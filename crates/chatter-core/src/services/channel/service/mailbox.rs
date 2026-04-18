@@ -2,7 +2,6 @@
 //!
 //! Setup and management of ephemeral group mailboxes (NDSS '21 paper).
 
-use crate::domain::channel::ChannelType;
 use crate::domain::ids::ChannelId;
 use crate::mailbox::group::GroupMailboxSetupResult;
 use crate::network::grpc::mailbox_client::MailboxClient;
@@ -67,84 +66,24 @@ impl ChannelService {
             "[MAILBOX_SETUP] Channel retrieved from DB"
         );
 
-        // Skip DMs - they use two-way anonymous mailboxes
-        if channel.channel_type == ChannelType::DirectMessage {
-            tracing::debug!(
-                channel_id = %channel_id,
-                "Skipping group mailbox setup for DM channel"
-            );
-            return Ok(None);
-        }
-
-        // Skip non-encrypted channels
-        if !channel.config.require_encryption {
-            tracing::info!(
-                channel_id = %channel_id,
-                "[MAILBOX_SETUP] Skipping - require_encryption is false"
-            );
-            return Ok(None);
-        }
-
-        tracing::info!(
+        // Server-trusted channels (Public/Private/DM/SavedMessages) now deliver
+        // everything over the device inbox — regular messages via the server
+        // message stream, SKDM + control content via per-device sealed sender.
+        // The group-mailbox transport added a second polling loop with no
+        // additional privacy (server already knows the membership), so it has
+        // been retired for all server-managed channel types.
+        //
+        // Anon groups (NDSS'21) register their own mailbox via
+        // `AnonGroupService::create_group_mailbox` — they do NOT flow through
+        // this path.
+        //
+        // Kept as a no-op to preserve call-site ergonomics during migration.
+        let _ = (channel, mailbox_client, anon_mailbox_client);
+        tracing::debug!(
             channel_id = %channel_id,
-            "[MAILBOX_SETUP] Channel requires encryption, proceeding with mailbox setup"
+            "Group mailbox setup retired for server-managed channels; skipping"
         );
-
-        // Setup the ephemeral mailbox via GroupCoordinator
-        match self.group_coordinator.setup_group_mailbox(channel_id, mailbox_client, anon_mailbox_client).await {
-            Ok(setup_result) => {
-                tracing::info!(
-                    channel_id = %channel_id,
-                    mailbox_id = %setup_result.mailbox.id,
-                    "Created group mailbox"
-                );
-                Ok(Some(setup_result))
-            }
-            Err(e) => {
-                tracing::warn!(
-                    channel_id = %channel_id,
-                    error = %e,
-                    "Failed to setup group mailbox"
-                );
-                Err(ChannelError::InvalidInput(format!(
-                    "Failed to setup group mailbox: {}",
-                    e
-                )))
-            }
-        }
+        Ok(None)
     }
 
-    /// Store a member's mailbox public key for a group channel.
-    ///
-    /// Called when receiving a group mailbox announcement from a peer.
-    /// Returns true if this was a new mailbox (not already known).
-    pub fn store_member_mailbox(
-        &self,
-        channel_id: &ChannelId,
-        member_id: &crate::domain::ids::UserId,
-        mailbox_pk: &[u8; 32],
-    ) -> Result<bool, ChannelError> {
-        use crate::mailbox::group::MemberMailbox;
-
-        let already_known = self.group_coordinator
-            .mailbox_manager()
-            .load_group_state(channel_id)
-            .ok()
-            .flatten()
-            .map(|state| state.get_member_mailbox(member_id).is_some())
-            .unwrap_or(false);
-
-        let member_mailbox = MemberMailbox::new(
-            *member_id,
-            *mailbox_pk,
-            Some(chrono::Utc::now() + chrono::Duration::days(7)),
-        );
-
-        self.group_coordinator
-            .mailbox_manager()
-            .save_member_mailbox(channel_id, &member_mailbox)
-            .map_err(|e| ChannelError::InvalidInput(format!("Failed to store member mailbox: {}", e)))?;
-
-        Ok(!already_known)
-    }
 }

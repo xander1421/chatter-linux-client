@@ -28,6 +28,10 @@ export component ChatLayout inherits Rectangle {
     in property <string> typing-indicator: "";
     in property <string> presence-status: "offline";
 
+    // When true, hide the chat header (e.g. during an active call where the
+    // call dock already carries channel name/encryption/timer).
+    in property <bool> hide-header: false;
+
     // Jarvis AI thinking state
     in-out property <bool> jarvis-thinking: false;
 
@@ -146,8 +150,9 @@ export component ChatLayout inherits Rectangle {
         width: 100%;
         height: 100%;
 
-        // Header at top (fixed 56px)
-        ChatHeader {
+        // Header at top (fixed 56px). Hidden during active calls — the call
+        // dock already shows channel name/encryption/timer.
+        if !root.hide-header: ChatHeader {
             channel-id: root.channel-id;
             channel-name: root.channel-name;
             channel-type: root.channel-type;

@@ -9,11 +9,13 @@
 pub mod attachment_crypto;
 pub mod attachment_crypto_fast;
 pub mod attachment_crypto_portable;
+pub mod auth_crypto;
 pub mod call_key_provider;
 pub mod device_credentials;
 pub mod dm_crypto;
 pub mod ecies;
 pub mod envelope_crypto;
+pub mod kdf;
 pub mod profile_crypto;
 pub mod rng;
 pub mod secret_key;

@@ -184,6 +184,18 @@ pub struct MessageService {
     pub(crate) search_index: Arc<SearchIndex>,
     /// Token manager for anonymous mailbox credentials.
     pub(crate) token_manager: Arc<TokenManager>,
+    /// Event bus for emitting `DomainEvent::MessageReceived` after deferred
+    /// group decrypt succeeds.
+    pub(crate) event_bus: crate::events::EventBus,
+    /// Group messages queued waiting on a `SenderKeyDistribution`. Keyed by
+    /// `(channel_id, sender_id, sender_device_id)`. Drained by
+    /// `retry_pending_group_decrypts` when the matching SKDM lands.
+    pub(crate) pending_group_decrypts: Arc<parking_lot::Mutex<
+        std::collections::HashMap<
+            (crate::domain::ids::ChannelId, crate::domain::ids::UserId, u32),
+            Vec<crate::proto::chat_v1::Message>,
+        >,
+    >>,
 }
 
 impl MessageService {
@@ -202,6 +214,7 @@ impl MessageService {
         sesame_manager: Arc<SesameManager<SqliteSesameStore>>,
         search_index: Arc<SearchIndex>,
         token_manager: Arc<TokenManager>,
+        event_bus: crate::events::EventBus,
     ) -> Self {
         Self {
             grpc_pool,
@@ -216,6 +229,8 @@ impl MessageService {
             sesame_manager,
             search_index,
             token_manager,
+            event_bus,
+            pending_group_decrypts: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -647,25 +662,40 @@ impl MessageService {
             let sender_id = reply_sender.parse::<uuid::Uuid>()
                 .map(UserId)
                 .unwrap_or_else(|_| UserId(uuid::Uuid::nil()));
-            
-            // Fetch the original message text for the quote
-            let quote_text = self.message_repo
+
+            // Fetch the original message (text + attachments) for the quote
+            let original = self
+                .message_repo
                 .get_by_sender_timestamp(&sender_id, reply_ts)
                 .ok()
-                .flatten()
+                .flatten();
+            let quote_text = original
+                .as_ref()
                 .and_then(|msg| match &msg.content {
                     crate::domain::message::MessageContent::Text(text) => Some(text.clone()),
                     crate::domain::message::MessageContent::Mixed(mixed) => mixed.text.clone(),
                     _ => None,
                 })
                 .unwrap_or_default();
-            
+            let quote_attachments = original
+                .as_ref()
+                .map(|m| {
+                    let atts: Vec<_> = m
+                        .attachments
+                        .iter()
+                        .filter_map(|id| self.attachment_repo.get(id).ok().flatten())
+                        .collect();
+                    crate::services::gateway::shared::build_quoted_attachments(&atts)
+                })
+                .unwrap_or_default();
+
             crate::services::build_reply_content(
                 &text,
                 attachment_pointers,
                 &reply_sender,
                 reply_ts,
                 &quote_text,
+                quote_attachments,
                 now
             )
         } else if !attachment_pointers.is_empty() {

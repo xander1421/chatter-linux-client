@@ -11,12 +11,12 @@
 //! 3. Rainbow table attacks are infeasible (password acts as secret)
 
 use base64::Engine;
-use hkdf::Hkdf;
-use hmac::{Hmac, Mac};
-use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use zeroize::Zeroize;
 
+use crate::crypto::auth_crypto::{
+    derive_profile_key, hash_password, hash_username, hash_username_lookup,
+};
 use crate::crypto::signal::identity::IdentityKeyManager;
 use crate::crypto::signal::prekey::PreKeyManager;
 use crate::crypto::DeviceCredentials;
@@ -88,52 +88,6 @@ pub struct LoginResult {
     pub backup_destroyed: bool,
     /// One-time recovery codes returned during registration (shown once to user).
     pub recovery_codes: Option<Vec<String>>,
-}
-
-// ============================================================================
-// Username Privacy Helpers
-// ============================================================================
-
-/// Derive a deterministic profile key from password hash.
-///
-/// Uses HKDF-SHA256 to derive a 32-byte profile key from the password hash.
-/// This ensures the same password always produces the same profile key,
-/// enabling consistent username hashing across devices.
-///
-/// # Security
-///
-/// - Password hash is the IKM (input key material)
-/// - Username is part of the info for domain separation
-/// - Output is suitable for HMAC and AES-GCM operations
-fn derive_profile_key_from_password(password_hash: &[u8], username: &str) -> Result<[u8; 32], CryptoError> {
-    let hk = Hkdf::<Sha256>::new(None, password_hash);
-    let info = format!("chatter_profile_key_{}", username.trim().to_lowercase());
-    let mut profile_key = [0u8; 32];
-    hk.expand(info.as_bytes(), &mut profile_key)
-        .map_err(|_| CryptoError::KeyDerivationFailed("HKDF expand failed for profile key".into()))?;
-    Ok(profile_key)
-}
-
-/// Hash a username with the profile key for privacy.
-///
-/// Uses HMAC-SHA256 with the profile key as the secret. The server never sees
-/// the actual username - only this hash.
-///
-/// # Privacy Properties
-///
-/// 1. Username cannot be recovered from hash (one-way)
-/// 2. Rainbow table resistant (profile key acts as secret)
-/// 3. Deterministic (same password + username = same hash on any device)
-fn hash_username_with_profile_key(username: &str, profile_key: &[u8; 32]) -> String {
-    type HmacSha256 = Hmac<Sha256>;
-
-    let normalized = username.trim().to_lowercase();
-    let mut mac = HmacSha256::new_from_slice(profile_key)
-        .expect("HMAC can take key of any size");
-    mac.update(normalized.as_bytes());
-    let result = mac.finalize();
-
-    hex::encode(result.into_bytes())
 }
 
 /// Authentication service.
@@ -446,15 +400,9 @@ impl AuthService {
             return Err(AuthError::AlreadyLoggedIn);
         }
 
-        // Hash password with SHA256 (server expects pre-hashed)
-        let password_hash = Sha256::digest(password.as_bytes());
-
-        // PRIVACY: Derive profile key deterministically from password
-        // This ensures same password produces same profile_key on any device
-        let profile_key = derive_profile_key_from_password(&password_hash, username)?;
-
-        // PRIVACY: Hash username with profile key - server never sees actual username
-        let username_hash = hash_username_with_profile_key(username, &profile_key);
+        let password_hash = hash_password(password);
+        let profile_key = derive_profile_key(&password_hash, username)?;
+        let username_hash = hash_username(username, &profile_key);
 
         // Derive SVR public key - required for registration
         let svr_public_key = if let Some(p) = pin {
@@ -613,16 +561,10 @@ impl AuthService {
             return Err(AuthError::AlreadyLoggedIn);
         }
 
-        // Hash password with SHA256 (server expects pre-hashed)
-        let password_hash = Sha256::digest(password.as_bytes());
-
-        // PRIVACY: Derive profile key deterministically from password
-        // This ensures same password produces same profile_key on any device
-        // SECURITY: Profile key stays client-side only - never sent to server
-        let profile_key = derive_profile_key_from_password(&password_hash, username)?;
-
-        // PRIVACY: Hash username with profile key - server never sees actual username
-        let username_hash = hash_username_with_profile_key(username, &profile_key);
+        // SECURITY: Profile key stays client-side only — never sent to server.
+        let password_hash = hash_password(password);
+        let profile_key = derive_profile_key(&password_hash, username)?;
+        let username_hash = hash_username(username, &profile_key);
 
         // Derive SVR public key and registration lock - required for registration
         let (svr_public_key, mut registration_lock) = if let Some(p) = pin {
@@ -775,6 +717,9 @@ impl AuthService {
         // Profile key stays client-side for profile encryption
         // SECURITY: display_name is encrypted with profile key (server sees only ciphertext)
         // SECURITY: challenge_id and response prove identity key possession
+        // Signal-style discovery hash: independent of profile_key, lets
+        // any peer look up "alice" → ACI via LookupUsername.
+        let username_lookup = hash_username_lookup(username);
         let result = auth_client
             .register_and_wait(
                 &username_hash, // PRIVACY: Send hash, not plaintext username
@@ -789,6 +734,7 @@ impl AuthService {
                 &challenge.challenge_id,
                 &challenge_response,
                 &registration_lock, // SECURITY: Prevents account takeover without PIN
+                &username_lookup,
             )
             .await;
 
@@ -962,9 +908,8 @@ impl AuthService {
             return Err(AuthError::NotLoggedIn);
         }
 
-        // Hash passwords with SHA256
-        let current_hash = Sha256::digest(current_password.as_bytes());
-        let new_hash = Sha256::digest(new_password.as_bytes());
+        let current_hash = hash_password(current_password);
+        let new_hash = hash_password(new_password);
 
         let mut auth_client = self.try_auth_client()
             .ok_or_else(|| AuthError::Network(NetworkError::ConnectionFailed("Not connected to server".to_string())))?;
@@ -1005,5 +950,119 @@ impl AuthService {
         self.auth_interceptor.clear();
 
         Ok(())
+    }
+
+    /// Redeem a recovery code to reset password + PIN.
+    ///
+    /// Validates inputs, derives the new SVR material + username hash from
+    /// `(new_password, new_pin, username)`, and calls the server's
+    /// recovery-code redemption RPC. Returns the number of recovery codes
+    /// that remain on the account. All sensitive intermediates are zeroized
+    /// before return.
+    pub async fn use_recovery_code(
+        &self,
+        auth_client: &mut AuthClient,
+        username: &str,
+        recovery_code: &str,
+        new_password: &str,
+        new_pin: &str,
+    ) -> Result<i32, AuthError> {
+        use zeroize::Zeroize;
+
+        if new_pin.len() != 6 || !new_pin.chars().all(|c| c.is_ascii_digit()) {
+            return Err(AuthError::InvalidInput("PIN must be exactly 6 digits".into()));
+        }
+        if recovery_code.len() != 8 || !recovery_code.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Err(AuthError::InvalidInput(
+                "Recovery code must be exactly 8 alphanumeric characters".into(),
+            ));
+        }
+
+        let mut password_hash = hash_password(new_password).to_vec();
+
+        let keypair = crate::crypto::svr::SvrKeypair::new_from_pin(new_pin, username)?;
+        let svr_public_key = keypair.public_key_bytes();
+
+        let mut registration_lock = crate::crypto::svr::derive_registration_lock(new_pin, username)?;
+
+        let username_hash = {
+            let mut profile_key = derive_profile_key(&password_hash, username)?;
+            let h = hash_username(username, &profile_key);
+            profile_key.zeroize();
+            h
+        };
+
+        let result = auth_client
+            .use_recovery_code(
+                &username_hash,
+                recovery_code,
+                &password_hash,
+                &svr_public_key,
+                &registration_lock,
+            )
+            .await;
+
+        password_hash.zeroize();
+        registration_lock.zeroize();
+
+        Ok(result.map_err(AuthError::Network)?)
+    }
+
+    /// Log in via an OIDC access token.
+    ///
+    /// Sets the token as the bearer auth header, queries the server for our
+    /// identity, ensures we have a Signal identity keypair (generating one on
+    /// first contact), and returns a `LoginResult` describing the account.
+    /// Does NOT mutate auth state or start background tasks — the caller
+    /// orchestrates those.
+    pub async fn login_with_oidc_token(
+        &self,
+        access_token: &str,
+    ) -> Result<LoginResult, AuthError> {
+        self.auth_interceptor.set_bearer(access_token.to_string());
+
+        let identity = self.get_my_identity().await?;
+
+        let needs_prekey_upload = if !self.identity_manager.has_identity()? {
+            self.identity_manager.generate_identity(&mut rand::rng())?;
+            true
+        } else {
+            false
+        };
+
+        let user_id: crate::domain::ids::UserId = identity.user_id.parse()
+            .map_err(|e| AuthError::InvalidInput(format!("invalid user_id: {e}")))?;
+        let display_name = identity.user_profile
+            .map(|p| p.display_name)
+            .unwrap_or_else(|| "User".to_string());
+
+        Ok(LoginResult {
+            user_id,
+            device_id: identity.device_id,
+            display_name,
+            needs_prekey_upload,
+            keys_restored: false,
+            keys_missing: !self.identity_manager.has_identity().unwrap_or(false),
+            backup_destroyed: false,
+            recovery_codes: None,
+        })
+    }
+
+    /// Regenerate the caller's recovery codes.
+    ///
+    /// Hashes the password, calls the server RPC, zeroizes the hash. Returns
+    /// the newly issued codes (caller must display them exactly once — codes
+    /// are never recoverable from the server).
+    pub async fn regenerate_recovery_codes(
+        &self,
+        auth_client: &mut AuthClient,
+        password: &str,
+    ) -> Result<Vec<String>, AuthError> {
+        use zeroize::Zeroize;
+
+        let mut password_hash = hash_password(password).to_vec();
+        let result = auth_client.regenerate_recovery_codes(&password_hash).await;
+        password_hash.zeroize();
+        result.map_err(AuthError::Network)
     }
 }

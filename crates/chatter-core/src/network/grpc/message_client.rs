@@ -899,6 +899,7 @@ mod tests {
             edited_at: 0,
             mentioned_integrations: vec![],
             targets_ai_bot: false,
+            channel_type: 0,
         };
 
         assert_eq!(message.id, "msg-123");
@@ -988,6 +989,7 @@ mod tests {
             edited_at: 0,
             mentioned_integrations: vec![],
             targets_ai_bot: false,
+            channel_type: 0,
         };
 
         let event = MessageEvent {

@@ -21,6 +21,7 @@ mod handlers;
 mod lifecycle;
 mod membership;
 mod messaging;
+mod processing;
 mod removal;
 mod storage;
 

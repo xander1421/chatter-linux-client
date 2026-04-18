@@ -44,20 +44,48 @@ impl MessageService {
             _ => format!("Forwarded:\n{}", original_text),
         };
 
-        // Build proto content
-        let content = chat_v1::message::Content {
-            r#type: Some(chat_v1::message::content::Type::Text(forwarded_text.clone())),
+        // Copy attachment IDs from source if any
+        let attachment_ids: Vec<String> = source
+            .attachments
+            .iter()
+            .map(|id| id.to_string())
+            .collect();
+
+        let content = if attachment_ids.is_empty() {
+            chat_v1::message::Content {
+                r#type: Some(chat_v1::message::content::Type::Text(forwarded_text.clone())),
+            }
+        } else {
+            let files: Vec<chat_v1::FileMetadata> = attachment_ids
+                .iter()
+                .map(|id| chat_v1::FileMetadata {
+                    id: id.clone(),
+                    ..Default::default()
+                })
+                .collect();
+            chat_v1::message::Content {
+                r#type: Some(chat_v1::message::content::Type::Mixed(
+                    chat_v1::message::MixedContent {
+                        text: forwarded_text.clone(),
+                        files,
+                    },
+                )),
+            }
         };
 
-        // Get encryption settings from channel config
         let (is_dm, require_encryption) = self
             .get_channel_encryption_settings(target_channel_id, channel_client)
             .await?;
 
+        let plaintext_bytes = {
+            use prost::Message as _;
+            content.encode_to_vec()
+        };
+
         let (content_to_send, skdm_opt) = self.prepare_encrypted_content(
             auth_client,
             target_channel_id,
-            forwarded_text.as_bytes(),
+            &plaintext_bytes,
             content,
             is_dm,
             require_encryption,
@@ -67,13 +95,6 @@ impl MessageService {
         if let Some(skdm) = skdm_opt {
             self.distribute_sender_key(auth_client, message_client, target_channel_id, &skdm).await?;
         }
-
-        // Copy attachment IDs from source if any
-        let attachment_ids: Vec<String> = source
-            .attachments
-            .iter()
-            .map(|id| id.to_string())
-            .collect();
 
         // Call server
         let proto_message = message_client

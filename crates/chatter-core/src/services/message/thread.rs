@@ -42,20 +42,41 @@ impl MessageService {
             ));
         }
 
-        // Build proto content
-        let content = chat_v1::message::Content {
-            r#type: Some(chat_v1::message::content::Type::Text(trimmed_text.to_string())),
+        let content = if attachment_ids.is_empty() {
+            chat_v1::message::Content {
+                r#type: Some(chat_v1::message::content::Type::Text(trimmed_text.to_string())),
+            }
+        } else {
+            let files: Vec<chat_v1::FileMetadata> = attachment_ids
+                .iter()
+                .map(|id| chat_v1::FileMetadata {
+                    id: id.to_string(),
+                    ..Default::default()
+                })
+                .collect();
+            chat_v1::message::Content {
+                r#type: Some(chat_v1::message::content::Type::Mixed(
+                    chat_v1::message::MixedContent {
+                        text: trimmed_text.to_string(),
+                        files,
+                    },
+                )),
+            }
         };
 
-        // Get encryption settings from channel config
         let (is_dm, require_encryption) = self
             .get_channel_encryption_settings(channel_id, channel_client)
             .await?;
 
+        let plaintext_bytes = {
+            use prost::Message as _;
+            content.encode_to_vec()
+        };
+
         let (content_to_send, skdm_opt) = self.prepare_encrypted_content(
             auth_client,
             channel_id,
-            trimmed_text.as_bytes(),
+            &plaintext_bytes,
             content,
             is_dm,
             require_encryption,

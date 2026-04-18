@@ -111,38 +111,46 @@ impl ConversationHandle {
                 Ok(())
             }
             ActiveConversation::MailboxDm { peer_id, .. } => {
-                let msg = self.lookup_message(target_author, target_sent_timestamp)?;
-                let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
+                // Send the reaction content over the wire — the wire payload
+                // only needs target_author + target_sent_timestamp, so don't
+                // block the send on a local DB lookup.
                 let content = crate::services::build_reaction_content(
-                    emoji, remove, &author_aci, target_sent_timestamp,
+                    emoji, remove, target_author, target_sent_timestamp,
                 );
                 self.send_dm_content(content, peer_id).await?;
-                // Persist own reaction to DB
-                let _ = self.client.messages().update_reaction(&msg.id, emoji, !remove);
+                // Best-effort local persist: no-op if the target message
+                // isn't in our DB (receiver may have scrolled past it).
+                if let Ok(sender_uid) = target_author.parse::<UserId>() {
+                    let _ = self.client.messages().update_reaction_by_sender(
+                        &sender_uid, target_sent_timestamp, emoji, !remove,
+                    );
+                }
                 Ok(())
             }
             ActiveConversation::ServerDm { channel_id, .. } => {
-                let msg = self.lookup_message(target_author, target_sent_timestamp)?;
-                let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
                 let content = crate::services::build_reaction_content_with_channel(
-                    emoji, remove, &author_aci, target_sent_timestamp,
+                    emoji, remove, target_author, target_sent_timestamp,
                     Some(&channel_id.to_string()),
                 );
                 self.send_channel_content(content, channel_id).await?;
-                // Persist own reaction to DB
-                let _ = self.client.messages().update_reaction(&msg.id, emoji, !remove);
+                if let Ok(sender_uid) = target_author.parse::<UserId>() {
+                    let _ = self.client.messages().update_reaction_by_sender(
+                        &sender_uid, target_sent_timestamp, emoji, !remove,
+                    );
+                }
                 Ok(())
             }
             ActiveConversation::Channel(channel_id) => {
-                let msg = self.lookup_message(target_author, target_sent_timestamp)?;
-                let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
                 let content = crate::services::build_reaction_content_with_channel(
-                    emoji, remove, &author_aci, target_sent_timestamp,
+                    emoji, remove, target_author, target_sent_timestamp,
                     Some(&channel_id.to_string()),
                 );
                 self.send_channel_content(content, channel_id).await?;
-                // Persist own reaction to DB
-                let _ = self.client.messages().update_reaction(&msg.id, emoji, !remove);
+                if let Ok(sender_uid) = target_author.parse::<UserId>() {
+                    let _ = self.client.messages().update_reaction_by_sender(
+                        &sender_uid, target_sent_timestamp, emoji, !remove,
+                    );
+                }
                 Ok(())
             }
             ActiveConversation::None => Err(ConversationError::NoConversation),

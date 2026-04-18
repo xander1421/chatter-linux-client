@@ -20,6 +20,10 @@
 use hkdf::Hkdf;
 use sha2::Sha256;
 
+// HKDF is used here directly (variable-length output sized by
+// `VERIFICATION_EMOJI_COUNT`) so we don't go through `crypto::kdf::hkdf_sha256`
+// which uses a compile-time const-generic length.
+
 /// Salt for SAS emoji derivation.
 const SAS_SALT: &[u8] = b"ChatterCallSAS-v1";
 

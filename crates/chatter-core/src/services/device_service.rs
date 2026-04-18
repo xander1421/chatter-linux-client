@@ -7,6 +7,8 @@ use std::sync::Arc;
 
 use crate::error::{NetworkError, StorageError};
 use crate::network::grpc::auth_client::AuthClient;
+use crate::services::channel::ChannelService;
+use crate::services::signal_service::SignalService;
 use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
 
 /// Device information.
@@ -55,14 +57,26 @@ pub enum DeviceError {
 /// Device management service.
 ///
 /// Provides device listing, renaming, and revocation functionality.
+/// Revocation also rotates sender keys for every encrypted channel so the
+/// revoked device can no longer decrypt future messages.
 pub struct DeviceService {
     settings_repo: Arc<SettingsRepository>,
+    channel_service: Arc<ChannelService>,
+    signal_service: Arc<SignalService>,
 }
 
 impl DeviceService {
     /// Create a new DeviceService with dependencies.
-    pub fn new(settings_repo: Arc<SettingsRepository>) -> Self {
-        Self { settings_repo }
+    pub fn new(
+        settings_repo: Arc<SettingsRepository>,
+        channel_service: Arc<ChannelService>,
+        signal_service: Arc<SignalService>,
+    ) -> Self {
+        Self {
+            settings_repo,
+            channel_service,
+            signal_service,
+        }
     }
 
     /// Check if a user is currently logged in.
@@ -162,6 +176,41 @@ impl DeviceService {
         }
 
         auth_client.revoke_device(device_id).await?;
+        Ok(())
+    }
+
+    /// Revoke a device and rotate sender keys on every encrypted channel.
+    ///
+    /// The revoked device still holds old sender keys locally; rotation ensures
+    /// the next message sent from this client uses a fresh key that the revoked
+    /// device cannot read. Rotation is lazy — each channel is only marked, and
+    /// the actual key generation + SKDM redistribution happens on the next
+    /// send via `encrypt_for_group`.
+    ///
+    /// This is the preferred entry point for unlinking a device; bare
+    /// `revoke_device` leaves sender keys intact and is a privacy bug.
+    pub async fn revoke_and_rotate(
+        &self,
+        auth_client: &mut AuthClient,
+        device_id: u32,
+    ) -> Result<(), DeviceError> {
+        self.revoke_device(auth_client, device_id).await?;
+
+        // Lazy rotation: mark each encrypted channel; next send cycles the key.
+        let channels = self.channel_service.get_channels_mru().unwrap_or_default();
+        for channel in channels {
+            if !channel.config.require_encryption {
+                continue;
+            }
+            if let Err(e) = self.signal_service.mark_channel_for_rotation(&channel.id) {
+                tracing::warn!(
+                    channel_id = %channel.id,
+                    revoked_device_id = device_id,
+                    error = %e,
+                    "Failed to mark channel for sender-key rotation after device revoke"
+                );
+            }
+        }
         Ok(())
     }
 }

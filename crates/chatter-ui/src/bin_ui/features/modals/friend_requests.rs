@@ -8,8 +8,6 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
-use chatter_core::services::channel::ChannelService;
-use chatter_core::services::user::UserService;
 
 use crate::bin_ui::converters::get_initials;
 use crate::{DMListItemData, MainWindow};

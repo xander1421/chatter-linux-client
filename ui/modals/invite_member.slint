@@ -29,6 +29,7 @@ export component InviteMemberModal inherits Rectangle {
     callback close();
     callback toggle-user(int);  // index - toggles selection
     callback invite();  // confirms invite for all selected users
+    callback search-changed(string);  // fired on every keystroke so backend can search
 
     // Reset state when modal closes
     changed show-modal => {
@@ -60,6 +61,7 @@ export component InviteMemberModal inherits Rectangle {
             Input {
                 placeholder: "Search by name or username...";
                 text <=> root.search-text;
+                edited(q) => { root.search-changed(q); }
             }
 
             // User list (scrollable)

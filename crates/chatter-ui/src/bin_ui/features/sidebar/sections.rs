@@ -13,7 +13,6 @@ use chatter_core::domain::ids::SectionId;
 use chatter_core::domain::message::ConversationType;
 
 use chatter_core::services::attachment::DecodedImagePixels;
-use chatter_core::services::channel::ChannelService;
 
 use crate::bin_ui::converters::{channel_to_slint, get_initials};
 use crate::{CustomSectionData, MainWindow, SectionConversationData, run_ui};

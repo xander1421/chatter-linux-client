@@ -99,7 +99,7 @@ impl SearchIndex {
                  id,
                  conversation_id,
                  CASE content_type
-                     WHEN 0 THEN json_extract(content_json, '$')
+                     WHEN 0 THEN json_extract(content_json, '$.Text')
                      WHEN 5 THEN json_extract(content_json, '$.AI.text')
                      WHEN 6 THEN json_extract(content_json, '$.Mixed.text')
                  END
@@ -107,7 +107,7 @@ impl SearchIndex {
              WHERE content_type IN (0, 5, 6)
                AND COALESCE(
                    CASE content_type
-                       WHEN 0 THEN json_extract(content_json, '$')
+                       WHEN 0 THEN json_extract(content_json, '$.Text')
                        WHEN 5 THEN json_extract(content_json, '$.AI.text')
                        WHEN 6 THEN json_extract(content_json, '$.Mixed.text')
                    END, ''
@@ -153,4 +153,114 @@ fn collect_results(rows: &mut rusqlite::Rows<'_>) -> Result<Vec<SearchResult>, S
         });
     }
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::Database;
+    use crate::domain::ids::UserId;
+    use crate::domain::message::{Message, ConversationType};
+    use crate::storage::repositories::MessageRepository;
+    use std::path::Path;
+
+    fn setup_db() -> Arc<Database> {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let db = Arc::new(Database::open(&db_path, "testpass").unwrap());
+        db.run_migrations().unwrap();
+        
+        // Keep temp_dir alive by leaking it for simplicity in this test helper
+        // (Not ideal but fine for unit tests)
+        Box::leak(Box::new(temp_dir));
+        
+        db
+    }
+
+    #[test]
+    fn test_fts5_available() {
+        let db = setup_db();
+        let conn = db.connection().unwrap();
+        let res: rusqlite::Result<i32> = conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE name='messages_fts' AND type='table'",
+            [],
+            |row| row.get(0),
+        );
+        assert!(res.is_ok(), "Query failed: {:?}", res.err());
+        assert_eq!(res.unwrap(), 1, "messages_fts table not found in sqlite_master");
+    }
+
+    #[test]
+    fn test_search_basic() {
+        let db = setup_db();
+        let index = SearchIndex::new(db.clone());
+        let repo = MessageRepository::new(db.clone());
+
+        let channel_id = ChannelId::new();
+        let user_id = UserId::new();
+
+        // Insert some messages
+        let msg1 = Message::new_text(
+            channel_id.clone(),
+            ConversationType::Channel,
+            Some(user_id.clone()),
+            "Hello world".to_string(),
+            0,
+        );
+        repo.insert(&msg1).unwrap();
+
+        let msg2 = Message::new_text(
+            channel_id.clone(),
+            ConversationType::Channel,
+            Some(user_id.clone()),
+            "Another message about rust".to_string(),
+            0,
+        );
+        repo.insert(&msg2).unwrap();
+
+        // Reindex just in case triggers didn't fire (though they should)
+        index.reindex_all().unwrap();
+
+        // Search for "hello"
+        let results = index.search("hello", None, 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].message_id, msg1.id);
+
+        // Search for "rust"
+        let results = index.search("rust", None, 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].message_id, msg2.id);
+
+        // Search for something that doesn't exist
+        let results = index.search("nomatch", None, 10).unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_search_phrase() {
+        let db = setup_db();
+        let index = SearchIndex::new(db.clone());
+        let repo = MessageRepository::new(db.clone());
+
+        let channel_id = ChannelId::new();
+        let user_id = UserId::new();
+
+        repo.insert(&Message::new_text(
+            channel_id.clone(),
+            ConversationType::Channel,
+            Some(user_id.clone()),
+            "the quick brown fox".to_string(),
+            0,
+        )).unwrap();
+
+        index.reindex_all().unwrap();
+
+        // Search for "quick brown"
+        let results = index.search("quick brown", None, 10).unwrap();
+        assert_eq!(results.len(), 1);
+
+        // Search for "brown quick" - currently it won't match because we quote the query
+        let results = index.search("brown quick", None, 10).unwrap();
+        assert_eq!(results.len(), 0);
+    }
 }

@@ -159,9 +159,9 @@ impl GroupCoordinator {
         // Build announcement
         let announcement = self.build_announcement(channel_id, &mailbox);
 
-        // Persist state
+        // Persist state (token already marked used by claim_available_token in ensure_token)
         self.mailbox_manager.save_our_mailbox(&mailbox)?;
-        self.token_manager.mark_token_used(&token.id)?;
+        let _ = token;
 
         Ok(GroupMailboxSetupResult {
             mailbox,
@@ -283,18 +283,21 @@ impl GroupCoordinator {
         }
     }
 
-    /// Ensure we have an available token, requesting more if needed.
+    /// Atomically claim a token, requesting more if needed.
+    ///
+    /// Uses `claim_available_token` (UPDATE ... RETURNING) so the credential
+    /// is marked used in the same SQL statement — the server rejects any
+    /// credential it has seen before.
     async fn ensure_token(
         &self,
         client: &mut MailboxClient,
     ) -> Result<MailboxToken, MailboxError> {
-        tracing::info!("Checking for available token locally");
-        if let Some(token) = self.token_manager.get_available_token()? {
-            tracing::info!("Found existing local token");
+        tracing::info!("Claiming available token locally");
+        if let Some(token) = self.token_manager.claim_available_token()? {
+            tracing::info!("Claimed existing local token");
             return Ok(token);
         }
 
-        // Need to request tokens
         tracing::info!("No local token, requesting from server...");
         let count = self.token_manager.request_tokens(client, 5).await?;
         tracing::info!(count = count, "Requested tokens from server");
@@ -303,7 +306,7 @@ impl GroupCoordinator {
         }
 
         self.token_manager
-            .get_available_token()?
+            .claim_available_token()?
             .ok_or(MailboxError::NoTokensAvailable)
     }
 

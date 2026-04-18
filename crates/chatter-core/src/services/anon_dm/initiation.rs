@@ -259,11 +259,6 @@ impl AnonDmService {
             .await
             .map_err(|e| AnonDmError::MessageError(format!("Failed to send ECIES message: {}", e)))?;
 
-        // Mark token as used
-        self.token_manager
-            .mark_token_used(&token.id)
-            .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
-
         tracing::debug!(
             conversation_id = %conversation_id,
             peer_id = %friend_code.user_id,

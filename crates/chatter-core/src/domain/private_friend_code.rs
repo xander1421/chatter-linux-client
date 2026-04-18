@@ -29,8 +29,6 @@
 //! - **Identity Binding**: Identity key binds subsequent messages to this user
 
 use base32::Alphabet;
-use hkdf::Hkdf;
-use sha2::Sha256;
 
 use super::UserId;
 
@@ -93,16 +91,10 @@ impl PrivateFriendCode {
         }
     }
 
-    /// Derive delivery token from profile key.
-    ///
-    /// Uses HKDF-SHA256 to derive a 96-bit token from the 32-byte profile key.
-    /// This matches Signal's delivery token derivation.
+    /// Derive delivery token from profile key (thin wrapper around
+    /// [`crate::crypto::auth_crypto::derive_delivery_token`]).
     pub fn derive_delivery_token(profile_key: &[u8; 32]) -> [u8; 12] {
-        let hk = Hkdf::<Sha256>::new(None, profile_key);
-        let mut token = [0u8; 12];
-        hk.expand(b"DeliveryToken", &mut token)
-            .expect("HKDF expand should never fail with 12-byte output");
-        token
+        crate::crypto::auth_crypto::derive_delivery_token(profile_key)
     }
 
     /// Encode to bytes.

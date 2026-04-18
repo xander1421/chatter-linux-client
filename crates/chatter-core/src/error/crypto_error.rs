@@ -55,8 +55,8 @@ pub enum CryptoError {
         reason: String,
     },
 
-    /// Session has exceeded MAXSEND age and cannot be used for sending.
-    #[error("session expired (MAXSEND) for {0}")]
+    /// Session ratchet has reached a state where it cannot be used for sending.
+    #[error("session expired for {0}")]
     SessionExpired(String),
 
     /// Encryption operation failed.

@@ -176,6 +176,16 @@ impl MessageGateway {
         let reply_to_text = data_message.quote.as_ref()
             .map(|q| q.text.clone())
             .filter(|t| !t.is_empty());
+        let (reply_to_thumbnail, reply_to_thumbnail_mime) = data_message
+            .quote
+            .as_ref()
+            .and_then(|q| q.attachments.first())
+            .map(|qa| {
+                let thumb = (!qa.thumbnail.is_empty()).then(|| qa.thumbnail.clone());
+                let mime = (!qa.content_type.is_empty()).then(|| qa.content_type.clone());
+                (thumb, mime)
+            })
+            .unwrap_or((None, None));
 
         // Create domain message with sender's timestamp for Signal-style dedup
         let message = Message {
@@ -190,6 +200,8 @@ impl MessageGateway {
             reply_to,
             reply_to_author_id,
             reply_to_text,
+            reply_to_thumbnail,
+            reply_to_thumbnail_mime,
             attachments,
             is_pinned: false,
             is_edited: false,

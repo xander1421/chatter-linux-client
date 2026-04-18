@@ -52,6 +52,9 @@ pub struct ChannelService {
     pub(crate) user_repo: Arc<UserRepository>,
     pub(crate) signal_service: Arc<crate::services::signal_service::SignalService>,
     pub(crate) group_coordinator: Arc<GroupCoordinator>,
+    /// For SKDM redistribution after kick/leave; set after MessageService
+    /// exists. Read access via `message_service()`.
+    pub(crate) message_service: Arc<crate::services::message::MessageService>,
 }
 
 impl ChannelService {
@@ -64,6 +67,7 @@ impl ChannelService {
         user_repo: Arc<UserRepository>,
         signal_service: Arc<crate::services::signal_service::SignalService>,
         group_coordinator: Arc<GroupCoordinator>,
+        message_service: Arc<crate::services::message::MessageService>,
     ) -> Self {
         Self {
             grpc_pool,
@@ -73,6 +77,7 @@ impl ChannelService {
             user_repo,
             signal_service,
             group_coordinator,
+            message_service,
         }
     }
 
@@ -221,26 +226,9 @@ impl ChannelService {
         self.channel_repo.insert_membership(&membership)?;
         tracing::info!(channel_id = %channel.id, "Membership inserted");
 
-        // Setup group mailbox for encrypted channels (NDSS '21 paper)
-        tracing::info!(channel_id = %channel.id, setup_mailbox = setup_mailbox, "About to setup group mailbox");
-        let mailbox_setup = if setup_mailbox {
-            let mut mailbox_client = self.mailbox_client();
-            let mut anon_mailbox_client = self.anonymous_mailbox_client();
-            match self.setup_group_mailbox_internal(&channel.id, &mut mailbox_client, &mut anon_mailbox_client).await {
-                Ok(Some(setup)) => Some(setup),
-                Ok(None) => None,
-                Err(e) => {
-                    tracing::error!(
-                        channel_id = %channel.id,
-                        error = %e,
-                        "Group mailbox setup failed during channel creation - group encryption unavailable"
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        // Server-managed channels no longer register a group mailbox; control
+        // and SKDM fanout flow over the device inbox.
+        let _ = setup_mailbox;
 
         // Sync members (in case initial_members were added by server)
         let mut channel_client = self.channel_client();
@@ -252,7 +240,7 @@ impl ChannelService {
             );
         }
 
-        Ok((channel, mailbox_setup))
+        Ok((channel, None))
     }
 
     // ==================== CRUD Operations ====================

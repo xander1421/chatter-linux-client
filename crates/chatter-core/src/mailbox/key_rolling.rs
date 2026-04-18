@@ -142,10 +142,10 @@ impl KeyRollingService {
             .our_mailbox
             .ok_or(MailboxError::NoMailboxConfigured)?;
 
-        // 2. Get a fresh token for new mailbox
+        // 2. Atomically claim a fresh token for the new mailbox
         let token = self
             .token_manager
-            .get_available_token()?
+            .claim_available_token()?
             .ok_or(MailboxError::NoTokensAvailable)?;
 
         // 3. Generate new Ed25519 keypair
@@ -180,9 +180,6 @@ impl KeyRollingService {
 
         // 5. Save new mailbox
         self.dm_manager.save_our_mailbox(peer_id, &new_mailbox)?;
-
-        // 6. Mark token as used
-        self.token_manager.mark_token_used(&token.id)?;
 
         // 7. Schedule old mailbox for deletion after overlap period
         let delete_at = Utc::now() + self.overlap_period;
@@ -225,10 +222,10 @@ impl KeyRollingService {
 
         let old_mailbox = state.our_mailbox.ok_or(MailboxError::NoMailboxConfigured)?;
 
-        // 2. Get a fresh token
+        // 2. Atomically claim a fresh token
         let token = self
             .token_manager
-            .get_available_token()?
+            .claim_available_token()?
             .ok_or(MailboxError::NoTokensAvailable)?;
 
         // 3. Generate new Ed25519 keypair
@@ -265,10 +262,7 @@ impl KeyRollingService {
         // 5. Save new mailbox
         self.group_manager.save_our_mailbox(&new_mailbox)?;
 
-        // 6. Mark token as used
-        self.token_manager.mark_token_used(&token.id)?;
-
-        // 7. Schedule old mailbox deletion
+        // 6. Schedule old mailbox deletion
         let delete_at = Utc::now() + self.overlap_period;
         {
             let mut deletions = self.pending_deletions.write().await;

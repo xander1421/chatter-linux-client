@@ -761,6 +761,7 @@ export component App inherits Rectangle {
     callback channel-settings-invite-channel-members();  // opens invite modal for regular channels
     callback invite-member-toggle-user(int);  // index - toggles selection
     callback invite-member-confirm();  // confirms invite for all selected users
+    callback invite-member-search-changed(string);  // fired on every search keystroke
     callback channel-settings-archive();
     callback channel-settings-leave();
     callback channel-settings-delete();
@@ -1127,6 +1128,7 @@ export component App inherits Rectangle {
                         visible: !(root.is-mobile-screen && (root.members-panel-visible || root.thread-panel-visible));
 
                         ActiveCallView {
+                            vertical-stretch: 0;
                             show: root.active-call-visible;
                             call-data: root.active-call-data;
                             is-muted: root.call-is-muted;
@@ -1151,6 +1153,7 @@ export component App inherits Rectangle {
                     ChatLayout {
                     vertical-stretch: 1;
                     visible: !(root.is-mobile-screen && (root.members-panel-visible || root.thread-panel-visible));
+                    hide-header: root.active-call-visible;
                     show-back-button: root.is-mobile-screen;
                     back-clicked => { root.mobile-back(); }
                     channel-id: root.channel-id;
@@ -1458,6 +1461,9 @@ export component App inherits Rectangle {
         }
         invite => {
             root.invite-member-confirm();
+        }
+        search-changed(q) => {
+            root.invite-member-search-changed(q);
         }
     }
 

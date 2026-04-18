@@ -89,9 +89,15 @@ pub(crate) fn build_anon_message(
         .to_datetime()
         .unwrap_or_else(chrono::Utc::now);
 
-    let (reply_to, reply_to_author_id, reply_to_text) = match quote {
-        Some(q) => (q.reply_to, q.reply_to_author_id, q.reply_to_text),
-        None => (None, None, None),
+    let (reply_to, reply_to_author_id, reply_to_text, reply_to_thumbnail, reply_to_thumbnail_mime) = match quote {
+        Some(q) => (
+            q.reply_to,
+            q.reply_to_author_id,
+            q.reply_to_text,
+            q.reply_to_thumbnail,
+            q.reply_to_thumbnail_mime,
+        ),
+        None => (None, None, None, None, None),
     };
 
     Message {
@@ -106,6 +112,8 @@ pub(crate) fn build_anon_message(
         reply_to,
         reply_to_author_id,
         reply_to_text,
+        reply_to_thumbnail,
+        reply_to_thumbnail_mime,
         attachments: attachment_ids,
         is_pinned: false,
         is_edited: false,

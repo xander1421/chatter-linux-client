@@ -360,21 +360,20 @@ async fn handle_bootstrap_request_async(
     // Get anonymous credential - request tokens if needed
     tracing::debug!(peer = %peer_id, "BOOTSTRAP[2/4] Checking for anonymous tokens");
     let token_manager = TokenManager::new(database.clone());
-    let token = match token_manager.get_available_token() {
+    let token = match token_manager.claim_available_token() {
         Ok(Some(t)) => {
-            tracing::debug!(peer = %peer_id, token_id = %t.id, "BOOTSTRAP[2/4] Found existing token");
+            tracing::debug!(peer = %peer_id, token_id = %t.id, "BOOTSTRAP[2/4] Claimed existing token");
             t
         }
         Ok(None) => {
-            // No tokens - request more from server
             tracing::info!(peer = %peer_id, "BOOTSTRAP[2/4] No tokens available, requesting from server");
             let mut mailbox_client = MailboxClient::new(channel.clone(), auth_interceptor.clone());
             match token_manager.request_tokens(&mut mailbox_client, 5).await {
                 Ok(count) if count > 0 => {
                     tracing::info!(peer = %peer_id, count, "BOOTSTRAP[2/4] Received {} tokens from server", count);
                     token_manager
-                        .get_available_token()
-                        .map_err(|e| format!("Failed to get token after request: {}", e))?
+                        .claim_available_token()
+                        .map_err(|e| format!("Failed to claim token after request: {}", e))?
                         .ok_or_else(|| "No tokens after request".to_string())?
                 }
                 Ok(_) => {
@@ -388,8 +387,8 @@ async fn handle_bootstrap_request_async(
             }
         }
         Err(e) => {
-            tracing::error!(peer = %peer_id, error = %e, "BOOTSTRAP[2/4] FAILED - Token check error");
-            return Err(format!("Failed to check tokens: {}", e));
+            tracing::error!(peer = %peer_id, error = %e, "BOOTSTRAP[2/4] FAILED - Token claim error");
+            return Err(format!("Failed to claim token: {}", e));
         }
     };
 
@@ -414,8 +413,6 @@ async fn handle_bootstrap_request_async(
         )
         .await
         .map_err(|e| format!("Failed to send bootstrap: {}", e))?;
-
-    let _ = token_manager.mark_token_used(&token.id);
 
     tracing::info!(
         peer = %peer_id,

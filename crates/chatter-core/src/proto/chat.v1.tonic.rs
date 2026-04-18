@@ -5005,12 +5005,16 @@ pub mod user_service_client {
                 .insert(GrpcMethod::new("chat.v1.UserService", "UpdateUserProfile"));
             self.inner.server_streaming(req, path, codec).await
         }
-        ///
-        pub async fn search_users(
+        /** Signal-style exact lookup by client-side HKDF(username) hash.
+ Substring / display-name search is intentionally absent: display names
+ are profile-key-encrypted on the server, so the old ILIKE-based
+ SearchUsers could never produce meaningful matches anyway.
+*/
+        pub async fn lookup_username(
             &mut self,
-            request: impl tonic::IntoRequest<super::UserSearchRequest>,
+            request: impl tonic::IntoRequest<super::LookupUsernameRequest>,
         ) -> std::result::Result<
-            tonic::Response<super::UserSearchResponse>,
+            tonic::Response<super::LookupUsernameResponse>,
             tonic::Status,
         > {
             self.inner
@@ -5024,11 +5028,11 @@ pub mod user_service_client {
                 })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.UserService/SearchUsers",
+                "/chat.v1.UserService/LookupUsername",
             );
             let mut req = request.into_request();
             req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.UserService", "SearchUsers"));
+                .insert(GrpcMethod::new("chat.v1.UserService", "LookupUsername"));
             self.inner.unary(req, path, codec).await
         }
         /** User Presence

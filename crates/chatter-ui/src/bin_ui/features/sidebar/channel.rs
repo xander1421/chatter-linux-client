@@ -112,8 +112,10 @@ pub async fn load_channel_into_ui(
         }
     };
 
-    // 2. Load messages
-    let messages = match ui_ctx.get_messages_local_asc(&channel_id, &chatter_core::domain::message::ConversationType::Channel, None, 50) {
+    // 2. Load messages — use the channel's actual conversation type so
+    // SavedMessages (stored as ConversationType::SavedMessages) round-trip correctly.
+    let conv_type = channel.conversation_type();
+    let messages = match ui_ctx.get_messages_local_asc(&channel_id, &conv_type, None, 50) {
         Ok(msgs) => msgs,
         Err(e) => {
             tracing::error!("Failed to list channel messages: {}", e);
@@ -132,11 +134,13 @@ pub async fn load_channel_into_ui(
     );
 
     // 4. Update UI
-    let group_name = channel.name.clone();
-    let topic = channel.description.clone().unwrap_or_default();
+    let is_saved = matches!(channel.channel_type, ChannelType::SavedMessages);
+    let group_name = if is_saved { "Saved Messages".to_string() } else { channel.name.clone() };
+    let topic = if is_saved { String::new() } else { channel.description.clone().unwrap_or_default() };
     let channel_type_str = match channel.channel_type {
         ChannelType::Public => "public",
         ChannelType::Private => "private",
+        ChannelType::SavedMessages => "saved",
         _ => "public",
     };
     let member_count = channel.member_count as i32;

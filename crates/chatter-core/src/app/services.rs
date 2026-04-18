@@ -152,6 +152,7 @@ impl ServiceContainer {
             infra.sesame_manager.clone(),
             infra.search_index.clone(),
             infra.token_manager.clone(),
+            infra.event_bus.clone(),
         ));
 
         // 4. Message gateway with Sesame
@@ -201,6 +202,7 @@ impl ServiceContainer {
             infra.user_repo.clone(),
             signal_service.clone(),
             infra.group_coordinator.clone(),
+            message_service.clone(),
         ));
 
         // 9. Session service
@@ -347,6 +349,8 @@ impl ServiceContainer {
         // 24. Device service for multi-device management
         let device_service = Arc::new(DeviceService::new(
             infra.settings_repo.clone(),
+            channel_service.clone(),
+            signal_service.clone(),
         ));
 
         // 25. Organization service

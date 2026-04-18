@@ -10,8 +10,8 @@ use rand::RngCore;
 
 use crate::proto::content_v1::{
     AttachmentPointer, Content, DataMessage, Delete, DeleteForMeSync, EditMessage,
-    PinMessage, Reaction, ReceiptMessage, SavedMessageSync, TypingMessage, Quote,
-    content, typing_message, receipt_message, quote,
+    PinMessage, Quote, QuotedAttachment, Reaction, ReceiptMessage, SavedMessageSync, TypingMessage,
+    content, quote, receipt_message, typing_message,
 };
 use crate::util::time::TimestampNanos;
 
@@ -87,6 +87,7 @@ pub fn build_reply_content(
     quote_author_id: &str,
     quote_timestamp: u64,
     quote_text: &str,
+    quote_attachments: Vec<QuotedAttachment>,
     sent_at: u64,
 ) -> Content {
     tracing::debug!(
@@ -95,9 +96,10 @@ pub fn build_reply_content(
         attachment_count = attachments.len(),
         quote_author = quote_author_id,
         quote_ts = quote_timestamp,
+        quote_attachments = quote_attachments.len(),
         "build_reply_content: creating Content proto with Quote"
     );
-    
+
     Content {
         timestamp: sent_at,
         content: Some(content::Content::DataMessage(DataMessage {
@@ -107,7 +109,7 @@ pub fn build_reply_content(
             quote: Some(Quote {
                 id: quote_timestamp,  // Signal uses timestamp as ID
                 text: quote_text.to_string(),
-                attachments: vec![],  // TODO: Add quoted attachment support if needed
+                attachments: quote_attachments,
                 author_aci: quote_author_id.to_string(),
                 r#type: quote::Type::Normal as i32,
                 author_aci_binary: vec![],  // We use string format

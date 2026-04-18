@@ -5,7 +5,6 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::services::channel::ChannelService;
 use chatter_core::services::user::FriendRequestFilter;
 
 use crate::bin_ui::converters::{get_initials, FriendRequestExt, FriendRequestSendData};

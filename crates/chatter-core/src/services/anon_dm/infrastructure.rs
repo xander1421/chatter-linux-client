@@ -23,7 +23,7 @@ impl AnonDmService {
         // Serialize content
         let plaintext = content.encode_to_vec();
 
-        // Get token #1 for anonymous prekey fetch
+        // Get token #1 for anonymous prekey fetch (claim = fetch + mark used atomically)
         let prekey_token = self.get_or_request_token().await?;
 
         // Encrypt with Signal Protocol ANONYMOUSLY
@@ -33,12 +33,7 @@ impl AnonDmService {
             .await
             .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
 
-        // Mark prekey token as used
-        self.token_manager
-            .mark_token_used(&prekey_token.id)
-            .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
-
-        // Get token #2 for anonymous message send
+        // Get token #2 for anonymous message send (claim = fetch + mark used atomically)
         let send_token = self.get_or_request_token().await?;
 
         // Build SealedSenderMessage
@@ -72,11 +67,6 @@ impl AnonDmService {
             .await
             .map_err(|e| AnonDmError::MessageError(format!("Failed to send to device inbox: {}", e)))?;
 
-        // Mark send token as used
-        self.token_manager
-            .mark_token_used(&send_token.id)
-            .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
-
         tracing::debug!(
             peer_id = %peer_id,
             "Sent to device inbox using fully anonymous path"
@@ -85,12 +75,14 @@ impl AnonDmService {
         Ok(())
     }
 
-    /// Get an available token or request new ones.
+    /// Atomically claim a token or request new ones.
+    ///
+    /// Uses `claim_available_token` (UPDATE ... RETURNING) so two concurrent
+    /// sends never see the same credential — the server rejects any repeat.
     pub(crate) async fn get_or_request_token(&self) -> Result<crate::mailbox::token_manager::MailboxToken, AnonDmError> {
-        match self.token_manager.get_available_token() {
+        match self.token_manager.claim_available_token() {
             Ok(Some(token)) => Ok(token),
             Ok(None) => {
-                // Request new tokens from server
                 let mut mailbox_client = self.grpc_pool.mailbox_client();
                 self.token_manager
                     .request_tokens(&mut mailbox_client, 5)
@@ -98,7 +90,7 @@ impl AnonDmService {
                     .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
 
                 self.token_manager
-                    .get_available_token()
+                    .claim_available_token()
                     .map_err(|e| AnonDmError::CryptoError(e.to_string()))?
                     .ok_or_else(|| AnonDmError::CryptoError("No tokens available".to_string()))
             }
@@ -171,11 +163,10 @@ impl AnonDmService {
         &self,
         conversation_id: &AnonDmId,
     ) -> Result<AnonDmMailbox, AnonDmError> {
-        // Get or request a blind-signed token
-        let token = match self.token_manager.get_available_token() {
+        // Atomically claim a blind-signed token (marks used in same SQL stmt)
+        let token = match self.token_manager.claim_available_token() {
             Ok(Some(token)) => token,
             Ok(None) => {
-                // Request new tokens from server
                 let mut mailbox_client = self.grpc_pool.mailbox_client();
                 self.token_manager
                     .request_tokens(&mut mailbox_client, 5)
@@ -183,7 +174,7 @@ impl AnonDmService {
                     .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
 
                 self.token_manager
-                    .get_available_token()
+                    .claim_available_token()
                     .map_err(|e| AnonDmError::CryptoError(e.to_string()))?
                     .ok_or_else(|| AnonDmError::CryptoError("No tokens available".to_string()))?
             }
@@ -260,11 +251,6 @@ impl AnonDmService {
             created_at: now,
             expires_at: now + chrono::Duration::days(30),
         };
-
-        // Mark the token as used
-        self.token_manager
-            .mark_token_used(&token.id)
-            .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
 
         Ok(mailbox)
     }

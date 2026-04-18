@@ -182,7 +182,7 @@ fn test_build_text_content_empty_body() {
 /// Test building typing indicator content.
 ///
 /// Architecture reference:
-///   TypingHandler → DomainEvent::TypingStarted/TypingStopped
+///   base_anon dispatcher → DomainEvent::TypingStarted/TypingStopped
 #[test]
 fn test_build_typing_started() {
     let content = build_typing_content(true);
@@ -225,7 +225,7 @@ fn test_build_typing_with_channel() {
 /// Test building read receipt content.
 ///
 /// Architecture reference:
-///   ReceiptHandler → DomainEvent::MessagesRead
+///   base_anon dispatcher → DomainEvent::MessagesRead
 ///   Read receipts carry timestamps of the messages that were read.
 #[test]
 fn test_build_read_receipt() {
@@ -278,7 +278,7 @@ fn test_build_read_receipt_with_channel() {
 /// Test building an emoji reaction.
 ///
 /// Architecture reference:
-///   ReactionHandler → DomainEvent::ReactionAdded/ReactionRemoved
+///   base_anon dispatcher → DomainEvent::ReactionAdded/ReactionRemoved
 #[test]
 fn test_build_reaction_add() {
     let content = build_reaction_content("👍", false, "author-abc", 12345);
@@ -332,7 +332,7 @@ fn test_build_reaction_with_channel() {
 /// Test building a pin message.
 ///
 /// Architecture reference:
-///   PinHandler → DomainEvent::MessagePinned/MessageUnpinned
+///   base_anon dispatcher → DomainEvent::MessagePinned/MessageUnpinned
 #[test]
 fn test_build_pin() {
     let content = build_pin_content("author-abc", 12345, false);

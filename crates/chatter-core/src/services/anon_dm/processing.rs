@@ -1,46 +1,104 @@
 use crate::domain::anon_dm::{AnonDmId, AnonDmMessageId};
-use crate::domain::ids::{ChannelId, MessageId};
-use crate::domain::message::{ConversationType, MessageContent};
+use crate::domain::ids::{AttachmentId, ChannelId, MessageId};
+use crate::domain::message::ConversationType;
 use crate::domain::UserId;
-use crate::proto::content_v1::Content;
+use crate::inbox::handlers::base_anon::{
+    AnonInboxBackend, CommonDispatchOutcome, QuoteContext, dispatch_common_content,
+};
+use crate::inbox::handlers::DomainEvent;
+use crate::proto::content_v1::{AttachmentPointer, Content};
 use crate::services::AttachmentService;
 
 use super::{AnonDmError, AnonDmService};
 
+impl AnonInboxBackend for AnonDmService {
+    type Id = AnonDmId;
+
+    fn conversation_type(&self) -> ConversationType { ConversationType::AnonDm }
+    fn label(&self) -> &'static str { "anon DM" }
+
+    fn is_sender_blocked(&self, sender_id: &UserId) -> bool {
+        self.is_user_blocked(sender_id).unwrap_or(false)
+    }
+
+    fn is_conversation_blocked(&self, id: &Self::Id) -> bool {
+        AnonDmService::is_conversation_blocked(self, id).unwrap_or(false)
+    }
+
+    fn create_attachment_records(&self, pointers: &[AttachmentPointer]) -> Vec<AttachmentId> {
+        let svc = AttachmentService::new_local(self.attachment_repo.clone());
+        svc.create_from_pointers(pointers)
+    }
+
+    fn store_data_message(
+        &self,
+        id: &Self::Id,
+        sender: &UserId,
+        text: &str,
+        attachments: &[AttachmentId],
+        sent_at: u64,
+        quote: Option<QuoteContext>,
+    ) -> Result<String, String> {
+        self.store_message_with_attachments(id, sender, text, attachments, sent_at, quote)
+            .map(|m| m.as_str().to_string())
+            .map_err(|e| e.to_string())
+    }
+
+    fn delete_message(&self, id: &Self::Id, sender: &UserId, ts: u64) -> Result<bool, String> {
+        self.delete_message_by_timestamp(id, sender, ts).map_err(|e| e.to_string())
+    }
+
+    fn update_message_text(&self, id: &Self::Id, sender: &UserId, ts: u64, text: &str) -> Result<bool, String> {
+        self.update_message_text_by_sender(id, sender, ts, text).map_err(|e| e.to_string())
+    }
+
+    fn add_reaction(
+        &self, id: &Self::Id, target_sender: &UserId, target_ts_ns: u64,
+        reactor: &UserId, emoji: &str,
+    ) -> Result<(), String> {
+        AnonDmService::add_reaction(self, id, target_sender, target_ts_ns, reactor, emoji)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    fn remove_reaction(
+        &self, id: &Self::Id, target_sender: &UserId, target_ts_ns: u64,
+        reactor: &UserId, emoji: &str,
+    ) -> Result<(), String> {
+        AnonDmService::remove_reaction(self, id, target_sender, target_ts_ns, reactor, emoji)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    fn set_pinned(&self, id: &Self::Id, ts: u64, pinned: bool) -> Result<(), String> {
+        self.set_message_pinned(id, ts, pinned).map(|_| ()).map_err(|e| e.to_string())
+    }
+
+    fn get_message_id_by_timestamp(&self, id: &Self::Id, ts: u64) -> Option<MessageId> {
+        self.get_message_by_timestamp(id, ts).ok().flatten().map(|m| m.id)
+    }
+
+    fn persist_delivery_status(&self, id: &Self::Id, timestamps: &[u64], status: &str) {
+        let _ = self.update_delivery_status(id, timestamps, status);
+    }
+}
+
 impl AnonDmService {
     /// Process an incoming message from an anonymous DM conversation.
     ///
-    /// This is the service-layer entry point for handling incoming `InboxEvent::AnonDmMessage`.
-    /// It validates the conversation, routes based on content type, and returns domain events.
+    /// Delegates common content types (DataMessage, Typing, Reaction, Receipt,
+    /// Pin, Edit) to `dispatch_common_content`. Handles DM-specific content
+    /// (presence, profile updates, anon-group forwarding, calls) locally.
     pub fn process_incoming_content(
         &self,
         conversation_id: &AnonDmId,
         sender_id: &UserId,
         inner_content: &Content,
-    ) -> Result<Vec<crate::inbox::handlers::DomainEvent>, AnonDmError> {
-        use crate::inbox::handlers::DomainEvent;
-        use crate::proto::content_v1::{content::Content as ContentType, typing_message, receipt_message};
+    ) -> Result<Vec<DomainEvent>, AnonDmError> {
+        use crate::proto::content_v1::content::Content as ContentType;
 
-        // Check if sender is globally blocked
-        if self.is_user_blocked(sender_id).unwrap_or(false) {
-            tracing::info!(
-                sender_id = %sender_id,
-                conversation_id = %conversation_id,
-                "[ANON_DM] Dropped message from blocked user"
-            );
-            return Ok(vec![]);
-        }
-
-        // Check if conversation is blocked
-        if self.is_conversation_blocked(conversation_id).unwrap_or(false) {
-            tracing::info!(
-                conversation_id = %conversation_id,
-                "[ANON_DM] Dropped message for blocked conversation"
-            );
-            return Ok(vec![]);
-        }
-
-        // Verify conversation exists and is active
+        // Verify conversation exists and sender matches peer (DM-specific gate).
+        // Block lists are checked inside dispatch_common_content via the backend.
         match self.get_conversation(conversation_id) {
             Ok(Some(dm)) => {
                 if dm.peer_id != *sender_id {
@@ -56,7 +114,6 @@ impl AnonDmService {
                     tracing::info!(
                         conversation_id = %conversation_id,
                         status = ?dm.status,
-                        has_peer_mailbox = dm.peer_mailbox_pk.is_some(),
                         "[ANON_DM] Dropped message in non-active conversation"
                     );
                     return Ok(vec![]);
@@ -71,44 +128,20 @@ impl AnonDmService {
                 return Ok(vec![]);
             }
             Err(e) => {
-                tracing::warn!(
-                    conversation_id = %conversation_id,
-                    error = %e,
-                    "[ANON_DM] Failed to check conversation"
-                );
+                tracing::warn!(conversation_id = %conversation_id, error = %e, "[ANON_DM] Failed to check conversation");
                 return Ok(vec![]);
             }
         }
 
+        // Common content types (identical between DM and Group).
+        match dispatch_common_content(conversation_id, sender_id, inner_content, self) {
+            CommonDispatchOutcome::Handled(events) => return Ok(events),
+            CommonDispatchOutcome::Dropped => return Ok(vec![]),
+            CommonDispatchOutcome::NotHandled => {}
+        }
+
+        // DM-specific content types.
         let mut events = Vec::new();
-
-        // Log the incoming content type for debugging
-        let content_type_name = match &inner_content.content {
-            Some(ContentType::DataMessage(_)) => "DataMessage",
-            Some(ContentType::Typing(_)) => "Typing",
-            Some(ContentType::Reaction(_)) => "Reaction",
-            Some(ContentType::Receipt(_)) => "Receipt",
-            Some(ContentType::Pin(_)) => "Pin",
-            Some(ContentType::Edit(_)) => "Edit",
-            Some(ContentType::AnonDmPresence(_)) => "AnonDmPresence",
-            Some(ContentType::AnonDmProfileUpdate(_)) => "AnonDmProfileUpdate",
-            Some(ContentType::AnonGroupInvite(_)) => "AnonGroupInvite",
-            Some(ContentType::AnonGroupJoinAck(_)) => "AnonGroupJoinAck",
-            Some(ContentType::AnonGroupMemberList(_)) => "AnonGroupMemberList",
-            Some(ContentType::AnonCallOffer(_)) => "AnonCallOffer",
-            Some(ContentType::AnonCallAnswer(_)) => "AnonCallAnswer",
-            Some(ContentType::AnonCallHangup(_)) => "AnonCallHangup",
-            _ => "Unknown",
-        };
-
-        tracing::info!(
-            conversation_id = %conversation_id,
-            sender_id = %sender_id,
-            content_type = content_type_name,
-            "[ANON_DM_PROCESS] Processing incoming content"
-        );
-
-        // Route based on inner content type
         match &inner_content.content {
             Some(ContentType::AnonDmPresence(presence)) => {
                 use crate::proto::content_v1::anon_dm_presence;
@@ -176,280 +209,6 @@ impl AnonDmService {
                         bio: profile_update.bio.clone(),
                         timestamp: profile_update.timestamp,
                     });
-                }
-            }
-            Some(ContentType::DataMessage(data_msg)) => {
-                // Check for delete first
-                if let Some(delete) = &data_msg.delete {
-                    let deleted = self.delete_message_by_timestamp(
-                        conversation_id,
-                        sender_id,
-                        delete.target_sent_timestamp,
-                    )?;
-
-                    if deleted {
-                        tracing::info!(
-                            "Deleted message at timestamp {} from {} in anon DM {}",
-                            delete.target_sent_timestamp,
-                            sender_id,
-                            conversation_id
-                        );
-                    }
-
-                    events.push(DomainEvent::MessageDeleted {
-                        message_id: MessageId::from_timestamp(delete.target_sent_timestamp),
-                        author_id: *sender_id,
-                        channel_id: Some((*conversation_id).into()),
-                        target_sent_timestamp: delete.target_sent_timestamp,
-                    });
-                    return Ok(events);
-                }
-
-                // Handle text and/or attachments
-                let has_text = !data_msg.body.is_empty();
-                let has_attachments = !data_msg.attachments.is_empty();
-
-                if has_text || has_attachments {
-                    // Create attachment records from pointers if any
-                    let attachment_ids = if has_attachments {
-                        let attachment_service = AttachmentService::new_local(self.attachment_repo.clone());
-                        let ids = attachment_service.create_from_pointers(&data_msg.attachments);
-                        tracing::info!(
-                            conversation_id = %conversation_id,
-                            attachment_count = ids.len(),
-                            "[ANON_DM] Created attachment records from pointers"
-                        );
-                        ids
-                    } else {
-                        Vec::new()
-                    };
-
-                    // Use sender's timestamp for consistent ordering across devices
-                    let sent_at = inner_content.timestamp;
-
-                    // Store message (with or without quote metadata)
-                    let quote = crate::inbox::handlers::base_anon::QuoteContext::from_content(inner_content);
-                    let message_id = self.store_message_with_attachments(
-                        conversation_id,
-                        sender_id,
-                        &data_msg.body,
-                        &attachment_ids,
-                        sent_at,
-                        quote,
-                    )?;
-                    tracing::info!(
-                        conversation_id = %conversation_id,
-                        message_id = %message_id,
-                        sent_at = sent_at,
-                        has_text = has_text,
-                        attachment_count = attachment_ids.len(),
-                        "[ANON_DM] Stored message"
-                    );
-
-                    // Emit unified MessageReceived event
-                    let message = crate::inbox::handlers::base_anon::build_message_from_content(
-                        message_id.as_str(),
-                        (*conversation_id).into(),
-                        ConversationType::AnonDm,
-                        *sender_id,
-                        &inner_content,
-                        sent_at,
-                    );
-                    events.push(DomainEvent::MessageReceived { message });
-                    
-                    // Clear typing indicator when message arrives
-                    // This prevents stuck typing indicators after message is sent
-                    let channel_id: crate::domain::ChannelId = (*conversation_id).into();
-                    events.push(DomainEvent::TypingStopped {
-                        channel_id,
-                        user_id: *sender_id,
-                    });
-                }
-            }
-            Some(ContentType::Typing(typing)) => {
-                let channel_id: crate::domain::ChannelId = (*conversation_id).into();
-                let started = typing.action == typing_message::Action::Started as i32;
-
-                if started {
-                    events.push(DomainEvent::TypingStarted {
-                        channel_id,
-                        user_id: *sender_id,
-                    });
-                } else {
-                    events.push(DomainEvent::TypingStopped {
-                        channel_id,
-                        user_id: *sender_id,
-                    });
-                }
-            }
-            Some(ContentType::Reaction(reaction)) => {
-                let target_sender_id: crate::domain::UserId = reaction.target_author_aci.parse().unwrap_or(*sender_id);
-                let sent_at_ns = reaction.target_sent_timestamp;
-
-                // Persist reaction to anon_dm_reactions table
-                if reaction.remove {
-                    match self.remove_reaction(conversation_id, &target_sender_id, sent_at_ns, sender_id, &reaction.emoji) {
-                        Ok(_) => {}
-                        Err(e) => {
-                            tracing::warn!(
-                                conversation_id = %conversation_id,
-                                error = %e,
-                                "[ANON_DM] Failed to remove reaction from DB"
-                            );
-                        }
-                    }
-                    events.push(DomainEvent::ReactionRemoved {
-                        sender_id: target_sender_id,
-                        sent_at_ns,
-                        reactor_id: *sender_id,
-                        emoji: reaction.emoji.clone(),
-                        timestamp: reaction.target_sent_timestamp,
-                    });
-                } else {
-                    match self.add_reaction(conversation_id, &target_sender_id, sent_at_ns, sender_id, &reaction.emoji) {
-                        Ok(_) => {}
-                        Err(e) => {
-                            tracing::warn!(
-                                conversation_id = %conversation_id,
-                                error = %e,
-                                "[ANON_DM] Failed to add reaction to DB"
-                            );
-                        }
-                    }
-                    events.push(DomainEvent::ReactionAdded {
-                        sender_id: target_sender_id,
-                        sent_at_ns,
-                        reactor_id: *sender_id,
-                        emoji: reaction.emoji.clone(),
-                        timestamp: reaction.target_sent_timestamp,
-                    });
-                }
-            }
-            Some(ContentType::Receipt(receipt)) => {
-                let channel_id: crate::domain::ChannelId = (*conversation_id).into();
-                let receipt_type_name = if receipt.r#type == receipt_message::Type::Read as i32 {
-                    "Read"
-                } else if receipt.r#type == receipt_message::Type::Delivery as i32 {
-                    "Delivery"
-                } else {
-                    "Unknown"
-                };
-
-                tracing::info!(
-                    conversation_id = %conversation_id,
-                    sender_id = %sender_id,
-                    receipt_type = receipt_type_name,
-                    timestamp_count = receipt.timestamps.len(),
-                    timestamps = ?receipt.timestamps,
-                    "[ANON_DM_RECEIPT_PROCESS] Processing receipt from peer"
-                );
-
-                if receipt.r#type == receipt_message::Type::Read as i32 {
-                    // Persist read status to anon DM DB
-                    let _ = self.update_delivery_status(conversation_id, &receipt.timestamps, "read");
-
-                    events.push(DomainEvent::MessagesRead {
-                        reader_id: *sender_id,
-                        message_timestamps: receipt.timestamps.clone(),
-                        receipt_timestamp: receipt.timestamp,
-                        channel_id: Some(channel_id),
-                    });
-                    tracing::info!(
-                        conversation_id = %conversation_id,
-                        channel_id = %channel_id,
-                        timestamp_count = receipt.timestamps.len(),
-                        "[ANON_DM_RECEIPT_PROCESS] Emitting MessagesRead event"
-                    );
-                } else if receipt.r#type == receipt_message::Type::Delivery as i32 {
-                    // Persist delivery status to anon DM DB
-                    let _ = self.update_delivery_status(conversation_id, &receipt.timestamps, "delivered");
-
-                    events.push(DomainEvent::MessagesDelivered {
-                        recipient_id: *sender_id,
-                        message_timestamps: receipt.timestamps.clone(),
-                        receipt_timestamp: receipt.timestamp,
-                    });
-                    tracing::info!(
-                        conversation_id = %conversation_id,
-                        timestamp_count = receipt.timestamps.len(),
-                        "[ANON_DM_RECEIPT_PROCESS] Emitting MessagesDelivered event"
-                    );
-                }
-            }
-            Some(ContentType::Pin(pin)) => {
-                let new_pinned = !pin.unpin;
-
-                // Persist pin state to anon DM messages table
-                if let Err(e) = self.set_message_pinned(conversation_id, pin.target_sent_timestamp, new_pinned) {
-                    tracing::warn!(error = %e, "Failed to persist anon DM pin state");
-                }
-
-                // Look up real message ID from DB (not fabricated) for correct pinned_state tracking
-                let message_id = self.get_message_by_timestamp(conversation_id, pin.target_sent_timestamp)
-                    .ok().flatten()
-                    .map(|m| m.id)
-                    .unwrap_or_else(|| crate::domain::MessageId::from_timestamp(pin.target_sent_timestamp));
-                let channel_id: crate::domain::ChannelId = (*conversation_id).into();
-
-                if pin.unpin {
-                    events.push(DomainEvent::MessageUnpinned {
-                        message_id,
-                        unpinner_id: *sender_id,
-                        channel_id,
-                        target_sent_timestamp: pin.target_sent_timestamp,
-                    });
-                } else {
-                    events.push(DomainEvent::MessagePinned {
-                        message_id,
-                        pinner_id: *sender_id,
-                        channel_id,
-                        target_sent_timestamp: pin.target_sent_timestamp,
-                    });
-                }
-            }
-            Some(ContentType::Edit(edit)) => {
-                let target_timestamp = edit.target_sent_timestamp;
-                let new_text = edit
-                    .data_message
-                    .as_ref()
-                    .map(|dm| dm.body.clone())
-                    .unwrap_or_default();
-
-                // Update the message in the database (only if sender is the author)
-                match self.update_message_text_by_sender(conversation_id, sender_id, target_timestamp, &new_text) {
-                    Ok(true) => {
-                        tracing::info!(
-                            conversation_id = %conversation_id,
-                            sender_id = %sender_id,
-                            target_timestamp = target_timestamp,
-                            "[ANON_DM] Updated message text (edit from peer)"
-                        );
-                        events.push(DomainEvent::MessageEdited {
-                            message_id: MessageId::from_timestamp(target_timestamp),
-                            new_content: MessageContent::Text(new_text),
-                            channel_id: (*conversation_id).into(),
-                            conversation_type: ConversationType::AnonDm,
-                            target_sent_timestamp: target_timestamp,
-                        });
-                    }
-                    Ok(false) => {
-                        // Either message not found or sender is not the author
-                        tracing::debug!(
-                            conversation_id = %conversation_id,
-                            sender_id = %sender_id,
-                            target_timestamp = target_timestamp,
-                            "[ANON_DM] Edit ignored: message not found or sender not author"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            conversation_id = %conversation_id,
-                            sender_id = %sender_id,
-                            target_timestamp = target_timestamp,
-                            error = %e,
-                            "[ANON_DM] Failed to update message text"
-                        );
-                    }
                 }
             }
             Some(ContentType::AnonGroupInvite(invite)) => {

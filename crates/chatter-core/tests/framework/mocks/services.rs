@@ -240,12 +240,12 @@ pub trait UserServiceTrait: Send + Sync {
         user_id: String,
     ) -> impl std::future::Future<Output = MockResult<()>> + Send;
 
-    /// Search users.
-    fn search_users(
+    /// Signal-style exact-username lookup. Returns the matched user id or
+    /// `None` when no account is registered under the given username hash.
+    fn lookup_username(
         &self,
-        query: String,
-        limit: u32,
-    ) -> impl std::future::Future<Output = MockResult<Vec<TestUser>>> + Send;
+        username_hash: [u8; 32],
+    ) -> impl std::future::Future<Output = MockResult<Option<String>>> + Send;
 }
 
 // ============================================================================

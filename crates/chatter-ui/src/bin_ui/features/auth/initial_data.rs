@@ -265,9 +265,10 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     }
 
     // Load anonymous DMs from local storage and add to DM list
-    match Ok::<_, ()>(ui_ctx.list_anon_dm_conversations()) {
-        Ok(anon_dms) => {
-            tracing::info!("Loaded {} anonymous DM conversations", anon_dms.len());
+    {
+        let anon_dms = ui_ctx.list_anon_dm_conversations();
+        tracing::info!("Loaded {} anonymous DM conversations", anon_dms.len());
+        {
             for dm in anon_dms {
                 // Get peer display name from conversation (revealed on accept/init)
                 // Do NOT use user_service - these are strangers
@@ -323,15 +324,13 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                 dm_list.push(dm_item);
             }
         }
-        Err(e) => {
-            tracing::warn!("Failed to load anonymous DM conversations: {}", e);
-        }
     }
 
     // Load pending anon DM requests (message requests) - show as pending in sidebar and modal
     let mut private_requests_ui: Vec<FriendRequestSendData> = Vec::new();
-    match Ok::<_, ()>(ui_ctx.list_anon_dm_message_requests()) {
-        Ok(requests) => {
+    {
+        let requests = ui_ctx.list_anon_dm_message_requests();
+        {
             tracing::info!("Loaded {} pending anon DM requests", requests.len());
             for dm in requests {
                 // Get peer display name from conversation (revealed after ECIES decryption)
@@ -379,15 +378,13 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                 });
             }
         }
-        Err(e) => {
-            tracing::warn!("Failed to load pending anon DM requests: {}", e);
-        }
     }
 
     // Load outgoing pending anon DM requests (requests we sent but haven't been accepted)
-    match Ok::<_, ()>(ui_ctx.list_anon_dm_outgoing_requests()) {
-        Ok(requests) => {
-            tracing::info!("Loaded {} outgoing anon DM requests", requests.len());
+    {
+        let requests = ui_ctx.list_anon_dm_outgoing_requests();
+        tracing::info!("Loaded {} outgoing anon DM requests", requests.len());
+        {
             for dm in requests {
                 // Get peer display name from conversation
                 let peer_name = dm.peer_display_name.clone()
@@ -427,9 +424,6 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                 };
                 dm_list.push(dm_item);
             }
-        }
-        Err(e) => {
-            tracing::warn!("Failed to load outgoing anon DM requests: {}", e);
         }
     }
 
@@ -476,22 +470,15 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     tracing::info!("Loaded {} private groups", private_groups.len());
 
     // Load blocked users for the Blocked tab
-    let blocked_users_data: Vec<(String, String)> = match Ok::<_, ()>(ui_ctx.get_anon_dm_blocked_users()) {
-        Ok(users) => {
-            tracing::info!("Loaded {} blocked users", users.len());
-            users.into_iter()
-                .map(|user_id| {
-                    let id_str = user_id.to_string();
-                    let display_name = format!("User {}", &id_str[..8.min(id_str.len())]);
-                    (id_str, display_name)
-                })
-                .collect()
-        }
-        Err(e) => {
-            tracing::warn!("Failed to load blocked users: {}", e);
-            Vec::new()
-        }
-    };
+    let users = ui_ctx.get_anon_dm_blocked_users();
+    tracing::info!("Loaded {} blocked users", users.len());
+    let blocked_users_data: Vec<(String, String)> = users.into_iter()
+        .map(|user_id| {
+            let id_str = user_id.to_string();
+            let display_name = format!("User {}", &id_str[..8.min(id_str.len())]);
+            (id_str, display_name)
+        })
+        .collect();
 
     // Pre-decode avatars before entering UI thread to avoid blocking
     let mut dm_list = dm_list;
@@ -629,7 +616,8 @@ async fn load_channel_into_ui_from_services(
     let current_user_id_for_slint = current_user_id.clone().unwrap_or_default();
 
     // Update UI
-    let channel_name = channel.name.clone();
+    let is_saved = matches!(channel.channel_type, chatter_core::domain::channel::ChannelType::SavedMessages);
+    let channel_name = if is_saved { "Saved Messages".to_string() } else { channel.name.clone() };
     let channel_id_str = channel_id.to_string();
 
     let ui_ctx_load = ui_ctx.clone();
@@ -804,8 +792,9 @@ pub fn refresh_anon_dms(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let mut dm_list: Vec<DMListItemSendData> = Vec::new();
         
         // Load active anon DM conversations
-        match Ok::<_, ()>(ui_ctx.list_anon_dm_conversations()) {
-            Ok(dms) => {
+        {
+            let dms = ui_ctx.list_anon_dm_conversations();
+            {
                 for dm in dms {
                     if dm.status != chatter_core::domain::anon_dm::AnonDmStatus::Pending {
                         let peer_name = dm.peer_display_name.clone()
@@ -852,14 +841,12 @@ pub fn refresh_anon_dms(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                 }
             }
-            Err(e) => {
-                tracing::warn!("Failed to refresh anonymous DMs: {}", e);
-            }
         }
-        
+
         // Also load pending anon DM requests
-        match Ok::<_, ()>(ui_ctx.list_anon_dm_message_requests()) {
-            Ok(requests) => {
+        {
+            let requests = ui_ctx.list_anon_dm_message_requests();
+            {
                 for dm in requests {
                     let peer_name = dm.peer_display_name.clone()
                         .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
@@ -891,11 +878,8 @@ pub fn refresh_anon_dms(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     dm_list.push(dm_item);
                 }
             }
-            Err(e) => {
-                tracing::warn!("Failed to load pending anon DM requests: {}", e);
-            }
         }
-        
+
         // Get existing DM list and merge with anon DMs
         if let Some(w) = window_weak.upgrade() {
             let existing_dms = w.get_dm_conversations();

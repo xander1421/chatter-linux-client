@@ -234,7 +234,7 @@ impl CoreServices {
             None => return Vec::new(),
         };
 
-        let token = self.token_manager.get_available_token().ok().flatten();
+        let token = self.token_manager.claim_available_token().ok().flatten();
         let unblinded = token.as_ref().map(|t| crate::mailbox::blind_signature::UnblindedToken {
             public_key: t.public_key.clone(),
             signature: t.signature.clone(),
@@ -248,14 +248,10 @@ impl CoreServices {
         }
 
         let result = match client.trending(limit as i32, unblinded).await {
-            Ok(results) => {
-                if let Some(t) = token {
-                    let _ = self.token_manager.mark_token_used(&t.id);
-                }
-                results
-            }
+            Ok(results) => results,
             Err(_) => Vec::new(),
         };
+        let _ = token;
 
         interceptor.set_mode(old_mode);
         result
@@ -270,7 +266,7 @@ impl CoreServices {
             None => return Vec::new(),
         };
 
-        let token = self.token_manager.get_available_token().ok().flatten();
+        let token = self.token_manager.claim_available_token().ok().flatten();
         let unblinded = token.as_ref().map(|t| crate::mailbox::blind_signature::UnblindedToken {
             public_key: t.public_key.clone(),
             signature: t.signature.clone(),
@@ -284,14 +280,10 @@ impl CoreServices {
         }
 
         let result = match client.search(query, limit as i32, unblinded).await {
-            Ok(results) => {
-                if let Some(t) = token {
-                    let _ = self.token_manager.mark_token_used(&t.id);
-                }
-                results
-            }
+            Ok(results) => results,
             Err(_) => Vec::new(),
         };
+        let _ = token;
 
         interceptor.set_mode(old_mode);
         result

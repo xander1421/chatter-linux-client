@@ -9,7 +9,6 @@
 //! the server from knowing actual usernames - it only stores/matches hashes.
 //! If the database is compromised, attackers see hashes, not usernames.
 
-use sha2::Sha256;
 use tokio_stream::{Stream, StreamExt};
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
@@ -31,48 +30,9 @@ use crate::proto::chat_v1::{
 };
 // NOTE: ServerTrustRootResponse removed - trust root is hardcoded in config.rs per Signal's security model
 
-// ============================================================================
-// Username Hashing
-// ============================================================================
-
-/// Hash a username with profile key for privacy before sending to server.
-///
-/// Uses HMAC-SHA256 with the profile key as the secret. The server never sees
-/// the actual username - only this hash. This provides:
-///
-/// 1. **Privacy**: Username cannot be recovered from hash
-/// 2. **Rainbow table resistance**: Profile key acts as unique salt
-/// 3. **Unlinkability**: Same username with different profile keys = different hashes
-///
-/// # Security Model
-///
-/// - Username is for LOGIN only, not discovery
-/// - Discovery uses QR codes / friend links with user_id
-/// - Profile keys are exchanged via E2E encrypted messages
-///
-/// # Example
-///
-/// ```ignore
-/// let hash = hash_username("alice", &profile_key);
-/// // Unique hash that only this user can reproduce
-/// ```
-pub fn hash_username(username: &str, profile_key: &[u8; 32]) -> String {
-    use hmac::{Hmac, Mac};
-
-    type HmacSha256 = Hmac<Sha256>;
-
-    // Normalize: lowercase and trim whitespace
-    let normalized = username.trim().to_lowercase();
-
-    // HMAC-SHA256 with profile_key as secret
-    let mut mac = HmacSha256::new_from_slice(profile_key)
-        .expect("HMAC can take key of any size");
-    mac.update(normalized.as_bytes());
-    let result = mac.finalize();
-
-    // Hex encode for proto String compatibility
-    hex::encode(result.into_bytes())
-}
+// Username hashing lives in `crypto::auth_crypto`. Re-exported here so existing
+// callers in the network layer don't need to change their imports.
+pub use crate::crypto::auth_crypto::hash_username;
 
 /// Auth service client wrapper.
 ///
@@ -272,6 +232,7 @@ impl AuthClient {
         challenge_id: &str,
         challenge_response: &[u8],
         registration_lock: &[u8; 32],
+        username_lookup_hash: &[u8; 32],
     ) -> Result<impl Stream<Item = Result<AuthEvent, NetworkError>>, NetworkError> {
         use base64::Engine;
 
@@ -294,6 +255,7 @@ impl AuthClient {
             initial_one_time_prekeys,
             challenge_response: challenge_response.to_vec(),
             challenge_id: challenge_id.to_string(),
+            username_lookup_hash: username_lookup_hash.to_vec(),
         };
 
         let response = self
@@ -342,6 +304,7 @@ impl AuthClient {
         challenge_id: &str,
         challenge_response: &[u8],
         registration_lock: &[u8; 32],
+        username_lookup_hash: &[u8; 32],
     ) -> Result<RegistrationResult, NetworkError> {
         let stream = self
             .register(
@@ -357,6 +320,7 @@ impl AuthClient {
                 challenge_id,
                 challenge_response,
                 registration_lock,
+                username_lookup_hash,
             )
             .await?;
 

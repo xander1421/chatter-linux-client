@@ -7,10 +7,10 @@ use std::sync::Arc;
 use chrono::{DateTime, Duration, Utc};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use uuid::Uuid;
-use hkdf::Hkdf;
-use sha2::Sha256;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519Secret};
 use zeroize::Zeroize;
+
+use crate::crypto::kdf::hkdf_sha256;
 
 use crate::domain::UserId;
 use crate::error::MailboxError;
@@ -258,10 +258,8 @@ impl ConversationKey {
         let raw_shared = our_secret.diffie_hellman(&their_public_key);
 
         // Derive encryption key via HKDF-SHA256 (never use raw DH output directly)
-        let hkdf = Hkdf::<Sha256>::new(None, raw_shared.as_bytes());
-        let mut derived_key = [0u8; 32];
-        hkdf.expand(b"chatter-dm-conversation-v1", &mut derived_key)
-            .map_err(|_| MailboxError::KeyDerivationFailed("HKDF expand failed".into()))?;
+        let derived_key: [u8; 32] = hkdf_sha256(raw_shared.as_bytes(), None, b"chatter-dm-conversation-v1")
+            .map_err(|e| MailboxError::KeyDerivationFailed(e.to_string()))?;
 
         self.shared_secret = Some(derived_key);
         self.established_at = Some(Utc::now());

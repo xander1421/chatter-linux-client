@@ -44,7 +44,7 @@ async fn test_get_nonexistent_user_profile() {
 }
 
 #[tokio::test]
-async fn test_search_users() {
+async fn test_lookup_username_exact_match() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
@@ -52,13 +52,12 @@ async fn test_search_users() {
 
     let mut user_client = UserClient::new(pool.channel(), pool.auth_clone());
 
-    // Search for our username (partial match)
-    let query = &user.username[..user.username.len().min(10)];
-    let response = assert_ok(user_client.search_users(query, 50, 0).await);
+    let hash = chatter_core::crypto::auth_crypto::hash_username_lookup(&user.username);
+    let found = assert_ok(user_client.lookup_username(hash).await);
+    assert_eq!(found.as_deref(), Some(user.id.to_string().as_str()));
 
-    // Verify API works (may or may not find user depending on indexing)
-    // UserSearchResponse has `results` field containing UserProfile
-    assert!(response.results.len() <= 50);
+    let missing = chatter_core::crypto::auth_crypto::hash_username_lookup("does_not_exist_xyz");
+    assert_eq!(assert_ok(user_client.lookup_username(missing).await), None);
 }
 
 // ============================================================================

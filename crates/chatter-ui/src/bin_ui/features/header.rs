@@ -155,19 +155,79 @@ fn wire_search_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     // Search result clicked - navigate to message
     let weak_window = window.as_weak();
+    let ui_ctx_clicked = ui_ctx.clone();
 
     window.on_search_result_clicked(move |message_id: slint::SharedString| {
         let message_id_str = message_id.to_string();
         tracing::info!("Search result clicked: {}", message_id_str);
-        // TODO: Navigate to message in chat
-        // This would require:
-        // 1. Switch to the message's channel
-        // 2. Load messages around that message
-        // 3. Scroll to the message
-        // Already on UI thread - no need for invoke_from_event_loop
-        if let Some(w) = weak_window.upgrade() {
+        
+        let weak = weak_window.clone();
+        let ui_ctx = ui_ctx_clicked.clone();
+        
+        // Already on UI thread - close modal immediately
+        if let Some(w) = weak.upgrade() {
             w.set_active_modal("none".into());
+            w.set_loading_messages(true);
         }
+
+        tokio::spawn(async move {
+            // 1. Find the message to get its channel_id
+            let msg_id = match message_id_str.parse::<chatter_core::domain::ids::MessageId>() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("Invalid message ID: {}", e);
+                    return;
+                }
+            };
+
+            let message = match ui_ctx.get_message_local(&msg_id) {
+                Some(m) => m,
+                None => {
+                    tracing::error!("Message {} not found locally", msg_id);
+                    return;
+                }
+            };
+
+            let channel_id = message.conversation_id;
+
+            // 2. Switch to the channel
+            ui_ctx.chat_state().set_active_channel(channel_id);
+            ui_ctx.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
+            
+            let ui_ctx_for_sel = ui_ctx.clone();
+            let weak_for_sel = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_for_sel.upgrade() {
+                    crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx_for_sel);
+                }
+            });
+
+            // 3. Load channel messages
+            // For now we just use the standard load_channel_into_ui which loads latest 50.
+            // In a more complete implementation, we would load around the target message.
+            crate::bin_ui::features::sidebar::channel::load_channel_into_ui(
+                weak.clone(),
+                channel_id,
+                ui_ctx.clone(),
+            ).await;
+
+            // 4. Find the message index and scroll to it
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    let messages = w.get_messages();
+                    for i in 0..messages.row_count() {
+                        if let Some(msg) = messages.row_data(i) {
+                            if msg.message_id == message_id_str {
+                                w.set_scroll_to_message_index(i as i32);
+                                tracing::debug!("Scrolling to message index {}", i);
+                                break;
+                            }
+                        }
+                    }
+
+                }
+            });
+        });
     });
 
     // Toggle search scope
@@ -464,30 +524,31 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
 fn wire_invite_member(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let chat_state = ui_ctx.chat_state().clone();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_invite_member(move || {
         let conversation = chat_state.active_conversation();
         let weak = weak_window.clone();
+        let ui_ctx = ui_ctx.clone();
 
-        let _ = slint::invoke_from_event_loop(move || {
-            let Some(w) = weak.upgrade() else { return };
-
-            match conversation {
-                ActiveConversation::AnonGroup(group_id) => {
-                    // Open private group invite modal
-                    w.set_invite_private_group_id(group_id.to_string().into());
-                    w.set_active_modal("invite-private-group".into());
-                }
-                ActiveConversation::Channel(channel_id) => {
-                    // Open channel invite modal
-                    w.set_invite_member_channel_id(channel_id.to_string().into());
-                    w.set_active_modal("invite-member".into());
-                }
-                _ => {
-                    tracing::debug!("Invite not available for this conversation type");
-                }
+        match conversation {
+            ActiveConversation::AnonGroup(group_id) => {
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_invite_private_group_id(group_id.to_string().into());
+                        w.set_active_modal("invite-private-group".into());
+                    }
+                });
             }
-        });
+            ActiveConversation::Channel(channel_id) => {
+                crate::bin_ui::features::modals::open_invite_member_modal(
+                    weak, ui_ctx, channel_id,
+                );
+            }
+            _ => {
+                tracing::debug!("Invite not available for this conversation type");
+            }
+        }
     });
 }
 

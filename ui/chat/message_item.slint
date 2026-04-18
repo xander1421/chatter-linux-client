@@ -81,6 +81,8 @@ export component MessageItem inherits Rectangle {
     in property <bool> is-reply: false;
     in property <string> reply-to-sender-name: "";
     in property <string> reply-to-preview: "";
+    in property <bool> reply-to-has-thumbnail: false;
+    in property <image> reply-to-thumbnail;
 
     // Internal hover state — touch covers entire message row
     property <bool> is-hovered: touch.has-hover;
@@ -350,11 +352,13 @@ export component MessageItem inherits Rectangle {
                             background: root.is-own ? Colors.background.with-alpha(0.08) : Colors.background.with-alpha(0.06);
                             border-radius: 6px;
                             max-width: root.width * 0.7 - Spacing.sm * 2;
-                            height: quote-layout.preferred-height + Spacing.sm;
+                            height: quote-row.preferred-height + Spacing.xs;
 
-                            HorizontalLayout {
+                            quote-row := HorizontalLayout {
                                 padding-left: 0px;
+                                padding-right: 0px;
                                 spacing: 0px;
+                                alignment: stretch;
 
                                 // Accent bar
                                 Rectangle {
@@ -363,10 +367,12 @@ export component MessageItem inherits Rectangle {
                                     border-radius: 1.5px;
                                 }
 
-                                quote-layout := VerticalLayout {
+                                VerticalLayout {
                                     padding: Spacing.xs;
                                     padding-left: Spacing.sm;
-                                    spacing: 2px;
+                                    padding-right: Spacing.sm;
+                                    spacing: 4px;
+                                    horizontal-stretch: 1;
 
                                     Text {
                                         text: root.reply-to-sender-name;
@@ -376,12 +382,25 @@ export component MessageItem inherits Rectangle {
                                         overflow: elide;
                                     }
 
-                                    Text {
+                                    // Text preview — only when no thumbnail
+                                    if !root.reply-to-has-thumbnail: Text {
                                         text: root.reply-to-preview;
                                         color: Colors.text-secondary;
                                         font-size: Typography.xs;
                                         overflow: elide;
-                                        max-width: root.width * 0.6;
+                                    }
+
+                                    // Thumbnail below sender name, spanning full bubble width
+                                    if root.reply-to-has-thumbnail: Rectangle {
+                                        height: 140px;
+                                        border-radius: 6px;
+                                        clip: true;
+                                        Image {
+                                            source: root.reply-to-thumbnail;
+                                            width: parent.width;
+                                            height: parent.height;
+                                            image-fit: cover;
+                                        }
                                     }
                                 }
                             }

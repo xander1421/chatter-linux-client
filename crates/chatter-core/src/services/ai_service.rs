@@ -532,6 +532,51 @@ impl AIService {
                 })
         }))
     }
+
+    /// Map a provider id string to the proto enum. Unknown strings map to
+    /// `Custom` so the UI can round-trip user-defined provider types.
+    fn provider_type(provider: &str) -> IntegrationType {
+        match provider {
+            "claude" => IntegrationType::Claude,
+            "openai" => IntegrationType::Openai,
+            _ => IntegrationType::Custom,
+        }
+    }
+
+    /// List models for a provider addressed by its id string.
+    ///
+    /// Returns `(id, display_name)` tuples so UIs don't need to reach into
+    /// proto types to render a model picker.
+    pub async fn list_models_by_name(
+        &self,
+        provider: &str,
+    ) -> Result<Vec<(String, String)>, AIError> {
+        let models = self.list_models(Self::provider_type(provider)).await?;
+        Ok(models.into_iter().map(|m| (m.id, m.display_name)).collect())
+    }
+
+    /// Create an integration and attach it to a channel in one call.
+    ///
+    /// Common UI flow: user picks provider + model → server creates
+    /// integration row → server attaches it to the target channel. Running
+    /// both steps in the service avoids leaking the two-phase flow into the
+    /// client façade.
+    pub async fn create_integration_for_channel(
+        &self,
+        name: &str,
+        provider: &str,
+        model: &str,
+        channel_id: &str,
+    ) -> Result<(), AIError> {
+        let config = IntegrationConfig {
+            model: model.to_string(),
+            ..Default::default()
+        };
+
+        let integration = self.create(name, Self::provider_type(provider), Some(config)).await?;
+        self.attach_to_channel(&integration.id, channel_id).await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

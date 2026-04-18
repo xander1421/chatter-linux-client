@@ -176,6 +176,61 @@ impl AnonDmService {
             .ok()
             .flatten()
     }
+
+    /// Persist the user's avatar bytes locally.
+    ///
+    /// Bytes are never uploaded to the server; they only travel over
+    /// already-established Signal sessions via `send_profile_update`.
+    /// Callers must size-check; we enforce [`crate::domain::anon_dm_init::MAX_AVATAR_SIZE`]
+    /// as defense in depth.
+    pub fn set_my_avatar_bytes(&self, bytes: &[u8]) -> Result<(), AnonDmError> {
+        use crate::storage::settings_keys;
+        if bytes.len() > crate::domain::anon_dm_init::MAX_AVATAR_SIZE {
+            return Err(AnonDmError::MessageError(format!(
+                "avatar too large: {} bytes, max {}",
+                bytes.len(),
+                crate::domain::anon_dm_init::MAX_AVATAR_SIZE,
+            )));
+        }
+        self.settings_repo
+            .set_bytes(settings_keys::AVATAR, bytes)
+            .map_err(|e| AnonDmError::Storage(e))?;
+        tracing::info!(avatar_size = bytes.len(), "Stored avatar bytes locally");
+        Ok(())
+    }
+
+    /// Store the new avatar then broadcast a profile update over every
+    /// ready anonymous DM.
+    ///
+    /// Best-effort broadcast: failures to push to individual conversations
+    /// are logged — the local store already succeeded, and peers see the
+    /// new avatar on the next profile update that happens to ride along.
+    pub async fn update_avatar_and_broadcast(&self, bytes: &[u8]) -> Result<(), AnonDmError> {
+        self.set_my_avatar_bytes(bytes)?;
+
+        let conversations = match self.list_ready_conversations() {
+            Ok(convs) => convs,
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to enumerate anon DMs for avatar broadcast");
+                return Ok(());
+            }
+        };
+
+        let total = conversations.len();
+        let mut sent = 0usize;
+        for conv in conversations {
+            match self.send_profile_update(&conv.id, None, None, None).await {
+                Ok(()) => sent += 1,
+                Err(e) => tracing::warn!(
+                    conversation_id = %conv.id,
+                    error = %e,
+                    "Failed to broadcast avatar update to conversation"
+                ),
+            }
+        }
+        tracing::info!(sent, total, "Broadcast avatar update to active anon DMs");
+        Ok(())
+    }
     
     /// Download avatar from URL and store it in the conversation record.
     ///

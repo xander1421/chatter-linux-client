@@ -50,27 +50,34 @@ impl AnonDmService {
         reply_to_sender: &UserId,
         reply_to_timestamp: u64,
     ) -> Result<(MessageId, u64), AnonDmError> {
-        // Look up the original message to build preview text.
+        // Look up the original message to build preview text + thumbnail.
         // Falls back to "📷 Photo" / "🎬 Video" / etc. for media-only replies
         // so the receiver sees a non-empty reply bubble on reload.
-        let preview_text = self
+        let original = self
             .get_message_by_sender_timestamp(conversation_id, reply_to_sender, reply_to_timestamp)
             .ok()
-            .flatten()
+            .flatten();
+        let (preview_text, quote_attachments) = original
+            .as_ref()
             .map(|msg| {
                 let attachments: Vec<_> = msg
                     .attachments
                     .iter()
                     .filter_map(|id| self.attachment_repo.get(id).ok().flatten())
                     .collect();
-                crate::services::gateway::shared::message_reply_preview(&msg, &attachments)
+                let preview =
+                    crate::services::gateway::shared::message_reply_preview(msg, &attachments);
+                let qa =
+                    crate::services::gateway::shared::build_quoted_attachments(&attachments);
+                (preview, qa)
             })
             .unwrap_or_default();
 
-        let quote = crate::services::gateway::shared::build_quote(
+        let quote = crate::services::gateway::shared::build_quote_with_attachments(
             &reply_to_sender.to_string(),
             reply_to_timestamp,
             &preview_text,
+            quote_attachments,
         );
 
         self.send_with_attachments_and_quote(conversation_id, text, attachments, Some(quote)).await
@@ -131,6 +138,15 @@ impl AnonDmService {
         let reply_to_text = quote.as_ref()
             .map(|q| q.text.clone())
             .filter(|t| !t.is_empty());
+        let (reply_to_thumbnail, reply_to_thumbnail_mime) = quote
+            .as_ref()
+            .and_then(|q| q.attachments.first())
+            .map(|qa| {
+                let thumb = (!qa.thumbnail.is_empty()).then(|| qa.thumbnail.clone());
+                let mime = (!qa.content_type.is_empty()).then(|| qa.content_type.clone());
+                (thumb, mime)
+            })
+            .unwrap_or((None, None));
 
         let message = Message {
             id: message_id,
@@ -144,6 +160,8 @@ impl AnonDmService {
             reply_to,
             reply_to_author_id,
             reply_to_text,
+            reply_to_thumbnail,
+            reply_to_thumbnail_mime,
             attachments: attachment_ids.clone(),
             is_pinned: false,
             is_edited: false,

@@ -59,6 +59,8 @@ pub fn build_own_message_item(
     is_reply: bool,
     reply_to_sender_name: &str,
     reply_to_preview: &str,
+    reply_to_thumbnail: slint::Image,
+    reply_to_has_thumbnail: bool,
     delivery_status: &str,
 ) -> crate::MessageItemData {
     use slint::{ModelRc, VecModel};
@@ -92,6 +94,8 @@ pub fn build_own_message_item(
         is_reply,
         reply_to_sender_name: reply_to_sender_name.into(),
         reply_to_preview: reply_to_preview.into(),
+        reply_to_has_thumbnail,
+        reply_to_thumbnail,
         show_sender: true,
         delivery_status: delivery_status.into(),
         is_pinned: false,

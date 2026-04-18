@@ -49,6 +49,8 @@ pub mod v047_fix_search_fts;
 pub mod v048_custom_sections;
 pub mod v049_vector_embeddings;
 pub mod v050_pending_anon_group_messages;
+pub mod v051_fix_search_json_path;
+pub mod v052_reply_thumbnail;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -101,6 +103,8 @@ pub use v047_fix_search_fts::V047FixSearchFts;
 pub use v048_custom_sections::V048CustomSections;
 pub use v049_vector_embeddings::V049VectorEmbeddings;
 pub use v050_pending_anon_group_messages::V050PendingAnonGroupMessages;
+pub use v051_fix_search_json_path::V051FixSearchJsonPath;
+pub use v052_reply_thumbnail::V052ReplyThumbnail;
 
 /// Trait for database migrations.
 ///
@@ -268,4 +272,6 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V048CustomSections)
         .register(V049VectorEmbeddings)
         .register(V050PendingAnonGroupMessages)
+        .register(V051FixSearchJsonPath)
+        .register(V052ReplyThumbnail)
 }

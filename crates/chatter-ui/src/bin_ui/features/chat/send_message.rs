@@ -207,13 +207,33 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let ts_for_sidebar = timestamp_str.clone();
             let ui_ctx_for_sidebar = ui_ctx.clone();
 
+            // Thumbnail of quoted message — populated by send path on the stored Message
+            let reply_thumbnail_bytes: Option<Vec<u8>> = result
+                .message
+                .as_ref()
+                .and_then(|m| m.reply_to_thumbnail.clone());
+
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
                     let slint_attachments: Vec<_> = attachment_display.iter().map(|a| a.to_slint()).collect();
+                    let (reply_thumbnail, reply_has_thumbnail) = reply_thumbnail_bytes
+                        .as_ref()
+                        .and_then(|bytes| image::load_from_memory(bytes).ok())
+                        .map(|img| {
+                            let rgba = img.to_rgba8();
+                            let (w, h) = rgba.dimensions();
+                            let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                                rgba.as_raw(), w, h,
+                            );
+                            (slint::Image::from_rgba8(buf), true)
+                        })
+                        .unwrap_or_else(|| (slint::Image::default(), false));
                     let msg_item = super::helpers::build_own_message_item(
                         &msg_id, &current_user_id, &current_user_name, &sent_text,
                         &timestamp_str, sent_at, slint_attachments,
-                        is_reply, &reply_sender_name, &reply_preview_text, delivery_status,
+                        is_reply, &reply_sender_name, &reply_preview_text,
+                        reply_thumbnail, reply_has_thumbnail,
+                        delivery_status,
                     );
                     super::helpers::append_message_to_ui(&w, msg_item);
 

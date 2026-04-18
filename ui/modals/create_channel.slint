@@ -144,12 +144,11 @@ export component CreateChannelModal inherits Rectangle {
             // ============================================================
             HorizontalLayout {
                 spacing: Spacing.md;
-                alignment: start;
 
                 // Icon upload (64px)
                 VerticalLayout {
                     horizontal-stretch: 0;
-                    alignment: start;
+                    alignment: center;
                     spacing: Spacing.xs;
 
                     Rectangle {
@@ -340,7 +339,7 @@ export component CreateChannelModal inherits Rectangle {
                                     colorize: root.is-private-group ? Colors.group-accent : Colors.text-secondary;
                                 }
                                 Text {
-                                    text: "Private group";
+                                    text: "Anon group";
                                     color: root.is-private-group ? Colors.group-accent : Colors.text-primary;
                                     font-size: Typography.sm;
                                     font-weight: Typography.semibold;

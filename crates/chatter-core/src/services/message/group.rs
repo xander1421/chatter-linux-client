@@ -3,281 +3,16 @@
 //! Sender key distribution, group mailbox announcements, and N-way fanout delivery.
 
 use crate::domain::ids::{ChannelId, UserId};
-use crate::mailbox::group::GroupFanout;
 use crate::mailbox::TokenManager;
 use crate::network::grpc::auth_client::AuthClient;
-use crate::network::grpc::channel_client::ChannelClient;
 use crate::network::grpc::message_client::MessageClient;
-use crate::proto::chat_v1::{self, SealedSenderMessage};
-use crate::proto::mailbox_v1::EnvelopeType;
+use crate::proto::chat_v1::SealedSenderMessage;
 use crate::storage::repositories::settings_repo::keys;
 use crate::util::time::TimestampNanos;
 
 use super::{MessageError, MessageService};
 
 impl MessageService {
-    /// Send a GroupMailboxAddress announcement to channel members.
-    ///
-    /// NDSS '21 bootstrap: Mailbox announcements MUST be sent pairwise via
-    /// Double Ratchet to each member's device inbox, NOT via sender keys.
-    /// This is because members don't have each other's mailbox addresses yet.
-    pub async fn send_group_mailbox_announcement(
-        &self,
-        _message_client: &mut MessageClient,
-        auth_client: &mut AuthClient,
-        _channel_client: &mut ChannelClient,
-        channel_id: &ChannelId,
-        announcement: crate::proto::content_v1::GroupMailboxAddress,
-    ) -> Result<(), MessageError> {
-        use crate::proto::content_v1::{content, Content};
-        use prost::Message;
-
-        // Get our user ID
-        let our_user_id = self.settings_repo
-            .get_string(keys::CURRENT_USER_ID)
-            .map_err(MessageError::Storage)?
-            .ok_or(MessageError::NotLoggedIn)?;
-
-        // Get channel members (excluding ourselves)
-        let members = self.channel_repo.list_members(channel_id).unwrap_or_default();
-        let other_members: Vec<_> = members
-            .iter()
-            .filter(|m| m.user_id.to_string() != our_user_id)
-            .collect();
-
-        if other_members.is_empty() {
-            tracing::debug!(
-                channel_id = %channel_id,
-                "Skipping mailbox announcement (no other members)"
-            );
-            return Ok(());
-        }
-
-        // Build the Content proto with our mailbox announcement
-        let timestamp = TimestampNanos::now().as_u64();
-        let mut content = Content {
-            content: Some(content::Content::GroupMailboxAddress(announcement)),
-            ephemeral_reply_to: None,
-            timestamp,
-            padding: vec![],
-        };
-        Self::pad_content_to_bucket(&mut content);
-        let plaintext = content.encode_to_vec();
-
-        // Use shared token manager for anonymous credential sending
-        let token_manager = self.token_manager.clone();
-
-        // Send pairwise to each member via Sealed Sender (Double Ratchet)
-        let mut success_count = 0;
-        let mut error_count = 0;
-
-        for member in &other_members {
-            let member_id = member.user_id.to_string();
-
-            // Encrypt pairwise via Double Ratchet (X3DH if no session exists)
-            match self.signal_service
-                .encrypt_message(auth_client, &member_id, 1, &plaintext)
-                .await
-            {
-                Ok(sealed_bytes) => {
-                    // Get anonymous credential token for this send
-                    let token = self.get_or_request_token_for_skdm(&token_manager, &member_id).await;
-
-                    match token {
-                        Some(token) => {
-                            // Mark token used BEFORE sending — the server consumes
-                            // the credential at auth middleware regardless of whether
-                            // the handler succeeds. If we only mark on success, a
-                            // handler failure leaves the token "available" client-side
-                            // but consumed server-side, causing "already used" errors.
-                            let _ = token_manager.mark_token_used(&token.id);
-
-                            // Create SealedSenderMessage proto
-                            let sealed_message = SealedSenderMessage {
-                                sealed_body: sealed_bytes,
-                                server_key_id: self.signal_service.get_server_key_id(),
-                                timestamp,
-                            };
-
-                            // Use anonymous client (no AuthInterceptor) to avoid
-                            // multi-auth rejection — GRA-434
-                            let mut anon_client = self.grpc_pool.anonymous_message_client();
-
-                            // Send with anonymous credential (NDSS '21 blind signature)
-                            match anon_client
-                                .send_with_anonymous_credential(
-                                    &member_id,
-                                    0, // All devices
-                                    sealed_message,
-                                    &token.public_key,
-                                    &token.signature,
-                                    token.randomizer.as_deref(),
-                                )
-                                .await
-                            {
-                                Ok(_) => {
-                                    success_count += 1;
-                                    tracing::debug!(
-                                        channel_id = %channel_id,
-                                        member_id = %member_id,
-                                        "Sent mailbox announcement to member via sealed sender"
-                                    );
-                                }
-                                Err(e) => {
-                                    error_count += 1;
-                                    tracing::warn!(
-                                        channel_id = %channel_id,
-                                        member_id = %member_id,
-                                        error = %e,
-                                        "Failed to send mailbox announcement to member"
-                                    );
-                                }
-                            }
-                        }
-                        None => {
-                            error_count += 1;
-                            tracing::warn!(
-                                channel_id = %channel_id,
-                                member_id = %member_id,
-                                "No anonymous tokens available for mailbox announcement"
-                            );
-                        }
-                    }
-                }
-                Err(e) => {
-                    error_count += 1;
-                    tracing::warn!(
-                        channel_id = %channel_id,
-                        member_id = %member_id,
-                        error = %e,
-                        "Failed to encrypt mailbox announcement for member"
-                    );
-                }
-            }
-        }
-
-        tracing::info!(
-            channel_id = %channel_id,
-            total_members = other_members.len(),
-            success = success_count,
-            errors = error_count,
-            "Distributed mailbox announcement via pairwise sealed sender"
-        );
-
-        // Consider it success if at least one member received the announcement
-        if success_count == 0 && !other_members.is_empty() {
-            return Err(MessageError::EncryptionFailed(
-                "Failed to send mailbox announcement to any member".into()
-            ));
-        }
-
-        Ok(())
-    }
-
-    /// Send a GroupMailboxAddress announcement (simplified API - no client params).
-    pub async fn announce_group_mailbox(
-        &self,
-        channel_id: &ChannelId,
-        announcement: crate::proto::content_v1::GroupMailboxAddress,
-    ) -> Result<(), MessageError> {
-        let mut message_client = self.message_client();
-        let mut auth_client = self.auth_client();
-        let mut channel_client = self.channel_client();
-
-        self.send_group_mailbox_announcement(
-            &mut message_client,
-            &mut auth_client,
-            &mut channel_client,
-            channel_id,
-            announcement,
-        )
-        .await
-    }
-
-    /// Respond to a member's mailbox announcement with our own mailbox.
-    ///
-    /// Called when we receive a GroupMailboxAddress announcement from a new member.
-    /// We respond with our own mailbox so they can send messages to us.
-    ///
-    /// NDSS '21 mailbox exchange: Both parties need each other's mailbox addresses.
-    pub async fn respond_with_mailbox_to_member(
-        &self,
-        channel_id: &ChannelId,
-        to_member_id: &UserId,
-    ) -> Result<(), MessageError> {
-        use crate::proto::content_v1::{content, Content, GroupMailboxAddress};
-        use prost::Message;
-
-        // Get our mailbox for this channel
-        let group_state = self.group_mailbox_manager
-            .load_group_state(channel_id)
-            .map_err(|e| MessageError::MailboxError(e.to_string()))?
-            .ok_or_else(|| MessageError::MailboxError("No group state for channel".into()))?;
-
-        let our_mailbox = group_state.our_mailbox
-            .ok_or_else(|| MessageError::MailboxError("No mailbox for channel".into()))?;
-
-        // Build announcement proto
-        let announcement = GroupMailboxAddress {
-            channel_id: channel_id.to_string(),
-            mailbox_pk: our_mailbox.public_key.to_vec(),
-            timestamp: TimestampNanos::now().as_u64(),
-        };
-
-        let timestamp = TimestampNanos::now().as_u64();
-        let content = Content {
-            timestamp,
-            content: Some(content::Content::GroupMailboxAddress(announcement)),
-            ..Default::default()
-        };
-        let plaintext = content.encode_to_vec();
-
-        // Encrypt for this specific member
-        let mut auth_client = self.auth_client();
-        let sealed_bytes = self.signal_service
-            .encrypt_message(&mut auth_client, &to_member_id.to_string(), 1, &plaintext)
-            .await
-            .map_err(|e| MessageError::EncryptionFailed(e.to_string()))?;
-
-        // Get token for anonymous send
-        let database = self.settings_repo.database().clone();
-        let token_manager = TokenManager::new(database);
-        let token = self.get_or_request_token_for_skdm(&token_manager, &to_member_id.to_string()).await
-            .ok_or_else(|| MessageError::MailboxError("No tokens for mailbox response".into()))?;
-
-        // Send via sealed sender
-        let sealed_message = SealedSenderMessage {
-            sealed_body: sealed_bytes,
-            server_key_id: self.signal_service.get_server_key_id(),
-            timestamp,
-        };
-
-        // Use anonymous client (no AuthInterceptor) to avoid
-        // multi-auth rejection — GRA-434
-        let mut anon_client = self.grpc_pool.anonymous_message_client();
-
-        anon_client
-            .send_with_anonymous_credential(
-                &to_member_id.to_string(),
-                0, // All devices
-                sealed_message,
-                &token.public_key,
-                &token.signature,
-                token.randomizer.as_deref(),
-            )
-            .await?;
-
-        let _ = token_manager.mark_token_used(&token.id);
-
-        tracing::info!(
-            channel_id = %channel_id,
-            to_member_id = %to_member_id,
-            "Sent our mailbox announcement in response to new member"
-        );
-
-        Ok(())
-    }
-
     /// Distribute a sender key distribution message to channel members.
     ///
     /// Implements NDSS '21 pairwise distribution:
@@ -294,23 +29,31 @@ impl MessageService {
         use crate::proto::content_v1::{self, content};
         use prost::Message;
 
-        // Get our user ID
+        // Get our user ID + current device id (so we don't ship SKDM to
+        // ourselves on this same device — we already have our own sender key).
         let our_user_id = self.settings_repo
             .get_string(keys::CURRENT_USER_ID)
             .map_err(MessageError::Storage)?
             .ok_or(MessageError::NotLoggedIn)?;
+        let our_device_id = self.settings_repo
+            .get::<u32>(keys::CURRENT_DEVICE_ID)
+            .map_err(MessageError::Storage)?
+            .ok_or(MessageError::NotLoggedIn)?;
 
-        // Get channel members (excluding ourselves)
+        // Fan SKDM to ALL members including our own user's OTHER linked
+        // devices. Own device on this client is the only one excluded —
+        // multi-device sync requires every other device that might receive
+        // this channel's messages to hold our sender key.
         let members = self.channel_repo.list_members(channel_id).unwrap_or_default();
-        let other_members: Vec<_> = members
+        let fanout_user_ids: Vec<String> = members
             .iter()
-            .filter(|m| m.user_id.to_string() != our_user_id)
+            .map(|m| m.user_id.to_string())
             .collect();
 
-        if other_members.is_empty() {
+        if fanout_user_ids.is_empty() {
             tracing::debug!(
                 channel_id = %channel_id,
-                "Skipping sender key distribution (no other members)"
+                "Skipping sender key distribution (no channel members)"
             );
             return Ok(());
         }
@@ -344,75 +87,18 @@ impl MessageService {
         let mut success_count = 0;
         let mut error_count = 0;
 
-        for member in &other_members {
-            let member_id = member.user_id.to_string();
+        for member_id in &fanout_user_ids {
+            let is_self = member_id == &our_user_id;
 
-            // Encrypt pairwise via Double Ratchet (X3DH if no session exists)
-            match self.signal_service
-                .encrypt_message(auth_client, &member_id, 1, &plaintext)
+            // Encrypt sealed-sender SKDM for every device this user has.
+            // Sender keys are per (user, device) so each device needs its own
+            // ciphertext — a single "device=0 broadcast" ciphertext is only
+            // decryptable by the device it was encrypted for.
+            let ciphertexts = match self.signal_service
+                .encrypt_message_all_devices(auth_client, member_id, &plaintext)
                 .await
             {
-                Ok(sealed_bytes) => {
-                    // Get anonymous credential token for this send
-                    let token = self.get_or_request_token_for_skdm(&token_manager, &member_id).await;
-
-                    match token {
-                        Some(token) => {
-                            // Mark token used BEFORE sending — server consumes at auth layer
-                            let _ = token_manager.mark_token_used(&token.id);
-
-                            // Create SealedSenderMessage proto
-                            let sealed_message = SealedSenderMessage {
-                                sealed_body: sealed_bytes,
-                                server_key_id: self.signal_service.get_server_key_id(),
-                                timestamp,
-                            };
-
-                            // Use anonymous client (no AuthInterceptor) to avoid
-                            // multi-auth rejection — GRA-434
-                            let mut anon_client = self.grpc_pool.anonymous_message_client();
-
-                            // Send with anonymous credential (NDSS '21 blind signature)
-                            match anon_client
-                                .send_with_anonymous_credential(
-                                    &member_id,
-                                    0, // All devices
-                                    sealed_message,
-                                    &token.public_key,
-                                    &token.signature,
-                                    token.randomizer.as_deref(),
-                                )
-                                .await
-                            {
-                                Ok(_) => {
-                                    success_count += 1;
-                                    tracing::debug!(
-                                        channel_id = %channel_id,
-                                        member_id = %member_id,
-                                        "Distributed SKDM to member via sealed sender with credential"
-                                    );
-                                }
-                                Err(e) => {
-                                    error_count += 1;
-                                    tracing::warn!(
-                                        channel_id = %channel_id,
-                                        member_id = %member_id,
-                                        error = %e,
-                                        "Failed to send SKDM to member"
-                                    );
-                                }
-                            }
-                        }
-                        None => {
-                            error_count += 1;
-                            tracing::warn!(
-                                channel_id = %channel_id,
-                                member_id = %member_id,
-                                "No anonymous tokens available for SKDM distribution"
-                            );
-                        }
-                    }
-                }
+                Ok(map) => map,
                 Err(e) => {
                     error_count += 1;
                     tracing::warn!(
@@ -421,26 +107,226 @@ impl MessageService {
                         error = %e,
                         "Failed to encrypt SKDM for member"
                     );
+                    continue;
+                }
+            };
+
+            for (device_id, sealed_bytes) in ciphertexts {
+                // Skip our own current device — it already holds the sender key.
+                if is_self && device_id == our_device_id {
+                    continue;
+                }
+
+                let token = self.get_or_request_token_for_skdm(&token_manager, member_id).await;
+                let token = match token {
+                    Some(t) => t,
+                    None => {
+                        error_count += 1;
+                        tracing::warn!(
+                            channel_id = %channel_id,
+                            member_id = %member_id,
+                            device_id,
+                            "No anonymous tokens available for SKDM distribution"
+                        );
+                        continue;
+                    }
+                };
+
+                let sealed_message = SealedSenderMessage {
+                    sealed_body: sealed_bytes,
+                    server_key_id: self.signal_service.get_server_key_id(),
+                    timestamp,
+                };
+
+                // Anonymous client avoids multi-auth rejection (GRA-434).
+                let mut anon_client = self.grpc_pool.anonymous_message_client();
+
+                match anon_client
+                    .send_with_anonymous_credential(
+                        member_id,
+                        device_id,
+                        sealed_message,
+                        &token.public_key,
+                        &token.signature,
+                        token.randomizer.as_deref(),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        success_count += 1;
+                        tracing::debug!(
+                            channel_id = %channel_id,
+                            member_id = %member_id,
+                            device_id,
+                            is_self,
+                            "Distributed SKDM to device via sealed sender"
+                        );
+                    }
+                    Err(e) => {
+                        error_count += 1;
+                        tracing::warn!(
+                            channel_id = %channel_id,
+                            member_id = %member_id,
+                            device_id,
+                            error = %e,
+                            "Failed to send SKDM to device"
+                        );
+                    }
                 }
             }
         }
 
         tracing::info!(
             channel_id = %channel_id,
-            total_members = other_members.len(),
+            total_members = fanout_user_ids.len(),
             success = success_count,
             errors = error_count,
             has_mailbox = has_mailbox,
             "Distributed sender key via pairwise sealed sender"
         );
 
-        // Consider it success if at least one member received the SKDM
-        if success_count == 0 && !other_members.is_empty() {
+        // Consider it success if at least one device received the SKDM (or
+        // the only "member" is ourselves on this one device and no fanout is needed).
+        let non_self_members = fanout_user_ids.iter().filter(|u| *u != &our_user_id).count();
+        if success_count == 0 && non_self_members > 0 {
             return Err(MessageError::EncryptionFailed(
                 "Failed to distribute SKDM to any member".into()
             ));
         }
 
+        Ok(())
+    }
+
+    /// Queue a group-encrypted proto whose sender key isn't stored yet.
+    ///
+    /// Call site: inbox stream decrypt fails with "no sender key" → enqueue
+    /// here, then fire a `SenderKeyRequest`. The matching
+    /// `SenderKeyReceived` event on the bus should trigger
+    /// [`retry_pending_group_decrypts`].
+    pub fn defer_pending_group_decrypt(
+        &self,
+        channel_id: ChannelId,
+        sender_id: UserId,
+        device_id: u32,
+        proto_msg: crate::proto::chat_v1::Message,
+    ) {
+        self.pending_group_decrypts
+            .lock()
+            .entry((channel_id, sender_id, device_id))
+            .or_default()
+            .push(proto_msg);
+    }
+
+    /// Drain deferred group messages for `(channel, sender, device)` and
+    /// re-run decrypt using the now-stored sender key. Successes emit
+    /// `DomainEvent::MessageReceived`; permanent failures are dropped.
+    pub async fn retry_pending_group_decrypts(
+        &self,
+        channel_id: ChannelId,
+        sender_id: UserId,
+        device_id: u32,
+    ) {
+        use crate::events::DomainEvent;
+        use crate::proto::chat_v1;
+        use crate::proto::content_v1::GroupEncrypted;
+        use crate::services::message::conversion::proto_to_domain_message_with_sender;
+
+        let pending: Vec<chat_v1::Message> = {
+            let mut guard = self.pending_group_decrypts.lock();
+            guard.remove(&(channel_id, sender_id, device_id)).unwrap_or_default()
+        };
+
+        if pending.is_empty() {
+            return;
+        }
+
+        tracing::info!(
+            channel_id = %channel_id,
+            sender_id = %sender_id,
+            device_id,
+            count = pending.len(),
+            "Retrying deferred group-encrypted messages after SKDM arrival"
+        );
+
+        for proto_msg in pending {
+            let Some(chat_v1::message::content::Type::Encrypted(enc)) =
+                proto_msg.content.as_ref().and_then(|c| c.r#type.as_ref())
+            else {
+                continue;
+            };
+            use prost::Message as _;
+            let group_encrypted = match GroupEncrypted::decode(enc.ciphertext.as_slice()) {
+                Ok(ge) => ge,
+                Err(e) => {
+                    tracing::warn!(error = %e, "Retry: failed to decode GroupEncrypted");
+                    continue;
+                }
+            };
+            match self.signal_service.decrypt_from_group(&sender_id, device_id, &group_encrypted).await {
+                Ok(plaintext) => {
+                    use prost::Message as ProstMessage;
+                    let decoded = match chat_v1::message::Content::decode(plaintext.as_slice()) {
+                        Ok(c) if c.r#type.is_some() => c,
+                        _ => {
+                            tracing::warn!(
+                                sender_id = %sender_id,
+                                device_id,
+                                "Retry: decrypted plaintext is not a valid Content proto"
+                            );
+                            continue;
+                        }
+                    };
+                    let mut patched = proto_msg.clone();
+                    patched.content = Some(decoded);
+                    match proto_to_domain_message_with_sender(&patched, Some(sender_id)) {
+                        Ok(message) => {
+                            let _ = self.event_bus.domain_sender().send(
+                                DomainEvent::MessageReceived { message },
+                            );
+                        }
+                        Err(e) => tracing::warn!(error = %e, "Retry: conversion failed"),
+                    }
+                }
+                Err(e) => tracing::warn!(
+                    sender_id = %sender_id,
+                    device_id,
+                    error = %e,
+                    "Retry decrypt still failed after SKDM"
+                ),
+            }
+        }
+    }
+
+    /// Ask every other current member for their SKDM.
+    ///
+    /// Called right after joining an encrypted channel so we can start
+    /// decrypting messages the existing members send — without this step
+    /// their first message after our join would fail the no-sender-key
+    /// path and sit in the pending-decrypt queue until a manual retry.
+    /// Individual request failures are logged but do not abort the loop;
+    /// missing peers will heal on first decrypt miss.
+    pub async fn request_skdms_from_channel_members(
+        &self,
+        channel_id: &ChannelId,
+    ) -> Result<(), MessageError> {
+        let current_user = self.settings_repo
+            .get_string(keys::CURRENT_USER_ID)
+            .map_err(MessageError::Storage)?
+            .ok_or(MessageError::NotLoggedIn)?;
+        let members = self.channel_repo.list_members(channel_id).unwrap_or_default();
+        for member in &members {
+            if member.user_id.to_string() == current_user {
+                continue;
+            }
+            if let Err(e) = self.send_sender_key_request(channel_id, &member.user_id).await {
+                tracing::warn!(
+                    channel_id = %channel_id,
+                    member_id = %member.user_id,
+                    error = %e,
+                    "Failed to request SKDM from existing member"
+                );
+            }
+        }
         Ok(())
     }
 
@@ -494,44 +380,75 @@ impl MessageService {
         let plaintext = skdm_content.encode_to_vec();
         let member_id_str = member_id.to_string();
 
-        // Encrypt pairwise via Double Ratchet (X3DH if no session exists)
-        let sealed_bytes = self.signal_service
-            .encrypt_message(&mut auth_client, &member_id_str, 1, &plaintext)
+        // Encrypt per-device for the new member. Sender keys are keyed by
+        // (user, device); a single ciphertext only decrypts on the device it
+        // was encrypted for.
+        let ciphertexts = self.signal_service
+            .encrypt_message_all_devices(&mut auth_client, &member_id_str, &plaintext)
             .await
             .map_err(|e| MessageError::EncryptionFailed(format!("Failed to encrypt SKDM: {}", e)))?;
 
-        // Get anonymous credential token for this send
         let database = self.settings_repo.database().clone();
         let token_manager = TokenManager::new(database);
-        let token = self.get_or_request_token_for_skdm(&token_manager, &member_id_str).await
-            .ok_or_else(|| MessageError::EncryptionFailed("No anonymous tokens available for SKDM".into()))?;
-
-        // Mark token used BEFORE sending — server consumes at auth layer
-        let _ = token_manager.mark_token_used(&token.id);
-
-        // Create SealedSenderMessage proto
-        let sealed_message = SealedSenderMessage {
-            sealed_body: sealed_bytes,
-            server_key_id: self.signal_service.get_server_key_id(),
-            timestamp,
-        };
-
-        // Use anonymous client (no AuthInterceptor) to avoid
-        // multi-auth rejection — GRA-434
+        let server_key_id = self.signal_service.get_server_key_id();
         let mut anon_client = self.grpc_pool.anonymous_message_client();
 
-        // Send with anonymous credential (NDSS '21 blind signature)
-        anon_client
-            .send_with_anonymous_credential(
-                &member_id_str,
-                0, // All devices
-                sealed_message,
-                &token.public_key,
-                &token.signature,
-                token.randomizer.as_deref(),
-            )
-            .await
-            .map_err(MessageError::Network)?;
+        let mut any_sent = false;
+        for (device_id, sealed_bytes) in ciphertexts {
+            let token = match self.get_or_request_token_for_skdm(&token_manager, &member_id_str).await {
+                Some(t) => t,
+                None => {
+                    tracing::warn!(
+                        channel_id = %channel_id,
+                        member_id = %member_id,
+                        device_id,
+                        "No anonymous tokens available for SKDM to device"
+                    );
+                    continue;
+                }
+            };
+
+            let sealed_message = SealedSenderMessage {
+                sealed_body: sealed_bytes,
+                server_key_id,
+                timestamp,
+            };
+
+            match anon_client
+                .send_with_anonymous_credential(
+                    &member_id_str,
+                    device_id,
+                    sealed_message,
+                    &token.public_key,
+                    &token.signature,
+                    token.randomizer.as_deref(),
+                )
+                .await
+            {
+                Ok(_) => {
+                    any_sent = true;
+                    tracing::debug!(
+                        channel_id = %channel_id,
+                        member_id = %member_id,
+                        device_id,
+                        "Sent SKDM to new member device"
+                    );
+                }
+                Err(e) => tracing::warn!(
+                    channel_id = %channel_id,
+                    member_id = %member_id,
+                    device_id,
+                    error = %e,
+                    "Failed to send SKDM to new member device"
+                ),
+            }
+        }
+
+        if !any_sent {
+            return Err(MessageError::EncryptionFailed(
+                "SKDM delivery to new member failed on every device".into()
+            ));
+        }
 
         tracing::info!(
             channel_id = %channel_id,
@@ -558,8 +475,11 @@ impl MessageService {
 
     /// Send a sender key request to a channel member.
     ///
-    /// Call this when you receive an encrypted message but don't have
-    /// the sender's key. The sender should respond with their SKDM.
+    /// Fanned to every device the target has, not just the primary. Sender
+    /// keys are per (user, device); whichever device currently holds the
+    /// sending sender key responds with its own SKDM. Without this fanout, a
+    /// request would land only in device 1's inbox and dormant multi-device
+    /// users whose device 1 is offline would never reply.
     pub async fn send_sender_key_request(
         &self,
         channel_id: &ChannelId,
@@ -590,370 +510,82 @@ impl MessageService {
         let plaintext = content.encode_to_vec();
         let target_id_str = target_user_id.to_string();
 
-        // Encrypt via sealed sender
-        let sealed_bytes = self.signal_service
-            .encrypt_message(&mut auth_client, &target_id_str, 1, &plaintext)
+        // Encrypt sealed-sender per device (pairwise sender keys are per
+        // (user, device); we need a distinct envelope for each).
+        let ciphertexts = self.signal_service
+            .encrypt_message_all_devices(&mut auth_client, &target_id_str, &plaintext)
             .await
             .map_err(|e| MessageError::EncryptionFailed(format!("Failed to encrypt sender key request: {}", e)))?;
 
-        // Get anonymous credential token for this send
         let database = self.settings_repo.database().clone();
         let token_manager = TokenManager::new(database);
-        let token = self.get_or_request_token_for_skdm(&token_manager, &target_id_str).await
-            .ok_or_else(|| MessageError::EncryptionFailed("No anonymous tokens available for sender key request".into()))?;
-
-        // Mark token used BEFORE sending — server consumes at auth layer
-        let _ = token_manager.mark_token_used(&token.id);
-
-        // Create SealedSenderMessage proto
-        let sealed_message = SealedSenderMessage {
-            sealed_body: sealed_bytes,
-            server_key_id: self.signal_service.get_server_key_id(),
-            timestamp,
-        };
-
-        // Use anonymous client (no AuthInterceptor) to avoid
-        // multi-auth rejection — GRA-434
+        let server_key_id = self.signal_service.get_server_key_id();
         let mut anon_client = self.grpc_pool.anonymous_message_client();
 
-        // Send with anonymous credential (NDSS '21 blind signature)
-        anon_client
-            .send_with_anonymous_credential(
-                &target_id_str,
-                0, // All devices
-                sealed_message,
-                &token.public_key,
-                &token.signature,
-                token.randomizer.as_deref(),
-            )
-            .await
-            .map_err(MessageError::Network)?;
+        let mut any_sent = false;
+        for (device_id, sealed_bytes) in ciphertexts {
+            let token = match self.get_or_request_token_for_skdm(&token_manager, &target_id_str).await {
+                Some(t) => t,
+                None => {
+                    tracing::warn!(
+                        channel_id = %channel_id,
+                        target_user_id = %target_user_id,
+                        device_id,
+                        "No anonymous tokens available for sender key request"
+                    );
+                    continue;
+                }
+            };
+
+            let sealed_message = SealedSenderMessage {
+                sealed_body: sealed_bytes,
+                server_key_id,
+                timestamp,
+            };
+
+            match anon_client
+                .send_with_anonymous_credential(
+                    &target_id_str,
+                    device_id,
+                    sealed_message,
+                    &token.public_key,
+                    &token.signature,
+                    token.randomizer.as_deref(),
+                )
+                .await
+            {
+                Ok(_) => {
+                    any_sent = true;
+                    tracing::debug!(
+                        channel_id = %channel_id,
+                        target_user_id = %target_user_id,
+                        device_id,
+                        "Sent SenderKeyRequest to device"
+                    );
+                }
+                Err(e) => tracing::warn!(
+                    channel_id = %channel_id,
+                    target_user_id = %target_user_id,
+                    device_id,
+                    error = %e,
+                    "Failed to send SenderKeyRequest to device"
+                ),
+            }
+        }
+
+        if !any_sent {
+            return Err(MessageError::EncryptionFailed(
+                "SenderKeyRequest failed to reach any target device".into()
+            ));
+        }
 
         tracing::info!(
             channel_id = %channel_id,
             target_user_id = %target_user_id,
-            "Sent sender key request via sealed sender with credential"
+            "Sent sender key request via sealed sender (multi-device fanout)"
         );
 
         Ok(())
-    }
-
-    /// Send encrypted content to group member mailboxes via GroupFanout.
-    ///
-    /// This implements the NDSS '21 paper's per-group ephemeral mailboxes for
-    /// privacy-preserving group messaging. Messages are fan-out to N member
-    /// mailboxes, preventing server-side correlation of group membership.
-    pub async fn send_via_group_mailboxes(
-        &self,
-        group_fanout: &GroupFanout,
-        channel_id: &ChannelId,
-        encrypted_content: &[u8],
-        sender_id: &UserId,
-    ) -> Result<(), MessageError> {
-        // Check if group mailboxes are ready
-        match group_fanout.is_ready_to_send(channel_id) {
-            Ok(true) => {
-                // Build associated_data with sender info for recipient to extract
-                let associated_data = format!("sender:{}:channel:{}", sender_id, channel_id);
-
-                // Wrap in EncryptedData for mailbox delivery
-                use prost::Message as ProstMessage;
-                let mailbox_envelope = chat_v1::EncryptedData {
-                    version: chat_v1::CryptoVersion::SignalProtocol as i32,
-                    ciphertext: encrypted_content.to_vec(),
-                    associated_data: associated_data.into_bytes(),
-                    nonce: vec![],
-                    auth_tag: vec![],
-                    signature: vec![],
-                    device_id: String::new(),
-                };
-                let envelope_bytes = mailbox_envelope.encode_to_vec();
-
-                // Fan-out to all member mailboxes
-                match group_fanout
-                    .send_to_group(channel_id, &envelope_bytes, EnvelopeType::Message)
-                    .await
-                {
-                    Ok(result) => {
-                        if result.is_complete_success() {
-                            tracing::debug!(
-                                channel_id = %channel_id,
-                                total = result.total_members,
-                                "Sent message to all group mailboxes"
-                            );
-                        } else {
-                            tracing::warn!(
-                                channel_id = %channel_id,
-                                successful = result.successful,
-                                failed = result.failed,
-                                "Partial delivery to group mailboxes"
-                            );
-                        }
-                        Ok(())
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            channel_id = %channel_id,
-                            error = %e,
-                            "Failed to send to group mailboxes (channel delivery still succeeded)"
-                        );
-                        // Don't fail - channel delivery already succeeded
-                        Ok(())
-                    }
-                }
-            }
-            Ok(false) => {
-                tracing::debug!(
-                    channel_id = %channel_id,
-                    "Group mailboxes not ready - skipping fanout"
-                );
-                Ok(())
-            }
-            Err(e) => {
-                tracing::debug!(
-                    channel_id = %channel_id,
-                    error = %e,
-                    "Could not check group mailbox readiness - skipping fanout"
-                );
-                Ok(())
-            }
-        }
-    }
-
-    /// Send pairwise-encrypted message to group member mailboxes.
-    ///
-    /// Per NDSS '21 and Signal Protocol spec: Group messages MUST be encrypted
-    /// separately for each member using their pairwise Double Ratchet session
-    /// (sealed sender). This provides proper forward secrecy and post-compromise
-    /// security per member.
-    ///
-    /// The sender's identity is cryptographically bound inside each sealed sender
-    /// ciphertext and is revealed during SSDecVer (decryption), NOT in metadata.
-    pub async fn send_pairwise_to_group_mailboxes(
-        &self,
-        group_fanout: &GroupFanout,
-        channel_id: &ChannelId,
-        plaintext: &[u8],
-        auth_client: &mut AuthClient,
-    ) -> Result<(), MessageError> {
-        use std::collections::HashMap;
-
-        // Check if group mailboxes are ready
-        match group_fanout.is_ready_to_send(channel_id) {
-            Ok(true) => {}
-            Ok(false) => {
-                // Queue message for later - will be sent when member mailboxes arrive
-                // Use a nil UUID to indicate "send to any new member"
-                let nil_member = UserId::from_uuid(uuid::Uuid::nil());
-                let timestamp = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos() as u64)
-                    .unwrap_or(0);
-
-                if let Err(e) = group_fanout.queue_pending_message(
-                    channel_id,
-                    &nil_member,
-                    plaintext,
-                    timestamp,
-                ) {
-                    tracing::warn!(
-                        channel_id = %channel_id,
-                        error = %e,
-                        "Failed to queue pending channel message during bootstrap"
-                    );
-                } else {
-                    tracing::info!(
-                        channel_id = %channel_id,
-                        plaintext_len = plaintext.len(),
-                        "[BOOTSTRAP] Queued channel message - no member mailboxes available yet"
-                    );
-                }
-                return Ok(());
-            }
-            Err(e) => {
-                tracing::debug!(
-                    channel_id = %channel_id,
-                    error = %e,
-                    "Could not check group mailbox readiness - skipping pairwise fanout"
-                );
-                return Ok(());
-            }
-        }
-
-        // Get group state to know which members to encrypt for
-        let group_state = group_fanout
-            .get_group_state(channel_id)
-            .map_err(|e| MessageError::MailboxError(e.to_string()))?
-            .ok_or_else(|| MessageError::MailboxError("Group state not found".into()))?;
-
-        if group_state.member_mailboxes.is_empty() {
-            tracing::debug!(
-                channel_id = %channel_id,
-                "No member mailboxes - skipping pairwise fanout"
-            );
-            return Ok(());
-        }
-
-        // Encrypt pairwise for each member using sealed sender (Double Ratchet)
-        // Multi-device: encrypt for ALL devices of each member
-        let mut member_ciphertexts: HashMap<UserId, HashMap<u32, Vec<u8>>> = HashMap::new();
-        let mut success_count = 0;
-        let mut error_count = 0;
-
-        for member_id in group_state.member_mailboxes.keys().copied() {
-            let member_id: UserId = member_id;
-            match self
-                .signal_service
-                .encrypt_message_all_devices(
-                    auth_client,
-                    &member_id.to_string(),
-                    plaintext,
-                )
-                .await
-            {
-                Ok(device_ciphertexts) => {
-                    // device_ciphertexts: HashMap<u32, Vec<u8>> (device_id -> ciphertext)
-                    let device_count = device_ciphertexts.len();
-                    member_ciphertexts.insert(member_id, device_ciphertexts);
-                    success_count += device_count;
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        channel_id = %channel_id,
-                        member_id = %member_id,
-                        error = %e,
-                        "Failed to encrypt for member's devices"
-                    );
-                    error_count += 1;
-                }
-            }
-        }
-
-        if member_ciphertexts.is_empty() {
-            tracing::warn!(
-                channel_id = %channel_id,
-                "No successful pairwise encryptions - fanout aborted"
-            );
-            return Err(MessageError::EncryptionFailed(
-                "Failed to encrypt for any group member".into(),
-            ));
-        }
-
-        // Fan-out pairwise ciphertexts to member mailboxes (multi-device)
-        match group_fanout
-            .send_to_group_pairwise_multidevice(channel_id, member_ciphertexts, EnvelopeType::Message)
-            .await
-        {
-            Ok(result) => {
-                tracing::info!(
-                    channel_id = %channel_id,
-                    encrypted = success_count,
-                    encrypt_errors = error_count,
-                    delivered = result.successful,
-                    delivery_errors = result.failed,
-                    "Pairwise group fanout complete"
-                );
-
-                // TIMING FIX: Queue message for members whose mailboxes haven't arrived yet.
-                // This handles the race condition where we send before all member mailboxes
-                // have been exchanged. When their mailbox arrives via GroupMailboxReceived,
-                // the message will be flushed to them.
-                self.queue_for_missing_members(
-                    group_fanout,
-                    channel_id,
-                    plaintext,
-                    &group_state.member_mailboxes,
-                );
-
-                Ok(())
-            }
-            Err(e) => {
-                tracing::warn!(
-                    channel_id = %channel_id,
-                    error = %e,
-                    "Pairwise group fanout failed"
-                );
-                Err(MessageError::MailboxError(e.to_string()))
-            }
-        }
-    }
-
-    /// Queue a message for channel members whose mailboxes haven't arrived yet.
-    ///
-    /// This fixes the timing race condition where messages are sent before all
-    /// member mailboxes have been exchanged during bootstrap. Uses a nil member ID
-    /// to queue for "any new member who arrives", and the message is flushed when
-    /// their mailbox is received via GroupMailboxReceived event.
-    fn queue_for_missing_members(
-        &self,
-        group_fanout: &GroupFanout,
-        channel_id: &ChannelId,
-        plaintext: &[u8],
-        known_mailboxes: &std::collections::HashMap<UserId, crate::mailbox::group::MemberMailbox>,
-    ) {
-        use crate::storage::repositories::settings_repo::keys;
-        use std::collections::HashSet;
-
-        // Get our user ID to exclude from comparison
-        let our_user_id = match self.settings_repo.get_string(keys::CURRENT_USER_ID) {
-            Ok(Some(id)) => id,
-            _ => return, // Can't check without our ID
-        };
-
-        // Get full member list from channel
-        let all_members = match self.channel_repo.list_members(channel_id) {
-            Ok(members) => members,
-            Err(_) => return, // Can't check without member list
-        };
-
-        // Build set of members we've already sent to
-        let sent_to: HashSet<String> = known_mailboxes
-            .keys()
-            .map(|id| id.to_string())
-            .collect();
-
-        // Find members without mailboxes (excluding ourselves)
-        let missing_members: Vec<_> = all_members
-            .iter()
-            .filter(|m| {
-                let member_id_str = m.user_id.to_string();
-                member_id_str != our_user_id && !sent_to.contains(&member_id_str)
-            })
-            .collect();
-
-        if missing_members.is_empty() {
-            // All members have mailboxes - no queueing needed
-            return;
-        }
-
-        // Queue with nil member ID so it gets sent when ANY new mailbox arrives
-        let nil_member = UserId::from_uuid(uuid::Uuid::nil());
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
-
-        if let Err(e) = group_fanout.queue_pending_message(
-            channel_id,
-            &nil_member,
-            plaintext,
-            timestamp,
-        ) {
-            tracing::warn!(
-                channel_id = %channel_id,
-                missing_count = missing_members.len(),
-                error = %e,
-                "[TIMING_FIX] Failed to queue message for members without mailboxes"
-            );
-        } else {
-            tracing::info!(
-                channel_id = %channel_id,
-                sent_to_count = sent_to.len(),
-                missing_count = missing_members.len(),
-                "[TIMING_FIX] Queued message for {} member(s) without mailboxes yet",
-                missing_members.len()
-            );
-        }
     }
 
     /// Pad a Content proto to the nearest standard bucket size for traffic analysis protection.
@@ -991,16 +623,19 @@ impl MessageService {
         }
     }
 
-    /// Get an available anonymous token or request new ones from the server.
+    /// Atomically claim an anonymous token for an SKDM/sender-key send, or
+    /// request new tokens from the server if the local cache is empty.
     ///
-    /// Used for SKDM distribution and sender key requests to ensure messages
-    /// are sent with anonymous credentials per NDSS '21.
-    async fn get_or_request_token_for_skdm(
+    /// Uses `claim_available_token` so the token is marked used in the same
+    /// SQL statement — two concurrent sends can never present the same
+    /// public key to the server (which rejects repeats with
+    /// `permission_denied: credential already used`).
+    pub(super) async fn get_or_request_token_for_skdm(
         &self,
         token_manager: &TokenManager,
         recipient_id: &str,
     ) -> Option<crate::mailbox::MailboxToken> {
-        match token_manager.get_available_token() {
+        match token_manager.claim_available_token() {
             Ok(Some(t)) => Some(t),
             Ok(None) => {
                 tracing::info!(
@@ -1009,7 +644,7 @@ impl MessageService {
                 );
                 let mut mailbox_client = self.grpc_pool.mailbox_client();
                 match token_manager.request_tokens(&mut mailbox_client, 5).await {
-                    Ok(_) => token_manager.get_available_token().ok().flatten(),
+                    Ok(_) => token_manager.claim_available_token().ok().flatten(),
                     Err(e) => {
                         tracing::warn!(
                             recipient_id = %recipient_id,
@@ -1024,7 +659,7 @@ impl MessageService {
                 tracing::warn!(
                     recipient_id = %recipient_id,
                     error = %e,
-                    "Failed to get available token for SKDM"
+                    "Failed to claim token for SKDM"
                 );
                 None
             }

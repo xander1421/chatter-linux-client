@@ -302,6 +302,16 @@ async fn process_sealed_sender_group_message(
                 encrypted_avatar,
             });
         }
+        Ok(SealedSenderResult::ControlContent { .. }) => {
+            // Group-mailbox transport no longer carries channel control
+            // content — that now rides the device inbox. Ignore if it sneaks
+            // through via a peer still running the old path.
+            tracing::debug!(
+                group_id = %group_id,
+                message_id = %message_id,
+                "Ignoring channel control content delivered via group mailbox (legacy path)"
+            );
+        }
         Err(e) => {
             tracing::error!(
                 group_id = %group_id,

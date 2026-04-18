@@ -43,6 +43,12 @@ pub struct MessageDisplayData {
     pub is_reply: bool,
     pub reply_to_sender_name: String,
     pub reply_to_preview: String,
+    /// Raw thumbnail bytes of the quoted media (image/jpeg, image/png).
+    /// Populated from `Message.reply_to_thumbnail` on receive/send.
+    pub reply_to_thumbnail_bytes: Option<Vec<u8>>,
+    /// Pre-decoded thumbnail pixels of the quoted media (RGBA, width, height).
+    /// Decoded from `reply_to_thumbnail_bytes` before hitting the UI thread.
+    pub reply_to_thumbnail_decoded: Option<(Vec<u8>, u32, u32)>,
     pub delivery_status: String,
     /// Raw avatar bytes for anonymous group members.
     pub sender_avatar_bytes: Option<Vec<u8>>,
@@ -57,16 +63,29 @@ pub struct MessageDisplayData {
 }
 
 impl MessageDisplayData {
-    /// Pre-decode all attachment thumbnails (call this before invoke_from_event_loop).
+    /// Pre-decode all thumbnails (attachments, avatar, reply bubble) before invoke_from_event_loop.
     pub fn decode_attachment_thumbnails(&mut self) {
         for att in &mut self.attachments {
             att.decode_thumbnail();
         }
 
-        // Also decode sender avatar if available
+        // Decode sender avatar if available
         if let Some(bytes) = &self.sender_avatar_bytes {
             if !bytes.is_empty() {
                 self.sender_avatar_decoded = image::load_from_memory(bytes)
+                    .ok()
+                    .map(|img| {
+                        let rgba = img.to_rgba8();
+                        let (w, h) = rgba.dimensions();
+                        (rgba.into_raw(), w, h)
+                    });
+            }
+        }
+
+        // Decode reply-bubble thumbnail
+        if let Some(bytes) = &self.reply_to_thumbnail_bytes {
+            if !bytes.is_empty() {
+                self.reply_to_thumbnail_decoded = image::load_from_memory(bytes)
                     .ok()
                     .map(|img| {
                         let rgba = img.to_rgba8();
@@ -134,6 +153,16 @@ impl MessageDisplayData {
             (slint::Image::default(), false)
         };
 
+        let (reply_to_thumbnail, reply_to_has_thumbnail) =
+            if let Some((ref pixels, w, h)) = self.reply_to_thumbnail_decoded {
+                let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                    pixels, w, h,
+                );
+                (slint::Image::from_rgba8(buffer), true)
+            } else {
+                (slint::Image::default(), false)
+            };
+
     // Parse markdown for rich rendering
     let trimmed_content = self.content.trim();
     let md_spans = parse_markdown(trimmed_content);
@@ -180,6 +209,8 @@ impl MessageDisplayData {
         is_reply: self.is_reply,
         reply_to_sender_name: self.reply_to_sender_name.clone().into(),
         reply_to_preview: self.reply_to_preview.clone().into(),
+        reply_to_has_thumbnail,
+        reply_to_thumbnail,
         show_sender: true,
         // For own messages with empty status, default to "sent"
         delivery_status: if is_own && self.delivery_status.is_empty() {
@@ -286,6 +317,8 @@ pub fn message_to_display_data_with_replies(
         is_reply: msg.reply_to.is_some(),
         reply_to_sender_name: String::new(),  // Resolved by UI handler after conversion
         reply_to_preview: msg.reply_to_text.clone().unwrap_or_default(),
+        reply_to_thumbnail_bytes: msg.reply_to_thumbnail.clone(),
+        reply_to_thumbnail_decoded: None,
         delivery_status: msg.delivery_status.clone(),
         is_pinned: msg.is_pinned,
         is_call,
@@ -386,6 +419,8 @@ pub fn anon_message_to_display_data(
         is_reply: quote_data.is_some(),
         reply_to_sender_name: quote_data.as_ref().map(|q| q.0.clone()).unwrap_or_default(),
         reply_to_preview: quote_data.as_ref().map(|q| q.1.clone()).unwrap_or_default(),
+        reply_to_thumbnail_bytes: None,
+        reply_to_thumbnail_decoded: None,
         delivery_status: msg.delivery_status().to_string(),
         sender_avatar_bytes: sender_avatar,
         sender_avatar_decoded: None,
@@ -451,7 +486,7 @@ pub fn messages_to_display_batch(
         display_messages.push(display_data);
     }
 
-    // Pre-decode attachment thumbnails before UI thread
+    // Pre-decode attachment + reply thumbnails before UI thread
     for msg in &mut display_messages {
         msg.decode_attachment_thumbnails();
     }
@@ -468,3 +503,4 @@ pub fn anon_dm_message_to_display_data(
 ) -> MessageDisplayData {
     message_to_display_data(msg, sender_name, resolved_attachments, sender_avatar)
 }
+

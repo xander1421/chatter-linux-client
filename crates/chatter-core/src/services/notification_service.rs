@@ -196,6 +196,84 @@ impl Default for NotificationService {
     }
 }
 
+/// Spawn a task that listens to the domain event bus and dispatches user-
+/// visible notifications via `NotificationService`.
+///
+/// Filter policy lives here (not in the UI / client facade):
+/// * Suppress messages the current user sent.
+/// * Suppress messages for the currently active channel (user is looking
+///   at them; notification would be noise).
+/// * Show reactions from other users as low-priority notifications.
+///
+/// Task exits when the event bus closes; returns the `JoinHandle` for the
+/// caller to track alongside other lifecycle tasks.
+pub fn spawn_notification_listener(
+    event_bus: crate::events::EventBus,
+    auth_state: crate::state::AuthState,
+    chat_state: crate::state::ChatState,
+    user_service: std::sync::Arc<crate::services::user::UserService>,
+    notification_service: std::sync::Arc<NotificationService>,
+) -> tokio::task::JoinHandle<()> {
+    use crate::domain::notification::NotificationPriority;
+    use crate::inbox::handlers::DomainEvent;
+
+    let mut domain_rx = event_bus.subscribe_domain();
+    tokio::spawn(async move {
+        loop {
+            let event = match domain_rx.recv().await {
+                Ok(e) => e,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(dropped_count = n, "Notification listener lagged");
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
+
+            let auth_data = auth_state.get();
+            let chat_data = chat_state.get();
+
+            match &event {
+                DomainEvent::MessageReceived { message } => {
+                    if let (Some(sender), Some(current)) =
+                        (&message.sender_id, &auth_data.current_user_id)
+                    {
+                        if sender == current {
+                            continue;
+                        }
+                    }
+                    if chat_data.active_channel_id == Some(message.conversation_id) {
+                        continue;
+                    }
+
+                    let sender_name = message
+                        .sender_id
+                        .map(|id| user_service.get_display_name(&id));
+                    let preview = message.as_text();
+
+                    let _ = notification_service.show_message_notification(
+                        sender_name.as_deref(),
+                        preview,
+                        message.is_sealed_sender(),
+                        NotificationPriority::Normal,
+                    );
+                }
+                DomainEvent::ReactionAdded { emoji, reactor_id, .. } => {
+                    if Some(*reactor_id) == auth_data.current_user_id {
+                        continue;
+                    }
+                    let _ = notification_service.show_message_notification(
+                        None,
+                        Some(&format!("Reacted {}", emoji)),
+                        false,
+                        NotificationPriority::Low,
+                    );
+                }
+                _ => {}
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -21,7 +21,8 @@ use crate::crypto::call_key_provider::EphemeralCallKey;
 use crate::domain::anon_dm::AnonDmId;
 use crate::domain::anon_group::AnonGroupId;
 #[cfg(feature = "desktop-media")]
-use crate::domain::call::{AnonCallSetupResult, CallSetupResult, CallType};
+use crate::domain::call::{AnonCallSetupResult, CallSetupResult};
+use crate::domain::call::CallType;
 use crate::domain::call::PendingDmCall;
 #[cfg(feature = "desktop-media")]
 use crate::domain::ids::CallId;
@@ -40,8 +41,8 @@ use crate::services::gateway::{
 };
 use crate::services::mailbox_manager::MailboxManager;
 use crate::services::message::MessageService;
-#[cfg(feature = "desktop-media")]
-use crate::services::signal::SignalService;
+use crate::services::signal_service::SignalService;
+use crate::network::grpc::client_pool::GrpcClientPool;
 
 /// Errors from call signaling operations.
 #[derive(Debug, thiserror::Error)]
@@ -64,6 +65,12 @@ pub enum CallSignalingError {
     AnonCall(String),
     #[error("no call room tokens available")]
     NoTokens,
+    /// Mobile-path orchestration error (LiveKit setup, gRPC create/end call,
+    /// JSON decode of server responses). Kept as a free-form string because
+    /// the mobile methods bridge multiple subsystems and their error surfaces
+    /// are shaped by the platform SDK rather than our typed domain errors.
+    #[error("mobile call: {0}")]
+    Mobile(String),
 }
 
 /// Handles call signaling (key exchange, hangup) over the Signal Protocol.
@@ -74,6 +81,11 @@ pub struct CallSignalingService {
     channel_service: Arc<ChannelService>,
     anon_dm_service: Arc<AnonDmService>,
     anon_group_service: Arc<AnonGroupService>,
+    /// Needed by mobile call flows for ephemeral key derivation + sealed sender.
+    signal_service: Arc<SignalService>,
+    /// gRPC pool for call-server calls (create_call, end_call, etc.) used by
+    /// mobile flows that manage LiveKit setup without the desktop media stack.
+    grpc_pool: Arc<GrpcClientPool>,
     /// Pending outgoing DM call state (waiting for answer with peer's ephemeral key).
     pending_dm_call: Arc<Mutex<Option<PendingDmCall>>>,
 }
@@ -85,6 +97,8 @@ impl CallSignalingService {
         channel_service: Arc<ChannelService>,
         anon_dm_service: Arc<AnonDmService>,
         anon_group_service: Arc<AnonGroupService>,
+        signal_service: Arc<SignalService>,
+        grpc_pool: Arc<GrpcClientPool>,
     ) -> Self {
         Self {
             message_service,
@@ -92,6 +106,8 @@ impl CallSignalingService {
             channel_service,
             anon_dm_service,
             anon_group_service,
+            signal_service,
+            grpc_pool,
             pending_dm_call: Arc::new(Mutex::new(None)),
         }
     }
@@ -893,6 +909,8 @@ impl CallSignalingService {
             reply_to: None,
             reply_to_author_id: None,
             reply_to_text: None,
+            reply_to_thumbnail: None,
+            reply_to_thumbnail_mime: None,
             attachments: vec![],
             is_pinned: false,
             is_edited: false,
@@ -1111,6 +1129,8 @@ impl CallSignalingService {
             reply_to: None,
             reply_to_author_id: None,
             reply_to_text: None,
+            reply_to_thumbnail: None,
+            reply_to_thumbnail_mime: None,
             attachments: vec![],
             is_pinned: false,
             is_edited: false,
@@ -1130,5 +1150,411 @@ impl CallSignalingService {
         if let Err(e) = self.message_service.store_message_local(&message) {
             tracing::error!(error = %e, "Failed to save call history");
         }
+    }
+}
+
+// ============================================================================
+// Mobile call orchestration
+// ============================================================================
+//
+// Methods used by Android/iOS clients where the LiveKit connection is handled
+// by the platform-native SDK rather than the GStreamer-based desktop media
+// stack. They combine gRPC call-server calls, sealed-sender signaling, and
+// ephemeral-key ECDH into a single service-layer operation so the client
+// façade stays thin.
+
+impl CallSignalingService {
+    /// Start a DM call (mobile): generate ephemeral key, create call on
+    /// server, send offer, store pending state.
+    pub async fn start_dm_call_mobile(
+        &self,
+        peer_id: &UserId,
+        channel_id: ChannelId,
+        call_type: crate::domain::call::CallType,
+    ) -> Result<String, CallSignalingError> {
+        use crate::crypto::call_key_provider::EphemeralCallKey;
+        use crate::proto::chat_v1::CallType as ProtoCallType;
+
+        let ephemeral_key = EphemeralCallKey::generate();
+        let ephemeral_public = ephemeral_key.public_key_bytes();
+
+        let is_video = matches!(call_type, crate::domain::call::CallType::Video);
+        let call_type_str = match call_type {
+            crate::domain::call::CallType::Voice => "Voice Call",
+            crate::domain::call::CallType::Video => "Video Call",
+            crate::domain::call::CallType::Group => "Group Call",
+        };
+        let proto_type = match call_type {
+            crate::domain::call::CallType::Voice => ProtoCallType::Voice,
+            crate::domain::call::CallType::Video => ProtoCallType::Video,
+            crate::domain::call::CallType::Group => ProtoCallType::Video,
+        };
+
+        let response = {
+            let mut call_client = self.grpc_pool.call_client();
+            call_client
+                .create_call(&channel_id.to_string(), call_type_str, proto_type, None)
+                .await
+                .map_err(|e| CallSignalingError::Mobile(e.to_string()))?
+        };
+        let call_id = response.call_id.clone();
+
+        self.send_call_offer(peer_id, &call_id, ephemeral_public, call_type_str, &channel_id.to_string())
+            .await
+            .map_err(|e| CallSignalingError::Mobile(e.to_string()))?;
+
+        self.set_pending_dm_call(PendingDmCall {
+            call_id: call_id.parse()
+                .map_err(|_| CallSignalingError::Mobile("Invalid call ID".into()))?,
+            channel_id,
+            ephemeral_key,
+            peer_id: *peer_id,
+            call_type: call_type_str.to_string(),
+            is_video,
+        });
+
+        Ok(call_id)
+    }
+
+    /// Complete an outgoing DM call (mobile): derive shared secret from
+    /// peer's answer, join room, return LiveKit credentials.
+    pub async fn complete_dm_call_mobile(
+        &self,
+        peer_ephemeral_pk: [u8; 32],
+        call_id: &str,
+        peer_id: &UserId,
+    ) -> Result<crate::domain::call::MobileCallSetup, CallSignalingError> {
+        use crate::services::call_verification::CallVerification;
+
+        let pending = self.take_pending_dm_call()
+            .ok_or(CallSignalingError::NoPendingCall)?;
+
+        if pending.call_id.to_string() != call_id {
+            let expected = pending.call_id.to_string();
+            self.set_pending_dm_call(pending);
+            return Err(CallSignalingError::CallIdMismatch {
+                expected,
+                actual: call_id.to_string(),
+            });
+        }
+
+        let priv_key = pending.ephemeral_key.private_key_bytes();
+        let call_key = self.signal_service.actor
+            .complete_call_key_exchange(
+                priv_key,
+                peer_ephemeral_pk,
+                *peer_id,
+                call_id.to_string(),
+                true,
+            )
+            .await
+            .map_err(|e| CallSignalingError::KeyDerivationFailed(e.to_string()))?;
+
+        let channel_id = pending.channel_id;
+        let is_video = pending.is_video;
+        drop(pending);
+
+        let join_response = {
+            let mut call_client = self.grpc_pool.call_client();
+            call_client.join_call(call_id).await
+                .map_err(|e| CallSignalingError::Mobile(e.to_string()))?
+        };
+
+        let verification = CallVerification::derive_verification_emojis(&call_key, call_id);
+        let (e1, e2, e3, e4) = CallVerification::to_slint_tuple(&verification);
+
+        let call_id_parsed = call_id.parse()
+            .map_err(|_| CallSignalingError::Mobile("Invalid call ID".into()))?;
+
+        Ok(crate::domain::call::MobileCallSetup {
+            call_id: call_id_parsed,
+            channel_id,
+            verification_emojis: [e1, e2, e3, e4],
+            is_video,
+            livekit_url: join_response.livekit_url,
+            livekit_token: join_response.livekit_token,
+            encryption_key: zeroize::Zeroizing::new(call_key.to_vec()),
+        })
+    }
+
+    /// Accept an incoming DM call (mobile): ECDH key exchange, send answer,
+    /// join room, return LiveKit credentials.
+    #[cfg(feature = "desktop-media")]
+    pub async fn accept_dm_call_mobile(
+        &self,
+        caller_ephemeral_pk: [u8; 32],
+        call_id: &str,
+        caller_id: &UserId,
+    ) -> Result<crate::domain::call::MobileCallSetup, CallSignalingError> {
+        use crate::crypto::call_key_provider::EphemeralCallKey;
+        use crate::services::call_verification::CallVerification;
+
+        let our_ephemeral = EphemeralCallKey::generate();
+        let our_ephemeral_pk = our_ephemeral.public_key_bytes();
+
+        let priv_key = our_ephemeral.private_key_bytes();
+        let encryption_key = self.signal_service.actor
+            .complete_call_key_exchange(
+                priv_key,
+                caller_ephemeral_pk,
+                *caller_id,
+                call_id.to_string(),
+                false,
+            )
+            .await
+            .map_err(|e| CallSignalingError::KeyDerivationFailed(e.to_string()))?;
+
+        self.send_call_answer(caller_id, call_id, our_ephemeral_pk)
+            .await
+            .map_err(|e| CallSignalingError::Mobile(e.to_string()))?;
+
+        drop(our_ephemeral);
+
+        let join_response = {
+            let mut call_client = self.grpc_pool.call_client();
+            call_client.join_call(call_id).await
+                .map_err(|e| CallSignalingError::Mobile(e.to_string()))?
+        };
+
+        let call_id_parsed = call_id.parse()
+            .map_err(|_| CallSignalingError::Mobile("Invalid call ID".into()))?;
+
+        let verification = CallVerification::derive_verification_emojis(&encryption_key, call_id);
+        let (e1, e2, e3, e4) = CallVerification::to_slint_tuple(&verification);
+
+        Ok(crate::domain::call::MobileCallSetup {
+            call_id: call_id_parsed,
+            channel_id: ChannelId::new(),
+            verification_emojis: [e1, e2, e3, e4],
+            is_video: false,
+            livekit_url: join_response.livekit_url,
+            livekit_token: join_response.livekit_token,
+            encryption_key: zeroize::Zeroizing::new(encryption_key.to_vec()),
+        })
+    }
+
+    /// Start a group call (mobile): create call on server, distribute key
+    /// to members, return LiveKit credentials.
+    pub async fn start_group_call_mobile(
+        &self,
+        channel_id: ChannelId,
+        call_type: crate::domain::call::CallType,
+    ) -> Result<crate::domain::call::MobileCallSetup, CallSignalingError> {
+        use crate::crypto::generate_group_call_key;
+        use crate::services::call_verification::CallVerification;
+        use crate::proto::chat_v1::CallType as ProtoCallType;
+
+        let group_key = generate_group_call_key();
+
+        let call_type_str = match call_type {
+            crate::domain::call::CallType::Voice => "Voice Call",
+            crate::domain::call::CallType::Video => "Video Call",
+            crate::domain::call::CallType::Group => "Group Call",
+        };
+        let proto_type = match call_type {
+            crate::domain::call::CallType::Voice => ProtoCallType::Voice,
+            crate::domain::call::CallType::Video => ProtoCallType::Video,
+            crate::domain::call::CallType::Group => ProtoCallType::Video,
+        };
+
+        let response = {
+            let mut call_client = self.grpc_pool.call_client();
+            call_client
+                .create_call(&channel_id.to_string(), call_type_str, proto_type, None)
+                .await
+                .map_err(|e| CallSignalingError::Mobile(e.to_string()))?
+        };
+        let call_id_str = response.call_id.clone();
+
+        // Fire-and-forget key distribution.
+        let signaling = self.clone();
+        let ch_id = channel_id;
+        let key_copy = group_key;
+        let cid_for_task = call_id_str.clone();
+        tokio::spawn(async move {
+            match signaling.distribute_group_call_key(&ch_id, &cid_for_task, key_copy, 0).await {
+                Ok(count) => tracing::info!(call_id = %cid_for_task, sent = count, "Group call key distributed"),
+                Err(e) => tracing::error!(call_id = %cid_for_task, error = %e, "Failed to distribute group call key"),
+            }
+        });
+
+        let verification = CallVerification::derive_verification_emojis(&group_key, &response.call_id);
+        let (e1, e2, e3, e4) = CallVerification::to_slint_tuple(&verification);
+
+        let call_id_parsed = response.call_id.parse()
+            .map_err(|_| CallSignalingError::Mobile("Invalid call ID".into()))?;
+
+        Ok(crate::domain::call::MobileCallSetup {
+            call_id: call_id_parsed,
+            channel_id,
+            verification_emojis: [e1, e2, e3, e4],
+            is_video: matches!(call_type, crate::domain::call::CallType::Video),
+            livekit_url: response.livekit_url,
+            livekit_token: response.livekit_token,
+            encryption_key: zeroize::Zeroizing::new(group_key.to_vec()),
+        })
+    }
+
+    /// End a DM call (mobile): send hangup, leave call on server.
+    #[cfg(feature = "desktop-media")]
+    pub async fn end_dm_call_mobile(
+        &self,
+        call_id: &str,
+        channel_id: &ChannelId,
+        _duration_secs: i64,
+    ) -> Result<(), CallSignalingError> {
+        use crate::services::gateway::CallHangupReason;
+
+        if let Err(e) = self
+            .send_call_hangup(channel_id, call_id, CallHangupReason::Normal)
+            .await
+        {
+            tracing::error!(error = %e, "Failed to send hangup notification");
+        }
+
+        let leave_result = {
+            let mut call_client = self.grpc_pool.call_client();
+            call_client.leave_call(call_id).await
+        };
+        if let Err(e) = leave_result {
+            tracing::error!(error = %e, "Failed to leave call on server");
+        }
+
+        Ok(())
+    }
+
+    /// End an anonymous call (mobile): send hangup, return conversation id for history insertion.
+    #[cfg(feature = "desktop-media")]
+    pub async fn end_anon_call_mobile(
+        &self,
+        room_name: &str,
+        _duration_secs: i64,
+    ) -> Result<Option<AnonDmId>, CallSignalingError> {
+        use crate::domain::anon_group::AnonGroupId;
+
+        let pending = self.anon_dm_service.take_pending_anon_call(room_name);
+
+        let conversation_id = if let Some(ref pending) = pending {
+            let conversation_id = pending.conversation_id;
+            let is_group_call = self.anon_dm_service
+                .get_conversation(&conversation_id)
+                .ok().flatten().is_none();
+
+            if is_group_call {
+                if let Some(group_id) = AnonGroupId::try_from_slice(conversation_id.as_bytes()) {
+                    if let Err(e) = self.anon_group_service.send_call_hangup(
+                        &group_id, &pending.call_room_id,
+                        crate::proto::content_v1::anon_call_hangup::Reason::Normal,
+                    ).await {
+                        tracing::error!(error = %e, "Failed to send group call hangup");
+                    }
+                }
+            } else {
+                if let Err(e) = self.anon_dm_service.send_call_hangup(
+                    &conversation_id, &pending.call_room_id,
+                    crate::proto::content_v1::anon_call_hangup::Reason::Normal,
+                ).await {
+                    tracing::error!(error = %e, "Failed to send anonymous call hangup");
+                }
+            }
+
+            Some(conversation_id)
+        } else {
+            tracing::warn!(room_name = %room_name, "No pending call context for end");
+            None
+        };
+
+        Ok(conversation_id)
+    }
+
+    /// Handle remote hangup (mobile): leave call on server (best-effort).
+    pub async fn handle_remote_hangup_mobile(
+        &self,
+        call_id: &str,
+    ) -> Result<(), CallSignalingError> {
+        let result = {
+            let mut call_client = self.grpc_pool.call_client();
+            call_client.leave_call(call_id).await
+        };
+        if let Err(e) = result {
+            tracing::debug!(error = %e, "leave_call after remote hangup");
+        }
+        Ok(())
+    }
+
+    /// Accept an anonymous call (mobile): send accept answer, join room,
+    /// return LiveKit credentials.
+    pub async fn accept_anon_call_mobile(
+        &self,
+        room_name: &str,
+    ) -> Result<crate::domain::call::MobileCallSetup, CallSignalingError> {
+        use crate::domain::anon_group::AnonGroupId;
+        use crate::services::call_verification::CallVerification;
+
+        let pending = self.anon_dm_service.take_pending_anon_call(room_name)
+            .ok_or(CallSignalingError::Mobile("No pending anonymous call".into()))?;
+
+        let token = match self.acquire_call_room_token_public().await {
+            Ok(t) => t,
+            Err(e) => {
+                // Restore pending call so user can retry.
+                self.anon_dm_service.store_pending_anon_call(room_name.to_string(), pending);
+                return Err(CallSignalingError::Mobile(e.to_string()));
+            }
+        };
+        let _ = self.anon_dm_service.mark_call_room_token_used(&token.id);
+
+        let my_display_name = self.anon_dm_service
+            .get_my_display_name()
+            .unwrap_or_else(|| "Anonymous".to_string());
+
+        let is_group_call = self.anon_dm_service
+            .get_conversation(&pending.conversation_id)
+            .ok().flatten().is_none();
+
+        if is_group_call {
+            let group_id = AnonGroupId::try_from_slice(pending.conversation_id.as_bytes())
+                .ok_or_else(|| CallSignalingError::Mobile("Invalid group ID".into()))?;
+            self.anon_group_service
+                .send_call_answer(&group_id, &pending.call_room_id, true, Some(&token), Some(&my_display_name))
+                .await
+                .map_err(|e| CallSignalingError::Mobile(format!("Failed to send group accept: {e}")))?;
+        } else {
+            self.anon_dm_service
+                .send_call_answer(
+                    &pending.conversation_id, &pending.call_room_id,
+                    true, Some(&token), None, Some(&my_display_name),
+                )
+                .await
+                .map_err(|e| CallSignalingError::Mobile(format!("Failed to send accept: {e}")))?;
+        }
+
+        let room_info = self.anon_dm_service
+            .join_anon_call_room(room_name, &token, &my_display_name, pending.is_video_call)
+            .await
+            .map_err(|e| CallSignalingError::Mobile(format!("Failed to join room: {e}")))?;
+
+        let mut key_arr = [0u8; 32];
+        if pending.encryption_key.len() >= 32 {
+            key_arr.copy_from_slice(&pending.encryption_key[..32]);
+        }
+        let verification = CallVerification::derive_verification_emojis(&key_arr, room_name);
+        let (e1, e2, e3, e4) = CallVerification::to_slint_tuple(&verification);
+
+        let result = crate::domain::call::MobileCallSetup {
+            call_id: crate::domain::ids::CallId::new(),
+            channel_id: ChannelId::new(),
+            verification_emojis: [e1, e2, e3, e4],
+            is_video: pending.is_video_call,
+            livekit_url: room_info.livekit_url,
+            livekit_token: room_info.livekit_token,
+            encryption_key: zeroize::Zeroizing::new(pending.encryption_key.clone()),
+        };
+
+        let mut active_pending = pending;
+        active_pending.started_at = Some(chrono::Utc::now());
+        self.anon_dm_service.store_pending_anon_call(room_name.to_string(), active_pending);
+
+        Ok(result)
     }
 }

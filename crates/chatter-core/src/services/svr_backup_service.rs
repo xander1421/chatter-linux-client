@@ -53,6 +53,12 @@ pub enum SvrBackupError {
     /// Backup permanently destroyed by server (too many failed PIN attempts).
     #[error("backup destroyed: re-register PIN to create a new backup")]
     BackupDestroyed,
+
+    /// Free-form error for orchestration-level failures (identity store access,
+    /// missing profile key, PIN format). Typed variants above cover the
+    /// transport and crypto layers; this variant covers the glue.
+    #[error("svr backup: {0}")]
+    Generic(String),
 }
 
 /// Result of a successful backup restore.
@@ -87,6 +93,7 @@ pub struct RestoreResult {
 pub struct SvrBackupService {
     grpc_pool: Arc<GrpcClientPool>,
     settings: Arc<SettingsRepository>,
+    signal_service: Arc<crate::services::signal_service::SignalService>,
 }
 
 impl SvrBackupService {
@@ -96,11 +103,139 @@ impl SvrBackupService {
     ///
     /// * `grpc_pool` - Connection pool for creating gRPC clients
     /// * `settings` - Settings repository for persisting the backup version counter
-    pub fn new(grpc_pool: Arc<GrpcClientPool>, settings: Arc<SettingsRepository>) -> Self {
+    /// * `signal_service` - Access to the identity keypair for backup payload assembly
+    pub fn new(
+        grpc_pool: Arc<GrpcClientPool>,
+        settings: Arc<SettingsRepository>,
+        signal_service: Arc<crate::services::signal_service::SignalService>,
+    ) -> Self {
         Self {
             grpc_pool,
             settings,
+            signal_service,
         }
+    }
+
+    /// Run the full post-registration backup flow from raw credentials.
+    ///
+    /// Derives the SVR secret from PIN + username, fetches the identity
+    /// keypair from the Signal store, reads the profile key from settings,
+    /// and uploads an encrypted backup. All sensitive intermediates are
+    /// zeroized. Failure is non-fatal to the caller — the most common cause
+    /// is a transient network error at registration time.
+    pub async fn backup_from_pin(
+        &self,
+        pin: &str,
+        username: &str,
+    ) -> Result<u32, SvrBackupError> {
+        use crate::crypto::svr::derive_svr_secret;
+        use crate::storage::repositories::settings_repo::keys;
+        use zeroize::Zeroize;
+
+        let mut svr_secret = derive_svr_secret(pin, username)
+            .map_err(|e| SvrBackupError::Crypto(e))?;
+
+        let mut private_bytes = self.signal_service.actor.get_identity_private_key().await
+            .map_err(|e| {
+                svr_secret.zeroize();
+                SvrBackupError::Generic(format!("failed to get identity private key: {e}"))
+            })?;
+        let public_bytes_33 = self.signal_service.actor.get_identity_public_key().await
+            .map_err(|e| {
+                svr_secret.zeroize();
+                private_bytes.zeroize();
+                SvrBackupError::Generic(format!("failed to get identity public key: {e}"))
+            })?;
+        let mut identity_keypair = [0u8; 64];
+        identity_keypair[..32].copy_from_slice(&private_bytes);
+        identity_keypair[32..].copy_from_slice(&public_bytes_33[1..]);
+        private_bytes.zeroize();
+
+        let mut profile_key = match self.signal_service.settings_repo.get_bytes(keys::PROFILE_KEY) {
+            Ok(Some(bytes)) if bytes.len() == 32 => {
+                let mut pk = [0u8; 32];
+                pk.copy_from_slice(&bytes);
+                pk
+            }
+            Ok(_) => {
+                svr_secret.zeroize();
+                identity_keypair.zeroize();
+                return Err(SvrBackupError::Generic(
+                    "profile key not found or invalid length".into(),
+                ));
+            }
+            Err(e) => {
+                svr_secret.zeroize();
+                identity_keypair.zeroize();
+                return Err(SvrBackupError::Generic(format!(
+                    "failed to read profile key: {e}"
+                )));
+            }
+        };
+
+        let result = self
+            .create_and_upload_backup(&svr_secret, &identity_keypair, &profile_key)
+            .await;
+
+        svr_secret.zeroize();
+        identity_keypair.zeroize();
+        profile_key.zeroize();
+
+        result
+    }
+
+    /// Public retry: derive profile key from password, then run the same
+    /// flow as [`backup_from_pin`]. Used when the initial backup at
+    /// registration failed and the user is re-authenticating.
+    pub async fn retry_from_credentials(
+        &self,
+        pin: &str,
+        username: &str,
+        password: &str,
+    ) -> Result<(), SvrBackupError> {
+        use crate::crypto::auth_crypto::{derive_profile_key, hash_password};
+        use crate::crypto::svr::derive_svr_secret;
+        use zeroize::Zeroize;
+
+        if pin.len() != 6 || !pin.chars().all(|c| c.is_ascii_digit()) {
+            return Err(SvrBackupError::Generic("PIN must be exactly 6 digits".into()));
+        }
+
+        let password_hash = hash_password(password);
+        let mut profile_key = derive_profile_key(&password_hash, username)
+            .map_err(SvrBackupError::Crypto)?;
+
+        let mut private_bytes = self.signal_service.actor.get_identity_private_key().await
+            .map_err(|e| {
+                profile_key.zeroize();
+                SvrBackupError::Generic(format!("failed to get identity private key: {e}"))
+            })?;
+        let public_bytes_33 = self.signal_service.actor.get_identity_public_key().await
+            .map_err(|e| {
+                profile_key.zeroize();
+                private_bytes.zeroize();
+                SvrBackupError::Generic(format!("failed to get identity public key: {e}"))
+            })?;
+        let mut identity_keypair = [0u8; 64];
+        identity_keypair[..32].copy_from_slice(&private_bytes);
+        identity_keypair[32..].copy_from_slice(&public_bytes_33[1..]);
+        private_bytes.zeroize();
+
+        let mut svr_secret = derive_svr_secret(pin, username).map_err(|e| {
+            profile_key.zeroize();
+            identity_keypair.zeroize();
+            SvrBackupError::Crypto(e)
+        })?;
+
+        let result = self
+            .create_and_upload_backup(&svr_secret, &identity_keypair, &profile_key)
+            .await;
+
+        svr_secret.zeroize();
+        identity_keypair.zeroize();
+        profile_key.zeroize();
+
+        result.map(|_| ())
     }
 
     /// Create an encrypted backup and upload it to the server.

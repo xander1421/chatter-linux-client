@@ -114,31 +114,13 @@ impl ChannelService {
             "Created sender key for joined channel"
         );
 
-        // Setup group mailbox for encrypted channels (NDSS '21 paper)
-        let mailbox_setup = if setup_mailbox {
-            let mut mailbox_client = self.mailbox_client();
-            let mut anon_mailbox_client = self.anonymous_mailbox_client();
-            match self.setup_group_mailbox_internal(channel_id, &mut mailbox_client, &mut anon_mailbox_client).await {
-                Ok(Some(mut setup)) => {
-                    // Include the SKDM in the result so caller can distribute it
-                    setup.skdm = Some(skdm);
-                    Some(setup)
-                }
-                Ok(None) => None,
-                Err(e) => {
-                    tracing::error!(
-                        channel_id = %channel_id,
-                        error = %e,
-                        "Group mailbox setup failed during channel join - group encryption unavailable"
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        // Server-managed channels no longer use per-group mailboxes — control
+        // + SKDM fanout ride the device inbox directly. The `setup_mailbox`
+        // toggle is retained only so call sites stay source-compatible.
+        let _ = setup_mailbox;
 
-        // Sync other channel members for SKDM distribution
+        // Sync other channel members so the upcoming SKDM distribution hits
+        // every member (SKDM distribute_skdm reads the local membership list).
         if let Err(e) = self.sync_channel_members_internal(&mut channel_client, channel_id).await {
             tracing::warn!(
                 channel_id = %channel_id,
@@ -147,7 +129,18 @@ impl ChannelService {
             );
         }
 
-        Ok((channel, mailbox_setup))
+        // Distribute our freshly minted SKDM via pairwise sealed-sender to
+        // every member's device inbox. Best-effort: peers that miss this
+        // blast will recover via SenderKeyRequest on the first decrypt miss.
+        if let Err(e) = self.message_service.distribute_skdm(channel_id, &skdm).await {
+            tracing::warn!(
+                channel_id = %channel_id,
+                error = %e,
+                "Failed to distribute SKDM on join (peers will heal via SenderKeyRequest)"
+            );
+        }
+
+        Ok((channel, None))
     }
 
     /// Sync channel members from the server to local storage.
@@ -442,27 +435,11 @@ impl ChannelService {
             };
             self.channel_repo.insert_membership(&membership)?;
 
-            // Setup group mailbox for encrypted channels (NDSS '21 paper)
-            let mailbox_setup = if setup_mailbox {
-                let mut mailbox_client = self.mailbox_client();
-                let mut anon_mailbox_client = self.anonymous_mailbox_client();
-                match self.setup_group_mailbox_internal(channel_id, &mut mailbox_client, &mut anon_mailbox_client).await {
-                    Ok(Some(setup)) => Some(setup),
-                    Ok(None) => None,
-                    Err(e) => {
-                        tracing::error!(
-                            channel_id = %channel_id,
-                            error = %e,
-                            "Group mailbox setup failed during invite accept - group encryption unavailable"
-                        );
-                        None
-                    }
-                }
-            } else {
-                None
-            };
+            // Server-managed channels: control/SKDM fanout via device inbox;
+            // no group mailbox to register.
+            let _ = setup_mailbox;
 
-            Ok(Some((channel, mailbox_setup)))
+            Ok(Some((channel, None)))
         } else {
             Ok(None)
         }
@@ -555,5 +532,42 @@ impl ChannelService {
         }
 
         Ok(membership)
+    }
+
+    /// Full leave orchestration: block sending → rotate sender key → server
+    /// leave → distribute final SKDM to remaining members → unblock sending
+    /// → purge local sender keys for this channel. Wraps `leave_channel` so
+    /// the SDK façade isn't stitching four services.
+    ///
+    /// SKDM distribution failure is best-effort: remaining members will
+    /// rotate themselves via `mark_channel_for_rotation` on their next send.
+    pub async fn leave_channel_complete(
+        &self,
+        channel_id: &ChannelId,
+    ) -> Result<(), ChannelError> {
+        let skdm = self.leave_channel(channel_id).await?;
+
+        if let Err(e) = self.message_service.distribute_skdm(channel_id, &skdm).await {
+            tracing::warn!(
+                channel_id = %channel_id,
+                error = %e,
+                "Failed to distribute SKDM on leave — remaining members will rotate on next send"
+            );
+        }
+
+        if let Err(e) = self.signal_service.unblock_channel_send(channel_id) {
+            tracing::warn!(channel_id = %channel_id, error = %e, "Failed to unblock channel send after leave");
+        }
+
+        // Drop every sender key for this channel — we're no longer a member.
+        if let Err(e) = self.signal_service.clear_channel_sender_keys(channel_id).await {
+            tracing::warn!(
+                channel_id = %channel_id,
+                error = %e,
+                "Failed to purge sender keys after leaving channel"
+            );
+        }
+
+        Ok(())
     }
 }

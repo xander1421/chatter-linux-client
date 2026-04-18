@@ -9,7 +9,7 @@
 use crate::domain::attachment::{Attachment, FileCategory};
 use crate::domain::message::Message;
 use crate::domain::AttachmentId;
-use crate::proto::content_v1::{AttachmentPointer, Quote, quote};
+use crate::proto::content_v1::{AttachmentPointer, Quote, QuotedAttachment, quote};
 
 // =============================================================================
 // Preview text
@@ -86,14 +86,49 @@ pub fn message_reply_preview(msg: &Message, attachments: &[Attachment]) -> Strin
 /// message's timestamp) for identification — this is how Signal identifies
 /// quoted messages without server-assigned message IDs.
 pub fn build_quote(author_id: &str, timestamp: u64, preview_text: &str) -> Quote {
+    build_quote_with_attachments(author_id, timestamp, preview_text, vec![])
+}
+
+/// Build a Signal-style Quote proto including one or more `QuotedAttachment`s.
+///
+/// Used for media replies so the receiver can render a thumbnail in the
+/// reply bubble even if they haven't downloaded the original attachment.
+pub fn build_quote_with_attachments(
+    author_id: &str,
+    timestamp: u64,
+    preview_text: &str,
+    attachments: Vec<QuotedAttachment>,
+) -> Quote {
     Quote {
         id: timestamp,
         author_aci: author_id.to_string(),
         text: preview_text.to_string(),
-        attachments: vec![],
+        attachments,
         r#type: quote::Type::Normal as i32,
         author_aci_binary: vec![],
     }
+}
+
+/// Build `QuotedAttachment`s (Signal-style) from the quoted message's
+/// attachments. Only image/video attachments with a sender thumbnail are
+/// serialized — others are skipped to keep the quote payload small.
+pub fn build_quoted_attachments(attachments: &[Attachment]) -> Vec<QuotedAttachment> {
+    attachments
+        .iter()
+        .filter(|a| a.metadata.is_image() || a.metadata.is_video())
+        .filter_map(|a| {
+            let thumb = a.metadata.thumbnail.clone().unwrap_or_default();
+            if thumb.is_empty() {
+                return None;
+            }
+            Some(QuotedAttachment {
+                content_type: a.metadata.mime_type.clone(),
+                file_name: a.metadata.name.clone(),
+                thumbnail: thumb,
+            })
+        })
+        .take(1)
+        .collect()
 }
 
 // =============================================================================

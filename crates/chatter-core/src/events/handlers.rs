@@ -508,8 +508,8 @@ impl EventHandlers {
                 channel_id,
                 ..
             } => {
-                // Sender key is processed in SenderKeyHandler before this event is emitted
-                trace!(?sender_id, ?channel_id, "Sender key received (already processed by handler)");
+                // Sender key is processed in the polling layer before this event is emitted.
+                trace!(?sender_id, ?channel_id, "Sender key received (already processed)");
             }
 
             DomainEvent::GroupMailboxReceived {

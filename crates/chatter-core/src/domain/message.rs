@@ -112,6 +112,14 @@ pub struct Message {
     /// Quote context: preview text of the quoted message.
     #[serde(default)]
     pub reply_to_text: Option<String>,
+    /// Quote context: JPEG/PNG thumbnail bytes of the first image/video
+    /// attachment in the quoted message. Carried over the wire inside
+    /// `Quote.attachments[0].thumbnail` (Signal-compatible).
+    #[serde(default)]
+    pub reply_to_thumbnail: Option<Vec<u8>>,
+    /// Quote context: MIME type of the quoted attachment, e.g. "image/jpeg".
+    #[serde(default)]
+    pub reply_to_thumbnail_mime: Option<String>,
     pub attachments: Vec<AttachmentId>,
     pub is_pinned: bool,
     pub is_edited: bool,
@@ -170,6 +178,8 @@ impl Message {
             reply_to: None,
             reply_to_author_id: None,
             reply_to_text: None,
+            reply_to_thumbnail: None,
+            reply_to_thumbnail_mime: None,
             attachments: Vec::new(),
             is_pinned: false,
             is_edited: false,

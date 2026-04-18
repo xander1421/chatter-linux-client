@@ -452,6 +452,53 @@ impl TokenManager {
         }
     }
 
+    /// Atomically claim an available token: returns a token that has been
+    /// marked used in the same SQL statement, so concurrent callers never
+    /// see the same public key.
+    ///
+    /// Use this instead of `get_available_token` + `mark_token_used` when the
+    /// token is going straight onto the wire — the server rejects any
+    /// credential it has seen before, so a race would manifest as a
+    /// `permission_denied: credential already used` error.
+    pub fn claim_available_token(&self) -> Result<Option<MailboxToken>, MailboxError> {
+        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
+        let now = Utc::now().to_rfc3339();
+
+        let result = conn.query_row(
+            "UPDATE mailbox_tokens \
+             SET used_at = ?1 \
+             WHERE id = ( \
+                 SELECT id FROM mailbox_tokens \
+                 WHERE used_at IS NULL \
+                 ORDER BY created_at ASC \
+                 LIMIT 1 \
+             ) \
+             RETURNING id, ephemeral_public_key, ephemeral_private_key, signature, message_randomizer",
+            rusqlite::params![now],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, Option<Vec<u8>>>(4)?,
+                ))
+            },
+        );
+
+        match result {
+            Ok((id, public_key, private_key, signature, randomizer)) => Ok(Some(MailboxToken {
+                id,
+                public_key,
+                private_key,
+                signature,
+                randomizer,
+            })),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(MailboxError::Storage(e.to_string())),
+        }
+    }
+
     /// Mark a token as used.
     ///
     /// # Arguments

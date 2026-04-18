@@ -249,6 +249,8 @@ impl AnonDmService {
                     reply_to: None,
                     reply_to_author_id: None,
                     reply_to_text: None,
+                    reply_to_thumbnail: None,
+                    reply_to_thumbnail_mime: None,
                     attachments: Vec::new(),
                     is_pinned: false,
                     is_edited: false,

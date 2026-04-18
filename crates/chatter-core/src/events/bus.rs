@@ -92,8 +92,8 @@ impl EventBus {
 
     /// Get the domain event sender.
     ///
-    /// Use this to pass to components that need to emit domain events,
-    /// such as inbox handlers via `HandlerContext`.
+    /// Use this to pass to components that need to emit domain events
+    /// (inbox dispatchers, service-layer processors).
     #[must_use]
     pub fn domain_sender(&self) -> broadcast::Sender<DomainEvent> {
         self.domain_tx.clone()

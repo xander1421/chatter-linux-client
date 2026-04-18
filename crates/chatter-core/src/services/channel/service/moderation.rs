@@ -200,4 +200,40 @@ impl ChannelService {
 
         Ok(())
     }
+
+    /// Full kick orchestration: server kick → rotate sender key → distribute
+    /// new SKDM → unblock sending. Wraps the bare `kick_user` so the SDK
+    /// façade doesn't have to stitch three services together.
+    ///
+    /// Returns `SenderKeyRotationFailed` if SKDM distribution fails — in that
+    /// case the channel stays blocked for sending and manual retry is needed.
+    pub async fn kick_user_complete(
+        &self,
+        channel_id: &ChannelId,
+        user_id: &UserId,
+        reason: Option<&str>,
+    ) -> Result<(), ChannelError> {
+        let skdm = self.kick_user(channel_id, user_id, reason).await?;
+
+        if let Err(e) = self.message_service.distribute_skdm(channel_id, &skdm).await {
+            tracing::error!(
+                channel_id = %channel_id,
+                error = %e,
+                "Failed to distribute SKDM after kick — sending remains blocked"
+            );
+            return Err(ChannelError::SenderKeyRotationFailed(
+                format!("SKDM distribution failed after kick: {e}"),
+            ));
+        }
+
+        if let Err(e) = self.signal_service.unblock_channel_send(channel_id) {
+            tracing::warn!(
+                channel_id = %channel_id,
+                error = %e,
+                "Failed to unblock channel send after kick"
+            );
+        }
+
+        Ok(())
+    }
 }

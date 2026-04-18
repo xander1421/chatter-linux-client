@@ -86,6 +86,8 @@ export struct MessageItemData {
     is-reply: bool,                  // Whether this message is a reply to another
     reply-to-sender-name: string,    // Display name of quoted message author
     reply-to-preview: string,        // Preview text of the quoted message
+    reply-to-has-thumbnail: bool,    // Whether the quoted message has a media thumbnail
+    reply-to-thumbnail: image,       // Thumbnail image for the quoted message (e.g. photo, video)
     show-sender: bool,
     // Link preview
     has-link-preview: bool,

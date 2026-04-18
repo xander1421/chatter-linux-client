@@ -1,0 +1,1518 @@
+//! SDK facade for chatter-core.
+//!
+//! [`ChatterClient`] is the main entry point for consumers of this library.
+//! It wraps the internal [`AppContext`] and [`CoreServices`] with a clean,
+//! discoverable API. The implementation is split across submodules that each
+//! add a focused set of methods to `ChatterClient` via `impl` blocks:
+//!
+//! * `auth` — login / register / recovery / PIN flows
+//! * `calls` — DM / group / anonymous call orchestration (desktop + mobile)
+//! * `channels` — channel CRUD + membership
+//! * `messaging` — message list / get / mark-read thin façades
+//! * `profile` — user display name + friend code + QR façades
+//! * `pin` — pinned-message façade
+//! * `anon_group` — anonymous group membership façade
+//! * `jarvis` — Jarvis AI assistant façade
+
+mod anon_group;
+mod auth;
+mod calls;
+mod channels;
+mod jarvis;
+mod messaging;
+mod pin;
+mod profile;
+
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+
+use parking_lot::Mutex;
+use tokio::task::JoinHandle;
+
+use crate::app::context::{AppContext, ContextError};
+use crate::app::core_services::CoreServices;
+use crate::domain::attachment::Attachment;
+use crate::domain::channel::{Channel, ChannelType};
+use crate::domain::message::{ConversationType, Message};
+use crate::error::NetworkError;
+use crate::events::{DomainEvent, EventBus};
+use crate::services::auth_service::AuthError;
+use crate::inbox::DeviceInboxProvider;
+use crate::mailbox::group::GroupFanout;
+use crate::proto::content_v1::AttachmentPointer;
+use crate::services::ai_service::AIService;
+use crate::services::anon_dm::AnonDmService;
+use crate::services::anon_group::AnonGroupService;
+use crate::services::attachment::AttachmentService;
+use crate::services::auth_service::AuthService;
+#[cfg(feature = "desktop-media")]
+use crate::services::call_worker::CallWorkerHandle;
+use crate::services::channel::ChannelService;
+use crate::services::dm_bootstrap_service::DmBootstrapService;
+use crate::services::gateway::outgoing::{
+    OwnedOutgoingServices, OutgoingIntent, QuoteIntent, SendError, SendResult,
+    route_outgoing_owned,
+};
+use crate::services::jarvis::JarvisService;
+use crate::services::ai::LocalAIService;
+use crate::services::mailbox_manager::MailboxManager;
+use crate::services::message::MessageService;
+use crate::services::pin_service::PinService;
+use crate::services::session_service::{SessionError, SessionService};
+use crate::services::signal_service::SignalService;
+use crate::services::section_service::SectionService;
+use crate::services::typing_service::TypingService;
+use crate::services::user::UserService;
+use crate::services::conversation::ConversationHandle;
+use crate::state::{
+    ActiveConversation, AuthState, ChatState, JarvisState, MessageState, OfflineState,
+    OrgState, PinnedState, PresenceState, PrivacyState, StreamingState, UIState, UserState,
+};
+use crate::state::chat_state::PendingAttachment;
+use crate::storage::settings_keys;
+use crate::system::Directories;
+
+/// Builder for [`ChatterClient`].
+#[derive(Default)]
+pub struct ClientBuilder {
+    server_url: Option<String>,
+    data_dir: Option<String>,
+}
+
+impl ClientBuilder {
+    pub fn new() -> Self {
+        Self { server_url: None, data_dir: None }
+    }
+
+    /// Set the server URL. Falls back to `CHATTER_SERVER_URL` env var, then built-in default.
+    pub fn server_url(mut self, url: impl Into<String>) -> Self {
+        self.server_url = Some(url.into());
+        self
+    }
+
+    /// Set the base data directory. Required on Android (`context.filesDir`).
+    /// On desktop, XDG directories are used by default.
+    pub fn data_dir(mut self, dir: impl Into<String>) -> Self {
+        self.data_dir = Some(dir.into());
+        self
+    }
+
+    /// Build the client. Initializes database, crypto, and network pool.
+    ///
+    /// Must be called within a tokio runtime (e.g. inside `#[tokio::main]`
+    /// or after `Runtime::new()`).
+    pub fn build(self) -> Result<Arc<ChatterClient>, ClientError> {
+        let ctx = AppContext::with_config(self.server_url, self.data_dir)?;
+        let ui = ctx.core_services();
+        Ok(Arc::new(ChatterClient {
+            ctx,
+            ui,
+            tasks: Mutex::new(Vec::new()),
+            started: AtomicBool::new(false),
+            last_activity_ms: AtomicU64::new(0),
+            call_signaling: std::sync::OnceLock::new(),
+            svr_backup_service: std::sync::OnceLock::new(),
+            #[cfg(not(target_os = "android"))]
+            oidc_service: std::sync::OnceLock::new(),
+        }))
+    }
+}
+
+/// Errors from [`ChatterClient`] operations.
+#[derive(Debug, thiserror::Error)]
+pub enum ClientError {
+    #[error("initialization failed: {0}")]
+    Init(#[from] ContextError),
+    #[error("connection failed: {0}")]
+    Connection(#[from] NetworkError),
+    #[error("not connected")]
+    NotConnected,
+    #[error("inbox error: {0}")]
+    Inbox(String),
+    #[error("inbox already started")]
+    AlreadyStarted,
+    #[error("auth error: {0}")]
+    Auth(#[from] AuthError),
+    #[error("validation: {0}")]
+    Validation(String),
+}
+
+/// Result of a successful recovery code usage.
+///
+/// After this, the user can login with their new password + new PIN.
+/// SVR backup is created automatically during the subsequent login flow.
+#[derive(Debug, Clone)]
+pub struct RecoveryResult {
+    /// Number of unused recovery codes remaining on the account.
+    pub remaining_codes: i32,
+}
+
+/// The main entry point for the chatter-core SDK.
+///
+/// # Example
+/// ```rust,no_run
+/// use chatter_core::prelude::*;
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let client = ChatterClient::builder()
+///         .server_url("https://chat.example.com")
+///         .build()?;
+///
+///     // Subscribe BEFORE starting inbox to avoid missing events
+///     let mut events = client.subscribe_events();
+///
+///     client.connect().await?;
+///     // client.auth().login(...).await?;
+///     client.start().await?;
+///     Ok(())
+/// }
+/// ```
+///
+/// # Shutdown
+///
+/// Call [`shutdown()`](Self::shutdown) before dropping for graceful cleanup.
+/// The `Drop` impl aborts background tasks but cannot await async cleanup.
+pub struct ChatterClient {
+    ctx: AppContext,
+    ui: Arc<CoreServices>,
+    tasks: Mutex<Vec<JoinHandle<()>>>,
+    started: AtomicBool,
+    /// Epoch millis of last user activity (for idle detection).
+    last_activity_ms: AtomicU64,
+    /// Cached call signaling service (persistent for pending state).
+    call_signaling: std::sync::OnceLock<crate::services::call_signaling::CallSignalingService>,
+    /// Cached SVR backup service.
+    svr_backup_service: std::sync::OnceLock<crate::services::svr_backup_service::SvrBackupService>,
+    #[cfg(not(target_os = "android"))]
+    oidc_service: std::sync::OnceLock<Arc<crate::services::oidc_service::OidcService>>,
+}
+
+impl ChatterClient {
+    pub fn builder() -> ClientBuilder {
+        ClientBuilder::new()
+    }
+
+    // ── Services (return &Arc<T> so .clone() yields Arc<T>) ─────────────
+
+    // Service accessors are `pub(crate)` to enforce the architecture rule:
+    // UI lives in `chatter-ui` and must call façade methods on `ChatterClient`,
+    // not reach into individual services. Adding a new UI feature means adding
+    // a method here, not exposing a service.
+    pub(crate) fn auth(&self) -> &Arc<AuthService> { &self.ui.auth_service }
+    pub(crate) fn messages(&self) -> &Arc<MessageService> { &self.ui.message_service }
+    pub(crate) fn channels(&self) -> &Arc<ChannelService> { &self.ui.channel_service }
+    pub(crate) fn users(&self) -> &Arc<UserService> { &self.ui.user_service }
+    pub(crate) fn attachments(&self) -> &Arc<AttachmentService> { &self.ui.attachment_service }
+    pub(crate) fn typing(&self) -> &Arc<TypingService> { &self.ui.typing_service }
+    pub(crate) fn pins(&self) -> &Arc<PinService> { &self.ui.pin_service }
+    pub(crate) fn sessions(&self) -> &Arc<SessionService> { &self.ui.session_service }
+    pub(crate) fn anon_dms(&self) -> &Arc<AnonDmService> { &self.ui.anon_dm_service }
+    pub(crate) fn anon_groups(&self) -> &Arc<AnonGroupService> { &self.ui.anon_group_service }
+    pub(crate) fn signal(&self) -> &Arc<SignalService> { &self.ui.signal_service }
+    pub(crate) fn ai(&self) -> &Arc<AIService> { &self.ui.ai_service }
+    pub(crate) fn jarvis(&self) -> &Arc<JarvisService> { &self.ui.jarvis_service }
+    pub(crate) fn mailbox_manager(&self) -> &Arc<MailboxManager> { &self.ui.mailbox_manager }
+    pub(crate) fn local_ai(&self) -> &Arc<LocalAIService> { &self.ui.local_ai_service }
+    pub(crate) fn dm_bootstrap(&self) -> &Arc<DmBootstrapService> { &self.ui.dm_bootstrap_service }
+    pub(crate) fn notifications(&self) -> &Arc<crate::services::notification_service::NotificationService> { &self.ui.notification_service }
+    pub(crate) fn sections(&self) -> &Arc<SectionService> { &self.ui.section_service }
+    pub(crate) fn devices(&self) -> &Arc<crate::services::device_service::DeviceService> { &self.ui.device_service }
+
+    /// Get the SVR backup service (lazy-initialized, persistent instance).
+    pub fn svr_backup(&self) -> &crate::services::svr_backup_service::SvrBackupService {
+        self.svr_backup_service.get_or_init(|| {
+            let settings = Arc::new(
+                crate::storage::repositories::settings_repo::SettingsRepository::new(
+                    self.ui.database.clone(),
+                ),
+            );
+            crate::services::svr_backup_service::SvrBackupService::new(
+                self.ui.grpc_pool.clone(),
+                settings,
+                self.signal().clone(),
+            )
+        })
+    }
+
+    /// Get the call signaling service (persistent instance for pending state).
+    pub fn call_signaling(&self) -> &crate::services::call_signaling::CallSignalingService {
+        self.call_signaling.get_or_init(|| {
+            crate::services::call_signaling::CallSignalingService::new(
+                self.messages().clone(),
+                self.mailbox_manager().clone(),
+                self.channels().clone(),
+                self.anon_dms().clone(),
+                self.anon_groups().clone(),
+                self.signal().clone(),
+                self.ui.grpc_pool.clone(),
+            )
+        })
+    }
+
+
+    // ── Safety number verification ────────────────────────────────────
+
+    /// Get the safety number for a peer (60-digit numeric fingerprint).
+    ///
+    /// Both users see the same number when their identity keys match.
+    /// Returns a formatted string with 12 groups of 5 digits.
+    pub async fn get_safety_number(
+        &self,
+        peer_user_id: &crate::domain::ids::UserId,
+    ) -> Result<String, ClientError> {
+        let local_user_id = self.ui.auth_state.get().current_user_id
+            .as_ref()
+            .ok_or_else(|| ClientError::Validation("Not logged in".into()))?
+            .to_string();
+
+        let safety_number = self.ui.signal_service
+            .generate_safety_number(&local_user_id, &peer_user_id.to_string())
+            .await
+            .map_err(|e| ClientError::Validation(e.to_string()))?;
+
+        Ok(safety_number)
+    }
+
+    /// Check if a peer has been marked as verified.
+    pub fn is_peer_verified(
+        &self,
+        peer_user_id: &crate::domain::ids::UserId,
+    ) -> Result<bool, ClientError> {
+        self.ui.signal_service
+            .is_peer_verified(&peer_user_id.to_string())
+            .map_err(|e| ClientError::Validation(e.to_string()))
+    }
+
+    /// Mark a peer as verified with their current safety number.
+    pub async fn mark_peer_verified(
+        &self,
+        peer_user_id: &crate::domain::ids::UserId,
+    ) -> Result<(), ClientError> {
+        let safety_number = self.get_safety_number(peer_user_id).await?;
+        self.ui.signal_service
+            .set_peer_verified(&peer_user_id.to_string(), &safety_number, true)
+            .map_err(|e| ClientError::Validation(e.to_string()))
+    }
+
+    /// Mark a peer as unverified.
+    pub fn mark_peer_unverified(
+        &self,
+        peer_user_id: &crate::domain::ids::UserId,
+    ) -> Result<(), ClientError> {
+        // Get existing safety number to preserve it
+        if let Ok(Some((safety_number, _))) = self.ui.signal_service.key_store
+            .get_peer_verification(&peer_user_id.to_string())
+        {
+            self.ui.signal_service
+                .set_peer_verified(&peer_user_id.to_string(), &safety_number, false)
+                .map_err(|e| ClientError::Validation(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    // ── Events ──────────────────────────────────────────────────────────
+
+    pub fn event_bus(&self) -> &EventBus { &self.ui.event_bus }
+
+    pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<DomainEvent> {
+        self.ui.event_bus.subscribe_domain()
+    }
+
+    /// Spawn the typing-indicator cleanup task (expires stale "typing..." state).
+    pub fn start_typing_cleanup(&self) -> tokio::task::JoinHandle<()> {
+        self.typing().start_cleanup_task()
+    }
+
+    /// Compute the local Signal identity fingerprint (displayed in settings /
+    /// safety-number flows).
+    pub async fn my_identity_fingerprint(
+        &self,
+    ) -> Result<String, crate::error::ServiceError> {
+        self.signal().get_identity_fingerprint().await
+    }
+
+    /// Get the current user's display name from settings (same one used for
+    /// outgoing messages / calls). Falls back to an empty option.
+    pub fn my_display_name(&self) -> Option<String> {
+        self.anon_dms().get_my_display_name()
+    }
+
+    /// Look up an anon DM conversation by id.
+    pub fn get_anon_dm_conversation(
+        &self,
+        id: &crate::domain::anon_dm::AnonDmId,
+    ) -> Option<crate::domain::anon_dm::AnonDm> {
+        self.anon_dms().get_conversation(id).ok().flatten()
+    }
+
+    /// Resolve the peer user id of a regular DM channel (2-member channel).
+    pub fn get_dm_peer_local(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+    ) -> Option<crate::domain::ids::UserId> {
+        self.channels().get_dm_peer_local(channel_id).ok().flatten()
+    }
+
+    // ── Local AI settings façade ─────────────────────────────────────────
+
+    pub fn set_local_ai_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<(), crate::services::ai::LocalAIError> {
+        self.local_ai().set_enabled(enabled)
+    }
+
+    pub fn set_local_ai_preferred_model(
+        &self,
+        model_id: &str,
+        quantized_file: Option<&str>,
+    ) -> Result<(), crate::services::ai::LocalAIError> {
+        self.local_ai().set_preferred_model(model_id, quantized_file)
+    }
+
+    pub async fn load_local_ai_model(
+        &self,
+        model_id: String,
+        quantized_file: Option<String>,
+    ) -> Result<crate::services::ai::ModelInfo, crate::services::ai::LocalAIError> {
+        self.local_ai().load_model(model_id, quantized_file).await
+    }
+
+    pub async fn unload_local_ai_model(&self) -> Result<(), crate::services::ai::LocalAIError> {
+        self.local_ai().unload_model().await
+    }
+
+    /// Toggle the "send sealed-sender messages unrestricted" privacy setting.
+    pub fn set_sealed_sender_unrestricted(
+        &self,
+        unrestricted: bool,
+    ) -> Result<(), crate::services::session_service::SessionError> {
+        self.sessions()
+            .set_bool_setting("privacy.sealed_sender_unrestricted", unrestricted)
+    }
+
+    /// Session-level current user id (None when logged out).
+    pub fn session_current_user_id(&self) -> Option<crate::domain::ids::UserId> {
+        self.sessions().current_user_id()
+    }
+
+    pub async fn list_sessions(
+        &self,
+    ) -> Result<Vec<crate::services::session_service::Session>, crate::services::session_service::SessionError> {
+        self.sessions().list_sessions().await
+    }
+
+    pub async fn revoke_session(
+        &self,
+        device_id: u32,
+    ) -> Result<(), crate::services::session_service::SessionError> {
+        self.sessions().revoke_session(device_id).await
+    }
+
+    pub async fn revoke_all_other_sessions(
+        &self,
+    ) -> Result<(), crate::services::session_service::SessionError> {
+        self.sessions().revoke_all_other_sessions().await
+    }
+
+    // ── Mailbox / DM bootstrapping façade ────────────────────────────────
+
+    /// Ensure mailbox manager initialized and token pool has capacity.
+    pub async fn ensure_mailbox_ready(
+        &self,
+        min_tokens: usize,
+    ) -> Result<(), crate::services::mailbox_manager::MailboxError> {
+        let mm = self.mailbox_manager();
+        if let Err(e) = mm.initialize().await {
+            tracing::warn!(error = %e, "mailbox_manager initialize failed (may be already initialized)");
+        }
+        if mm.token_count().await < min_tokens {
+            mm.acquire_tokens(min_tokens).await?;
+        }
+        Ok(())
+    }
+
+    /// Get or create a pairwise mailbox for a conversation with the given TTL.
+    pub async fn get_or_create_mailbox(
+        &self,
+        conversation_id: &str,
+        ttl_seconds: u64,
+    ) -> Result<crate::services::mailbox_manager::ActiveMailbox, crate::services::mailbox_manager::MailboxError>
+    {
+        self.mailbox_manager()
+            .get_or_create_mailbox(conversation_id, ttl_seconds)
+            .await
+    }
+
+    /// Local lookup of the DM channel between current user and a peer.
+    pub fn get_dm_channel_for_peer(
+        &self,
+        peer_id: &crate::domain::ids::UserId,
+    ) -> Option<crate::domain::channel::Channel> {
+        self.channels().get_dm_channel_for_peer(peer_id).ok().flatten()
+    }
+
+    /// Flush any pending UI messages for a peer after DM bootstrap completes.
+    pub async fn flush_pending_dm_messages(&self, peer_id: &crate::domain::ids::UserId) {
+        self.dm_bootstrap().flush_pending_ui_messages(peer_id).await;
+    }
+
+    // ── Sidebar sections (custom grouping) façade ────────────────────────
+
+    pub fn list_sections_with_conversations(
+        &self,
+    ) -> Result<Vec<crate::domain::section::CustomSection>, crate::services::section_service::SectionError>
+    {
+        self.sections().list_sections_with_conversations()
+    }
+
+    pub fn create_section(
+        &self,
+        name: &str,
+        emoji: &str,
+    ) -> Result<crate::domain::section::CustomSection, crate::services::section_service::SectionError> {
+        self.sections().create_section(name, emoji)
+    }
+
+    pub fn delete_section(
+        &self,
+        id: &crate::domain::ids::SectionId,
+    ) -> Result<(), crate::services::section_service::SectionError> {
+        self.sections().delete_section(id)
+    }
+
+    pub fn rename_section(
+        &self,
+        id: &crate::domain::ids::SectionId,
+        new_name: &str,
+    ) -> Result<(), crate::services::section_service::SectionError> {
+        self.sections().rename_section(id, new_name)
+    }
+
+    pub fn change_section_icon(
+        &self,
+        id: &crate::domain::ids::SectionId,
+        new_emoji: &str,
+    ) -> Result<(), crate::services::section_service::SectionError> {
+        self.sections().change_icon(id, new_emoji)
+    }
+
+    pub fn toggle_section_expanded(
+        &self,
+        id: &crate::domain::ids::SectionId,
+        expanded: bool,
+    ) -> Result<(), crate::services::section_service::SectionError> {
+        self.sections().toggle_expanded(id, expanded)
+    }
+
+    pub fn move_conversation_to_section(
+        &self,
+        conv_id: &str,
+        conv_type: crate::domain::message::ConversationType,
+        section_id: &crate::domain::ids::SectionId,
+    ) -> Result<(), crate::services::section_service::SectionError> {
+        self.sections()
+            .move_conversation_to_section(conv_id, conv_type, section_id)
+    }
+
+    pub fn remove_conversation_from_section(
+        &self,
+        conv_id: &str,
+    ) -> Result<(), crate::services::section_service::SectionError> {
+        self.sections().remove_conversation_from_section(conv_id)
+    }
+
+    pub fn get_conversation_metadata(
+        &self,
+        conversation_id: &str,
+        conversation_type: &crate::domain::message::ConversationType,
+    ) -> Option<crate::domain::UnifiedConversation> {
+        self.sections()
+            .get_conversation_metadata(conversation_id, conversation_type)
+            .ok()
+            .flatten()
+    }
+
+    // ── Auth façade ──────────────────────────────────────────────────────
+
+    pub fn endpoint(&self) -> String {
+        self.auth().endpoint()
+    }
+
+    pub fn set_server_url(&self, url: &str) -> Result<(), crate::error::NetworkError> {
+        self.auth().set_server_url(url)
+    }
+
+    pub fn is_logged_in(&self) -> bool {
+        self.auth().is_logged_in()
+    }
+
+    pub fn has_registered_before(&self) -> bool {
+        self.auth().has_registered_before()
+    }
+
+    pub fn current_user(&self) -> Option<(crate::domain::ids::UserId, u32)> {
+        self.auth().current_user()
+    }
+
+    pub fn restore_session(&self) -> bool {
+        self.auth().restore_session()
+    }
+
+    pub async fn cleanup_failed_registration(
+        &self,
+    ) -> Result<(), crate::services::auth_service::AuthError> {
+        self.auth().cleanup_failed_registration().await
+    }
+
+    /// Local logout (best-effort server notify + clear local state).
+    pub async fn do_logout(&self) -> Result<(), crate::services::auth_service::AuthError> {
+        self.auth().do_logout().await
+    }
+
+    // ── State stores ────────────────────────────────────────────────────
+
+    pub fn auth_state(&self) -> &AuthState { &self.ui.auth_state }
+    pub fn chat_state(&self) -> &ChatState { &self.ui.chat_state }
+
+    /// Shortcut for `chat_state().active_conversation()`. The typed
+    /// `ActiveConversation` is the single source of truth for "which
+    /// conversation is currently being viewed" — use this (or the
+    /// `matches_*` predicates on it) instead of string-comparing UI state.
+    pub fn active_conversation(&self) -> crate::state::ActiveConversation {
+        self.ui.chat_state.active_conversation()
+    }
+    pub fn message_state(&self) -> &MessageState { &self.ui.message_state }
+    pub fn user_state(&self) -> &UserState { &self.ui.user_state }
+    pub fn presence_state(&self) -> &PresenceState { &self.ui.presence_state }
+    pub fn ui_state(&self) -> &UIState { &self.ui.ui_state }
+    pub fn offline_state(&self) -> &OfflineState { &self.ui.offline_state }
+    pub fn streaming_state(&self) -> &StreamingState { &self.ui.streaming_state }
+    pub fn pinned_state(&self) -> &PinnedState { &self.ui.pinned_state }
+    pub fn privacy_state(&self) -> &PrivacyState { &self.ui.privacy_state }
+    pub fn jarvis_state(&self) -> &JarvisState { &self.ui.jarvis_state }
+    pub fn org_state(&self) -> &OrgState { &self.ui.org_state }
+
+    // ── Infrastructure ──────────────────────────────────────────────────
+
+    pub fn runtime_handle(&self) -> &tokio::runtime::Handle { &self.ui.runtime_handle }
+    pub fn directories(&self) -> &Directories { &self.ui.directories }
+
+    /// Create an organization client for making gRPC calls.
+    /// Returns None if not connected to server.
+    pub fn try_org_client(&self) -> Option<crate::network::grpc::OrganizationClient> {
+        self.ui.grpc_pool.try_channel().map(|channel| {
+            crate::network::grpc::OrganizationClient::new(channel, self.ui.grpc_pool.auth_clone())
+        })
+    }
+
+    /// Post-boot call service handle (OnceLock).
+    #[cfg(feature = "desktop-media")]
+    pub fn call_service(&self) -> &Arc<std::sync::OnceLock<CallWorkerHandle>> {
+        &self.ui.call_service
+    }
+
+    /// Post-boot group fanout (OnceLock).
+    pub fn group_fanout(&self) -> &Arc<std::sync::OnceLock<Arc<GroupFanout>>> {
+        &self.ui.group_fanout
+    }
+
+    /// Post-boot device inbox provider (OnceLock).
+    pub fn device_inbox_provider(&self) -> &Arc<std::sync::OnceLock<Arc<DeviceInboxProvider>>> {
+        &self.ui.device_inbox_provider
+    }
+
+    // ── Delegated CoreServices methods ─────────────────────────────────────
+
+    /// Initialize the call service if not already set. Safe to call multiple times.
+    #[cfg(feature = "desktop-media")]
+    pub fn ensure_call_service(&self) {
+        self.ui.ensure_call_service()
+    }
+
+    /// Check if connected to the server.
+    pub fn is_connected(&self) -> bool {
+        self.ui.is_connected()
+    }
+
+    /// Start the inbox provider and return a receiver for raw inbox events.
+    pub async fn start_inbox_provider(
+        &self,
+    ) -> Option<tokio::sync::broadcast::Receiver<crate::inbox::InboxEvent>> {
+        self.ui.start_inbox_provider().await
+    }
+
+    /// Refresh prekeys and return the new available count.
+    pub async fn refresh_prekeys(&self, count: u32) -> Result<u32, crate::error::ServiceError> {
+        self.ui.refresh_prekeys(count).await
+    }
+
+    /// Pre-fetch anonymous tokens for sealed sender messaging.
+    pub async fn prefetch_tokens(
+        &self,
+        target_count: u32,
+    ) -> Result<u32, crate::error::MailboxError> {
+        self.ui.prefetch_tokens(target_count).await
+    }
+
+    /// Decline an incoming call.
+    pub async fn decline_call(&self, call_id: &str) -> Result<(), NetworkError> {
+        self.ui.decline_call(call_id).await
+    }
+
+    /// Search GIFs.
+    pub async fn search_gifs(
+        &self,
+        query: &str,
+        limit: u32,
+    ) -> Vec<crate::proto::chat_v1::GifResult> {
+        self.ui.search_gifs(query, limit).await
+    }
+
+    /// Fetch trending GIFs.
+    pub async fn trending_gifs(&self, limit: u32) -> Vec<crate::proto::chat_v1::GifResult> {
+        self.ui.trending_gifs(limit).await
+    }
+
+    // ── Lifecycle ───────────────────────────────────────────────────────
+
+    /// Connect to the server (establish gRPC channel).
+    ///
+    /// The gRPC pool is created at `build()` but connects lazily.
+    /// This forces an immediate connection attempt to verify reachability.
+    /// Optional — RPCs will auto-connect on first use if skipped.
+    pub async fn connect(&self) -> Result<(), ClientError> {
+        self.ui.auth_service.connect().await?;
+        Ok(())
+    }
+
+    /// Start all background services after authentication.
+    ///
+    /// Call AFTER login/register. Call `subscribe_events()` BEFORE this
+    /// to avoid missing events.
+    ///
+    /// This initializes:
+    /// - Post-login infrastructure (device inbox, group fanout, call service)
+    /// - Event handlers (DomainEvent → state store + DB persistence)
+    /// - Inbox polling + protocol processor
+    /// - Channel event stream, bootstrap, DM bootstrap
+    /// - AI services (Jarvis, local AI)
+    /// - Presence (broadcasts online status)
+    pub async fn start(self: &Arc<Self>) -> Result<(), ClientError> {
+        if self.started.swap(true, Ordering::SeqCst) {
+            return Err(ClientError::AlreadyStarted);
+        }
+
+        // ── Infrastructure init ─────────────────────────────────────
+        self.ctx.init_device_inbox_provider();
+        self.ctx.init_group_fanout();
+        #[cfg(feature = "desktop-media")]
+        self.ctx.init_call_service();
+
+        // ── Event handling ──────────────────────────────────────────
+        let h_events = self.ctx.spawn_event_handlers();
+
+        // ── Multi-device crypto maintenance listener ────────────────
+        // Single task that handles:
+        //   * SenderKeyReceived → replay any deferred group decrypts whose
+        //     SKDM finally arrived.
+        //   * ChannelMemberLeft (someone else) → mark the channel for
+        //     sender-key rotation so next send issues a new key the ex-member
+        //     cannot read.
+        let h_skdm_retry = {
+            let client = Arc::clone(self);
+            let mut rx = self.ui.event_bus.subscribe_domain();
+            let own_user_id = self.ui.auth_state.get().current_user_id;
+            tokio::spawn(async move {
+                loop {
+                    match rx.recv().await {
+                        Ok(DomainEvent::SenderKeyReceived { sender_id, sender_device_id, channel_id, .. }) => {
+                            client.messages().retry_pending_group_decrypts(
+                                channel_id, sender_id, sender_device_id,
+                            ).await;
+                        }
+                        Ok(DomainEvent::ChannelMemberLeft { channel_id, user_id, .. }) => {
+                            // Skip if WE left — `leave_channel` already rotated + purged.
+                            if Some(user_id) == own_user_id {
+                                continue;
+                            }
+                            if let Err(e) = client.signal().mark_channel_for_rotation(&channel_id) {
+                                tracing::warn!(
+                                    channel_id = %channel_id,
+                                    user_id = %user_id,
+                                    error = %e,
+                                    "Failed to mark channel for rotation after member left"
+                                );
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!(skipped = n, "Multi-device crypto listener lagged");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            })
+        };
+
+        // ── Inbox polling + protocol processor ──────────────────────
+        let inbox_rx = match self.ui.start_inbox_provider().await {
+            Some(rx) => rx,
+            None => {
+                self.started.store(false, Ordering::SeqCst);
+                return Err(ClientError::Inbox("failed to start inbox".into()));
+            }
+        };
+        let processor = crate::services::InboxEventProcessor::from_client(self);
+        let mut inbox_rx = inbox_rx;
+        let h_inbox = tokio::spawn(async move {
+            loop {
+                match inbox_rx.recv().await {
+                    Ok(event) => { processor.process(&event).await; }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "InboxEventProcessor lagged");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+
+        // ── Channel + DM services ───────────────────────────────────
+        let h_channel_stream = self.ctx.start_channel_event_stream();
+        let h_channel_bootstrap = self.ctx.start_channel_bootstrap_service();
+        let h_dm_bootstrap = self.ctx.spawn_dm_bootstrap_handler();
+
+        // ── AI services ─────────────────────────────────────────────
+        let jarvis = crate::services::jarvis::JarvisBackgroundBuilder::new(
+            self.jarvis().clone(),
+        )
+        .with_event_bus(self.event_bus().clone())
+        .spawn();
+
+        let h_ai = tokio::spawn({
+            let local_ai = self.local_ai().clone();
+            async move {
+                match local_ai.load_preferred_model().await {
+                    Ok(Some(info)) => tracing::info!("Auto-loaded local AI model: {}", info.model_id),
+                    Ok(None) => {}
+                    Err(e) => tracing::warn!("Failed to auto-load local AI model: {}", e),
+                }
+            }
+        });
+
+        // ── Pre-fetch sender certificate (needed for sealed sender / anon DM) ──
+        {
+            let signal = self.signal().clone();
+            let grpc_pool = self.ui.grpc_pool.clone();
+            tokio::spawn(async move {
+                let mut auth = grpc_pool.auth_client();
+                let device_id: Option<u32> = signal.settings_repo
+                    .get(crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID)
+                    .ok()
+                    .flatten();
+                if let Some(did) = device_id {
+                    match signal.get_or_request_sender_certificate(&mut auth, did).await {
+                        Ok(_) => tracing::info!("Sender certificate pre-fetched"),
+                        Err(e) => tracing::warn!("Failed to pre-fetch sender certificate: {}", e),
+                    }
+                }
+            });
+        }
+
+        // ── PreKey replenishment (runs initial check immediately) ────
+        let h_prekey = self.ui.spawn_prekey_replenishment();
+
+        // ── Presence ────────────────────────────────────────────────
+        self.set_presence(crate::proto::UserPresence::Online).await;
+        self.touch_activity();
+
+        // ── Store handles for shutdown ───────────────────────────────
+        let mut tasks = self.tasks.lock();
+        tasks.extend([h_events, h_inbox, h_skdm_retry, h_channel_stream, h_channel_bootstrap, h_dm_bootstrap, jarvis.maintenance, h_ai, h_prekey]);
+        if let Some(observer) = jarvis.observer {
+            tasks.push(observer);
+        }
+
+        Ok(())
+    }
+
+
+    // ── High-level messaging ─────────────────────────────────────────
+
+    /// Send a text message (no attachments).
+    pub async fn send_text(
+        &self,
+        conversation: ActiveConversation,
+        text: &str,
+    ) -> Result<SendResult, SendError> {
+        self.send_message(conversation, text, &[], None, None).await
+    }
+
+    /// Send a message with optional attachments, quote, and options.
+    pub async fn send_message(
+        &self,
+        conversation: ActiveConversation,
+        text: &str,
+        pending_attachments: &[PendingAttachment],
+        quote: Option<QuoteIntent>,
+        options: Option<SendOptions>,
+    ) -> Result<SendResult, SendError> {
+        let uploaded = upload_attachments(pending_attachments, self.attachments()).await;
+        let quote = if let Some(mut q) = quote {
+            if q.preview_text.is_none() && !conversation.is_anon() {
+                let attachments_svc = self.attachments();
+                q.preview_text = self.messages()
+                    .get_by_sender_timestamp(&q.author_id, q.timestamp)
+                    .ok().flatten()
+                    .map(|m| {
+                        let atts: Vec<_> = m
+                            .attachments
+                            .iter()
+                            .filter_map(|id| attachments_svc.get(id).ok().flatten())
+                            .collect();
+                        crate::services::gateway::shared::message_reply_preview(&m, &atts)
+                    })
+                    .filter(|t| !t.is_empty());
+            }
+            Some(q)
+        } else { None };
+        let intent = build_intent(conversation, text, uploaded.pointers, quote, &options.unwrap_or_default(), self.channels())?;
+        let services = OwnedOutgoingServices::from_client(self);
+        route_outgoing_owned(intent, &services).await
+    }
+
+    /// Get a [`ConversationHandle`] for per-conversation operations.
+    pub fn conversation(self: &Arc<Self>, conv: ActiveConversation) -> ConversationHandle {
+        ConversationHandle::new(conv, self.clone())
+    }
+
+    /// Pin or unpin a conversation in the conversation list.
+    pub fn pin_conversation(
+        self: &Arc<Self>,
+        conv: ActiveConversation,
+        pinned: bool,
+    ) -> Result<(), crate::services::conversation::ConversationError> {
+        self.conversation(conv).pin_conversation(pinned)
+    }
+
+    /// Mute or unmute a conversation's notifications.
+    pub fn mute_conversation(
+        self: &Arc<Self>,
+        conv: ActiveConversation,
+        muted: bool,
+    ) -> Result<(), crate::services::conversation::ConversationError> {
+        self.conversation(conv).mute_conversation(muted)
+    }
+
+    /// Delete a conversation from local storage.
+    pub fn delete_conversation(
+        self: &Arc<Self>,
+        conv: ActiveConversation,
+    ) -> Result<(), crate::services::conversation::ConversationError> {
+        self.conversation(conv).delete_conversation()
+    }
+
+    /// Set the disappearing message timer for a conversation.
+    ///
+    /// Pass `0` to disable. The value is in seconds.
+    pub fn set_disappearing_timer(
+        self: &Arc<Self>,
+        conv: ActiveConversation,
+        seconds: u32,
+    ) -> Result<(), crate::services::conversation::ConversationError> {
+        self.conversation(conv).set_disappearing_timer(seconds)
+    }
+
+    // ── Conversation listing ────────────────────────────────────────
+
+    /// List all channels the user is a member of.
+    pub fn list_channels(&self) -> Result<Vec<Channel>, crate::services::channel::ChannelError> {
+        self.channels().get_channels_for_user()
+    }
+
+    /// List channel members with profile information.
+    pub fn list_members_with_profiles(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+    ) -> Result<Vec<crate::domain::channel::MemberWithProfile>, crate::services::channel::ChannelError> {
+        self.channels().list_members_with_profiles(channel_id)
+    }
+
+    /// List all DM channels.
+    pub fn list_dms(&self) -> Result<Vec<Channel>, crate::services::channel::ChannelError> {
+        let all = self.channels().get_channels_for_user()?;
+        Ok(all.into_iter().filter(|c| c.channel_type == ChannelType::DirectMessage).collect())
+    }
+
+    /// List all anonymous DM conversations.
+    pub fn list_anon_dms(&self) -> Result<Vec<crate::domain::anon_dm::AnonDm>, crate::services::anon_dm::AnonDmError> {
+        self.anon_dms().list_conversations()
+    }
+
+    /// List pending anon DM message requests (incoming).
+    pub fn list_anon_dm_requests(&self) -> Result<Vec<crate::domain::anon_dm::AnonDm>, crate::services::anon_dm::AnonDmError> {
+        self.anon_dms().list_message_requests()
+    }
+
+    // ── Friend / social operations ──────────────────────────────────
+
+    /// Send a friend request.
+    pub async fn send_friend_request(
+        &self,
+        user_id: &crate::domain::ids::UserId,
+        message: Option<&str>,
+    ) -> Result<crate::domain::user::Friendship, crate::services::user::UserError> {
+        self.users().send_friend_request(user_id, message).await
+    }
+
+    /// Accept or decline a friend request.
+    pub async fn respond_friend_request(
+        &self,
+        user_id: &crate::domain::ids::UserId,
+        accept: bool,
+    ) -> Result<crate::services::user::FriendResponseResult, crate::services::user::UserError> {
+        self.users().respond_friend_request(user_id, accept).await
+    }
+
+    /// Remove a friend.
+    pub async fn remove_friend(
+        &self,
+        user_id: &crate::domain::ids::UserId,
+    ) -> Result<(), crate::services::user::UserError> {
+        self.users().remove_friend(user_id).await
+    }
+
+    /// Block a user.
+    pub async fn block_user(
+        &self,
+        user_id: &crate::domain::ids::UserId,
+    ) -> Result<(), crate::services::user::UserError> {
+        self.users().block_user(user_id).await
+    }
+
+    /// Unblock a user.
+    pub async fn unblock_user(
+        &self,
+        user_id: &crate::domain::ids::UserId,
+    ) -> Result<(), crate::services::user::UserError> {
+        self.users().unblock_user(user_id).await
+    }
+
+    /// List friends with their profile data (display name, avatar, etc.).
+    pub async fn list_friends_with_profiles(&self) -> Result<Vec<(crate::domain::user::Friendship, crate::domain::user::Profile)>, crate::services::user::UserError> {
+        self.users().list_friends_with_profiles(100, 0).await
+    }
+
+    // ── Anon DM management ──────────────────────────────────────────
+
+    /// Start an anonymous DM conversation with a user.
+    pub async fn start_anon_dm(
+        &self,
+        peer_id: crate::domain::ids::UserId,
+        message: Option<&str>,
+    ) -> Result<crate::domain::anon_dm::AnonDm, crate::services::anon_dm::AnonDmError> {
+        self.anon_dms().start_conversation(peer_id, message).await
+    }
+
+    /// Accept an incoming anon DM request.
+    pub async fn accept_anon_dm(
+        &self,
+        conversation_id: &crate::domain::anon_dm::AnonDmId,
+    ) -> Result<crate::domain::anon_dm::AnonDm, crate::services::anon_dm::AnonDmError> {
+        self.anon_dms().accept_request(*conversation_id).await
+    }
+
+    /// Decline an incoming anon DM request.
+    pub fn decline_anon_dm(
+        &self,
+        conversation_id: &crate::domain::anon_dm::AnonDmId,
+    ) -> Result<(), crate::services::anon_dm::AnonDmError> {
+        self.anon_dms().decline_request(conversation_id)
+    }
+
+    // ── Anon group management ───────────────────────────────────────
+
+    /// Create an anonymous group.
+    pub async fn create_anon_group(
+        &self,
+        name: String,
+        members: Vec<(crate::domain::ids::UserId, crate::domain::anon_group::AnonGroupRole)>,
+    ) -> Result<crate::domain::anon_group::AnonGroup, crate::services::anon_group::AnonGroupError> {
+        self.anon_groups().create_group_with_roles(name, members).await
+    }
+
+    /// Invite members to an anonymous group.
+    pub async fn invite_to_anon_group(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+        members: Vec<(crate::domain::ids::UserId, crate::domain::anon_group::AnonGroupRole)>,
+    ) -> Result<(), crate::services::anon_group::AnonGroupError> {
+        self.anon_groups().invite_members(group_id, members).await
+    }
+
+    // ── Profile ─────────────────────────────────────────────────────
+
+    /// Update the current user's profile.
+    pub async fn update_profile(
+        &self,
+        display_name: Option<&str>,
+        avatar_url: Option<&str>,
+        status: Option<&crate::domain::user::StatusMessage>,
+    ) -> Result<crate::domain::Profile, crate::services::user::UserError> {
+        self.users().update_user_profile(display_name, avatar_url, status).await
+    }
+
+    /// Decode + crop + resize + WebP-encode raw image bytes into a normalised
+    /// avatar. Pure delegation to [`crate::media::ImageProcessor::process_avatar_from_memory`]
+    /// — exposed on the client so the FFI bridge can drive it without
+    /// importing internal modules.
+    ///
+    /// Output is byte-identical regardless of which client calls this, so
+    /// Android, Linux, and any future client all produce the same processed
+    /// bytes from the same source image.
+    pub fn process_avatar(
+        &self,
+        raw: &[u8],
+    ) -> Result<Vec<u8>, crate::error::MediaError> {
+        crate::media::ImageProcessor::process_avatar_from_memory(raw)
+    }
+
+    /// Store the user's avatar bytes locally (never uploaded).
+    pub fn set_avatar_bytes(&self, bytes: &[u8]) -> Result<(), crate::services::auth_service::AuthError> {
+        self.anon_dms()
+            .set_my_avatar_bytes(bytes)
+            .map_err(|e| crate::services::auth_service::AuthError::InvalidInput(e.to_string()))
+    }
+
+    /// Update the user's avatar AND broadcast it to every active anon DM.
+    pub async fn update_avatar_and_broadcast(
+        &self,
+        bytes: &[u8],
+    ) -> Result<(), crate::services::auth_service::AuthError> {
+        self.anon_dms()
+            .update_avatar_and_broadcast(bytes)
+            .await
+            .map_err(|e| crate::services::auth_service::AuthError::InvalidInput(e.to_string()))
+    }
+
+    /// Change password.
+    pub async fn change_password(
+        &self,
+        current: &str,
+        new: &str,
+    ) -> Result<(), crate::services::auth_service::AuthError> {
+        self.auth().change_password(current, new).await
+    }
+
+    /// Get a user's display name.
+    pub fn get_display_name(&self, user_id: &crate::domain::ids::UserId) -> String {
+        self.users().get_display_name(user_id)
+    }
+
+    /// Signal-style exact username lookup (returns `None` when no account).
+    pub async fn lookup_by_username(
+        &self,
+        username: &str,
+    ) -> Result<Option<crate::domain::ids::UserId>, crate::services::user::UserError> {
+        self.users().lookup_by_username(username).await
+    }
+
+    /// Get a user's profile.
+    pub async fn get_user_profile(
+        &self,
+        user_id: &crate::domain::ids::UserId,
+    ) -> Result<crate::domain::Profile, crate::services::user::UserError> {
+        self.users().get_user_profile(user_id).await
+    }
+
+    // ── Message history ─────────────────────────────────────────────
+
+    /// Get recent messages for any conversation type.
+    ///
+    /// Returns messages in chronological order (oldest first).
+    pub fn get_messages(
+        &self,
+        conversation: &ActiveConversation,
+        limit: u32,
+    ) -> Result<Vec<Message>, crate::services::message::MessageError> {
+        match conversation {
+            ActiveConversation::Channel(id) => {
+                // All channels use encrypted group mailboxes → stored as AnonGroup
+                self.messages().get_messages_local(id, &ConversationType::AnonGroup, None, limit)
+            }
+            ActiveConversation::ServerDm { channel_id: id, .. } => {
+                self.messages().get_messages_local(id, &ConversationType::ServerDm, None, limit)
+            }
+            ActiveConversation::MailboxDm { channel_id: id, .. } => {
+                self.messages().get_messages_local(id, &ConversationType::MailboxDm, None, limit)
+            }
+            // Anon paths use their own message types — return empty for now.
+            // SDK consumers should use anon_dms().get_messages() / anon_groups().get_messages()
+            // for anonymous conversations which have different message schemas.
+            _ => Ok(vec![]),
+        }
+    }
+
+    // ── Presence ─────────────────────────────────────────────────────
+
+    /// Set presence status and broadcast to all anon DM conversations.
+    pub async fn set_presence(&self, presence: crate::proto::UserPresence) {
+        let conversations = match self.anon_dms().list_conversations() {
+            Ok(convs) => convs,
+            Err(e) => {
+                tracing::warn!("Failed to list conversations for presence: {}", e);
+                return;
+            }
+        };
+
+        for conv in &conversations {
+            if !conv.is_ready() {
+                continue;
+            }
+            let service = self.anon_dms().clone();
+            let conv_id = conv.id;
+            tokio::spawn(async move {
+                if let Err(e) = service.send_presence_update(&conv_id, presence).await {
+                    tracing::debug!("Failed to send presence update: {}", e);
+                }
+            });
+        }
+    }
+
+    /// Record user activity (resets idle timer).
+    ///
+    /// Call this on any user interaction (message send, typing, etc.)
+    /// to prevent automatic away status.
+    pub fn touch_activity(&self) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        self.last_activity_ms.store(now, Ordering::Relaxed);
+    }
+
+    // ── Thread support ─────────────────────────────────────────────
+
+    /// Get messages in a thread.
+    pub async fn get_thread_messages(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        thread_root_id: &crate::domain::ids::MessageId,
+        limit: u32,
+        before: Option<&crate::domain::ids::MessageId>,
+    ) -> Result<Vec<Message>, ClientError> {
+        let mut msg_client = self.ui.grpc_pool.message_client();
+        self.messages()
+            .get_thread_messages(&mut msg_client, channel_id, thread_root_id, limit, before)
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
+    }
+
+    // ── Message forwarding ─────────────────────────────────────────
+
+    /// Forward a message to another channel.
+    pub async fn forward_message(
+        &self,
+        source_message_id: &crate::domain::ids::MessageId,
+        target_channel_id: &crate::domain::ids::ChannelId,
+        comment: Option<&str>,
+    ) -> Result<Message, ClientError> {
+        let mut msg_client = self.ui.grpc_pool.message_client();
+        let mut auth_client = self.ui.grpc_pool.auth_client();
+        let mut ch_client = self.ui.grpc_pool.channel_client();
+        self.messages()
+            .forward_message(&mut msg_client, &mut auth_client, &mut ch_client, source_message_id, target_channel_id, comment)
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
+    }
+
+    // ── Organization management ────────────────────────────────────
+
+    /// List all organizations the current user belongs to.
+    pub async fn list_user_organizations(&self) -> Result<Vec<crate::proto::organization_v1::Organization>, ClientError> {
+        let mut client = self.try_org_client()
+            .ok_or_else(|| ClientError::NotConnected)?;
+        client.list_user_organizations().await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
+    }
+
+    /// Get organization details by ID.
+    pub async fn get_organization(&self, org_id: &str) -> Result<crate::proto::organization_v1::Organization, ClientError> {
+        let mut client = self.try_org_client()
+            .ok_or_else(|| ClientError::NotConnected)?;
+        client.get_organization(org_id).await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
+    }
+
+    /// List members of an organization.
+    pub async fn list_org_members(&self, org_id: &str) -> Result<Vec<crate::proto::organization_v1::OrgMember>, ClientError> {
+        let mut client = self.try_org_client()
+            .ok_or_else(|| ClientError::NotConnected)?;
+        let response = client.list_members(org_id).await
+            .map_err(|e| ClientError::Inbox(e.to_string()))?;
+        Ok(response.members)
+    }
+
+    // ── Device management ─────────────────────────────────────────
+
+    /// List all linked devices for the current user.
+    pub async fn list_devices(&self) -> Result<Vec<crate::services::device_service::Device>, ClientError> {
+        let mut auth_client = self.ui.grpc_pool.auth_client();
+        let response = auth_client.list_devices().await
+            .map_err(|e| ClientError::Inbox(e.to_string()))?;
+
+        let mut devices: Vec<crate::services::device_service::Device> = response
+            .devices
+            .into_iter()
+            .map(|d| crate::services::device_service::Device {
+                device_id: d.device_id,
+                name: d.device_name,
+                info: d.device_info,
+                created_at: chrono::DateTime::from_timestamp_millis(d.created_at as i64)
+                    .unwrap_or(chrono::DateTime::UNIX_EPOCH),
+                last_active: chrono::DateTime::from_timestamp_millis(d.last_active as i64)
+                    .unwrap_or(chrono::DateTime::UNIX_EPOCH),
+                is_primary: d.is_primary,
+                is_current: d.is_current,
+            })
+            .collect();
+
+        devices.sort_by_key(|d| d.device_id);
+        Ok(devices)
+    }
+
+    /// Unlink (revoke) a specific device.
+    ///
+    /// After a successful revoke, every encrypted channel we own is marked for
+    /// sender-key rotation so the revoked device's cached sender key cannot be
+    /// used to read messages going forward. Rotation happens on next send per
+    /// channel (new SenderKey generated → SKDM redistributed to remaining
+    /// members' remaining devices, never to the revoked device).
+    pub async fn unlink_device(&self, device_id: u32) -> Result<(), ClientError> {
+        let mut auth_client = self.ui.grpc_pool.auth_client();
+        self.devices()
+            .revoke_and_rotate(&mut auth_client, device_id)
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
+    }
+
+    /// Unlink all devices except the current one.
+    pub async fn unlink_all_other_devices(&self) -> Result<(), ClientError> {
+        let devices = self.list_devices().await?;
+        let current_device_id = self.sessions().current_device_id();
+
+        for device in devices {
+            if device.is_current || Some(device.device_id) == current_device_id {
+                continue;
+            }
+            if device.is_primary {
+                continue; // Cannot revoke primary device
+            }
+            if let Err(e) = self.unlink_device(device.device_id).await {
+                tracing::warn!(device_id = device.device_id, error = %e, "Failed to unlink device");
+            }
+        }
+
+        Ok(())
+    }
+
+    // ── AI Integration ─────────────────────────────────────────────
+
+    /// List available AI models for a provider.
+    pub async fn list_ai_models(
+        &self,
+        provider: &str,
+    ) -> Result<Vec<(String, String)>, ClientError> {
+        self.ai().list_models_by_name(provider)
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
+    }
+
+    /// Create an AI integration and attach it to a channel.
+    pub async fn create_ai_integration(
+        &self,
+        name: &str,
+        provider: &str,
+        model: &str,
+        channel_id: &str,
+    ) -> Result<(), ClientError> {
+        self.ai().create_integration_for_channel(name, provider, model, channel_id)
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
+    }
+
+    /// Handle remote hangup: store history, disconnect locally.
+    #[cfg(feature = "desktop-media")]
+    pub async fn handle_remote_hangup(&self, duration_secs: i64) -> Result<(), ClientError> {
+        let call_worker = self.call_service().get()
+            .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;
+        self.call_signaling()
+            .handle_remote_hangup(call_worker, duration_secs)
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
+    }
+
+    // ── Data sync ───────────────────────────────────────────────────
+
+    /// Sync channels from server and prefetch tokens.
+    ///
+    /// Call after `start()` / `login()` to ensure local data is fresh.
+    /// The UI's `load_initial_data` calls this internally — SDK consumers
+    /// should call it if they need server-fresh data.
+    pub async fn sync(&self) {
+        // Sync channels from server
+        match self.channels().list_channels(100, 0, None).await {
+            Ok(channels) => tracing::info!("Synced {} channels from server", channels.len()),
+            Err(e) => tracing::warn!("Failed to sync channels: {}", e),
+        }
+
+        // Prefetch anonymous tokens for sealed sender
+        if let Err(e) = self.prefetch_tokens(10).await {
+            tracing::warn!("Failed to prefetch tokens: {}", e);
+        }
+    }
+
+    // ── Settings ────────────────────────────────────────────────────
+
+    /// Enable or disable sending read receipts.
+    pub fn set_read_receipts_enabled(&self, enabled: bool) -> Result<(), SessionError> {
+        self.sessions().set_bool_setting(settings_keys::SEND_READ_RECEIPTS, enabled)
+    }
+
+    /// Enable or disable typing indicators.
+    pub fn set_typing_indicators_enabled(&self, enabled: bool) -> Result<(), SessionError> {
+        self.sessions().set_bool_setting(settings_keys::SHOW_TYPING_INDICATORS, enabled)
+    }
+
+    /// Check if read receipts are enabled (defaults to true).
+    pub fn read_receipts_enabled(&self) -> Result<bool, SessionError> {
+        Ok(self.sessions().get_bool_setting(settings_keys::SEND_READ_RECEIPTS)?.unwrap_or(true))
+    }
+
+    /// Check if typing indicators are enabled (defaults to true).
+    pub fn typing_indicators_enabled(&self) -> Result<bool, SessionError> {
+        Ok(self.sessions().get_bool_setting(settings_keys::SHOW_TYPING_INDICATORS)?.unwrap_or(true))
+    }
+
+    // ── Lifecycle ───────────────────────────────────────────────────
+
+    /// Graceful shutdown. Stops inbox, aborts background tasks, disconnects.
+    pub async fn shutdown(&self) {
+        // Stop inbox provider
+        if let Some(provider) = self.ctx.get_device_inbox_provider() {
+            if let Err(e) = provider.stop().await {
+                tracing::warn!("Error stopping inbox provider: {}", e);
+            }
+        }
+
+        // Abort background tasks
+        let handles: Vec<_> = {
+            let mut tasks = self.tasks.lock();
+            std::mem::take(&mut *tasks)
+        };
+        for handle in handles {
+            handle.abort();
+        }
+
+        // Disconnect gRPC
+        self.ui.auth_service.disconnect();
+
+        self.started.store(false, Ordering::SeqCst);
+    }
+
+    // ── Escape hatches ──────────────────────────────────────────────────
+
+}
+
+impl Drop for ChatterClient {
+    fn drop(&mut self) {
+        let tasks = self.tasks.lock();
+        for handle in tasks.iter() {
+            handle.abort();
+        }
+    }
+}
+
+// =============================================================================
+// SDK types
+// =============================================================================
+
+#[derive(Debug, Default)]
+pub struct SendOptions {
+    pub thread_id: Option<crate::domain::ids::MessageId>,
+    pub mentioned_integrations: Vec<crate::domain::ids::IntegrationId>,
+    pub targets_ai_bot: bool,
+}
+
+pub struct UploadedAttachments {
+    pub pointers: Vec<AttachmentPointer>,
+    pub attachments: Vec<Attachment>,
+}
+
+// =============================================================================
+// Private helpers
+// =============================================================================
+
+async fn upload_attachments(pending: &[PendingAttachment], attachment_service: &AttachmentService) -> UploadedAttachments {
+    let mut pointers = Vec::with_capacity(pending.len());
+    let mut attachments = Vec::with_capacity(pending.len());
+    for att in pending {
+        if let Some(pointer) = &att.pointer {
+            pointers.push(pointer.clone());
+            if let Ok(Some(full_att)) = attachment_service.get(&att.id) { attachments.push(full_att); }
+            continue;
+        }
+        match attachment_service.upload_to_cdn_encrypted(&att.path).await {
+            Ok(res) => {
+                pointers.push(res.to_attachment_pointer());
+                if let Ok(Some(full_att)) = attachment_service.get(&res.attachment_id) { attachments.push(full_att); }
+            }
+            Err(e) => tracing::error!(path = %att.path.display(), error = %e, "Failed to upload attachment"),
+        }
+    }
+    UploadedAttachments { pointers, attachments }
+}
+
+fn build_intent(
+    conversation: ActiveConversation, text: &str, attachment_pointers: Vec<AttachmentPointer>,
+    quote: Option<QuoteIntent>, options: &SendOptions, channel_service: &ChannelService,
+) -> Result<OutgoingIntent, SendError> {
+    match conversation {
+        ActiveConversation::AnonDm(id) => Ok(OutgoingIntent::AnonDm {
+            conversation_id: id, text: text.to_string(), attachment_pointers, quote,
+        }),
+        ActiveConversation::AnonGroup(id) => Ok(OutgoingIntent::AnonGroup {
+            group_id: id, text: text.to_string(), attachment_pointers, quote,
+        }),
+        ActiveConversation::MailboxDm { channel_id, peer_id } => Ok(OutgoingIntent::ChannelDm {
+            peer_id, dm_channel_id: channel_id, text: text.to_string(),
+            attachment_pointers, file_paths: vec![], quote,
+        }),
+        ActiveConversation::ServerDm { channel_id, .. } => Ok(OutgoingIntent::Channel {
+            channel_id, text: text.to_string(), attachment_pointers,
+            file_paths: vec![], thread_id: options.thread_id,
+            mentioned_integrations: options.mentioned_integrations.clone(),
+            targets_ai_bot: options.targets_ai_bot,
+            quote,
+        }),
+        ActiveConversation::Channel(id) => {
+            let is_saved = channel_service.get_channel_local(&id).ok().flatten()
+                .map(|c| c.channel_type == ChannelType::SavedMessages).unwrap_or(false);
+            if is_saved {
+                let att_ids = attachment_pointers.iter()
+                    .map(|p| crate::domain::AttachmentId::from_cdn_key(&p.cdn_key)).collect();
+                Ok(OutgoingIntent::SavedMessages { text: text.to_string(), attachment_ids: att_ids })
+            } else {
+                Ok(OutgoingIntent::Channel {
+                    channel_id: id, text: text.to_string(), attachment_pointers,
+                    file_paths: vec![], thread_id: options.thread_id,
+                    mentioned_integrations: options.mentioned_integrations.clone(),
+                    targets_ai_bot: options.targets_ai_bot,
+                    quote,
+                })
+            }
+        }
+        ActiveConversation::None => Err(SendError::UnsupportedAction),
+    }
+}

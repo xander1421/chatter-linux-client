@@ -187,6 +187,35 @@ impl Attachment {
     pub fn is_encrypted(&self) -> bool {
         self.encryption_key.is_some()
     }
+
+    /// Rebuild the `AttachmentPointer` proto that a sender ships inside the
+    /// E2E message payload. Returns `None` when the local record lacks the
+    /// CDN key or the per-blob AES key — without both, receivers cannot
+    /// download and decrypt the blob.
+    #[must_use]
+    pub fn to_pointer(&self) -> Option<crate::proto::content_v1::AttachmentPointer> {
+        let cdn_key = self.remote_url.clone()?;
+        let encryption_key = self.encryption_key.clone()?;
+        Some(crate::proto::content_v1::AttachmentPointer {
+            cdn_key,
+            encryption_key,
+            digest: self.encryption_iv.clone().unwrap_or_default(),
+            plaintext_size: self.metadata.size,
+            content_type: self.metadata.mime_type.clone(),
+            file_name: self.metadata.name.clone(),
+            thumbnail: self.metadata.thumbnail.clone().unwrap_or_default(),
+            thumbnail_width: self.metadata.thumbnail_width.unwrap_or(0),
+            thumbnail_height: self.metadata.thumbnail_height.unwrap_or(0),
+            width: self.metadata.width.unwrap_or(0),
+            height: self.metadata.height.unwrap_or(0),
+            duration_ms: self
+                .metadata
+                .duration_seconds
+                .map(|d| (d * 1000.0) as u64)
+                .unwrap_or(0),
+            ..Default::default()
+        })
+    }
 }
 
 /// File metadata information (matches proto FileMetadata).

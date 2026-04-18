@@ -2,9 +2,10 @@
 //!
 //! Password change, account deletion.
 
-use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio_stream::StreamExt;
+
+use crate::crypto::auth_crypto::hash_password;
 
 use crate::error::{NetworkError, StorageError};
 use crate::network::grpc::auth_client::AuthClient;
@@ -98,9 +99,8 @@ impl AccountService {
             return Err(AccountError::NotLoggedIn);
         }
 
-        // Hash both passwords with SHA256 (server expects pre-hashed)
-        let current_hash = Sha256::digest(current_password.as_bytes());
-        let new_hash = Sha256::digest(new_password.as_bytes());
+        let current_hash = hash_password(current_password);
+        let new_hash = hash_password(new_password);
 
         // Call server to change password
         auth_client
@@ -136,8 +136,7 @@ impl AccountService {
             return Err(AccountError::NotLoggedIn);
         }
 
-        // Hash password with SHA256 (server expects pre-hashed)
-        let password_hash = Sha256::digest(password.as_bytes());
+        let password_hash = hash_password(password);
 
         // Call server to delete account - returns event stream
         let stream = auth_client

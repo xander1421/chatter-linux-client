@@ -86,13 +86,15 @@ pub fn proto_to_domain_message_with_sender(
         conversation_id: channel_id,
         conversation_type: ConversationType::AnonGroup,
         sender_id,
-        device_id: None,
+        device_id: if proto.author_device_id != 0 { Some(proto.author_device_id) } else { None },
         content,
         encrypted_content: None,
         thread_id,
         reply_to: None, // Not exposed in proto yet
         reply_to_author_id: None,
         reply_to_text: None,
+        reply_to_thumbnail: None,
+        reply_to_thumbnail_mime: None,
         attachments,
         is_pinned: proto.pinned,
         is_edited: proto.edited,
@@ -196,6 +198,22 @@ pub fn proto_content_to_domain(
                 .parse()
                 .map_err(|_| MessageError::InvalidContent("invalid file ID".to_string()))?;
             Ok(MessageContent::Mixed(MixedContent::attachments_only(vec![attachment_id])))
+        }
+        Some(chat_v1::message::content::Type::Mixed(mixed)) => {
+            // Text + attachments (how encrypted channel messages arrive post-refactor).
+            let attachment_ids: Vec<AttachmentId> = mixed
+                .files
+                .iter()
+                .filter_map(|f| f.id.parse().ok())
+                .collect();
+            let text = mixed.text.clone();
+            let content = match (text.is_empty(), attachment_ids.is_empty()) {
+                (false, false) => MixedContent::new(text, attachment_ids),
+                (false, true) => MixedContent::text_only(text),
+                (true, false) => MixedContent::attachments_only(attachment_ids),
+                (true, true) => MixedContent::text_only(String::new()),
+            };
+            Ok(MessageContent::Mixed(content))
         }
         None => {
             // No content type - default to empty text

@@ -28,7 +28,7 @@ pub(super) fn handle_message_received(
     let conv_type = message.conversation_type.clone();
 
     // Resolve sender display name (UserService handles profile / anon DM peer
-    /// / anon group member fallback — see `UserService::get_display_name`).
+    // / anon group member fallback — see `UserService::get_display_name`).
     let sender_name = sender_id
         .map(|sid| ui_ctx.display_name(&sid))
         .unwrap_or_else(|| "Anonymous".to_string());

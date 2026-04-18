@@ -9,8 +9,6 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::anon_group::AnonGroupId;
 use chatter_core::domain::ids::{ChannelId, UserId};
 use chatter_core::domain::ChannelType;
-use chatter_core::services::channel::ChannelService;
-use chatter_core::services::user::UserService;
 
 use crate::{ChannelMemberData, InviteUser, MainWindow, PrivateGroupFriend};
 
@@ -23,6 +21,7 @@ pub fn wire_channel_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_channel_actions(window, ui_ctx);
     wire_invite_members(window, ui_ctx);
     wire_invite_channel_members(window, ui_ctx);
+    wire_invite_member_search(window, ui_ctx);
 }
 
 /// Open the channel settings modal with channel data.
@@ -451,95 +450,107 @@ fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 }
 
+/// Load invite-member data (friends + channel metadata) and open the invite modal.
+///
+/// Callable from any entry point that opens the channel invite modal (header
+/// button, channel settings). Populates friends list so users see candidates
+/// immediately; the search input can then hit the server for non-friend users.
+pub fn open_invite_member_modal(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, channel_id: ChannelId) {
+    tokio::spawn(async move {
+        let channel_id_str = channel_id.to_string();
+
+        let channel_name = ui_ctx
+            .get_channel_local(&channel_id)
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
+
+        let existing_members: HashSet<UserId> = ui_ctx
+            .get_channel_members(&channel_id, 100, 0)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|m| m.user_id)
+            .collect();
+
+        let user_data = load_friends_as_invite_users(&ui_ctx, &existing_members).await;
+
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                w.set_invite_member_channel_id(channel_id_str.into());
+                w.set_invite_member_channel_name(channel_name.into());
+                w.set_invite_member_users(ModelRc::new(VecModel::from(user_data)));
+                w.set_invite_member_selected_count(0);
+                w.set_active_modal("invite-member".into());
+            }
+        });
+    });
+}
+
+async fn load_friends_as_invite_users(
+    ui_ctx: &Arc<ChatterClient>,
+    existing_members: &HashSet<UserId>,
+) -> Vec<InviteUser> {
+    let mut user_data: Vec<InviteUser> = Vec::new();
+    let mut seen_user_ids: HashSet<UserId> = HashSet::new();
+
+    let friends = ui_ctx.list_friends(100, 0).await.unwrap_or_default();
+    for friendship in &friends {
+        if !seen_user_ids.insert(friendship.friend_id) {
+            continue;
+        }
+
+        let is_member = existing_members.contains(&friendship.friend_id);
+        let profile = ui_ctx.get_profile_local(&friendship.friend_id);
+        let user = ui_ctx.get_user_local(&friendship.friend_id);
+
+        let display_name = profile
+            .as_ref()
+            .map(|p| p.display_name.clone())
+            .unwrap_or_else(|| friendship.friend_id.to_string());
+        let username = user
+            .as_ref()
+            .map(|u| u.username.clone())
+            .unwrap_or_default();
+
+        user_data.push(InviteUser {
+            id: friendship.friend_id.to_string().into(),
+            display_name: display_name.into(),
+            username: username.into(),
+            avatar_url: "".into(),
+            already_member: is_member,
+            selected: false,
+        });
+    }
+
+    user_data
+}
+
 fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    // Open invite modal for regular channels
     let weak_window = window.as_weak();
-    let ui_ctx = ui_ctx.clone();
+    let ui_ctx_open = ui_ctx.clone();
 
     window.on_channel_settings_invite_channel_members(move || {
         let weak = weak_window.clone();
-        let ui_ctx = ui_ctx.clone();
+        let ui_ctx = ui_ctx_open.clone();
 
-        tokio::spawn(async move {
-            // Get the channel ID from channel settings
-            let channel_id_str = weak
-                .upgrade()
-                .map(|w| w.get_channel_settings_id().to_string())
-                .unwrap_or_default();
+        let channel_id_str = weak
+            .upgrade()
+            .map(|w| w.get_channel_settings_id().to_string())
+            .unwrap_or_default();
 
-            if channel_id_str.is_empty() {
+        if channel_id_str.is_empty() {
+            return;
+        }
+
+        let channel_id: ChannelId = match channel_id_str.parse() {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::error!("Invalid channel ID: {}", e);
                 return;
             }
+        };
 
-            let channel_id: ChannelId = match channel_id_str.parse() {
-                Ok(id) => id,
-                Err(e) => {
-                    tracing::error!("Invalid channel ID: {}", e);
-                    return;
-                }
-            };
-
-            // Get channel name
-            let channel_name = ui_ctx
-                .get_channel_local(&channel_id)
-                .map(|c| c.name.clone())
-                .unwrap_or_default();
-
-            // Get existing members to filter them out
-            let existing_members: HashSet<UserId> = ui_ctx
-                .get_channel_members(&channel_id, 100, 0)
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .map(|m| m.user_id)
-                .collect();
-
-            // Load available friends
-            let mut user_data: Vec<InviteUser> = Vec::new();
-            let mut seen_user_ids: HashSet<UserId> = HashSet::new();
-
-            // Load friends
-            let friends = ui_ctx.list_friends(100, 0).await.unwrap_or_default();
-            for friendship in &friends {
-                if seen_user_ids.contains(&friendship.friend_id) {
-                    continue;
-                }
-
-                let is_member = existing_members.contains(&friendship.friend_id);
-                let profile = ui_ctx.get_profile_local(&friendship.friend_id);
-                let user = ui_ctx.get_user_local(&friendship.friend_id);
-
-                let display_name = profile
-                    .as_ref()
-                    .map(|p| p.display_name.clone())
-                    .unwrap_or_else(|| friendship.friend_id.to_string());
-                let username = user
-                    .as_ref()
-                    .map(|u| u.username.clone())
-                    .unwrap_or_default();
-
-                seen_user_ids.insert(friendship.friend_id);
-                user_data.push(InviteUser {
-                    id: friendship.friend_id.to_string().into(),
-                    display_name: display_name.into(),
-                    username: username.into(),
-                    avatar_url: "".into(),
-                    already_member: is_member,
-                    selected: false,
-                });
-            }
-
-            // Update UI - open invite modal
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    w.set_invite_member_channel_id(channel_id_str.into());
-                    w.set_invite_member_channel_name(channel_name.into());
-                    w.set_invite_member_users(ModelRc::new(VecModel::from(user_data)));
-                    w.set_invite_member_selected_count(0);
-                    w.set_active_modal("invite-member".into());
-                }
-            });
-        });
+        open_invite_member_modal(weak, ui_ctx, channel_id);
     });
 
     // Toggle user selection
@@ -646,6 +657,99 @@ fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                     if success_count > 0 {
                         w.set_active_modal("none".into());
                     }
+                }
+            });
+        });
+    });
+}
+
+/// On every search keystroke, rebuild the candidate list: friends first (as a
+/// substring filter when a query is present), then server search results for
+/// anyone else matching. Dedupe by user id and mark already-members.
+fn wire_invite_member_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak_window = window.as_weak();
+    let ui_ctx_search = ui_ctx.clone();
+
+    window.on_invite_member_search_changed(move |query: slint::SharedString| {
+        let weak = weak_window.clone();
+        let ui_ctx = ui_ctx_search.clone();
+        let query = query.to_string();
+
+        tokio::spawn(async move {
+            let channel_id_str = weak
+                .upgrade()
+                .map(|w| w.get_invite_member_channel_id().to_string())
+                .unwrap_or_default();
+            if channel_id_str.is_empty() {
+                return;
+            }
+            let channel_id: ChannelId = match channel_id_str.parse() {
+                Ok(id) => id,
+                Err(_) => return,
+            };
+
+            let existing_members: HashSet<UserId> = ui_ctx
+                .get_channel_members(&channel_id, 100, 0)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|m| m.user_id)
+                .collect();
+
+            let mut friends = load_friends_as_invite_users(&ui_ctx, &existing_members).await;
+            let trimmed = query.trim();
+
+            if !trimmed.is_empty() {
+                let needle = trimmed.to_lowercase();
+                friends.retain(|u| {
+                    u.display_name.to_lowercase().contains(&needle)
+                        || u.username.to_lowercase().contains(&needle)
+                });
+            }
+
+            let mut seen: HashSet<String> = friends.iter().map(|u| u.id.to_string()).collect();
+
+            // Signal-style exact-username lookup: display names are
+            // profile-key-encrypted on the server, so only exact username
+            // matches can resolve to an account.
+            if !trimmed.is_empty() {
+                match ui_ctx.lookup_by_username(trimmed).await {
+                    Ok(Some(user_id)) => {
+                        let id_str = user_id.to_string();
+                        if seen.insert(id_str.clone()) {
+                            let is_member = existing_members.contains(&user_id);
+                            match ui_ctx.get_user_profile(&user_id).await {
+                                Ok(profile) => {
+                                    let username = ui_ctx
+                                        .get_user_local(&user_id)
+                                        .map(|u| u.username)
+                                        .unwrap_or_else(|| trimmed.to_string());
+                                    friends.push(InviteUser {
+                                        id: id_str.into(),
+                                        display_name: profile.display_name.into(),
+                                        username: username.into(),
+                                        avatar_url: "".into(),
+                                        already_member: is_member,
+                                        selected: false,
+                                    });
+                                }
+                                Err(e) => {
+                                    tracing::warn!(error = %e, %id_str, "lookup hit but profile fetch failed");
+                                }
+                            }
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::warn!(error = %e, query = %trimmed, "username lookup failed");
+                    }
+                }
+            }
+
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.set_invite_member_users(ModelRc::new(VecModel::from(friends)));
+                    w.set_invite_member_selected_count(0);
                 }
             });
         });

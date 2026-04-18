@@ -5,20 +5,7 @@ use std::sync::Arc;
 use slint::{Model, Weak};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::domain::anon_group::AnonGroupId;
-use chatter_core::domain::ids::UserId;
 use crate::MainWindow;
-
-/// Get the display name for an anonymous group member, with fallback.
-pub(super) fn get_anon_member_name(
-    ui_ctx: &Arc<ChatterClient>,
-    group_id: &AnonGroupId,
-    user_id: &UserId,
-) -> String {
-    ui_ctx
-        .get_anon_group_member_display_name(group_id, user_id)
-        .unwrap_or_else(|| format!("Member {}", &user_id.to_string()[..8]))
-}
 
 /// Update unread count badge in sidebar (DM + channel models).
 pub(crate) fn update_unread_count(window: &MainWindow, channel_id: &str, count: u32) {

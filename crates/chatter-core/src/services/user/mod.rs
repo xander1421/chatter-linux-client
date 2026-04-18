@@ -724,50 +724,24 @@ impl UserService {
         self.settings_repo.current_user_id().map_err(UserError::from)
     }
 
-    /// Search users in local storage.
-    pub fn search_users_local(&self, query: &str) -> Result<Vec<User>, UserError> {
-        let current_user = self.settings_repo.current_user_id()?;
-        let friendships = self.user_repo.list_friends(&current_user)?;
-
-        let query_lower = query.to_lowercase();
-        let mut matching_users = Vec::new();
-
-        for friendship in friendships {
-            if let Ok(Some(user)) = self.user_repo.get(&friendship.friend_id) {
-                if user.username.to_lowercase().contains(&query_lower) {
-                    matching_users.push(user);
-                }
-            }
-        }
-
-        Ok(matching_users)
-    }
-
     // ========================================================================
-    // Search Operations
+    // Lookup Operations
     // ========================================================================
 
-    /// Search for users by query (network call).
-    pub async fn search_users(
+    /// Signal-style username lookup. Hashes `username` with the global
+    /// discovery salt and asks the server for the matching account ID.
+    /// Returns `Ok(None)` when no account is registered under the name.
+    pub async fn lookup_by_username(
         &self,
-        query: &str,
-        limit: u32,
-        offset: u32,
-    ) -> Result<Vec<Profile>, UserError> {
+        username: &str,
+    ) -> Result<Option<crate::domain::UserId>, UserError> {
         let _ = self.settings_repo.current_user_id()?;
-
+        let hash = crate::crypto::auth_crypto::hash_username_lookup(username);
         let mut user_client = self.user_client();
-        let response = user_client
-            .search_users(query, limit as i32, offset as i32)
-            .await?;
-
-        let mut profiles = Vec::with_capacity(response.results.len());
-        for proto_profile in &response.results {
-            let profile = proto_to_domain_profile(proto_profile)?;
-            profiles.push(profile);
+        match user_client.lookup_username(hash).await? {
+            Some(id_str) => Ok(id_str.parse().ok()),
+            None => Ok(None),
         }
-
-        Ok(profiles)
     }
 
     // ========================================================================

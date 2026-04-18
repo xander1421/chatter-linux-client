@@ -221,7 +221,31 @@ impl MessageGateway {
                 });
             }
 
-            // Other content types in sealed sender (typing, receipt, etc.)
+            // Channel control content (reaction, pin, edit, typing, receipt,
+            // delete) delivered as per-device sealed sender. Caller dispatches
+            // the inner variant.
+            let is_control = matches!(
+                content_proto.content,
+                Some(content::Content::Reaction(_))
+                    | Some(content::Content::Pin(_))
+                    | Some(content::Content::Edit(_))
+                    | Some(content::Content::Typing(_))
+                    | Some(content::Content::Receipt(_))
+                    | Some(content::Content::DeleteForMeSync(_))
+            );
+            if is_control {
+                tracing::info!(
+                    sender_id = %sender_id,
+                    content_type = ct_name,
+                    "GATEWAY: Channel control content received via sealed sender"
+                );
+                return Ok(SealedSenderResult::ControlContent {
+                    sender_id,
+                    content: Box::new(content_proto),
+                });
+            }
+
+            // Other content types in sealed sender — nothing actionable.
             tracing::info!(
                 sender_id = %sender_id,
                 content_type = ct_name,

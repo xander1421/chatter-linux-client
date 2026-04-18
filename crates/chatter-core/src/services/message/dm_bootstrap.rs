@@ -288,7 +288,6 @@ impl MessageService {
                             "BOOTSTRAP[1/4] FAILED to send REQUEST"
                         );
                     } else {
-                        let _ = token_manager.mark_token_used(&token.id);
                         tracing::info!(
                             peer_id = %peer_id,
                             "BOOTSTRAP[1/4] SUCCESS - REQUEST sent to peer's device inbox"
@@ -331,7 +330,7 @@ impl MessageService {
         // Get anonymous credential for initial contact
         let token_manager = self.token_manager.clone();
 
-        let credential_token = match token_manager.get_available_token() {
+        let credential_token = match token_manager.claim_available_token() {
             Ok(Some(token)) => token,
             Ok(None) => {
                 // No tokens available - request new ones from server
@@ -342,7 +341,7 @@ impl MessageService {
                     return Err(MessageError::DmError(format!("Failed to get anonymous token: {}", e)));
                 }
 
-                match token_manager.get_available_token() {
+                match token_manager.claim_available_token() {
                     Ok(Some(t)) => t,
                     Ok(None) => return Err(MessageError::DmError("No tokens available after request".into())),
                     Err(e) => return Err(MessageError::DmError(format!("Failed to get token: {}", e))),
@@ -373,7 +372,6 @@ impl MessageService {
             .await
             .map_err(|e| MessageError::DmError(format!("Failed to send bootstrap: {}", e)))?;
 
-        let _ = token_manager.mark_token_used(&credential_token.id);
         tracing::info!(
             peer_id = %peer_id,
             "DM bootstrap sent successfully - waiting for key exchange response"
@@ -389,7 +387,7 @@ impl MessageService {
         peer_id: &UserId,
         grpc_pool: &Arc<GrpcClientPool>,
     ) -> Option<crate::mailbox::MailboxToken> {
-        match token_manager.get_available_token() {
+        match token_manager.claim_available_token() {
             Ok(Some(t)) => Some(t),
             Ok(None) => {
                 tracing::info!(peer_id = %peer_id, "No tokens for bootstrap request, requesting from server");
@@ -398,7 +396,7 @@ impl MessageService {
                     grpc_pool.auth_clone(),
                 );
                 match token_manager.request_tokens(&mut mailbox_client, 5).await {
-                    Ok(count) if count > 0 => token_manager.get_available_token().ok().flatten(),
+                    Ok(count) if count > 0 => token_manager.claim_available_token().ok().flatten(),
                     _ => None,
                 }
             }

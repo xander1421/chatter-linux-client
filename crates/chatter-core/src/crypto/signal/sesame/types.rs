@@ -19,24 +19,13 @@ pub const MAX_PENDING_MESSAGES: usize = 100;
 /// Maximum age for pending messages before they expire (1 hour).
 pub const PENDING_MESSAGE_TTL_SECS: i64 = 3600;
 
-/// Maximum age (in seconds) for a session to be used for sending.
-/// After this time, the session must be replaced with a fresh one.
-/// Signal Sesame spec: MAXSEND. Using 24 hours as a conservative default.
-pub const MAXSEND_SECS: i64 = 86_400;
-
-/// Maximum network latency assumption (in seconds).
-/// Used to compute MAXRECV = MAXSEND + 2*MAXLATENCY.
-/// 5 minutes allows for slow/offline devices.
-pub const MAXLATENCY_SECS: i64 = 300;
-
-/// Maximum age (in seconds) before a session can be deleted entirely.
-/// Per Sesame spec: MAXRECV > MAXSEND + 2*MAXLATENCY.
-/// = 86400 + 2*300 = 87000 seconds (~24h 10min).
-pub const MAXRECV_SECS: i64 = MAXSEND_SECS + 2 * MAXLATENCY_SECS;
-
-/// Maximum age (in seconds) before a stale device record is hard-deleted.
-/// Per Sesame spec: hard-delete after MAXLATENCY.
-pub const STALE_DEVICE_HARD_DELETE_SECS: i64 = MAXLATENCY_SECS;
+// Note on freshness limits: Signal-Desktop does NOT enforce app-level MAXSEND /
+// MAXRECV / MAXLATENCY counters (verified against its source). Libsignal
+// enforces ratchet-internal bounds (MAX_MESSAGE_KEYS, MAX_RECEIVER_CHAINS)
+// which are the only meaningful freshness limits. Session rotation is
+// event-driven (stale-device 410, UntrustedIdentity, explicit reset) — not
+// counter-driven. Our earlier time-based expiry constants were a source of
+// false-positive "session unusable" errors and have been removed.
 
 /// Tracks all devices for a user we communicate with.
 ///
@@ -294,55 +283,18 @@ impl DeviceRecord {
     }
 
     /// Mark device as stale.
+    ///
+    /// Set when the server returns 410 (stale device) on outbound send. The
+    /// session is dropped on the next rotation event; Signal-Desktop does
+    /// NOT time-delete stale device rows, so we don't either.
     pub fn mark_stale(&mut self) {
         self.stale = true;
         self.stale_timestamp = Some(Utc::now());
     }
 
-    /// Check if this stale device record should be hard-deleted.
-    ///
-    /// Per Sesame spec, stale devices are hard-deleted after MAXLATENCY.
-    pub fn should_hard_delete(&self) -> bool {
-        if !self.stale {
-            return false;
-        }
-        match self.stale_timestamp {
-            Some(ts) => {
-                let age = Utc::now().signed_duration_since(ts);
-                age.num_seconds() > STALE_DEVICE_HARD_DELETE_SECS
-            }
-            None => false,
-        }
-    }
-
-    /// Check if the active session is usable for sending.
-    pub fn has_usable_session(&self) -> bool {
-        self.active_session
-            .as_ref()
-            .map(|s| s.is_usable_for_send())
-            .unwrap_or(false)
-    }
-
-    /// Remove sessions that have exceeded MAXRECV.
-    ///
-    /// Returns the number of sessions removed.
-    pub fn cleanup_expired_sessions(&mut self) -> usize {
-        let mut removed = 0;
-
-        // Check active session
-        if let Some(ref session) = self.active_session {
-            if session.is_expired_for_recv() {
-                self.active_session = None;
-                removed += 1;
-            }
-        }
-
-        // Remove expired inactive sessions
-        let before = self.inactive_sessions.len();
-        self.inactive_sessions.retain(|s| !s.is_expired_for_recv());
-        removed += before - self.inactive_sessions.len();
-
-        removed
+    /// Whether this device currently has a session we can try.
+    pub fn has_active_session(&self) -> bool {
+        self.active_session.is_some()
     }
 }
 
@@ -365,19 +317,6 @@ pub struct SessionEntry {
     pub send_count: u32,
     /// Number of messages received with this session.
     pub recv_count: u32,
-}
-
-/// Describes why a session is not usable.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SessionUsability {
-    /// Session is valid and usable for sending.
-    Usable,
-    /// Session has exceeded MAXSEND and should not be used for sending.
-    ExpiredForSend,
-    /// Session has exceeded MAXRECV and can be deleted.
-    ExpiredForRecv,
-    /// Session record is corrupted and cannot be deserialized.
-    Corrupted,
 }
 
 impl SessionEntry {
@@ -420,42 +359,14 @@ impl SessionEntry {
         Ok(())
     }
 
-    /// Check the usability of this session.
-    ///
-    /// Validates:
-    /// 1. The session record can be deserialized (not corrupted)
-    /// 2. The session age hasn't exceeded MAXSEND (for sending)
-    /// 3. The session age hasn't exceeded MAXRECV (eligible for deletion)
-    pub fn usability(&self) -> SessionUsability {
-        // Check if session record is corrupted
-        if SessionRecord::deserialize(&self.session_record).is_err() {
-            return SessionUsability::Corrupted;
-        }
-
-        let age = Utc::now().signed_duration_since(self.created_at);
-
-        if age.num_seconds() > MAXRECV_SECS {
-            return SessionUsability::ExpiredForRecv;
-        }
-
-        if age.num_seconds() > MAXSEND_SECS {
-            return SessionUsability::ExpiredForSend;
-        }
-
-        SessionUsability::Usable
+    /// Can this session record still be deserialized into a usable
+    /// `SessionRecord`? The only failure mode we care about client-side;
+    /// ratchet-level freshness is enforced by libsignal itself.
+    pub fn is_intact(&self) -> bool {
+        SessionRecord::deserialize(&self.session_record).is_ok()
     }
 
-    /// Check if this session is usable for sending messages.
-    pub fn is_usable_for_send(&self) -> bool {
-        self.usability() == SessionUsability::Usable
-    }
-
-    /// Check if this session has exceeded MAXRECV and can be safely deleted.
-    pub fn is_expired_for_recv(&self) -> bool {
-        matches!(self.usability(), SessionUsability::ExpiredForRecv | SessionUsability::Corrupted)
-    }
-
-    /// Get the session age in seconds.
+    /// Session age in seconds (debug/telemetry only).
     pub fn age_secs(&self) -> i64 {
         Utc::now().signed_duration_since(self.created_at).num_seconds()
     }

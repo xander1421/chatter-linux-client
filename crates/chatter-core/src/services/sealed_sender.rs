@@ -118,24 +118,21 @@ impl SealedSenderService {
             .await
             .map_err(|e| SealedSenderError::SendFailed(e.to_string()))?;
 
-        // 5. Mark token used
-        let _ = token_manager.mark_token_used(&token.id);
-
         Ok(())
     }
 
-    /// Get an available token or request new ones.
+    /// Atomically claim a token or request new ones if the local cache is empty.
     ///
-    /// This consolidates the token request + retry pattern used in multiple places.
+    /// Uses `claim_available_token` so the token is marked used in the same
+    /// SQL statement — concurrent sends can never present the same credential
+    /// to the server.
     pub async fn get_or_request_token(
         &self,
         token_manager: &TokenManager,
     ) -> Option<MailboxToken> {
-        // Try to get an available token
-        match token_manager.get_available_token() {
+        match token_manager.claim_available_token() {
             Ok(Some(token)) => Some(token),
             Ok(None) => {
-                // Request new tokens
                 let mut mailbox_client = self.grpc_pool.mailbox_client();
 
                 match token_manager.request_tokens(&mut mailbox_client, 5).await {
@@ -152,11 +149,10 @@ impl SealedSenderService {
                     }
                 }
 
-                // Retry get after request
-                token_manager.get_available_token().ok().flatten()
+                token_manager.claim_available_token().ok().flatten()
             }
             Err(e) => {
-                tracing::error!("Failed to check available tokens: {}", e);
+                tracing::error!("Failed to claim available token: {}", e);
                 None
             }
         }

@@ -657,9 +657,13 @@ async fn route_anon_dm(
             .await?
     };
 
+    // Pull the just-stored Message so callers get reply-quote metadata
+    // (reply_to_thumbnail, preview, etc.).
+    let message = anon_dm_service.message_repo.get(&message_id).ok().flatten();
+
     Ok(SendResult {
         sent_at,
-        message: None, // Anon DM uses its own message type, not domain::Message
+        message,
         attachment_ids,
         gif_attachment_ids: vec![],
         bootstrap_initiated: false,
@@ -696,9 +700,17 @@ async fn route_anon_group(
             .await?
     };
 
+    // Pull the just-stored Message so callers get reply-quote metadata
+    // (reply_to_thumbnail, preview, etc.).
+    let message = message_id
+        .as_str()
+        .parse::<crate::domain::ids::MessageId>()
+        .ok()
+        .and_then(|mid| anon_group_service.message_service.get_message_local(&mid).ok().flatten());
+
     Ok(SendResult {
         sent_at,
-        message: None, // Anon group uses its own message type, not domain::Message
+        message,
         attachment_ids,
         gif_attachment_ids: vec![],
         bootstrap_initiated: false,

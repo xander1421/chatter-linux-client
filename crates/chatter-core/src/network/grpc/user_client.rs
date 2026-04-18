@@ -15,11 +15,11 @@ use crate::proto::chat_v1::{
     FriendStatus, GetNavigationHistoryRequest, GetNavigationHistoryResponse,
     GetUserProfileRequest, ListBlockedUsersRequest, ListBlockedUsersResponse,
     ListFriendRequestsRequest, ListFriendRequestsResponse, ListFriendsRequest, ListFriendsResponse,
-    PinChannelRequest, PinChannelResponse, PresenceUpdate, RemoveFriendRequest,
-    ReorderPinnedChannelsRequest, StreamPresenceRequest, TrackChannelVisitRequest,
-    UnblockUserRequest, UnpinChannelRequest, UnpinChannelResponse, UpdatePresenceRequest,
-    UpdateUserProfileRequest, UserEvent, UserEventRequest, UserPresence, UserProfile,
-    UserSearchRequest, UserSearchResponse,
+    LookupUsernameRequest, LookupUsernameResponse, PinChannelRequest, PinChannelResponse,
+    PresenceUpdate, RemoveFriendRequest, ReorderPinnedChannelsRequest, StreamPresenceRequest,
+    TrackChannelVisitRequest, UnblockUserRequest, UnpinChannelRequest, UnpinChannelResponse,
+    UpdatePresenceRequest, UpdateUserProfileRequest, UserEvent, UserEventRequest, UserPresence,
+    UserProfile,
 };
 
 /// User service client wrapper.
@@ -88,24 +88,26 @@ impl UserClient {
             .map(|r| r.map_err(|s| NetworkError::from_status(&s))))
     }
 
-    /// Search for users by query.
-    pub async fn search_users(
+    /// Signal-style exact username lookup by 32-byte discovery hash. Returns
+    /// `Ok(None)` when the server has no account registered under that hash.
+    pub async fn lookup_username(
         &mut self,
-        query: &str,
-        limit: i32,
-        offset: i32,
-    ) -> Result<UserSearchResponse, NetworkError> {
-        let request = UserSearchRequest {
-            query: query.to_string(),
-            limit,
-            offset,
+        username_hash: [u8; 32],
+    ) -> Result<Option<String>, NetworkError> {
+        let request = LookupUsernameRequest {
+            username_hash: username_hash.to_vec(),
         };
-
-        self.inner
-            .search_users(request)
+        let LookupUsernameResponse { user_id } = self
+            .inner
+            .lookup_username(request)
             .await
             .map(|r| r.into_inner())
-            .map_err(|s| NetworkError::from_status(&s))
+            .map_err(|s| NetworkError::from_status(&s))?;
+        if user_id.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(user_id))
+        }
     }
 
     // ==================== Presence RPCs ====================

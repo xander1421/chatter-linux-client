@@ -110,29 +110,44 @@ impl AnonGroupService {
     ) -> Result<(AnonGroupMessageId, u64), AnonGroupError> {
         let current_user = self.current_user_id()?;
 
-        // Look up the original message to build preview text.
+        // Look up the original message to build preview text + thumbnail.
         // Falls back to "📷 Photo" / "🎬 Video" / etc. for media-only replies
         // so the receiver sees a non-empty reply bubble on reload.
         let channel_id: ChannelId = (*group_id).into();
-        let preview_text = self
+        let quoted_msg = self
             .message_service
             .message_repo
-            .get_by_conversation_timestamp(&channel_id, reply_to_timestamp)?
+            .get_by_conversation_timestamp(&channel_id, reply_to_timestamp)?;
+        let (preview_text, quote_attachments) = quoted_msg
+            .as_ref()
             .map(|msg| {
                 let attachments: Vec<_> = msg
                     .attachments
                     .iter()
                     .filter_map(|id| self.attachment_repo.get(id).ok().flatten())
                     .collect();
-                shared::message_reply_preview(&msg, &attachments)
+                let preview = shared::message_reply_preview(msg, &attachments);
+                let qa = shared::build_quoted_attachments(&attachments);
+                (preview, qa)
             })
             .unwrap_or_default();
 
-        let quote = shared::build_quote(
+        let quote = shared::build_quote_with_attachments(
             &reply_to_sender.to_string(),
             reply_to_timestamp,
             &preview_text,
+            quote_attachments.clone(),
         );
+        // Capture thumbnail+mime for local storage so the sender's own bubble
+        // renders the preview image without a round-trip through the network.
+        let (quote_thumb, quote_mime) = quote_attachments
+            .first()
+            .map(|qa| {
+                let thumb = (!qa.thumbnail.is_empty()).then(|| qa.thumbnail.clone());
+                let mime = (!qa.content_type.is_empty()).then(|| qa.content_type.clone());
+                (thumb, mime)
+            })
+            .unwrap_or((None, None));
 
         // Extract attachment IDs
         let attachment_ids = shared::extract_attachment_ids(&attachments);
@@ -162,6 +177,8 @@ impl AnonGroupService {
             reply_to: Some(crate::domain::ids::MessageId::from_timestamp(reply_to_timestamp)),
             reply_to_author_id: Some(*reply_to_sender),
             reply_to_text: (!preview_text.is_empty()).then(|| preview_text.clone()),
+            reply_to_thumbnail: quote_thumb,
+            reply_to_thumbnail_mime: quote_mime,
         });
 
         let message_id = self.store_message_with_content_json(

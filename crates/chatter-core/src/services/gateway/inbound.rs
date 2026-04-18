@@ -319,4 +319,10 @@ pub enum SealedSenderResult {
         encrypted_display_name: Option<Vec<u8>>,
         encrypted_avatar: Option<Vec<u8>>,
     },
+    /// Channel control content (reaction, pin, edit, typing, delete) received
+    /// via per-device sealed sender — caller dispatches to the right event.
+    ControlContent {
+        sender_id: UserId,
+        content: Box<crate::proto::content_v1::Content>,
+    },
 }

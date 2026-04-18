@@ -665,6 +665,17 @@ async fn process_identified_sender_message(
             );
             stats.write().messages_failed += 1;
         }
+        Ok(SealedSenderResult::ControlContent { sender_id: actual_sender, content }) => {
+            if let Some(inner) = content.content {
+                dispatch_channel_control_content(
+                    inner,
+                    &actual_sender,
+                    &msg.message_guid,
+                    event_tx,
+                    stats,
+                );
+            }
+        }
         Err(e) => {
             tracing::error!(
                 message_id = %msg.message_guid,
@@ -939,6 +950,20 @@ async fn process_sealed_sender_message(
                 "[INBOX] AnonGroupJoinAck via device sealed sender (wrong path)"
             );
             stats.write().messages_failed += 1;
+        }
+        Ok(SealedSenderResult::ControlContent { sender_id: actual_sender, content }) => {
+            if let Some(inner) = content.content {
+                dispatch_channel_control_content(
+                    inner,
+                    &actual_sender,
+                    &msg.message_guid,
+                    event_tx,
+                    stats,
+                );
+            }
+            let _ = event_tx.send(InboxEvent::MessageProcessed {
+                message_id: msg.message_guid.clone(),
+            });
         }
         Ok(SealedSenderResult::DataMessageReceived {
             sender_id: msg_sender,

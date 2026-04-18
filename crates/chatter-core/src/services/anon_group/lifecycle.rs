@@ -243,11 +243,10 @@ impl AnonGroupService {
         &self,
         group_id: &AnonGroupId,
     ) -> Result<AnonGroupMailbox, AnonGroupError> {
-        // Get or request a blind-signed token for anonymous mailbox registration
-        let token = match self.token_manager.get_available_token() {
+        // Atomically claim a blind-signed token (marks used in same SQL stmt)
+        let token = match self.token_manager.claim_available_token() {
             Ok(Some(token)) => token,
             Ok(None) => {
-                // Request new tokens from server
                 let mut mailbox_client =
                     self.grpc_pool.mailbox_client();
                 self.token_manager
@@ -255,9 +254,8 @@ impl AnonGroupService {
                     .await
                     .map_err(|e| AnonGroupError::CryptoError(e.to_string()))?;
 
-                // Now get a token
                 self.token_manager
-                    .get_available_token()
+                    .claim_available_token()
                     .map_err(|e| AnonGroupError::CryptoError(e.to_string()))?
                     .ok_or_else(|| AnonGroupError::CryptoError("No tokens available".to_string()))?
             }
@@ -334,11 +332,6 @@ impl AnonGroupService {
             created_at: now,
             expires_at: now + chrono::Duration::days(DEFAULT_GROUP_MAILBOX_TTL_DAYS),
         };
-
-        // Mark the token as used
-        self.token_manager
-            .mark_token_used(&token.id)
-            .map_err(|e| AnonGroupError::CryptoError(e.to_string()))?;
 
         Ok(mailbox)
     }

@@ -373,6 +373,33 @@ impl MessageService {
             }
         }
         
+        // Resolve quoted message locally so we can populate both wire + local
+        // reply metadata from a single source of truth.
+        let original = self
+            .message_repo
+            .get_by_sender_timestamp(quote_author_id, quote_timestamp)
+            .ok()
+            .flatten();
+        let original_attachments: Vec<_> = original
+            .as_ref()
+            .map(|m| {
+                m.attachments
+                    .iter()
+                    .filter_map(|id| self.attachment_repo.get(id).ok().flatten())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let quote_attachments =
+            crate::services::gateway::shared::build_quoted_attachments(&original_attachments);
+        let (quote_thumb, quote_mime) = quote_attachments
+            .first()
+            .map(|qa| {
+                let thumb = (!qa.thumbnail.is_empty()).then(|| qa.thumbnail.clone());
+                let mime = (!qa.content_type.is_empty()).then(|| qa.content_type.clone());
+                (thumb, mime)
+            })
+            .unwrap_or((None, None));
+
         // Build reply content with Quote proto
         let sent_at = TimestampNanos::now().as_u64();
         let content = crate::services::build_reply_content(
@@ -381,6 +408,7 @@ impl MessageService {
             &quote_author_id.to_string(),
             quote_timestamp,
             quote_text,
+            quote_attachments,
             sent_at,
         );
 
@@ -392,14 +420,6 @@ impl MessageService {
         let mut message = Message::new_text(*dm_channel_id, ConversationType::MailboxDm, Some(our_user_id), text.to_string(), sent_at);
         message.attachments = attachment_ids.clone();
 
-        // Populate reply-quote context so the quote bubble survives reload.
-        // Prefer resolving the original message locally for the id/preview;
-        // fall back to the synthetic timestamp-derived id + caller's preview.
-        let original = self
-            .message_repo
-            .get_by_sender_timestamp(quote_author_id, quote_timestamp)
-            .ok()
-            .flatten();
         message.reply_to = Some(
             original
                 .as_ref()
@@ -412,16 +432,13 @@ impl MessageService {
                 Some(crate::services::gateway::shared::truncate_preview(quote_text))
             } else {
                 original.as_ref().map(|m| {
-                    let attachments: Vec<_> = m
-                        .attachments
-                        .iter()
-                        .filter_map(|id| self.attachment_repo.get(id).ok().flatten())
-                        .collect();
-                    crate::services::gateway::shared::message_reply_preview(m, &attachments)
+                    crate::services::gateway::shared::message_reply_preview(m, &original_attachments)
                 })
             }
             .filter(|t| !t.is_empty())
         };
+        message.reply_to_thumbnail = quote_thumb;
+        message.reply_to_thumbnail_mime = quote_mime;
 
         // Store in database
         if let Err(e) = self.message_repo.insert(&message) {

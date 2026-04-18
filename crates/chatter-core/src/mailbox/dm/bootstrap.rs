@@ -291,12 +291,12 @@ impl DmBootstrap {
         let conversation_key = ConversationKey::new();
         tracing::debug!(peer_id = %peer_id, "DM bootstrap: step 5 - conversation keys generated");
 
-        // 6. Save state
+        // 6. Save state (token already marked used by claim_available_token in ensure_token)
         self.conversation_manager
             .save_our_mailbox(&peer_id, &our_mailbox)?;
         self.conversation_manager
             .save_conversation_key(&peer_id, &conversation_key)?;
-        self.token_manager.mark_token_used(&token.id)?;
+        let _ = token;
         tracing::debug!(peer_id = %peer_id, "DM bootstrap: step 6 - state saved");
 
         // 7. Build bootstrap message (KeyExchange proto)
@@ -314,19 +314,22 @@ impl DmBootstrap {
         })
     }
 
-    /// Ensure we have an available token, requesting more if needed.
+    /// Atomically claim a token, requesting more if needed.
+    ///
+    /// Uses `claim_available_token` (UPDATE ... RETURNING) so two concurrent
+    /// bootstraps can never pick up the same credential — the server rejects
+    /// repeats as `permission_denied: credential already used`.
     async fn ensure_token(
         &self,
         client: &mut MailboxClient,
     ) -> Result<MailboxToken, MailboxError> {
-        tracing::info!("DM bootstrap: checking for available token");
-        if let Some(token) = self.token_manager.get_available_token()? {
-            tracing::info!(token_id = %token.id, "DM bootstrap: found existing available token");
+        tracing::info!("DM bootstrap: claiming available token");
+        if let Some(token) = self.token_manager.claim_available_token()? {
+            tracing::info!(token_id = %token.id, "DM bootstrap: claimed existing token");
             return Ok(token);
         }
 
         tracing::info!("DM bootstrap: no available token, requesting new tokens from server");
-        // Need to request tokens
         let count = self.token_manager.request_tokens(client, 5).await?;
         tracing::info!(count, "DM bootstrap: requested tokens from server");
         if count == 0 {
@@ -335,7 +338,7 @@ impl DmBootstrap {
         }
 
         self.token_manager
-            .get_available_token()?
+            .claim_available_token()?
             .ok_or(MailboxError::NoTokensAvailable)
     }
 
@@ -515,7 +518,6 @@ impl DmBootstrap {
             let mailbox = self.build_mailbox_from_token(&token, &response)?;
             self.conversation_manager
                 .save_our_mailbox(&sender_id, &mailbox)?;
-            self.token_manager.mark_token_used(&token.id)?;
             Some(mailbox)
         } else {
             existing.and_then(|c| c.our_mailbox)
