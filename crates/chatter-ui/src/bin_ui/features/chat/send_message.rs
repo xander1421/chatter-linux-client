@@ -64,7 +64,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
 
         // Clear outgoing typing state (Signal: clearTypingTimers on message send)
-        clear_outgoing_typing();
+        clear_outgoing_typing(&ui_ctx_jarvis);
         if has_attachments { chat_state.clear_pending_attachments(); }
 
         // Track user activity for presence updates
@@ -122,15 +122,14 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
 
         // ================================================================
-        // Unified send pipeline (one tokio::spawn for all types)
+        // Send pipeline — core orchestrates, UI renders the result.
         // ================================================================
         tokio::spawn(async move {
-            // 1. Auth check + user info (shared)
             if !auth_state.is_logged_in() { return; }
             let current_user_id = auth_state.get().current_user_id.map(|id| id.to_string()).unwrap_or_default();
             let current_user_name = auth_state.get().display_name.unwrap_or_else(|| "Me".to_string());
 
-            // 2. Build quote from reply context
+            // Quote reference — preview text is filled in by core.
             let quote = if is_reply {
                 let reply = match super::helpers::parse_reply_context(&reply_to_sender, &reply_to_timestamp) {
                     Some(r) => r,
@@ -139,26 +138,26 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Some(gateway::QuoteIntent {
                     author_id: reply.sender_id,
                     timestamp: reply.timestamp,
-                    preview_text: None, // send_message() fills this in
+                    preview_text: None,
                 })
             } else {
                 None
             };
 
-            // 3. Send via core client
-            // Scale timeout for attachments: base 10s + 30s per attachment (upload + encrypt + send)
+            // Scale timeout for attachments: base 10s + 30s per attachment.
             let send_timeout = if pending_attachments.is_empty() {
                 crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT
             } else {
                 std::time::Duration::from_secs(10 + 30 * pending_attachments.len() as u64)
             };
-            let result = match tokio::time::timeout(
+
+            let ui_result = match tokio::time::timeout(
                 send_timeout,
-                ui_ctx.send_message(conversation, &text, &pending_attachments, quote, None),
+                ui_ctx.send_message_ui(conversation, &text, &pending_attachments, quote, None),
             ).await {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
-                    gateway::shared::handle_send_error(&e, "send");
+                    ui_ctx.format_send_error(&e, "send");
                     return;
                 }
                 Err(_) => {
@@ -167,51 +166,26 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
-            // 7. Handle result + update UI (fully unified — no per-type branches)
-            let sent_at = result.sent_at;
-            let message_id_str = result.message_id_string();
-            let timestamp_str = chrono::DateTime::from_timestamp_nanos(sent_at as i64)
-                .with_timezone(&chrono::Local).format("%H:%M").to_string();
-
-            // Sidebar preview (shared)
-            let preview = if text.chars().count() > 50 {
-                format!("You: {}...", text.chars().take(47).collect::<String>())
-            } else {
-                format!("You: {}", text)
-            };
-
-            // DM bootstrap: first message to new peer, key exchange in progress.
-            // Show "sending" placeholder — the message will be delivered when bootstrap completes.
-            let delivery_status = if result.bootstrap_initiated { "sending" } else { "sent" };
-            let msg_id = if result.bootstrap_initiated {
-                format!("pending-{}", sent_at)
-            } else {
-                message_id_str
-            };
-
-            // Resolve attachments by the IDs returned from the gateway (post-upload)
-            let mut attachment_display: Vec<_> = result.attachment_ids.iter()
-                .filter_map(|att_id| ui_ctx.get_attachment(att_id))
-                .map(|a| attachment_to_display_data(&a))
+            // Decode attachment thumbnails off the UI thread.
+            let mut attachment_display: Vec<_> = ui_result
+                .attachments
+                .iter()
+                .map(attachment_to_display_data)
                 .collect();
-            // Bootstrap sends have no attachments yet (key exchange must complete first)
-            if result.bootstrap_initiated {
-                attachment_display.clear();
-            }
             for att in &mut attachment_display {
                 att.decode_thumbnail();
             }
 
             let ui_ctx_for_gifs = ui_ctx.clone();
-            let sent_text = text.clone();
-            let ts_for_sidebar = timestamp_str.clone();
             let ui_ctx_for_sidebar = ui_ctx.clone();
-
-            // Thumbnail of quoted message — populated by send path on the stored Message
-            let reply_thumbnail_bytes: Option<Vec<u8>> = result
-                .message
-                .as_ref()
-                .and_then(|m| m.reply_to_thumbnail.clone());
+            let sent_text = text.clone();
+            let timestamp_str = ui_result.timestamp_display.clone();
+            let sidebar_preview = ui_result.sidebar_preview.clone();
+            let reply_thumbnail_bytes = ui_result.reply_thumbnail_bytes.clone();
+            let msg_id = ui_result.message_id_effective.clone();
+            let delivery_status = ui_result.delivery_status;
+            let bootstrap_initiated = ui_result.bootstrap_initiated;
+            let sent_at = ui_result.sent_at;
 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
@@ -237,12 +211,12 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     );
                     super::helpers::append_message_to_ui(&w, msg_item);
 
-                    if result.bootstrap_initiated {
+                    if bootstrap_initiated {
                         w.set_composer_placeholder("Setting up secure channel...".into());
                     }
 
                     crate::bin_ui::features::sidebar::update_sidebar_preview(
-                        &w, &ui_ctx_for_sidebar, conversation, &preview, &ts_for_sidebar, false,
+                        &w, &ui_ctx_for_sidebar, conversation, &sidebar_preview, &timestamp_str, false,
                     );
 
                     crate::bin_ui::gif_state::auto_register_gifs_from_messages(
@@ -256,16 +230,17 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 }
 
 /// Handle Jarvis slash commands (/ask, /summarize, /knowledge, /remember).
+///
+/// Dispatch + state recording lives in `ChatterClient::jarvis_execute`.
+/// This function only manages the UI thinking-placeholder lifecycle.
 async fn handle_jarvis_slash_command(
     ui_ctx: &Arc<ChatterClient>,
-    cmd: crate::bin_ui::features::jarvis::JarvisCommand,
+    cmd: chatter_core::services::jarvis::JarvisCommand,
     channel_id: Option<&chatter_core::domain::ids::ChannelId>,
     weak_window: slint::Weak<MainWindow>,
 ) {
-    use crate::bin_ui::features::jarvis::JarvisCommand;
     use chatter_core::domain::jarvis::JarvisContext;
 
-    // Build context
     let context = match channel_id {
         Some(id) => JarvisContext::channel(id.clone()),
         None => {
@@ -273,10 +248,9 @@ async fn handle_jarvis_slash_command(
             JarvisContext::dm(placeholder_id)
         }
     };
-
     let author_id = ui_ctx.auth_state().get().current_user_id;
 
-    // Set thinking state and add placeholder
+    // Surface the thinking placeholder before kicking off the core call.
     ui_ctx.jarvis_state().set_thinking(true);
     let thinking_id = {
         let weak = weak_window.clone();
@@ -291,68 +265,24 @@ async fn handle_jarvis_slash_command(
         rx.recv().ok()
     };
 
-    // Execute command
-    let (query_display, result) = match cmd {
-        JarvisCommand::Ask(query) => {
-            ui_ctx.jarvis_state().add_user_message(&query, channel_id.map(|id| id.to_string()).as_deref());
-            let r = ui_ctx.jarvis_ask(&context, &query, author_id.as_ref()).await;
-            (format!("/ask {}", query), r)
-        }
-        JarvisCommand::Summarize => {
-            ui_ctx.jarvis_state().add_user_message("/summarize", channel_id.map(|id| id.to_string()).as_deref());
-            let r = ui_ctx.jarvis_summarize_conversation(&context).await;
-            ("/summarize".to_string(), r)
-        }
-        JarvisCommand::Knowledge(entity) => {
-            ui_ctx.jarvis_state().add_user_message(&format!("/knowledge {}", entity), channel_id.map(|id| id.to_string()).as_deref());
-            let query = format!("What do you know about {}?", entity);
-            let r = ui_ctx.jarvis_ask(&context, &query, author_id.as_ref()).await;
-            (format!("/knowledge {}", entity), r)
-        }
-        JarvisCommand::Remember(fact) => {
-            ui_ctx.jarvis_state().add_user_message(&format!("/remember {}", fact), channel_id.map(|id| id.to_string()).as_deref());
-            let r = ui_ctx.jarvis_ask(&context, &format!("Please remember this fact: {}", fact), author_id.as_ref()).await;
-            (format!("/remember {}", fact), r)
-        }
+    let (query_display, result) = ui_ctx
+        .jarvis_execute(cmd, &context, author_id.as_ref())
+        .await;
+    let response_text = match &result {
+        Ok(response) => response.clone(),
+        Err(e) => format!("Error: {}", e),
     };
 
-    // Handle result
-    match result {
-        Ok(response) => {
-            ui_ctx.jarvis_state().add_assistant_message(&response);
-            let response_clone = response.clone();
-            let query_clone = query_display.clone();
-            let thinking_id_clone = thinking_id.clone();
-            let jarvis_state = ui_ctx.jarvis_state().clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                jarvis_state.set_thinking(false);
-                if let Some(w) = weak_window.upgrade() {
-                    w.set_jarvis_thinking(false);
-                    if let Some(tid) = thinking_id_clone {
-                        crate::bin_ui::features::jarvis::replace_thinking_with_response(
-                            &w, &tid, &query_clone, &response_clone,
-                        );
-                    }
-                }
-            });
+    let jarvis_state = ui_ctx.jarvis_state().clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        jarvis_state.set_thinking(false);
+        if let Some(w) = weak_window.upgrade() {
+            w.set_jarvis_thinking(false);
+            if let Some(tid) = thinking_id {
+                crate::bin_ui::features::jarvis::replace_thinking_with_response(
+                    &w, &tid, &query_display, &response_text,
+                );
+            }
         }
-        Err(e) => {
-            let error_msg = format!("Error: {}", e);
-            ui_ctx.jarvis_state().add_assistant_message(&error_msg);
-            let query_clone = query_display.clone();
-            let thinking_id_clone = thinking_id.clone();
-            let jarvis_state = ui_ctx.jarvis_state().clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                jarvis_state.set_thinking(false);
-                if let Some(w) = weak_window.upgrade() {
-                    w.set_jarvis_thinking(false);
-                    if let Some(tid) = thinking_id_clone {
-                        crate::bin_ui::features::jarvis::replace_thinking_with_response(
-                            &w, &tid, &query_clone, &error_msg,
-                        );
-                    }
-                }
-            });
-        }
-    }
+    });
 }

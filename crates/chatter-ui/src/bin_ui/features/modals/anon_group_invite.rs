@@ -1,16 +1,16 @@
 //! Anonymous group invite event handler.
 //!
-//! Handles DomainEvent::AnonGroupInviteReceived and shows accept/decline dialog
-//! in the FriendsModal "Groups" requests sub-tab.
+//! Subscribes to [`AnonGroupInviteEvent`] on [`ChatterClient`] and shows the
+//! accept/decline dialog in the FriendsModal "Groups" requests sub-tab.
 
 use std::sync::{Arc, Mutex, OnceLock};
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
 
 use chatter_core::client::ChatterClient;
+use chatter_core::client::events::AnonGroupInviteEvent;
 use chatter_core::domain::anon_group::AnonGroupId;
 use chatter_core::domain::UserId;
-use chatter_core::inbox::DomainEvent;
 use crate::{FriendRequestData, MainWindow};
 
 /// All data needed to accept a group invite later.
@@ -100,65 +100,61 @@ fn refresh_group_invites_ui(weak: &Weak<MainWindow>) {
 
 /// Spawn anon group invite handler to process incoming invite events.
 ///
-/// Subscribes to `DomainEvent::AnonGroupInviteReceived` from the event bus
-/// and adds invites to the pending list for user approval.
+/// Subscribes to the typed [`AnonGroupInviteEvent`] stream on
+/// [`ChatterClient`] and adds invites to the pending list for user approval.
 pub fn spawn_anon_group_invite_handler(
     weak_window: Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
 ) -> tokio::task::JoinHandle<()> {
     let ui_ctx_handler = ui_ctx.clone();
-    let mut event_rx = ui_ctx.event_bus().subscribe_domain();
+    let mut event_rx = ui_ctx.subscribe_anon_group_invites();
 
     tokio::spawn(async move {
         loop {
-            let event = match event_rx.recv().await {
+            let AnonGroupInviteEvent {
+                group_id,
+                group_name,
+                inviter_id,
+                inviter_mailbox_pk,
+                profile_key,
+                inviter_display_name,
+                inviter_avatar,
+            } = match event_rx.recv().await {
                 Ok(event) => event,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(dropped_count = n, "Domain event receiver lagged, continuing");
+                    tracing::warn!(dropped_count = n, "Anon group invite receiver lagged, continuing");
                     continue;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
-            match event {
-                DomainEvent::AnonGroupInviteReceived {
-                    group_id,
-                    group_name,
-                    inviter_id,
-                    inviter_mailbox_pk,
-                    profile_key,
-                    inviter_display_name,
-                    inviter_avatar,
-                } => {
-                    let inviter_name = inviter_display_name.clone()
-                        .unwrap_or_else(|| ui_ctx_handler.display_name(&inviter_id));
-                    tracing::info!(
-                        group_id = %group_id,
-                        group_name = %group_name,
-                        inviter_name = %inviter_name,
-                        "Received anon group invite - adding to pending list"
-                    );
 
-                    // Store invite for later accept/decline
-                    {
-                        let mut invites = pending_invites().lock().unwrap();
-                        // Deduplicate by group_id
-                        if !invites.iter().any(|i| i.group_id == group_id) {
-                            invites.push(PendingGroupInvite {
-                                group_id,
-                                group_name,
-                                inviter_id,
-                                inviter_mailbox_pk,
-                                profile_key,
-                                inviter_display_name,
-                                inviter_avatar,
-                            });
-                        }
-                    }
+            let inviter_name = inviter_display_name.clone()
+                .unwrap_or_else(|| ui_ctx_handler.display_name(&inviter_id));
+            tracing::info!(
+                group_id = %group_id,
+                group_name = %group_name,
+                inviter_name = %inviter_name,
+                "Received anon group invite - adding to pending list"
+            );
 
-                    refresh_group_invites_ui(&weak_window);
+            // Store invite for later accept/decline
+            {
+                let mut invites = pending_invites().lock().unwrap();
+                // Deduplicate by group_id
+                if !invites.iter().any(|i| i.group_id == group_id) {
+                    invites.push(PendingGroupInvite {
+                        group_id,
+                        group_name,
+                        inviter_id,
+                        inviter_mailbox_pk,
+                        profile_key,
+                        inviter_display_name,
+                        inviter_avatar,
+                    });
                 }
-                _ => {}
             }
+
+            refresh_group_invites_ui(&weak_window);
         }
     })
 }

@@ -21,7 +21,7 @@ use crate::crypto::call_key_provider::EphemeralCallKey;
 use crate::domain::anon_dm::AnonDmId;
 use crate::domain::anon_group::AnonGroupId;
 #[cfg(feature = "desktop-media")]
-use crate::domain::call::{AnonCallSetupResult, CallSetupResult};
+use crate::domain::call::{AnonCallAnswerOutcome, AnonCallSetupResult, CallSetupResult};
 use crate::domain::call::CallType;
 use crate::domain::call::PendingDmCall;
 #[cfg(feature = "desktop-media")]
@@ -663,6 +663,7 @@ impl CallSignalingService {
                 room_name,
                 call_id,
                 channel_id,
+                pending.is_video_call,
             )
             .await
             .map_err(|e| CallSignalingError::CallWorker(e.to_string()))?;
@@ -690,7 +691,9 @@ impl CallSignalingService {
 
     /// Handle an anonymous call answer (caller side): acquire token, join room, connect LiveKit.
     ///
-    /// If accepted, returns `Some(AnonCallSetupResult)`. If declined, stores call history and returns `None`.
+    /// Group anon calls fan out answers to every participant, so this may be
+    /// invoked repeatedly for the same room. Returns `AlreadyInCall` for those
+    /// echoes so the UI can distinguish them from a real `Declined`.
     #[cfg(feature = "desktop-media")]
     pub async fn handle_anon_call_answer(
         &self,
@@ -698,12 +701,14 @@ impl CallSignalingService {
         accepted: bool,
         callee_display_name: &str,
         call_worker: &CallWorkerHandle,
-    ) -> Result<Option<AnonCallSetupResult>, CallSignalingError> {
+    ) -> Result<AnonCallAnswerOutcome, CallSignalingError> {
         // Skip if already in a call — this handles the callee's own echo coming
-        // back from the group mailbox, or duplicate answer events.
+        // back from the group mailbox, or another participant's answer in a
+        // multi-party group call. Distinct from `Declined` so the UI can ignore
+        // these silently instead of tearing down the active call.
         if call_worker.is_in_call().await {
-            tracing::debug!("Already in a call, skipping duplicate answer event");
-            return Ok(None);
+            tracing::debug!("Already in a call, ignoring duplicate answer event");
+            return Ok(AnonCallAnswerOutcome::AlreadyInCall);
         }
 
         // Reconstruct room name from call_room_id
@@ -733,7 +738,7 @@ impl CallSignalingService {
                 );
             }
 
-            return Ok(None);
+            return Ok(AnonCallAnswerOutcome::Declined);
         }
 
         tracing::info!(room_name = %room_name, "Anonymous call accepted, connecting to LiveKit");
@@ -782,6 +787,7 @@ impl CallSignalingService {
                 &pending.room_name,
                 call_id,
                 channel_id,
+                pending.is_video_call,
             )
             .await
             .map_err(|e| {
@@ -818,7 +824,7 @@ impl CallSignalingService {
         active_pending.started_at = Some(chrono::Utc::now());
         self.anon_dm_service.store_pending_anon_call(room_name.clone(), active_pending);
 
-        Ok(Some(result))
+        Ok(AnonCallAnswerOutcome::Connected(result))
     }
 
     /// Decline an incoming anonymous call: send decline answer, store missed call history.
@@ -1068,8 +1074,22 @@ impl CallSignalingService {
         &self,
         call_worker: &CallWorkerHandle,
         duration_secs: i64,
+        expected_call_id: Option<&str>,
     ) -> Result<(), CallSignalingError> {
         if let Some(call) = call_worker.active_call().await {
+            // Ignore hangups for a call we are not in. Moved here so the UI
+            // doesn't need to reach into call state to gate the event.
+            if let Some(expected) = expected_call_id {
+                if call.id.to_string() != expected {
+                    tracing::debug!(
+                        expected,
+                        active = %call.id,
+                        "Ignoring remote hangup for non-active call"
+                    );
+                    return Ok(());
+                }
+            }
+
             let current_user = self.channel_service.current_user_id()
                 .unwrap_or_else(|_| UserId::from_uuid(uuid::Uuid::nil()));
             let is_outgoing = call.initiator_id == current_user;

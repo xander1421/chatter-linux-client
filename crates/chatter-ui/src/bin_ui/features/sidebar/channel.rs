@@ -70,10 +70,7 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             run_ui!(weak, |w| super::refresh_selection(&w, &ui_ctx_for_sel));
 
             // Mark as read
-            let handle = chatter_core::services::conversation::ConversationHandle::new(
-                chatter_core::state::ActiveConversation::Channel(channel_id),
-                ui_ctx.clone(),
-            );
+            let handle = ui_ctx.conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
             let _ = handle.mark_as_read().await;
 
             // Load pinned messages for this channel from DB

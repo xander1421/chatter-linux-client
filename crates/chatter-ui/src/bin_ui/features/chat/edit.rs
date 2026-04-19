@@ -5,11 +5,10 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, SharedString};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
-use chatter_core::services::conversation::ConversationHandle;
 use chatter_core::state::ActiveConversation;
 use crate::MainWindow;
 
@@ -39,9 +38,7 @@ pub fn wire_edit_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
 
             // Get message text via ConversationHandle (polymorphic across all types)
-            let handle = chatter_core::services::conversation::ConversationHandle::new(
-                conversation, ui_ctx.clone(),
-            );
+            let handle = ui_ctx.conversation(conversation);
             let text = match handle.get_message_text(&target_sender_id, target_sent_timestamp) {
                 Ok(t) => t,
                 Err(_) => return,
@@ -87,52 +84,37 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let sender_id_str = parts[0].to_string();
         let timestamp_ns_str = parts[1].to_string();
 
-        let handle = ConversationHandle::current(&ui_ctx);
-        if matches!(handle.conversation(), ActiveConversation::None) {
+        let conversation = ui_ctx.chat_state().active_conversation();
+        if matches!(conversation, ActiveConversation::None) {
             return;
         }
 
         let weak = weak_window.clone();
+        let ui_ctx = ui_ctx.clone();
 
         let target_sent_timestamp: u64 = match timestamp_ns_str.parse() {
             Ok(ts) => ts,
             Err(_) => return,
         };
 
+        // Validate sender id up front so we keep Signal-style logging.
+        let _: UserId = match sender_id_str.parse() {
+            Ok(id) => id,
+            Err(_) => return,
+        };
+
         tokio::spawn(async move {
+            let handle = ui_ctx.conversation(conversation);
             if let Err(e) = handle.send_edit(target_sent_timestamp, &new_text_str).await {
                 tracing::error!(error = %e, "Failed to send edit");
                 return;
             }
+            // Core emits `DomainEvent::MessageEdited` after persisting, so the
+            // existing domain-handler dispatcher refreshes the UI — nothing
+            // conversation-kind-specific needed here.
 
-            // Persistence is handled by ConversationHandle::send_edit()
-
-            // Update UI
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
-                    // For anon conversations, update message content in the UI model
-                    let is_anon = matches!(
-                        handle.conversation(),
-                        ActiveConversation::AnonDm(_) | ActiveConversation::AnonGroup(_)
-                    );
-                    if is_anon {
-                        let current_model = w.get_messages();
-                        let messages: Vec<_> = (0..current_model.row_count())
-                            .filter_map(|i| current_model.row_data(i))
-                            .map(|mut m| {
-                                if m.sender_id.as_str() == sender_id_str.as_str()
-                                    && m.timestamp_ns.as_str() == timestamp_ns_str.as_str()
-                                {
-                                    m.content = new_text_str.clone().into();
-                                    m.is_edited = true;
-                                }
-                                m
-                            })
-                            .collect();
-                        w.set_messages(ModelRc::new(VecModel::from(messages)));
-                    }
-
-                    // Clear edit mode
                     w.set_composer_is_editing(false);
                     w.set_composer_edit_message_id("".into());
                     w.set_composer_text("".into());

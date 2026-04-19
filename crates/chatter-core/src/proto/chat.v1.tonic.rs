@@ -5369,6 +5369,7 @@ pub mod user_service_client {
                 .insert(GrpcMethod::new("chat.v1.UserService", "GetNavigationHistory"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn clear_navigation_history(
             &mut self,
             request: impl tonic::IntoRequest<super::ClearNavigationHistoryRequest>,
@@ -5393,6 +5394,8 @@ pub mod user_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /** Channel Pinning
+*/
         pub async fn pin_channel(
             &mut self,
             request: impl tonic::IntoRequest<super::PinChannelRequest>,

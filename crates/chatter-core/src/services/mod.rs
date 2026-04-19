@@ -40,6 +40,7 @@ pub mod pin_service;
 pub mod thread_service;
 pub mod reaction_service;
 pub mod typing_service;
+pub mod outgoing_typing;
 pub mod typing_cleanup;
 pub mod read_receipt_service;
 pub mod presence_service;

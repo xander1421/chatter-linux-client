@@ -7,19 +7,19 @@ use std::sync::Arc;
 use slint::ComponentHandle;
 
 use chatter_core::client::ChatterClient;
-use chatter_core::inbox::DomainEvent;
+use chatter_core::client::events::CallKeyEvent;
 use crate::MainWindow;
 
 use super::key_exchange::handle_call_key_answer;
 
 /// Wire call key answer handler to process incoming answer events.
 ///
-/// Subscribes to `DomainEvent::CallKeyAnswerReceived` from the event bus
-/// and completes the ephemeral key exchange for the caller (via core).
+/// Subscribes to the typed [`CallKeyEvent`] stream from [`ChatterClient`]
+/// and completes the ephemeral key exchange for the caller (via core),
+/// or updates the group-call encryption key.
 pub fn wire_call_key_answer_handler(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let call_service = ui_ctx.call_service().clone();
     let ui_ctx = ui_ctx.clone();
-    let mut event_rx = ui_ctx.event_bus().subscribe_domain();
+    let mut event_rx = ui_ctx.subscribe_call_key_events();
     let weak = window.as_weak();
 
     slint::spawn_local(async move {
@@ -27,13 +27,13 @@ pub fn wire_call_key_answer_handler(window: &MainWindow, ui_ctx: &Arc<ChatterCli
             let event = match event_rx.recv().await {
                 Ok(event) => event,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(dropped_count = n, "Domain event receiver lagged, continuing");
+                    tracing::warn!(dropped_count = n, "Call key event receiver lagged, continuing");
                     continue;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
             match event {
-                DomainEvent::CallKeyAnswerReceived {
+                CallKeyEvent::AnswerReceived {
                     call_id,
                     peer_id,
                     ephemeral_public_key,
@@ -44,20 +44,10 @@ pub fn wire_call_key_answer_handler(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                         "Processing call key answer"
                     );
 
-                    // Get the call service
-                    let service = match call_service.get() {
-                        Some(s) => s.clone(),
-                        None => {
-                            tracing::error!("No CallService available for key answer handling");
-                            continue;
-                        }
-                    };
-
                     // Handle the answer on the UI thread (delegates to core)
                     if weak.upgrade().is_some() {
                         handle_call_key_answer(
                             &weak,
-                            &service,
                             &ui_ctx,
                             ephemeral_public_key,
                             call_id,
@@ -65,7 +55,7 @@ pub fn wire_call_key_answer_handler(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                         ).await;
                     }
                 }
-                DomainEvent::GroupCallKeyReceived {
+                CallKeyEvent::GroupKeyReceived {
                     call_id,
                     sender_id: _,
                     key_material,
@@ -78,26 +68,20 @@ pub fn wire_call_key_answer_handler(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                         "Processing group call key update"
                     );
 
-                    // Update LiveKit encryption key
-                    if let Some(service) = call_service.get() {
-                        let service = service.clone();
-                        let key = key_material.to_vec();
-
-                        tokio::spawn(async move {
-                            let success = service.set_encryption_key(key).await;
-                            if success {
-                                tracing::info!(
-                                    call_id = %call_id,
-                                    key_epoch = key_epoch,
-                                    "Group call key updated"
-                                );
-                            } else {
-                                tracing::error!("Failed to update group call key");
-                            }
-                        });
-                    }
+                    let ctx = ui_ctx.clone();
+                    let key = key_material.to_vec();
+                    tokio::spawn(async move {
+                        if ctx.call_set_encryption_key(key).await {
+                            tracing::info!(
+                                call_id = %call_id,
+                                key_epoch = key_epoch,
+                                "Group call key updated"
+                            );
+                        } else {
+                            tracing::error!("Failed to update group call key");
+                        }
+                    });
                 }
-                _ => {} // Ignore other events
             }
         }
     }).unwrap();

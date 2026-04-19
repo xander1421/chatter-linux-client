@@ -484,6 +484,7 @@ export component MainWindow inherits Window {
     // ========== Call properties ==========
     in-out property <bool> incoming-call-visible <=> app.incoming-call-visible;
     in property <IncomingCallData> incoming-call-data <=> app.incoming-call-data;
+    in-out property <bool> incoming-call-replaces-active <=> app.incoming-call-replaces-active;
     in-out property <bool> active-call-visible <=> app.active-call-visible;
     in property <ActiveCallData> active-call-data <=> app.active-call-data;
     in-out property <bool> call-is-muted <=> app.call-is-muted;

@@ -243,7 +243,7 @@ pub async fn app_init() -> AppState {
         bin_ui::features::modals::spawn_anon_group_invite_handler(weak_window.clone(), &ui_ctx);
 
         {
-            let mut domain_rx = ui_ctx.event_bus().subscribe_domain();
+            let mut domain_rx = ui_ctx.subscribe_events();
             let weak_for_domain = weak_window.clone();
             let ui_ctx_for_domain = ui_ctx.clone();
             tokio::spawn(async move {

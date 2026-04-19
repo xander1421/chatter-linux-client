@@ -398,21 +398,10 @@ pub async fn handle_domain_event(
             tracing::debug!("Ignoring AnonCallOfferReceived (desktop-media disabled)");
         }
 
-        #[cfg(feature = "desktop-media")]
-        DomainEvent::AnonCallAnswerReceived {
-            conversation_id,
-            accepted,
-            call_room_id,
-            callee_display_name,
-            ..
-        } => {
-            anon_calls::handle_anon_call_answer(
-                window, ui_ctx, conversation_id, accepted, call_room_id, callee_display_name,
-            );
-        }
-        #[cfg(not(feature = "desktop-media"))]
         DomainEvent::AnonCallAnswerReceived { .. } => {
-            tracing::debug!("Ignoring AnonCallAnswerReceived (desktop-media disabled)");
+            // Handled entirely by the call orchestrator bridge — it calls
+            // CallSignalingService::handle_anon_call_answer and emits
+            // AnonCallConnected / ActiveEnded orchestrator events.
         }
 
         #[cfg(feature = "desktop-media")]
@@ -448,21 +437,9 @@ pub async fn handle_domain_event(
             tracing::debug!("Ignoring AnonGroupCallOfferReceived (desktop-media disabled)");
         }
 
-        #[cfg(feature = "desktop-media")]
-        DomainEvent::AnonGroupCallAnswerReceived {
-            group_id,
-            accepted,
-            call_room_id,
-            callee_display_name,
-            ..
-        } => {
-            anon_calls::handle_anon_group_call_answer(
-                window, ui_ctx, group_id, accepted, call_room_id, callee_display_name,
-            );
-        }
-        #[cfg(not(feature = "desktop-media"))]
         DomainEvent::AnonGroupCallAnswerReceived { .. } => {
-            tracing::debug!("Ignoring AnonGroupCallAnswerReceived (desktop-media disabled)");
+            // Handled entirely by the call orchestrator bridge (same path as
+            // AnonCallAnswerReceived).
         }
 
         #[cfg(feature = "desktop-media")]

@@ -111,30 +111,6 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let description_opt = if description.is_empty() { None } else { Some(description.as_str()) };
                 let password_opt = if password.is_empty() { None } else { Some(password.as_str()) };
 
-                // Upload channel icon to CDN if one was picked.
-                // Service handles encryption + in-memory pixel cache so sidebar
-                // can render immediately. Returned cdn_key becomes the channel's img_url.
-                let image_url: Option<String> = if let Some(path) = pending_icon {
-                    match ui_ctx.upload_channel_icon(&path).await {
-                        Ok(cdn_key) => {
-                            tracing::info!("Uploaded channel icon to CDN: {}", cdn_key);
-                            Some(cdn_key)
-                        }
-                        Err(e) => {
-                            let error_msg = format!("Failed to upload channel icon: {}", e);
-                            let _ = slint::invoke_from_event_loop(move || {
-                                if let Some(w) = weak.upgrade() {
-                                    w.set_create_channel_loading(false);
-                                    w.set_create_channel_error(error_msg.into());
-                                }
-                            });
-                            return;
-                        }
-                    }
-                } else {
-                    None
-                };
-
                 let domain_config = ChannelConfig {
                     persistence: if is_ephemeral { MessagePersistence::Ephemeral } else { MessagePersistence::Permanent },
                     max_members: if max_members > 0 { Some(max_members as u32) } else { None },
@@ -143,7 +119,21 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     ..Default::default()
                 };
 
-                match ui_ctx.create_channel(&name, channel_type, Some(domain_config), description_opt, image_url.as_deref(), password_opt, vec![]).await {
+                // Core uploads the icon to CDN internally (if provided) and
+                // creates the channel atomically. If upload fails, no channel
+                // is created and the error surfaces here.
+                match ui_ctx
+                    .create_channel_with_icon(
+                        &name,
+                        channel_type,
+                        Some(domain_config),
+                        description_opt,
+                        pending_icon.as_deref(),
+                        password_opt,
+                        vec![],
+                    )
+                    .await
+                {
                     Ok(channel) => {
                         let channel_id = channel.id;
                         let channel_id_str: SharedString = channel_id.to_string().into();

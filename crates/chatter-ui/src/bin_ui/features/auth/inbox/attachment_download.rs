@@ -127,13 +127,12 @@ fn handle_gif(
 
     // Background: decode remaining frames (REUSES ALREADY DECRYPTED BYTES)
     let gif_bytes = decode_result.gif_bytes;
+    let ui_ctx_decode = ui_ctx.clone();
     tokio::task::spawn_blocking(move || {
-        use chatter_core::services::attachment::AttachmentService;
-
         let start = std::time::Instant::now();
 
-        // Decode all frames from already-decrypted bytes
-        let full_result = match AttachmentService::decode_gif_all_frames(&gif_bytes) {
+        // Decode all frames from already-decrypted bytes via the client façade.
+        let full_result = match ui_ctx_decode.decode_gif_all_frames(&gif_bytes) {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!("Failed to decode GIF frames: {}", e);

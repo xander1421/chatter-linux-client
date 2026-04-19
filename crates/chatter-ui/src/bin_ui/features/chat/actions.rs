@@ -96,13 +96,11 @@ pub fn wire_forward_message_action(window: &MainWindow, ui_ctx: &Arc<ChatterClie
             };
 
             // Lookup message text via ConversationHandle (polymorphic across all types)
-            let handle = chatter_core::services::conversation::ConversationHandle::new(
-                conversation, ui_ctx.clone(),
-            );
+            let handle = ui_ctx.conversation(conversation);
             let preview = handle.get_message_text(&target_sender_id, target_sent_timestamp)
                 .ok()
                 .flatten()
-                .map(|t| chatter_core::services::gateway::shared::truncate_preview(&t))
+                .map(|t| ui_ctx.truncate_message_preview(&t))
                 .unwrap_or_else(|| "Message".to_string());
 
             run_ui!(weak, |w| {
@@ -196,9 +194,7 @@ pub fn wire_copy_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
 
             // Lookup message text via ConversationHandle (polymorphic across all types)
-            let handle = chatter_core::services::conversation::ConversationHandle::new(
-                conversation, ui_ctx.clone(),
-            );
+            let handle = ui_ctx.conversation(conversation);
             let text = match handle.get_message_text(&target_sender_id, target_sent_timestamp) {
                 Ok(Some(t)) => t,
                 Ok(None) => {
@@ -267,9 +263,7 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
 
             // Look up attachment IDs via ConversationHandle (polymorphic across all types)
-            let handle = chatter_core::services::conversation::ConversationHandle::new(
-                conversation, ui_ctx.clone(),
-            );
+            let handle = ui_ctx.conversation(conversation);
             let attachment_ids = match handle.get_message_attachment_ids(&target_sender_id, target_sent_timestamp) {
                 Ok(ids) => ids,
                 Err(e) => {

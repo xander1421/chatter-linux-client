@@ -6,7 +6,6 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::{Attachment, FileCategory, Message};
-use chatter_core::services::conversation::ConversationHandle;
 use chatter_core::state::ActiveConversation;
 
 use crate::{MainWindow, MessageItemData};
@@ -78,7 +77,7 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }).unwrap_or((false, String::new(), String::new()));
 
         let unpin = is_currently_pinned;
-        let handle = ConversationHandle::new(conversation, ui_ctx.clone());
+        let handle = ui_ctx.conversation(conversation);
         let ui_ctx = ui_ctx.clone();
         let weak = weak_window.clone();
 

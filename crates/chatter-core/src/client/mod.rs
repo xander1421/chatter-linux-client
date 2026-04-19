@@ -16,8 +16,9 @@
 
 mod anon_group;
 mod auth;
-mod calls;
+pub mod calls;
 mod channels;
+pub mod events;
 mod jarvis;
 mod messaging;
 mod pin;
@@ -112,6 +113,7 @@ impl ClientBuilder {
             last_activity_ms: AtomicU64::new(0),
             call_signaling: std::sync::OnceLock::new(),
             svr_backup_service: std::sync::OnceLock::new(),
+            outgoing_typing: crate::services::outgoing_typing::OutgoingTypingManager::new(),
             #[cfg(not(target_os = "android"))]
             oidc_service: std::sync::OnceLock::new(),
         }))
@@ -182,6 +184,8 @@ pub struct ChatterClient {
     last_activity_ms: AtomicU64,
     /// Cached call signaling service (persistent for pending state).
     call_signaling: std::sync::OnceLock<crate::services::call_signaling::CallSignalingService>,
+    /// Outgoing typing-indicator state machine (Signal refresh/pause timers).
+    outgoing_typing: crate::services::outgoing_typing::OutgoingTypingManager,
     /// Cached SVR backup service.
     svr_backup_service: std::sync::OnceLock<crate::services::svr_backup_service::SvrBackupService>,
     #[cfg(not(target_os = "android"))]
@@ -319,9 +323,252 @@ impl ChatterClient {
         self.ui.event_bus.subscribe_domain()
     }
 
+    // ── Typed event streams (UI-facing, narrow) ─────────────────────────
+    //
+    // UI crates must not call `subscribe_domain()` directly. These helpers
+    // filter the raw DomainEvent bus into focused payload types from
+    // [`crate::client::events`] so each UI site only sees the variants it
+    // cares about. Each call spawns a dedicated fan-out task tied to the
+    // subscription's lifetime (tasks exit when the receiver is dropped and
+    // the next filter attempt fails to publish).
+
+    /// Subscribe to anonymous DM request / acceptance / init events.
+    ///
+    /// Filters `DomainEvent::AnonDmRequestReceived`, `AnonDmRequestAccepted`,
+    /// and `AnonDmInitReceived` into the typed [`events::AnonDmRequestEvent`].
+    pub fn subscribe_anon_dm_requests(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<events::AnonDmRequestEvent> {
+        let (tx, rx) = tokio::sync::broadcast::channel::<events::AnonDmRequestEvent>(32);
+        let mut src = self.ui.event_bus.subscribe_domain();
+        tokio::spawn(async move {
+            loop {
+                match src.recv().await {
+                    Ok(DomainEvent::AnonDmRequestReceived {
+                        conversation_id,
+                        sender_id,
+                        sender_mailbox_pk,
+                        intro_message,
+                        profile_key,
+                        sender_display_name,
+                        sender_avatar,
+                    }) => {
+                        if tx.send(events::AnonDmRequestEvent::Received {
+                            conversation_id,
+                            sender_id,
+                            sender_mailbox_pk,
+                            intro_message,
+                            profile_key,
+                            sender_display_name,
+                            sender_avatar,
+                        }).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(DomainEvent::AnonDmRequestAccepted {
+                        conversation_id,
+                        peer_id,
+                        peer_mailbox_pk,
+                        profile_key,
+                        peer_display_name,
+                        peer_avatar,
+                    }) => {
+                        if tx.send(events::AnonDmRequestEvent::Accepted {
+                            conversation_id,
+                            peer_id,
+                            peer_mailbox_pk,
+                            profile_key,
+                            peer_display_name,
+                            peer_avatar,
+                        }).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(DomainEvent::AnonDmInitReceived {
+                        conversation_id,
+                        sender_id,
+                        sender_display_name,
+                        sender_avatar,
+                        peer_mailbox_pk,
+                        peer_identity_key,
+                        peer_delivery_token,
+                        intro_message,
+                        server_timestamp,
+                    }) => {
+                        if tx.send(events::AnonDmRequestEvent::Init {
+                            conversation_id,
+                            sender_id,
+                            sender_display_name,
+                            sender_avatar,
+                            peer_mailbox_pk,
+                            peer_identity_key,
+                            peer_delivery_token,
+                            intro_message,
+                            server_timestamp,
+                        }).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "subscribe_anon_dm_requests lagged");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+        rx
+    }
+
+    /// Subscribe to anonymous group invite events.
+    pub fn subscribe_anon_group_invites(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<events::AnonGroupInviteEvent> {
+        let (tx, rx) = tokio::sync::broadcast::channel::<events::AnonGroupInviteEvent>(16);
+        let mut src = self.ui.event_bus.subscribe_domain();
+        tokio::spawn(async move {
+            loop {
+                match src.recv().await {
+                    Ok(DomainEvent::AnonGroupInviteReceived {
+                        group_id,
+                        group_name,
+                        inviter_id,
+                        inviter_mailbox_pk,
+                        profile_key,
+                        inviter_display_name,
+                        inviter_avatar,
+                    }) => {
+                        if tx.send(events::AnonGroupInviteEvent {
+                            group_id,
+                            group_name,
+                            inviter_id,
+                            inviter_mailbox_pk,
+                            profile_key,
+                            inviter_display_name,
+                            inviter_avatar,
+                        }).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "subscribe_anon_group_invites lagged");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+        rx
+    }
+
+    /// Subscribe to call key exchange events (PFS answer + group key distribution).
+    pub fn subscribe_call_key_events(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<events::CallKeyEvent> {
+        let (tx, rx) = tokio::sync::broadcast::channel::<events::CallKeyEvent>(16);
+        let mut src = self.ui.event_bus.subscribe_domain();
+        tokio::spawn(async move {
+            loop {
+                match src.recv().await {
+                    Ok(DomainEvent::CallKeyAnswerReceived {
+                        call_id,
+                        peer_id,
+                        ephemeral_public_key,
+                    }) => {
+                        if tx.send(events::CallKeyEvent::AnswerReceived {
+                            call_id,
+                            peer_id,
+                            ephemeral_public_key,
+                        }).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(DomainEvent::GroupCallKeyReceived {
+                        call_id,
+                        sender_id,
+                        key_material,
+                        key_epoch,
+                        channel_id,
+                    }) => {
+                        if tx.send(events::CallKeyEvent::GroupKeyReceived {
+                            call_id,
+                            sender_id,
+                            key_material,
+                            key_epoch,
+                            channel_id,
+                        }).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "subscribe_call_key_events lagged");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+        rx
+    }
+
+    /// Subscribe to remote call hangup events (peer ended the call).
+    pub fn subscribe_remote_call_hangups(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<events::RemoteCallHangup> {
+        let (tx, rx) = tokio::sync::broadcast::channel::<events::RemoteCallHangup>(16);
+        let mut src = self.ui.event_bus.subscribe_domain();
+        tokio::spawn(async move {
+            loop {
+                match src.recv().await {
+                    Ok(DomainEvent::CallHangupReceived { call_id, peer_id, reason }) => {
+                        if tx.send(events::RemoteCallHangup { call_id, peer_id, reason }).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "subscribe_remote_call_hangups lagged");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+        rx
+    }
+
     /// Spawn the typing-indicator cleanup task (expires stale "typing..." state).
     pub fn start_typing_cleanup(&self) -> tokio::task::JoinHandle<()> {
         self.typing().start_cleanup_task()
+    }
+
+    /// Record a keystroke in `conversation`. The core state machine decides
+    /// whether this fires a new STARTED, resets the pause timer, or is
+    /// throttled. UI callers must NOT manage typing timers themselves.
+    pub fn typing_bump(self: &Arc<Self>, conversation: crate::state::ActiveConversation) {
+        // Skip typing-to-self (DM mirrors are irrelevant signal noise).
+        if let crate::state::ActiveConversation::MailboxDm { peer_id, .. }
+        | crate::state::ActiveConversation::ServerDm { peer_id, .. } = &conversation
+        {
+            if let Some(user_id) = self.ui.auth_state.get().current_user_id {
+                if peer_id == &user_id {
+                    return;
+                }
+            }
+        }
+        if matches!(conversation, crate::state::ActiveConversation::None) {
+            return;
+        }
+        let handle = self.conversation(conversation);
+        self.outgoing_typing.bump(handle);
+    }
+
+    /// User stopped typing explicitly (compose cleared, message sent, ESC).
+    /// Sends STOPPED and cancels timers if typing was active.
+    pub fn typing_clear(self: &Arc<Self>) {
+        let client = Arc::clone(self);
+        self.outgoing_typing.clear(move |conversation| {
+            Some(client.conversation(conversation.clone()))
+        });
     }
 
     /// Compute the local Signal identity fingerprint (displayed in settings /
@@ -756,6 +1003,46 @@ impl ChatterClient {
             })
         };
 
+        // ── Call worker room-events policy listener ─────────────────
+        // On `ParticipantLeft` in a channel-based group call, the initiator
+        // rotates the encryption key and redistributes it so the departed
+        // participant can't decrypt future frames. The "when" decision
+        // (reacting to a LiveKit event) now lives in core rather than the
+        // UI crate.
+        #[cfg(feature = "desktop-media")]
+        let _h_call_room_policy = {
+            let client = Arc::clone(self);
+            tokio::spawn(async move {
+                // Wait for the call worker to be initialized. init_call_service
+                // runs before start() returns, but on Android it is deferred.
+                let mut rx = loop {
+                    if let Some(w) = client.ctx.get_call_service() {
+                        break w.subscribe_room_events();
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                };
+
+                use crate::calls::LiveKitRoomEvent;
+                loop {
+                    match rx.recv().await {
+                        Ok(LiveKitRoomEvent::ParticipantLeft { .. }) => {
+                            if let Err(e) = client.handle_participant_departed().await {
+                                tracing::error!(
+                                    error = %e,
+                                    "Failed to handle participant departure"
+                                );
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!(skipped = n, "Call room-events policy lagged");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            })
+        };
+
         // ── Inbox polling + protocol processor ──────────────────────
         let inbox_rx = match self.ui.start_inbox_provider().await {
             Some(rx) => rx,
@@ -882,6 +1169,74 @@ impl ChatterClient {
         route_outgoing_owned(intent, &services).await
     }
 
+    /// Send a message and return a pre-shaped UI result.
+    ///
+    /// Wraps [`send_message`](Self::send_message) and folds the post-send
+    /// shaping (effective message id, delivery status, sidebar preview,
+    /// local timestamp, resolved attachments, quoted thumbnail) into a
+    /// single struct so the UI crate doesn't have to branch on
+    /// `bootstrap_initiated` or N+1 fetch attachments by id.
+    pub async fn send_message_ui(
+        &self,
+        conversation: ActiveConversation,
+        text: &str,
+        pending_attachments: &[PendingAttachment],
+        quote: Option<QuoteIntent>,
+        options: Option<SendOptions>,
+    ) -> Result<crate::client::messaging::SendMessageUiResult, SendError> {
+        use crate::client::messaging::SendMessageUiResult;
+        use crate::domain::message::truncate_preview_text;
+
+        let result = self
+            .send_message(conversation, text, pending_attachments, quote, options)
+            .await?;
+
+        let real_message_id = result.message_id_string();
+        let (message_id_effective, delivery_status) = if result.bootstrap_initiated {
+            (format!("pending-{}", result.sent_at), "sending")
+        } else {
+            (real_message_id, "sent")
+        };
+
+        let timestamp_display = chrono::DateTime::from_timestamp_nanos(result.sent_at as i64)
+            .with_timezone(&chrono::Local)
+            .format("%H:%M")
+            .to_string();
+
+        // "You: {trim(text, 50)}" — same shape as get_dm_sidebar_preview for
+        // receive-side entries.
+        let sidebar_preview = format!("You: {}", truncate_preview_text(text, 50));
+
+        // Bootstrap sends carry attachments only after the key exchange, so
+        // report an empty list for the "sending" placeholder. Non-bootstrap
+        // sends resolve each attachment id against the local store.
+        let attachments: Vec<_> = if result.bootstrap_initiated {
+            Vec::new()
+        } else {
+            result
+                .attachment_ids
+                .iter()
+                .filter_map(|id| self.attachments().get(id).ok().flatten())
+                .collect()
+        };
+
+        let reply_thumbnail_bytes = result
+            .message
+            .as_ref()
+            .and_then(|m| m.reply_to_thumbnail.clone());
+
+        Ok(SendMessageUiResult {
+            message_id_effective,
+            sent_at: result.sent_at,
+            timestamp_display,
+            sidebar_preview,
+            delivery_status,
+            bootstrap_initiated: result.bootstrap_initiated,
+            attachments,
+            reply_thumbnail_bytes,
+        })
+    }
+
     /// Get a [`ConversationHandle`] for per-conversation operations.
     pub fn conversation(self: &Arc<Self>, conv: ActiveConversation) -> ConversationHandle {
         ConversationHandle::new(conv, self.clone())
@@ -959,28 +1314,93 @@ impl ChatterClient {
 
     /// Send a friend request.
     pub async fn send_friend_request(
-        &self,
+        self: &Arc<Self>,
         user_id: &crate::domain::ids::UserId,
         message: Option<&str>,
     ) -> Result<crate::domain::user::Friendship, crate::services::user::UserError> {
-        self.users().send_friend_request(user_id, message).await
+        let result = self.users().send_friend_request(user_id, message).await?;
+        let client = Arc::clone(self);
+        tokio::spawn(async move {
+            client.refresh_and_emit_friend_requests().await;
+        });
+        Ok(result)
     }
 
     /// Accept or decline a friend request.
     pub async fn respond_friend_request(
-        &self,
+        self: &Arc<Self>,
         user_id: &crate::domain::ids::UserId,
         accept: bool,
     ) -> Result<crate::services::user::FriendResponseResult, crate::services::user::UserError> {
-        self.users().respond_friend_request(user_id, accept).await
+        let result = self.users().respond_friend_request(user_id, accept).await?;
+        let client = Arc::clone(self);
+        tokio::spawn(async move {
+            client.refresh_and_emit_friend_requests().await;
+        });
+        Ok(result)
     }
 
-    /// Remove a friend.
+    /// Remove a friend (also used to cancel a pending sent request).
     pub async fn remove_friend(
-        &self,
+        self: &Arc<Self>,
         user_id: &crate::domain::ids::UserId,
     ) -> Result<(), crate::services::user::UserError> {
-        self.users().remove_friend(user_id).await
+        self.users().remove_friend(user_id).await?;
+        let client = Arc::clone(self);
+        tokio::spawn(async move {
+            client.refresh_and_emit_friend_requests().await;
+        });
+        Ok(())
+    }
+
+    /// Re-poll friend requests from the server and emit `FriendRequestsUpdated`
+    /// so sidebar / profile modals refresh uniformly. Shared path for
+    /// send/respond/remove callers so there's one "source of truth" shape.
+    pub(crate) async fn refresh_and_emit_friend_requests(&self) {
+        use crate::inbox::events::FriendRequestInfo;
+        use crate::proto::chat_v1::friend_requests_filter;
+
+        let mut user_client = self.ui.grpc_pool.user_client();
+        let received = match user_client
+            .list_friend_requests(friend_requests_filter::Filter::Received, 50, 0)
+            .await
+        {
+            Ok(resp) => resp
+                .requests
+                .into_iter()
+                .map(|r| FriendRequestInfo {
+                    user_id: r.user_id,
+                    display_name: r.display_name,
+                    username: r.username,
+                    avatar_url: r.avatar_url,
+                })
+                .collect::<Vec<_>>(),
+            Err(e) => {
+                tracing::debug!(error = %e, "refresh_and_emit_friend_requests: received fetch failed");
+                return;
+            }
+        };
+        let sent = match user_client
+            .list_friend_requests(friend_requests_filter::Filter::Sent, 50, 0)
+            .await
+        {
+            Ok(resp) => resp
+                .requests
+                .into_iter()
+                .map(|r| FriendRequestInfo {
+                    user_id: r.user_id,
+                    display_name: r.display_name,
+                    username: r.username,
+                    avatar_url: r.avatar_url,
+                })
+                .collect::<Vec<_>>(),
+            Err(e) => {
+                tracing::debug!(error = %e, "refresh_and_emit_friend_requests: sent fetch failed");
+                return;
+            }
+        };
+        self.event_bus()
+            .emit_domain(DomainEvent::FriendRequestsUpdated { received, sent });
     }
 
     /// Block a user.
@@ -1342,13 +1762,19 @@ impl ChatterClient {
             .map_err(|e| ClientError::Inbox(e.to_string()))
     }
 
-    /// Handle remote hangup: store history, disconnect locally.
+    /// Handle remote hangup: store history, disconnect locally. Accepts the
+    /// hangup's `call_id` so core can gate on active-call match without the
+    /// UI having to inspect call state.
     #[cfg(feature = "desktop-media")]
-    pub async fn handle_remote_hangup(&self, duration_secs: i64) -> Result<(), ClientError> {
+    pub async fn handle_remote_hangup(
+        &self,
+        call_id: &str,
+        duration_secs: i64,
+    ) -> Result<(), ClientError> {
         let call_worker = self.call_service().get()
             .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;
         self.call_signaling()
-            .handle_remote_hangup(call_worker, duration_secs)
+            .handle_remote_hangup(call_worker, duration_secs, Some(call_id))
             .await
             .map_err(|e| ClientError::Inbox(e.to_string()))
     }
@@ -1419,6 +1845,33 @@ impl ChatterClient {
         self.ui.auth_service.disconnect();
 
         self.started.store(false, Ordering::SeqCst);
+    }
+
+    // ── UI helpers / formatting ─────────────────────────────────────────
+
+    /// Truncate a message body to Signal-style quote-preview length (100 chars
+    /// with "..." appended when exceeded). Used by search results and quote UI.
+    pub fn truncate_message_preview(&self, text: &str) -> String {
+        crate::services::gateway::shared::truncate_preview(text)
+    }
+
+    /// Convert a [`SendError`] into a user-facing error string (also logs the
+    /// error with the given context). Keeps UI error-formatting consistent
+    /// across send call sites.
+    pub fn format_send_error(&self, err: &SendError, context: &str) -> String {
+        crate::services::gateway::shared::handle_send_error(err, context)
+    }
+
+    /// Password strength level (0–4). See
+    /// [`crate::services::validation::password_strength`] for scoring details.
+    pub fn password_strength(&self, password: &str) -> i32 {
+        crate::services::validation::password_strength(password)
+    }
+
+    /// PIN strength level (0–3). See
+    /// [`crate::services::validation::pin_strength`] for scoring details.
+    pub fn pin_strength(&self, pin: &str) -> i32 {
+        crate::services::validation::pin_strength(pin)
     }
 
     // ── Escape hatches ──────────────────────────────────────────────────

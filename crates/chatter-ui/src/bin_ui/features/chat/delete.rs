@@ -6,7 +6,6 @@ use slint::{ComponentHandle, Model, SharedString};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::UserId;
-use chatter_core::services::conversation::ConversationHandle;
 
 use crate::{MessageItemData, MainWindow, run_ui};
 
@@ -43,13 +42,13 @@ pub fn wire_delete_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             "UI callback: delete-for-me triggered (Signal-style lookup)"
         );
 
-        let handle = ConversationHandle::current(&ui_ctx);
+        let conversation = ui_ctx.chat_state().active_conversation();
+        let ui_ctx_spawn = ui_ctx.clone();
         let weak = weak_window.clone();
         let sender_for_ui = sender_id_str.clone();
         let timestamp_for_ui = timestamp_ns_str.clone();
 
         tokio::spawn(async move {
-            // Parse sender_id and timestamp for Signal-style lookup
             let target_sender_id: UserId = match sender_id_str.parse() {
                 Ok(id) => id,
                 Err(e) => {
@@ -65,6 +64,7 @@ pub fn wire_delete_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
+            let handle = ui_ctx_spawn.conversation(conversation);
             if let Err(e) = handle.delete_for_me(&target_sender_id, target_sent_timestamp).await {
                 tracing::error!(error = %e, "Failed to delete-for-me");
                 return;
@@ -99,7 +99,8 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ui_ctx: &Arc<ChatterCli
             "UI callback: delete-for-everyone triggered (Signal-style lookup)"
         );
 
-        let handle = ConversationHandle::current(&ui_ctx);
+        let conversation = ui_ctx.chat_state().active_conversation();
+        let ui_ctx_spawn = ui_ctx.clone();
         let weak = weak_window.clone();
         let sender_for_ui = sender_id_str.clone();
         let timestamp_for_ui = timestamp_ns_str.clone();
@@ -113,6 +114,7 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ui_ctx: &Arc<ChatterCli
         };
 
         tokio::spawn(async move {
+            let handle = ui_ctx_spawn.conversation(conversation);
             if let Err(e) = handle.send_delete(target_sent_timestamp).await {
                 tracing::error!(error = %e, "Failed to send delete-for-everyone");
                 return;

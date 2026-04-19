@@ -13,21 +13,17 @@ use crate::{CallParticipantData, MainWindow};
 /// Wire room events to update UI (participant count, etc.).
 pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
-    let call_service = ui_ctx.call_service().clone();
     let ui_ctx = ui_ctx.clone();
 
     // Spawn a tokio task to consume room events (tokio runtime needed for channels and sleep)
     tokio::spawn(async move {
-        // Wait for call service to be initialized
-        let service = loop {
-            if let Some(svc) = call_service.get() {
-                break svc.clone();
-            }
+        // Wait for call service to be initialized (probed via the orchestrator
+        // broadcast channel — same OnceLock), then take the room events receiver.
+        while ui_ctx.subscribe_call_orchestrator_events().is_none() {
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        };
+        }
 
-        // Take the room events receiver
-        let Some(mut rx) = service.take_room_events() else {
+        let Some(mut rx) = ui_ctx.take_call_room_events() else {
             tracing::warn!("Room events receiver already taken");
             return;
         };
@@ -133,15 +129,8 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             tracing::debug!("UI updated for participant leave");
                         }
                     });
-
-                    // Key rotation: core decides if we're the initiator of a
-                    // channel group call and rotates + redistributes if so.
-                    let ui_ctx = ui_ctx.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = ui_ctx.handle_participant_departed().await {
-                            tracing::error!(error = %e, "Failed to handle participant departure");
-                        }
-                    });
+                    // Key rotation on participant leave is driven by the core
+                    // room-events policy listener (see `ChatterClient::start`).
                 }
                 LiveKitRoomEvent::TrackSubscribed { participant_identity, track_sid, is_video, is_screen_share } => {
                     tracing::info!(

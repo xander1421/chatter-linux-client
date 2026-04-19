@@ -76,54 +76,21 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     for channel in &channels {
         match channel.channel_type {
             ChannelType::DirectMessage => {
-                // For DMs, we need to find the OTHER user (not ourselves)
-                let other_user_id = if let Some(current_id) = current_user_id {
-                    // Get channel members and find the one that's not us
-                    let members = ui_ctx.list_channel_members_local(&channel.id);
-                    members
-                        .iter()
-                        .find(|m| m.user_id != current_id)
-                        .map(|m| m.user_id.to_string())
-                        .unwrap_or_else(|| channel.owner_id.to_string())
-                } else {
-                    // Fallback to owner_id if we don't know our own ID
+                // Core handles peer-id detection, last-message fetch, "You: "
+                // prefixing, preview truncation, and local-time formatting —
+                // we just render the returned struct.
+                let preview =
+                    ui_ctx.get_dm_sidebar_preview(&channel.id, &ConversationType::ServerDm);
+                let other_user_id = if preview.peer_user_id.is_empty() {
                     channel.owner_id.to_string()
+                } else {
+                    preview.peer_user_id
                 };
-
                 let other_user_name = channel.name.clone();
 
-                // Get the most recent message for this DM to populate preview
-                let (last_message, timestamp) =
-                    match ui_ctx.get_messages_local(&channel.id, &ConversationType::ServerDm, None, 1) {
-                        Ok(messages) if !messages.is_empty() => {
-                            let msg = &messages[0];
-                            let is_own = current_user_id.map(|id| msg.sender_id == Some(id)).unwrap_or(false);
-                            
-                            let preview = msg
-                                .as_text()
-                                .map(|text| {
-                                    let display_text = truncate_sidebar_preview(text);
-                                    if is_own {
-                                        format!("You: {}", display_text)
-                                    } else {
-                                        display_text
-                                    }
-                                })
-                                .unwrap_or_default();
-                            // Convert UTC to local time for display
-                            let ts = msg
-                                .created_at
-                                .with_timezone(&chrono::Local)
-                                .format("%H:%M")
-                                .to_string();
-                            (preview, ts)
-                        }
-                        _ => (String::new(), String::new()),
-                    };
-
                 let mut dm_item = dm_to_send_data(channel, &other_user_name, &other_user_id);
-                dm_item.last_message = last_message;
-                dm_item.timestamp = timestamp;
+                dm_item.last_message = preview.last_message;
+                dm_item.timestamp = preview.timestamp_display;
                 dm_list.push(dm_item);
             }
             ChannelType::Public | ChannelType::Private => {

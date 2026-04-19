@@ -485,6 +485,22 @@ pub struct AnonCallSetupResult {
     pub peer_display_name: String,
 }
 
+/// Outcome of `handle_anon_call_answer`.
+///
+/// Group anon calls fan out answers to every participant, so the caller (and
+/// any already-joined callee) receives *N* answer events per call. These
+/// must be distinguished from an actual decline.
+#[derive(Debug)]
+pub enum AnonCallAnswerOutcome {
+    /// The call was accepted and this participant just connected to LiveKit.
+    Connected(AnonCallSetupResult),
+    /// Peer declined the call (`accepted=false`).
+    Declined,
+    /// We are already in this call (own echo or another participant's answer
+    /// to the same room). UI should ignore — the call is already active.
+    AlreadyInCall,
+}
+
 impl std::fmt::Debug for AnonCallSetupResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AnonCallSetupResult")

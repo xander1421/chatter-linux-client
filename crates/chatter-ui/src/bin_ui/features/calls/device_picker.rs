@@ -18,7 +18,6 @@ use crate::MainWindow;
 /// Wire device picker callbacks for audio device and screen source selection.
 pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
-    let call_service = ui_ctx.call_service().clone();
 
     // Show audio input device picker (microphones)
     window.on_show_audio_device_picker({
@@ -120,32 +119,26 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     // Handle audio input device selection
     window.on_audio_device_selected({
-        let call_service = call_service.clone();
+        let ui_ctx = ui_ctx.clone();
         let weak = weak.clone();
         move |device_id| {
             let device_id_str = device_id.to_string();
             tracing::info!("Audio input device selected: {}", device_id_str);
 
-            if let Some(service) = call_service.get() {
-                let service = service.clone();
-                let weak = weak.clone();
-                let device_id = device_id_str.clone();
-
-                slint::spawn_local(async move {
-                    // Stop current microphone and restart with new device
-                    service.stop_microphone();
-
-                    if let Err(e) = service.publish_microphone(Some(&device_id)).await {
-                        tracing::error!("Failed to switch microphone to {}: {}", device_id, e);
-                    } else {
-                        tracing::info!("Switched to microphone: {}", device_id);
-                        // Update UI to reflect the new device
-                        if let Some(w) = weak.upgrade() {
-                            w.set_selected_audio_device_id(device_id.into());
-                        }
+            let ui_ctx = ui_ctx.clone();
+            let weak = weak.clone();
+            slint::spawn_local(async move {
+                ui_ctx.call_stop_microphone();
+                if let Err(e) = ui_ctx.call_publish_microphone(Some(&device_id_str)).await {
+                    tracing::error!("Failed to switch microphone to {}: {}", device_id_str, e);
+                } else {
+                    tracing::info!("Switched to microphone: {}", device_id_str);
+                    if let Some(w) = weak.upgrade() {
+                        w.set_selected_audio_device_id(device_id_str.into());
                     }
-                }).unwrap();
-            }
+                }
+            })
+            .unwrap();
         }
     });
 
@@ -168,17 +161,16 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     // Handle screen source selection
     window.on_screen_source_selected({
-        let call_service = call_service.clone();
+        let ui_ctx = ui_ctx.clone();
         let weak = weak.clone();
         move |source_id| {
             #[cfg(target_os = "android")]
-            { let _ = source_id; tracing::warn!("Screen source selection not available on Android"); return; }
+            { let _ = source_id; let _ = &ui_ctx; tracing::warn!("Screen source selection not available on Android"); return; }
             #[cfg(not(target_os = "android"))]
             {
                 let source_id_str = source_id.to_string();
                 tracing::info!("Screen source selected: {}", source_id_str);
 
-                // Parse source_id as u64
                 let source_id_u64: u64 = match source_id_str.parse() {
                     Ok(id) => id,
                     Err(e) => {
@@ -187,37 +179,34 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                 };
 
-                if let Some(service) = call_service.get() {
-                    let service = service.clone();
-                    let weak = weak.clone();
-                    let source_id_display = source_id_str.clone();
-
-                    slint::spawn_local(async move {
-                        // Find the selected source in the list
-                        match ScreenCapture::list_sources() {
-                            Ok(sources) => {
-                                if let Some(source) = sources.into_iter().find(|s| s.id == source_id_u64) {
-                                    // Start screen share with the selected source
-                                    if let Err(e) = service.publish_screen_share(source).await {
-                                        tracing::error!("Failed to start screen share: {}", e);
-                                    } else {
-                                        tracing::info!("Screen share started with source: {}", source_id_display);
-                                        if let Some(w) = weak.upgrade() {
-                                            w.set_call_is_screen_sharing(true);
-                                            w.set_selected_screen_source_id(source_id_display.into());
-                                        }
-                                    }
+                let ui_ctx = ui_ctx.clone();
+                let weak = weak.clone();
+                let source_id_display = source_id_str.clone();
+                slint::spawn_local(async move {
+                    match ScreenCapture::list_sources() {
+                        Ok(sources) => {
+                            if let Some(source) = sources.into_iter().find(|s| s.id == source_id_u64) {
+                                if let Err(e) = ui_ctx.call_publish_screen_share(source).await {
+                                    tracing::error!("Failed to start screen share: {}", e);
                                 } else {
-                                    tracing::error!("Selected screen source not found: {}", source_id_display);
+                                    tracing::info!("Screen share started with source: {}", source_id_display);
+                                    if let Some(w) = weak.upgrade() {
+                                        w.set_call_is_screen_sharing(true);
+                                        w.set_selected_screen_source_id(source_id_display.into());
+                                    }
                                 }
-                            }
-                            Err(e) => {
-                                tracing::error!("Failed to enumerate screen sources: {}", e);
+                            } else {
+                                tracing::error!("Selected screen source not found: {}", source_id_display);
                             }
                         }
-                    }).unwrap();
-                }
+                        Err(e) => {
+                            tracing::error!("Failed to enumerate screen sources: {}", e);
+                        }
+                    }
+                })
+                .unwrap();
             }
         }
     });
 }
+

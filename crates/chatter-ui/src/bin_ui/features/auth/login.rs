@@ -73,9 +73,9 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     crate::bin_ui::features::modals::spawn_anon_group_invite_handler(weak.clone(), &ui_ctx);
                     crate::bin_ui::features::modals::spawn_anon_dm_request_handler(weak.clone(), &ui_ctx);
 
-                    // Subscribe to DomainEvent for UI updates
+                    // Subscribe to domain events for UI updates via the SDK facade.
                     {
-                        let mut domain_rx = ui_ctx.event_bus().subscribe_domain();
+                        let mut domain_rx = ui_ctx.subscribe_events();
                         let weak_for_domain = weak.clone();
                         let ui_ctx_for_domain = ui_ctx.clone();
                         tokio::spawn(async move {
@@ -194,9 +194,9 @@ fn wire_sso_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     crate::bin_ui::features::modals::spawn_anon_group_invite_handler(weak.clone(), &ui_ctx);
                     crate::bin_ui::features::modals::spawn_anon_dm_request_handler(weak.clone(), &ui_ctx);
 
-                    // Subscribe to domain events
+                    // Subscribe to domain events for UI updates via the SDK facade.
                     {
-                        let mut domain_rx = ui_ctx.event_bus().subscribe_domain();
+                        let mut domain_rx = ui_ctx.subscribe_events();
                         let weak_for_domain = weak.clone();
                         let ui_ctx_for_domain = ui_ctx.clone();
                         tokio::spawn(async move {

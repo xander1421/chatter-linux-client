@@ -64,6 +64,69 @@ impl ChatterClient {
         self.jarvis().ask(context, query, author_id).await
     }
 
+    /// Execute a parsed Jarvis slash command end-to-end.
+    ///
+    /// Consolidates the dispatch logic that used to branch in the UI crate:
+    /// records the user message in local state, routes `/ask`,
+    /// `/summarize`, `/knowledge`, and `/remember` to their respective
+    /// service calls, then records the assistant reply (or error).
+    ///
+    /// Returns `(query_display, result)` — the first value is the
+    /// canonical slash-command string for UI rendering, the second is the
+    /// assistant's reply (or a `JarvisError`).
+    pub async fn jarvis_execute(
+        &self,
+        cmd: crate::services::jarvis::JarvisCommand,
+        context: &crate::domain::jarvis::JarvisContext,
+        author_id: Option<&crate::domain::ids::UserId>,
+    ) -> (String, Result<String, crate::services::jarvis::JarvisError>) {
+        use crate::services::jarvis::JarvisCommand as JC;
+
+        use crate::domain::jarvis::ContextType;
+        let channel_label = match context.context_type {
+            ContextType::Channel => Some(context.context_id.clone()),
+            _ => None,
+        };
+
+        let (query_display, result) = match cmd {
+            JC::Ask(query) => {
+                self.jarvis_state().add_user_message(&query, channel_label.as_deref());
+                let r = self.jarvis_ask(context, &query, author_id).await;
+                (format!("/ask {}", query), r)
+            }
+            JC::Summarize => {
+                self.jarvis_state().add_user_message("/summarize", channel_label.as_deref());
+                let r = self.jarvis_summarize_conversation(context).await;
+                ("/summarize".to_string(), r)
+            }
+            JC::Knowledge(entity) => {
+                let label = format!("/knowledge {}", entity);
+                self.jarvis_state().add_user_message(&label, channel_label.as_deref());
+                let query = format!("What do you know about {}?", entity);
+                let r = self.jarvis_ask(context, &query, author_id).await;
+                (label, r)
+            }
+            JC::Remember(fact) => {
+                let label = format!("/remember {}", fact);
+                self.jarvis_state().add_user_message(&label, channel_label.as_deref());
+                let query = format!("Please remember this fact: {}", fact);
+                let r = self.jarvis_ask(context, &query, author_id).await;
+                (label, r)
+            }
+        };
+
+        match &result {
+            Ok(response) => {
+                self.jarvis_state().add_assistant_message(response);
+            }
+            Err(e) => {
+                self.jarvis_state().add_assistant_message(&format!("Error: {}", e));
+            }
+        }
+
+        (query_display, result)
+    }
+
     pub async fn jarvis_summarize_conversation(
         &self,
         context: &crate::domain::jarvis::JarvisContext,

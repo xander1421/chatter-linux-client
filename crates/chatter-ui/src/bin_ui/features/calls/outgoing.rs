@@ -1,14 +1,18 @@
-//! Outgoing call initiation.
+//! Outgoing call initiation (UI glue).
 //!
-//! Handles starting voice and video calls.
+//! The core crate owns the orchestration: peer lookup, call-type dispatch,
+//! pending-state management. `ChatterClient::start_call` returns an
+//! [`OutgoingCallStart`] describing the "Calling…" state to render. This
+//! module is now a thin wrapper that translates button clicks into that call
+//! and paints the returned struct.
 
 use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use chatter_core::client::ChatterClient;
+use chatter_core::client::calls::OutgoingCallStart;
 use chatter_core::domain::call::CallType;
-use chatter_core::services::CallWorkerHandle;
 use chatter_core::state::ActiveConversation;
 use crate::{ActiveCallData, CallParticipantData, MainWindow};
 
@@ -17,89 +21,57 @@ use super::timers::{start_call_timer, start_video_frame_timer};
 /// Wire start call callbacks.
 pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
-    let ctx_call_service = ui_ctx.call_service().clone();
     let ctx_chat_state = ui_ctx.chat_state().clone();
     let ctx_ui = ui_ctx.clone();
 
-    // Start voice call
     window.on_start_voice_call({
         let weak = weak.clone();
-        let call_service = ctx_call_service.clone();
         let chat_state = ctx_chat_state.clone();
         let ui_ctx = ctx_ui.clone();
-
         move || {
-            let weak = weak.clone();
-            let conversation = chat_state.active_conversation();
-            let ui_ctx = ui_ctx.clone();
-
-            // Get the call service from OnceLock
-            let call_service = match call_service.get() {
-                Some(svc) => svc.clone(),
-                None => {
-                    tracing::error!("CallService not initialized");
-                    return;
-                }
-            };
-
-            slint::spawn_local(async move {
-                if tokio::time::timeout(
-                    std::time::Duration::from_secs(30),
-                    start_call_impl(weak.clone(), call_service, CallType::Voice, conversation, ui_ctx),
-                ).await.is_err() {
-                    tracing::error!("Call setup timed out");
-                    if let Some(w) = weak.upgrade() {
-                        w.set_active_call_visible(false);
-                    }
-                }
-            }).unwrap();
+            spawn_start(weak.clone(), chat_state.active_conversation(), CallType::Voice, ui_ctx.clone());
         }
     });
 
-    // Start video call
     window.on_start_video_call({
         let weak = weak.clone();
-        let call_service = ctx_call_service.clone();
         let chat_state = ctx_chat_state.clone();
         let ui_ctx = ctx_ui.clone();
-
         move || {
-            let weak = weak.clone();
-            let conversation = chat_state.active_conversation();
-            let ui_ctx = ui_ctx.clone();
-
-            // Get the call service from OnceLock
-            let call_service = match call_service.get() {
-                Some(svc) => svc.clone(),
-                None => {
-                    tracing::error!("CallService not initialized");
-                    return;
-                }
-            };
-
-            slint::spawn_local(async move {
-                if tokio::time::timeout(
-                    std::time::Duration::from_secs(30),
-                    start_call_impl(weak.clone(), call_service, CallType::Video, conversation, ui_ctx),
-                ).await.is_err() {
-                    tracing::error!("Call setup timed out");
-                    if let Some(w) = weak.upgrade() {
-                        w.set_active_call_visible(false);
-                    }
-                }
-            }).unwrap();
+            spawn_start(weak.clone(), chat_state.active_conversation(), CallType::Video, ui_ctx.clone());
         }
     });
 }
 
+fn spawn_start(
+    weak: slint::Weak<MainWindow>,
+    conversation: ActiveConversation,
+    call_type: CallType,
+    ui_ctx: Arc<ChatterClient>,
+) {
+    slint::spawn_local(async move {
+        if tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            start_call_impl(weak.clone(), call_type, conversation, ui_ctx),
+        )
+        .await
+        .is_err()
+        {
+            tracing::error!("Call setup timed out");
+            if let Some(w) = weak.upgrade() {
+                w.set_active_call_visible(false);
+            }
+        }
+    })
+    .unwrap();
+}
+
 async fn start_call_impl(
     weak: slint::Weak<MainWindow>,
-    call_service: CallWorkerHandle,
     call_type: CallType,
     conversation: ActiveConversation,
     ui_ctx: Arc<ChatterClient>,
 ) {
-    // Get current user ID and display name
     let user_id = match ui_ctx.session_current_user_id() {
         Some(id) => id,
         None => {
@@ -107,343 +79,102 @@ async fn start_call_impl(
             return;
         }
     };
-
     let display_name = ui_ctx.my_display_name().unwrap_or_else(|| "Anonymous".to_string());
-
-    let is_video_call = matches!(call_type, CallType::Video);
-    let call_type_str = match call_type {
-        CallType::Voice => "Voice Call",
-        CallType::Video => "Video Call",
-        CallType::Group => "Group Call",
-    };
-
-    // Dispatch directly on the typed enum — no string serialization
-    match conversation {
-        ActiveConversation::AnonGroup(id) => {
-            start_private_group_call(
-                weak,
-                &id.to_string(),
-                &display_name,
-                user_id,
-                is_video_call,
-                call_type_str,
-                ui_ctx,
-            ).await;
-            return;
-        }
-        ActiveConversation::None => {
-            tracing::warn!("No channel, DM, or private group selected for call");
-            return;
-        }
-        _ => {} // Channel, Dm, AnonDm — handled below
-    }
-
-    let channel_name = weak.upgrade()
+    let channel_name = weak
+        .upgrade()
         .map(|w| w.get_channel_name().to_string())
         .unwrap_or_default();
 
-    let is_dm = matches!(conversation, ActiveConversation::MailboxDm { .. } | ActiveConversation::ServerDm { .. } | ActiveConversation::AnonDm(_));
-
-    let channel_id = match conversation.channel_id() {
-        Some(id) => id,
-        None => {
-            tracing::error!("No channel ID for conversation");
-            return;
-        }
-    };
-
-    tracing::info!("Starting {} in channel {}", call_type_str, channel_id);
-
-    if is_dm {
-        // =================================================================
-        // DM Call with Ephemeral Key Exchange (PFS)
-        // =================================================================
-        // 1. Generate ephemeral X25519 keypair
-        // 2. Create call on server (but don't connect yet)
-        // 3. Send offer with our ephemeral public key
-        // 4. Store pending state, wait for answer
-        // 5. When answer arrives → derive key → connect
-        // =================================================================
-
-        // Get peer ID - different lookup for anon DMs vs regular DMs
-        let peer_id = if let ActiveConversation::AnonDm(anon_dm_id) = conversation {
-            // For anon DMs, look up the conversation to get peer_id
-            match ui_ctx.get_anon_dm_conversation(&anon_dm_id) {
-                Some(dm) => dm.peer_id,
-                None => {
-                    tracing::error!("Anon DM conversation not found: {}", anon_dm_id);
-                    return;
-                }
-            }
-        } else {
-            // Regular DM - look up from channel membership
-            match ui_ctx.get_dm_peer_local(&channel_id) {
-                Some(id) => id,
-                None => {
-                    tracing::error!("Could not determine peer ID for DM call");
-                    return;
-                }
-            }
-        };
-
-        // Handle anonymous DM calls differently
-        if let ActiveConversation::AnonDm(anon_dm_id) = conversation {
-            // Delegate to core — handles token acquisition, offer, pending state, and failed call history
-            let start_result = {
-                let ctx = ui_ctx.clone();
-                let display_name = display_name.clone();
-                tokio::spawn(async move {
-                    ctx.start_anon_dm_call(&anon_dm_id, is_video_call, &display_name).await
-                }).await.unwrap()
-            };
-
-            match start_result {
-                Ok(offer_result) => {
-                    tracing::info!(room_name = %offer_result.room_name, "Anon DM call started via core");
-
-                    // Show "Calling..." UI
-                    if let Some(w) = weak.upgrade() {
-                        let local_participant = CallParticipantData {
-                            user_id: user_id.to_string().into(),
-                            display_name: display_name.into(),
-                            avatar_url: "".into(),
-                            is_muted: false,
-                            is_video_enabled: is_video_call,
-                            is_screen_sharing: false,
-                            is_speaking: false,
-                        };
-
-                        let call_data = ActiveCallData {
-                            call_id: offer_result.room_name.clone().into(),
-                            channel_id: channel_id.to_string().into(),
-                            title: format!("Calling...").into(),
-                            is_video_call,
-                            is_anonymous_call: true,
-                            is_encrypted: true,
-                            is_identity_verified: true,
-                            identity_warning: "".into(),
-                            participant_count: 1,
-                            duration_seconds: 0,
-                            participants: ModelRc::new(VecModel::from(vec![local_participant])),
-                            verification_emoji_1: "\u{1F512}".into(),
-                            verification_emoji_2: "".into(),
-                            verification_emoji_3: "".into(),
-                            verification_emoji_4: "".into(),
-                        };
-
-                        w.set_active_call_data(call_data);
-                        w.set_call_is_muted(false);
-                        w.set_call_is_video_enabled(is_video_call);
-                        w.set_call_is_screen_sharing(false);
-                        w.set_active_call_visible(true);
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Failed to start anon DM call: {}", e);
-                    if let Some(w) = weak.upgrade() {
-                        w.set_active_call_visible(false);
-                    }
-                }
-            }
-        } else {
-            // Regular DM call — delegate to core orchestration
-            let start_result = {
-                let ctx = ui_ctx.clone();
-                let peer = peer_id;
-                tokio::spawn(async move {
-                    ctx.start_dm_call(&peer, channel_id, call_type, user_id).await
-                }).await.unwrap()
-            };
-
-            match start_result {
-                Ok(call_id) => {
-                    tracing::info!(call_id = %call_id, "DM call started via core, waiting for answer");
-
-                    // Show "Calling..." UI (not connected yet)
-                    if let Some(w) = weak.upgrade() {
-                        let local_participant = CallParticipantData {
-                            user_id: user_id.to_string().into(),
-                            display_name: display_name.into(),
-                            avatar_url: "".into(),
-                            is_muted: false,
-                            is_video_enabled: is_video_call,
-                            is_screen_sharing: false,
-                            is_speaking: false,
-                        };
-
-                        // Placeholder verification (will update when connected)
-                        let call_data = ActiveCallData {
-                            call_id: call_id.to_string().into(),
-                            channel_id: channel_id.to_string().into(),
-                            title: if channel_name.is_empty() { format!("Calling...").into() } else { channel_name.into() },
-                            is_video_call,
-                            is_anonymous_call: false,
-                            is_encrypted: true,
-                            is_identity_verified: false,
-                            identity_warning: "".into(),
-                            participant_count: 1,
-                            duration_seconds: 0,
-                            participants: ModelRc::new(VecModel::from(vec![local_participant])),
-                            verification_emoji_1: "\u{23F3}".into(),
-                            verification_emoji_2: "".into(),
-                            verification_emoji_3: "".into(),
-                            verification_emoji_4: "".into(),
-                        };
-
-                        w.set_active_call_data(call_data);
-                        w.set_call_is_muted(false);
-                        w.set_call_is_video_enabled(is_video_call);
-                        w.set_call_is_screen_sharing(false);
-                        w.set_active_call_visible(true);
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Failed to start DM call: {}", e);
-                }
-            }
-        }
-    } else {
-        // =================================================================
-        // Group Call — core handles key generation + initiation + distribution
-        // =================================================================
-
-        let start_result = {
-            let ctx = ui_ctx.clone();
-            tokio::spawn(async move {
-                ctx.start_group_call(channel_id, call_type, user_id).await
-            }).await.unwrap()
-        };
-
-        match start_result {
-            Ok(setup) => {
-                tracing::info!(call_id = %setup.call_id, "Started group call via core");
-
-                if let Some(w) = weak.upgrade() {
-                    let local_participant = CallParticipantData {
-                        user_id: user_id.to_string().into(),
-                        display_name: display_name.into(),
-                        avatar_url: "".into(),
-                        is_muted: false,
-                        is_video_enabled: is_video_call,
-                        is_screen_sharing: false,
-                        is_speaking: false,
-                    };
-
-                    let call_data = ActiveCallData {
-                        call_id: setup.call_id.to_string().into(),
-                        channel_id: channel_id.to_string().into(),
-                        title: if channel_name.is_empty() { call_type_str.into() } else { channel_name.into() },
-                        is_video_call,
-                        is_anonymous_call: false,
-                        is_encrypted: true,
-                        is_identity_verified: false,
-                        identity_warning: "".into(),
-                        participant_count: 1,
-                        duration_seconds: 0,
-                        participants: ModelRc::new(VecModel::from(vec![local_participant])),
-                        verification_emoji_1: setup.verification_emojis[0].clone().into(),
-                        verification_emoji_2: setup.verification_emojis[1].clone().into(),
-                        verification_emoji_3: setup.verification_emojis[2].clone().into(),
-                        verification_emoji_4: setup.verification_emojis[3].clone().into(),
-                    };
-
-                    w.set_active_call_data(call_data);
-                    w.set_call_is_muted(false);
-                    w.set_call_is_video_enabled(is_video_call);
-                    w.set_call_is_screen_sharing(false);
-                    w.set_active_call_visible(true);
-
-                    start_call_timer(&w, None);
-                    start_video_frame_timer(&w, &call_service);
-                }
-            }
-            Err(e) => {
-                tracing::error!("Failed to start group call: {}", e);
-            }
-        }
-    }
-}
-
-/// Start a call in a private (anonymous) group.
-///
-/// Delegates to core for token acquisition, offer sending, and pending state management.
-async fn start_private_group_call(
-    weak: slint::Weak<MainWindow>,
-    group_id_str: &str,
-    display_name: &str,
-    user_id: chatter_core::domain::ids::UserId,
-    is_video_call: bool,
-    call_type_str: &str,
-    ui_ctx: Arc<ChatterClient>,
-) {
-    use chatter_core::domain::anon_group::AnonGroupId;
-
-    let anon_group_id: AnonGroupId = match group_id_str.parse() {
-        Ok(id) => id,
+    // Delegate all orchestration to core — it resolves peer / kind / transport.
+    let ctx = ui_ctx.clone();
+    let dn = display_name.clone();
+    let start = match tokio::spawn(async move { ctx.start_call(conversation, call_type, &dn).await })
+        .await
+        .unwrap()
+    {
+        Ok(s) => s,
         Err(e) => {
-            tracing::error!("Invalid private group ID: {}", e);
-            return;
-        }
-    };
-
-    tracing::info!("Starting {} in private group {}", call_type_str, anon_group_id);
-
-    // Delegate to core — handles token acquisition, offer, pending state
-    let start_result = {
-        let ctx = ui_ctx.clone();
-        let gid = anon_group_id;
-        let dn = display_name.to_string();
-        tokio::spawn(async move {
-            ctx.start_anon_group_call(&gid, is_video_call, &dn).await
-        }).await.unwrap()
-    };
-
-    match start_result {
-        Ok(offer_result) => {
-            tracing::info!(room_name = %offer_result.room_name, "Anon group call started via core");
-
-            // Show "Calling..." UI
-            if let Some(w) = weak.upgrade() {
-                let local_participant = CallParticipantData {
-                    user_id: user_id.to_string().into(),
-                    display_name: display_name.to_string().into(),
-                    avatar_url: "".into(),
-                    is_muted: false,
-                    is_video_enabled: is_video_call,
-                    is_screen_sharing: false,
-                    is_speaking: false,
-                };
-
-                let call_data = ActiveCallData {
-                    call_id: offer_result.room_name.into(),
-                    channel_id: group_id_str.to_string().into(),
-                    title: format!("Calling...").into(),
-                    is_video_call,
-                    is_anonymous_call: true,
-                    is_encrypted: true,
-                    is_identity_verified: true,
-                    identity_warning: "".into(),
-                    participant_count: 1,
-                    duration_seconds: 0,
-                    participants: ModelRc::new(VecModel::from(vec![local_participant])),
-                    verification_emoji_1: "\u{1F512}".into(),
-                    verification_emoji_2: "".into(),
-                    verification_emoji_3: "".into(),
-                    verification_emoji_4: "".into(),
-                };
-
-                w.set_active_call_data(call_data);
-                w.set_call_is_muted(false);
-                w.set_call_is_video_enabled(is_video_call);
-                w.set_call_is_screen_sharing(false);
-                w.set_active_call_visible(true);
-            }
-        }
-        Err(e) => {
-            tracing::error!("Failed to start anon group call: {}", e);
+            tracing::error!(error = %e, "Failed to start call");
             if let Some(w) = weak.upgrade() {
                 w.set_active_call_visible(false);
             }
+            return;
+        }
+    };
+
+    tracing::info!(call_id = %start.call_id, "Outgoing call started via core");
+    render_calling_placeholder(&weak, &ui_ctx, start, user_id, display_name, channel_name);
+}
+
+/// Paint the "Calling…" placeholder from a core-produced setup struct.
+fn render_calling_placeholder(
+    weak: &slint::Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    setup: OutgoingCallStart,
+    user_id: chatter_core::domain::ids::UserId,
+    display_name: String,
+    channel_name: String,
+) {
+    let Some(w) = weak.upgrade() else { return };
+
+    let local_participant = CallParticipantData {
+        user_id: user_id.to_string().into(),
+        display_name: display_name.into(),
+        avatar_url: "".into(),
+        is_muted: false,
+        is_video_enabled: setup.is_video,
+        is_screen_sharing: false,
+        is_speaking: false,
+    };
+
+    // Pre-known verification emojis (channel group calls) — show them at dial
+    // time. For DM + anon, fall back to a "dialling" placeholder glyph until
+    // the answer arrives.
+    let (e1, e2, e3, e4) = match &setup.verification_emojis {
+        Some(v) => (v[0].clone(), v[1].clone(), v[2].clone(), v[3].clone()),
+        None if setup.is_anonymous => ("\u{1F512}".into(), "".into(), "".into(), "".into()),
+        None => ("\u{23F3}".into(), "".into(), "".into(), "".into()),
+    };
+
+    let title = if setup.title.is_empty() && !channel_name.is_empty() {
+        channel_name
+    } else if setup.title.is_empty() {
+        "Calling...".into()
+    } else {
+        setup.title.clone()
+    };
+
+    let call_data = ActiveCallData {
+        call_id: setup.call_id.clone().into(),
+        channel_id: setup.channel_id.clone().into(),
+        title: title.into(),
+        is_video_call: setup.is_video,
+        is_anonymous_call: setup.is_anonymous,
+        is_encrypted: true,
+        is_identity_verified: setup.is_anonymous, // anon = no identity to verify
+        identity_warning: "".into(),
+        participant_count: 1,
+        duration_seconds: 0,
+        participants: ModelRc::new(VecModel::from(vec![local_participant])),
+        verification_emoji_1: e1.into(),
+        verification_emoji_2: e2.into(),
+        verification_emoji_3: e3.into(),
+        verification_emoji_4: e4.into(),
+    };
+    w.set_active_call_data(call_data);
+    w.set_call_is_muted(false);
+    w.set_call_is_video_enabled(setup.is_video);
+    w.set_call_is_screen_sharing(false);
+    w.set_active_call_visible(true);
+
+    // Channel group calls connect synchronously inside `start_group_call`, so
+    // start the timers now. DM + anon calls are still "pending" at this point
+    // — their timers are started by the `AnonCallConnected` / DM key-exchange
+    // paths when the peer answers.
+    if setup.verification_emojis.is_some() {
+        start_call_timer(&w, None);
+        if let Some(frames) = ui_ctx.call_video_frames() {
+            start_video_frame_timer(&w, frames);
         }
     }
 }

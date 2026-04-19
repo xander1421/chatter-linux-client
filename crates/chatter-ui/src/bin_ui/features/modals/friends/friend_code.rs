@@ -8,7 +8,8 @@ use slint::{ComponentHandle, Model, SharedString};
 
 use chatter_core::client::ChatterClient;
 
-use super::requests::refresh_sent_requests;
+// refresh_sent_requests removed — core emits FriendRequestsUpdated after
+// every send/respond/remove and the dispatcher refreshes the sidebar.
 use crate::MainWindow;
 
 /// Wire callback to generate and display the current user's friend code.
@@ -194,9 +195,7 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<Cha
                     let friend_id = friendship.friend_id.to_string();
                     tracing::info!("Sent friend request via code to {}", friend_id);
 
-                    // Refresh sent requests list
-                    refresh_sent_requests(weak.clone(), ui_ctx.clone()).await;
-
+                    // Core emits FriendRequestsUpdated — no explicit refresh needed.
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_friends_loading(false);

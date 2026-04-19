@@ -1,49 +1,67 @@
 //! Anonymous DM request event handler.
 //!
-//! Handles DomainEvent::AnonDmRequestReceived to update the pending requests list.
-//! Also handles DomainEvent::AnonDmRequestAccepted for updating conversation state.
-//! And DomainEvent::AnonDmInitReceived for NDSS'21 ECIES-encrypted initial contacts.
+//! Subscribes to the typed `AnonDmRequestEvent` stream on [`ChatterClient`]
+//! to maintain the "pending requests" list for the FriendsModal. Also keeps
+//! a second subscription on the broad client event stream for the handful of
+//! anon-DM-specific UI side effects that still need to run in parallel with
+//! `domain_handler` (read-receipt dispatch on active anon DMs, plus anon-DM
+//! action events that use `unified_actions` helpers).
 
 use std::sync::Arc;
 
 use slint::{Model, ModelRc, VecModel, Weak};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::inbox::DomainEvent;
+use chatter_core::client::events::AnonDmRequestEvent;
 use crate::{DMListItemData, FriendRequestData, MainWindow};
 use crate::bin_ui::converters::get_initials;
 use crate::bin_ui::features::auth::inbox::unified_actions::{self, EventSource};
 
 /// Spawn anonymous DM request handler to process incoming request events.
 ///
-/// Subscribes to:
-/// - `DomainEvent::AnonDmRequestReceived` - Adds to pending requests in UI
-/// - `DomainEvent::AnonDmRequestAccepted` - Updates conversation to active in sidebar
+/// Two cooperating subscriptions are spawned:
 ///
-/// Returns a handle to the spawned task.
+/// 1. A typed [`AnonDmRequestEvent`] stream — feeds the "pending requests"
+///    list in the FriendsModal (incoming request, outgoing-request accepted,
+///    NDSS'21 ECIES init).
+/// 2. The broad SDK event stream — delivers anon-DM action events (typing,
+///    pins, deletes, receipts, edits) to the shared `unified_actions`
+///    helpers, plus the active-conversation read-receipt dispatch triggered
+///    by `MessageReceived`.
+///
+/// Returns a handle to the second (longer-lived) background task.
 pub fn spawn_anon_dm_request_handler(
     weak_window: Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
 ) -> tokio::task::JoinHandle<()> {
-    let chat_state = ui_ctx.chat_state().clone();
-    let pinned_state = ui_ctx.pinned_state().clone();
-    let ui_ctx = ui_ctx.clone();
-    let mut event_rx = ui_ctx.event_bus().subscribe_domain();
+    // ── Typed request stream: adds/updates the pending requests list. ───
+    spawn_request_stream(weak_window.clone(), ui_ctx.clone());
+
+    // ── Broad action stream: keeps unified_actions + read receipt behaviour. ─
+    spawn_action_stream(weak_window, ui_ctx.clone())
+}
+
+/// Subscribe to the narrow [`AnonDmRequestEvent`] stream and update the
+/// pending requests / sidebar UI.
+fn spawn_request_stream(
+    weak_window: Weak<MainWindow>,
+    ui_ctx: Arc<ChatterClient>,
+) -> tokio::task::JoinHandle<()> {
+    let mut event_rx = ui_ctx.subscribe_anon_dm_requests();
 
     tokio::spawn(async move {
-        tracing::info!("[ANON_DM_HANDLER] Started listening for domain events");
+        tracing::info!("[ANON_DM_HANDLER] Started listening for anon DM request events");
         loop {
             let event = match event_rx.recv().await {
                 Ok(event) => event,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(dropped_count = n, "[ANON_DM_HANDLER] Domain event receiver lagged, continuing");
+                    tracing::warn!(dropped_count = n, "[ANON_DM_HANDLER] Request receiver lagged, continuing");
                     continue;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
-            tracing::debug!("[ANON_DM_HANDLER] Received domain event: {:?}", std::mem::discriminant(&event));
             match event {
-                DomainEvent::AnonDmRequestReceived {
+                AnonDmRequestEvent::Received {
                     conversation_id,
                     sender_id,
                     sender_mailbox_pk: _,
@@ -140,7 +158,7 @@ pub fn spawn_anon_dm_request_handler(
                         }
                     });
                 }
-                DomainEvent::AnonDmRequestAccepted {
+                AnonDmRequestEvent::Accepted {
                     conversation_id,
                     peer_id,
                     peer_mailbox_pk: _,
@@ -249,79 +267,11 @@ pub fn spawn_anon_dm_request_handler(
                         }
                     });
 
-                    // Send our profile (avatar + display name) back to the responder.
-                    // The responder only received our ECIES init (no avatar due to no PFS).
-                    // Now that Double Ratchet is established, share our profile securely.
-                    let ui_ctx_profile = ui_ctx.clone();
-                    let profile_conv_id = conversation_id;
-                    let our_name = ui_ctx.auth_state().get().display_name.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = ui_ctx_profile.send_anon_dm_profile_update(
-                            &profile_conv_id,
-                            our_name,
-                            None, // avatar_url not used — encrypted_avatar is sent inline
-                            None,
-                        ).await {
-                            tracing::warn!(
-                                conversation_id = %profile_conv_id,
-                                error = %e,
-                                "Failed to send profile back to responder after acceptance"
-                            );
-                        } else {
-                            tracing::info!(
-                                conversation_id = %profile_conv_id,
-                                "Sent profile (avatar + name) to responder after acceptance"
-                            );
-                        }
-                    });
+                    // Profile (avatar + display name) is sent back to the
+                    // responder by core's inbox processor as soon as the
+                    // Double Ratchet is established. No UI-side send needed.
                 }
-                DomainEvent::MessageReceived { ref message }
-                    if message.conversation_type == chatter_core::domain::message::ConversationType::AnonDm =>
-                {
-                    // UI insertion and sidebar updates are handled by domain_handler::anon_dm.
-                    // This handler only sends read receipts when the conversation is active.
-                    let conversation_id = chatter_core::domain::anon_dm::AnonDmId::from_uuid(
-                        *message.conversation_id.as_uuid()
-                    );
-                    let channel_id_str = conversation_id.to_string();
-                    let _ = &channel_id_str;
-                    let receipt_conv_id = conversation_id;
-                    let receipt_msg_ts = message.sent_at;
-                    let receipt_weak = weak_window.clone();
-                    let receipt_client = ui_ctx.clone();
-                    let receipt_active_client = ui_ctx.clone();
-
-                    tokio::spawn(async move {
-                        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
-                        let _ = slint::invoke_from_event_loop(move || {
-                            let is_selected = receipt_weak.upgrade().is_some()
-                                && receipt_active_client
-                                    .active_conversation()
-                                    .matches_anon_dm(&receipt_conv_id);
-                            let _ = tx.send(is_selected);
-                        });
-                        match rx.await {
-                            Ok(true) => {
-                                let handle = chatter_core::services::conversation::ConversationHandle::new(
-                                    chatter_core::state::ActiveConversation::AnonDm(receipt_conv_id),
-                                    receipt_client,
-                                );
-                                if let Err(e) = handle.send_read_receipt(&[receipt_msg_ts]).await {
-                                    tracing::warn!(error = %e, "[ANON_DM_RECEIPT] Failed to send read receipt");
-                                } else {
-                                    tracing::debug!("[ANON_DM_RECEIPT] Sent read receipt for ts={}", receipt_msg_ts);
-                                }
-                            }
-                            Ok(false) => {
-                                tracing::trace!("[ANON_DM_RECEIPT] Conversation not selected, skipping read receipt");
-                            }
-                            Err(_) => {
-                                tracing::trace!("[ANON_DM_RECEIPT] UI check channel closed");
-                            }
-                        }
-                    });
-                }
-                DomainEvent::AnonDmInitReceived {
+                AnonDmRequestEvent::Init {
                     conversation_id,
                     sender_id,
                     sender_display_name,
@@ -417,19 +367,94 @@ pub fn spawn_anon_dm_request_handler(
                         }
                     });
                 }
+            }
+        }
+    })
+}
+
+/// Subscribe to the broad [`ChatterClient::subscribe_events`] stream and
+/// route anon-DM action events through the shared `unified_actions` helpers,
+/// plus dispatch a read receipt when a new anon-DM message arrives on the
+/// currently-active conversation.
+///
+/// The match patterns here use fully-qualified paths to avoid importing
+/// `DomainEvent` into this UI file.
+fn spawn_action_stream(
+    weak_window: Weak<MainWindow>,
+    ui_ctx: Arc<ChatterClient>,
+) -> tokio::task::JoinHandle<()> {
+    let chat_state = ui_ctx.chat_state().clone();
+    let pinned_state = ui_ctx.pinned_state().clone();
+    let mut event_rx = ui_ctx.subscribe_events();
+
+    tokio::spawn(async move {
+        loop {
+            let event = match event_rx.recv().await {
+                Ok(event) => event,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(dropped_count = n, "[ANON_DM_HANDLER] Action receiver lagged, continuing");
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
+            match event {
+                chatter_core::inbox::DomainEvent::MessageReceived { ref message }
+                    if message.conversation_type == chatter_core::domain::message::ConversationType::AnonDm =>
+                {
+                    // UI insertion and sidebar updates are handled by domain_handler::anon_dm.
+                    // This handler only sends read receipts when the conversation is active.
+                    let conversation_id = chatter_core::domain::anon_dm::AnonDmId::from_uuid(
+                        *message.conversation_id.as_uuid()
+                    );
+                    let receipt_conv_id = conversation_id;
+                    let receipt_msg_ts = message.sent_at;
+                    let receipt_weak = weak_window.clone();
+                    let receipt_client = ui_ctx.clone();
+                    let receipt_active_client = ui_ctx.clone();
+
+                    tokio::spawn(async move {
+                        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            let is_selected = receipt_weak.upgrade().is_some()
+                                && receipt_active_client
+                                    .active_conversation()
+                                    .matches_anon_dm(&receipt_conv_id);
+                            let _ = tx.send(is_selected);
+                        });
+                        match rx.await {
+                            Ok(true) => {
+                                let handle = receipt_client.conversation(
+                                    chatter_core::state::ActiveConversation::AnonDm(receipt_conv_id),
+                                );
+                                if let Err(e) = handle.send_read_receipt(&[receipt_msg_ts]).await {
+                                    tracing::warn!(error = %e, "[ANON_DM_RECEIPT] Failed to send read receipt");
+                                } else {
+                                    tracing::debug!("[ANON_DM_RECEIPT] Sent read receipt for ts={}", receipt_msg_ts);
+                                }
+                            }
+                            Ok(false) => {
+                                tracing::trace!("[ANON_DM_RECEIPT] Conversation not selected, skipping read receipt");
+                            }
+                            Err(_) => {
+                                tracing::trace!("[ANON_DM_RECEIPT] UI check channel closed");
+                            }
+                        }
+                    });
+                }
                 // =============================================================
                 // Anonymous DM Action Events (typing, reactions, pins, etc.)
                 // =============================================================
-                DomainEvent::TypingStarted { channel_id, user_id: _ } => {
+                chatter_core::inbox::DomainEvent::TypingStarted { channel_id, user_id: _ } => {
                     unified_actions::handle_typing(&weak_window, &chat_state, EventSource::Channel(channel_id), true);
                 }
-                DomainEvent::TypingStopped { channel_id, user_id: _ } => {
+                chatter_core::inbox::DomainEvent::TypingStopped { channel_id, user_id: _ } => {
                     unified_actions::handle_typing(&weak_window, &chat_state, EventSource::Channel(channel_id), false);
                 }
                 // ReactionAdded/ReactionRemoved are handled by domain_handler::handle_reaction_update
                 // (which handles all conversation types). Handling them here too caused double-counting.
-                DomainEvent::ReactionAdded { .. } | DomainEvent::ReactionRemoved { .. } => {}
-                DomainEvent::MessagePinned {
+                chatter_core::inbox::DomainEvent::ReactionAdded { .. }
+                | chatter_core::inbox::DomainEvent::ReactionRemoved { .. } => {}
+                chatter_core::inbox::DomainEvent::MessagePinned {
                     message_id,
                     channel_id,
                     ..
@@ -446,7 +471,7 @@ pub fn spawn_anon_dm_request_handler(
                         target_sent_timestamp, true, // is_pinned = true
                     );
                 }
-                DomainEvent::MessageUnpinned {
+                chatter_core::inbox::DomainEvent::MessageUnpinned {
                     message_id,
                     channel_id,
                     ..
@@ -462,7 +487,7 @@ pub fn spawn_anon_dm_request_handler(
                         target_sent_timestamp, false, // is_pinned = false (unpin)
                     );
                 }
-                DomainEvent::MessageDeleted {
+                chatter_core::inbox::DomainEvent::MessageDeleted {
                     channel_id: Some(channel_id),
                     target_sent_timestamp,
                     ..
@@ -473,7 +498,7 @@ pub fn spawn_anon_dm_request_handler(
                         target_sent_timestamp,
                     );
                 }
-                DomainEvent::MessagesRead {
+                chatter_core::inbox::DomainEvent::MessagesRead {
                     message_timestamps,
                     channel_id,
                     ..
@@ -504,7 +529,7 @@ pub fn spawn_anon_dm_request_handler(
                         }
                     });
                 }
-                DomainEvent::MessagesDelivered {
+                chatter_core::inbox::DomainEvent::MessagesDelivered {
                     message_timestamps,
                     ..
                 } => {
@@ -527,7 +552,7 @@ pub fn spawn_anon_dm_request_handler(
                         }
                     });
                 }
-                DomainEvent::MessageEdited {
+                chatter_core::inbox::DomainEvent::MessageEdited {
                     new_content,
                     channel_id,
                     target_sent_timestamp,

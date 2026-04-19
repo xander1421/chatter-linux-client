@@ -127,8 +127,9 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     window.on_register_password_changed({
         let weak = weak_window.clone();
+        let ui_ctx = ui_ctx.clone();
         move |password: slint::SharedString| {
-            let strength = chatter_core::services::validation::password_strength(password.as_str());
+            let strength = ui_ctx.password_strength(password.as_str());
             if let Some(w) = weak.upgrade() {
                 w.set_register_password_strength(strength);
             }
@@ -137,8 +138,9 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     window.on_register_pin_changed({
         let weak = weak_window.clone();
+        let ui_ctx = ui_ctx.clone();
         move |pin: slint::SharedString| {
-            let strength = chatter_core::services::validation::pin_strength(pin.as_str());
+            let strength = ui_ctx.pin_strength(pin.as_str());
             if let Some(w) = weak.upgrade() {
                 w.set_register_pin_strength(strength);
             }
@@ -215,9 +217,9 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         tracing::info!("Registration successful!");
                         if let Ok(mut g) = selected_avatar().lock() { *g = None; }
 
-                        // Subscribe to DomainEvent for UI updates
+                        // Subscribe to domain events for UI updates via the SDK facade.
                         {
-                            let mut domain_rx = ui_ctx.event_bus().subscribe_domain();
+                            let mut domain_rx = ui_ctx.subscribe_events();
                             let weak_for_domain = weak.clone();
                             let ui_ctx_for_domain = ui_ctx.clone();
                             crate::rt_handle().spawn(async move {

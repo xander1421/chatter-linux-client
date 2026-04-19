@@ -7,7 +7,6 @@ use slint::{ComponentHandle, Model, SharedString};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::Permissions;
 use chatter_core::domain::UserId;
-use chatter_core::services::conversation::ConversationHandle;
 use chatter_core::state::ActiveConversation;
 
 use crate::MainWindow;
@@ -31,7 +30,7 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             return;
         }
 
-        let handle = ConversationHandle::new(conversation, ui_ctx.clone());
+        let handle = ui_ctx.conversation(conversation);
 
         tokio::spawn(async move {
             let target_sender_id: UserId = match sender_id_str.parse() {

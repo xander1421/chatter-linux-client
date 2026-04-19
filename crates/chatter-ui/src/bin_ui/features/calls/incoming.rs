@@ -1,14 +1,23 @@
 //! Incoming call handling.
 //!
-//! Handles accepting and declining incoming calls.
+//! Thin UI glue around the client's `accept_presented_incoming_call` /
+//! `decline_presented_incoming_call` methods. All orchestration (modal
+//! policy, active-slot replacement, wire-level accept/decline) lives in
+//! [`chatter_core::services::call_worker`] and [`chatter_core::client`].
+//! This file only:
+//! - subscribes to orchestrator broadcast events → repaints the modal
+//! - translates accept/decline button clicks into client calls
+//! - renders the `ActiveCallData` Slint struct from the client's return value
 
-use std::str::FromStr;
 use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::domain::ids::UserId;
+use chatter_core::client::calls::AcceptedIncomingCall;
+use chatter_core::services::call_worker::{
+    CallEndReason, CallOrchestratorEvent, OrchestratedCallKind,
+};
 use crate::{ActiveCallData, CallParticipantData, MainWindow};
 
 use super::timers::{start_call_timer, start_video_frame_timer};
@@ -16,361 +25,378 @@ use super::timers::{start_call_timer, start_video_frame_timer};
 /// Wire incoming call accept/decline callbacks.
 pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
-    let ui_ctx = ui_ctx.clone();
-    let ctx_call_service = ui_ctx.call_service().clone();
+    let ctx_for_accept = ui_ctx.clone();
+    let ctx_for_decline = ui_ctx.clone();
 
-    // Accept call callback
     window.on_accept_incoming_call({
         let weak = weak.clone();
-        let ui_ctx = ui_ctx.clone();
-        let call_service = ctx_call_service.clone();
-
         move |call_id| {
             let call_id_str = call_id.to_string();
-            tracing::info!("Accept call: {}", call_id_str);
+            let weak = weak.clone();
+            let ui_ctx = ctx_for_accept.clone();
 
-            // Read the is_anonymous_call flag from the incoming call data
-            let is_anonymous = weak.upgrade()
-                .map(|w| w.get_incoming_call_data().is_anonymous_call)
+            let replaces_active = weak
+                .upgrade()
+                .map(|w| w.get_incoming_call_replaces_active())
                 .unwrap_or(false);
 
-            if is_anonymous {
-                // Delegate to core — handles token, accept, room join, LiveKit connect
-                let weak = weak.clone();
-                let ui_ctx = ui_ctx.clone();
-                let call_service = call_service.clone();
-
-                slint::spawn_local(async move {
-                    tracing::info!("Accepting anonymous call: {}", call_id_str);
-
-                    // Hide UI immediately to prevent double-click
-                    if let Some(w) = weak.upgrade() {
-                        w.set_incoming_call_visible(false);
-                    }
-
-                    let result = {
-                        let ctx = ui_ctx.clone();
-                        let room = call_id_str.clone();
-                        tokio::spawn(async move {
-                            ctx.accept_anon_call(&room).await
-                        }).await.unwrap()
-                    };
-
-                    match result {
-                        Ok(setup) => {
-                            tracing::info!(room_name = %setup.room_name, "Anonymous call accepted via core");
-
-                            // Get call service for media publishing
-                            let service = match call_service.get() {
-                                Some(svc) => svc.clone(),
-                                None => {
-                                    tracing::error!("CallService not initialized");
-                                    return;
-                                }
-                            };
-
-                            // Publish microphone immediately
-                            if let Err(e) = service.publish_microphone(None).await {
-                                tracing::error!("Failed to publish microphone: {}", e);
-                            }
-
-                            // Update UI
-                            if let Some(w) = weak.upgrade() {
-                                w.set_incoming_call_visible(false);
-
-                                let local_participant = CallParticipantData {
-                                    user_id: "You".into(),
-                                    display_name: "You".into(),
-                                    avatar_url: "".into(),
-                                    is_muted: false,
-                                    is_video_enabled: setup.is_video,
-                                    is_screen_sharing: false,
-                                    is_speaking: false,
-                                };
-
-                                let remote_participant = CallParticipantData {
-                                    user_id: "Anonymous".into(),
-                                    display_name: setup.peer_display_name.clone().into(),
-                                    avatar_url: "".into(),
-                                    is_muted: false,
-                                    is_video_enabled: setup.is_video,
-                                    is_screen_sharing: false,
-                                    is_speaking: false,
-                                };
-
-                                let call_data = ActiveCallData {
-                                    call_id: setup.room_name.clone().into(),
-                                    channel_id: setup.channel_id.to_string().into(),
-                                    title: "Anonymous Call".into(),
-                                    is_video_call: setup.is_video,
-                                    is_anonymous_call: true,
-                                    is_encrypted: true,
-                                    is_identity_verified: true,
-                                    identity_warning: "".into(),
-                                    participant_count: 2,
-                                    duration_seconds: 0,
-                                    participants: ModelRc::new(VecModel::from(vec![
-                                        remote_participant,
-                                        local_participant,
-                                    ])),
-                                    verification_emoji_1: setup.verification_emojis[0].clone().into(),
-                                    verification_emoji_2: setup.verification_emojis[1].clone().into(),
-                                    verification_emoji_3: setup.verification_emojis[2].clone().into(),
-                                    verification_emoji_4: setup.verification_emojis[3].clone().into(),
-                                };
-
-                                w.set_active_call_data(call_data);
-                                w.set_call_is_muted(false);
-                                w.set_call_is_video_enabled(setup.is_video);
-                                w.set_call_is_screen_sharing(false);
-                                w.set_active_call_visible(true);
-
-                                super::timers::start_call_timer(&w, None);
-                                super::timers::start_video_frame_timer(&w, &service);
-
-                                if setup.is_video {
-                                    let service = service.clone();
-                                    slint::spawn_local(async move {
-                                        if let Err(e) = service.publish_camera(None).await {
-                                            tracing::error!("Failed to publish camera: {}", e);
-                                        }
-                                    }).unwrap();
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to accept anonymous call: {}", e);
-                            if let Some(w) = weak.upgrade() {
-                                w.set_incoming_call_visible(false);
-                            }
-                        }
-                    }
-                }).unwrap();
-                return;
-            }
-
-            let weak = weak.clone();
-            let ui_ctx = ui_ctx.clone();
-            let call_service = call_service.clone();
-
-            slint::spawn_local(async move {
-                // Get incoming call data to extract caller's ephemeral key and caller ID
-                let (caller_ephemeral_b64, is_video_call, caller_name, call_start_timestamp_ns, caller_id_str) = if let Some(w) = weak.upgrade() {
-                    let data = w.get_incoming_call_data();
-                    // Parse timestamp from string (nanoseconds since epoch)
-                    let timestamp_ns = data.call_start_timestamp_ns.to_string()
-                        .parse::<u64>()
-                        .ok();
-                    (
-                        data.encryption_key.to_string(), // Contains caller's ephemeral public key
-                        data.is_video_call,
-                        data.caller_name.to_string(),
-                        timestamp_ns,
-                        data.caller_id.to_string(),
-                    )
-                } else {
-                    return;
-                };
-
-                // Parse caller ID
-                let caller_id = match UserId::from_str(&caller_id_str) {
-                    Ok(id) => id,
-                    Err(e) => {
-                        tracing::error!("Invalid caller ID: {}", e);
-                        return;
-                    }
-                };
-
-                // Decode caller's ephemeral public key from base64
-                let caller_ephemeral_pk: [u8; 32] = match base64::Engine::decode(
-                    &base64::engine::general_purpose::STANDARD,
-                    &caller_ephemeral_b64,
-                ) {
-                    Ok(bytes) if bytes.len() == 32 => {
-                        let mut key = [0u8; 32];
-                        key.copy_from_slice(&bytes);
-                        key
-                    }
-                    Ok(bytes) => {
-                        tracing::error!("Invalid caller ephemeral key length: {} (expected 32)", bytes.len());
-                        return;
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to decode caller ephemeral key: {}", e);
-                        return;
-                    }
-                };
-
-                // Get current user ID
-                let user_id = match ui_ctx.session_current_user_id() {
-                    Some(id) => id,
-                    None => {
-                        tracing::error!("No user ID available");
-                        return;
-                    }
-                };
-
-                // Delegate all crypto + signaling + joining to core
-                let result = {
-                    let ctx = ui_ctx.clone();
-                    let cid = call_id_str.clone();
-                    tokio::spawn(async move {
-                        ctx.accept_dm_call(caller_ephemeral_pk, &cid, &caller_id, user_id).await
-                    }).await.unwrap()
-                };
-
-                match result {
-                    Ok(setup) => {
-                        tracing::info!(call_id = %call_id_str, "DM call accepted via core");
-
-                        // Get the call service for media publishing
-                        let service = match call_service.get() {
-                            Some(svc) => svc.clone(),
-                            None => {
-                                tracing::error!("CallService not initialized");
-                                if let Some(w) = weak.upgrade() {
-                                    w.set_incoming_call_visible(false);
-                                }
-                                return;
-                            }
-                        };
-
-                        // Publish microphone immediately after joining
-                        if let Err(e) = service.publish_microphone(None).await {
-                            tracing::error!("Failed to publish microphone: {}", e);
-                        } else {
-                            tracing::info!("Microphone published successfully");
-                        }
-
-                        // Update UI
-                        if let Some(w) = weak.upgrade() {
-                            w.set_incoming_call_visible(false);
-
-                            // Create local participant
-                            let local_participant = CallParticipantData {
-                                user_id: user_id.to_string().into(),
-                                display_name: "You".into(),
-                                avatar_url: "".into(),
-                                is_muted: false,
-                                is_video_enabled: is_video_call,
-                                is_screen_sharing: false,
-                                is_speaking: false,
-                            };
-
-                            // Create caller participant
-                            let caller_participant = CallParticipantData {
-                                user_id: caller_id.to_string().into(),
-                                display_name: caller_name.into(),
-                                avatar_url: "".into(),
-                                is_muted: false,
-                                is_video_enabled: is_video_call,
-                                is_screen_sharing: false,
-                                is_speaking: false,
-                            };
-
-                            // Use verification emojis from core result
-                            let call_data = ActiveCallData {
-                                call_id: setup.call_id.to_string().into(),
-                                channel_id: setup.channel_id.to_string().into(),
-                                title: "Call".into(),
-                                is_video_call,
-                                is_anonymous_call: false,
-                                is_encrypted: true,
-                                is_identity_verified: false,
-                                identity_warning: "".into(),
-                                participant_count: 2, // We + caller
-                                duration_seconds: 0,
-                                participants: ModelRc::new(VecModel::from(vec![caller_participant, local_participant])),
-                                verification_emoji_1: setup.verification_emojis[0].clone().into(),
-                                verification_emoji_2: setup.verification_emojis[1].clone().into(),
-                                verification_emoji_3: setup.verification_emojis[2].clone().into(),
-                                verification_emoji_4: setup.verification_emojis[3].clone().into(),
-                            };
-
-                            w.set_active_call_data(call_data);
-                            w.set_call_is_muted(false);
-                            w.set_call_is_video_enabled(is_video_call);
-                            w.set_call_is_screen_sharing(false);
-                            w.set_active_call_visible(true);
-
-                            // Start call duration timer (receiver uses caller's timestamp for sync)
-                            start_call_timer(&w, call_start_timestamp_ns);
-
-                            // Start video frame polling timer
-                            start_video_frame_timer(&w, &service);
-
-                            // Publish camera if video call
-                            if is_video_call {
-                                let service = service.clone();
-                                slint::spawn_local(async move {
-                                    if let Err(e) = service.publish_camera(None).await {
-                                        tracing::error!("Failed to publish camera: {}", e);
-                                    } else {
-                                        tracing::info!("Camera published successfully");
-                                    }
-                                }).unwrap();
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to accept DM call: {}", e);
-                        if let Some(w) = weak.upgrade() {
-                            w.set_incoming_call_visible(false);
-                        }
-                    }
-                }
-            }).unwrap();
-        }
-    });
-
-    let weak = window.as_weak();
-    let ui_ctx_decline = ui_ctx.clone();
-
-    // Decline call callback
-    window.on_decline_incoming_call(move |call_id| {
-        let call_id_str = call_id.to_string();
-        tracing::info!("Decline call: {}", call_id_str);
-
-        let is_anonymous = weak.upgrade()
-            .map(|w| w.get_incoming_call_data().is_anonymous_call)
-            .unwrap_or(false);
-
-        if is_anonymous {
-            let ui_ctx = ui_ctx_decline.clone();
-
-            // Hide the modal immediately
+            // Hide the modal immediately — the accept flow paints the
+            // active-call view directly on success.
             if let Some(w) = weak.upgrade() {
                 w.set_incoming_call_visible(false);
+                w.set_incoming_call_replaces_active(false);
             }
 
-            // Delegate decline to core — handles pending state, send decline, call history
             tokio::spawn(async move {
-                if let Err(e) = ui_ctx.decline_anon_call(&call_id_str).await {
-                    tracing::error!("Failed to decline anonymous call: {}", e);
-                } else {
-                    tracing::info!("Anonymous call declined for {}", call_id_str);
+                match ui_ctx
+                    .accept_presented_incoming_call(&call_id_str, replaces_active)
+                    .await
+                {
+                    Ok(accepted) => render_accepted_call(&weak, &ui_ctx, accepted),
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to accept incoming call");
+                    }
                 }
             });
+        }
+    });
+
+    window.on_decline_incoming_call({
+        let weak = weak.clone();
+        move |call_id| {
+            let call_id_str = call_id.to_string();
+            let ui_ctx = ctx_for_decline.clone();
+
+            if let Some(w) = weak.upgrade() {
+                w.set_incoming_call_visible(false);
+                w.set_incoming_call_replaces_active(false);
+            }
+
+            tokio::spawn(async move {
+                if let Err(e) = ui_ctx
+                    .decline_presented_incoming_call(&call_id_str)
+                    .await
+                {
+                    tracing::debug!(error = %e, "Decline call notification failed");
+                }
+            });
+        }
+    });
+}
+
+/// Paint the Slint active-call view from the client's accept result.
+fn render_accepted_call(
+    weak: &slint::Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    accepted: AcceptedIncomingCall,
+) {
+    // Timers use a cheap Arc-backed handle to shared video frames.
+    let shared_frames = match ui_ctx.call_video_frames() {
+        Some(f) => f,
+        None => {
+            tracing::error!("CallService not initialized after accept");
             return;
         }
+    };
 
-        let weak = weak.clone();
-        let ui_ctx = ui_ctx_decline.clone();
+    let current_user_id = ui_ctx
+        .session_current_user_id()
+        .map(|id| id.to_string())
+        .unwrap_or_default();
+    let my_display_name = ui_ctx
+        .my_display_name()
+        .unwrap_or_else(|| "You".to_string());
 
-        // Hide the modal immediately
-        if let Some(w) = weak.upgrade() {
-            w.set_incoming_call_visible(false);
+    match accepted {
+        AcceptedIncomingCall::Dm {
+            setup,
+            peer_id,
+            peer_name,
+            is_video,
+        } => {
+            let weak = weak.clone();
+            let frames = shared_frames.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(w) = weak.upgrade() else { return };
+                let local_participant = CallParticipantData {
+                    user_id: current_user_id.clone().into(),
+                    display_name: my_display_name.clone().into(),
+                    avatar_url: "".into(),
+                    is_muted: false,
+                    is_video_enabled: is_video,
+                    is_screen_sharing: false,
+                    is_speaking: false,
+                };
+                let remote_participant = CallParticipantData {
+                    user_id: peer_id.to_string().into(),
+                    display_name: peer_name.clone().into(),
+                    avatar_url: "".into(),
+                    is_muted: false,
+                    is_video_enabled: is_video,
+                    is_screen_sharing: false,
+                    is_speaking: false,
+                };
+                let call_data = ActiveCallData {
+                    call_id: setup.call_id.to_string().into(),
+                    channel_id: setup.channel_id.to_string().into(),
+                    title: "Call".into(),
+                    is_video_call: is_video,
+                    is_anonymous_call: false,
+                    is_encrypted: true,
+                    is_identity_verified: false,
+                    identity_warning: "".into(),
+                    participant_count: 2,
+                    duration_seconds: 0,
+                    participants: ModelRc::new(VecModel::from(vec![
+                        remote_participant,
+                        local_participant,
+                    ])),
+                    verification_emoji_1: setup.verification_emojis[0].clone().into(),
+                    verification_emoji_2: setup.verification_emojis[1].clone().into(),
+                    verification_emoji_3: setup.verification_emojis[2].clone().into(),
+                    verification_emoji_4: setup.verification_emojis[3].clone().into(),
+                };
+                w.set_active_call_data(call_data);
+                w.set_call_is_muted(false);
+                w.set_call_is_video_enabled(is_video);
+                w.set_call_is_screen_sharing(false);
+                w.set_active_call_visible(true);
+                start_call_timer(&w, None);
+                start_video_frame_timer(&w, frames);
+            });
+            // Media is auto-published by the call worker after connect.
         }
 
-        // Notify server that call was declined (gRPC - run on tokio)
-        tokio::spawn(async move {
-            // Leave call signals decline (we never joined, so this just marks our intent)
-            if let Err(e) = ui_ctx.decline_call(&call_id_str).await {
-                // This error is expected if we never joined - just log at debug level
-                tracing::debug!("Decline call notification: {}", e);
-            } else {
-                tracing::info!("Call decline notification sent for {}", call_id_str);
-            }
-        });
+        AcceptedIncomingCall::Anon { setup, peer_id: _ } => {
+            render_active_anon_call(
+                weak,
+                ui_ctx,
+                shared_frames,
+                setup.room_name,
+                setup.channel_id.to_string(),
+                setup.peer_display_name,
+                setup.is_video,
+                setup.verification_emojis,
+            );
+        }
+    }
+}
+
+/// Mount the active anonymous call UI.
+///
+/// Shared between the "accept incoming" path (`AcceptedIncomingCall::Anon`)
+/// and the orchestrator's `AnonCallConnected` event (caller-side answer
+/// received). Both paths need the same UI state, so keep them in one helper.
+/// Media publication is handled inside the call worker — this is pure view.
+#[allow(clippy::too_many_arguments)]
+fn render_active_anon_call(
+    weak: &slint::Weak<MainWindow>,
+    _ui_ctx: &Arc<ChatterClient>,
+    shared_frames: chatter_core::calls::SharedVideoFrames,
+    room_name: String,
+    channel_id: String,
+    peer_display_name: String,
+    is_video: bool,
+    verification_emojis: [String; 4],
+) {
+    let weak = weak.clone();
+    let frames = shared_frames.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(w) = weak.upgrade() else { return };
+        let local_participant = CallParticipantData {
+            user_id: "You".into(),
+            display_name: "You".into(),
+            avatar_url: "".into(),
+            is_muted: false,
+            is_video_enabled: is_video,
+            is_screen_sharing: false,
+            is_speaking: false,
+        };
+        let remote_participant = CallParticipantData {
+            user_id: "Anonymous".into(),
+            display_name: peer_display_name.into(),
+            avatar_url: "".into(),
+            is_muted: false,
+            is_video_enabled: is_video,
+            is_screen_sharing: false,
+            is_speaking: false,
+        };
+        let call_data = ActiveCallData {
+            call_id: room_name.into(),
+            channel_id: channel_id.into(),
+            title: "Anonymous Call".into(),
+            is_video_call: is_video,
+            is_anonymous_call: true,
+            is_encrypted: true,
+            is_identity_verified: true,
+            identity_warning: "".into(),
+            participant_count: 2,
+            duration_seconds: 0,
+            participants: ModelRc::new(VecModel::from(vec![
+                remote_participant,
+                local_participant,
+            ])),
+            verification_emoji_1: verification_emojis[0].clone().into(),
+            verification_emoji_2: verification_emojis[1].clone().into(),
+            verification_emoji_3: verification_emojis[2].clone().into(),
+            verification_emoji_4: verification_emojis[3].clone().into(),
+        };
+        w.set_active_call_data(call_data);
+        w.set_call_is_muted(false);
+        w.set_call_is_video_enabled(is_video);
+        w.set_call_is_screen_sharing(false);
+        w.set_active_call_visible(true);
+        super::super::auth::initial_data::hide_incoming_call(&w);
+        start_call_timer(&w, None);
+        start_video_frame_timer(&w, frames);
     });
+    // Media is auto-published by the call worker after connect — no UI-side
+    // publish needed.
+}
+
+/// Subscribe to CallOrchestrator broadcast events and translate them into
+/// Slint property updates. The orchestrator (in core) owns the policy
+/// decision — this function only paints the modal.
+pub fn wire_orchestrator_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let ui_ctx = ui_ctx.clone();
+    let weak = window.as_weak();
+
+    slint::spawn_local(async move {
+        let mut rx = loop {
+            if let Some(rx) = ui_ctx.subscribe_call_orchestrator_events() {
+                break rx;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        };
+
+        tracing::info!("Call orchestrator UI subscriber started");
+
+        loop {
+            match rx.recv().await {
+                Ok(event) => handle_orchestrator_event(&weak, &ui_ctx, event),
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(skipped = n, "Call orchestrator UI subscriber lagged");
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    tracing::info!("Call orchestrator UI subscriber stopping — channel closed");
+                    break;
+                }
+            }
+        }
+    })
+    .expect("spawn call orchestrator subscriber");
+}
+
+fn handle_orchestrator_event(
+    weak: &slint::Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    event: CallOrchestratorEvent,
+) {
+    match event {
+        CallOrchestratorEvent::IncomingPresented {
+            call,
+            kind,
+            peer_id,
+            peer_name,
+            is_video,
+            is_identity_verified,
+            identity_warning,
+            replaces_active,
+            ..
+        } => {
+            let weak = weak.clone();
+            let call_id = call.as_str().to_string();
+            let peer_id_str = peer_id.to_string();
+            let call_type_str = if is_video { "video".to_string() } else { "voice".to_string() };
+            let is_anonymous = matches!(
+                kind,
+                OrchestratedCallKind::AnonDm | OrchestratedCallKind::AnonGroup
+            );
+
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    super::super::auth::initial_data::show_incoming_call(
+                        &w,
+                        &call_id,
+                        &peer_id_str,
+                        &peer_name,
+                        &call_type_str,
+                        is_identity_verified,
+                        &identity_warning,
+                        is_anonymous,
+                    );
+                    w.set_incoming_call_replaces_active(replaces_active);
+                }
+            });
+        }
+
+        CallOrchestratorEvent::IncomingWithdrawn { call, reason } => {
+            tracing::info!(
+                call = %call.as_str(),
+                reason = ?reason,
+                "Incoming call withdrawn"
+            );
+            let weak = weak.clone();
+            let expected_call_id = call.as_str().to_string();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    let current = w.get_incoming_call_data().call_id.to_string();
+                    if current == expected_call_id {
+                        super::super::auth::initial_data::hide_incoming_call(&w);
+                        w.set_incoming_call_replaces_active(false);
+                    }
+                }
+            });
+        }
+
+        CallOrchestratorEvent::ActiveEnded { call, reason } => {
+            tracing::info!(
+                call = %call.as_str(),
+                reason = ?reason,
+                "Active call ended"
+            );
+            let should_clear = matches!(
+                reason,
+                CallEndReason::ReplacedByIncoming
+                    | CallEndReason::Declined
+                    | CallEndReason::Error(_)
+            );
+            if should_clear {
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_active_call_visible(false);
+                        super::super::auth::initial_data::hide_incoming_call(&w);
+                    }
+                });
+            }
+        }
+
+        CallOrchestratorEvent::OutgoingStarted { call, .. }
+        | CallOrchestratorEvent::ActiveConnected { call, .. } => {
+            tracing::debug!(call = %call.as_str(), "Orchestrator state transition");
+        }
+
+        CallOrchestratorEvent::AnonCallConnected { call, info, .. } => {
+            tracing::info!(
+                call = %call.as_str(),
+                "Anon call connected — mounting active-call UI"
+            );
+            let Some(frames) = ui_ctx.call_video_frames() else {
+                tracing::error!("CallService not initialized — cannot render anon call");
+                return;
+            };
+            render_active_anon_call(
+                weak,
+                ui_ctx,
+                frames,
+                info.room_name,
+                info.channel_id.to_string(),
+                info.peer_display_name,
+                info.is_video,
+                info.verification_emojis,
+            );
+        }
+    }
 }

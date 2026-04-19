@@ -10,10 +10,9 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
-use chatter_core::services::user::FriendRequestFilter;
 
-use crate::bin_ui::converters::{get_initials, DMListItemExt, DMListItemSendData, FriendRequestExt, FriendRequestSendData};
-use crate::{DMListItemData, FriendRequestData, MainWindow};
+use crate::bin_ui::converters::{get_initials, DMListItemExt, DMListItemSendData};
+use crate::{DMListItemData, MainWindow};
 
 thread_local! {
     static PENDING_AVATAR_PATH: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
@@ -171,62 +170,22 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             ).await {
                 Ok(Ok(_)) => {
                     tracing::info!("Friend request sent to {}", friend_id);
-
-                    // Refresh sent requests list via UserService
-                    match ui_ctx.list_friend_requests(FriendRequestFilter::Sent, 50, 0).await {
-                        Ok(friendships) => {
-                            // We need to get the full profile info for each friend
-                            // For now, just use friend_id as display info
-                            // Use Send-safe type to pass across thread boundary
-                            let sent_requests: Vec<FriendRequestSendData> = friendships
-                                .into_iter()
-                                .map(|f| FriendRequestSendData {
-                                    user_id: f.friend_id.to_string(),
-                                    display_name: f.friend_id.to_string(),
-                                    username: String::new(),
-                                    avatar_url: String::new(),
-                                    avatar_bytes: None,
-                                    avatar_decoded: None,
-                                    sent_at: String::new(),
-                                })
-                                .collect();
-
-                            let _ = slint::invoke_from_event_loop(move || {
-                                if let Some(w) = weak.upgrade() {
-                                    w.set_profile_loading(false);
-                                    // Convert Send-safe data to Slint types inside event loop
-                                    let sent_slint: Vec<FriendRequestData> = sent_requests.into_iter().map(|r| r.to_slint()).collect();
-                                    w.set_friends_sent_requests(ModelRc::new(VecModel::from(sent_slint)));
-                                }
-                            });
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to refresh sent requests: {}", e);
-                            let _ = slint::invoke_from_event_loop(move || {
-                                if let Some(w) = weak.upgrade() {
-                                    w.set_profile_loading(false);
-                                }
-                            });
-                        }
-                    }
+                    // Core emits `FriendRequestsUpdated` after send — the
+                    // domain-handler dispatcher refreshes the list. No
+                    // manual list_friend_requests + reshape here.
                 }
                 Ok(Err(e)) => {
                     tracing::error!("Failed to send friend request: {}", e);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_profile_loading(false);
-                        }
-                    });
                 }
                 Err(_) => {
                     tracing::error!("Friend request timed out");
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_profile_loading(false);
-                        }
-                    });
                 }
             }
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.set_profile_loading(false);
+                }
+            });
         });
     });
 

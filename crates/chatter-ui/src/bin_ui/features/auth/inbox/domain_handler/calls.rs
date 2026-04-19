@@ -8,9 +8,15 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
 use crate::MainWindow;
 
-/// Handle incoming call key offer — show the incoming call modal.
+/// Handle incoming call key offer.
+///
+/// Deprecated inside this path: the CallOrchestrator bridge
+/// ([`chatter_core::services::call_worker::spawn_call_orchestrator_bridge`])
+/// now owns the decision to present the incoming-call modal, so we keep
+/// this function as a trace-only stub until the UI dispatcher stops
+/// forwarding `CallKeyOfferReceived` explicitly.
 pub(super) fn handle_call_key_offer(
-    window: &Weak<MainWindow>,
+    _window: &Weak<MainWindow>,
     _ui_ctx: &Arc<ChatterClient>,
     call_id: String,
     peer_id: UserId,
@@ -18,35 +24,18 @@ pub(super) fn handle_call_key_offer(
     call_type: String,
     _channel_id: String,
     is_identity_verified: bool,
-    identity_warning: String,
+    _identity_warning: String,
     caller_name: String,
     _timestamp: u64,
 ) {
-    let weak = window.clone();
-
-    // The ephemeral key is passed to the UI via show_incoming_call() -> IncomingCallData.
-    // When the user accepts, incoming.rs reads it from IncomingCallData and passes to core.
-    let _ = slint::invoke_from_event_loop(move || {
-        if let Some(w) = weak.upgrade() {
-            super::super::super::initial_data::show_incoming_call(
-                &w,
-                &call_id,
-                &peer_id.to_string(),
-                &caller_name,
-                &call_type,
-                is_identity_verified,
-                &identity_warning,
-                false, // not anonymous
-            );
-
-            tracing::info!(
-                peer_id = %peer_id,
-                call_type = %call_type,
-                verified = is_identity_verified,
-                "Showing incoming call modal"
-            );
-        }
-    });
+    tracing::trace!(
+        %call_id,
+        %peer_id,
+        %call_type,
+        verified = is_identity_verified,
+        caller = %caller_name,
+        "CallKeyOfferReceived: orchestrator bridge drives the modal now"
+    );
 }
 
 // NOTE: CallKeyAnswerReceived and GroupCallKeyReceived are handled by

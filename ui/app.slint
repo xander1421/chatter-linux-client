@@ -532,6 +532,9 @@ export component App inherits Rectangle {
     // ========== Call properties ==========
     in-out property <bool> incoming-call-visible: false;
     in property <IncomingCallData> incoming-call-data;
+    /// True when a newly arrived incoming call will replace the active call
+    /// if accepted — driven by the call orchestrator.
+    in-out property <bool> incoming-call-replaces-active: false;
     in-out property <bool> active-call-visible: false;
     in property <ActiveCallData> active-call-data;
     in-out property <bool> call-is-muted: false;
@@ -2074,6 +2077,7 @@ export component App inherits Rectangle {
     IncomingCallModal {
         show: root.incoming-call-visible;
         call-data: root.incoming-call-data;
+        replaces-active: root.incoming-call-replaces-active;
 
         accept-call => {
             root.accept-incoming-call(root.incoming-call-data.call-id);

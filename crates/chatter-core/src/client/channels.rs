@@ -369,6 +369,48 @@ impl ChatterClient {
         Ok(channel)
     }
 
+    /// Create a channel, atomically uploading the icon first if one is
+    /// provided. UI should pass `icon_path` and let core decide whether to
+    /// upload — keeps the two-step (upload → create) dance out of the UI.
+    ///
+    /// If the icon upload fails, the channel is not created.
+    pub async fn create_channel_with_icon(
+        self: &Arc<Self>,
+        name: &str,
+        channel_type: ChannelType,
+        config: Option<crate::domain::channel::ChannelConfig>,
+        description: Option<&str>,
+        icon_path: Option<&std::path::Path>,
+        password: Option<&str>,
+        initial_members: Vec<crate::domain::ids::UserId>,
+    ) -> Result<Channel, crate::services::channel::ChannelError> {
+        let image_url: Option<String> = match icon_path {
+            Some(path) => match self.attachments().upload_channel_icon(path).await {
+                Ok(key) => {
+                    tracing::info!(cdn_key = %key, "Uploaded channel icon to CDN");
+                    Some(key)
+                }
+                Err(e) => {
+                    return Err(crate::services::channel::ChannelError::InvalidInput(format!(
+                        "icon upload failed: {}",
+                        e
+                    )));
+                }
+            },
+            None => None,
+        };
+        self.create_channel(
+            name,
+            channel_type,
+            config,
+            description,
+            image_url.as_deref(),
+            password,
+            initial_members,
+        )
+        .await
+    }
+
     /// Join a channel and set up group encryption.
     ///
     /// Handles mailbox announcement, SKDM distribution, and requesting

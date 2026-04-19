@@ -1267,13 +1267,15 @@ impl InboxEventProcessor {
 
         let anon_dm_service = self.anon_dm_service.clone();
         let event_bus = self.event_bus.clone();
+        let client = self.client.clone();
         let profile_key = profile_key.clone();
         let encrypted_display_name = encrypted_display_name.clone();
         let encrypted_avatar = encrypted_avatar.clone();
 
         tokio::spawn(async move {
+            let service_for_handle = anon_dm_service.clone();
             let result = tokio::task::spawn_blocking(move || {
-                anon_dm_service.handle_acceptance_encrypted(
+                service_for_handle.handle_acceptance_encrypted(
                     anon_dm_id,
                     peer_id,
                     mailbox_pk,
@@ -1304,6 +1306,27 @@ impl InboxEventProcessor {
                         avatar_url: None,
                         bio: None,
                         timestamp: TimestampNanos::now().as_u64(),
+                    });
+
+                    // Auto-send our profile (display name + avatar) back to the
+                    // peer now that the Double Ratchet is established. The peer
+                    // only saw our ECIES init at request time — this is the
+                    // first moment we can share richer identity securely.
+                    // Moved here from the UI layer so the profile sync
+                    // happens regardless of frontend.
+                    let our_name = client.auth_state().get().display_name.clone();
+                    let service = anon_dm_service.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = service
+                            .send_profile_update(&anon_dm_id, our_name, None, None)
+                            .await
+                        {
+                            tracing::warn!(
+                                conversation_id = %anon_dm_id,
+                                error = %e,
+                                "Failed to send profile back to responder after acceptance"
+                            );
+                        }
                     });
                 }
                 Ok(Err(e)) => {

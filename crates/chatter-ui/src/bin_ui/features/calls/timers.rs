@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
 
-use chatter_core::services::CallWorkerHandle;
+use chatter_core::calls::SharedVideoFrames;
 use crate::MainWindow;
 
 thread_local! {
@@ -115,9 +115,9 @@ pub fn stop_call_timer() {
 /// Start the video frame polling timer.
 ///
 /// Polls SharedVideoFrames at ~30fps and updates Slint image properties.
-pub fn start_video_frame_timer(window: &MainWindow, call_service: &CallWorkerHandle) {
+/// The frames handle is cheap to clone (Arc inside).
+pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFrames) {
     let weak = window.as_weak();
-    let shared_frames = call_service.video_frames().clone();
 
     VIDEO_FRAME_TIMER.with(|timer_cell| {
         // Stop existing timer if any

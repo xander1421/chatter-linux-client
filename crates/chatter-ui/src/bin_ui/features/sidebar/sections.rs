@@ -124,11 +124,10 @@ fn wire_delete_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak_clone = weak.clone();
 
         tokio::spawn(async move {
-            let Ok(id) = section_id_str.parse::<uuid::Uuid>() else {
+            let Ok(id) = section_id_str.parse::<SectionId>() else {
                 tracing::error!(section_id = %section_id_str, "Invalid section ID");
                 return;
             };
-            let id = SectionId(id);
 
             match ui_ctx.delete_section(&id) {
                 Ok(()) => {
@@ -174,8 +173,7 @@ fn wire_rename_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak_clone = weak.clone();
 
         tokio::spawn(async move {
-            let Ok(id) = section_id_str.parse::<uuid::Uuid>() else { return };
-            let id = SectionId(id);
+            let Ok(id) = section_id_str.parse::<SectionId>() else { return };
 
             if let Err(e) = ui_ctx.rename_section(&id, &name_str) {
                 tracing::error!(error = %e, "Failed to rename section");
@@ -203,8 +201,7 @@ fn wire_toggle_expanded(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak_clone = weak.clone();
 
         tokio::spawn(async move {
-            let Ok(id) = section_id_str.parse::<uuid::Uuid>() else { return };
-            let id = SectionId(id);
+            let Ok(id) = section_id_str.parse::<SectionId>() else { return };
 
             if let Ok(sections) = ui_ctx.list_sections_with_conversations() {
                 if let Some(section) = sections.iter().find(|s| s.id == id) {
@@ -228,10 +225,10 @@ fn wire_move_to_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak_clone = weak.clone();
 
         tokio::spawn(async move {
-            let Ok(sid) = section_id_str.parse::<uuid::Uuid>() else { return };
+            let Ok(sid) = section_id_str.parse::<SectionId>() else { return };
             let Ok(conv_type) = ConversationType::from_str_value(&conv_type_str) else { return };
 
-            if let Ok(()) = ui_ctx.move_conversation_to_section(&conv_id_str, conv_type, &SectionId(sid)) {
+            if let Ok(()) = ui_ctx.move_conversation_to_section(&conv_id_str, conv_type, &sid) {
                 refresh_sections_ui(&weak_clone, &ui_ctx);
                 refresh_channel_list(&weak_clone, &ui_ctx);
             }

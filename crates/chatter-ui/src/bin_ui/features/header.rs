@@ -125,7 +125,7 @@ fn wire_search_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 // Get content preview
                 let content_preview = msg
                     .as_text()
-                    .map(|t| chatter_core::services::gateway::shared::truncate_preview(&t))
+                    .map(|t| ui_ctx.truncate_message_preview(&t))
                     .unwrap_or_else(|| "[Attachment]".to_string());
 
                 display_results.push(crate::SearchResult {

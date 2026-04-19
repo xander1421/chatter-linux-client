@@ -98,69 +98,16 @@ async fn fetch_mention_suggestions_raw(
     ui_ctx: &ChatterClient,
     chat_state: &ChatState,
 ) -> Vec<RawMentionSuggestion> {
-    let query_lower = query.to_lowercase();
-    let mut suggestions: Vec<RawMentionSuggestion> = Vec::new();
-
-    // Add special mentions first
-    if "here".starts_with(&query_lower) {
-        suggestions.push(("here".to_string(), "@here".to_string(), "here".to_string(), false));
-    }
-    if "all".starts_with(&query_lower) || "everyone".starts_with(&query_lower) {
-        suggestions.push(("all".to_string(), "@all".to_string(), "all".to_string(), false));
-    }
-
     let channel_id = match chat_state.get().active_channel_id.clone() {
         Some(id) => id,
-        None => {
-            tracing::debug!("No active channel for mention search");
-            return suggestions;
-        }
+        None => return Vec::new(),
     };
-
-    match ui_ctx.get_channel_members(&channel_id, 50, 0).await {
-        Ok(members) => {
-            for member in &members[..std::cmp::min(20, members.len())] {
-                match ui_ctx.get_user_profile(&member.user_id).await {
-                    Ok(profile) => {
-                        let display_name = if profile.display_name.is_empty() {
-                            member.user_id.to_string()
-                        } else {
-                            profile.display_name.clone()
-                        };
-
-                        let name_lower = display_name.to_lowercase();
-                        let user_id_str = member.user_id.to_string();
-
-                        if name_lower.contains(&query_lower)
-                            || user_id_str.to_lowercase().contains(&query_lower)
-                        {
-                            suggestions.push((
-                                user_id_str,
-                                format!("@{}", display_name),
-                                "user".to_string(),
-                                profile.avatar_url.is_some(),
-                            ));
-                        }
-                    }
-                    Err(e) => {
-                        tracing::debug!(
-                            "Failed to fetch profile for user {}: {}",
-                            member.user_id,
-                            e
-                        );
-                    }
-                }
-
-                if suggestions.len() >= 8 {
-                    break;
-                }
-            }
-        }
-        Err(e) => {
-            tracing::warn!("Failed to fetch channel members for mentions: {}", e);
-        }
-    }
-
-    suggestions.truncate(8);
-    suggestions
+    // Core does the @here/@all injection, per-member filtering, profile batching
+    // and cap. UI just shapes the result into its Slint-side tuples.
+    ui_ctx
+        .search_mention_suggestions(&channel_id, query)
+        .await
+        .into_iter()
+        .map(|s| (s.id, s.display, s.kind.as_str().to_string(), s.has_avatar))
+        .collect()
 }

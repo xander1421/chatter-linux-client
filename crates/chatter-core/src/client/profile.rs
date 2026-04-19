@@ -105,11 +105,16 @@ impl ChatterClient {
     }
 
     pub async fn connect_via_friend_code(
-        &self,
+        self: &Arc<Self>,
         code: &str,
         message: Option<&str>,
     ) -> Result<crate::domain::user::Friendship, crate::services::UserError> {
-        self.users().connect_via_friend_code(code, message).await
+        let result = self.users().connect_via_friend_code(code, message).await?;
+        let client = Arc::clone(self);
+        tokio::spawn(async move {
+            client.refresh_and_emit_friend_requests().await;
+        });
+        Ok(result)
     }
 
     pub async fn list_friend_requests(
@@ -275,6 +280,18 @@ impl ChatterClient {
         attachment_id: &crate::domain::ids::AttachmentId,
     ) -> Result<crate::services::attachment::ImageDecodeResult, crate::services::attachment::AttachmentError> {
         self.attachments().decrypt_and_get_image_info(attachment_id)
+    }
+
+    /// Decode every frame of a GIF from already-decrypted bytes.
+    ///
+    /// Blocking — call from a background thread (e.g. `spawn_blocking`).
+    /// Thin façade over [`AttachmentService::decode_gif_all_frames`] so the UI
+    /// never has to reach into the service directly.
+    pub fn decode_gif_all_frames(
+        &self,
+        gif_bytes: &[u8],
+    ) -> Result<crate::services::attachment::GifFullDecodeResult, crate::services::attachment::AttachmentError> {
+        crate::services::attachment::AttachmentService::decode_gif_all_frames(gif_bytes)
     }
 
     pub async fn upload_channel_icon(

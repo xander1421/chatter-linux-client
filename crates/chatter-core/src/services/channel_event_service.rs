@@ -229,6 +229,7 @@ impl ChannelEventService {
         let message = self.create_system_message(
             channel_id,
             SystemMessage::UserJoined(*user_id),
+            Some(*user_id),
         );
 
         // Persist message
@@ -254,6 +255,7 @@ impl ChannelEventService {
         let message = self.create_system_message(
             channel_id,
             SystemMessage::UserLeft(*user_id),
+            Some(*user_id),
         );
 
         self.message_repo.insert(&message)?;
@@ -281,13 +283,23 @@ impl ChannelEventService {
     }
 
     /// Create a system message for the given channel.
-    fn create_system_message(&self, channel_id: &ChannelId, content: SystemMessage) -> Message {
+    fn create_system_message(
+        &self,
+        channel_id: &ChannelId,
+        content: SystemMessage,
+        subject: Option<UserId>,
+    ) -> Message {
         let now = Utc::now();
+        // `sender_id` drives the UI's name lookup — the converter formats
+        // system messages as `"{sender_name} {description}"`, e.g.
+        // "Alice joined the channel". Set it to the user the event is
+        // about (joiner / leaver / kicked) so `get_display_name` can
+        // resolve a real name instead of falling back to "Anonymous".
         Message {
             id: MessageId::new(),
             conversation_id: *channel_id,
-            conversation_type: ConversationType::AnonGroup,
-            sender_id: None, // System messages have no sender
+            conversation_type: ConversationType::Channel,
+            sender_id: subject,
             device_id: None,
             content: MessageContent::System(content),
             encrypted_content: None,
@@ -302,7 +314,7 @@ impl ChannelEventService {
             is_edited: false,
             is_deleted: false,
             is_read: false,
-            sent_at: 0, // System messages don't use sender timestamp
+            sent_at: now.timestamp_nanos_opt().unwrap_or(0) as u64,
             created_at: now,
             updated_at: now,
             edited_at: None,

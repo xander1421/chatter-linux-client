@@ -71,6 +71,34 @@ impl ConversationHandle {
     // Ephemeral operations (reaction, typing, pin, edit, delete)
     // ========================================================================
 
+    /// Toggle a reaction: query local state, decide add vs remove, then
+    /// dispatch. Returns `true` if the new state is "reacted".
+    ///
+    /// UI callers should prefer this over [`send_reaction`] — it eliminates
+    /// the "query `user_has_reacted` then send remove flag" pattern that
+    /// used to live in the UI.
+    pub async fn toggle_reaction(
+        &self,
+        emoji: &str,
+        target_author: &str,
+        target_sent_timestamp: u64,
+    ) -> Result<bool, ConversationError> {
+        let target_sender_id: UserId = match target_author.parse() {
+            Ok(id) => id,
+            Err(_) => return Err(ConversationError::NoConversation),
+        };
+        // Per-user check — the summary aggregate would flip other users'
+        // reactions off.
+        let already = self
+            .client
+            .messages()
+            .user_has_reacted(&target_sender_id, target_sent_timestamp, emoji)
+            .unwrap_or(false);
+        let remove = already;
+        self.send_reaction(emoji, target_author, target_sent_timestamp, remove).await?;
+        Ok(!remove)
+    }
+
     /// Send a reaction.
     pub async fn send_reaction(
         &self,
@@ -256,7 +284,52 @@ impl ConversationHandle {
     }
 
     /// Send an edit and persist locally.
+    ///
+    /// Emits `DomainEvent::MessageEdited` on success so UI subscribers
+    /// refresh uniformly across conversation kinds — no UI-side branching
+    /// on anon vs DM/channel needed.
     pub async fn send_edit(
+        &self,
+        target_sent_timestamp: u64,
+        new_text: &str,
+    ) -> ConversationResult {
+        let result = self.send_edit_inner(target_sent_timestamp, new_text).await;
+        if result.is_ok() {
+            self.emit_local_edit_event(target_sent_timestamp, new_text);
+        }
+        result
+    }
+
+    fn emit_local_edit_event(&self, target_sent_timestamp: u64, new_text: &str) {
+        use crate::domain::message::{ConversationType as CT, MessageContent};
+        use crate::domain::ids::{ChannelId, MessageId};
+        use crate::events::DomainEvent;
+
+        let (channel_id, conversation_type) = match &self.conversation {
+            ActiveConversation::AnonDm(id) => {
+                let cid: ChannelId = (*id).into();
+                (cid, CT::AnonDm)
+            }
+            ActiveConversation::AnonGroup(id) => {
+                let cid: ChannelId = (*id).into();
+                (cid, CT::AnonGroup)
+            }
+            ActiveConversation::MailboxDm { channel_id, .. } => (*channel_id, CT::MailboxDm),
+            ActiveConversation::ServerDm { channel_id, .. } => (*channel_id, CT::ServerDm),
+            ActiveConversation::Channel(channel_id) => (*channel_id, CT::Channel),
+            ActiveConversation::None => return,
+        };
+
+        self.client.event_bus().emit_domain(DomainEvent::MessageEdited {
+            message_id: MessageId::new(),
+            new_content: MessageContent::Text(new_text.to_string()),
+            channel_id,
+            conversation_type,
+            target_sent_timestamp,
+        });
+    }
+
+    async fn send_edit_inner(
         &self,
         target_sent_timestamp: u64,
         new_text: &str,

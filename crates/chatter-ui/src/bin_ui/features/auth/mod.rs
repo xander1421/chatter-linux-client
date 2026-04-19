@@ -3,7 +3,7 @@
 //! Handles login, register, logout, and domain event processing.
 
 pub mod inbox;
-mod initial_data;
+pub(crate) mod initial_data;
 mod login;
 mod logout;
 pub mod presence_integration;

@@ -8,7 +8,7 @@
 //! - `call_history` - Call history message creation
 //! - `room_events` - LiveKit room event handling
 //! - `outgoing` - Outgoing call initiation
-//! - `incoming` - Incoming call accept/decline
+//! - `incoming` - Incoming call accept/decline + orchestrator event glue
 //! - `active` - Active call controls (mute, video, screen share, end)
 //! - `device_picker` - Audio and screen device selection
 //! - `event_handlers` - Domain event handling for call keys
@@ -34,6 +34,7 @@ pub mod timers;
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     outgoing::wire_start_call(window, ui_ctx);
     incoming::wire_incoming_call(window, ui_ctx);
+    incoming::wire_orchestrator_events(window, ui_ctx);
     active::wire_active_call(window, ui_ctx);
     room_events::wire_room_events(window, ui_ctx);
     device_picker::wire_device_picker(window, ui_ctx);
