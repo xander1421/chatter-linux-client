@@ -46,7 +46,7 @@ use crate::services::anon_dm::AnonDmService;
 use crate::services::anon_group::AnonGroupService;
 use crate::services::attachment::AttachmentService;
 use crate::services::auth_service::AuthService;
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "media")]
 use crate::services::call_worker::CallWorkerHandle;
 use crate::services::channel::ChannelService;
 use crate::services::dm_bootstrap_service::DmBootstrapService;
@@ -78,11 +78,12 @@ use crate::system::Directories;
 pub struct ClientBuilder {
     server_url: Option<String>,
     data_dir: Option<String>,
+    notification_sink: Option<Arc<dyn crate::system::notification_sink::NotificationSink>>,
 }
 
 impl ClientBuilder {
     pub fn new() -> Self {
-        Self { server_url: None, data_dir: None }
+        Self { server_url: None, data_dir: None, notification_sink: None }
     }
 
     /// Set the server URL. Falls back to `CHATTER_SERVER_URL` env var, then built-in default.
@@ -98,12 +99,22 @@ impl ClientBuilder {
         self
     }
 
+    /// Inject a platform-specific notification sink. If not set, core picks a
+    /// sensible default (desktop: `DesktopNotifications`; android: no-op).
+    pub fn notification_sink(
+        mut self,
+        sink: Arc<dyn crate::system::notification_sink::NotificationSink>,
+    ) -> Self {
+        self.notification_sink = Some(sink);
+        self
+    }
+
     /// Build the client. Initializes database, crypto, and network pool.
     ///
     /// Must be called within a tokio runtime (e.g. inside `#[tokio::main]`
     /// or after `Runtime::new()`).
     pub fn build(self) -> Result<Arc<ChatterClient>, ClientError> {
-        let ctx = AppContext::with_config(self.server_url, self.data_dir)?;
+        let ctx = AppContext::with_config_and_sink(self.server_url, self.data_dir, self.notification_sink)?;
         let ui = ctx.core_services();
         Ok(Arc::new(ChatterClient {
             ctx,
@@ -198,11 +209,13 @@ impl ChatterClient {
     }
 
     // ── Services (return &Arc<T> so .clone() yields Arc<T>) ─────────────
-
-    // Service accessors are `pub(crate)` to enforce the architecture rule:
-    // UI lives in `chatter-ui` and must call façade methods on `ChatterClient`,
-    // not reach into individual services. Adding a new UI feature means adding
-    // a method here, not exposing a service.
+    //
+    // Crate-visible only. chatter-ui MUST route through high-level façade
+    // methods below, not raw service accessors — see memory
+    // `feedback_service_layer_architecture`. When an out-of-tree bridge
+    // (chatter-bridge, iOS) actually lands, expose what that specific crate
+    // needs via `pub(in …)` or a dedicated bridge module. Do not widen on
+    // speculation.
     pub(crate) fn auth(&self) -> &Arc<AuthService> { &self.ui.auth_service }
     pub(crate) fn messages(&self) -> &Arc<MessageService> { &self.ui.message_service }
     pub(crate) fn channels(&self) -> &Arc<ChannelService> { &self.ui.channel_service }
@@ -753,6 +766,13 @@ impl ChatterClient {
         self.sections().toggle_expanded(id, expanded)
     }
 
+    pub fn reorder_sections(
+        &self,
+        ids: &[crate::domain::ids::SectionId],
+    ) -> Result<(), crate::services::section_service::SectionError> {
+        self.sections().reorder_sections(ids)
+    }
+
     pub fn move_conversation_to_section(
         &self,
         conv_id: &str,
@@ -855,7 +875,7 @@ impl ChatterClient {
     }
 
     /// Post-boot call service handle (OnceLock).
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub fn call_service(&self) -> &Arc<std::sync::OnceLock<CallWorkerHandle>> {
         &self.ui.call_service
     }
@@ -873,7 +893,7 @@ impl ChatterClient {
     // ── Delegated CoreServices methods ─────────────────────────────────────
 
     /// Initialize the call service if not already set. Safe to call multiple times.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub fn ensure_call_service(&self) {
         self.ui.ensure_call_service()
     }
@@ -954,7 +974,7 @@ impl ChatterClient {
         // ── Infrastructure init ─────────────────────────────────────
         self.ctx.init_device_inbox_provider();
         self.ctx.init_group_fanout();
-        #[cfg(feature = "desktop-media")]
+        #[cfg(feature = "media")]
         self.ctx.init_call_service();
 
         // ── Event handling ──────────────────────────────────────────
@@ -1009,7 +1029,7 @@ impl ChatterClient {
         // participant can't decrypt future frames. The "when" decision
         // (reacting to a LiveKit event) now lives in core rather than the
         // UI crate.
-        #[cfg(feature = "desktop-media")]
+        #[cfg(feature = "media")]
         let _h_call_room_policy = {
             let client = Arc::clone(self);
             tokio::spawn(async move {
@@ -1279,11 +1299,95 @@ impl ChatterClient {
         self.conversation(conv).set_disappearing_timer(seconds)
     }
 
+    // ── Drafts (façade) ─────────────────────────────────────────────
+
+    /// Save or update a draft for a conversation root (no thread).
+    pub fn save_draft(
+        &self,
+        channel_id: crate::domain::ids::ChannelId,
+        content: String,
+    ) -> Result<crate::domain::draft::Draft, crate::services::draft_service::DraftError> {
+        self.ui.draft_service.save_draft(channel_id, None, content, None, vec![])
+    }
+
+    /// Get the root-level draft for a channel (or None).
+    pub fn get_draft(
+        &self,
+        channel_id: crate::domain::ids::ChannelId,
+    ) -> Result<Option<crate::domain::draft::Draft>, crate::services::draft_service::DraftError> {
+        self.ui.draft_service.get_draft(channel_id, None)
+    }
+
+    /// Delete the root-level draft for a channel.
+    pub fn delete_draft(
+        &self,
+        channel_id: crate::domain::ids::ChannelId,
+    ) -> Result<(), crate::services::draft_service::DraftError> {
+        self.ui.draft_service.delete_draft(channel_id, None)
+    }
+
+    /// List every draft for the current user across all conversations.
+    pub fn list_all_drafts(
+        &self,
+    ) -> Result<Vec<crate::domain::draft::Draft>, crate::services::draft_service::DraftError> {
+        self.ui.draft_service.list_all_drafts()
+    }
+
+    /// List every draft pre-joined with the owning conversation's display
+    /// name + conversation type. Keeps the join + fallback logic on the
+    /// client side rather than pushing it into each UI platform (Android,
+    /// desktop, iOS).
+    pub fn list_drafts_with_conversation_names(
+        &self,
+    ) -> Result<Vec<crate::domain::draft::DraftWithConversation>, crate::services::draft_service::DraftError> {
+        use std::collections::HashMap;
+        let drafts = self.ui.draft_service.list_all_drafts()?;
+        let conversations = self
+            .ui
+            .conversation_repo
+            .list_all()
+            .map_err(crate::services::draft_service::DraftError::Storage)?;
+        let lookup: HashMap<String, (String, crate::domain::message::ConversationType)> =
+            conversations
+                .into_iter()
+                .map(|c| (c.id, (c.name, c.conversation_type)))
+                .collect();
+        Ok(drafts
+            .into_iter()
+            .map(|d| {
+                let (name, ty) = lookup
+                    .get(&d.key.channel_id.to_string())
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        (
+                            "(unknown conversation)".to_string(),
+                            crate::domain::message::ConversationType::Channel,
+                        )
+                    });
+                crate::domain::draft::DraftWithConversation {
+                    draft: d,
+                    conversation_name: name,
+                    conversation_type: ty,
+                }
+            })
+            .collect())
+    }
+
     // ── Conversation listing ────────────────────────────────────────
 
     /// List all channels the user is a member of.
     pub fn list_channels(&self) -> Result<Vec<Channel>, crate::services::channel::ChannelError> {
         self.channels().get_channels_for_user()
+    }
+
+    /// Unified conversation rollup — channels, DMs, anon DMs, anon groups —
+    /// used by cross-conversation screens (drafts list, etc). Returns
+    /// `UnifiedConversation` rows with a `conversation_type` field already
+    /// classified.
+    pub fn list_all_conversations(
+        &self,
+    ) -> Result<Vec<crate::domain::UnifiedConversation>, crate::error::StorageError> {
+        self.ui.conversation_repo.list_all()
     }
 
     /// List channel members with profile information.
@@ -1765,7 +1869,7 @@ impl ChatterClient {
     /// Handle remote hangup: store history, disconnect locally. Accepts the
     /// hangup's `call_id` so core can gate on active-call match without the
     /// UI having to inspect call state.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn handle_remote_hangup(
         &self,
         call_id: &str,
@@ -1872,6 +1976,71 @@ impl ChatterClient {
     /// [`crate::services::validation::pin_strength`] for scoring details.
     pub fn pin_strength(&self, pin: &str) -> i32 {
         crate::services::validation::pin_strength(pin)
+    }
+
+    // ── Bridge façades ───────────────────────────────────────────────
+    //
+    // Thin wrappers kept here (not in bin-specific modules) so the
+    // `chatter-bridge` crate can reach every operation it needs without
+    // widening `pub(crate)` service accessors. Do not expand this block
+    // speculatively — add an entry only when a real caller lands.
+
+    pub fn get_pinned_messages_local(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        conversation_type: &crate::domain::message::ConversationType,
+    ) -> Result<Vec<crate::domain::Message>, crate::services::message::MessageError> {
+        self.ui.message_service.get_pinned_messages_local(channel_id, conversation_type)
+    }
+
+    pub fn get_anon_dm_display_name(&self) -> Option<String> {
+        self.ui.anon_dm_service.get_my_display_name()
+    }
+
+    pub async fn start_anon_dm_private(
+        &self,
+        code: &crate::domain::PrivateFriendCode,
+        message: Option<&str>,
+        display_name: Option<&str>,
+    ) -> Result<crate::domain::anon_dm::AnonDm, crate::services::anon_dm::AnonDmError> {
+        self.ui.anon_dm_service
+            .start_conversation_private(code, message, display_name)
+            .await
+    }
+
+    pub async fn upload_attachment(
+        &self,
+        path: &std::path::Path,
+        channel_id: &crate::domain::ids::ChannelId,
+    ) -> Result<crate::services::attachment::UploadResult, crate::services::attachment::AttachmentError> {
+        self.ui.attachment_service.upload_file(path, channel_id).await
+    }
+
+    pub fn has_attachment_locally(
+        &self,
+        attachment_id: &crate::domain::ids::AttachmentId,
+    ) -> bool {
+        self.ui.attachment_service.has_local_content(attachment_id)
+    }
+
+    pub fn set_notification_detail_level(
+        &self,
+        level: crate::services::notification_service::NotificationDetailLevel,
+    ) {
+        self.ui.notification_service.set_detail_level(level)
+    }
+
+    pub fn notification_detail_level(
+        &self,
+    ) -> crate::services::notification_service::NotificationDetailLevel {
+        self.ui.notification_service.detail_level()
+    }
+
+    pub fn get_peer_identity(
+        &self,
+        peer_id: &str,
+    ) -> Result<Option<Vec<u8>>, crate::error::StorageError> {
+        self.ui.signal_service.get_peer_identity(peer_id)
     }
 
     // ── Escape hatches ──────────────────────────────────────────────────

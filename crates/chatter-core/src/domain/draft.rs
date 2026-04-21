@@ -5,6 +5,7 @@
 //! across sessions and navigation.
 
 use crate::domain::ids::{AttachmentId, ChannelId, DraftId, MessageId, ThreadId, UserId};
+use crate::domain::message::ConversationType;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
@@ -347,4 +348,14 @@ mod tests {
         draft.clear_mentions();
         assert!(draft.mentions.is_empty());
     }
+}
+
+/// Draft joined with the owning conversation's display name and type.
+/// Returned by the client-wide "all drafts" screen so UI code does not
+/// need to resolve the name itself.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DraftWithConversation {
+    pub draft: Draft,
+    pub conversation_name: String,
+    pub conversation_type: ConversationType,
 }

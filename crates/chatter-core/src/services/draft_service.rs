@@ -192,6 +192,15 @@ impl DraftService {
 
         Ok(self.draft_repo.list_for_channel(channel_id)?)
     }
+
+    /// List all drafts across every channel / thread for the current user.
+    ///
+    /// Returns drafts sorted by most recently updated first. Backs the
+    /// cross-conversation drafts screen on the clients.
+    pub fn list_all_drafts(&self) -> Result<Vec<Draft>, DraftError> {
+        let _ = self.settings_repo.current_user_id()?;
+        Ok(self.draft_repo.list_all()?)
+    }
 }
 
 #[cfg(test)]
