@@ -51,6 +51,9 @@ struct LatestFrame {
     height: u32,
     /// Whether this is a screen share frame.
     is_screen_share: bool,
+    /// Orientation the UI should apply before drawing, in degrees
+    /// (0 / 90 / 180 / 270). Set from the track's rotation metadata.
+    rotation_degrees: u32,
 }
 
 impl VideoPlayback {
@@ -113,17 +116,23 @@ impl VideoPlayback {
                         // Convert I420 to RGBA
                         let rgba_data = i420_to_rgba(&i420_buffer, width, height);
 
+                        // Wrap once so both the local frames map and the
+                        // cross-thread shared store share the same buffer via
+                        // Arc cloning instead of a per-frame deep copy of
+                        // potentially megabytes of pixel data.
+                        let rgba_arc = Arc::new(rgba_data);
+
                         // Store in local frames map
                         {
                             let mut frames_guard = frames.write();
-                            let rgba_arc = Arc::new(rgba_data.clone());
                             frames_guard.insert(
                                 participant_id_clone.clone(),
                                 LatestFrame {
-                                    rgba_data: rgba_arc,
+                                    rgba_data: rgba_arc.clone(),
                                     width,
                                     height,
                                     is_screen_share,
+                                    rotation_degrees: 0,
                                 },
                             );
                         }
@@ -132,7 +141,7 @@ impl VideoPlayback {
                         if let Some(ref shared) = shared_frames {
                             shared.set_frame(
                                 participant_id_clone.clone(),
-                                rgba_data,
+                                rgba_arc,
                                 width,
                                 height,
                                 is_screen_share,
@@ -192,6 +201,7 @@ impl VideoPlayback {
             height: frame.height,
             is_screen_share: frame.is_screen_share,
             frame_id: 0,
+            rotation_degrees: frame.rotation_degrees,
         })
     }
 
@@ -206,6 +216,7 @@ impl VideoPlayback {
                 height: frame.height,
                 is_screen_share: frame.is_screen_share,
                 frame_id: 0,
+                rotation_degrees: frame.rotation_degrees,
             })
             .collect()
     }
@@ -223,6 +234,7 @@ impl VideoPlayback {
                     height: frame.height,
                     is_screen_share: frame.is_screen_share,
                     frame_id: 0,
+                    rotation_degrees: frame.rotation_degrees,
                 })
             })
             .collect()
@@ -241,6 +253,7 @@ impl VideoPlayback {
                     height: frame.height,
                     is_screen_share: frame.is_screen_share,
                     frame_id: 0,
+                    rotation_degrees: frame.rotation_degrees,
                 })
             })
             .collect()

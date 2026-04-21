@@ -82,7 +82,39 @@ impl ChannelService {
             ));
         }
 
-        let _ = self.channel_repo.delete_membership(channel_id, user_id);
+        // Remove local membership BEFORE rotating/distributing. If this fails
+        // with anything other than NotFound (membership already absent), bail
+        // out — otherwise `distribute_skdm` would fan the rotated sender key
+        // back to the kicked user via the stale local membership row.
+        match self.channel_repo.delete_membership(channel_id, user_id) {
+            Ok(()) => {}
+            Err(crate::error::StorageError::NotFound(_)) => {}
+            Err(e) => {
+                tracing::error!(
+                    channel_id = %channel_id,
+                    kicked_user = %user_id,
+                    error = %e,
+                    "CRITICAL: Failed to remove local membership after kick — aborting before sender-key rotation to prevent leaking the new key to the removed user"
+                );
+                return Err(ChannelError::Storage(e));
+            }
+        }
+
+        // Defense in depth: verify the kicked user is no longer listed locally
+        // before we rotate + distribute the new sender key.
+        if let Ok(members) = self.channel_repo.list_members(channel_id) {
+            if members.iter().any(|m| &m.user_id == user_id) {
+                tracing::error!(
+                    channel_id = %channel_id,
+                    kicked_user = %user_id,
+                    "CRITICAL: kicked user still present in local memberships after delete — aborting rotation"
+                );
+                return Err(ChannelError::InvalidInput(format!(
+                    "local membership for kicked user {} still present",
+                    user_id
+                )));
+            }
+        }
 
         // Rotate sender key — this is MANDATORY after member removal.
         // If rotation fails, sending stays blocked to prevent forward secrecy violation.
@@ -145,7 +177,29 @@ impl ChannelService {
             return Err(e.into());
         }
 
-        let _ = self.channel_repo.delete_membership(channel_id, user_id);
+        // Same membership-removal guard as kick_user — otherwise distribute_skdm
+        // would leak the rotated sender key back to the banned user.
+        match self.channel_repo.delete_membership(channel_id, user_id) {
+            Ok(()) => {}
+            Err(crate::error::StorageError::NotFound(_)) => {}
+            Err(e) => {
+                tracing::error!(
+                    channel_id = %channel_id,
+                    banned_user = %user_id,
+                    error = %e,
+                    "CRITICAL: Failed to remove local membership after ban — aborting before sender-key rotation"
+                );
+                return Err(ChannelError::Storage(e));
+            }
+        }
+        if let Ok(members) = self.channel_repo.list_members(channel_id) {
+            if members.iter().any(|m| &m.user_id == user_id) {
+                return Err(ChannelError::InvalidInput(format!(
+                    "local membership for banned user {} still present",
+                    user_id
+                )));
+            }
+        }
 
         // Rotate sender key — mandatory after member removal
         let skdm = self.signal_service.rotate_sender_key(channel_id).await

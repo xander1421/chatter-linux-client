@@ -5,6 +5,7 @@
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
+use crate::domain::ids::ChannelId;
 use crate::error::{NetworkError, StorageError};
 use crate::network::grpc::auth_client::AuthClient;
 use crate::services::channel::ChannelService;
@@ -52,6 +53,21 @@ pub enum DeviceError {
     /// Storage operation failed.
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),
+
+    /// Failed to list channels for post-revoke sender-key rotation marking.
+    #[error("list channels for rotation: {0}")]
+    ListChannelsForRotation(String),
+
+    /// One or more channels failed sender-key rotation marking after revoke.
+    /// The revoked device still holds the old key for these channels until
+    /// rotation succeeds on retry.
+    #[error(
+        "{} channel(s) failed sender-key rotation marking after revoke",
+        failures.len()
+    )]
+    RotationMarkingFailed {
+        failures: Vec<(ChannelId, String)>,
+    },
 }
 
 /// Device management service.
@@ -196,20 +212,35 @@ impl DeviceService {
     ) -> Result<(), DeviceError> {
         self.revoke_device(auth_client, device_id).await?;
 
-        // Lazy rotation: mark each encrypted channel; next send cycles the key.
-        let channels = self.channel_service.get_channels_mru().unwrap_or_default();
+        // Lazy rotation: mark EVERY channel the user is a member of, not just
+        // the MRU-unsectioned slice (get_channels_mru filters out channels
+        // that belong to custom sidebar sections — those still need rotation).
+        let channels = self
+            .channel_service
+            .get_channels_for_user()
+            .map_err(|e| DeviceError::ListChannelsForRotation(e.to_string()))?;
+
+        let mut failures: Vec<(ChannelId, String)> = Vec::new();
         for channel in channels {
             if !channel.config.require_encryption {
                 continue;
             }
             if let Err(e) = self.signal_service.mark_channel_for_rotation(&channel.id) {
-                tracing::warn!(
+                tracing::error!(
                     channel_id = %channel.id,
                     revoked_device_id = device_id,
                     error = %e,
                     "Failed to mark channel for sender-key rotation after device revoke"
                 );
+                failures.push((channel.id, e.to_string()));
             }
+        }
+
+        if !failures.is_empty() {
+            // Do NOT report success when any channel was missed — the caller
+            // needs to know that some of this user's channels will keep using
+            // the old sender key (which the revoked device still holds).
+            return Err(DeviceError::RotationMarkingFailed { failures });
         }
         Ok(())
     }

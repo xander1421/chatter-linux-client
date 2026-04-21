@@ -16,22 +16,23 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "media")]
 use crate::crypto::call_key_provider::EphemeralCallKey;
 use crate::domain::anon_dm::AnonDmId;
 use crate::domain::anon_group::AnonGroupId;
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "media")]
 use crate::domain::call::{AnonCallAnswerOutcome, AnonCallSetupResult, CallSetupResult};
+#[cfg(feature = "media")]
 use crate::domain::call::CallType;
 use crate::domain::call::PendingDmCall;
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "media")]
 use crate::domain::ids::CallId;
 use crate::domain::ids::{ChannelId, UserId};
 use crate::services::anon_dm::AnonDmService;
 use crate::services::anon_group::AnonGroupService;
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "media")]
 use crate::services::call_verification::CallVerification;
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "media")]
 use crate::services::call_worker::CallWorkerHandle;
 use crate::services::channel::ChannelService;
 use crate::services::gateway::{
@@ -246,7 +247,7 @@ impl CallSignalingService {
     ///
     /// Returns the call ID. The call is not yet connected — that happens when
     /// `complete_dm_call()` is called after the peer sends their answer.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn start_dm_call(
         &self,
         peer_id: &UserId,
@@ -309,7 +310,7 @@ impl CallSignalingService {
     ///
     /// Consumes the pending call state, derives the shared secret via Signal service,
     /// updates LiveKit encryption, and returns verification data for the UI.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn complete_dm_call(
         &self,
         peer_ephemeral_pk: [u8; 32],
@@ -385,7 +386,7 @@ impl CallSignalingService {
     ///
     /// Performs the callee's side of the ephemeral key exchange. Returns
     /// verification data for the UI.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn accept_dm_call(
         &self,
         caller_ephemeral_pk: [u8; 32],
@@ -480,7 +481,7 @@ impl CallSignalingService {
     }
 
     /// Derive verification emojis from an anonymous call's encryption key and room name.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     fn anon_verification_emojis(encryption_key: &[u8], room_name: &str) -> [String; 4] {
         let mut key_arr = [0u8; 32];
         if encryption_key.len() >= 32 {
@@ -590,7 +591,7 @@ impl CallSignalingService {
     /// Accept an incoming anonymous call: acquire token, send accept, join room, connect LiveKit.
     ///
     /// Returns an `AnonCallSetupResult` with everything the UI needs.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn accept_anon_call(
         &self,
         room_name: &str,
@@ -694,7 +695,7 @@ impl CallSignalingService {
     /// Group anon calls fan out answers to every participant, so this may be
     /// invoked repeatedly for the same room. Returns `AlreadyInCall` for those
     /// echoes so the UI can distinguish them from a real `Declined`.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn handle_anon_call_answer(
         &self,
         call_room_id: &[u8],
@@ -946,7 +947,7 @@ impl CallSignalingService {
     ///
     /// `call_worker` must be provided since it's behind a OnceLock in the client.
     /// `duration_secs` comes from the UI timer (core doesn't track call duration).
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn end_dm_call(
         &self,
         call_worker: &CallWorkerHandle,
@@ -988,7 +989,7 @@ impl CallSignalingService {
     ///
     /// Handles both anonymous DM and anonymous group calls.
     /// Always disconnects from the LiveKit room, even if hangup signaling fails.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn end_anon_call(
         &self,
         call_worker: &CallWorkerHandle,
@@ -1069,7 +1070,7 @@ impl CallSignalingService {
     }
 
     /// Handle remote hangup: store history, disconnect locally.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn handle_remote_hangup(
         &self,
         call_worker: &CallWorkerHandle,
@@ -1106,7 +1107,7 @@ impl CallSignalingService {
     }
 
     /// Store a DM/channel call history message.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     fn store_dm_call_history(
         &self,
         channel_id: &ChannelId,
@@ -1299,7 +1300,6 @@ impl CallSignalingService {
 
     /// Accept an incoming DM call (mobile): ECDH key exchange, send answer,
     /// join room, return LiveKit credentials.
-    #[cfg(feature = "desktop-media")]
     pub async fn accept_dm_call_mobile(
         &self,
         caller_ephemeral_pk: [u8; 32],
@@ -1416,7 +1416,6 @@ impl CallSignalingService {
     }
 
     /// End a DM call (mobile): send hangup, leave call on server.
-    #[cfg(feature = "desktop-media")]
     pub async fn end_dm_call_mobile(
         &self,
         call_id: &str,
@@ -1444,7 +1443,6 @@ impl CallSignalingService {
     }
 
     /// End an anonymous call (mobile): send hangup, return conversation id for history insertion.
-    #[cfg(feature = "desktop-media")]
     pub async fn end_anon_call_mobile(
         &self,
         room_name: &str,

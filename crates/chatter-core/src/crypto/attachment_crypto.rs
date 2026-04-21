@@ -157,9 +157,12 @@ impl AttachmentCrypto {
     ///
     /// Returns `CryptoError::AttachmentEncryptionFailed` if encryption fails.
     pub fn encrypt(plaintext: &[u8]) -> Result<EncryptedAttachment, CryptoError> {
-        // Generate 64-byte random key: [AES key (32)] + [MAC key (32)]
-        let mut key = [0u8; KEY_SET_LENGTH];
-        rand::rng().fill_bytes(&mut key);
+        // Generate 64-byte random key: [AES key (32)] + [MAC key (32)].
+        // Wrapped in `Zeroizing` so any `?` return path wipes the local buffer
+        // before any unwinding; the returned `EncryptedAttachment` carries its
+        // own `ZeroizeOnDrop` via `EncryptedAttachment`'s derive.
+        let mut key: Zeroizing<[u8; KEY_SET_LENGTH]> = Zeroizing::new([0u8; KEY_SET_LENGTH]);
+        rand::rng().fill_bytes(&mut *key);
 
         // Split key into AES and MAC portions
         let aes_key = &key[..AES_KEY_LENGTH];
@@ -196,7 +199,7 @@ impl AttachmentCrypto {
 
         Ok(EncryptedAttachment {
             ciphertext,
-            key,
+            key: *key,
             digest: final_digest,
             plaintext_size: plaintext.len(),
         })

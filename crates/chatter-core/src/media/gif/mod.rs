@@ -22,7 +22,7 @@
 pub mod animator;
 pub mod cache;
 pub mod client;
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "desktop-gstreamer")]
 pub mod gstreamer_decoder;
 pub mod picker;
 pub mod progressive;
@@ -35,7 +35,7 @@ pub use picker::GifPicker;
 pub use progressive::{decode_first_frame_only, StreamingGifDecoder};
 
 // GStreamer decoder exports
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "desktop-gstreamer")]
 pub use gstreamer_decoder::{
     GStreamerGifDecoder,
     GifInfo,
@@ -49,9 +49,9 @@ pub use gstreamer_decoder::{
 /// Returns `true` if GStreamer with GL support is available for
 /// hardware-accelerated GIF processing.
 pub fn is_gpu_acceleration_available() -> bool {
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "desktop-gstreamer")]
     { is_gstreamer_gif_available() && is_gl_available() }
-    #[cfg(not(feature = "desktop-media"))]
+    #[cfg(not(feature = "desktop-gstreamer"))]
     { false }
 }
 
@@ -65,7 +65,7 @@ pub fn is_gpu_acceleration_available() -> bool {
 /// Returns frames progressively for immediate display.
 pub fn decode_gif_auto(data: Vec<u8>) -> Result<Box<dyn GifDecoder>, crate::error::MediaError> {
     // Try GStreamer first (GPU accelerated when available)
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "desktop-gstreamer")]
     if is_gstreamer_gif_available() {
         match StreamingGStreamerDecoder::new(data.clone()) {
             Ok(Some(decoder)) => {
@@ -110,10 +110,10 @@ pub trait GifDecoder: Send {
 }
 
 // Wrapper for GStreamer decoder
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "desktop-gstreamer")]
 struct GStreamerGifDecoderWrapper(StreamingGStreamerDecoder);
 
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "desktop-gstreamer")]
 impl GifDecoder for GStreamerGifDecoderWrapper {
     fn first_frame(&self) -> &GifFrame {
         self.0.first_frame()

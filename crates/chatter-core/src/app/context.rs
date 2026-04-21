@@ -6,11 +6,12 @@
 use std::sync::Arc;
 
 use crate::error::{NetworkError, StorageError, SystemError};
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "media")]
 use crate::services::CallWorkerHandle;
 use crate::mailbox::group::GroupFanout;
 use crate::mailbox::anon_dm::AnonDmPoller;
 use crate::inbox::provider::DeviceInboxProvider;
+use crate::system::notification_sink::NotificationSink;
 
 use super::infrastructure::InfrastructureContainer;
 use super::services::ServiceContainer;
@@ -49,18 +50,26 @@ pub struct AppContext {
 
     // Post-boot initialization (OnceLock) - shared with CoreServices
     device_inbox_provider: Arc<std::sync::OnceLock<Arc<DeviceInboxProvider>>>,
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     call_service: Arc<std::sync::OnceLock<CallWorkerHandle>>,
 }
 
 impl AppContext {
     /// Create a new AppContext, initializing all subsystems.
     pub fn new(data_dir: Option<String>) -> Result<Self, ContextError> {
+        Self::new_with_sink(data_dir, None)
+    }
+
+    /// Create a new AppContext with a caller-supplied notification sink.
+    pub fn new_with_sink(
+        data_dir: Option<String>,
+        notification_sink: Option<Arc<dyn NotificationSink>>,
+    ) -> Result<Self, ContextError> {
         let infrastructure = Arc::new(InfrastructureContainer::new(data_dir)?);
-        
+
         // Create shared OnceLocks for post-boot services (shared with CoreServices)
         let device_inbox_provider = Arc::new(std::sync::OnceLock::new());
-        #[cfg(feature = "desktop-media")]
+        #[cfg(feature = "media")]
         let call_service = Arc::new(std::sync::OnceLock::new());
 
         let services = Arc::new(ServiceContainer::new(&infrastructure)?);
@@ -69,9 +78,10 @@ impl AppContext {
             &infrastructure,
             &services,
             infrastructure.group_fanout.clone(),
-            #[cfg(feature = "desktop-media")]
+            #[cfg(feature = "media")]
             call_service.clone(),
             device_inbox_provider.clone(),
+            notification_sink,
         ));
 
         tracing::info!("GIF search enabled via server-side gRPC service");
@@ -81,7 +91,7 @@ impl AppContext {
             services,
             core_services,
             device_inbox_provider,
-            #[cfg(feature = "desktop-media")]
+            #[cfg(feature = "media")]
             call_service,
         })
     }
@@ -93,11 +103,20 @@ impl AppContext {
     /// If `data_dir` is `Some(path)`, that path is used as the base directory
     /// for config, data, and cache (required on Android).
     pub fn with_config(server_url: Option<String>, data_dir: Option<String>) -> Result<Self, ContextError> {
+        Self::with_config_and_sink(server_url, data_dir, None)
+    }
+
+    /// Like `with_config` but allows injecting a platform notification sink.
+    pub fn with_config_and_sink(
+        server_url: Option<String>,
+        data_dir: Option<String>,
+        notification_sink: Option<Arc<dyn NotificationSink>>,
+    ) -> Result<Self, ContextError> {
         if let Some(url) = server_url {
             // SAFETY: Called before any threads are spawned (single-threaded init).
             unsafe { std::env::set_var(super::infrastructure::SERVER_URL_ENV, &url); }
         }
-        Self::new(data_dir)
+        Self::new_with_sink(data_dir, notification_sink)
     }
 
     /// Get the UI context - the primary API for UI code.
@@ -159,7 +178,7 @@ impl AppContext {
     ///
     /// Also spawns the EventBus → orchestrator bridge so incoming-call offers
     /// reach the worker without UI-layer dispatch.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub fn init_call_service(&self) {
         let mut newly_created = false;
         self.call_service.get_or_init(|| {
@@ -187,7 +206,7 @@ impl AppContext {
     }
 
     /// Get the call worker handle.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub fn get_call_service(&self) -> Option<CallWorkerHandle> {
         self.call_service.get().cloned()
     }
@@ -207,12 +226,8 @@ impl AppContext {
 
         let handlers = EventHandlers::new(
             self.core_services.message_state.clone(),
-            self.core_services.chat_state.clone(),
             self.core_services.pinned_state.clone(),
-            self.core_services.user_state.clone(),
-            self.core_services.presence_state.clone(),
             self.core_services.streaming_state.clone(),
-            self.core_services.offline_state.clone(),
         )
         .with_group_coordinator(self.infrastructure.group_coordinator.clone())
         .with_message_service(self.core_services.message_service.clone())

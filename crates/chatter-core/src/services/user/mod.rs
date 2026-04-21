@@ -25,7 +25,7 @@ use crate::storage::repositories::anon_dm_repo::AnonDmRepository;
 use crate::storage::repositories::anon_group_repo::AnonGroupRepository;
 use crate::storage::repositories::user_repo::UserRepository;
 
-mod conversions;
+pub(crate) mod conversions;
 #[cfg(test)]
 mod tests;
 

@@ -12,6 +12,9 @@ slint::include_modules!();
 // UI modules (require Slint types)
 pub mod bin_ui;
 
+// Platform integration (JNI on Android, etc.)
+pub mod platform;
+
 /// Global tokio runtime handle for use in Slint callbacks.
 /// On Android, Slint's event loop doesn't preserve the tokio runtime context,
 /// so tokio::spawn silently fails from callbacks. This handle is set once at
@@ -33,15 +36,9 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     ))
     .expect("Failed to set Android platform");
 
-    // Initialize Android notification channel (required API 26+)
-    // Must be done before any notifications are shown.
-    {
-        let notifs = chatter_core::system::android_notifications::AndroidNotifications::new();
-        if let Err(e) = notifs.init_channel() {
-            // Non-fatal — app works without notifications
-            eprintln!("Failed to init Android notification channel: {}", e);
-        }
-    }
+    // Android notification sink is constructed here and injected into the
+    // client via ClientBuilder::notification_sink during app_init.
+    // Channel init (API 26+) happens lazily on first show(), or via sink.init().
 
     // Two-phase startup:
     // Phase 1: block_on() for async init (client, gRPC channels, window setup)
@@ -86,7 +83,7 @@ fn setup_keyboard_inset_tracking(window: &MainWindow) {
         slint::TimerMode::Repeated,
         std::time::Duration::from_millis(200),
         move || {
-            if let Some(insets) = chatter_core::system::android_keyboard::query_display_insets() {
+            if let Some(insets) = crate::platform::android::query_display_insets() {
                 let top_changed = (insets.top - last_top.get()).abs() > 0.5;
                 let bottom_changed = (insets.bottom - last_bottom.get()).abs() > 0.5;
 
@@ -167,6 +164,15 @@ pub async fn app_init() -> AppState {
     #[cfg(target_os = "android")]
     {
         builder = builder.data_dir("/data/data/com.chatter.client/files");
+
+        let android_sink = std::sync::Arc::new(
+            crate::platform::android::AndroidNotifications::new(),
+        );
+        if let Err(e) = android_sink.init_channel() {
+            // Non-fatal — notifications just won't fire.
+            eprintln!("Failed to init Android notification channel: {}", e);
+        }
+        builder = builder.notification_sink(android_sink);
     }
     let client = match builder.build() {
         Ok(c) => c,
@@ -308,7 +314,6 @@ pub async fn app_init() -> AppState {
                                         slint::quit_event_loop().ok();
                                         break;
                                     }
-                                    _ => {}
                                 }
                             }
                         }

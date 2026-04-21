@@ -110,29 +110,6 @@ pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 return;
             }
 
-            // Legacy fallback: Handle old attachments that have local_path (pre-migration)
-            let has_legacy_local_path = attachment.local_path.is_some()
-                && attachment.local_path.as_ref().is_some_and(|p| std::path::Path::new(p).exists());
-
-            if has_legacy_local_path && attachment.status == AttachmentStatus::Ready {
-                tracing::warn!("Using legacy filesystem path for attachment {} - consider re-downloading", att_id);
-                #[cfg(not(target_os = "android"))]
-                if let Some(ref local_path) = attachment.local_path {
-                    let path = std::path::PathBuf::from(local_path);
-                    let filename = attachment.metadata.name.clone();
-                    let mime_type = attachment.metadata.mime_type.clone();
-
-                    // Legacy: open file with system handler
-                    let opener = ExternalOpener;
-                    if let Err(e) = opener.open_file(&path) {
-                        tracing::error!("Failed to open legacy file {:?}: {}", path, e);
-                    } else {
-                        tracing::info!("Opened legacy file: {} ({})", filename, mime_type);
-                    }
-                }
-                return;
-            }
-
             // No valid content source - show warning
             tracing::warn!(
                 "Attachment {} has no accessible content (location={:?}, status={:?})",

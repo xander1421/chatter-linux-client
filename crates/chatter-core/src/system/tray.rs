@@ -4,20 +4,20 @@
 
 use crate::error::SystemError;
 use super::platform::{APP_ID, APP_DISPLAY_NAME};
-use ksni::{self, menu::StandardItem, Icon, MenuItem, Tray, TrayService};
+use ksni::{self, menu::StandardItem, Handle, Icon, MenuItem, Tray, TrayService};
 use std::sync::{
-    atomic::{AtomicU32, Ordering},
+    atomic::{AtomicU32, AtomicU8, Ordering},
     Arc,
 };
 use tokio::sync::mpsc;
 
-/// Messages that can be sent to the system tray.
+/// Messages emitted by the tray implementation (menu/activate events).
+///
+/// Carries user-driven tray events only. Controller-driven mutations
+/// (unread count, status) flow through `SystemTray`'s typed methods and
+/// `Handle::update`, not through this channel.
 #[derive(Clone, Debug)]
 pub enum TrayMessage {
-    /// Update the unread message count badge.
-    SetUnreadCount(u32),
-    /// Update the tray status indicator.
-    SetStatus(TrayStatus),
     /// Signal the application to quit.
     Quit,
     /// Signal to open the main window.
@@ -38,13 +38,43 @@ pub enum TrayStatus {
     DoNotDisturb,
 }
 
+impl TrayStatus {
+    fn from_u8(v: u8) -> Self {
+        match v {
+            1 => TrayStatus::Offline,
+            2 => TrayStatus::Away,
+            3 => TrayStatus::DoNotDisturb,
+            _ => TrayStatus::Online,
+        }
+    }
+
+    fn as_u8(self) -> u8 {
+        match self {
+            TrayStatus::Online => 0,
+            TrayStatus::Offline => 1,
+            TrayStatus::Away => 2,
+            TrayStatus::DoNotDisturb => 3,
+        }
+    }
+}
+
+/// Shared tray state. Mutated by `SystemTray` controller methods and read by
+/// the ksni `Tray` impl when it renders.
+#[derive(Default)]
+struct TrayState {
+    unread_count: AtomicU32,
+    status: AtomicU8,
+}
+
 /// System tray icon controller.
 ///
-/// Provides methods to update the system tray state.
-/// The actual tray service runs in a separate thread.
+/// Drives the ksni service that runs on a dedicated blocking thread. Each
+/// mutation updates shared state and wakes ksni via `Handle::update` so the
+/// icon/menu redraw immediately.
 #[derive(Clone)]
 pub struct SystemTray {
-    sender: mpsc::Sender<TrayMessage>,
+    state: Arc<TrayState>,
+    handle: Handle<TrayServiceImpl>,
 }
 
 impl SystemTray {
@@ -57,26 +87,28 @@ impl SystemTray {
     ///
     /// Returns `SystemError::TrayInit` if the tray service fails to start.
     pub fn spawn() -> Result<(Self, TrayHandle, mpsc::Receiver<TrayMessage>), SystemError> {
-        let (tx, _rx) = mpsc::channel::<TrayMessage>(16);
         let (event_tx, event_rx) = mpsc::channel::<TrayMessage>(16);
 
-        let tray_service = TrayServiceImpl::new(event_tx);
+        let state = Arc::new(TrayState::default());
+        let tray_service = TrayServiceImpl::new(event_tx, state.clone());
 
-        // Spawn ksni service in blocking thread (it uses glib main loop)
-        let handle = std::thread::spawn(move || {
-            let service = TrayService::new(tray_service);
-            let service_handle = service.handle();
+        // Build the service on this thread so we can grab `Handle` before
+        // moving `service` into the blocking worker.
+        let service = TrayService::new(tray_service);
+        let handle = service.handle();
 
-            // Run the service (this blocks until shutdown)
+        let thread_handle = std::thread::spawn(move || {
+            // Run the service (blocks until shutdown)
             let _ = service.run();
-
-            drop(service_handle);
         });
 
-        let controller = Self { sender: tx.clone() };
+        let controller = Self {
+            state,
+            handle: handle.clone(),
+        };
         let tray_handle = TrayHandle {
-            thread_handle: Some(handle),
-            sender: tx,
+            thread_handle: Some(thread_handle),
+            handle,
         };
 
         Ok((controller, tray_handle, event_rx))
@@ -84,30 +116,33 @@ impl SystemTray {
 
     /// Update the unread message count badge.
     pub fn set_unread_count(&self, count: u32) {
-        let _ = self.sender.try_send(TrayMessage::SetUnreadCount(count));
+        self.state.unread_count.store(count, Ordering::Relaxed);
+        // Force ksni to re-render so the icon updates.
+        self.handle.update(|_| {});
     }
 
     /// Update the tray status indicator.
     pub fn set_status(&self, status: TrayStatus) {
-        let _ = self.sender.try_send(TrayMessage::SetStatus(status));
+        self.state.status.store(status.as_u8(), Ordering::Relaxed);
+        self.handle.update(|_| {});
     }
 
-    /// Signal the application to quit.
+    /// Signal the application to quit by shutting down the ksni service.
     pub fn quit(&self) {
-        let _ = self.sender.try_send(TrayMessage::Quit);
+        self.handle.shutdown();
     }
 }
 
 /// Handle to the system tray service for cleanup.
 pub struct TrayHandle {
     thread_handle: Option<std::thread::JoinHandle<()>>,
-    sender: mpsc::Sender<TrayMessage>,
+    handle: Handle<TrayServiceImpl>,
 }
 
 impl TrayHandle {
     /// Shutdown the tray service and wait for cleanup.
     pub fn shutdown(mut self) {
-        let _ = self.sender.try_send(TrayMessage::Quit);
+        self.handle.shutdown();
         if let Some(handle) = self.thread_handle.take() {
             let _ = handle.join();
         }
@@ -116,34 +151,34 @@ impl TrayHandle {
 
 impl Drop for TrayHandle {
     fn drop(&mut self) {
-        let _ = self.sender.try_send(TrayMessage::Quit);
+        self.handle.shutdown();
     }
 }
 
 /// Internal ksni tray implementation.
 struct TrayServiceImpl {
-    unread_count: Arc<AtomicU32>,
+    state: Arc<TrayState>,
     event_sender: mpsc::Sender<TrayMessage>,
 }
 
 impl TrayServiceImpl {
-    fn new(event_sender: mpsc::Sender<TrayMessage>) -> Self {
-        Self {
-            unread_count: Arc::new(AtomicU32::new(0)),
-            event_sender,
-        }
+    fn new(event_sender: mpsc::Sender<TrayMessage>, state: Arc<TrayState>) -> Self {
+        Self { state, event_sender }
     }
 
-    fn icon_name(&self) -> String {
-        let count = self.unread_count.load(Ordering::Relaxed);
+    fn compute_icon_name(&self) -> String {
+        let count = self.state.unread_count.load(Ordering::Relaxed);
+        let status = TrayStatus::from_u8(self.state.status.load(Ordering::Relaxed));
+
         if count > 0 {
-            // Use generic icon with badge indicator
-            // Custom icons would be: "chatter-linux-unread"
             "mail-unread".to_string()
         } else {
-            // Default icon
-            // Custom icon would be: "chatter-linux"
-            "dialog-information".to_string()
+            match status {
+                TrayStatus::Offline => "user-offline".to_string(),
+                TrayStatus::Away => "user-away".to_string(),
+                TrayStatus::DoNotDisturb => "user-busy".to_string(),
+                TrayStatus::Online => "dialog-information".to_string(),
+            }
         }
     }
 }
@@ -158,7 +193,7 @@ impl Tray for TrayServiceImpl {
     }
 
     fn icon_name(&self) -> String {
-        self.icon_name()
+        self.compute_icon_name()
     }
 
     fn icon_pixmap(&self) -> Vec<Icon> {
@@ -214,31 +249,35 @@ mod tests {
 
     #[test]
     fn test_tray_message_variants() {
-        let messages = [
-            TrayMessage::SetUnreadCount(5),
-            TrayMessage::SetStatus(TrayStatus::Online),
-            TrayMessage::Quit,
-            TrayMessage::OpenWindow,
-        ];
-
-        // Just verify they can be constructed
-        assert_eq!(messages.len(), 4);
+        let messages = [TrayMessage::Quit, TrayMessage::OpenWindow];
+        assert_eq!(messages.len(), 2);
     }
 
     #[test]
-    fn test_tray_service_icon_name() {
+    fn test_tray_status_roundtrip_u8() {
+        for status in [
+            TrayStatus::Online,
+            TrayStatus::Offline,
+            TrayStatus::Away,
+            TrayStatus::DoNotDisturb,
+        ] {
+            assert_eq!(TrayStatus::from_u8(status.as_u8()), status);
+        }
+    }
+
+    #[test]
+    fn test_tray_state_icon_name() {
         let (tx, _rx) = mpsc::channel(1);
-        let service = TrayServiceImpl::new(tx);
+        let state = Arc::new(TrayState::default());
+        let service = TrayServiceImpl::new(tx, state.clone());
 
-        // Default: no unread messages
-        assert_eq!(service.icon_name(), "dialog-information");
+        assert_eq!(service.compute_icon_name(), "dialog-information");
 
-        // Set unread count
-        service.unread_count.store(5, Ordering::Relaxed);
-        assert_eq!(service.icon_name(), "mail-unread");
+        state.unread_count.store(5, Ordering::Relaxed);
+        assert_eq!(service.compute_icon_name(), "mail-unread");
 
-        // Back to zero
-        service.unread_count.store(0, Ordering::Relaxed);
-        assert_eq!(service.icon_name(), "dialog-information");
+        state.unread_count.store(0, Ordering::Relaxed);
+        state.status.store(TrayStatus::DoNotDisturb.as_u8(), Ordering::Relaxed);
+        assert_eq!(service.compute_icon_name(), "user-busy");
     }
 }

@@ -4,19 +4,14 @@
 
 use crate::error::SystemError;
 use super::platform::APP_DISPLAY_NAME;
-use std::sync::{
-    atomic::{AtomicU32, Ordering},
-    Arc,
-};
 use tokio::sync::mpsc;
 
-/// Messages that can be sent to the system tray.
+/// Messages emitted by the tray implementation (menu/activate events).
+///
+/// Same shape as the Linux tray: user-driven events only. Controller
+/// mutations go through `SystemTray`'s typed methods.
 #[derive(Clone, Debug)]
 pub enum TrayMessage {
-    /// Update the unread message count badge.
-    SetUnreadCount(u32),
-    /// Update the tray status indicator.
-    SetStatus(TrayStatus),
     /// Signal the application to quit.
     Quit,
     /// Signal to open the main window.
@@ -76,7 +71,6 @@ impl SystemTray {
                             TrayMessage::OpenWindow => {
                                 // Would trigger window show
                             }
-                            _ => {}
                         }
                     }
                     else => break,
@@ -148,14 +142,16 @@ impl SystemTray {
     }
 
     /// Update the unread message count badge.
-    pub fn set_unread_count(&self, count: u32) {
-        let _ = self.sender.try_send(TrayMessage::SetUnreadCount(count));
-    }
+    ///
+    /// No-op on Windows until the tray-icon/muda backend exposes a way to
+    /// redraw the icon from outside the message loop. Kept so the
+    /// cross-platform `SystemTray` API surface matches the Linux impl.
+    pub fn set_unread_count(&self, _count: u32) {}
 
     /// Update the tray status indicator.
-    pub fn set_status(&self, status: TrayStatus) {
-        let _ = self.sender.try_send(TrayMessage::SetStatus(status));
-    }
+    ///
+    /// No-op on Windows (see `set_unread_count`).
+    pub fn set_status(&self, _status: TrayStatus) {}
 
     /// Signal the application to quit.
     pub fn quit(&self) {
@@ -217,14 +213,8 @@ mod tests {
 
     #[test]
     fn test_tray_message_variants() {
-        let messages = [
-            TrayMessage::SetUnreadCount(5),
-            TrayMessage::SetStatus(TrayStatus::Online),
-            TrayMessage::Quit,
-            TrayMessage::OpenWindow,
-        ];
-
-        assert_eq!(messages.len(), 4);
+        let messages = [TrayMessage::Quit, TrayMessage::OpenWindow];
+        assert_eq!(messages.len(), 2);
     }
 
     #[test]

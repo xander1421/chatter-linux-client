@@ -55,9 +55,7 @@ use tracing::{debug, trace, warn};
 use crate::events::bus::EventBus;
 use crate::inbox::handlers::DomainEvent;
 use crate::mailbox::group::GroupCoordinator;
-use crate::state::{
-    ChatState, MessageState, OfflineState, PinnedState, PresenceState, StreamingState, UserState,
-};
+use crate::state::{MessageState, PinnedState, StreamingState};
 
 /// Event handlers that bridge domain events to state stores.
 ///
@@ -74,22 +72,10 @@ use crate::state::{
 pub struct EventHandlers {
     /// Message cache and draft state.
     message_state: MessageState,
-    /// Channel/thread navigation state.
-    #[allow(dead_code)]
-    chat_state: ChatState,
     /// Pinned messages navigation state.
     pinned_state: PinnedState,
-    /// User profile and relationship cache.
-    #[allow(dead_code)]
-    user_state: UserState,
-    /// User presence status cache.
-    #[allow(dead_code)]
-    presence_state: PresenceState,
     /// Real-time streaming data (typing, reactions).
     streaming_state: StreamingState,
-    /// Connection and offline queue status.
-    #[allow(dead_code)]
-    offline_state: OfflineState,
     /// Group mailbox coordinator for NDSS '21 per-group mailboxes.
     group_coordinator: Option<Arc<GroupCoordinator>>,
     /// Message service for DB persistence of edits/deletes.
@@ -103,35 +89,23 @@ pub struct EventHandlers {
 }
 
 impl EventHandlers {
-    /// Create a new EventHandlers with all state stores.
+    /// Create a new EventHandlers with the state stores it actually reads.
     ///
     /// # Arguments
     ///
     /// * `message_state` - Message cache and draft state
-    /// * `chat_state` - Channel/thread navigation state
     /// * `pinned_state` - Pinned messages navigation state
-    /// * `user_state` - User profile and relationship cache
-    /// * `presence_state` - User presence status cache
     /// * `streaming_state` - Real-time streaming data (typing, reactions)
-    /// * `offline_state` - Connection and offline queue status
     #[must_use]
     pub fn new(
         message_state: MessageState,
-        chat_state: ChatState,
         pinned_state: PinnedState,
-        user_state: UserState,
-        presence_state: PresenceState,
         streaming_state: StreamingState,
-        offline_state: OfflineState,
     ) -> Self {
         Self {
             message_state,
-            chat_state,
             pinned_state,
-            user_state,
-            presence_state,
             streaming_state,
-            offline_state,
             group_coordinator: None,
             message_service: None,
             anon_group_service: None,
@@ -946,29 +920,8 @@ mod tests {
     use crate::domain::ids::{ChannelId, MessageId, UserId};
     use crate::domain::message::{ConversationType, Message, MessageContent};
 
-    fn create_test_stores() -> (
-        MessageState,
-        ChatState,
-        PinnedState,
-        UserState,
-        PresenceState,
-        StreamingState,
-        OfflineState,
-    ) {
-        (
-            MessageState::new(),
-            ChatState::new(),
-            PinnedState::new(),
-            UserState::new(),
-            PresenceState::new(),
-            StreamingState::new(),
-            OfflineState::new(),
-        )
-    }
-
     fn create_handlers() -> EventHandlers {
-        let (msg, chat, pinned, user, presence, streaming, offline) = create_test_stores();
-        EventHandlers::new(msg, chat, pinned, user, presence, streaming, offline)
+        EventHandlers::new(MessageState::new(), PinnedState::new(), StreamingState::new())
     }
 
     fn create_test_message(channel_id: ChannelId) -> Message {

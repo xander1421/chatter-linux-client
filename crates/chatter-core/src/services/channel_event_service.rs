@@ -298,7 +298,11 @@ impl ChannelEventService {
         Message {
             id: MessageId::new(),
             conversation_id: *channel_id,
-            conversation_type: ConversationType::Channel,
+            // Channel message reads use `ConversationType::AnonGroup` (see
+            // services/anon_group/storage.rs, services/conversation.rs,
+            // services/message/mod.rs). Writing under ::Channel here made
+            // join/leave/kick system messages invisible in channel history.
+            conversation_type: ConversationType::AnonGroup,
             sender_id: subject,
             device_id: None,
             content: MessageContent::System(content),

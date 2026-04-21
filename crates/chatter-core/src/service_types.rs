@@ -13,7 +13,7 @@ pub use crate::services::session_service::{Session, SessionService};
 pub use crate::services::anon_dm::{AnonDmService, PendingAnonCall};
 pub use crate::services::anon_group::AnonGroupService;
 pub use crate::services::mailbox_manager::MailboxManager;
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "media")]
 pub use crate::services::call_worker::CallWorkerHandle;
 pub use crate::services::conversation::ConversationHandle;
 pub use crate::services::jarvis::JarvisBackgroundBuilder;

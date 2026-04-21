@@ -806,6 +806,27 @@ impl CallWorkerHandle {
         None
     }
 
+    /// Plain-data snapshot of participants for FFI consumers. Maps the
+    /// domain `Participant` list onto a `Send + Clone` shape and tags
+    /// which one is the local user.
+    pub async fn participant_snapshot(
+        &self,
+    ) -> Vec<crate::client::calls::CallParticipantSnapshot> {
+        let Some(call) = self.active_call().await else { return vec![]; };
+        let local_id = call.initiator_id.clone();
+        call.participants.iter().map(|p| {
+            crate::client::calls::CallParticipantSnapshot {
+                identity: p.user_id.to_string(),
+                display_name: p.user_id.to_string(),
+                has_audio: !p.is_muted,
+                has_video: p.is_video_enabled,
+                is_speaking: false,
+                is_muted: p.is_muted,
+                is_local: p.user_id == local_id,
+            }
+        }).collect()
+    }
+
     /// Get the room name of the active call (for anonymous call management).
     pub async fn get_room_name(&self) -> Option<String> {
         let (tx, rx) = oneshot::channel();

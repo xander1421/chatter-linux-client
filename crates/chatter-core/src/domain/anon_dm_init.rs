@@ -12,7 +12,7 @@
 //! NDSS'21 specifies sender identity is revealed after decryption anyway,
 //! including it here is correct protocol behavior.
 //!
-//! # Wire Format (v4)
+//! # Wire Format
 //!
 //! ```text
 //! | version (1) | conversation_id (16) | sender_id (16) | mailbox_pk (32) |
@@ -26,23 +26,11 @@ use super::anon_dm::AnonDmId;
 use super::UserId;
 
 /// Current version of the init message format.
-pub const INIT_MESSAGE_VERSION: u8 = 4;
+pub const INIT_MESSAGE_VERSION: u8 = 5;
 
-/// Previous version (for backward compatibility).
-const INIT_MESSAGE_VERSION_V3: u8 = 3;
-
-/// Previous version (for backward compatibility).
-const INIT_MESSAGE_VERSION_V2: u8 = 2;
-
-/// Minimum size of init message v4 (without display_name, intro, or avatar).
+/// Minimum size of init message (without display_name, intro, or avatar).
 /// avatar_len is u32 (4 bytes) to support up to 1MB avatars.
 pub const MIN_INIT_SIZE: usize = 1 + 16 + 16 + 32 + 33 + 12 + 1 + 2 + 4; // 117 bytes
-
-/// Minimum size of init message v3 (legacy).
-const MIN_INIT_SIZE_V3: usize = 1 + 16 + 16 + 32 + 33 + 12 + 1 + 2; // 113 bytes
-
-/// Minimum size of init message v2 (legacy).
-const MIN_INIT_SIZE_V2: usize = 1 + 16 + 16 + 32 + 33 + 12 + 2; // 112 bytes
 
 /// Maximum intro message length.
 pub const MAX_INTRO_LENGTH: usize = 500;
@@ -79,7 +67,7 @@ pub struct AnonDmInitMessage {
     pub sender_display_name: String,
     /// Optional intro message (max 500 chars).
     pub intro_message: String,
-    /// Optional sender avatar (max 25KB).
+    /// Optional sender avatar (max 1MB).
     pub sender_avatar: Option<Vec<u8>>,
 }
 
@@ -141,7 +129,7 @@ impl AnonDmInitMessage {
         }
     }
 
-    /// Serialize to bytes (v4 format).
+    /// Serialize to bytes.
     pub fn to_bytes(&self) -> Result<Vec<u8>, InitMessageError> {
         let name_bytes = self.sender_display_name.as_bytes();
         if name_bytes.len() > MAX_DISPLAY_NAME_LENGTH {
@@ -161,96 +149,63 @@ impl AnonDmInitMessage {
         let total_size = MIN_INIT_SIZE + name_bytes.len() + intro_bytes.len() + avatar_bytes.len();
         let mut bytes = Vec::with_capacity(total_size);
 
-        // Version
         bytes.push(INIT_MESSAGE_VERSION);
-
-        // Conversation ID (16 bytes)
         bytes.extend_from_slice(self.conversation_id.as_bytes());
-
-        // Sender ID (16 bytes) - revealed after decryption per NDSS'21
         bytes.extend_from_slice(self.sender_id.as_bytes());
-
-        // Mailbox public key (32 bytes)
         bytes.extend_from_slice(&self.mailbox_pk);
-
-        // Identity key (33 bytes)
         bytes.extend_from_slice(&self.identity_key);
-
-        // Delivery token (12 bytes)
         bytes.extend_from_slice(&self.delivery_token);
 
-        // Sender display name length (1 byte)
         bytes.push(name_bytes.len() as u8);
-
-        // Sender display name
         bytes.extend_from_slice(name_bytes);
 
-        // Intro message length (2 bytes, big-endian)
         let intro_len = intro_bytes.len() as u16;
         bytes.extend_from_slice(&intro_len.to_be_bytes());
-
-        // Intro message
         bytes.extend_from_slice(intro_bytes);
 
-        // Avatar length (4 bytes, big-endian u32)
         let avatar_len: u32 = avatar_bytes.len().try_into().map_err(|_| {
             InitMessageError::AvatarTooLarge(avatar_bytes.len(), MAX_AVATAR_SIZE)
         })?;
         bytes.extend_from_slice(&avatar_len.to_be_bytes());
-
-        // Avatar bytes
         bytes.extend_from_slice(avatar_bytes);
 
         Ok(bytes)
     }
 
-    /// Parse from bytes (supports v2, v3 and v4 formats).
+    /// Parse from bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, InitMessageError> {
         if bytes.is_empty() {
-            return Err(InitMessageError::TooShort(0, MIN_INIT_SIZE_V2));
+            return Err(InitMessageError::TooShort(0, MIN_INIT_SIZE));
         }
 
         let version = bytes[0];
-
-        // Route to appropriate parser based on version
-        match version {
-            INIT_MESSAGE_VERSION => Self::from_bytes_v4(bytes),
-            INIT_MESSAGE_VERSION_V3 => Self::from_bytes_v3(bytes),
-            INIT_MESSAGE_VERSION_V2 => Self::from_bytes_v2(bytes),
-            _ => Err(InitMessageError::UnsupportedVersion(version)),
+        if version != INIT_MESSAGE_VERSION {
+            return Err(InitMessageError::UnsupportedVersion(version));
         }
-    }
 
-    /// Parse v4 format (with display_name and avatar).
-    fn from_bytes_v4(bytes: &[u8]) -> Result<Self, InitMessageError> {
         if bytes.len() < MIN_INIT_SIZE {
             return Err(InitMessageError::TooShort(bytes.len(), MIN_INIT_SIZE));
         }
 
         let mut offset = 1; // Skip version byte
 
-        // Conversation ID (16 bytes)
         let mut conv_id_bytes = [0u8; 16];
         conv_id_bytes.copy_from_slice(&bytes[offset..offset + 16]);
         let conversation_id = AnonDmId::from_bytes(conv_id_bytes);
         offset += 16;
 
-        // Sender ID (16 bytes)
         let sender_id = UserId::try_from_slice(&bytes[offset..offset + 16])
             .ok_or_else(|| InitMessageError::InvalidData("invalid sender_id".into()))?;
         offset += 16;
 
-        // Mailbox public key (32 bytes)
         let mut mailbox_pk = [0u8; 32];
         mailbox_pk.copy_from_slice(&bytes[offset..offset + 32]);
         offset += 32;
 
-        // Identity key (33 bytes)
         let mut identity_key = [0u8; 33];
         identity_key.copy_from_slice(&bytes[offset..offset + 33]);
         offset += 33;
 
-        // Validate identity key format
         if identity_key[0] != 0x05 {
             return Err(InitMessageError::InvalidData(format!(
                 "invalid identity key type byte: 0x{:02x}",
@@ -258,12 +213,10 @@ impl AnonDmInitMessage {
             )));
         }
 
-        // Delivery token (12 bytes)
         let mut delivery_token = [0u8; 12];
         delivery_token.copy_from_slice(&bytes[offset..offset + 12]);
         offset += 12;
 
-        // Display name length (1 byte)
         let name_len = bytes[offset] as usize;
         offset += 1;
 
@@ -274,19 +227,16 @@ impl AnonDmInitMessage {
             return Err(InitMessageError::TooShort(bytes.len(), offset + name_len));
         }
 
-        // Display name
         let sender_display_name = String::from_utf8(bytes[offset..offset + name_len].to_vec())
             .map_err(|_| InitMessageError::InvalidData("invalid UTF-8 in display name".into()))?;
         offset += name_len;
 
-        // Intro message length (2 bytes)
         if bytes.len() < offset + 2 {
             return Err(InitMessageError::TooShort(bytes.len(), offset + 2));
         }
         let intro_len = u16::from_be_bytes([bytes[offset], bytes[offset + 1]]) as usize;
         offset += 2;
 
-        // Intro message
         if intro_len > MAX_INTRO_LENGTH {
             return Err(InitMessageError::IntroTooLong(intro_len, MAX_INTRO_LENGTH));
         }
@@ -297,14 +247,12 @@ impl AnonDmInitMessage {
             .map_err(|_| InitMessageError::InvalidData("invalid UTF-8 in intro message".into()))?;
         offset += intro_len;
 
-        // Avatar length (4 bytes, u32)
         if bytes.len() < offset + 4 {
             return Err(InitMessageError::TooShort(bytes.len(), offset + 4));
         }
         let avatar_len = u32::from_be_bytes([bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]]) as usize;
         offset += 4;
 
-        // Avatar
         let sender_avatar = if avatar_len > 0 {
             if avatar_len > MAX_AVATAR_SIZE {
                 return Err(InitMessageError::AvatarTooLarge(avatar_len, MAX_AVATAR_SIZE));
@@ -326,164 +274,6 @@ impl AnonDmInitMessage {
             sender_display_name,
             intro_message,
             sender_avatar,
-        })
-    }
-
-    /// Parse v3 format (with display_name, no avatar).
-    fn from_bytes_v3(bytes: &[u8]) -> Result<Self, InitMessageError> {
-        if bytes.len() < MIN_INIT_SIZE_V3 {
-            return Err(InitMessageError::TooShort(bytes.len(), MIN_INIT_SIZE_V3));
-        }
-
-        let mut offset = 1; // Skip version byte
-
-        // Conversation ID (16 bytes)
-        let mut conv_id_bytes = [0u8; 16];
-        conv_id_bytes.copy_from_slice(&bytes[offset..offset + 16]);
-        let conversation_id = AnonDmId::from_bytes(conv_id_bytes);
-        offset += 16;
-
-        // Sender ID (16 bytes)
-        let sender_id = UserId::try_from_slice(&bytes[offset..offset + 16])
-            .ok_or_else(|| InitMessageError::InvalidData("invalid sender_id".into()))?;
-        offset += 16;
-
-        // Mailbox public key (32 bytes)
-        let mut mailbox_pk = [0u8; 32];
-        mailbox_pk.copy_from_slice(&bytes[offset..offset + 32]);
-        offset += 32;
-
-        // Identity key (33 bytes)
-        let mut identity_key = [0u8; 33];
-        identity_key.copy_from_slice(&bytes[offset..offset + 33]);
-        offset += 33;
-
-        // Validate identity key format
-        if identity_key[0] != 0x05 {
-            return Err(InitMessageError::InvalidData(format!(
-                "invalid identity key type byte: 0x{:02x}",
-                identity_key[0]
-            )));
-        }
-
-        // Delivery token (12 bytes)
-        let mut delivery_token = [0u8; 12];
-        delivery_token.copy_from_slice(&bytes[offset..offset + 12]);
-        offset += 12;
-
-        // Display name length (1 byte)
-        let name_len = bytes[offset] as usize;
-        offset += 1;
-
-        if name_len > MAX_DISPLAY_NAME_LENGTH {
-            return Err(InitMessageError::DisplayNameTooLong(name_len, MAX_DISPLAY_NAME_LENGTH));
-        }
-        if bytes.len() < offset + name_len {
-            return Err(InitMessageError::TooShort(bytes.len(), offset + name_len));
-        }
-
-        // Display name
-        let sender_display_name = String::from_utf8(bytes[offset..offset + name_len].to_vec())
-            .map_err(|_| InitMessageError::InvalidData("invalid UTF-8 in display name".into()))?;
-        offset += name_len;
-
-        // Intro message length (2 bytes)
-        if bytes.len() < offset + 2 {
-            return Err(InitMessageError::TooShort(bytes.len(), offset + 2));
-        }
-        let intro_len = u16::from_be_bytes([bytes[offset], bytes[offset + 1]]) as usize;
-        offset += 2;
-
-        // Intro message
-        if intro_len > MAX_INTRO_LENGTH {
-            return Err(InitMessageError::IntroTooLong(intro_len, MAX_INTRO_LENGTH));
-        }
-        if bytes.len() < offset + intro_len {
-            return Err(InitMessageError::TooShort(bytes.len(), offset + intro_len));
-        }
-        let intro_message = String::from_utf8(bytes[offset..offset + intro_len].to_vec())
-            .map_err(|_| InitMessageError::InvalidData("invalid UTF-8 in intro message".into()))?;
-
-        Ok(Self {
-            conversation_id,
-            sender_id,
-            mailbox_pk,
-            identity_key,
-            delivery_token,
-            sender_display_name,
-            intro_message,
-            sender_avatar: None, // V3 format doesn't include avatar
-        })
-    }
-
-    /// Parse v2 format (legacy, without display_name).
-    fn from_bytes_v2(bytes: &[u8]) -> Result<Self, InitMessageError> {
-        if bytes.len() < MIN_INIT_SIZE_V2 {
-            return Err(InitMessageError::TooShort(bytes.len(), MIN_INIT_SIZE_V2));
-        }
-
-        let mut offset = 1; // Skip version byte
-
-        // Conversation ID (16 bytes)
-        let mut conv_id_bytes = [0u8; 16];
-        conv_id_bytes.copy_from_slice(&bytes[offset..offset + 16]);
-        let conversation_id = AnonDmId::from_bytes(conv_id_bytes);
-        offset += 16;
-
-        // Sender ID (16 bytes)
-        let sender_id = UserId::try_from_slice(&bytes[offset..offset + 16])
-            .ok_or_else(|| InitMessageError::InvalidData("invalid sender_id".into()))?;
-        offset += 16;
-
-        // Mailbox public key (32 bytes)
-        let mut mailbox_pk = [0u8; 32];
-        mailbox_pk.copy_from_slice(&bytes[offset..offset + 32]);
-        offset += 32;
-
-        // Identity key (33 bytes)
-        let mut identity_key = [0u8; 33];
-        identity_key.copy_from_slice(&bytes[offset..offset + 33]);
-        offset += 33;
-
-        // Validate identity key format
-        if identity_key[0] != 0x05 {
-            return Err(InitMessageError::InvalidData(format!(
-                "invalid identity key type byte: 0x{:02x}",
-                identity_key[0]
-            )));
-        }
-
-        // Delivery token (12 bytes)
-        let mut delivery_token = [0u8; 12];
-        delivery_token.copy_from_slice(&bytes[offset..offset + 12]);
-        offset += 12;
-
-        // Intro message length (2 bytes)
-        if bytes.len() < offset + 2 {
-            return Err(InitMessageError::TooShort(bytes.len(), offset + 2));
-        }
-        let intro_len = u16::from_be_bytes([bytes[offset], bytes[offset + 1]]) as usize;
-        offset += 2;
-
-        // Intro message
-        if intro_len > MAX_INTRO_LENGTH {
-            return Err(InitMessageError::IntroTooLong(intro_len, MAX_INTRO_LENGTH));
-        }
-        if bytes.len() < offset + intro_len {
-            return Err(InitMessageError::TooShort(bytes.len(), offset + intro_len));
-        }
-        let intro_message = String::from_utf8(bytes[offset..offset + intro_len].to_vec())
-            .map_err(|_| InitMessageError::InvalidData("invalid UTF-8 in intro message".into()))?;
-
-        Ok(Self {
-            conversation_id,
-            sender_id,
-            mailbox_pk,
-            identity_key,
-            delivery_token,
-            sender_display_name: String::new(), // Empty for v2 messages
-            intro_message,
-            sender_avatar: None, // V2 format doesn't include avatar
         })
     }
 
@@ -552,7 +342,6 @@ mod tests {
         );
 
         let bytes = msg.to_bytes().unwrap();
-        // MIN_INIT_SIZE now includes display_name length byte
         assert!(bytes.len() >= MIN_INIT_SIZE);
 
         let parsed = AnonDmInitMessage::from_bytes(&bytes).unwrap();
@@ -650,7 +439,6 @@ mod tests {
             Some(avatar),
         );
 
-        // Should succeed — exactly at the limit
         assert!(msg.to_bytes().is_ok());
     }
 

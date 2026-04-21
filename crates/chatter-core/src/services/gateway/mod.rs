@@ -59,7 +59,7 @@ pub use builders::{
 
 // Re-export outgoing router
 pub use outgoing::{
-    OutgoingIntent, QuoteIntent, AnonQuoteIntent, SendResult, SendError,
+    OutgoingIntent, QuoteIntent, SendResult, SendError,
     OutgoingServices, route_outgoing,
     OwnedOutgoingServices, route_outgoing_owned,
 };

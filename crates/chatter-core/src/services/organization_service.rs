@@ -66,17 +66,29 @@ impl OrganizationService {
 
     /// Set the active organization context.
     ///
-    /// Stores the active org ID in settings for use by other services.
+    /// Stores the active org ID under the same canonical settings key used
+    /// by auth restore/logout (`keys::CURRENT_ORG_ID`) so all code paths
+    /// converge on one source of truth.
     pub fn set_active_organization(&self, org_id: Option<&str>) -> Result<(), OrganizationError> {
-        self.settings_repo
-            .set("active_organization_id", &org_id.unwrap_or("").to_string())
-            .map_err(|e| OrganizationError::Storage(e.to_string()))
+        use crate::storage::repositories::settings_repo::keys;
+        match org_id {
+            Some(id) if !id.is_empty() => self
+                .settings_repo
+                .set_string(keys::CURRENT_ORG_ID, id)
+                .map_err(|e| OrganizationError::Storage(e.to_string())),
+            _ => self
+                .settings_repo
+                .delete(keys::CURRENT_ORG_ID)
+                .map(|_| ())
+                .map_err(|e| OrganizationError::Storage(e.to_string())),
+        }
     }
 
     /// Get the active organization ID.
     pub fn active_organization_id(&self) -> Option<String> {
+        use crate::storage::repositories::settings_repo::keys;
         self.settings_repo
-            .get::<String>("active_organization_id")
+            .get_string(keys::CURRENT_ORG_ID)
             .ok()
             .flatten()
             .filter(|s| !s.is_empty())

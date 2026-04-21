@@ -206,12 +206,6 @@ impl PresenceRouter {
     }
 }
 
-/// Presence stream handler.
-///
-/// Type alias for backwards compatibility with the architecture document.
-/// Use `PresenceRouter` for the full API.
-pub type PresenceStream = PresenceRouter;
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -75,6 +75,10 @@ glutin_egl_sys = { version = "0.7", optional = true }
 [target.'cfg(target_os = "android")'.dependencies]
 i-slint-backend-android-activity = { version = "1.15.1", default-features = false, features = ["aa-06"], optional = true }
 android-activity = { version = "0.6", features = ["native-activity"], optional = true }
+# JNI bindings for Android system APIs (notifications, window insets).
+# These live in chatter-ui (platform layer), not chatter-core (platform-neutral).
+jni = "0.21"
+ndk-context = "0.1"
 
 [dev-dependencies]
 tempfile = "3"

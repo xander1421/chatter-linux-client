@@ -446,9 +446,14 @@ impl IncrementalMacVerifier {
     /// * `incremental_mac` - Concatenated 32-byte digests from AttachmentPointer
     /// * `chunk_size` - Chunk size in bytes (must be 65536 per Signal spec)
     ///
-    /// Returns `None` if `incremental_mac` is empty (backward compat).
+    /// Returns `None` if `incremental_mac` is empty (backward compat) or if
+    /// its length is not a multiple of 32 (malformed input — fail fast rather
+    /// than silently truncating).
     pub fn new(mac_key: &[u8; 32], incremental_mac: &[u8], chunk_size: u32) -> Option<Self> {
         if incremental_mac.is_empty() || chunk_size == 0 {
+            return None;
+        }
+        if incremental_mac.len() % 32 != 0 {
             return None;
         }
 

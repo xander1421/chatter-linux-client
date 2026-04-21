@@ -186,9 +186,6 @@ impl Default for ReactionAggregator {
     }
 }
 
-/// Type alias for backwards compatibility.
-pub type ReactionStream = ReactionAggregator;
-
 #[cfg(test)]
 mod tests {
     use super::*;

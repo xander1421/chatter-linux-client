@@ -22,6 +22,9 @@ pub struct VideoFrameData {
     pub is_screen_share: bool,
     /// Frame timestamp (monotonic counter for change detection).
     pub frame_id: u64,
+    /// Capture-device rotation — 0 / 90 / 180 / 270. Renderer applies in
+    /// fragment shader so upload stays tightly packed RGBA.
+    pub rotation_degrees: u32,
 }
 
 /// Shared storage for video frames from remote participants.
@@ -44,7 +47,17 @@ impl SharedVideoFrames {
     }
 
     /// Store a frame for a participant.
-    pub fn set_frame(&self, participant_id: String, rgba_data: Vec<u8>, width: u32, height: u32, is_screen_share: bool) {
+    ///
+    /// Accepts an `Arc<Vec<u8>>` so callers can share the same buffer between
+    /// the shared store and their own local caches without a deep copy of
+    /// the RGBA pixel data on every frame.
+    pub fn set_frame(&self, participant_id: String, rgba_data: Arc<Vec<u8>>, width: u32, height: u32, is_screen_share: bool) {
+        self.set_frame_rotated(participant_id, rgba_data, width, height, is_screen_share, 0);
+    }
+
+    /// Same as `set_frame` but carries capture rotation so the renderer
+    /// can apply it in its fragment shader.
+    pub fn set_frame_rotated(&self, participant_id: String, rgba_data: Arc<Vec<u8>>, width: u32, height: u32, is_screen_share: bool, rotation_degrees: u32) {
         let frame_id = {
             let mut counter = self.frame_counter.write();
             *counter += 1;
@@ -53,17 +66,24 @@ impl SharedVideoFrames {
 
         let mut frames = self.frames.write();
         frames.insert(participant_id, VideoFrameData {
-            rgba_data: Arc::new(rgba_data),
+            rgba_data,
             width,
             height,
             is_screen_share,
             frame_id,
+            rotation_degrees,
         });
     }
 
     /// Get a frame for a participant (clones the data).
     pub fn get_frame(&self, participant_id: &str) -> Option<VideoFrameData> {
         self.frames.read().get(participant_id).cloned()
+    }
+
+    /// Drop a participant's stored frame. Called when a track ends or
+    /// when a screen-share session terminates.
+    pub fn remove_frame(&self, participant_id: &str) {
+        self.frames.write().remove(participant_id);
     }
 
     /// Get all frames (clones the data).
@@ -93,11 +113,6 @@ impl SharedVideoFrames {
             .filter(|(_, frame)| frame.is_screen_share)
             .map(|(id, frame)| (id.clone(), frame.clone()))
             .collect()
-    }
-
-    /// Remove a participant's frame.
-    pub fn remove_frame(&self, participant_id: &str) {
-        self.frames.write().remove(participant_id);
     }
 
     /// Clear all frames.
@@ -143,7 +158,7 @@ mod tests {
         assert!(shared.is_empty());
 
         // Add a frame
-        shared.set_frame("user1".into(), vec![0u8; 100], 10, 10, false);
+        shared.set_frame("user1".into(), Arc::new(vec![0u8; 100]), 10, 10, false);
         assert_eq!(shared.len(), 1);
         assert!(shared.has_frame("user1"));
 

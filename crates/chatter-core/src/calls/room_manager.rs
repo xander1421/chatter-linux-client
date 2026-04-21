@@ -66,6 +66,13 @@ pub enum RoomEvent {
         participant_identity: String,
         is_encrypted: bool,
     },
+    /// LiveKit reported a new connection-quality score for a
+    /// participant. Score matches LiveKit's ConnectionQuality ordering:
+    /// 0 Unknown, 1 Poor, 2 Good, 3 Excellent. We collapse Lost→Unknown.
+    ConnectionQualityChanged {
+        participant_identity: String,
+        quality: u8,
+    },
 }
 
 /// E2EE key state (key provider + epoch under one lock).
@@ -799,6 +806,19 @@ impl RoomManager {
                 let _ = event_tx.try_send(RoomEvent::TrackUnsubscribed {
                     participant_identity: participant_id,
                     track_sid: track.sid().to_string(),
+                });
+            }
+            livekit::RoomEvent::ConnectionQualityChanged { participant, quality } => {
+                use livekit::participant::ConnectionQuality as CQ;
+                let score: u8 = match quality {
+                    CQ::Excellent => 4,
+                    CQ::Good      => 3,
+                    CQ::Poor      => 1,
+                    _             => 0,
+                };
+                let _ = event_tx.try_send(RoomEvent::ConnectionQualityChanged {
+                    participant_identity: participant.identity().to_string(),
+                    quality: score,
                 });
             }
             livekit::RoomEvent::E2eeStateChanged { participant, state: enc_state } => {

@@ -5,8 +5,9 @@
 use std::sync::Arc;
 
 use crate::domain::channel::Channel;
+use crate::domain::ids::UserId;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::services::channel::converters::proto_to_domain_channel;
+use crate::services::channel::converters::{proto_to_domain_channel, proto_to_domain_membership};
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::settings_repo::SettingsRepository;
 
@@ -26,6 +27,12 @@ pub struct ChannelSyncResult {
     pub synced: usize,
     pub new_channels: usize,
     pub updated_channels: usize,
+    pub members_synced: usize,
+    pub members_removed: usize,
+    /// Per-channel proto→domain conversion failures.
+    pub channel_parse_errors: usize,
+    /// Per-channel member reconcile failures.
+    pub member_sync_errors: usize,
 }
 
 impl ChannelSync {
@@ -49,6 +56,12 @@ impl ChannelSync {
         let mut result = ChannelSyncResult::default();
         let mut all_channels = Vec::new();
         let mut offset: i32 = 0;
+
+        // Track whether any non-fatal step failed (per-channel proto parse,
+        // per-channel member reconcile). If so we intentionally do NOT
+        // advance `last_synced_at` — otherwise the next sync would skip the
+        // work that failed here and local state would stay drifted.
+        let mut had_failure = false;
 
         loop {
             let mut client = self.grpc_pool.channel_client();
@@ -80,6 +93,8 @@ impl ChannelSync {
                         result.synced += 1;
                     }
                     Err(e) => {
+                        had_failure = true;
+                        result.channel_parse_errors += 1;
                         tracing::warn!(error = %e, "Failed to convert proto channel during sync");
                     }
                 }
@@ -91,18 +106,125 @@ impl ChannelSync {
             offset += PAGE_SIZE;
         }
 
-        // Update sync timestamp
-        let now = chrono::Utc::now().timestamp_millis();
-        let _ = self.settings_repo.set(SYNC_KEY, &now);
+        // Sync memberships for each channel so local member queries reflect
+        // server state (join/leave/role changes that happened while offline).
+        for channel in &all_channels {
+            match self.sync_channel_members(&channel.id).await {
+                Ok((added, removed)) => {
+                    result.members_synced += added;
+                    result.members_removed += removed;
+                }
+                Err(e) => {
+                    had_failure = true;
+                    result.member_sync_errors += 1;
+                    tracing::warn!(
+                        channel_id = %channel.id,
+                        error = %e,
+                        "Failed to sync members for channel"
+                    );
+                }
+            }
+        }
+
+        // Only advance the sync timestamp when every per-channel step
+        // succeeded. Partial failure must cause the next cycle to re-try
+        // the channels we skipped here.
+        if !had_failure {
+            let now = chrono::Utc::now().timestamp_millis();
+            let _ = self.settings_repo.set(SYNC_KEY, &now);
+        }
 
         tracing::info!(
             synced = result.synced,
             new = result.new_channels,
             updated = result.updated_channels,
+            members_synced = result.members_synced,
+            members_removed = result.members_removed,
+            channel_parse_errors = result.channel_parse_errors,
+            member_sync_errors = result.member_sync_errors,
+            advanced_timestamp = !had_failure,
             "Channel sync complete"
         );
 
         Ok((all_channels, result))
+    }
+
+    /// Fetch the server-side member list for a channel and reconcile it with
+    /// the local memberships table. Returns (added_or_updated, removed).
+    async fn sync_channel_members(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+    ) -> Result<(usize, usize), SyncError> {
+        use std::collections::HashSet;
+
+        let mut client = self.grpc_pool.channel_client();
+        let mut all_members = Vec::new();
+        let mut offset: i32 = 0;
+
+        loop {
+            let response = client
+                .get_channel_members(&channel_id.to_string(), PAGE_SIZE, offset)
+                .await
+                .map_err(|e| SyncError::Network(e.to_string()))?;
+            let page_len = response.members.len();
+            all_members.extend(response.members);
+            if (page_len as i32) < PAGE_SIZE {
+                break;
+            }
+            offset += PAGE_SIZE;
+        }
+
+        let server_ids: HashSet<UserId> = all_members
+            .iter()
+            .filter_map(|m| m.user_id.parse::<UserId>().ok())
+            .collect();
+
+        let local = self
+            .channel_repo
+            .list_members(channel_id)
+            .map_err(|e| SyncError::Storage(e.to_string()))?;
+
+        // Delete local memberships no longer present on the server.
+        let mut removed = 0;
+        for member in &local {
+            if !server_ids.contains(&member.user_id) {
+                match self.channel_repo.delete_membership(channel_id, &member.user_id) {
+                    Ok(()) => removed += 1,
+                    Err(e) => tracing::warn!(
+                        channel_id = %channel_id,
+                        user_id = %member.user_id,
+                        error = %e,
+                        "Failed to delete stale membership during sync"
+                    ),
+                }
+            }
+        }
+
+        // Insert any new memberships present on the server.
+        let mut added = 0;
+        for proto in &all_members {
+            match proto_to_domain_membership(channel_id, proto) {
+                Ok(membership) => {
+                    match self.channel_repo.insert_or_ignore_membership(&membership) {
+                        Ok(true) => added += 1,
+                        Ok(false) => {}
+                        Err(e) => tracing::warn!(
+                            channel_id = %channel_id,
+                            user_id = %membership.user_id,
+                            error = %e,
+                            "Failed to insert membership during sync"
+                        ),
+                    }
+                }
+                Err(e) => tracing::warn!(
+                    channel_id = %channel_id,
+                    error = %e,
+                    "Failed to convert proto member during sync"
+                ),
+            }
+        }
+
+        Ok((added, removed))
     }
 
     /// Get the last sync timestamp.

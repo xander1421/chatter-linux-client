@@ -153,6 +153,21 @@ impl Default for DesktopNotifications {
     }
 }
 
+impl super::notification_sink::NotificationSink for DesktopNotifications {
+    fn show(
+        &self,
+        title: &str,
+        body: &str,
+        priority: NotificationPriority,
+    ) -> Result<(), SystemError> {
+        DesktopNotifications::show_message(self, title, body, priority)
+    }
+
+    fn show_domain(&self, notification: &Notification) -> Result<(), SystemError> {
+        DesktopNotifications::show(self, notification)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

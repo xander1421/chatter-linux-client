@@ -24,7 +24,7 @@ use crate::services::anon_dm::AnonDmService;
 use crate::services::anon_group::AnonGroupService;
 use crate::services::attachment::AttachmentService;
 use crate::services::auth_service::AuthService;
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "media")]
 use crate::services::call_worker::CallWorkerHandle;
 use crate::services::channel::ChannelService;
 use crate::services::dm_bootstrap_service::DmBootstrapService;

@@ -13,7 +13,7 @@ pub mod error;
 pub mod service_types;
 pub mod wire;
 pub mod media;
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "media")]
 pub mod calls;
 pub mod crypto;
 pub mod system;

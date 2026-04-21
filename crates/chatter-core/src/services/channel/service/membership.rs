@@ -267,12 +267,22 @@ impl ChannelService {
                     }
                 }
                 Some(channel_event::Event::OperationFailed(failure)) => {
-                    // Leave failed — unblock sending since we're still a member
-                    let _ = self.signal_service.unblock_channel_send(channel_id);
+                    // Leave failed AFTER we already rotated the sender key. Do
+                    // NOT unblock sending — the rotated key has not been
+                    // distributed to remaining members, so any message we
+                    // encrypted with it would be undecryptable. Mark the
+                    // channel for rotation so the next successful leave/retry
+                    // redistributes fresh key material to peers.
+                    let _ = self.signal_service.mark_channel_for_rotation(channel_id);
                     let err_msg = failure
                         .error
                         .map(|e| format!("leave failed: {:?} - {}", e.code, e.message))
                         .unwrap_or_else(|| "leave failed: unknown error".to_string());
+                    tracing::error!(
+                        channel_id = %channel_id,
+                        error = %err_msg,
+                        "Leave failed after pre-leave key rotation — channel remains blocked, marked for re-rotation"
+                    );
                     return Err(ChannelError::InvalidInput(err_msg));
                 }
                 _ => continue,
@@ -280,7 +290,13 @@ impl ChannelService {
         }
 
         if !left {
-            let _ = self.signal_service.unblock_channel_send(channel_id);
+            // Same rationale as above: rotated key is not distributed, keep
+            // channel blocked and flagged for rotation.
+            let _ = self.signal_service.mark_channel_for_rotation(channel_id);
+            tracing::error!(
+                channel_id = %channel_id,
+                "Leave stream ended without MemberRemovedId after key rotation — channel remains blocked, marked for re-rotation"
+            );
             return Err(ChannelError::InvalidInput(
                 "no member_removed_id event received".to_string(),
             ));

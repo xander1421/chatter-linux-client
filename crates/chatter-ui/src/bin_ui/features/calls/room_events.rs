@@ -190,6 +190,14 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         }
                     });
                 }
+                LiveKitRoomEvent::ConnectionQualityChanged { participant_identity, quality } => {
+                    // UI doesn't surface per-participant quality today.
+                    // Log so SDK users see the stream is live.
+                    tracing::debug!(
+                        "Connection quality: {} -> {}",
+                        participant_identity, quality
+                    );
+                }
             }
         }
 

@@ -105,22 +105,6 @@ impl AIService {
         Ok(response.models)
     }
 
-    /// List available models for an AI provider (legacy API with client parameter).
-    #[deprecated(note = "Use list_models() instead")]
-    pub async fn list_available_models(
-        &self,
-        client: &mut IntegrationClient,
-        provider: IntegrationType,
-    ) -> Result<Vec<AvailableModel>, AIError> {
-        // Check logged in
-        let _ = self.settings_repo.current_user_id()?;
-
-        // Call server
-        let response = client.list_available_models(provider, None, None).await?;
-
-        Ok(response.models)
-    }
-
     /// Get token and parameter limits for a specific model.
     ///
     /// Returns the model's input/output token limits and other constraints.
@@ -139,24 +123,6 @@ impl AIService {
 
         // Call server
         let mut client = self.client();
-        let response = client.get_model_limits(provider, model).await?;
-
-        // Return limits or error if not found
-        response.limits.ok_or(AIError::InvalidModel)
-    }
-
-    /// Get token and parameter limits for a specific model (legacy API with client parameter).
-    #[deprecated(note = "Use get_limits() instead")]
-    pub async fn get_model_limits(
-        &self,
-        client: &mut IntegrationClient,
-        provider: IntegrationType,
-        model: &str,
-    ) -> Result<ModelLimits, AIError> {
-        // Check logged in
-        let _ = self.settings_repo.current_user_id()?;
-
-        // Call server
         let response = client.get_model_limits(provider, model).await?;
 
         // Return limits or error if not found
@@ -185,22 +151,6 @@ impl AIService {
         Ok(response.integrations)
     }
 
-    /// List all integrations associated with a channel (legacy API with client parameter).
-    #[deprecated(note = "Use get_channel_integrations() instead")]
-    pub async fn list_channel_integrations(
-        &self,
-        client: &mut IntegrationClient,
-        channel_id: &str,
-    ) -> Result<Vec<Integration>, AIError> {
-        // Check logged in
-        let _ = self.settings_repo.current_user_id()?;
-
-        // Call server
-        let response = client.get_channel_integrations(channel_id).await?;
-
-        Ok(response.integrations)
-    }
-
     /// Add an integration to a channel.
     ///
     /// Associates an existing integration with a channel, enabling its
@@ -221,25 +171,6 @@ impl AIService {
         Ok(())
     }
 
-    /// Add an integration to a channel (legacy API with client parameter).
-    #[deprecated(note = "Use attach_to_channel() instead")]
-    pub async fn add_integration_to_channel(
-        &self,
-        client: &mut IntegrationClient,
-        integration_id: &str,
-        channel_id: &str,
-    ) -> Result<(), AIError> {
-        // Check logged in
-        let _ = self.settings_repo.current_user_id()?;
-
-        // Call server
-        client
-            .add_integration_to_channel(integration_id, channel_id)
-            .await?;
-
-        Ok(())
-    }
-
     /// Remove an integration from a channel.
     ///
     /// Disassociates an integration from a channel, disabling its
@@ -256,25 +187,6 @@ impl AIService {
         // Call server
         let mut client = self.client();
         client.remove_integration_from_channel(integration_id, channel_id).await?;
-
-        Ok(())
-    }
-
-    /// Remove an integration from a channel (legacy API with client parameter).
-    #[deprecated(note = "Use detach_from_channel() instead")]
-    pub async fn remove_integration_from_channel(
-        &self,
-        client: &mut IntegrationClient,
-        integration_id: &str,
-        channel_id: &str,
-    ) -> Result<(), AIError> {
-        // Check logged in
-        let _ = self.settings_repo.current_user_id()?;
-
-        // Call server
-        client
-            .remove_integration_from_channel(integration_id, channel_id)
-            .await?;
 
         Ok(())
     }
@@ -311,29 +223,6 @@ impl AIService {
         })
     }
 
-    /// Create a new integration (legacy API with client parameter).
-    #[deprecated(note = "Use create() instead")]
-    pub async fn create_integration(
-        &self,
-        client: &mut IntegrationClient,
-        name: &str,
-        provider: IntegrationType,
-        config: Option<IntegrationConfig>,
-    ) -> Result<Integration, AIError> {
-        // Check logged in
-        let _ = self.settings_repo.current_user_id()?;
-
-        // Call server
-        let response = client
-            .create_integration(name, provider as i32, config)
-            .await?;
-
-        // Return integration from response
-        response.integration.ok_or_else(|| {
-            AIError::ConfigurationError("server did not return integration".to_string())
-        })
-    }
-
     /// Get an integration by ID.
     ///
     /// Retrieves the full integration details including configuration.
@@ -347,25 +236,6 @@ impl AIService {
 
         // Call server
         let mut client = self.client();
-        let response = client.get_integration(integration_id).await?;
-
-        // Return integration from response
-        response.integration.ok_or_else(|| {
-            AIError::ConfigurationError("integration not found".to_string())
-        })
-    }
-
-    /// Get an integration by ID (legacy API with client parameter).
-    #[deprecated(note = "Use get() instead")]
-    pub async fn get_integration(
-        &self,
-        client: &mut IntegrationClient,
-        integration_id: &str,
-    ) -> Result<Integration, AIError> {
-        // Check logged in
-        let _ = self.settings_repo.current_user_id()?;
-
-        // Call server
         let response = client.get_integration(integration_id).await?;
 
         // Return integration from response
@@ -396,22 +266,6 @@ impl AIService {
         Ok((response.success, response.message))
     }
 
-    /// Test an integration's connectivity (legacy API with client parameter).
-    #[deprecated(note = "Use test() instead")]
-    pub async fn test_integration(
-        &self,
-        client: &mut IntegrationClient,
-        integration_id: &str,
-    ) -> Result<(bool, String), AIError> {
-        // Check logged in
-        let _ = self.settings_repo.current_user_id()?;
-
-        // Call server
-        let response = client.test_integration(integration_id).await?;
-
-        Ok((response.success, response.message))
-    }
-
     /// Enable an integration.
     ///
     /// Activates an integration that was previously disabled.
@@ -433,25 +287,6 @@ impl AIService {
         })
     }
 
-    /// Enable an integration (legacy API with client parameter).
-    #[deprecated(note = "Use enable() instead")]
-    pub async fn enable_integration(
-        &self,
-        client: &mut IntegrationClient,
-        integration_id: &str,
-    ) -> Result<Integration, AIError> {
-        // Check logged in
-        let _ = self.settings_repo.current_user_id()?;
-
-        // Call server
-        let response = client.enable_integration(integration_id).await?;
-
-        // Return updated integration
-        response.integration.ok_or_else(|| {
-            AIError::ConfigurationError("server did not return integration".to_string())
-        })
-    }
-
     /// Disable an integration.
     ///
     /// Deactivates an integration without deleting it.
@@ -465,25 +300,6 @@ impl AIService {
 
         // Call server
         let mut client = self.client();
-        let response = client.disable_integration(integration_id).await?;
-
-        // Return updated integration
-        response.integration.ok_or_else(|| {
-            AIError::ConfigurationError("server did not return integration".to_string())
-        })
-    }
-
-    /// Disable an integration (legacy API with client parameter).
-    #[deprecated(note = "Use disable() instead")]
-    pub async fn disable_integration(
-        &self,
-        client: &mut IntegrationClient,
-        integration_id: &str,
-    ) -> Result<Integration, AIError> {
-        // Check logged in
-        let _ = self.settings_repo.current_user_id()?;
-
-        // Call server
         let response = client.disable_integration(integration_id).await?;
 
         // Return updated integration
@@ -574,7 +390,21 @@ impl AIService {
         };
 
         let integration = self.create(name, Self::provider_type(provider), Some(config)).await?;
-        self.attach_to_channel(&integration.id, channel_id).await?;
+
+        // If attach fails we have an orphan integration row on the server —
+        // best-effort clean it up so the user doesn't accumulate dead entries.
+        // The original attach error is always what the caller sees.
+        if let Err(attach_err) = self.attach_to_channel(&integration.id, channel_id).await {
+            let mut client = self.client();
+            if let Err(cleanup_err) = client.delete_integration(&integration.id).await {
+                tracing::warn!(
+                    integration_id = %integration.id,
+                    error = %cleanup_err,
+                    "Failed to delete orphaned integration after attach failure — manual cleanup required"
+                );
+            }
+            return Err(attach_err);
+        }
         Ok(())
     }
 }

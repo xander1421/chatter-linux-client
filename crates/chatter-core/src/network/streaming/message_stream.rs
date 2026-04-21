@@ -182,12 +182,6 @@ impl Default for MessageEventRouter {
     }
 }
 
-/// Message stream handler.
-///
-/// Type alias for backwards compatibility with the architecture document.
-/// Use `MessageEventRouter` for the full API.
-pub type MessageStream = MessageEventRouter;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,9 +377,4 @@ mod tests {
         assert_eq!(router.subscriber_counts().message_sent, 0);
     }
 
-    #[test]
-    fn test_message_stream_type_alias() {
-        // Verify the type alias works correctly
-        let _stream: MessageStream = MessageEventRouter::new();
-    }
 }

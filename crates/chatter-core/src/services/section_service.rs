@@ -167,6 +167,24 @@ impl SectionService {
         Ok(())
     }
 
+    /// Reorder custom sections by writing each id's new `sort_order` to
+    /// match its position in `ids`. Unknown ids are skipped. Missing ids
+    /// retain their existing sort_order — callers that want "replace the
+    /// whole order" should pass every section id they care about.
+    pub fn reorder_sections(&self, ids: &[SectionId]) -> Result<(), SectionError> {
+        let existing = self.section_repo.list_sections()?;
+        for (idx, id) in ids.iter().enumerate() {
+            let Some(section) = existing.iter().find(|s| s.id == *id) else { continue };
+            self.section_repo
+                .update_section(id, &section.name, &section.icon_emoji, idx as i32)
+                .map_err(|e| match e {
+                    StorageError::NotFound(_) => SectionError::NotFound,
+                    other => SectionError::Storage(other),
+                })?;
+        }
+        Ok(())
+    }
+
     /// Toggle the expanded/collapsed state of a section.
     pub fn toggle_expanded(&self, id: &SectionId, expanded: bool) -> Result<(), SectionError> {
         self.section_repo

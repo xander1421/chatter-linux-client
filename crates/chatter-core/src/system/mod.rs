@@ -4,6 +4,7 @@
 
 pub mod antidebug;
 pub mod directories;
+pub mod notification_sink;
 pub mod platform;
 
 // Desktop-only modules (not available on Android)
@@ -16,12 +17,6 @@ pub mod keyring;
 pub mod notifications;
 #[cfg(not(target_os = "android"))]
 pub mod open;
-
-// Android-only modules
-#[cfg(target_os = "android")]
-pub mod android_keyboard;
-#[cfg(target_os = "android")]
-pub mod android_notifications;
 
 // Linux-only modules
 #[cfg(target_os = "linux")]
@@ -38,14 +33,11 @@ pub use autostart::AutostartManager;
 pub use clipboard::{Clipboard, ImageData};
 pub use directories::Directories;
 pub use keyring::Keyring;
+pub use notification_sink::{NoopNotificationSink, NotificationSink};
 #[cfg(not(target_os = "android"))]
 pub use notifications::DesktopNotifications;
 #[cfg(not(target_os = "android"))]
 pub use open::ExternalOpener;
-#[cfg(target_os = "android")]
-pub use android_keyboard::{DisplayInsets, query_display_insets};
-#[cfg(target_os = "android")]
-pub use android_notifications::AndroidNotifications;
 
 #[cfg(target_os = "linux")]
 pub use dbus::DbusClient;

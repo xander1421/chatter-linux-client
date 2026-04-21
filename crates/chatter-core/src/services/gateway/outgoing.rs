@@ -77,7 +77,7 @@ pub enum OutgoingIntent {
         conversation_id: AnonDmId,
         text: String,
         attachment_pointers: Vec<AttachmentPointer>,
-        quote: Option<AnonQuoteIntent>,
+        quote: Option<QuoteIntent>,
     },
 
     /// Send a message in an anonymous group (NDSS '21 pairwise fanout).
@@ -85,7 +85,7 @@ pub enum OutgoingIntent {
         group_id: AnonGroupId,
         text: String,
         attachment_pointers: Vec<AttachmentPointer>,
-        quote: Option<AnonQuoteIntent>,
+        quote: Option<QuoteIntent>,
     },
 
     /// Save a message to the SavedMessages channel (Note to Self).
@@ -143,9 +143,6 @@ pub struct QuoteIntent {
     /// the recipient already has the message locally.
     pub preview_text: Option<String>,
 }
-
-/// Alias for backward compatibility.
-pub type AnonQuoteIntent = QuoteIntent;
 
 // =============================================================================
 // Result
@@ -642,7 +639,7 @@ async fn route_anon_dm(
     conversation_id: &AnonDmId,
     text: &str,
     attachment_pointers: Vec<AttachmentPointer>,
-    quote: Option<AnonQuoteIntent>,
+    quote: Option<QuoteIntent>,
 ) -> Result<SendResult, SendError> {
     // Extract attachment IDs before pointers are moved into the service call
     let attachment_ids = super::shared::extract_attachment_ids(&attachment_pointers);
@@ -681,7 +678,7 @@ async fn route_anon_group(
     group_id: &AnonGroupId,
     text: &str,
     attachment_pointers: Vec<AttachmentPointer>,
-    quote: Option<AnonQuoteIntent>,
+    quote: Option<QuoteIntent>,
 ) -> Result<SendResult, SendError> {
     // Extract attachment IDs before pointers are moved into the service call
     let attachment_ids = super::shared::extract_attachment_ids(&attachment_pointers);

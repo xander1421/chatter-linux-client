@@ -11,7 +11,6 @@ pub mod session_service;
 pub mod account_service;
 pub mod device_service;
 pub mod message;
-pub mod message_service;
 pub mod gateway;
 pub mod message_gateway;
 pub mod channel;
@@ -20,7 +19,7 @@ pub mod user;
 pub mod status_service;
 pub mod attachment;
 pub mod attachment_service;
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "media")]
 pub mod call_worker;
 pub mod call_verification;
 pub mod notification_service;
@@ -147,7 +146,7 @@ pub use message_gateway::{
 pub use message::{MessageService, MessageError, SendDmContentParams, SendDmMsgParams};
 pub use message::core::{proto_to_domain_message, proto_to_domain_message_with_sender, proto_content_to_domain};
 pub use attachment_service::{AttachmentService, AttachmentError, UploadResult, CdnUploadResult};
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "media")]
 pub use call_worker::CallWorkerHandle;
 
 // Re-exports for pairwise encryption service

@@ -1,6 +1,7 @@
 //! Upload operations for attachments.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
@@ -183,6 +184,15 @@ impl AttachmentService {
                 "Failed to open file for upload: {}", e
             )))?;
 
+        // If the file produces a read error partway through we MUST NOT let
+        // the upload silently complete with fewer chunks — that produces a
+        // truncated blob on the server. `read_error` is a write-once slot:
+        // the stream stores the first `io::Error` it sees, and the awaiter
+        // below reads it after the RPC returns.
+        let read_error: Arc<std::sync::OnceLock<std::io::Error>> =
+            Arc::new(std::sync::OnceLock::new());
+        let read_error_stream = read_error.clone();
+
         let chunk_stream = async_stream::stream! {
             let mut file = file;
             let mut buf = vec![0u8; CHUNK_SIZE];
@@ -192,6 +202,7 @@ impl AttachmentService {
                     Ok(n) => n,
                     Err(e) => {
                         tracing::error!(error = %e, "Failed to read chunk from file during upload");
+                        let _ = read_error_stream.set(e);
                         break;
                     }
                 };
@@ -220,6 +231,15 @@ impl AttachmentService {
                 chunk_stream,
             )
             .await;
+
+        // If the stream aborted early because of a file read error, fail the
+        // whole upload regardless of what the server responded with — a
+        // "success" here would actually be a truncated blob.
+        if let Some(err) = read_error.get() {
+            return Err(AttachmentError::FileError(format!(
+                "File read failed during upload (truncated): {}", err
+            )));
+        }
 
         match upload_result {
             Ok(metadata) => {
@@ -811,7 +831,7 @@ impl AttachmentService {
 
         // Extract waveform and duration for audio files
         if mime_type.starts_with("audio/") {
-            #[cfg(feature = "desktop-media")]
+            #[cfg(feature = "desktop-gstreamer")]
             {
                 let path_for_waveform = file_path.to_path_buf();
                 meta.waveform = match tokio::task::spawn_blocking(move || {
@@ -871,7 +891,7 @@ impl AttachmentService {
             }
         } else if mime_type.starts_with("video/") {
             // Video processing uses GStreamer — only available with desktop-media feature
-            #[cfg(feature = "desktop-media")]
+            #[cfg(feature = "desktop-gstreamer")]
             {
                 let path_for_thumb = file_path.to_path_buf();
                 match tokio::task::spawn_blocking(move || {

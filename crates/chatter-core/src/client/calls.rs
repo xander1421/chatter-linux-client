@@ -24,7 +24,7 @@ use crate::services::anon_dm::AnonDmService;
 use crate::services::anon_group::AnonGroupService;
 use crate::services::attachment::AttachmentService;
 use crate::services::auth_service::AuthService;
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "media")]
 use crate::services::call_worker::CallWorkerHandle;
 use crate::services::channel::ChannelService;
 use crate::services::dm_bootstrap_service::DmBootstrapService;
@@ -54,9 +54,23 @@ use super::{ChatterClient, ClientError};
 
 /// Result of [`ChatterClient::accept_presented_incoming_call`]. Carries enough
 /// information for a UI layer to build its active-call view without poking
+/// Plain-data snapshot of a room participant. Used across the FFI
+/// boundary so bridge callers don't touch LiveKit types directly.
+#[cfg(feature = "media")]
+#[derive(Clone, Debug)]
+pub struct CallParticipantSnapshot {
+    pub identity: String,
+    pub display_name: String,
+    pub has_audio: bool,
+    pub has_video: bool,
+    pub is_speaking: bool,
+    pub is_muted: bool,
+    pub is_local: bool,
+}
+
 /// orchestrator internals. `Clone` is intentionally omitted — the anonymous
 /// setup's encryption key is `Zeroize`-only.
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "media")]
 #[derive(Debug)]
 pub enum AcceptedIncomingCall {
     /// Standard DM call (Signal-style ephemeral key exchange).
@@ -91,7 +105,7 @@ impl ChatterClient {
     /// and dispatches to the correct signalling path. Returns an
     /// [`OutgoingCallStart`] with everything the UI needs to render the
     /// "Calling…" state.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn start_call(
         &self,
         conversation: crate::state::ActiveConversation,
@@ -188,7 +202,7 @@ impl ChatterClient {
     ///
     /// Returns the call ID. The UI should show "Calling..." and wait for
     /// `complete_dm_call()` when the peer answers.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn start_dm_call(
         &self,
         peer_id: &crate::domain::ids::UserId,
@@ -208,7 +222,7 @@ impl ChatterClient {
     /// Start a group call in a channel: generate key, initiate on server, distribute key.
     ///
     /// Returns a `CallSetupResult` with call_id and verification emojis for the UI.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn start_group_call(
         &self,
         channel_id: crate::domain::ids::ChannelId,
@@ -265,7 +279,7 @@ impl ChatterClient {
     /// Complete an outgoing DM call after receiving the peer's ephemeral key answer.
     ///
     /// Returns verification data (emojis) for the UI.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn complete_dm_call(
         &self,
         peer_ephemeral_pk: [u8; 32],
@@ -290,7 +304,7 @@ impl ChatterClient {
     /// Accept an incoming DM call: generate ephemeral key, derive shared secret, join call.
     ///
     /// Returns verification data (emojis) for the UI.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn accept_dm_call(
         &self,
         caller_ephemeral_pk: [u8; 32],
@@ -325,7 +339,7 @@ impl ChatterClient {
     /// the wire-level hangup on the old active call when `replaces_active`,
     /// runs the appropriate accept flow (DM / anon / anon group), and
     /// promotes the orchestrator's active slot on success.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn accept_presented_incoming_call(
         &self,
         call_id: &str,
@@ -412,7 +426,7 @@ impl ChatterClient {
     // the OnceLock themselves. Keeps the "UI never touches the worker
     // handle directly" invariant the orchestrator refactor depends on.
 
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn call_publish_microphone(
         &self,
         device_id: Option<&str>,
@@ -423,7 +437,7 @@ impl ChatterClient {
         }
     }
 
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn call_publish_camera(
         &self,
         device_path: Option<&str>,
@@ -434,28 +448,28 @@ impl ChatterClient {
         }
     }
 
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub fn call_stop_microphone(&self) {
         if let Some(worker) = self.call_service().get() {
             worker.stop_microphone();
         }
     }
 
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub fn call_stop_camera(&self) {
         if let Some(worker) = self.call_service().get() {
             worker.stop_camera();
         }
     }
 
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub fn call_set_microphone_muted(&self, muted: bool) {
         if let Some(worker) = self.call_service().get() {
             worker.set_microphone_muted(muted);
         }
     }
 
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn call_is_microphone_muted(&self) -> bool {
         match self.call_service().get().cloned() {
             Some(worker) => worker.is_microphone_muted().await,
@@ -463,7 +477,7 @@ impl ChatterClient {
         }
     }
 
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn call_is_camera_enabled(&self) -> bool {
         match self.call_service().get().cloned() {
             Some(worker) => worker.is_camera_enabled().await,
@@ -471,7 +485,7 @@ impl ChatterClient {
         }
     }
 
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn call_is_screen_sharing(&self) -> bool {
         match self.call_service().get().cloned() {
             Some(worker) => worker.is_screen_sharing().await,
@@ -481,7 +495,7 @@ impl ChatterClient {
 
     /// Return the currently-active call, if any. Used by the remote-hangup
     /// handler to match incoming hangup events against the live call.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn call_active_call(&self) -> Option<crate::domain::call::Call> {
         match self.call_service().get().cloned() {
             Some(worker) => worker.active_call().await,
@@ -489,14 +503,14 @@ impl ChatterClient {
         }
     }
 
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub fn call_set_camera_enabled(&self, enabled: bool) {
         if let Some(worker) = self.call_service().get() {
             worker.set_camera_enabled(enabled);
         }
     }
 
-    #[cfg(all(feature = "desktop-media", not(target_os = "android")))]
+    #[cfg(all(feature = "media", not(target_os = "android"), not(target_os = "ios")))]
     pub async fn call_publish_screen_share(
         &self,
         source: crate::calls::ScreenSource,
@@ -507,14 +521,14 @@ impl ChatterClient {
         }
     }
 
-    #[cfg(all(feature = "desktop-media", not(target_os = "android")))]
+    #[cfg(all(feature = "media", not(target_os = "android"), not(target_os = "ios")))]
     pub fn call_stop_screen_share(&self) {
         if let Some(worker) = self.call_service().get() {
             worker.stop_screen_share();
         }
     }
 
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn call_set_encryption_key(&self, key: Vec<u8>) -> bool {
         match self.call_service().get().cloned() {
             Some(worker) => worker.set_encryption_key(key).await,
@@ -524,7 +538,7 @@ impl ChatterClient {
 
     /// Subscribe to the orchestrator's broadcast stream. Returns `None`
     /// until the call service has been initialized (post-login).
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub fn subscribe_call_orchestrator_events(
         &self,
     ) -> Option<
@@ -539,7 +553,7 @@ impl ChatterClient {
     /// type is an `Arc` handle. Returns `None` until the call service
     /// has been initialized (post-login). The UI uses this to drive its
     /// video frame polling timer without poking the raw worker handle.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub fn call_video_frames(&self) -> Option<crate::calls::SharedVideoFrames> {
         self.call_service().get().map(|w| w.video_frames().clone())
     }
@@ -548,17 +562,106 @@ impl ChatterClient {
     /// be called once — the receiver is moved out of the worker. Returns
     /// `None` if the call service isn't initialized yet, or if the
     /// receiver has already been taken.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub fn take_call_room_events(
         &self,
     ) -> Option<tokio::sync::mpsc::Receiver<crate::calls::LiveKitRoomEvent>> {
         self.call_service().get().and_then(|w| w.take_room_events())
     }
 
+    /// Join a LiveKit room using pre-acquired setup credentials (url,
+    /// token, SFrame key) — the single media-layer entry the mobile
+    /// bridge calls after a signalling handshake produces a
+    /// `BridgeCallSetup`. Wraps `call_worker::connect_with_token` and
+    /// takes care of publishing microphone + optional camera via the
+    /// worker's subsequent commands.
+    #[cfg(feature = "media")]
+    pub async fn call_connect_with_setup(
+        &self,
+        call_id: &str,
+        channel_id: crate::domain::ids::ChannelId,
+        livekit_url: &str,
+        access_token: &str,
+        encryption_key: Vec<u8>,
+        room_name: &str,
+        is_video: bool,
+    ) -> Result<(), crate::error::CallError> {
+        let worker = self.call_service().get()
+            .cloned()
+            .ok_or(crate::error::CallError::WorkerShutdown)?;
+        let cid: crate::domain::ids::CallId = call_id
+            .parse()
+            .map_err(|_| crate::error::CallError::InvalidCallId)?;
+        worker
+            .connect_with_token(
+                access_token,
+                livekit_url,
+                encryption_key,
+                room_name,
+                cid,
+                channel_id,
+                is_video,
+            )
+            .await?;
+        // Publish default mic immediately. Camera is opt-in via UI toggle.
+        worker.publish_microphone(None).await.ok();
+        if is_video {
+            worker.publish_camera(None).await.ok();
+        }
+        Ok(())
+    }
+
+    /// Leave the currently-joined LiveKit room without clearing the
+    /// orchestrator's active-call record. Bridge pairs this with
+    /// `end_dm_call` / `end_anon_call` for the full hang-up flow.
+    #[cfg(feature = "media")]
+    pub async fn call_leave_room(&self) -> Result<(), crate::error::CallError> {
+        if let Some(worker) = self.call_service().get().cloned() {
+            worker.leave_call().await?;
+        }
+        Ok(())
+    }
+
+    /// Snapshot of the active call's participant list — identity, display
+    /// name, audio/video flags, speaking + muted state, `is_local`.
+    /// Returned in a Send-safe shape so the bridge can hand it over uniffi.
+    #[cfg(feature = "media")]
+    pub async fn call_active_participants(&self) -> Vec<CallParticipantSnapshot> {
+        let Some(worker) = self.call_service().get().cloned() else { return vec![]; };
+        worker.participant_snapshot().await
+    }
+
+    /// Same as [`call_active_participants`] but resolves each participant's
+    /// `display_name` via [`ChatterClient::get_display_name`]. The base
+    /// worker snapshot fills `display_name` with the raw user id — this
+    /// wrapper replaces it with the friendly name so the FFI caller doesn't
+    /// need a second round-trip per participant.
+    #[cfg(feature = "media")]
+    pub async fn call_active_participants_named(&self) -> Vec<CallParticipantSnapshot> {
+        let mut snapshot = self.call_active_participants().await;
+        for p in snapshot.iter_mut() {
+            if let Ok(uid) = p.identity.parse::<crate::domain::ids::UserId>() {
+                p.display_name = self.get_display_name(&uid);
+            }
+        }
+        snapshot
+    }
+
+    /// Cloned handle to the currently-initialised call worker, or None
+    /// when no call service has been wired up yet. Useful for bridge code
+    /// that wants to call worker methods directly (mic publish, screen
+    /// share, etc.) without re-fetching via `call_service()` each time.
+    #[cfg(feature = "media")]
+    pub fn call_service_handle_opt(
+        &self,
+    ) -> Option<crate::services::call_worker::CallWorkerHandle> {
+        self.call_service().get().cloned()
+    }
+
     /// Notify the orchestrator that an outgoing / pending call has connected
     /// and should be installed as the active call. Callers use this from the
     /// answer-handling path (caller side of a call).
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub fn notify_call_connected(
         &self,
         call_id: &str,
@@ -579,7 +682,7 @@ impl ChatterClient {
     /// Notify the orchestrator that a tracked call ended (locally or by the
     /// remote peer). Clears the slot and emits `ActiveEnded` /
     /// `IncomingWithdrawn` depending on where the call lived.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub fn notify_call_ended(
         &self,
         call_id: &str,
@@ -596,7 +699,7 @@ impl ChatterClient {
     /// Decline a presented incoming call. Runs the orchestrator transition
     /// (which emits `IncomingWithdrawn { Declined }`) and then fires the
     /// wire-level decline on the appropriate transport.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn decline_presented_incoming_call(
         &self,
         call_id: &str,
@@ -630,7 +733,6 @@ impl ChatterClient {
     // ── Anonymous Call Orchestration ─────────────────────────────────
 
     /// Start an anonymous DM call: acquire token, send offer, store pending state.
-    #[cfg(feature = "desktop-media")]
     pub async fn start_anon_dm_call(
         &self,
         anon_dm_id: &crate::domain::anon_dm::AnonDmId,
@@ -657,7 +759,7 @@ impl ChatterClient {
     }
 
     /// Accept an incoming anonymous call: acquire token, send accept, join room, connect LiveKit.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn accept_anon_call(
         &self,
         room_name: &str,
@@ -719,7 +821,6 @@ impl ChatterClient {
             .map_err(|e| ClientError::Inbox(e.to_string()))
     }
 
-    #[cfg(feature = "desktop-media")]
     pub async fn accept_dm_call_mobile(
         &self,
         caller_ephemeral_pk: [u8; 32],
@@ -744,7 +845,6 @@ impl ChatterClient {
             .map_err(|e| ClientError::Inbox(e.to_string()))
     }
 
-    #[cfg(feature = "desktop-media")]
     pub async fn end_dm_call_mobile(
         &self,
         call_id: &str,
@@ -757,7 +857,6 @@ impl ChatterClient {
             .map_err(|e| ClientError::Inbox(e.to_string()))
     }
 
-    #[cfg(feature = "desktop-media")]
     pub async fn end_anon_call_mobile(
         &self,
         room_name: &str,
@@ -886,7 +985,7 @@ impl ChatterClient {
     /// End an active DM/channel call: send hangup, store history, leave.
     ///
     /// `duration_secs` is the call duration from the UI timer.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn end_dm_call(&self, duration_secs: i64) -> Result<(), ClientError> {
         let call_worker = self.call_service().get()
             .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;
@@ -899,7 +998,7 @@ impl ChatterClient {
     /// End an active anonymous call: send hangup, store history, leave.
     ///
     /// Returns the conversation_id for UI bubble insertion.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn end_anon_call(&self, duration_secs: i64) -> Result<Option<crate::domain::anon_dm::AnonDmId>, ClientError> {
         let call_worker = self.call_service().get()
             .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;
@@ -915,7 +1014,7 @@ impl ChatterClient {
     /// dispatches to the correct wire-level tear-down. UI code should call
     /// this from its "End call" button instead of branching between
     /// `end_dm_call` / `end_anon_call` based on view state.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn end_active_call(&self, duration_secs: i64) -> Result<(), ClientError> {
         use crate::services::call_worker::OrchestratedCallKind;
 
@@ -945,7 +1044,7 @@ impl ChatterClient {
     /// members so the departed participant can't decrypt future frames.
     ///
     /// Only the initiator rotates to avoid race conditions.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub async fn handle_participant_departed(&self) -> Result<(), ClientError> {
         let call_worker = self.call_service().get()
             .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;

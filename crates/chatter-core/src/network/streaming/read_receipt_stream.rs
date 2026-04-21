@@ -184,9 +184,6 @@ impl Default for ReadReceiptAggregator {
     }
 }
 
-/// Type alias for backwards compatibility.
-pub type ReadReceiptStream = ReadReceiptAggregator;
-
 #[cfg(test)]
 mod tests {
     use super::*;

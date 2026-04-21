@@ -16,10 +16,10 @@ pub mod stream_manager;
 pub mod typing_stream;
 
 // Re-exports for convenience
-pub use message_stream::{MessageDeleted, MessageEventRouter, MessageStream, SubscriberCounts};
-pub use presence_stream::{CachedPresence, PresenceRouter, PresenceStream};
+pub use message_stream::{MessageDeleted, MessageEventRouter, SubscriberCounts};
+pub use presence_stream::{CachedPresence, PresenceRouter};
 pub use push_listener::{PushEvent, PushListener, PushListenerConfig};
-pub use reaction_stream::{ReactionAggregator, ReactionEvent, ReactionStream};
-pub use read_receipt_stream::{ReadReceiptAggregator, ReadReceiptStream, ReadState};
+pub use reaction_stream::{ReactionAggregator, ReactionEvent};
+pub use read_receipt_stream::{ReadReceiptAggregator, ReadState};
 pub use stream_manager::{StreamConfig, StreamHandle, StreamManager};
-pub use typing_stream::{TypingAggregator, TypingStateChange, TypingStream};
+pub use typing_stream::{TypingAggregator, TypingStateChange};

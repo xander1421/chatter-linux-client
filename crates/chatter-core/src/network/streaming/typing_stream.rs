@@ -233,9 +233,6 @@ impl Default for TypingAggregator {
     }
 }
 
-/// Type alias for backwards compatibility.
-pub type TypingStream = TypingAggregator;
-
 #[cfg(test)]
 mod tests {
     use super::*;

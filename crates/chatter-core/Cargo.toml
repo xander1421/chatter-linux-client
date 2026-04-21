@@ -180,11 +180,11 @@ muda = "0.17"
 # ============================================================================
 # Platform-specific: Android
 # ============================================================================
+# Android platform integration (JNI, ndk-context) lives in chatter-ui, not core.
+# Core is platform-neutral; UI crate injects platform impls via NotificationSink.
 [target.'cfg(target_os = "android")'.dependencies]
 gstreamer-gl-egl = { version = "0.23", optional = true }
 glutin_egl_sys = { version = "0.7", optional = true }
-jni = "0.21"           # JNI bindings for Android system APIs (notifications, etc.)
-ndk-context = "0.1"    # Access to Android app context (JNI VM + activity)
 
 [dev-dependencies]
 tokio-test = "0.4"
@@ -201,13 +201,18 @@ harness = false
 [features]
 default = ["desktop-system", "desktop-media"]
 desktop-system = ["keyring/sync-secret-service", "keyring/windows-native"]
+# Shared media stack (LiveKit + WebRTC) — works on every target the `livekit`
+# crate supports. Mobile bridges opt in via `--features media`; desktop pulls
+# it in transitively through `desktop-media`.
+media = [
+    "dep:livekit", "dep:livekit-api",
+]
+# GStreamer — inline video playback, avatar decode, etc. Desktop-only.
 desktop-gstreamer = [
     "dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video",
     "dep:gstreamer-audio", "dep:gstreamer-pbutils", "dep:gstreamer-gl",
     "dep:gstreamer-play", "dep:gstreamer-gl-egl", "dep:glutin_egl_sys",
 ]
-desktop-media = [
-    "desktop-gstreamer",
-    "dep:livekit", "dep:livekit-api",
-]
+# Compat alias — previous callers (desktop-cli, chatter-ui) keep working.
+desktop-media = ["media", "desktop-gstreamer"]
 local-ai = ["dep:mistralrs"]

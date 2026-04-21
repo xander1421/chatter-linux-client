@@ -15,13 +15,12 @@
 //! For sealed sender / anonymous messages, sender is NEVER shown regardless of
 //! detail level — that would defeat the protocol's privacy guarantees.
 
+use std::sync::Arc;
+
 use crate::domain::notification::{Notification, NotificationPriority};
 use crate::error::SystemError;
 use crate::network::streaming::push_listener::PushEvent;
-#[cfg(not(target_os = "android"))]
-use crate::system::notifications::DesktopNotifications;
-#[cfg(target_os = "android")]
-use crate::system::android_notifications::AndroidNotifications;
+use crate::system::notification_sink::{NoopNotificationSink, NotificationSink};
 
 /// How much detail to show in OS notifications.
 ///
@@ -60,24 +59,26 @@ impl NotificationDetailLevel {
 }
 
 /// Notification service — privacy-aware cross-platform notification delivery.
+///
+/// Business logic (privacy filtering, sealed-sender handling) lives here.
+/// Platform delivery is delegated to a `NotificationSink` injected at construction.
 pub struct NotificationService {
-    #[cfg(not(target_os = "android"))]
-    desktop: DesktopNotifications,
-    #[cfg(target_os = "android")]
-    android: AndroidNotifications,
+    sink: Arc<dyn NotificationSink>,
     detail_level: std::sync::RwLock<NotificationDetailLevel>,
 }
 
 impl NotificationService {
-    /// Create a new notification service with default privacy (no detail).
-    pub fn new() -> Self {
+    /// Create a notification service with the given platform sink.
+    pub fn new(sink: Arc<dyn NotificationSink>) -> Self {
         Self {
-            #[cfg(not(target_os = "android"))]
-            desktop: DesktopNotifications::new(),
-            #[cfg(target_os = "android")]
-            android: AndroidNotifications::new(),
+            sink,
             detail_level: std::sync::RwLock::new(NotificationDetailLevel::None),
         }
+    }
+
+    /// Create a notification service with a no-op sink (tests / headless).
+    pub fn noop() -> Self {
+        Self::new(Arc::new(NoopNotificationSink))
     }
 
     /// Set the notification detail level.
@@ -130,14 +131,7 @@ impl NotificationService {
             NotificationDetailLevel::None => {
                 self.show_platform_notification("Chatter", "New notification", NotificationPriority::Normal)
             }
-            _ => {
-                #[cfg(not(target_os = "android"))]
-                { self.desktop.show(notification) }
-                #[cfg(target_os = "android")]
-                {
-                    self.android.show(&notification.title, &notification.body, 3)
-                }
-            }
+            _ => self.sink.show_domain(notification),
         }
     }
 
@@ -163,36 +157,20 @@ impl NotificationService {
         self.show_platform_notification(title, body, priority)
     }
 
-    /// Platform-specific notification display.
-    /// Desktop: notify-rust → D-Bus/WinRT
-    /// Android: JNI → NotificationManager
+    /// Platform-neutral notification display via the injected sink.
     fn show_platform_notification(
         &self,
         title: &str,
         body: &str,
         priority: NotificationPriority,
     ) -> Result<(), SystemError> {
-        #[cfg(not(target_os = "android"))]
-        {
-            self.desktop.show_message(title, body, priority)
-        }
-
-        #[cfg(target_os = "android")]
-        {
-            let android_priority = match priority {
-                NotificationPriority::Urgent => 5,
-                NotificationPriority::High => 4,
-                NotificationPriority::Low => 2,
-                NotificationPriority::Normal => 3,
-            };
-            self.android.show(title, body, android_priority)
-        }
+        self.sink.show(title, body, priority)
     }
 }
 
 impl Default for NotificationService {
     fn default() -> Self {
-        Self::new()
+        Self::noop()
     }
 }
 
@@ -280,13 +258,13 @@ mod tests {
 
     #[test]
     fn test_default_detail_level_is_none() {
-        let service = NotificationService::new();
+        let service = NotificationService::noop();
         assert_eq!(service.detail_level(), NotificationDetailLevel::None);
     }
 
     #[test]
     fn test_set_detail_level() {
-        let service = NotificationService::new();
+        let service = NotificationService::noop();
         service.set_detail_level(NotificationDetailLevel::NameAndMessage);
         assert_eq!(service.detail_level(), NotificationDetailLevel::NameAndMessage);
     }

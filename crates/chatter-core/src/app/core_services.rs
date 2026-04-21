@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use crate::inbox::DeviceInboxProvider;
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "media")]
 use crate::services::CallWorkerHandle;
 use crate::events::EventBus;
 use crate::mailbox::group::GroupFanout;
@@ -17,6 +17,7 @@ use crate::services::anon_dm::AnonDmService;
 use crate::services::ai::LocalAIService;
 use crate::services::jarvis::JarvisService;
 use crate::services::notification_service::NotificationService;
+use crate::system::notification_sink::NotificationSink;
 use crate::services::anon_group::AnonGroupService;
 use crate::services::attachment::AttachmentService;
 use crate::services::auth_service::AuthService;
@@ -113,7 +114,7 @@ pub struct CoreServices {
 
     // Post-boot services (initialized via AppContext after grpc connect)
     pub group_fanout: Arc<std::sync::OnceLock<Arc<GroupFanout>>>,
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub call_service: Arc<std::sync::OnceLock<CallWorkerHandle>>,
     pub device_inbox_provider: Arc<std::sync::OnceLock<Arc<DeviceInboxProvider>>>,
 }
@@ -124,10 +125,17 @@ impl CoreServices {
         infra: &InfrastructureContainer,
         services: &ServiceContainer,
         group_fanout: Arc<std::sync::OnceLock<Arc<GroupFanout>>>,
-        #[cfg(feature = "desktop-media")]
+        #[cfg(feature = "media")]
         call_service: Arc<std::sync::OnceLock<CallWorkerHandle>>,
         device_inbox_provider: Arc<std::sync::OnceLock<Arc<DeviceInboxProvider>>>,
+        notification_sink: Option<Arc<dyn NotificationSink>>,
     ) -> Self {
+        let notification_sink: Arc<dyn NotificationSink> = notification_sink.unwrap_or_else(|| {
+            #[cfg(not(target_os = "android"))]
+            { Arc::new(crate::system::notifications::DesktopNotifications::new()) }
+            #[cfg(target_os = "android")]
+            { Arc::new(crate::system::notification_sink::NoopNotificationSink) }
+        });
         Self {
             // Runtime handle for async spawning from UI callbacks
             runtime_handle: tokio::runtime::Handle::current(),
@@ -154,7 +162,7 @@ impl CoreServices {
             local_ai_service: services.local_ai_service.clone(),
             jarvis_service: services.jarvis_service.clone(),
             notification_service: {
-                let svc = NotificationService::new();
+                let svc = NotificationService::new(notification_sink);
                 // Load privacy setting from local DB
                 if let Ok(Some(level_str)) = infra.settings_repo.get::<String>(
                     crate::storage::repositories::settings_repo::keys::NOTIFICATION_DETAIL_LEVEL,
@@ -196,7 +204,7 @@ impl CoreServices {
 
             // Post-boot services (shared OnceLock with AppContext)
             group_fanout,
-            #[cfg(feature = "desktop-media")]
+            #[cfg(feature = "media")]
             call_service,
             device_inbox_provider,
         }
@@ -476,7 +484,7 @@ impl CoreServices {
     /// Initialize the call service if not already set.
     ///
     /// Safe to call multiple times — uses `get_or_init` internally.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "media")]
     pub fn ensure_call_service(&self) {
         use crate::services::call_worker::CallWorkerHandle;
 
