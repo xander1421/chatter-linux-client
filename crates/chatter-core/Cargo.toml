@@ -97,7 +97,7 @@ uuid = { version = "1", features = ["v4", "v5", "serde"] }
 bytes = "1"
 http = "1"
 mime_guess = "2"
-reqwest = { version = "0.12", features = ["rustls-tls", "json", "blocking", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking", "stream", "charset", "http2", "macos-system-configuration"] }
 openidconnect = { version = "4", default-features = false, features = ["reqwest", "rustls-tls"] }
 url = "2"
 rodio = "0.21.1"
@@ -130,8 +130,8 @@ libc = "0.2"
 # ============================================================================
 # WebRTC / LiveKit (desktop only, gated behind `desktop-media`)
 # ============================================================================
-livekit = { version = "0.7.32", features = ["native-tls"], optional = true }
-livekit-api = { version = "0.4.14", optional = true }
+livekit = { version = "0.7.32", default-features = false, features = ["tokio", "rustls-tls-webpki-roots"], optional = true }
+livekit-api = { version = "0.4.14", default-features = false, features = ["services-tokio", "access-token", "webhooks", "signal-client-tokio", "rustls-tls-webpki-roots"], optional = true }
 # lazy_static removed — migrated to std::sync::LazyLock
 async-stream = "0.3.6"
 

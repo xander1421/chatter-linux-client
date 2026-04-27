@@ -44,8 +44,8 @@ gstreamer = { version = "0.23", optional = true }
 gstreamer-app = { version = "0.23", optional = true }
 gstreamer-video = { version = "0.23", optional = true }
 gstreamer-gl = { version = "0.23", optional = true }
-livekit = { version = "0.7.32", features = ["native-tls"], optional = true }
-livekit-api = { version = "0.4.14", optional = true }
+livekit = { version = "0.7.32", default-features = false, features = ["tokio", "rustls-tls-webpki-roots"], optional = true }
+livekit-api = { version = "0.4.14", default-features = false, features = ["services-tokio", "access-token", "webhooks", "signal-client-tokio", "rustls-tls-webpki-roots"], optional = true }
 rand = "0.9"
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 pdfium-render = { version = "0.9", optional = true }
@@ -55,7 +55,7 @@ uuid = { version = "1", features = ["v4", "v5", "serde"] }
 serde_json = "1"
 base64 = "0.22"
 prost = "0.13"
-reqwest = { version = "0.12", features = ["rustls-tls", "json", "blocking"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking", "charset", "http2", "macos-system-configuration"] }
 mime_guess = "2"
 # once_cell + lazy_static removed — migrated to std::sync::LazyLock
 zeroize = { version = "1.8", features = ["derive"] }
