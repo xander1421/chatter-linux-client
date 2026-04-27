@@ -35,22 +35,27 @@ impl SignalService {
         self.key_store.get_identity_by_uuid(peer_id)
     }
 
-    /// Generate and upload new one-time prekeys.
+    /// Generate and upload new one-time prekeys (classical OPK + PQOPK in
+    /// lockstep). Per Signal PQXDH §3.2 a PQOPK is consumed every time a
+    /// classical OPK is, so the two pools must refill together — failing to
+    /// upload PQOPKs would force the server to fall back to the medium-term
+    /// last-resort PQSPK and weaken PQ forward secrecy.
     pub async fn refresh_prekeys(
         &self,
         auth_client: &mut AuthClient,
         count: u32,
     ) -> Result<u32, ServiceError> {
         let proto_prekeys = self.actor.refresh_prekeys(count).await?;
+        let proto_kyber_otpks = self.actor.refresh_kyber_prekeys(count).await?;
         let uploaded_count = proto_prekeys.len() as u32;
+        let kyber_count = proto_kyber_otpks.len() as u32;
 
-        // Upload to server
         auth_client
-            .refresh_pre_keys(proto_prekeys)
+            .refresh_pre_keys_with_kyber_otpk(proto_prekeys, proto_kyber_otpks)
             .await
             .map_err(ServiceError::Network)?;
 
-        tracing::info!(count = uploaded_count, "Refreshed prekeys via Actor");
+        tracing::info!(opk = uploaded_count, pq_opk = kyber_count, "Refreshed prekeys via Actor");
 
         Ok(uploaded_count)
     }
@@ -67,7 +72,7 @@ impl SignalService {
         let (spk_proto, kpk_proto) = self.actor.rotate_signed_prekey().await?;
 
         auth_client
-            .refresh_pre_keys_with_rotation(Vec::new(), Some(spk_proto), Some(kpk_proto))
+            .refresh_pre_keys_with_rotation(Vec::new(), Some(spk_proto), Some(kpk_proto), Vec::new())
             .await
             .map_err(ServiceError::Network)?;
 

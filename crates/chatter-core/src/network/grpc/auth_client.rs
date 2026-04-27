@@ -588,7 +588,18 @@ impl AuthClient {
         &mut self,
         new_prekeys: Vec<signal_pre_key_bundle::PreKeyRecord>,
     ) -> Result<(), NetworkError> {
-        self.refresh_pre_keys_with_rotation(new_prekeys, None, None).await
+        self.refresh_pre_keys_with_rotation(new_prekeys, None, None, Vec::new()).await
+    }
+
+    /// Upload a batch of classical OPKs and PQOPKs in a single RPC. Per
+    /// PQXDH §3.2 a PQOPK is consumed every time a classical OPK is, so
+    /// the two pools refill together.
+    pub async fn refresh_pre_keys_with_kyber_otpk(
+        &mut self,
+        new_prekeys: Vec<signal_pre_key_bundle::PreKeyRecord>,
+        new_kyber_one_time_prekeys: Vec<signal_pre_key_bundle::KyberPreKeyRecord>,
+    ) -> Result<(), NetworkError> {
+        self.refresh_pre_keys_with_rotation(new_prekeys, None, None, new_kyber_one_time_prekeys).await
     }
 
     /// Refresh prekeys with optional signed + Kyber prekey rotation.
@@ -601,12 +612,14 @@ impl AuthClient {
         new_prekeys: Vec<signal_pre_key_bundle::PreKeyRecord>,
         new_signed_prekey: Option<signal_pre_key_bundle::SignedPreKeyRecord>,
         new_kyber_prekey: Option<signal_pre_key_bundle::KyberPreKeyRecord>,
+        new_kyber_one_time_prekeys: Vec<signal_pre_key_bundle::KyberPreKeyRecord>,
     ) -> Result<(), NetworkError> {
         let request = RefreshPreKeysRequest {
             new_one_time_prekeys: new_prekeys,
             request_id: uuid::Uuid::new_v4().to_string(),
             new_signed_prekey,
             new_kyber_prekey,
+            new_kyber_one_time_prekeys,
         };
 
         self.inner

@@ -31,6 +31,11 @@ pub enum SignalCommand {
     /// Get the identity private key (32 bytes X25519 scalar) for ECIES decryption.
     GetIdentityPrivateKey { response: oneshot::Sender<Result<[u8; 32], ServiceError>> },
     RefreshPrekeys { count: u32, response: oneshot::Sender<Result<Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>, ServiceError>> },
+    /// Generate `count` one-time Kyber prekeys (PQOPK) signed by the IK and
+    /// return their proto-encoded form for upload via RefreshPreKeys. PQOPKs
+    /// are spec-mandated alongside classical OPKs (PQXDH §3.2) and consumed
+    /// 1:1 with them, so the client refills both in lockstep.
+    RefreshKyberPrekeys { count: u32, response: oneshot::Sender<Result<Vec<crate::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord>, ServiceError>> },
     EstablishSession { 
         address: ProtocolAddress, 
         bundle: PreKeyBundle, 
@@ -180,7 +185,7 @@ impl SignalActorHandle {
                             use crate::crypto::signal::PreKeyManager;
                             let prekey_manager = PreKeyManager::new(store.key_store());
                             let mut rng = rand::rngs::StdRng::from_os_rng();
-                            
+
                             let start_id = prekey_manager.get_next_prekey_id().map_err(ServiceError::Crypto);
                             if let Err(e) = start_id { let _ = response.send(Err(e)); continue; }
                             let start_id = start_id.unwrap();
@@ -196,6 +201,34 @@ impl SignalActorHandle {
                                 })
                             }).collect();
                             let _ = response.send(Ok(proto_prekeys));
+                        }
+
+                        SignalCommand::RefreshKyberPrekeys { count, response } => {
+                            use libsignal_protocol::{IdentityKeyStore, GenericSignedPreKey};
+                            use crate::crypto::signal::PreKeyManager;
+                            let prekey_manager = PreKeyManager::new(store.key_store());
+
+                            let res = (|| {
+                                let identity = futures::executor::block_on(store.get_identity_key_pair())
+                                    .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?;
+
+                                let mut out = Vec::with_capacity(count as usize);
+                                for _ in 0..count {
+                                    let id = prekey_manager.get_next_kyber_prekey_id().map_err(ServiceError::Crypto)?;
+                                    let kpk = prekey_manager.generate_kyber_prekey(id, &identity)
+                                        .map_err(ServiceError::Crypto)?;
+
+                                    let proto = crate::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord {
+                                        id: u32::from(kpk.id().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?),
+                                        public_key: kpk.public_key().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.serialize().to_vec(),
+                                        signature: kpk.signature().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.to_vec(),
+                                        timestamp: kpk.timestamp().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.epoch_millis(),
+                                    };
+                                    out.push(proto);
+                                }
+                                Ok(out)
+                            })();
+                            let _ = response.send(res);
                         }
 
                         SignalCommand::EstablishSession { address, bundle, response } => {
@@ -599,6 +632,11 @@ impl SignalActorHandle {
 
     pub async fn refresh_prekeys(&self, count: u32) -> Result<Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>, ServiceError> {
         self.send(|tx| SignalCommand::RefreshPrekeys { count, response: tx }).await?
+    }
+
+    /// Generate a batch of one-time Kyber prekeys (PQOPK) for upload.
+    pub async fn refresh_kyber_prekeys(&self, count: u32) -> Result<Vec<crate::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord>, ServiceError> {
+        self.send(|tx| SignalCommand::RefreshKyberPrekeys { count, response: tx }).await?
     }
 
     pub async fn establish_session(&self, address: ProtocolAddress, bundle: libsignal_protocol::PreKeyBundle) -> Result<(), ServiceError> {
