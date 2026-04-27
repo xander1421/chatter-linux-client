@@ -221,19 +221,6 @@ pub enum DomainEvent {
         change_type: String,
     },
 
-    /// Server maintenance workflow flagged this device's signed prekey as
-    /// stale OR its one-time prekey pool as low. Consumer calls
-    /// `RefreshPreKeys` RPC with fresh rotation material.
-    PreKeyRefreshNeeded {
-        /// Device this notification was emitted for.
-        device_id: u32,
-        /// Age of the current signed prekey in days (0 if not stale yet).
-        signed_prekey_age_days: u32,
-        /// Count of unused one-time prekeys remaining.
-        unused_otpk_count: u32,
-        stale_signed_prekey: bool,
-        low_otpk_pool: bool,
-    },
     /// Incoming call presented by the call orchestrator. Bridged from
     /// `CallOrchestratorEvent::IncomingPresented` so the desktop
     /// notification listener (or any other domain-bus subscriber) can
@@ -638,7 +625,6 @@ impl DomainEvent {
             DomainEvent::PushWakeup { .. } => None,
             DomainEvent::SessionResetRequested { .. } => None,
             DomainEvent::PeerDevicesChanged { .. } => None,
-            DomainEvent::PreKeyRefreshNeeded { .. } => None,
         }
     }
 

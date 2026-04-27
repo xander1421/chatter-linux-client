@@ -592,7 +592,6 @@ pub async fn handle_domain_event(
         DomainEvent::PushWakeup { .. } => {}
         DomainEvent::SessionResetRequested { .. } => {}
         DomainEvent::PeerDevicesChanged { .. } => {}
-        DomainEvent::PreKeyRefreshNeeded { .. } => {}
         // Incoming calls are surfaced via a dedicated IncomingCallData
         // channel + IncomingCallModal — handled outside this inbox
         // domain-event path.

@@ -895,8 +895,7 @@ impl EventHandlers {
             // Handled by the Signal service / inbox handlers that own the
             // ratchet + prekey stores. Nothing to mirror into UI state.
             DomainEvent::SessionResetRequested { .. }
-            | DomainEvent::PeerDevicesChanged { .. }
-            | DomainEvent::PreKeyRefreshNeeded { .. } => {}
+            | DomainEvent::PeerDevicesChanged { .. } => {}
 
             // IncomingCall surfaces as a desktop toast via
             // spawn_notification_listener; no state-store mutation here

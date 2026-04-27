@@ -9,11 +9,14 @@
 //!   * `network::streaming::push_listener` — ntfy SSE wake-up hint. Push
 //!     has no typed metadata so it stays wake-only.
 //!
-//! The server emits four typed events the client must act on:
+//! The server emits three typed events the client must act on:
 //!   * `DEVICE_LINKED`          — toast + refresh device list UI.
 //!   * `SESSION_RESET`          — drop Signal ratchet with a named peer.
 //!   * `PEER_DEVICES_CHANGED`   — invalidate peer session cache + rekey groups.
-//!   * `PREKEY_REFRESH_NEEDED`  — call `RefreshPreKeys` RPC with fresh keys.
+//!
+//! Prekey rotation is client-driven by the `spawn_prekey_replenishment`
+//! background task (Signal X3DH §3.2 / PQXDH §3.2); the server does not
+//! emit a refresh nudge.
 //!
 //! Reconnect strategy: on stream close or transport error, reconnect with
 //! exponential backoff capped at 60s. Respects `shutdown_token`.
@@ -107,21 +110,6 @@ struct PeerDevicesChangedMeta {
     device_id: u32,
     #[serde(default)]
     change_type: String,
-}
-
-/// Metadata payload for PREKEY_REFRESH_NEEDED notifications.
-#[derive(Debug, Deserialize)]
-struct PreKeyRefreshMeta {
-    #[serde(default)]
-    device_id: u32,
-    #[serde(default)]
-    signed_prekey_age_days: u32,
-    #[serde(default)]
-    unused_otpk_count: u32,
-    #[serde(default)]
-    stale_signed_prekey: bool,
-    #[serde(default)]
-    low_otpk_pool: bool,
 }
 
 /// Spawn a background task that consumes the typed notification stream.
@@ -259,19 +247,6 @@ fn dispatch_notification(event_bus: &EventBus, notif: Notification) {
                 peer_user_id,
                 device_id: meta.device_id,
                 change_type: meta.change_type,
-            });
-        }
-        NotificationType::PrekeyRefreshNeeded => {
-            let meta: PreKeyRefreshMeta = match parse_meta(&notif) {
-                Some(m) => m,
-                None => return,
-            };
-            let _ = sender.send(DomainEvent::PreKeyRefreshNeeded {
-                device_id: meta.device_id,
-                signed_prekey_age_days: meta.signed_prekey_age_days,
-                unused_otpk_count: meta.unused_otpk_count,
-                stale_signed_prekey: meta.stale_signed_prekey,
-                low_otpk_pool: meta.low_otpk_pool,
             });
         }
         // Message / Mention / Reply / Reaction are delivered via mailbox
@@ -434,29 +409,6 @@ mod tests {
         match rx.try_recv().expect("event expected") {
             DomainEvent::SessionResetRequested { peer_device_id, .. } => {
                 assert_eq!(peer_device_id, None);
-            }
-            other => panic!("wrong event variant: {:?}", other),
-        }
-    }
-
-    #[test]
-    fn dispatch_prekey_refresh_emits_event() {
-        let (bus, mut rx) = bus_with_receiver();
-        let meta = r#"{"device_id":1,"signed_prekey_age_days":45,"unused_otpk_count":3,"stale_signed_prekey":true,"low_otpk_pool":true}"#;
-        dispatch_notification(&bus, notif(NotificationType::PrekeyRefreshNeeded, meta));
-        match rx.try_recv().expect("event expected") {
-            DomainEvent::PreKeyRefreshNeeded {
-                device_id,
-                signed_prekey_age_days,
-                unused_otpk_count,
-                stale_signed_prekey,
-                low_otpk_pool,
-            } => {
-                assert_eq!(device_id, 1);
-                assert_eq!(signed_prekey_age_days, 45);
-                assert_eq!(unused_otpk_count, 3);
-                assert!(stale_signed_prekey);
-                assert!(low_otpk_pool);
             }
             other => panic!("wrong event variant: {:?}", other),
         }

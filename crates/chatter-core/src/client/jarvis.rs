@@ -166,16 +166,15 @@ impl ChatterClient {
             self.users().clone(),
             self.notifications().clone(),
             self.signal().clone(),
-            self.ui.grpc_pool.clone(),
             self.ui.channel_repo.clone(),
         );
         self.tasks.lock().push(handle);
 
         // Spawn the gRPC typed-notification stream consumer alongside the
         // domain event listener. The stream feeds DeviceLinked /
-        // PeerDevicesChanged / SessionReset / PreKeyRefreshNeeded events
-        // into the same DomainEvent bus so the listener above handles
-        // their toasts + side effects uniformly.
+        // PeerDevicesChanged / SessionReset events into the same
+        // DomainEvent bus so the listener above handles their toasts +
+        // side effects uniformly.
         //
         // Needs the authenticated user id to scope the subscription. If
         // auth hasn't completed, skip — the caller should restart the

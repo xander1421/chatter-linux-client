@@ -186,7 +186,6 @@ pub fn spawn_notification_listener(
     user_service: std::sync::Arc<crate::services::user::UserService>,
     notification_service: std::sync::Arc<NotificationService>,
     signal_service: std::sync::Arc<crate::services::signal_service::SignalService>,
-    grpc_pool: std::sync::Arc<crate::network::grpc::GrpcClientPool>,
     channel_repo: std::sync::Arc<crate::storage::ChannelRepository>,
 ) -> tokio::task::JoinHandle<()> {
     use crate::domain::notification::NotificationPriority;
@@ -414,48 +413,6 @@ pub fn spawn_notification_listener(
                                     "failed to drop Signal sessions on SESSION_RESET"
                                 ),
                             },
-                        }
-                    });
-                }
-
-                DomainEvent::PreKeyRefreshNeeded {
-                    device_id,
-                    stale_signed_prekey,
-                    low_otpk_pool,
-                    unused_otpk_count,
-                    ..
-                } => {
-                    // Server-side maintenance workflow flagged this device.
-                    // Rotate signed+Kyber prekey if stale; top up OTPK pool
-                    // if low. Both actions use the existing SignalService
-                    // helpers which generate fresh crypto material + upload
-                    // via RefreshPreKeys RPC.
-                    let signal = signal_service.clone();
-                    let pool = grpc_pool.clone();
-                    let stale = *stale_signed_prekey;
-                    let low = *low_otpk_pool;
-                    let unused = *unused_otpk_count;
-                    let did = *device_id;
-                    tokio::spawn(async move {
-                        let mut auth = pool.auth_client();
-                        if stale {
-                            match signal.rotate_signed_prekey(&mut auth).await {
-                                Ok(()) => tracing::info!(device_id = did, "Rotated signed+Kyber prekey after server prod"),
-                                Err(e) => tracing::warn!(error = %e, "Failed to rotate signed prekey after server prod"),
-                            }
-                        }
-                        if low {
-                            // Refill to 100 total — target matches server-side
-                            // OTPK refill threshold heuristic. Clamp to a
-                            // reasonable batch so we don't over-generate if
-                            // unused_otpk_count is wildly stale.
-                            let refill = 100_u32.saturating_sub(unused).min(100);
-                            if refill > 0 {
-                                match signal.refresh_prekeys(&mut auth, refill).await {
-                                    Ok(n) => tracing::info!(device_id = did, count = n, "Refilled one-time prekeys after server prod"),
-                                    Err(e) => tracing::warn!(error = %e, "Failed to refill one-time prekeys after server prod"),
-                                }
-                            }
                         }
                     });
                 }
