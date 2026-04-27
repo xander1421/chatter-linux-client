@@ -10,7 +10,7 @@ use crate::network::grpc::message_client::MessageClient;
 use crate::proto::chat_v1;
 use crate::services::current_user::CurrentUserProvider;
 
-use super::conversion::proto_to_domain_message;
+use super::conversion::{conversation_type_for_channel, proto_to_domain_message};
 use super::{MessageError, MessageService};
 
 impl MessageService {
@@ -111,8 +111,11 @@ impl MessageService {
             )
             .await?;
 
-        // Convert to domain message and copy source attachments
-        let mut message = proto_to_domain_message(&proto_message, sender_id)?;
+        // Convert to domain message and copy source attachments.
+        // Forward lands in `target_channel_id`; derive ConversationType
+        // from that channel (may differ from source's conversation_type).
+        let conv_type = conversation_type_for_channel(&self.channel_repo, target_channel_id);
+        let mut message = proto_to_domain_message(&proto_message, sender_id, conv_type)?;
         message.attachments = source.attachments.clone();
 
         // For sent messages, store original plaintext locally (not encrypted server response)

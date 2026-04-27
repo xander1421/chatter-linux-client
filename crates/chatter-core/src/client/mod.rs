@@ -20,6 +20,7 @@ pub mod calls;
 mod channels;
 pub mod events;
 mod jarvis;
+mod link_device;
 mod messaging;
 mod pin;
 mod profile;
@@ -79,11 +80,17 @@ pub struct ClientBuilder {
     server_url: Option<String>,
     data_dir: Option<String>,
     notification_sink: Option<Arc<dyn crate::system::notification_sink::NotificationSink>>,
+    reconnect_config: Option<crate::network::ReconnectConfig>,
 }
 
 impl ClientBuilder {
     pub fn new() -> Self {
-        Self { server_url: None, data_dir: None, notification_sink: None }
+        Self {
+            server_url: None,
+            data_dir: None,
+            notification_sink: None,
+            reconnect_config: None,
+        }
     }
 
     /// Set the server URL. Falls back to `CHATTER_SERVER_URL` env var, then built-in default.
@@ -109,6 +116,14 @@ impl ClientBuilder {
         self
     }
 
+    /// Override the reconnect backoff / give-up tuning. Defaults reproduce
+    /// the historical behavior exactly — override this on mobile deployments
+    /// that want tighter give-up thresholds than desktop.
+    pub fn reconnect_config(mut self, cfg: crate::network::ReconnectConfig) -> Self {
+        self.reconnect_config = Some(cfg);
+        self
+    }
+
     /// Build the client. Initializes database, crypto, and network pool.
     ///
     /// Must be called within a tokio runtime (e.g. inside `#[tokio::main]`
@@ -116,15 +131,19 @@ impl ClientBuilder {
     pub fn build(self) -> Result<Arc<ChatterClient>, ClientError> {
         let ctx = AppContext::with_config_and_sink(self.server_url, self.data_dir, self.notification_sink)?;
         let ui = ctx.core_services();
+        let reconnect_config = self.reconnect_config.unwrap_or_default();
         Ok(Arc::new(ChatterClient {
             ctx,
             ui,
             tasks: Mutex::new(Vec::new()),
             started: AtomicBool::new(false),
             last_activity_ms: AtomicU64::new(0),
+            reconnect_config: Mutex::new(reconnect_config),
+            push_shutdown: Mutex::new(None),
             call_signaling: std::sync::OnceLock::new(),
             svr_backup_service: std::sync::OnceLock::new(),
             outgoing_typing: crate::services::outgoing_typing::OutgoingTypingManager::new(),
+            link_device_service: std::sync::OnceLock::new(),
             #[cfg(not(target_os = "android"))]
             oidc_service: std::sync::OnceLock::new(),
         }))
@@ -193,12 +212,23 @@ pub struct ChatterClient {
     started: AtomicBool,
     /// Epoch millis of last user activity (for idle detection).
     last_activity_ms: AtomicU64,
+    /// Reconnect backoff / give-up tuning. Mutable at runtime so the FFI
+    /// layer can adjust it without rebuilding the client (e.g. mobile apps
+    /// tighten this on battery-saver mode).
+    reconnect_config: Mutex<crate::network::ReconnectConfig>,
+    /// Shutdown channel for the active ntfy push listener task, if any.
+    /// Reset / replaced on every `configure_push` call so the caller can
+    /// swap URLs (or disable push) idempotently.
+    push_shutdown: Mutex<Option<tokio::sync::broadcast::Sender<()>>>,
     /// Cached call signaling service (persistent for pending state).
     call_signaling: std::sync::OnceLock<crate::services::call_signaling::CallSignalingService>,
     /// Outgoing typing-indicator state machine (Signal refresh/pause timers).
     outgoing_typing: crate::services::outgoing_typing::OutgoingTypingManager,
     /// Cached SVR backup service.
     svr_backup_service: std::sync::OnceLock<crate::services::svr_backup_service::SvrBackupService>,
+    /// Cached device-linking service (lazy because deps are read-only and only
+    /// touched when the user opens the link-device flow).
+    link_device_service: std::sync::OnceLock<Arc<crate::services::link_device_service::LinkDeviceService>>,
     #[cfg(not(target_os = "android"))]
     oidc_service: std::sync::OnceLock<Arc<crate::services::oidc_service::OidcService>>,
 }
@@ -210,31 +240,44 @@ impl ChatterClient {
 
     // ── Services (return &Arc<T> so .clone() yields Arc<T>) ─────────────
     //
-    // Crate-visible only. chatter-ui MUST route through high-level façade
-    // methods below, not raw service accessors — see memory
-    // `feedback_service_layer_architecture`. When an out-of-tree bridge
-    // (chatter-bridge, iOS) actually lands, expose what that specific crate
-    // needs via `pub(in …)` or a dedicated bridge module. Do not widen on
-    // speculation.
-    pub(crate) fn auth(&self) -> &Arc<AuthService> { &self.ui.auth_service }
-    pub(crate) fn messages(&self) -> &Arc<MessageService> { &self.ui.message_service }
-    pub(crate) fn channels(&self) -> &Arc<ChannelService> { &self.ui.channel_service }
-    pub(crate) fn users(&self) -> &Arc<UserService> { &self.ui.user_service }
-    pub(crate) fn attachments(&self) -> &Arc<AttachmentService> { &self.ui.attachment_service }
-    pub(crate) fn typing(&self) -> &Arc<TypingService> { &self.ui.typing_service }
-    pub(crate) fn pins(&self) -> &Arc<PinService> { &self.ui.pin_service }
-    pub(crate) fn sessions(&self) -> &Arc<SessionService> { &self.ui.session_service }
-    pub(crate) fn anon_dms(&self) -> &Arc<AnonDmService> { &self.ui.anon_dm_service }
-    pub(crate) fn anon_groups(&self) -> &Arc<AnonGroupService> { &self.ui.anon_group_service }
-    pub(crate) fn signal(&self) -> &Arc<SignalService> { &self.ui.signal_service }
-    pub(crate) fn ai(&self) -> &Arc<AIService> { &self.ui.ai_service }
-    pub(crate) fn jarvis(&self) -> &Arc<JarvisService> { &self.ui.jarvis_service }
-    pub(crate) fn mailbox_manager(&self) -> &Arc<MailboxManager> { &self.ui.mailbox_manager }
-    pub(crate) fn local_ai(&self) -> &Arc<LocalAIService> { &self.ui.local_ai_service }
-    pub(crate) fn dm_bootstrap(&self) -> &Arc<DmBootstrapService> { &self.ui.dm_bootstrap_service }
-    pub(crate) fn notifications(&self) -> &Arc<crate::services::notification_service::NotificationService> { &self.ui.notification_service }
-    pub(crate) fn sections(&self) -> &Arc<SectionService> { &self.ui.section_service }
-    pub(crate) fn devices(&self) -> &Arc<crate::services::device_service::DeviceService> { &self.ui.device_service }
+    // Default visibility is `pub(crate)` — chatter-ui MUST route through the
+    // high-level façade methods below, not raw service accessors, per the
+    // `feedback_service_layer_architecture` memory rule. Integration tests
+    // (the `tests/` directory, external to the lib) enable the `testing`
+    // feature, which widens these to `pub` so fixtures can wire real
+    // services against a live server.
+    crate::service_accessor!(auth, AuthService, auth_service);
+    crate::service_accessor!(messages, MessageService, message_service);
+    crate::service_accessor!(channels, ChannelService, channel_service);
+    crate::service_accessor!(users, UserService, user_service);
+    crate::service_accessor!(attachments, AttachmentService, attachment_service);
+    crate::service_accessor!(typing, TypingService, typing_service);
+    crate::service_accessor!(pins, PinService, pin_service);
+    crate::service_accessor!(sessions, SessionService, session_service);
+    crate::service_accessor!(anon_dms, AnonDmService, anon_dm_service);
+    crate::service_accessor!(anon_groups, AnonGroupService, anon_group_service);
+    crate::service_accessor!(signal, SignalService, signal_service);
+    crate::service_accessor!(ai, AIService, ai_service);
+    crate::service_accessor!(jarvis, JarvisService, jarvis_service);
+    crate::service_accessor!(mailbox_manager, MailboxManager, mailbox_manager);
+    crate::service_accessor!(local_ai, LocalAIService, local_ai_service);
+    crate::service_accessor!(dm_bootstrap, DmBootstrapService, dm_bootstrap_service);
+    crate::service_accessor!(
+        notifications,
+        crate::services::notification_service::NotificationService,
+        notification_service
+    );
+    crate::service_accessor!(sections, SectionService, section_service);
+    crate::service_accessor!(
+        devices,
+        crate::services::device_service::DeviceService,
+        device_service
+    );
+    // OIDC/SSO accessor lives in client/auth.rs as a lazy OnceLock init —
+    // the macro variant assumes a `ui.oidc_service` field on CoreServices
+    // that doesn't exist (OIDC is constructed on first use, not in
+    // service-init). Don't reintroduce this macro call without first adding
+    // the field.
 
     /// Get the SVR backup service (lazy-initialized, persistent instance).
     pub fn svr_backup(&self) -> &crate::services::svr_backup_service::SvrBackupService {
@@ -811,6 +854,70 @@ impl ChatterClient {
         self.auth().set_server_url(url)
     }
 
+    // ── Reconnect tuning façade (FFI surface for apps) ──────────────────
+    //
+    // Mirrors the pattern of `set_server_url` / `set_local_ai_enabled`:
+    // a thin setter on the client that an FFI bridge can expose without
+    // having to model the whole config struct.
+
+    /// Get the currently-active reconnect tuning. Safe to call across threads.
+    pub fn reconnect_config(&self) -> crate::network::ReconnectConfig {
+        *self.reconnect_config.lock()
+    }
+
+    /// Replace the reconnect tuning. Takes effect on the next reconnect
+    /// loop iteration for any component that reads this at the start of a
+    /// cycle. Already-in-flight sleeps are not interrupted.
+    pub fn set_reconnect_config(&self, cfg: crate::network::ReconnectConfig) {
+        *self.reconnect_config.lock() = cfg;
+    }
+
+    /// Convenience wrapper for FFI bridges that can't easily pass the whole
+    /// struct. Field-by-field tuning; any `None` argument leaves that field
+    /// unchanged.
+    ///
+    /// # Arguments
+    /// - `initial_delay_ms`: initial retry delay in milliseconds
+    /// - `max_delay_ms`: upper cap on any retry delay
+    /// - `backoff_multiplier`: multiplier applied after each failure (>= 1.0)
+    /// - `jitter_ratio`: ±fraction added to each delay (0.0 = no jitter)
+    /// - `max_attempts`: give up after this many failed attempts (0 = infinite)
+    /// - `give_up_after_ms`: give up after this many ms of wall-clock (0 = infinite)
+    pub fn tune_reconnect(
+        &self,
+        initial_delay_ms: Option<u64>,
+        max_delay_ms: Option<u64>,
+        backoff_multiplier: Option<f32>,
+        jitter_ratio: Option<f32>,
+        max_attempts: Option<u32>,
+        give_up_after_ms: Option<u64>,
+    ) {
+        let mut guard = self.reconnect_config.lock();
+        if let Some(v) = initial_delay_ms {
+            guard.initial_delay = std::time::Duration::from_millis(v);
+        }
+        if let Some(v) = max_delay_ms {
+            guard.max_delay = std::time::Duration::from_millis(v);
+        }
+        if let Some(v) = backoff_multiplier {
+            guard.backoff_multiplier = v;
+        }
+        if let Some(v) = jitter_ratio {
+            guard.jitter_ratio = v;
+        }
+        if let Some(v) = max_attempts {
+            // 0 = sentinel for "infinite" — mirrors the Option<u32> internal rep.
+            guard.max_attempts = if v == 0 { None } else { Some(v) };
+        }
+        if let Some(v) = give_up_after_ms {
+            guard.give_up_after = if v == 0 {
+                None
+            } else {
+                Some(std::time::Duration::from_millis(v))
+            };
+        }
+    }
+
     pub fn is_logged_in(&self) -> bool {
         self.auth().is_logged_in()
     }
@@ -824,6 +931,28 @@ impl ChatterClient {
     }
 
     pub fn restore_session(&self) -> bool {
+        self.auth().restore_session()
+    }
+
+    /// Async-aware session restore. If a stored OIDC session is near-expiry
+    /// this refreshes the access token *before* configuring the auth
+    /// interceptor, so the first RPC after restore doesn't race an expired
+    /// token. On refresh failure the OIDC tokens are cleared and false is
+    /// returned — the UI should route to the login screen.
+    pub async fn restore_session_async(&self) -> bool {
+        #[cfg(not(target_os = "android"))]
+        {
+            let refreshed = match self.oidc().try_refresh_if_needed().await {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(error = %e, "OIDC refresh pre-check failed");
+                    true
+                }
+            };
+            if !refreshed {
+                return false;
+            }
+        }
         self.auth().restore_session()
     }
 
@@ -842,6 +971,20 @@ impl ChatterClient {
 
     pub fn auth_state(&self) -> &AuthState { &self.ui.auth_state }
     pub fn chat_state(&self) -> &ChatState { &self.ui.chat_state }
+
+    /// Resolve the current active conversation's `ConversationType`,
+    /// looking up the channel row when the active conversation is a
+    /// `Channel(id)` (its type depends on `require_encryption`). UI
+    /// callers use this rather than
+    /// `ActiveConversation::conversation_type(...)` directly so they
+    /// don't need channel_repo access.
+    pub fn active_conversation_type(&self) -> Option<crate::domain::message::ConversationType> {
+        self.ui
+            .chat_state
+            .get()
+            .active_conversation
+            .conversation_type(&self.ui.channel_repo)
+    }
 
     /// Shortcut for `chat_state().active_conversation()`. The typed
     /// `ActiveConversation` is the single source of truth for "which
@@ -1671,9 +1814,23 @@ impl ChatterClient {
             ActiveConversation::MailboxDm { channel_id: id, .. } => {
                 self.messages().get_messages_local(id, &ConversationType::MailboxDm, None, limit)
             }
-            // Anon paths use their own message types — return empty for now.
-            // SDK consumers should use anon_dms().get_messages() / anon_groups().get_messages()
-            // for anonymous conversations which have different message schemas.
+            ActiveConversation::AnonDm(id) => {
+                // Anon DM messages live in the anon_dm service's own store;
+                // delegate so bridge consumers (Android, etc.) don't have to
+                // branch on conversation type.
+                self.anon_dms()
+                    .get_messages(id, None, limit as i32)
+                    .map_err(|e| crate::services::message::MessageError::Storage(
+                        crate::error::StorageError::InvalidData(e.to_string()),
+                    ))
+            }
+            ActiveConversation::AnonGroup(id) => {
+                self.anon_groups()
+                    .get_messages(id, None, limit as i32)
+                    .map_err(|e| crate::services::message::MessageError::Storage(
+                        crate::error::StorageError::InvalidData(e.to_string()),
+                    ))
+            }
             _ => Ok(vec![]),
         }
     }
@@ -1929,6 +2086,12 @@ impl ChatterClient {
 
     /// Graceful shutdown. Stops inbox, aborts background tasks, disconnects.
     pub async fn shutdown(&self) {
+        // Signal the ntfy push listener (if any) to exit cleanly so its SSE
+        // connection closes instead of being torn down via `abort()`.
+        if let Some(tx) = self.push_shutdown.lock().take() {
+            let _ = tx.send(());
+        }
+
         // Stop inbox provider
         if let Some(provider) = self.ctx.get_device_inbox_provider() {
             if let Err(e) = provider.stop().await {
@@ -2034,6 +2197,127 @@ impl ChatterClient {
         &self,
     ) -> crate::services::notification_service::NotificationDetailLevel {
         self.ui.notification_service.detail_level()
+    }
+
+    // ── Ntfy push wake-ups ──────────────────────────────────────────────
+    //
+    // On Android/iOS the OS kills the long-lived gRPC stream when the app is
+    // backgrounded. The self-hosted ntfy server still emits a (content-free
+    // by default) wake-up SSE event. `configure_push` starts a background
+    // task that subscribes to that SSE feed and, for each event, (1) emits
+    // a `DomainEvent::PushWakeup` on the event bus so the UI + listeners can
+    // react, and (2) pokes the inbox poller so any freshly delivered mailbox
+    // messages are pulled immediately rather than waiting for the next
+    // scheduled tick.
+
+    /// Start (or replace) the self-hosted ntfy push listener for this client.
+    ///
+    /// * `ntfy_url` — base URL of the ntfy instance (e.g.
+    ///   `https://push.example.com`). An empty string tears down any
+    ///   previously-configured listener (graceful no-op if none was
+    ///   running).
+    ///
+    /// The caller must be logged in — the current user's id is used to
+    /// derive the topic (`chatter_{user_id}`) matching the server-side
+    /// topic-obfuscation scheme.
+    ///
+    /// Idempotent: calling twice with the same URL cancels the first task
+    /// and starts a fresh one (the wake broadcast channel itself is recreated
+    /// so there's no stale subscriber to drain).
+    pub fn configure_push(self: &Arc<Self>, ntfy_url: &str) -> Result<(), ClientError> {
+        // Always shut down the previous listener first — this is the
+        // "disable push" path when `ntfy_url` is empty, and also ensures
+        // a reconfigure doesn't leak tasks.
+        if let Some(tx) = self.push_shutdown.lock().take() {
+            let _ = tx.send(());
+        }
+
+        let ntfy_url = ntfy_url.trim();
+        if ntfy_url.is_empty() {
+            tracing::info!("Push listener disabled (empty URL)");
+            return Ok(());
+        }
+
+        let user_id = match self.ui.auth_state.get().current_user_id {
+            Some(uid) => uid,
+            None => {
+                return Err(ClientError::Validation(
+                    "configure_push requires an authenticated user".into(),
+                ));
+            }
+        };
+
+        let config = crate::network::streaming::push_listener::PushListenerConfig::new(
+            ntfy_url.to_string(),
+            &user_id.to_string(),
+        );
+
+        // Fresh shutdown channel for this listener instance.
+        let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
+        *self.push_shutdown.lock() = Some(shutdown_tx);
+
+        let listener = std::sync::Arc::new(
+            crate::network::streaming::push_listener::PushListener::new(config),
+        );
+        let wake_rx = listener.subscribe();
+        let event_bus = self.ui.event_bus.clone();
+        let ui = self.ui.clone();
+        let topic = format!("chatter_{}", user_id);
+
+        // Task A: SSE consumer. Runs the listener's reconnect loop; exits
+        // when shutdown fires.
+        let listen_listener = listener.clone();
+        let listen_shutdown = shutdown_rx;
+        let h_sse = tokio::spawn(async move {
+            listen_listener.listen(listen_shutdown).await;
+        });
+
+        // Task B: wake-event router. Bridges the listener's broadcast into
+        // the event bus + inbox-poller poke. A separate task so the SSE
+        // consumer's lifetime isn't tied to the inbox provider being ready.
+        let router_topic = topic.clone();
+        let mut wake_rx = wake_rx;
+        let h_router = tokio::spawn(async move {
+            loop {
+                match wake_rx.recv().await {
+                    Ok(event) => {
+                        // (1) Fan out on the domain event bus — narrow
+                        // payload, no body text leaks.
+                        let kind = event.kind();
+                        let _ = event_bus.domain_sender().send(
+                            crate::events::DomainEvent::PushWakeup {
+                                topic: router_topic.clone(),
+                                kind,
+                            },
+                        );
+
+                        // (2) Trigger a one-shot mailbox sync. The inbox
+                        // provider is self-started and idempotent — calling
+                        // it when already running is a cheap no-op; when it
+                        // was torn down (e.g. Android backgrounded) this
+                        // restarts the poller so new messages get pulled.
+                        let _ = ui.start_inbox_provider().await;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            dropped = n,
+                            "Push wake-up router lagged — dropped events"
+                        );
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+
+        // Store handles so Drop / shutdown aborts them.
+        {
+            let mut tasks = self.tasks.lock();
+            tasks.push(h_sse);
+            tasks.push(h_router);
+        }
+
+        tracing::info!(topic = %topic, "Ntfy push listener configured");
+        Ok(())
     }
 
     pub fn get_peer_identity(

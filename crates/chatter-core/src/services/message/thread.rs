@@ -10,6 +10,7 @@ use crate::network::grpc::message_client::MessageClient;
 use crate::proto::chat_v1;
 use crate::services::current_user::CurrentUserProvider;
 
+use super::conversion::conversation_type_for_channel;
 use super::core::proto_to_domain_message_with_sender;
 use super::{MessageError, MessageService};
 
@@ -102,8 +103,11 @@ impl MessageService {
             )
             .await?;
 
-        // Convert to domain message and preserve attachment IDs
-        let mut message = super::core::proto_to_domain_message(&proto_message, sender_id)?;
+        // Convert to domain message and preserve attachment IDs.
+        // Thread reply lives in the same channel as the root; derive
+        // ConversationType from the channel row.
+        let conv_type = conversation_type_for_channel(&self.channel_repo, channel_id);
+        let mut message = super::core::proto_to_domain_message(&proto_message, sender_id, conv_type)?;
         message.attachments = attachment_ids;
 
         // For sent messages, store original plaintext locally (not encrypted server response)
@@ -144,7 +148,10 @@ impl MessageService {
             )
             .await?;
 
-        // Convert proto messages to domain messages and store locally
+        // Convert proto messages to domain messages and store locally.
+        // Every message in a thread belongs to the same channel, so
+        // derive ConversationType once.
+        let conv_type = conversation_type_for_channel(&self.channel_repo, channel_id);
         let mut messages = Vec::with_capacity(response.messages.len());
         for proto in &response.messages {
             // Parse sender ID from proto author_id
@@ -154,7 +161,7 @@ impl MessageService {
                 proto.author_id.parse().ok()
             };
 
-            let message = proto_to_domain_message_with_sender(proto, sender_id)?;
+            let message = proto_to_domain_message_with_sender(proto, sender_id, conv_type.clone())?;
 
             // Upsert to local storage (insert or update)
             match self.message_repo.get(&message.id)? {

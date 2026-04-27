@@ -116,6 +116,7 @@ pub async fn process_device_message(
                 message_repo,
                 channel_repo,
                 group_coordinator,
+                domain_tx,
             )
             .await;
             return;
@@ -180,6 +181,7 @@ async fn process_sender_key_message(
     message_repo: &Arc<MessageRepository>,
     channel_repo: &Arc<ChannelRepository>,
     group_coordinator: &Arc<GroupCoordinator>,
+    domain_tx: Option<&broadcast::Sender<DomainEvent>>,
 ) {
     tracing::info!(
         message_guid = %msg.message_guid,
@@ -207,6 +209,7 @@ async fn process_sender_key_message(
                 stats,
                 message_repo,
                 channel_repo,
+                domain_tx,
             );
         }
         Ok(RouteResult::ControlContent(plaintext)) => {
@@ -343,6 +346,7 @@ fn process_decrypted_data_message(
     stats: &Arc<RwLock<InboxStats>>,
     message_repo: &Arc<MessageRepository>,
     channel_repo: &Arc<ChannelRepository>,
+    domain_tx: Option<&broadcast::Sender<DomainEvent>>,
 ) {
     tracing::debug!(
         message_guid = %msg.message_guid,
@@ -385,10 +389,39 @@ fn process_decrypted_data_message(
                 .parse::<MessageId>()
                 .unwrap_or_else(|_| MessageId::new());
 
+            // Derive ConversationType from the channel row rather than
+            // hardcoding AnonGroup. Sender-key sealed-sender delivery is
+            // used by BOTH identified groups (require_encryption=true on
+            // a normal channel) and anon groups — the channel row's
+            // channel_type + require_encryption config determines which.
+            // Fallback to AnonGroup when the channel row is missing (rare
+            // race between SKDM landing and channel sync); Channel::
+            // conversation_type() default for encrypted-but-unknown is
+            // AnonGroup so this preserves the prior behaviour for that
+            // edge case.
+            let conversation_type = match channel_repo.get(&channel_id) {
+                Ok(Some(channel)) => channel.conversation_type(),
+                Ok(None) => {
+                    tracing::warn!(
+                        channel_id = %channel_id,
+                        "channel row missing when assigning ConversationType — defaulting to AnonGroup"
+                    );
+                    ConversationType::AnonGroup
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        channel_id = %channel_id,
+                        error = %e,
+                        "failed to load channel for ConversationType derivation — defaulting to AnonGroup"
+                    );
+                    ConversationType::AnonGroup
+                }
+            };
+
             // Create domain message with sender's timestamp for Signal-style dedup
             // created_at is derived from sent_at in Message::new_text()
             let mut message =
-                Message::new_text(channel_id, ConversationType::AnonGroup, Some(*sender_id), data_message.body.clone(), data_message.timestamp);
+                Message::new_text(channel_id, conversation_type, Some(*sender_id), data_message.body.clone(), data_message.timestamp);
             message.id = message_id;
 
             // Add attachment IDs to message (attachments are stored separately in attachment_repo)
@@ -435,6 +468,20 @@ fn process_decrypted_data_message(
                     let _ = event_tx.send(InboxEvent::MessageProcessed {
                         message_id: msg.message_guid.clone(),
                     });
+
+                    // Emit domain event so notification listener + state
+                    // handlers learn about the fresh group message. Only
+                    // on Ok(true) (new insert) — duplicates fall through
+                    // Ok(false) arm. Mirror of the retry-decrypt path in
+                    // services/message/group.rs:284 which used to be the
+                    // only branch that emitted, causing fresh messages to
+                    // silently miss the desktop toast.
+                    if let Some(tx) = domain_tx {
+                        let _ = tx.send(DomainEvent::MessageReceived {
+                            message: message.clone(),
+                        });
+                    }
+
                     let mut s = stats.write();
                     s.messages_received += 1;
                     s.messages_processed += 1;

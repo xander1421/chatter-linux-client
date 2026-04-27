@@ -7,22 +7,64 @@ use chrono::Utc;
 use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId};
 use crate::domain::message::{ConversationType, Message, MessageContent, MixedContent, ReactionCount};
 use crate::proto::chat_v1;
+use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::util::time::TimestampNanos;
 
 use super::MessageError;
 
+/// Derive the `ConversationType` for a given channel ID via
+/// `Channel::conversation_type()`. Defaults to `Channel` when the row
+/// isn't available yet (channel sync race). Use at RPC boundaries that
+/// hand proto Messages to `proto_to_domain_message_with_sender` —
+/// prevents every caller from repeating the same lookup boilerplate and
+/// keeps the mapping logic in one place.
+pub fn conversation_type_for_channel(
+    repo: &ChannelRepository,
+    channel_id: &ChannelId,
+) -> ConversationType {
+    match repo.get(channel_id) {
+        Ok(Some(ch)) => ch.conversation_type(),
+        Ok(None) => {
+            tracing::debug!(
+                channel_id = %channel_id,
+                "conversation_type_for_channel: channel row missing, defaulting to Channel"
+            );
+            ConversationType::Channel
+        }
+        Err(e) => {
+            tracing::warn!(
+                channel_id = %channel_id,
+                error = %e,
+                "conversation_type_for_channel: repo error, defaulting to Channel"
+            );
+            ConversationType::Channel
+        }
+    }
+}
+
 /// Convert a proto Message to a domain Message.
+///
+/// `conversation_type` must be supplied by the caller — the proto does
+/// not carry it, so the caller is responsible for deriving it from the
+/// target channel (usually `Channel::conversation_type()` on the row
+/// they're fetching into). Passing the wrong variant causes the message
+/// to be written to the wrong index bucket in the sqlite `messages`
+/// table (see domain/message.rs idx_messages_* indexes).
 pub fn proto_to_domain_message(
     proto: &chat_v1::Message,
     sender_id: crate::domain::ids::UserId,
+    conversation_type: ConversationType,
 ) -> Result<Message, MessageError> {
-    proto_to_domain_message_with_sender(proto, Some(sender_id))
+    proto_to_domain_message_with_sender(proto, Some(sender_id), conversation_type)
 }
 
 /// Convert a proto Message to a domain Message with optional sender.
+///
+/// See `proto_to_domain_message` for the `conversation_type` contract.
 pub fn proto_to_domain_message_with_sender(
     proto: &chat_v1::Message,
     sender_id: Option<crate::domain::ids::UserId>,
+    conversation_type: ConversationType,
 ) -> Result<Message, MessageError> {
     // Parse message ID
     let id: MessageId = proto
@@ -84,7 +126,7 @@ pub fn proto_to_domain_message_with_sender(
     Ok(Message {
         id,
         conversation_id: channel_id,
-        conversation_type: ConversationType::AnonGroup,
+        conversation_type,
         sender_id,
         device_id: if proto.author_device_id != 0 { Some(proto.author_device_id) } else { None },
         content,

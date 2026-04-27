@@ -278,7 +278,14 @@ impl MessageService {
                     };
                     let mut patched = proto_msg.clone();
                     patched.content = Some(decoded);
-                    match proto_to_domain_message_with_sender(&patched, Some(sender_id)) {
+                    // Group decrypt retry path — channel_id is the
+                    // current retry target. Derive ConversationType so
+                    // identified groups stay tagged Channel.
+                    let conv_type = crate::services::message::conversion::conversation_type_for_channel(
+                        &self.channel_repo,
+                        &channel_id,
+                    );
+                    match proto_to_domain_message_with_sender(&patched, Some(sender_id), conv_type) {
                         Ok(message) => {
                             let _ = self.event_bus.domain_sender().send(
                                 DomainEvent::MessageReceived { message },

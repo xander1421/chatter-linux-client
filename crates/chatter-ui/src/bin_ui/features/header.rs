@@ -574,7 +574,10 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     return;
                 }
             };
-            let conversation_type = match state.active_conversation.conversation_type() {
+            // Resolve conversation type via client helper so we pick up
+            // the correct variant for encrypted-vs-non-encrypted channels
+            // (cheap channel_repo lookup inside).
+            let conversation_type = match ui_ctx.active_conversation_type() {
                 Some(ct) => ct,
                 None => {
                     tracing::warn!("Cannot load more: no active conversation type");

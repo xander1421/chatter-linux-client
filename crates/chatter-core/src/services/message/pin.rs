@@ -8,6 +8,7 @@ use crate::domain::ids::{ChannelId, MessageId, UserId};
 use crate::domain::message::Message;
 use crate::services::current_user::CurrentUserProvider;
 
+use super::conversion::conversation_type_for_channel;
 use super::core::proto_to_domain_message_with_sender;
 use super::{MessageError, MessageService};
 
@@ -34,8 +35,12 @@ impl MessageService {
             proto_message.author_id.parse().ok()
         };
 
-        // Convert to domain message
-        let message = proto_to_domain_message_with_sender(&proto_message, sender_id)?;
+        // Convert to domain message. ConversationType derives from the
+        // local channel row (pin replies belong to whatever the channel
+        // actually is — identified / anon / DM — the server does not
+        // convey this in proto).
+        let conv_type = conversation_type_for_channel(&self.channel_repo, channel_id);
+        let message = proto_to_domain_message_with_sender(&proto_message, sender_id, conv_type)?;
 
         // Update local storage
         match self.message_repo.get(&message.id)? {
@@ -86,7 +91,10 @@ impl MessageService {
             .list_pinned_messages(&channel_id.to_string(), limit as i32)
             .await?;
 
-        // Convert proto messages to domain messages and store locally
+        // Convert proto messages to domain messages and store locally.
+        // All pinned messages belong to `channel_id`, so derive
+        // ConversationType once and reuse.
+        let conv_type = conversation_type_for_channel(&self.channel_repo, channel_id);
         let mut messages = Vec::with_capacity(response.messages.len());
         for proto in &response.messages {
             // Parse sender ID from proto author_id
@@ -96,7 +104,7 @@ impl MessageService {
                 proto.author_id.parse().ok()
             };
 
-            let message = proto_to_domain_message_with_sender(proto, sender_id)?;
+            let message = proto_to_domain_message_with_sender(proto, sender_id, conv_type.clone())?;
 
             // Upsert to local storage
             match self.message_repo.get(&message.id)? {

@@ -84,14 +84,21 @@ impl ActiveConversation {
     ///
     /// Returns None for ActiveConversation::None.
     ///
-    /// Note: Channel maps to AnonGroup because all channels use encrypted
-    /// group mailboxes (NDSS '21). Messages are stored as AnonGroup in the
-    /// unified message table. If non-encrypted channels are added later,
-    /// use Channel::conversation_type() which checks require_encryption.
-    pub fn conversation_type(&self) -> Option<crate::domain::message::ConversationType> {
+    /// `channel_repo` is needed for the `Channel(id)` variant — its
+    /// ConversationType depends on the channel row's `require_encryption`
+    /// flag: `AnonGroup` when set, otherwise plain `Channel`. Previously
+    /// this hardcoded `AnonGroup` for every channel, which mismatched the
+    /// actual stored `ConversationType` once non-encrypted channels
+    /// existed (and caused load-more + unread queries to miss rows).
+    pub fn conversation_type(
+        &self,
+        channel_repo: &crate::storage::ChannelRepository,
+    ) -> Option<crate::domain::message::ConversationType> {
         use crate::domain::message::ConversationType;
         match self {
-            Self::Channel(_) => Some(ConversationType::AnonGroup),
+            Self::Channel(id) => Some(
+                crate::services::message::conversion::conversation_type_for_channel(channel_repo, id),
+            ),
             Self::ServerDm { .. } => Some(ConversationType::ServerDm),
             Self::MailboxDm { .. } => Some(ConversationType::MailboxDm),
             Self::AnonDm(_) => Some(ConversationType::AnonDm),

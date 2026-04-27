@@ -59,13 +59,14 @@ impl SyncEngine {
         Self {
             channel_sync: ChannelSync::new(
                 grpc_pool.clone(),
-                channel_repo,
+                channel_repo.clone(),
                 settings_repo.clone(),
             ),
             message_sync: MessageSync::new(
                 grpc_pool.clone(),
                 message_repo,
                 settings_repo.clone(),
+                channel_repo,
             ),
             user_sync: UserSync::new(
                 grpc_pool,

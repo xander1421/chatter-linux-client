@@ -81,6 +81,9 @@ impl ChatterClient {
         let signal = self.signal().clone();
         let messages = self.messages().clone();
         let attachment_service = self.attachments().clone();
+        // Clone channel_repo so the spawned stream task can resolve
+        // ConversationType per incoming message without borrowing self.
+        let channel_repo_for_stream = self.ui.channel_repo.clone();
 
         let handle = tokio::spawn(async move {
             let stream = match msg_client.stream_message_events(&channel_id_str, None).await {
@@ -270,7 +273,14 @@ impl ChatterClient {
                                 proto_msg
                             };
 
-                            match proto_to_domain_message_with_sender(&decrypted_proto, sender_id) {
+                            // Streaming decrypt path — derive
+                            // ConversationType from the channel the
+                            // subscription is bound to.
+                            let conv_type = crate::services::message::conversion::conversation_type_for_channel(
+                                &channel_repo_for_stream,
+                                &channel_id_owned,
+                            );
+                            match proto_to_domain_message_with_sender(&decrypted_proto, sender_id, conv_type) {
                                 Ok(mut message) => {
                                     // Persist to DB so the message survives a
                                     // channel switch (`load_channel_into_ui`
@@ -451,6 +461,51 @@ impl ChatterClient {
         reason: Option<&str>,
     ) -> Result<(), crate::services::channel::ChannelError> {
         self.channels().kick_user_complete(channel_id, user_id, reason).await
+    }
+
+    /// Ban a user from a channel (server-side) and re-distribute sender keys.
+    ///
+    /// Like kick, ban removes local membership and rotates the sender key.
+    /// `duration` is the ban length — `None` means permanent.
+    pub async fn ban_user(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        user_id: &crate::domain::ids::UserId,
+        duration: Option<std::time::Duration>,
+        reason: Option<&str>,
+    ) -> Result<(), crate::services::channel::ChannelError> {
+        self.channels().ban_user_complete(channel_id, user_id, duration, reason).await
+    }
+
+    /// Unban a user — clears the server-side ban. The user can rejoin via
+    /// invite or public-channel flow afterwards.
+    pub async fn unban_user(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        user_id: &crate::domain::ids::UserId,
+    ) -> Result<(), crate::services::channel::ChannelError> {
+        self.channels().unban_user(channel_id, user_id).await
+    }
+
+    /// Mute a user in a channel (local-only enforcement — flips the
+    /// membership's `is_muted` flag and sets `muted_until`). Server sends
+    /// channel-moderation events for peer coordination.
+    pub fn mute_user(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        user_id: &crate::domain::ids::UserId,
+        duration: std::time::Duration,
+    ) -> Result<(), crate::services::channel::ChannelError> {
+        self.channels().mute_user(channel_id, user_id, duration)
+    }
+
+    /// Unmute a user — clears the local mute flag.
+    pub fn unmute_user(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        user_id: &crate::domain::ids::UserId,
+    ) -> Result<(), crate::services::channel::ChannelError> {
+        self.channels().unmute_user(channel_id, user_id)
     }
 
     /// Update a channel's name and/or description.

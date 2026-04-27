@@ -242,7 +242,15 @@ impl MessageService {
                 proto.author_id.parse().ok()
             };
 
-            let message = proto_to_domain_message_with_sender(proto, sender_id)?;
+            // Saved-messages RPC only returns messages in the current
+            // user's personal vault channel — ConversationType is
+            // unambiguously SavedMessages regardless of what the channel
+            // row says.
+            let message = proto_to_domain_message_with_sender(
+                proto,
+                sender_id,
+                crate::domain::message::ConversationType::SavedMessages,
+            )?;
 
             // Upsert to local storage (insert or update)
             match self.message_repo.get(&message.id)? {

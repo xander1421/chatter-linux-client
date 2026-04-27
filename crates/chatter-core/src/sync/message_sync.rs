@@ -8,7 +8,8 @@ use std::sync::Arc;
 use crate::domain::ids::{ChannelId, UserId};
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::proto::chat_v1::MessageSortDirection;
-use crate::services::message::conversion::proto_to_domain_message_with_sender;
+use crate::services::message::conversion::{conversation_type_for_channel, proto_to_domain_message_with_sender};
+use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::settings_repo::SettingsRepository;
 use crate::storage::repositories::unified_message_repo::UnifiedMessageRepository;
 
@@ -21,6 +22,7 @@ pub struct MessageSync {
     grpc_pool: Arc<GrpcClientPool>,
     message_repo: Arc<UnifiedMessageRepository>,
     settings_repo: Arc<SettingsRepository>,
+    channel_repo: Arc<ChannelRepository>,
 }
 
 /// Result of a message sync operation for one channel.
@@ -46,11 +48,13 @@ impl MessageSync {
         grpc_pool: Arc<GrpcClientPool>,
         message_repo: Arc<UnifiedMessageRepository>,
         settings_repo: Arc<SettingsRepository>,
+        channel_repo: Arc<ChannelRepository>,
     ) -> Self {
         Self {
             grpc_pool,
             message_repo,
             settings_repo,
+            channel_repo,
         }
     }
 
@@ -91,6 +95,10 @@ impl MessageSync {
             let page_count = response.messages.len();
             result.fetched += page_count;
 
+            // All messages in this page belong to `channel_id`; derive
+            // ConversationType once per page.
+            let conv_type = conversation_type_for_channel(&self.channel_repo, channel_id);
+
             for proto_msg in &response.messages {
                 // Parse sender ID
                 let sender_id: Option<UserId> = if proto_msg.author_id.is_empty() {
@@ -100,7 +108,7 @@ impl MessageSync {
                 };
 
                 // Convert proto to domain message using existing conversion
-                let message = match proto_to_domain_message_with_sender(proto_msg, sender_id) {
+                let message = match proto_to_domain_message_with_sender(proto_msg, sender_id, conv_type.clone()) {
                     Ok(msg) => msg,
                     Err(e) => {
                         tracing::debug!(

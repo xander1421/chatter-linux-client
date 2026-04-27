@@ -155,8 +155,11 @@ impl MessageService {
         let _ = group_fanout;
         let _ = attachment_pointers;
 
-        // Convert to domain message and preserve attachment IDs
-        let mut message = proto_to_domain_message(&proto_message, sender_id)?;
+        // Convert to domain message and preserve attachment IDs.
+        // Derive ConversationType from the channel row so identified
+        // channels don't get mistagged as AnonGroup.
+        let conv_type = super::conversion::conversation_type_for_channel(&self.channel_repo, channel_id);
+        let mut message = proto_to_domain_message(&proto_message, sender_id, conv_type)?;
         message.attachments = attachment_ids;
 
         // IMPORTANT: Check if server returned a different channel_id
@@ -702,7 +705,8 @@ impl MessageService {
             .await?;
 
         // Convert to domain message and preserve attachment IDs
-        let mut message = proto_to_domain_message(&proto_message, sender_id)?;
+        let conv_type = super::conversion::conversation_type_for_channel(&self.channel_repo, channel_id);
+        let mut message = proto_to_domain_message(&proto_message, sender_id, conv_type)?;
         message.attachments = attachment_ids;
 
         // IMPORTANT: Ensure channel_id matches (server might return different format)
@@ -764,7 +768,8 @@ impl MessageService {
             .await?;
 
         // Convert to domain message (use server response for consistency)
-        let mut updated_message = proto_to_domain_message(&proto_message, current_user)?;
+        let conv_type = super::conversion::conversation_type_for_channel(&self.channel_repo, channel_id);
+        let mut updated_message = proto_to_domain_message(&proto_message, current_user, conv_type)?;
 
         // Mark edited locally (in case server didn't set it)
         updated_message.mark_edited();
@@ -979,7 +984,8 @@ impl MessageService {
             .await?;
 
         // Convert to domain message and set reply_to + attachments
-        let mut message = proto_to_domain_message(&proto_message, sender_id)?;
+        let conv_type = super::conversion::conversation_type_for_channel(&self.channel_repo, channel_id);
+        let mut message = proto_to_domain_message(&proto_message, sender_id, conv_type)?;
         message.reply_to = Some(*reply_to_id);
         message.attachments = attachment_ids;
 
