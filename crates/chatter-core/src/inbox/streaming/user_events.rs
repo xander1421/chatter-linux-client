@@ -10,9 +10,13 @@ use tokio::sync::broadcast;
 use tokio::sync::watch;
 
 use crate::inbox::events::{FriendRequestInfo, InboxEvent};
+use crate::inbox::handlers::DomainEvent;
 use crate::proto::chat_v1::FriendStatus;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::proto::chat_v1::{friend_requests_filter, user_event};
+use crate::proto::UserPresence;
+use crate::services::user::conversions::proto_to_domain_profile;
+use crate::storage::repositories::UserRepository;
 
 /// Spawn the user events stream handler.
 ///
@@ -30,6 +34,8 @@ pub async fn spawn_user_events_stream(
     user_id: String,
     grpc_pool: Arc<GrpcClientPool>,
     event_tx: broadcast::Sender<InboxEvent>,
+    user_repo: Arc<UserRepository>,
+    domain_tx: Option<broadcast::Sender<DomainEvent>>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
     tokio::spawn(async move {
@@ -62,6 +68,8 @@ pub async fn spawn_user_events_stream(
                                             user_event,
                                             &grpc_pool,
                                             &event_tx,
+                                            &user_repo,
+                                            domain_tx.as_ref(),
                                         ).await;
                                     }
                                     Some(Err(e)) => {
@@ -100,6 +108,8 @@ async fn handle_user_event(
     event: crate::proto::chat_v1::UserEvent,
     grpc_pool: &Arc<GrpcClientPool>,
     event_tx: &broadcast::Sender<InboxEvent>,
+    user_repo: &Arc<UserRepository>,
+    domain_tx: Option<&broadcast::Sender<DomainEvent>>,
 ) {
     match event.event {
         Some(user_event::Event::FriendStatusChanged(status)) => {
@@ -126,12 +136,34 @@ async fn handle_user_event(
             // Refresh friend request lists
             refresh_friend_requests(grpc_pool, event_tx).await;
         }
-        Some(user_event::Event::ProfileUpdated(profile)) => {
+        Some(user_event::Event::ProfileUpdated(proto_profile)) => {
             tracing::debug!(
-                user_id = %profile.user_id,
+                user_id = %proto_profile.user_id,
                 "Profile updated event received"
             );
-            // TODO: Handle profile updates if needed
+
+            let profile = match proto_to_domain_profile(&proto_profile) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to convert proto profile");
+                    return;
+                }
+            };
+
+            if let Err(e) = user_repo.upsert_profile(&profile) {
+                tracing::warn!(error = %e, user_id = %profile.user_id, "Failed to upsert profile");
+                return;
+            }
+
+            if let Some(tx) = domain_tx {
+                let _ = tx.send(DomainEvent::UserProfileUpdated {
+                    user_id: profile.user_id,
+                    display_name: profile.display_name.clone(),
+                    avatar_url: profile.avatar_url.clone(),
+                    status_message: profile.status_message.as_ref().map(|s| s.text.clone()),
+                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                });
+            }
         }
         Some(user_event::Event::PresenceChanged(presence)) => {
             tracing::trace!(
@@ -139,7 +171,25 @@ async fn handle_user_event(
                 presence = ?presence.presence,
                 "Presence changed event received"
             );
-            // TODO: Handle presence updates
+
+            let user_id = match presence.user_id.parse() {
+                Ok(id) => id,
+                Err(_) => {
+                    tracing::debug!(user_id = %presence.user_id, "Skipping presence event with invalid user_id");
+                    return;
+                }
+            };
+
+            let proto_presence = UserPresence::try_from(presence.presence)
+                .unwrap_or(UserPresence::Offline);
+
+            if let Some(tx) = domain_tx {
+                let _ = tx.send(DomainEvent::UserPresenceChanged {
+                    user_id,
+                    presence: proto_presence,
+                    timestamp: presence.timestamp,
+                });
+            }
         }
         None => {
             tracing::trace!("Received empty user event");

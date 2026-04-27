@@ -592,6 +592,10 @@ pub async fn handle_domain_event(
         DomainEvent::PushWakeup { .. } => {}
         DomainEvent::SessionResetRequested { .. } => {}
         DomainEvent::PeerDevicesChanged { .. } => {}
+        // Profile already upserted by core; sidebar/header rerender on
+        // next refresh tick reads the new display name + avatar via
+        // user_repo. No immediate UI surfacing required.
+        DomainEvent::UserProfileUpdated { .. } => {}
         // Incoming calls are surfaced via a dedicated IncomingCallData
         // channel + IncomingCallModal — handled outside this inbox
         // domain-event path.

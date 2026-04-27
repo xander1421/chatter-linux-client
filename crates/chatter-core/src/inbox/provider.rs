@@ -386,6 +386,8 @@ impl DeviceInboxProvider {
                     user_id,
                     grpc_pool.clone(),
                     event_tx.clone(),
+                    user_repo.clone(),
+                    event_bus.as_ref().map(|bus| bus.domain_sender()),
                     shutdown_rx.clone(),
                 )
                 .await;

@@ -347,6 +347,17 @@ pub enum DomainEvent {
         timestamp: u64,
     },
 
+    /// Server-managed user profile updated (display_name, avatar, status_message,
+    /// presence). Emitted from the user events stream after the local user_repo
+    /// has been upserted with the new profile.
+    UserProfileUpdated {
+        user_id: UserId,
+        display_name: String,
+        avatar_url: Option<String>,
+        status_message: Option<String>,
+        timestamp: u64,
+    },
+
     /// NDSS'21 ECIES init message received (private friend contact).
     AnonDmInitReceived {
         conversation_id: AnonDmId,
@@ -618,6 +629,7 @@ impl DomainEvent {
             DomainEvent::ChannelMemberLeft { channel_id, .. } => Some(*channel_id),
             DomainEvent::UserPresenceChanged { .. } => None,
             DomainEvent::AnonDmProfileUpdated { .. } => None,
+            DomainEvent::UserProfileUpdated { .. } => None,
             DomainEvent::JarvisResponse { .. } => None,
             DomainEvent::JarvisStats { .. } => None,
             DomainEvent::JarvisCleared { .. } => None,

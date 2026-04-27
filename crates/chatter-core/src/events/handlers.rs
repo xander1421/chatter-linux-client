@@ -864,6 +864,25 @@ impl EventHandlers {
                 // This event is just for notifying other components
             }
 
+            DomainEvent::UserProfileUpdated {
+                user_id,
+                display_name,
+                avatar_url,
+                status_message,
+                timestamp,
+            } => {
+                // Already persisted by the user events stream handler; UI subscribes
+                // directly to refresh display name + avatar caches.
+                trace!(
+                    ?user_id,
+                    ?display_name,
+                    ?avatar_url,
+                    ?status_message,
+                    ?timestamp,
+                    "Server-managed user profile updated"
+                );
+            }
+
             // ================================================================
             // Jarvis AI Events
             // ================================================================
