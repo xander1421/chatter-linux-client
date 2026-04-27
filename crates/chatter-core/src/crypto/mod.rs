@@ -17,6 +17,7 @@ pub mod ecies;
 pub mod envelope_crypto;
 pub mod kdf;
 pub mod profile_crypto;
+pub mod provisioning;
 pub mod rng;
 pub mod secret_key;
 pub mod secret_string;
@@ -43,3 +44,7 @@ pub use secret_string::SecretString;
 pub use secure_buffer::{SecureBuffer, SecureCursor};
 pub use signal::{IdentityKeyManager, PreKeyManager, SealedSenderManager, SenderKeyManager, SessionManager, SignalStore};
 pub use ecies::{encrypt as ecies_encrypt, decrypt as ecies_decrypt, EciesMessage, EciesError};
+pub use provisioning::{
+    decrypt_envelope as decrypt_provision_envelope,
+    encrypt_envelope as encrypt_provision_envelope, ProvisioningKeypair,
+};

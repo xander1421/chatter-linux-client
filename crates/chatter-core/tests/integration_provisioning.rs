@@ -8,12 +8,15 @@ mod common;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 
+use chatter_core::crypto::{
+    encrypt_provision_envelope, decrypt_provision_envelope, ProvisioningKeypair,
+};
 use chatter_core::network::grpc::{ProvisioningClient, ProvisioningPollResult};
 use chatter_core::proto::chat_v1::signal_pre_key_bundle::{
     PreKeyRecord, SignedPreKeyRecord,
 };
 use chatter_core::proto::chat_v1::SignalPreKeyBundle;
-use chatter_core::proto::provisioning_v1::ProvisionEnvelope;
+use chatter_core::proto::provisioning_v1::{ProvisionEnvelope, ProvisionMessage};
 use libsignal_protocol::{IdentityKeyPair, KeyPair};
 
 use common::*;
@@ -150,7 +153,7 @@ async fn test_complete_provisioning_flow() {
 
     assert_ok(
         primary_client
-            .provision_device(&provisioning_uuid, envelope.clone())
+            .provision_device(&provisioning_uuid, envelope.clone(), "test-code-1234567890")
             .await,
     );
     println!("Primary device sent encrypted envelope");
@@ -244,7 +247,7 @@ async fn test_cancel_provisioning_session() {
 
     assert_ok(
         primary_client
-            .provision_device(&provisioning_uuid, envelope)
+            .provision_device(&provisioning_uuid, envelope, "test-code-1234567890")
             .await,
     );
 
@@ -306,7 +309,7 @@ async fn test_list_provisioning_sessions() {
 
     assert_ok(
         primary_client
-            .provision_device(&start_response.provisioning_uuid, envelope)
+            .provision_device(&start_response.provisioning_uuid, envelope, "test-code-1234567890")
             .await,
     );
 
@@ -358,7 +361,7 @@ async fn test_provision_device_requires_authentication() {
     };
 
     let result = client
-        .provision_device(&start_response.provisioning_uuid, envelope)
+        .provision_device(&start_response.provisioning_uuid, envelope, "test-code-1234567890")
         .await;
 
     assert_unauthenticated(result);
@@ -434,13 +437,13 @@ async fn test_cannot_reprovision_already_provisioned_session() {
 
     assert_ok(
         primary_client
-            .provision_device(&start_response.provisioning_uuid, envelope.clone())
+            .provision_device(&start_response.provisioning_uuid, envelope.clone(), "test-code-1234567890")
             .await,
     );
 
     // Try to provision again - should fail
     let result = primary_client
-        .provision_device(&start_response.provisioning_uuid, envelope)
+        .provision_device(&start_response.provisioning_uuid, envelope, "test-code-1234567890")
         .await;
 
     // Should get an error (session already provisioned)
@@ -469,6 +472,153 @@ async fn get_provisioning_code_for_test(
     // This is a placeholder that will cause the test to fail gracefully.
     // Real integration would require the crypto flow.
     "test-provisioning-code-placeholder".to_string()
+}
+
+// ============================================================================
+// End-to-end envelope crypto round-trip (no server required for the crypto
+// itself; this exercises the encrypt + decrypt halves on real keys with the
+// real ProvisionMessage proto).
+// ============================================================================
+
+#[test]
+fn test_provision_envelope_roundtrip_with_real_proto() {
+    // New device generates ephemeral keypair (would be embedded in QR).
+    let new_device = ProvisioningKeypair::generate();
+
+    // Primary builds a ProvisionMessage as it would in approve_link.
+    let identity = IdentityKeyPair::generate(&mut rand::rng());
+    let identity_priv = identity.private_key().serialize().to_vec();
+    assert_eq!(identity_priv.len(), 32);
+
+    let msg = ProvisionMessage {
+        aci_identity_key_private: identity_priv.clone(),
+        pni_identity_key_private: vec![],
+        aci: "11111111-2222-3333-4444-555555555555".into(),
+        pni: String::new(),
+        number: String::new(),
+        provisioning_code: "ABCDEF1234567890".into(),
+        profile_key: vec![0x42; 32],
+        master_key: vec![],
+        read_receipts: true,
+        typing_indicators: false,
+        link_previews: true,
+        provisioning_user_agent: "chatter-test/0.0".into(),
+        primary_device_registration_id: 1234,
+    };
+
+    // Primary encrypts to new device's pub.
+    let envelope = encrypt_provision_envelope(&new_device.public_bytes(), &msg)
+        .expect("encrypt");
+
+    // Wire format sanity: 33-byte prefixed pubkey + 0x01 version body.
+    assert_eq!(envelope.public_key.len(), 33);
+    assert_eq!(envelope.public_key[0], 0x05);
+    assert_eq!(envelope.body[0], 0x01);
+
+    // New device decrypts.
+    let decoded = decrypt_provision_envelope(&new_device, &envelope).expect("decrypt");
+    assert_eq!(decoded.aci, msg.aci);
+    assert_eq!(decoded.provisioning_code, msg.provisioning_code);
+    assert_eq!(decoded.aci_identity_key_private, identity_priv);
+    assert_eq!(decoded.profile_key, msg.profile_key);
+    assert_eq!(decoded.read_receipts, true);
+    assert_eq!(decoded.link_previews, true);
+    assert_eq!(decoded.primary_device_registration_id, 1234);
+}
+
+#[tokio::test]
+async fn test_full_link_flow_with_real_envelope_crypto() {
+    skip_if_no_server!();
+
+    let pool = assert_ok(create_test_pool().await);
+
+    // Step 1: register the primary user.
+    let primary = assert_ok(setup_authenticated_test(&pool).await);
+
+    // Step 2: new device starts provisioning (unauthenticated).
+    pool.auth().clear();
+    let mut new_device_client = ProvisioningClient::new(pool.channel(), pool.auth_clone());
+    let start = assert_ok(
+        new_device_client
+            .start_provisioning("Linux x86_64", "Real-Crypto Test")
+            .await,
+    );
+    let uuid = start.provisioning_uuid.clone();
+
+    // Step 3: new device generates ephemeral keypair.
+    let new_device_kp = ProvisioningKeypair::generate();
+
+    // Step 4: re-auth as primary, build + encrypt ProvisionMessage,
+    // upload envelope.
+    pool.auth().set_basic(
+        format!("{}.{}", primary.user_id, primary.device_id),
+        BASE64.encode(&primary.device_auth_token),
+    );
+    let mut primary_client = ProvisioningClient::new(pool.channel(), pool.auth_clone());
+
+    let provisioning_code = "TESTCODE12345678".to_string();
+    let primary_identity = IdentityKeyPair::generate(&mut rand::rng());
+    let provision_msg = ProvisionMessage {
+        aci_identity_key_private: primary_identity.private_key().serialize().to_vec(),
+        pni_identity_key_private: vec![],
+        aci: primary.user_id.clone(),
+        pni: String::new(),
+        number: String::new(),
+        provisioning_code: provisioning_code.clone(),
+        profile_key: vec![0xAA; 32],
+        master_key: vec![],
+        read_receipts: true,
+        typing_indicators: true,
+        link_previews: true,
+        provisioning_user_agent: "primary-test/0.0".into(),
+        primary_device_registration_id: 42,
+    };
+    let envelope = encrypt_provision_envelope(&new_device_kp.public_bytes(), &provision_msg)
+        .expect("encrypt envelope");
+    assert_ok(
+        primary_client
+            .provision_device(&uuid, envelope, &provision_msg.provisioning_code)
+            .await,
+    );
+
+    // Step 5: new device polls + decrypts.
+    pool.auth().clear();
+    let received_envelope = match assert_ok(
+        new_device_client.poll_provisioning_message(&uuid).await,
+    ) {
+        ProvisioningPollResult::Envelope(e) => e,
+        other => panic!("Expected Envelope, got {other:?}"),
+    };
+    let decoded = decrypt_provision_envelope(&new_device_kp, &received_envelope)
+        .expect("decrypt envelope");
+
+    // Step 6: code from decrypted envelope matches what primary sent.
+    assert_eq!(decoded.provisioning_code, provisioning_code);
+    assert_eq!(decoded.aci, primary.user_id);
+
+    // Step 7: complete linking with the recovered code + a fresh prekey
+    // bundle.
+    let (prekey_bundle, _) = generate_prekey_bundle();
+    let device_auth_token: [u8; 32] = rand::random();
+    let uak: [u8; 16] = rand::random();
+    let complete = assert_ok(
+        new_device_client
+            .complete_device_linking(
+                &decoded.provisioning_code,
+                &device_auth_token,
+                &uak,
+                "Linux x86_64",
+                "Real-Crypto Test",
+                prekey_bundle,
+                Vec::new(),
+            )
+            .await,
+    );
+    assert!(
+        complete.device_id > 1,
+        "Linked device should have device_id > 1, got {}",
+        complete.device_id
+    );
 }
 
 /// Generate a valid Signal Protocol prekey bundle for testing.

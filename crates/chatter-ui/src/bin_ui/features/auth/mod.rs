@@ -4,6 +4,7 @@
 
 pub mod inbox;
 pub(crate) mod initial_data;
+mod link_device;
 mod login;
 mod logout;
 pub mod presence_integration;
@@ -24,4 +25,5 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     register::wire_register(window, ui_ctx);
     logout::wire_logout(window, ui_ctx);
     recovery::wire_recovery(window, ui_ctx);
+    link_device::wire_link_device(window, ui_ctx);
 }

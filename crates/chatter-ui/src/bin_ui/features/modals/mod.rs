@@ -10,6 +10,7 @@ mod create_channel;
 mod friend_requests;
 mod friends;
 mod join_channel;
+mod link_approve;
 mod profile;
 mod sessions;
 mod settings;
@@ -37,4 +38,5 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     sessions::wire_session_callbacks(window, ui_ctx);
     channel_settings::wire_channel_settings(window, ui_ctx);
     anon_group_invite::wire_group_invite_callbacks(window, ui_ctx);
+    link_approve::wire(window, ui_ctx);
 }

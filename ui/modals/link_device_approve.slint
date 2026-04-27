@@ -1,0 +1,124 @@
+// Link Device Approve modal — primary device side.
+//
+// Paste a link URL from the new device, preview which device is being
+// linked, re-auth with password, then send the encrypted ProvisionMessage
+// via the LinkDeviceService.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Modal } from "../components/modal.slint";
+import { Button } from "../components/button.slint";
+import { Input } from "../components/input.slint";
+
+export component LinkDeviceApproveModal inherits Rectangle {
+    in property <bool> show-modal: false;
+    // URL pasted by the user (two-way bound to UI state).
+    in-out property <string> link-url: "";
+    in-out property <string> password: "";
+    // Preview state populated by core after parse.
+    in property <string> preview-device-name: "";
+    in property <string> preview-server-url: "";
+    in property <bool> preview-ready: false;
+    // Status / error from core.
+    in property <string> error: "";
+    in property <string> status: "";
+    in property <bool> approving: false;
+
+    callback close();
+    callback paste-changed(string);   // URL textbox changed → core re-parses
+    callback approve(string, string); // (url, password)
+
+    Modal {
+        show: root.show-modal;
+        title: "Link a New Device";
+        modal-width: 520px;
+
+        close => { root.close(); }
+
+        VerticalLayout {
+            spacing: Spacing.md;
+
+            Text {
+                text: "Paste the link from your new device. You'll be asked to confirm with your password or 6-digit PIN to authorize.";
+                color: Colors.text-secondary;
+                font-size: Typography.sm;
+                wrap: word-wrap;
+            }
+
+            Input {
+                placeholder: "chatter://link?uuid=…";
+                text <=> root.link-url;
+                disabled: root.approving;
+                edited(t) => { root.paste-changed(t); }
+            }
+
+            // Preview panel — appears once parse succeeds
+            if root.preview-ready: Rectangle {
+                background: Colors.surface-hover;
+                border-radius: Spacing.radius-sm;
+                VerticalLayout {
+                    padding: Spacing.sm;
+                    spacing: Spacing.xs;
+                    Text {
+                        text: "About to link:";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                    }
+                    Text {
+                        text: root.preview-device-name != "" ? root.preview-device-name : "Unnamed device";
+                        color: Colors.text-primary;
+                        font-size: Typography.base;
+                        font-weight: Typography.medium;
+                    }
+                    if root.preview-server-url != "": Text {
+                        text: "Server: " + root.preview-server-url;
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
+            Input {
+                placeholder: "Password or 6-digit PIN";
+                password: true;
+                text <=> root.password;
+                disabled: root.approving || !root.preview-ready;
+            }
+
+            if status != "": Text {
+                text: root.status;
+                color: Colors.text-secondary;
+                font-size: Typography.sm;
+                wrap: word-wrap;
+            }
+
+            if error != "": Text {
+                text: root.error;
+                color: Colors.error;
+                font-size: Typography.sm;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                Button {
+                    text: "Cancel";
+                    variant: "secondary";
+                    disabled: root.approving;
+                    clicked => { root.close(); }
+                }
+                Button {
+                    text: root.approving ? "" : "Authorize";
+                    variant: "primary";
+                    loading: root.approving;
+                    disabled: root.approving || !root.preview-ready || root.password == "";
+                    clicked => {
+                        root.approve(root.link-url, root.password);
+                    }
+                }
+            }
+        }
+    }
+}
