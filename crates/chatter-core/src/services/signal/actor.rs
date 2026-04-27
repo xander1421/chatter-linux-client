@@ -85,6 +85,15 @@ pub enum SignalCommand {
     },
     HasSenderKey { channel_id: ChannelId, our_address: ProtocolAddress, response: oneshot::Sender<Result<bool, ServiceError>> },
     HasSession { address: ProtocolAddress, response: oneshot::Sender<Result<bool, ServiceError>> },
+    /// Delete every Signal session row whose address matches `{peer_user_id}:*`.
+    /// Used by the PEER_DEVICES_CHANGED handler so a peer's device change
+    /// forces fresh prekey fetch + session rebuild on the next send to them.
+    /// Returns the number of session rows deleted.
+    InvalidatePeerSessions { peer_user_id: String, response: oneshot::Sender<Result<u32, ServiceError>> },
+    /// Delete the single Signal session for `(peer_user_id, device_id)`.
+    /// Used by SESSION_RESET when the server narrows the reset to one
+    /// device. Returns true if a session row existed + was removed.
+    InvalidatePeerDeviceSession { peer_user_id: String, device_id: u32, response: oneshot::Sender<Result<bool, ServiceError>> },
     ClearChannelSenderKeys { channel_id: ChannelId, response: oneshot::Sender<Result<(), ServiceError>> },
     MarkChannelForRotation { channel_id: ChannelId, response: oneshot::Sender<Result<(), ServiceError>> },
     /// Generate a Signal safety number for a peer (60-digit fingerprint).
@@ -414,6 +423,44 @@ impl SignalActorHandle {
                             let _ = response.send(res);
                         }
 
+                        SignalCommand::InvalidatePeerDeviceSession { peer_user_id, device_id, response } => {
+                            // Single-device drop. Address layout matches
+                            // load_session format: "{user_id}:{device_id}".
+                            let address = format!("{}:{}", peer_user_id, device_id);
+                            let res = store.key_store()
+                                .delete_session(&address)
+                                .map_err(ServiceError::Storage);
+                            if let Ok(true) = &res {
+                                tracing::info!(
+                                    peer_user_id = %peer_user_id,
+                                    device_id,
+                                    "Invalidated single peer-device Signal session"
+                                );
+                            }
+                            let _ = response.send(res);
+                        }
+
+                        SignalCommand::InvalidatePeerSessions { peer_user_id, response } => {
+                            // Blow away every session whose address LIKE "peer_user_id:%".
+                            // Next send to this peer will trigger ensure_session,
+                            // which fetches the peer's (now updated) prekey
+                            // bundle and re-establishes sessions for every
+                            // current device. For groups, caller is
+                            // responsible for also marking affected channels
+                            // for sender-key rotation.
+                            let res = store.key_store()
+                                .delete_sessions_for_user(&peer_user_id)
+                                .map_err(ServiceError::Storage);
+                            if let Ok(n) = &res {
+                                tracing::info!(
+                                    peer_user_id = %peer_user_id,
+                                    deleted = *n,
+                                    "Invalidated peer Signal sessions"
+                                );
+                            }
+                            let _ = response.send(res);
+                        }
+
                         SignalCommand::HasSession { address, response } => {
                             let session_key = format!("{}:{}", address.name(), address.device_id());
                             let res = store.key_store().load_session(&session_key)
@@ -637,6 +684,22 @@ impl SignalActorHandle {
 
     pub async fn has_session(&self, address: ProtocolAddress) -> Result<bool, ServiceError> {
         self.send(|tx| SignalCommand::HasSession { address, response: tx }).await?
+    }
+
+    /// Delete every Signal session for `peer_user_id` across all devices.
+    /// Returns the number of sessions dropped. Caller must separately mark
+    /// affected group channels for sender-key rotation (see
+    /// `mark_channel_for_rotation`) when the peer is a group member.
+    pub async fn invalidate_peer_sessions(&self, peer_user_id: String) -> Result<u32, ServiceError> {
+        self.send(|tx| SignalCommand::InvalidatePeerSessions { peer_user_id, response: tx }).await?
+    }
+
+    /// Delete the single Signal session for `(peer_user_id, device_id)`.
+    /// Narrower form of `invalidate_peer_sessions` — used when SESSION_RESET
+    /// carries a specific `peer_device_id`. Returns true when a session
+    /// row existed and was removed.
+    pub async fn invalidate_peer_device_session(&self, peer_user_id: String, device_id: u32) -> Result<bool, ServiceError> {
+        self.send(|tx| SignalCommand::InvalidatePeerDeviceSession { peer_user_id, device_id, response: tx }).await?
     }
 
     /// Rotate signed prekey + Kyber prekey (PQXDH pairing).

@@ -499,6 +499,37 @@ impl ChannelRepository {
         Ok(memberships)
     }
 
+    /// Return the channel IDs where `user_id` holds a membership. Used by
+    /// the PEER_DEVICES_CHANGED handler to enumerate groups that must be
+    /// marked for sender-key rotation when a peer's device set changes.
+    /// Returns only channel IDs (not full channel rows) since the caller
+    /// only needs the set for per-channel rotation-flag writes.
+    pub fn list_channels_for_user(&self, user_id: &UserId) -> Result<Vec<ChannelId>, StorageError> {
+        let conn = self.db.connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT channel_id FROM memberships WHERE user_id = ?1",
+        )?;
+
+        let mut rows = stmt.query(params![user_id.to_string()])?;
+        let mut channel_ids = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            let id_str: String = row.get(0)?;
+            match id_str.parse::<ChannelId>() {
+                Ok(id) => channel_ids.push(id),
+                Err(e) => {
+                    tracing::warn!(
+                        value = %id_str,
+                        error = %e,
+                        "list_channels_for_user: skipping row with invalid channel_id"
+                    );
+                }
+            }
+        }
+
+        Ok(channel_ids)
+    }
+
     /// Update the last read message for a user in a channel.
     pub fn update_last_read(
         &self,

@@ -19,7 +19,6 @@ use std::sync::Arc;
 
 use crate::domain::notification::{Notification, NotificationPriority};
 use crate::error::SystemError;
-use crate::network::streaming::push_listener::PushEvent;
 use crate::system::notification_sink::{NoopNotificationSink, NotificationSink};
 
 /// How much detail to show in OS notifications.
@@ -135,17 +134,12 @@ impl NotificationService {
         }
     }
 
-    /// Show a notification from a push event (ntfy SSE).
-    pub fn show_push_event(&self, event: &PushEvent) -> Result<(), SystemError> {
-        let priority = match event.priority {
-            5 => NotificationPriority::Urgent,
-            4 => NotificationPriority::High,
-            2 => NotificationPriority::Low,
-            _ => NotificationPriority::Normal,
-        };
-
-        self.show_platform_notification(&event.title, &event.message, priority)
-    }
+    // `show_push_event` was removed alongside push_listener's
+    // show_push_notification. Rationale: ntfy SSE is a wake-up transport
+    // only; user-facing toasts flow via DomainEvent from the typed gRPC
+    // stream consumer (see services::notification_stream) so server can
+    // run ntfy in content-free mode without losing notification
+    // fidelity.
 
     /// Show a simple text notification (caller controls content).
     pub fn show_message(
@@ -191,6 +185,9 @@ pub fn spawn_notification_listener(
     chat_state: crate::state::ChatState,
     user_service: std::sync::Arc<crate::services::user::UserService>,
     notification_service: std::sync::Arc<NotificationService>,
+    signal_service: std::sync::Arc<crate::services::signal_service::SignalService>,
+    grpc_pool: std::sync::Arc<crate::network::grpc::GrpcClientPool>,
+    channel_repo: std::sync::Arc<crate::storage::ChannelRepository>,
 ) -> tokio::task::JoinHandle<()> {
     use crate::domain::notification::NotificationPriority;
     use crate::inbox::handlers::DomainEvent;
@@ -246,6 +243,223 @@ pub fn spawn_notification_listener(
                         NotificationPriority::Low,
                     );
                 }
+
+                // ================================================================
+                // Typed lifecycle events (from gRPC notification stream).
+                // Side-effects run in spawned tasks so the event loop stays hot.
+                // ================================================================
+                DomainEvent::IncomingCall { call_id, peer_id: _, peer_name, is_video, channel_context } => {
+                    // Urgent priority so the OS surfaces with sound even
+                    // when device is on focus-assist — matches Signal's
+                    // ring notification behaviour. Title carries media
+                    // flag so the user knows whether to expect video.
+                    let title = if *is_video { "Incoming video call" } else { "Incoming call" };
+                    let body = match channel_context.as_deref() {
+                        Some(ch) if !ch.is_empty() => format!("{} is calling in {}", peer_name, ch),
+                        _ => format!("{} is calling", peer_name),
+                    };
+                    tracing::info!(
+                        call_id = %call_id,
+                        is_video = *is_video,
+                        "IncomingCall notification → urgent toast"
+                    );
+                    let _ = notification_service.show_message(
+                        title,
+                        &body,
+                        NotificationPriority::Urgent,
+                    );
+                }
+
+                DomainEvent::DeviceLinked { device_id, device_name, device_info, approved_by_self } => {
+                    // Skip the toast on the device that just approved the
+                    // pairing — the UI there already showed a confirm
+                    // screen. Only fan-out to siblings raises a toast.
+                    if *approved_by_self {
+                        continue;
+                    }
+                    let body = match (device_name.as_deref(), device_info.as_deref()) {
+                        (Some(name), _) if !name.is_empty() => {
+                            format!("\"{}\" is now linked to your account.", name)
+                        }
+                        (_, Some(info)) if !info.is_empty() => {
+                            format!("A {} was just linked to your account.", info)
+                        }
+                        _ => "A new device was just linked to your account.".to_string(),
+                    };
+                    tracing::info!(device_id, "DeviceLinked notification → surfacing toast");
+                    let _ = notification_service.show_message(
+                        "New device linked",
+                        &body,
+                        NotificationPriority::High,
+                    );
+                }
+
+                DomainEvent::PeerDevicesChanged { peer_user_id, device_id, change_type } => {
+                    // Two-phase rekey on peer device change:
+                    //   1. Drop every pairwise Signal session for the peer so
+                    //      ensure_session on next send fetches the fresh
+                    //      prekey set covering the peer's current device
+                    //      list.
+                    //   2. For every channel where the peer holds
+                    //      membership, mark the channel for sender-key
+                    //      rotation. Next group send will regenerate the
+                    //      sender key + redistribute SKDM so the peer's
+                    //      new device receives it (and revoked devices
+                    //      are excluded).
+                    let peer_id = *peer_user_id;
+                    let peer_str = peer_id.to_string();
+                    let signal = signal_service.clone();
+                    let repo = channel_repo.clone();
+                    let change = change_type.clone();
+                    let did = *device_id;
+                    tokio::spawn(async move {
+                        // Phase 1: pairwise session invalidation.
+                        match signal.actor.invalidate_peer_sessions(peer_str.clone()).await {
+                            Ok(n) => tracing::info!(
+                                peer = %peer_str,
+                                device_id = did,
+                                change_type = %change,
+                                dropped_sessions = n,
+                                "invalidated peer sessions after device change"
+                            ),
+                            Err(e) => tracing::warn!(
+                                peer = %peer_str,
+                                error = %e,
+                                "failed to invalidate peer sessions on device change"
+                            ),
+                        }
+
+                        // Phase 2: group sender-key rotation flags.
+                        // Run on a blocking thread — channel_repo is a
+                        // synchronous SQLite handle.
+                        let peer_id_for_blocking = peer_id;
+                        let repo_for_blocking = repo.clone();
+                        let channels = tokio::task::spawn_blocking(move || {
+                            repo_for_blocking.list_channels_for_user(&peer_id_for_blocking)
+                        }).await;
+
+                        let channel_ids = match channels {
+                            Ok(Ok(ids)) => ids,
+                            Ok(Err(e)) => {
+                                tracing::warn!(
+                                    peer = %peer_str,
+                                    error = %e,
+                                    "failed to list peer channel memberships — skipping SKDM rotation"
+                                );
+                                return;
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    peer = %peer_str,
+                                    error = %e,
+                                    "join error listing peer channels"
+                                );
+                                return;
+                            }
+                        };
+
+                        for channel_id in &channel_ids {
+                            if let Err(e) = signal.actor.mark_channel_for_rotation(*channel_id).await {
+                                tracing::warn!(
+                                    channel_id = %channel_id,
+                                    peer = %peer_str,
+                                    error = %e,
+                                    "failed to mark channel for SKDM rotation"
+                                );
+                            }
+                        }
+                        tracing::info!(
+                            peer = %peer_str,
+                            channels_marked = channel_ids.len(),
+                            "marked peer-shared channels for sender-key rotation"
+                        );
+                    });
+                }
+
+                DomainEvent::SessionResetRequested { peer_user_id, peer_device_id } => {
+                    // User-initiated reset. Narrow to single device when
+                    // metadata carries peer_device_id, otherwise drop
+                    // every session with the peer. Narrower path
+                    // preserves established sessions with the user's
+                    // other devices — matters when only one device's
+                    // ratchet is suspected bad.
+                    let peer = peer_user_id.to_string();
+                    let signal = signal_service.clone();
+                    let specific = *peer_device_id;
+                    tokio::spawn(async move {
+                        match specific {
+                            Some(device_id) => match signal.actor.invalidate_peer_device_session(peer.clone(), device_id).await {
+                                Ok(existed) => tracing::info!(
+                                    peer = %peer,
+                                    device_id,
+                                    had_session = existed,
+                                    "dropped single-device Signal session on SESSION_RESET"
+                                ),
+                                Err(e) => tracing::warn!(
+                                    peer = %peer,
+                                    device_id,
+                                    error = %e,
+                                    "failed to drop single-device Signal session on SESSION_RESET"
+                                ),
+                            },
+                            None => match signal.actor.invalidate_peer_sessions(peer.clone()).await {
+                                Ok(n) => tracing::info!(
+                                    peer = %peer,
+                                    dropped_sessions = n,
+                                    "dropped all Signal sessions on SESSION_RESET (user-wide)"
+                                ),
+                                Err(e) => tracing::warn!(
+                                    peer = %peer,
+                                    error = %e,
+                                    "failed to drop Signal sessions on SESSION_RESET"
+                                ),
+                            },
+                        }
+                    });
+                }
+
+                DomainEvent::PreKeyRefreshNeeded {
+                    device_id,
+                    stale_signed_prekey,
+                    low_otpk_pool,
+                    unused_otpk_count,
+                    ..
+                } => {
+                    // Server-side maintenance workflow flagged this device.
+                    // Rotate signed+Kyber prekey if stale; top up OTPK pool
+                    // if low. Both actions use the existing SignalService
+                    // helpers which generate fresh crypto material + upload
+                    // via RefreshPreKeys RPC.
+                    let signal = signal_service.clone();
+                    let pool = grpc_pool.clone();
+                    let stale = *stale_signed_prekey;
+                    let low = *low_otpk_pool;
+                    let unused = *unused_otpk_count;
+                    let did = *device_id;
+                    tokio::spawn(async move {
+                        let mut auth = pool.auth_client();
+                        if stale {
+                            match signal.rotate_signed_prekey(&mut auth).await {
+                                Ok(()) => tracing::info!(device_id = did, "Rotated signed+Kyber prekey after server prod"),
+                                Err(e) => tracing::warn!(error = %e, "Failed to rotate signed prekey after server prod"),
+                            }
+                        }
+                        if low {
+                            // Refill to 100 total — target matches server-side
+                            // OTPK refill threshold heuristic. Clamp to a
+                            // reasonable batch so we don't over-generate if
+                            // unused_otpk_count is wildly stale.
+                            let refill = 100_u32.saturating_sub(unused).min(100);
+                            if refill > 0 {
+                                match signal.refresh_prekeys(&mut auth, refill).await {
+                                    Ok(n) => tracing::info!(device_id = did, count = n, "Refilled one-time prekeys after server prod"),
+                                    Err(e) => tracing::warn!(error = %e, "Failed to refill one-time prekeys after server prod"),
+                                }
+                            }
+                        }
+                    });
+                }
+
                 _ => {}
             }
         }

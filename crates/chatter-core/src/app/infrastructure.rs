@@ -159,8 +159,34 @@ impl InfrastructureContainer {
         // 4. Database passphrase (get from keyring or generate)
         let mut passphrase = Self::passphrase_or_generate(&keyring, &directories)?;
 
-        // 5. Open database with passphrase
-        let database = Database::open(&db_path, &passphrase)?;
+        // 5. Open database with passphrase.
+        //
+        // If the passphrase file was wiped but the encrypted DB survived
+        // (Android partial reinstall, keyring loss, etc.), SQLCipher
+        // returns "Invalid encryption key: file is not a database". That
+        // state is unrecoverable — the key material is gone — so treat
+        // the DB as dead, remove it, and retry with a fresh passphrase
+        // rather than bricking account creation forever.
+        let database = match Database::open(&db_path, &passphrase) {
+            Ok(db) => db,
+            Err(crate::error::StorageError::Encryption(msg)) => {
+                tracing::warn!(
+                    error = %msg,
+                    "Database passphrase mismatch — wiping encrypted DB and retrying with fresh key"
+                );
+                passphrase.zeroize();
+                for p in [&db_path, &db_path.with_extension("db-wal"), &db_path.with_extension("db-shm")] {
+                    let _ = std::fs::remove_file(p);
+                }
+                #[cfg(target_os = "android")]
+                {
+                    let _ = std::fs::remove_file(directories.data_dir().join(".db_key"));
+                }
+                passphrase = Self::passphrase_or_generate(&keyring, &directories)?;
+                Database::open(&db_path, &passphrase)?
+            }
+            Err(e) => return Err(e.into()),
+        };
 
         // SECURITY: Zeroize passphrase immediately after use
         // This prevents it from lingering in memory

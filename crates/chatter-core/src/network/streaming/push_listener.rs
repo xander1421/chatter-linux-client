@@ -17,13 +17,11 @@
 //!                                           ──> show desktop notification
 //! ```
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::broadcast;
 
-#[cfg(not(target_os = "android"))]
-use crate::system::notifications::DesktopNotifications;
-use crate::domain::notification::NotificationPriority;
+use crate::network::ReconnectConfig;
 
 /// Configuration for the ntfy push listener.
 #[derive(Clone, Debug)]
@@ -37,24 +35,42 @@ pub struct PushListenerConfig {
     /// Optional auth token for subscribing to the topic.
     pub auth_token: Option<String>,
 
-    /// Reconnect delay on connection failure.
+    /// Initial reconnect delay on connection failure. Kept as a field (rather
+    /// than derived from `reconnect.initial_delay`) for API backwards compat —
+    /// older callers that set `reconnect_delay` before the `ReconnectConfig`
+    /// refactor still see it honored.
     pub reconnect_delay: Duration,
+
+    /// Backoff / give-up tuning for the reconnect loop. Defaults reproduce the
+    /// historical hard-coded behavior exactly (5s initial, 60s cap, 2x
+    /// multiplier, no jitter, infinite retries).
+    pub reconnect: ReconnectConfig,
 }
 
 impl PushListenerConfig {
     /// Create config for a user's push topic.
     pub fn new(ntfy_url: String, user_id: &str) -> Self {
+        let reconnect = ReconnectConfig::const_default();
         Self {
             ntfy_url,
             topic: format!("chatter_{}", user_id),
             auth_token: None,
-            reconnect_delay: Duration::from_secs(5),
+            reconnect_delay: reconnect.initial_delay,
+            reconnect,
         }
     }
 
     /// Set an auth token for topic subscription.
     pub fn with_auth(mut self, token: String) -> Self {
         self.auth_token = Some(token);
+        self
+    }
+
+    /// Override the reconnect tuning. Also updates `reconnect_delay` to the
+    /// supplied config's `initial_delay` for consistency.
+    pub fn with_reconnect(mut self, reconnect: ReconnectConfig) -> Self {
+        self.reconnect_delay = reconnect.initial_delay;
+        self.reconnect = reconnect;
         self
     }
 }
@@ -72,6 +88,22 @@ pub struct PushEvent {
     pub priority: u8,
     /// Tags (emoji shortcodes).
     pub tags: Vec<String>,
+}
+
+impl PushEvent {
+    /// Classify the privacy mode the server used when producing this event.
+    ///
+    /// Content-free mode is recognised by the canonical body string emitted by
+    /// `internal/services/notification/push/ntfy.go` (`"New activity"`).
+    /// Anything else implies the server is running in `full` mode.
+    pub fn kind(&self) -> crate::inbox::handlers::PushKind {
+        use crate::inbox::handlers::PushKind;
+        if self.message == "New activity" {
+            PushKind::ContentFree
+        } else {
+            PushKind::Full
+        }
+    }
 }
 
 /// Push listener that connects to a self-hosted ntfy instance.
@@ -122,8 +154,12 @@ impl PushListener {
             "Starting ntfy push listener"
         );
 
+        let reconnect_cfg = self.config.reconnect;
         let mut retry_delay = self.config.reconnect_delay;
-        let max_delay = Duration::from_secs(60);
+        // `attempt` is 0 while we are connected; each failure increments it.
+        let mut attempt: u32 = 0;
+        // Wall-clock reference for the optional `give_up_after` deadline.
+        let mut first_failure_at: Option<Instant> = None;
 
         loop {
             tokio::select! {
@@ -134,13 +170,35 @@ impl PushListener {
                 result = self.connect_sse(&url) => {
                     match result {
                         Ok(()) => {
-                            // Stream ended normally — reconnect immediately
+                            // Stream ended normally — reconnect immediately,
+                            // reset backoff state.
                             tracing::info!("ntfy SSE stream ended, reconnecting...");
                             retry_delay = self.config.reconnect_delay;
+                            attempt = 0;
+                            first_failure_at = None;
                         }
                         Err(e) => {
+                            if first_failure_at.is_none() {
+                                first_failure_at = Some(Instant::now());
+                            }
+                            attempt = attempt.saturating_add(1);
+                            let elapsed = first_failure_at
+                                .map(|t| t.elapsed())
+                                .unwrap_or_default();
+
+                            if reconnect_cfg.should_give_up(attempt, elapsed) {
+                                tracing::error!(
+                                    error = %e,
+                                    attempt,
+                                    elapsed_ms = elapsed.as_millis() as u64,
+                                    "ntfy SSE gave up after reconnect budget exhausted"
+                                );
+                                return;
+                            }
+
                             tracing::warn!(
                                 error = %e,
+                                attempt,
                                 retry_in = ?retry_delay,
                                 "ntfy SSE connection failed, retrying"
                             );
@@ -149,17 +207,27 @@ impl PushListener {
                 }
             }
 
+            // Apply optional jitter before sleeping. When `jitter_ratio == 0`
+            // this is a no-op and the historical timing is preserved exactly.
+            let sleep_for = if reconnect_cfg.jitter_ratio > 0.0 {
+                use rand::Rng;
+                let unit: f32 = rand::rng().random::<f32>();
+                reconnect_cfg.with_jitter(retry_delay, unit)
+            } else {
+                retry_delay
+            };
+
             // Wait before reconnecting (with shutdown check)
             tokio::select! {
                 _ = shutdown.recv() => {
                     tracing::debug!("Push listener shutting down during reconnect wait");
                     return;
                 }
-                _ = tokio::time::sleep(retry_delay) => {}
+                _ = tokio::time::sleep(sleep_for) => {}
             }
 
-            // Exponential backoff (capped)
-            retry_delay = (retry_delay * 2).min(max_delay);
+            // Advance backoff using the configured multiplier / cap.
+            retry_delay = reconnect_cfg.next_delay(retry_delay);
         }
     }
 
@@ -180,11 +248,30 @@ impl PushListener {
 
         tracing::debug!("Connected to ntfy SSE stream");
 
-        // Reset retry delay on successful connection
-        let mut lines = String::new();
-        let mut stream = response.bytes_stream();
-
         use futures::StreamExt;
+        let stream = response.bytes_stream().map(|r| {
+            r.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+        });
+        self.dispatch_from_stream(stream).await
+    }
+
+    /// Consume an SSE byte-stream, parse events, and broadcast `PushEvent`s on
+    /// the wake channel.
+    ///
+    /// Exposed at crate-visibility so unit tests can drive the dispatcher with
+    /// a synthetic `Stream` (no network required). Returns `Ok(())` when the
+    /// stream ends cleanly and `Err` on first transport failure.
+    pub(crate) async fn dispatch_from_stream<S>(
+        &self,
+        mut stream: S,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+    where
+        S: futures::Stream<
+                Item = Result<bytes::Bytes, Box<dyn std::error::Error + Send + Sync>>,
+            > + Unpin,
+    {
+        use futures::StreamExt;
+        let mut lines = String::new();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
             let text = String::from_utf8_lossy(&chunk);
@@ -194,6 +281,14 @@ impl PushListener {
             while let Some(pos) = lines.find("\n\n") {
                 let event_text = lines[..pos].to_string();
                 lines = lines[pos + 2..].to_string();
+
+                // ntfy occasionally emits `error: <text>\n\n` SSE lines (e.g.
+                // subscription auth rejected). Log + ignore so the outer
+                // reconnect loop can back off on its own cadence.
+                if event_text.trim_start().starts_with("error:") {
+                    tracing::warn!(error = %event_text.trim(), "ntfy SSE reported error");
+                    continue;
+                }
 
                 if let Some(event) = self.parse_sse_event(&event_text) {
                     tracing::debug!(
@@ -251,23 +346,14 @@ impl PushListener {
     }
 }
 
-/// Show a desktop notification from a push event.
-///
-/// Used when the push listener receives an event while the app is in the
-/// foreground. On Android, this would trigger an Android notification instead.
-#[cfg(not(target_os = "android"))]
-pub fn show_push_notification(desktop: &DesktopNotifications, event: &PushEvent) {
-    let priority = match event.priority {
-        5 => NotificationPriority::Urgent,
-        4 => NotificationPriority::High,
-        2 => NotificationPriority::Low,
-        _ => NotificationPriority::Normal,
-    };
-
-    if let Err(e) = desktop.show_message(&event.title, &event.message, priority) {
-        tracing::warn!(error = %e, "Failed to show push notification");
-    }
-}
+// NOTE: `show_push_notification` was removed. ntfy push is now strictly
+// a wake-up hint — the SSE title/body fields carry no structured data,
+// so rendering a toast from them would fight the gRPC typed-notification
+// stream which is the authoritative source for user-facing alerts
+// (DeviceLinked, IncomingCall, etc.). Keeping push toast-free also lets
+// the server run ntfy in content-free mode without UI regression.
+// If a platform needs a foreground-wake visual again, add a dedicated
+// path that doesn't render push payload text verbatim.
 
 #[cfg(test)]
 mod tests {
@@ -347,5 +433,127 @@ data: {"id":"abc","event":"open"}"#;
     fn test_push_listener_config_reconnect_delay() {
         let config = PushListenerConfig::new("http://localhost:8090".to_string(), "user-123");
         assert_eq!(config.reconnect_delay, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_push_listener_config_default_reconnect_is_historical() {
+        let config = PushListenerConfig::new("http://localhost:8090".to_string(), "user-123");
+        // Default config must preserve exact historical tuning so existing
+        // deployments don't shift behavior after the refactor.
+        assert_eq!(config.reconnect, ReconnectConfig::default());
+        assert_eq!(config.reconnect.initial_delay, Duration::from_secs(5));
+        assert_eq!(config.reconnect.max_delay, Duration::from_secs(60));
+        assert_eq!(config.reconnect.backoff_multiplier, 2.0);
+        assert_eq!(config.reconnect.max_attempts, None);
+        assert_eq!(config.reconnect.give_up_after, None);
+    }
+
+    #[test]
+    fn test_push_listener_config_with_reconnect_override() {
+        let custom = ReconnectConfig {
+            initial_delay: Duration::from_millis(250),
+            max_delay: Duration::from_secs(5),
+            backoff_multiplier: 1.5,
+            jitter_ratio: 0.1,
+            max_attempts: Some(3),
+            give_up_after: Some(Duration::from_secs(60)),
+        };
+        let config = PushListenerConfig::new("http://localhost:8090".to_string(), "user-123")
+            .with_reconnect(custom);
+        assert_eq!(config.reconnect, custom);
+        // `reconnect_delay` should track the custom initial
+        assert_eq!(config.reconnect_delay, Duration::from_millis(250));
+    }
+
+    #[test]
+    fn test_push_event_kind_content_free() {
+        use crate::inbox::handlers::PushKind;
+        let ev = PushEvent {
+            id: "a".into(),
+            title: "Chatter".into(),
+            message: "New activity".into(),
+            priority: 3,
+            tags: vec![],
+        };
+        assert_eq!(ev.kind(), PushKind::ContentFree);
+    }
+
+    #[test]
+    fn test_push_event_kind_full() {
+        use crate::inbox::handlers::PushKind;
+        let ev = PushEvent {
+            id: "a".into(),
+            title: "Alice".into(),
+            message: "hey are you free?".into(),
+            priority: 3,
+            tags: vec![],
+        };
+        assert_eq!(ev.kind(), PushKind::Full);
+    }
+
+    /// Feed a synthetic SSE stream (chunked bytes) into `dispatch_from_stream`
+    /// and assert the parsed wake-ups land on the broadcast channel. No
+    /// network involved — purely drives the byte-pipeline.
+    #[tokio::test]
+    async fn test_dispatch_from_stream_emits_wake_events() {
+        use futures::stream;
+
+        let listener = PushListener::new(
+            PushListenerConfig::new("http://localhost:8090".to_string(), "test"),
+        );
+        let mut rx = listener.subscribe();
+
+        // Two complete SSE events, split across three chunks to exercise
+        // buffered-line handling across byte boundaries.
+        let chunk_a = b"event: message\ndata: {\"id\":\"1\",\"event\":\"message\",\"title\":\"Chatter\",\"message\":\"New activity\",\"priority\":3,\"tags\":[]}\n\nevent: mes".to_vec();
+        let chunk_b = b"sage\ndata: {\"id\":\"2\",\"event\":\"message\",\"title\":\"Alice\",\"message\":\"hi!\",\"priority\":3,\"tags\":[]}\n".to_vec();
+        let chunk_c = b"\n".to_vec();
+
+        let items: Vec<Result<bytes::Bytes, Box<dyn std::error::Error + Send + Sync>>> = vec![
+            Ok(bytes::Bytes::from(chunk_a)),
+            Ok(bytes::Bytes::from(chunk_b)),
+            Ok(bytes::Bytes::from(chunk_c)),
+        ];
+
+        listener
+            .dispatch_from_stream(stream::iter(items))
+            .await
+            .expect("stream should drain cleanly");
+
+        let first = rx.try_recv().expect("first wake-up");
+        assert_eq!(first.id, "1");
+        assert_eq!(first.message, "New activity");
+
+        let second = rx.try_recv().expect("second wake-up");
+        assert_eq!(second.id, "2");
+        assert_eq!(second.message, "hi!");
+
+        assert!(rx.try_recv().is_err(), "no further events queued");
+    }
+
+    /// `error:` SSE lines from ntfy must be logged + skipped, not crash the
+    /// dispatcher and not emit spurious wake-ups.
+    #[tokio::test]
+    async fn test_dispatch_from_stream_skips_error_lines() {
+        use futures::stream;
+
+        let listener = PushListener::new(
+            PushListenerConfig::new("http://localhost:8090".to_string(), "test"),
+        );
+        let mut rx = listener.subscribe();
+
+        let payload = b"error: forbidden topic\n\nevent: message\ndata: {\"id\":\"x\",\"event\":\"message\",\"title\":\"Chatter\",\"message\":\"New activity\",\"priority\":3,\"tags\":[]}\n\n".to_vec();
+
+        let items: Vec<Result<bytes::Bytes, Box<dyn std::error::Error + Send + Sync>>> =
+            vec![Ok(bytes::Bytes::from(payload))];
+
+        listener
+            .dispatch_from_stream(stream::iter(items))
+            .await
+            .expect("stream should drain cleanly");
+
+        let ev = rx.try_recv().expect("wake-up after error line");
+        assert_eq!(ev.id, "x");
+        assert!(rx.try_recv().is_err());
     }
 }

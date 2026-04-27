@@ -165,7 +165,48 @@ impl ChatterClient {
             self.chat_state().clone(),
             self.users().clone(),
             self.notifications().clone(),
+            self.signal().clone(),
+            self.ui.grpc_pool.clone(),
+            self.ui.channel_repo.clone(),
         );
         self.tasks.lock().push(handle);
+
+        // Spawn the gRPC typed-notification stream consumer alongside the
+        // domain event listener. The stream feeds DeviceLinked /
+        // PeerDevicesChanged / SessionReset / PreKeyRefreshNeeded events
+        // into the same DomainEvent bus so the listener above handles
+        // their toasts + side effects uniformly.
+        //
+        // Needs the authenticated user id to scope the subscription. If
+        // auth hasn't completed, skip — the caller should restart the
+        // listener post-login. stream_notifications uses the user_id
+        // field strictly as a filter key; server authorizes via the auth
+        // interceptor on the gRPC channel.
+        let user_id = match self.auth_state().get().current_user_id {
+            Some(id) => id,
+            None => {
+                tracing::debug!("skipping gRPC notification stream — no authenticated user");
+                return;
+            }
+        };
+        let stream_handle = crate::services::notification_stream::spawn_grpc_notification_consumer(
+            self.ui.grpc_pool.clone(),
+            self.event_bus().clone(),
+            user_id,
+        );
+        self.tasks.lock().push(stream_handle);
+
+        // Bridge call orchestrator events → domain bus so incoming calls
+        // surface as desktop toasts via the same listener. CallWorker is
+        // only initialised after grpc connect (OnceLock); skip when not
+        // yet populated — `start_notification_listener` is idempotent.
+        #[cfg(feature = "media")]
+        if let Some(call_worker) = self.ui.call_service.get() {
+            let bridge_handle = crate::services::call_notification_bridge::spawn_call_notification_bridge(
+                call_worker,
+                self.event_bus().clone(),
+            );
+            self.tasks.lock().push(bridge_handle);
+        }
     }
 }
