@@ -24,6 +24,18 @@ impl IdentityKeyManager {
         Self { key_store }
     }
 
+    /// Reset all local crypto state so a fresh registration can proceed.
+    ///
+    /// Only safe to call when there is no active user session — the caller
+    /// MUST verify that first (see `AuthService::is_logged_in`). Used to
+    /// recover from a registration attempt that persisted the identity
+    /// locally but failed before the server confirmed the account.
+    pub fn reset_for_new_registration(&self) -> Result<(), CryptoError> {
+        self.key_store
+            .clear_all_crypto_state()
+            .map_err(CryptoError::Storage)
+    }
+
     /// Generate a new identity key pair and registration ID.
     ///
     /// This should only be called once during device registration.

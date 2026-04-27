@@ -171,10 +171,25 @@ pub fn build_message_from_content(
 }
 
 /// Convert Content proto to MessageContent for the unified Message struct.
+///
+/// Preserves Mixed (text + attachments) when the inbound DataMessage has
+/// both body and attachments — otherwise the receiver's unified Message
+/// would drop the attachments from the content variant, and
+/// `message_reply_preview` / anything that pattern-matches on
+/// `MessageContent::Mixed` would miss them on reload.
 pub fn content_to_message_content(content: &Content) -> MessageContent {
     match &content.content {
         Some(content_v1::content::Content::DataMessage(data_msg)) => {
-            MessageContent::Text(data_msg.body.clone())
+            let attachment_ids: Vec<AttachmentId> = data_msg
+                .attachments
+                .iter()
+                .filter(|ptr| !ptr.cdn_key.is_empty())
+                .map(|ptr| AttachmentId::from_cdn_key(&ptr.cdn_key))
+                .collect();
+            crate::services::anon_shared::message_content_from_text_and_attachments(
+                &data_msg.body,
+                &attachment_ids,
+            )
         }
         _ => MessageContent::Text(String::new()),
     }
@@ -218,15 +233,21 @@ pub trait AnonInboxBackend {
 
     fn update_message_text(&self, id: &Self::Id, sender: &UserId, ts: u64, text: &str) -> Result<bool, String>;
 
+    /// Returns `true` if the reaction was newly inserted, `false` if it
+    /// was already present (per the unified-reactions UNIQUE constraint).
+    /// Callers gate the `DomainEvent::ReactionAdded` emit on this so the
+    /// UI doesn't double-count when the same reaction arrives twice (e.g.
+    /// snapshot + delta from the same poll cycle).
     fn add_reaction(
         &self, id: &Self::Id, target_sender: &UserId, target_ts_ns: u64,
         reactor: &UserId, emoji: &str,
-    ) -> Result<(), String>;
+    ) -> Result<bool, String>;
 
+    /// Returns `true` if a reaction was actually removed.
     fn remove_reaction(
         &self, id: &Self::Id, target_sender: &UserId, target_ts_ns: u64,
         reactor: &UserId, emoji: &str,
-    ) -> Result<(), String>;
+    ) -> Result<bool, String>;
 
     fn set_pinned(&self, id: &Self::Id, ts: u64, pinned: bool) -> Result<(), String>;
 
@@ -385,28 +406,46 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
             let target_sender: UserId = reaction.target_author_aci.parse().unwrap_or(*sender_id);
             let sent_at_ns = reaction.target_sent_timestamp;
 
-            if reaction.remove {
-                if let Err(e) = backend.remove_reaction(id, &target_sender, sent_at_ns, sender_id, &reaction.emoji) {
-                    tracing::warn!(id = %id, error = %e, "Failed to remove reaction");
+            // Storage is the dedup gate: only emit the UI delta when the
+            // unified-reactions row was actually changed. Repeats of the
+            // same reaction (snapshot + delta, or replay across polls)
+            // become no-ops here instead of double-counting in the UI.
+            let changed = if reaction.remove {
+                match backend.remove_reaction(id, &target_sender, sent_at_ns, sender_id, &reaction.emoji) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::warn!(id = %id, error = %e, "Failed to remove reaction");
+                        false
+                    }
                 }
-                events.push(DomainEvent::ReactionRemoved {
-                    sender_id: target_sender,
-                    sent_at_ns,
-                    reactor_id: *sender_id,
-                    emoji: reaction.emoji.clone(),
-                    timestamp: reaction.target_sent_timestamp,
-                });
             } else {
-                if let Err(e) = backend.add_reaction(id, &target_sender, sent_at_ns, sender_id, &reaction.emoji) {
-                    tracing::warn!(id = %id, error = %e, "Failed to add reaction");
+                match backend.add_reaction(id, &target_sender, sent_at_ns, sender_id, &reaction.emoji) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::warn!(id = %id, error = %e, "Failed to add reaction");
+                        false
+                    }
                 }
-                events.push(DomainEvent::ReactionAdded {
-                    sender_id: target_sender,
-                    sent_at_ns,
-                    reactor_id: *sender_id,
-                    emoji: reaction.emoji.clone(),
-                    timestamp: reaction.target_sent_timestamp,
-                });
+            };
+            if changed {
+                let event = if reaction.remove {
+                    DomainEvent::ReactionRemoved {
+                        sender_id: target_sender,
+                        sent_at_ns,
+                        reactor_id: *sender_id,
+                        emoji: reaction.emoji.clone(),
+                        timestamp: reaction.target_sent_timestamp,
+                    }
+                } else {
+                    DomainEvent::ReactionAdded {
+                        sender_id: target_sender,
+                        sent_at_ns,
+                        reactor_id: *sender_id,
+                        emoji: reaction.emoji.clone(),
+                        timestamp: reaction.target_sent_timestamp,
+                    }
+                };
+                events.push(event);
             }
             CommonDispatchOutcome::Handled(events)
         }

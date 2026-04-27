@@ -536,6 +536,33 @@ impl MessageService {
             .map_err(|_| MessageError::NotLoggedIn)
     }
 
+    /// Persist a reaction received via inbox polling.
+    ///
+    /// Returns `true` if the reaction was newly inserted, `false` if it was
+    /// already known (from a prior poll cycle, or because the reaction was
+    /// already attached to the message snapshot we fetched). Inbox handlers
+    /// gate `DomainEvent::ReactionAdded` on this so the UI doesn't double-
+    /// count when the snapshot + delta both carry the same reaction.
+    pub fn record_reaction(
+        &self,
+        target_sender: &UserId,
+        target_sent_at_ns: u64,
+        reactor: &UserId,
+        emoji: &str,
+        remove: bool,
+    ) -> Result<bool, MessageError> {
+        let current = self.current_user_id()?;
+        if remove {
+            self.message_repo
+                .remove_reaction(target_sender, target_sent_at_ns, reactor, &current, emoji)
+                .map_err(MessageError::from)
+        } else {
+            self.message_repo
+                .add_reaction(target_sender, target_sent_at_ns, reactor, &current, emoji)
+                .map_err(MessageError::from)
+        }
+    }
+
     /// Classify a raw `(channel_id, conversation_type, peer_id)` triple into
     /// the typed `ActiveConversation` variant it represents.
     ///

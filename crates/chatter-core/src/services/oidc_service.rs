@@ -417,6 +417,34 @@ impl OidcService {
         let _ = self.settings_repo.delete(keys::OIDC_EXPIRES_AT);
         Ok(())
     }
+
+    /// Refresh the access token only if it is near-expiry. Returns `Ok(true)`
+    /// on a successful refresh (or when a refresh wasn't needed), and
+    /// `Ok(false)` when tokens could not be refreshed and have been cleared
+    /// (caller should treat as "session expired, go to login").
+    ///
+    /// Distinguishes "no stored tokens" from refresh failure — if there are
+    /// no tokens at all, returns `Ok(true)` (nothing to do).
+    pub async fn try_refresh_if_needed(&self) -> Result<bool, OidcError> {
+        if !self.is_oidc_session() {
+            return Ok(true);
+        }
+        if !self.needs_refresh() {
+            return Ok(true);
+        }
+        match self.refresh_tokens().await {
+            Ok(_) => Ok(true),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "OIDC refresh failed — clearing tokens; user must re-authenticate"
+                );
+                let _ = self.clear_tokens();
+                Ok(false)
+            }
+        }
+    }
+
 }
 
 use base64::Engine;

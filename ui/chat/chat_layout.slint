@@ -27,6 +27,8 @@ export component ChatLayout inherits Rectangle {
     in property <bool> is-archived: false;
     in property <string> typing-indicator: "";
     in property <string> presence-status: "offline";
+    in property <image> channel-avatar-source;
+    in property <bool> channel-has-avatar: false;
 
     // When true, hide the chat header (e.g. during an active call where the
     // call dock already carries channel name/encryption/timer).
@@ -161,6 +163,8 @@ export component ChatLayout inherits Rectangle {
             is-archived: root.is-archived;
             typing-indicator: root.typing-indicator;
             presence-status: root.presence-status;
+            avatar-source: root.channel-avatar-source;
+            has-avatar: root.channel-has-avatar;
             jarvis-thinking: root.jarvis-thinking;
             has-any-pinned: root.pinned-total-count > 0;
             show-back-button: root.show-back-button;

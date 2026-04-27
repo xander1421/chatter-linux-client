@@ -485,6 +485,13 @@ impl AuthService {
         self.settings_repo.set_bytes(keys::PROFILE_KEY, &profile_key)?;
         self.settings_repo.set_bytes(keys::DEVICE_AUTH_TOKEN, credentials.auth_token().as_bytes())?;
 
+        // Refresh local PIN fingerprint (re-auth gate for linked-device approval).
+        if let Some(p) = pin {
+            let mut fp = crate::crypto::svr::derive_pin_fingerprint(p, username)?;
+            self.settings_repo.set_bytes(keys::PIN_FINGERPRINT, &fp)?;
+            fp.zeroize();
+        }
+
         // Store identity public key for NDSS'21 private friend codes
         // This allows generating friend codes without accessing the SignalStore
         self.settings_repo.set_bytes(keys::IDENTITY_KEY_PUBLIC, identity_public_key.as_ref())?;
@@ -561,6 +568,15 @@ impl AuthService {
             return Err(AuthError::AlreadyLoggedIn);
         }
 
+        // Recover from a prior aborted register: identity + prekeys may be
+        // persisted locally without a user session (server call failed
+        // after the crypto step). `generate_identity` refuses to overwrite,
+        // so wipe the stale crypto state now. Safe because `is_logged_in`
+        // is false — no real sessions to break.
+        if self.identity_manager.has_identity()? {
+            self.identity_manager.reset_for_new_registration()?;
+        }
+
         // SECURITY: Profile key stays client-side only — never sent to server.
         let password_hash = hash_password(password);
         let profile_key = derive_profile_key(&password_hash, username)?;
@@ -600,6 +616,16 @@ impl AuthService {
         // Store profile key locally (needed for profile encryption)
         // Stored in SQLCipher encrypted database
         self.settings_repo.set_bytes(keys::PROFILE_KEY, &profile_key)?;
+
+        // Store local-only PIN fingerprint so re-auth gates (e.g. linked-device
+        // approval for OIDC sessions) can verify the PIN without a server
+        // round-trip. Derived from the same Argon2id SVR secret; never sent
+        // to the server.
+        if let Some(p) = pin {
+            let mut fp = crate::crypto::svr::derive_pin_fingerprint(p, username)?;
+            self.settings_repo.set_bytes(keys::PIN_FINGERPRINT, &fp)?;
+            fp.zeroize();
+        }
 
         // Store avatar locally if provided (raw bytes, encrypted when shared)
         // Avatar is NOT uploaded to server - only shared E2E encrypted during bootstraps
@@ -848,6 +874,20 @@ impl AuthService {
         self.settings_repo.delete(keys::CURRENT_DEVICE_ID)?;
         self.settings_repo.delete(keys::DEVICE_AUTH_TOKEN)?;
         let _ = self.settings_repo.delete(keys::CURRENT_ORG_ID);
+
+        // Clear any stored OIDC tokens so the next cold-start doesn't try to
+        // restore a bearer session we're explicitly leaving.
+        let _ = self.settings_repo.delete(keys::OIDC_SESSION);
+        let _ = self.settings_repo.delete(keys::OIDC_ACCESS_TOKEN);
+        let _ = self.settings_repo.delete(keys::OIDC_REFRESH_TOKEN);
+        let _ = self.settings_repo.delete(keys::OIDC_ID_TOKEN);
+        let _ = self.settings_repo.delete(keys::OIDC_EXPIRES_AT);
+
+        // Clear the local PIN fingerprint — re-derived on next login from
+        // user-supplied PIN. Leaving stale fingerprints behind would let a
+        // linked-device approve flow run after logout if the modal stayed
+        // open in another window.
+        let _ = self.settings_repo.delete(keys::PIN_FINGERPRINT);
 
         Ok(())
     }

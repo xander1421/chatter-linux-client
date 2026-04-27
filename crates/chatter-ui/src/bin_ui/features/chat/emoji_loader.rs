@@ -21,6 +21,15 @@ const SKIN_TONE_MODIFIERS: [&str; 5] = [
     "\u{1F3FF}", // Dark
 ];
 
+/// True if emoji renders in color by default (Emoji_Presentation=Yes).
+///
+/// Heuristic: first char must be in SMP emoji range (≥ U+1F000). BMP emoji
+/// (e.g. ✈, ⚽, ❤, ☝) default to monochrome text presentation and render grey
+/// without VS16 — we exclude them entirely for visual consistency.
+fn is_color_default(emoji: &str) -> bool {
+    emoji.chars().next().is_some_and(|c| (c as u32) >= 0x1F000)
+}
+
 /// Apply a skin tone modifier to an emoji if it supports it (People & Body category).
 fn apply_skin_tone(emoji: &str, tone: i32) -> String {
     if tone == 0 || tone < 0 || tone > 5 {
@@ -282,6 +291,7 @@ pub fn get_emoji_list(category: i32) -> Vec<EmojiData> {
 
     emojis
         .iter()
+        .filter(|(emoji, _)| is_color_default(emoji))
         .map(|(emoji, name)| EmojiData {
             emoji: emoji.to_string().into(),
             name: name.to_string().into(),

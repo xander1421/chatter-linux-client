@@ -661,14 +661,19 @@ impl AttachmentCrypto {
     }
 }
 
-/// Maximum attachment size (100MB default).
+/// Maximum attachment size (1 GiB default).
+///
+/// Large files are streamed as multipart chunks by the upload path (see
+/// `streaming_encrypt` in this module + the mailbox service's multipart
+/// putter) so the whole file never has to fit in RAM. Cap raised from
+/// 100 MiB after users hit the limit on video files.
 ///
 /// Can be overridden via `CHATTER_MAX_ATTACHMENT_SIZE` environment variable.
 pub fn max_attachment_size() -> u64 {
     std::env::var("CHATTER_MAX_ATTACHMENT_SIZE")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(100 * 1024 * 1024)
+        .unwrap_or(1024 * 1024 * 1024)
 }
 
 #[cfg(test)]

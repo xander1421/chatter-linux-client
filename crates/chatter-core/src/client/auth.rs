@@ -354,6 +354,26 @@ impl ChatterClient {
         new_reg_lock.zeroize();
 
         final_result.map_err(|e| ClientError::Validation(format!("PIN change failed: {}", e)))?;
+
+        // Refresh local PIN fingerprint so re-auth gates (linked-device approve)
+        // accept the new PIN immediately. Best-effort: a stored fingerprint
+        // mismatch only blocks the linked-device flow, not message send.
+        match crate::crypto::svr::derive_pin_fingerprint(new_pin, username) {
+            Ok(mut fp) => {
+                if let Err(e) = self
+                    .signal()
+                    .settings_repo
+                    .set_bytes(keys::PIN_FINGERPRINT, &fp)
+                {
+                    tracing::warn!(error = %e, "Failed to persist new PIN fingerprint");
+                }
+                fp.zeroize();
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to derive new PIN fingerprint");
+            }
+        }
+
         tracing::info!("PIN changed successfully");
         Ok(())
     }

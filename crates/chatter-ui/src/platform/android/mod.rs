@@ -1,7 +1,10 @@
 //! Android platform integration (JNI).
+//!
+//! Safe-area / keyboard insets used to live here under `keyboard.rs`, but
+//! Slint's Android backend already feeds WindowInsets into the built-in
+//! `Window.safe-area-insets` + `virtual-keyboard-size` out properties. The
+//! .slint code binds those directly — no Rust polling required.
 
-pub mod keyboard;
 pub mod notifications;
 
-pub use keyboard::{query_display_insets, DisplayInsets};
 pub use notifications::AndroidNotifications;

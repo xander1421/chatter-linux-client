@@ -14,15 +14,78 @@ use chatter_core::services::user::FriendRequestFilter;
 
 use crate::bin_ui::converters::{
     channel_to_slint, dm_to_send_data, get_initials, messages_to_display_batch,
-    DMListItemExt, DMListItemSendData, FriendRequestExt, FriendRequestSendData,
+    DMListItemExt, DMListItemSendData, FriendDataExt, FriendDataSendData,
+    FriendRequestExt, FriendRequestSendData,
 };
-use crate::{ChannelListItemData, DMListItemData, FriendRequestData, MainWindow, PrivateGroupListItemData};
+use crate::{ChannelListItemData, DMListItemData, FriendData, FriendRequestData, MainWindow, PrivateGroupListItemData};
 
 use chatter_core::domain::message::truncate_preview_text;
 
 /// Truncate text for sidebar preview via the shared core helper (50 chars).
 fn truncate_sidebar_preview(text: &str) -> String {
     truncate_preview_text(text, 50)
+}
+
+/// Rebuild the FriendsModal "Friends" tab list — accepted friendships
+/// plus Active anon-DM peers — and push it into the UI. Cheap enough to
+/// run on every relevant event (friend accepted, anon-DM accepted,
+/// anon-DM profile updated); the modal pulls the model by reference.
+pub fn refresh_friends_list(window_weak: Weak<MainWindow>, ui_ctx: Arc<ChatterClient>) {
+    tokio::spawn(async move {
+        let mut friends_data: Vec<FriendDataSendData> = Vec::new();
+        if let Ok(pairs) = ui_ctx.list_friends_with_profiles().await {
+            for (friendship, profile) in pairs {
+                friends_data.push(FriendDataSendData {
+                    user_id: friendship.friend_id.to_string(),
+                    display_name: profile.display_name.clone(),
+                    username: String::new(),
+                    avatar_url: profile.avatar_url.clone().unwrap_or_default(),
+                    avatar_bytes: None,
+                    avatar_decoded: None,
+                    presence_status: match profile.presence {
+                        chatter_core::domain::user::PresenceStatus::Online => "online",
+                        chatter_core::domain::user::PresenceStatus::Away => "away",
+                        chatter_core::domain::user::PresenceStatus::DoNotDisturb => "dnd",
+                        chatter_core::domain::user::PresenceStatus::Offline => "offline",
+                    }.to_string(),
+                    custom_status: String::new(),
+                    is_anon: false,
+                });
+            }
+        }
+        if let Ok(anon_dms) = ui_ctx.list_anon_dms() {
+            for dm in anon_dms {
+                if !matches!(dm.status, chatter_core::domain::anon_dm::AnonDmStatus::Active) {
+                    continue;
+                }
+                let peer_name = dm
+                    .peer_display_name
+                    .clone()
+                    .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
+                friends_data.push(FriendDataSendData {
+                    user_id: dm.id.to_string(),
+                    display_name: peer_name,
+                    username: String::new(),
+                    avatar_url: String::new(),
+                    avatar_bytes: dm.peer_avatar.clone(),
+                    avatar_decoded: None,
+                    presence_status: "online".to_string(),
+                    custom_status: String::new(),
+                    is_anon: true,
+                });
+            }
+        }
+        for f in &mut friends_data {
+            f.pre_decode_avatar();
+        }
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = window_weak.upgrade() {
+                let slint_list: Vec<FriendData> =
+                    friends_data.into_iter().map(|f| f.to_slint()).collect();
+                w.set_friends_list(ModelRc::new(VecModel::from(slint_list)));
+            }
+        });
+    });
 }
 
 /// Load initial data after login or on startup.
@@ -457,6 +520,65 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         req.pre_decode_avatar();
     }
 
+    // Build the Friends-tab list — unified over accepted server friendships
+    // and Active anon-DM peers. Both surface in the FriendsModal's "Friends"
+    // tab; the `is_anon` flag discriminates so anon rows route to the anon
+    // chat and render the peer-supplied avatar bytes.
+    let mut friends_data: Vec<FriendDataSendData> = Vec::new();
+    match ui_ctx.list_friends_with_profiles().await {
+        Ok(pairs) => {
+            for (friendship, profile) in pairs {
+                // Profile carries display_name + avatar_url; username is
+                // on the User entity. We don't need it here — the modal
+                // only shows display_name prominently.
+                friends_data.push(FriendDataSendData {
+                    user_id: friendship.friend_id.to_string(),
+                    display_name: profile.display_name.clone(),
+                    username: String::new(),
+                    avatar_url: profile.avatar_url.clone().unwrap_or_default(),
+                    avatar_bytes: None,
+                    avatar_decoded: None,
+                    presence_status: match profile.presence {
+                        chatter_core::domain::user::PresenceStatus::Online => "online",
+                        chatter_core::domain::user::PresenceStatus::Away => "away",
+                        chatter_core::domain::user::PresenceStatus::DoNotDisturb => "dnd",
+                        chatter_core::domain::user::PresenceStatus::Offline => "offline",
+                    }.to_string(),
+                    custom_status: String::new(),
+                    is_anon: false,
+                });
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Failed to load accepted friends: {}", e);
+        }
+    }
+    if let Ok(anon_dms) = ui_ctx.list_anon_dms() {
+        for dm in anon_dms {
+            if !matches!(dm.status, chatter_core::domain::anon_dm::AnonDmStatus::Active) {
+                continue;
+            }
+            let peer_name = dm
+                .peer_display_name
+                .clone()
+                .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
+            friends_data.push(FriendDataSendData {
+                user_id: dm.id.to_string(),
+                display_name: peer_name,
+                username: String::new(),
+                avatar_url: String::new(),
+                avatar_bytes: dm.peer_avatar.clone(),
+                avatar_decoded: None,
+                presence_status: "online".to_string(),
+                custom_status: String::new(),
+                is_anon: true,
+            });
+        }
+    }
+    for f in &mut friends_data {
+        f.pre_decode_avatar();
+    }
+
     // Update UI with channels, DMs, private groups, and friend requests
     let window_weak_ui = window_weak.clone();
     let pending_message_requests_count = private_requests_ui.len() as i32;
@@ -500,6 +622,10 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
             w.set_friends_received_requests(ModelRc::new(VecModel::from(received_ui_slint)));
             w.set_friends_sent_requests(ModelRc::new(VecModel::from(sent_ui_slint)));
             w.set_friends_private_requests(ModelRc::new(VecModel::from(private_requests_ui_slint)));
+
+            // Friends-tab list — accepted friendships + Active anon-DM peers.
+            let friends_slint: Vec<FriendData> = friends_data.into_iter().map(|f| f.to_slint()).collect();
+            w.set_friends_list(ModelRc::new(VecModel::from(friends_slint)));
 
             // Set blocked users
             let blocked_users_slint: Vec<crate::BlockedUserData> = blocked_users_data
@@ -919,7 +1045,9 @@ pub fn show_incoming_call(
         call_id: call_id.into(),
         caller_id: peer_id.into(),
         caller_name: caller_name.into(),
+        caller_initials: crate::bin_ui::converters::get_initials(caller_name).into(),
         caller_avatar: String::new().into(),
+        caller_avatar_source: slint::Image::default(),
         channel_name: String::new().into(),
         is_video_call: call_type == "video",
         is_anonymous_call: is_anonymous,

@@ -105,15 +105,6 @@ export component PrivateGroupListItem inherits Rectangle {
                     horizontal-stretch: 1;
                 }
 
-                // Encryption lock indicator
-                Image {
-                    source: Icons.lock;
-                    width: 10px;
-                    height: 10px;
-                    colorize: Colors.success;
-                    y: (parent.height - self.height) / 2;
-                }
-
                 // Member count badge
                 if root.member-count > 0: Rectangle {
                     width: member-text.preferred-width + 8px;
@@ -187,6 +178,19 @@ export component PrivateGroupListItem inherits Rectangle {
                 font-weight: Typography.semibold;
                 horizontal-alignment: center;
                 vertical-alignment: center;
+            }
+        }
+
+        // Encryption indicator on the far-right — purple shield marks a
+        // private (anonymous) group. Sits after the unread badge so the
+        // presence of a badge doesn't push it out of sight.
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: Icons.shield;
+                width: 12px;
+                height: 12px;
+                colorize: accent-color;
             }
         }
     }

@@ -191,6 +191,7 @@ mod tests {
             id: id.to_string(),
             channel_id: channel_id.to_string(),
             author_id: "user-123".to_string(),
+            author_device_id: 0,
             parent_id: String::new(),
             content: None,
             timestamp: 1234567890000,

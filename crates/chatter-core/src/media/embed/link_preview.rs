@@ -4,10 +4,22 @@
 
 use crate::domain::embed::LinkPreview;
 use crate::error::media_error::MediaError;
+use async_trait::async_trait;
 use std::time::Duration;
 
 /// Maximum response body size to download (100KB).
 const MAX_BODY_SIZE: usize = 100 * 1024;
+
+/// Abstraction over link-preview fetching.
+///
+/// This trait gives the caching service in `services::embed_service` a seam
+/// it can mock out without touching the network. The real implementation
+/// (`LinkPreviewGenerator`) performs an HTTP GET and parses OpenGraph tags.
+#[async_trait]
+pub trait PreviewFetcher: Send + Sync {
+    /// Fetch and parse a `LinkPreview` for the given URL.
+    async fn fetch_preview(&self, url: &str) -> Result<LinkPreview, MediaError>;
+}
 
 /// Link preview generator using OpenGraph meta tags.
 pub struct LinkPreviewGenerator {
@@ -105,6 +117,13 @@ impl LinkPreviewGenerator {
 impl Default for LinkPreviewGenerator {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[async_trait]
+impl PreviewFetcher for LinkPreviewGenerator {
+    async fn fetch_preview(&self, url: &str) -> Result<LinkPreview, MediaError> {
+        self.generate(url).await
     }
 }
 

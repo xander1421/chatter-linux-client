@@ -25,6 +25,7 @@ export component SessionsModal inherits Rectangle {
     callback close();
     callback revoke-session(int);  // device_id
     callback revoke-all-others();
+    callback link-new-device();    // open primary-side approve modal
 
     Modal {
         show: root.show-modal;
@@ -48,6 +49,16 @@ export component SessionsModal inherits Rectangle {
                     font-size: Typography.sm;
                     vertical-alignment: center;
                     horizontal-stretch: 1;
+                }
+
+                // Link a new device (primary-side approve flow)
+                Button {
+                    text: "Link new device";
+                    variant: "primary";
+                    disabled: root.revoking;
+                    clicked => {
+                        root.link-new-device();
+                    }
                 }
 
                 // Only show revoke all if more than 1 session

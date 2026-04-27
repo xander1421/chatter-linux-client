@@ -135,7 +135,7 @@ impl AnonGroupService {
         accept: bool,
         token: Option<&CallRoomToken>,
         display_name: Option<&str>,
-    ) -> Result<(), AnonGroupError> {
+    ) -> Result<u64, AnonGroupError> {
         self.check_group_not_blocked(group_id)?;
 
         let _group = self
@@ -177,7 +177,7 @@ impl AnonGroupService {
             "Sent anonymous group call answer"
         );
 
-        Ok(())
+        Ok(timestamp)
     }
 
     /// Send a call hangup notification in a private group.

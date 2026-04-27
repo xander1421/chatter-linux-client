@@ -248,7 +248,7 @@ impl AnonDmService {
         token: Option<&CallRoomToken>,
         decline_reason: Option<DeclineReason>,
         display_name: Option<&str>,
-    ) -> Result<(), AnonDmError> {
+    ) -> Result<u64, AnonDmError> {
         // Check if conversation is blocked
         self.check_conversation_not_blocked(conversation_id)?;
 
@@ -298,7 +298,7 @@ impl AnonDmService {
             "Sent anonymous call answer"
         );
 
-        Ok(())
+        Ok(timestamp)
     }
 
     /// End an anonymous call.

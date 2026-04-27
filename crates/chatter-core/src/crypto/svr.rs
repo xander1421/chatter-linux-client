@@ -51,6 +51,26 @@ pub fn derive_svr_secret(pin: &str, salt: &str) -> Result<[u8; 32], CryptoError>
     Ok(output)
 }
 
+/// Derive a local-only PIN fingerprint, used for in-memory PIN re-auth gates
+/// (e.g. authorising a new linked device when the user has no password —
+/// OIDC sessions). Never sent to the server. Computed as
+/// `HMAC-SHA256(svr_secret, "Chatter Local PIN Fingerprint")`.
+///
+/// Persist with [`SettingsRepository::set_bytes(keys::PIN_FINGERPRINT, …)`]
+/// on register / change-pin; constant-time compare on verify.
+pub fn derive_pin_fingerprint(pin: &str, username: &str) -> Result<[u8; 32], CryptoError> {
+    let mut svr_secret = derive_svr_secret(pin, username)?;
+    type HmacSha256 = Hmac<Sha256>;
+    let mut mac = HmacSha256::new_from_slice(&svr_secret)
+        .expect("HMAC can take key of any size");
+    mac.update(b"Chatter Local PIN Fingerprint");
+    let result = mac.finalize();
+    svr_secret.zeroize();
+    let mut fp = [0u8; 32];
+    fp.copy_from_slice(&result.into_bytes());
+    Ok(fp)
+}
+
 /// Derive registration lock token from PIN.
 /// Signal: HMAC-SHA256(svr_secret, "Registration Lock")
 /// Server stores the hash; future re-registrations must present matching token.

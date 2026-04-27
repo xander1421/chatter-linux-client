@@ -720,23 +720,48 @@ impl InboxEventProcessor {
 
             InboxEvent::DmReaction { peer_id, emoji, remove, target_sent_timestamp, target_author_aci, .. } => {
                 let sender_id = target_author_aci.parse().unwrap_or(*peer_id);
-                let event = if *remove {
-                    DomainEvent::ReactionRemoved { sender_id, sent_at_ns: *target_sent_timestamp, reactor_id: *peer_id, emoji: emoji.clone(), timestamp: *target_sent_timestamp }
-                } else {
-                    DomainEvent::ReactionAdded { sender_id, sent_at_ns: *target_sent_timestamp, reactor_id: *peer_id, emoji: emoji.clone(), timestamp: *target_sent_timestamp }
-                };
-                self.event_bus.emit_domain(event);
+                // Persist first; the unified-reactions table has UNIQUE
+                // (sender_id, sent_at_ns, user_id, emoji) so this is idempotent.
+                // Only emit the UI delta if the reaction was actually new —
+                // otherwise the snapshot + delta both apply and the bubble
+                // shows count=2 for a single reaction.
+                match self.message_service.record_reaction(
+                    &sender_id, *target_sent_timestamp, peer_id, emoji, *remove,
+                ) {
+                    Ok(true) => {
+                        let event = if *remove {
+                            DomainEvent::ReactionRemoved { sender_id, sent_at_ns: *target_sent_timestamp, reactor_id: *peer_id, emoji: emoji.clone(), timestamp: *target_sent_timestamp }
+                        } else {
+                            DomainEvent::ReactionAdded { sender_id, sent_at_ns: *target_sent_timestamp, reactor_id: *peer_id, emoji: emoji.clone(), timestamp: *target_sent_timestamp }
+                        };
+                        self.event_bus.emit_domain(event);
+                    }
+                    Ok(false) => {
+                        tracing::debug!(emoji = %emoji, "DM reaction already recorded — skipping UI delta");
+                    }
+                    Err(e) => tracing::warn!(error = %e, "Failed to persist DM reaction"),
+                }
                 false
             }
 
             InboxEvent::ChannelReaction { channel_id: _, sender_id, emoji, remove, target_sent_timestamp, target_author_aci, .. } => {
                 let target_sender_id = target_author_aci.parse().unwrap_or(*sender_id);
-                let event = if *remove {
-                    DomainEvent::ReactionRemoved { sender_id: target_sender_id, sent_at_ns: *target_sent_timestamp, reactor_id: *sender_id, emoji: emoji.clone(), timestamp: *target_sent_timestamp }
-                } else {
-                    DomainEvent::ReactionAdded { sender_id: target_sender_id, sent_at_ns: *target_sent_timestamp, reactor_id: *sender_id, emoji: emoji.clone(), timestamp: *target_sent_timestamp }
-                };
-                self.event_bus.emit_domain(event);
+                match self.message_service.record_reaction(
+                    &target_sender_id, *target_sent_timestamp, sender_id, emoji, *remove,
+                ) {
+                    Ok(true) => {
+                        let event = if *remove {
+                            DomainEvent::ReactionRemoved { sender_id: target_sender_id, sent_at_ns: *target_sent_timestamp, reactor_id: *sender_id, emoji: emoji.clone(), timestamp: *target_sent_timestamp }
+                        } else {
+                            DomainEvent::ReactionAdded { sender_id: target_sender_id, sent_at_ns: *target_sent_timestamp, reactor_id: *sender_id, emoji: emoji.clone(), timestamp: *target_sent_timestamp }
+                        };
+                        self.event_bus.emit_domain(event);
+                    }
+                    Ok(false) => {
+                        tracing::debug!(emoji = %emoji, "Channel reaction already recorded — skipping UI delta");
+                    }
+                    Err(e) => tracing::warn!(error = %e, "Failed to persist channel reaction"),
+                }
                 false
             }
 
@@ -882,6 +907,43 @@ impl InboxEventProcessor {
                     let _ = self.message_service.update_delivery_status_by_timestamp(
                         channel_id, &crate::domain::message::ConversationType::AnonGroup, *ts, status,
                     );
+                }
+                false
+            }
+
+            // =================================================================
+            // Friend-request fan-out — translate the inbox-layer notification
+            // into a UI-visible DomainEvent. Without this bridge the user
+            // events stream fires `InboxEvent::FriendRequestsUpdated` but the
+            // UI (which only listens to `DomainEvent`) never refreshes the
+            // pending-requests list.
+            // =================================================================
+            InboxEvent::FriendRequestsUpdated { received, sent } => {
+                self.event_bus.emit_domain(DomainEvent::FriendRequestsUpdated {
+                    received: received.clone(),
+                    sent: sent.clone(),
+                });
+                false
+            }
+
+            InboxEvent::FriendAccepted { friend_user_id, channel_id } => {
+                match (
+                    friend_user_id.parse::<UserId>(),
+                    channel_id.parse::<crate::domain::ids::ChannelId>(),
+                ) {
+                    (Ok(friend_id), Ok(ch_id)) => {
+                        self.event_bus.emit_domain(DomainEvent::FriendAccepted {
+                            friend_id,
+                            channel_id: ch_id,
+                        });
+                    }
+                    _ => {
+                        tracing::warn!(
+                            friend_user_id,
+                            channel_id,
+                            "FriendAccepted: failed to parse IDs — UI will not refresh"
+                        );
+                    }
                 }
                 false
             }

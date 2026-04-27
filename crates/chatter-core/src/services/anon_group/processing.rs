@@ -64,18 +64,16 @@ impl AnonInboxBackend for AnonGroupService {
     fn add_reaction(
         &self, id: &Self::Id, target_sender: &UserId, target_ts_ns: u64,
         reactor: &UserId, emoji: &str,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         AnonGroupService::add_reaction(self, id, target_sender, target_ts_ns, reactor, emoji)
-            .map(|_| ())
             .map_err(|e| e.to_string())
     }
 
     fn remove_reaction(
         &self, id: &Self::Id, target_sender: &UserId, target_ts_ns: u64,
         reactor: &UserId, emoji: &str,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         AnonGroupService::remove_reaction(self, id, target_sender, target_ts_ns, reactor, emoji)
-            .map(|_| ())
             .map_err(|e| e.to_string())
     }
 

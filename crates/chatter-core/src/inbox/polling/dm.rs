@@ -396,6 +396,21 @@ fn dispatch_dm_content(
                             message_id = %msg_id,
                             "Stored received DM in database"
                         );
+
+                        // Emit domain event so the notification listener,
+                        // UI message-state handler, and any other domain
+                        // subscribers learn about the new message. Fresh
+                        // (non-duplicate) inserts only — duplicates fall
+                        // through the Ok(false) arm. Previously this
+                        // branch only emitted the lower-level
+                        // InboxEvent::DmReceived, which the notification
+                        // listener doesn't subscribe to, so identified
+                        // DM texts never raised a desktop toast.
+                        if let Some(tx) = domain_tx {
+                            let _ = tx.send(DomainEvent::MessageReceived {
+                                message: message.clone(),
+                            });
+                        }
                     }
                     Ok(false) => {
                         tracing::debug!(peer_id = %peer_id, "DM duplicate skipped");

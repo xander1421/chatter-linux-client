@@ -144,6 +144,16 @@ pub async fn load_channel_into_ui(
     let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
     let ui_ctx_gifs = ui_ctx.clone();
 
+    // Channel icon (uploaded at creation) — decoded from the attachment
+    // cache. `slint::Image` is `!Send`, so carry the raw RGBA across the
+    // thread-hop and build the `Image` inside `run_ui!`.
+    let channel_icon_pixels = channel
+        .image_url
+        .as_deref()
+        .filter(|u| !u.is_empty())
+        .and_then(|url| ui_ctx.get_channel_icon_pixels(url))
+        .map(|p| (p.rgba.to_vec(), p.width, p.height));
+
     run_ui!(weak, |w| {
         w.set_channel_name(group_name.into());
         w.set_channel_type(channel_type_str.into());
@@ -151,6 +161,19 @@ pub async fn load_channel_into_ui(
         w.set_member_count(member_count);
         w.set_topic(topic.into());
         w.set_header_presence_status("offline".into());
+        match channel_icon_pixels {
+            Some((rgba, w_px, h_px)) => {
+                let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                    &rgba, w_px, h_px,
+                );
+                w.set_channel_avatar_source(slint::Image::from_rgba8(buffer));
+                w.set_channel_has_avatar(true);
+            }
+            None => {
+                w.set_channel_avatar_source(slint::Image::default());
+                w.set_channel_has_avatar(false);
+            }
+        }
 
         let slint_messages: Vec<_> = display_messages.iter().map(|m| m.to_slint_with_user(&current_user_id)).collect();
         w.set_messages(ModelRc::new(VecModel::from(slint_messages)));

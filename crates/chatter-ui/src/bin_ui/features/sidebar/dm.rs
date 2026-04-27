@@ -149,6 +149,8 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     w.set_channel_name(title.into());
                     w.set_topic(subtitle.into());
                     w.set_header_presence_status("online".into());
+                    w.set_channel_has_avatar(false);
+                    w.set_channel_avatar_source(slint::Image::default());
                     crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx.clone());
                 });
                 return;
@@ -227,6 +229,8 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 w.set_channel_name(title.into());
                 w.set_topic(status_str.into());
                 w.set_header_presence_status(status_str.into());
+                w.set_channel_has_avatar(false);
+                w.set_channel_avatar_source(slint::Image::default());
             });
         });
     });

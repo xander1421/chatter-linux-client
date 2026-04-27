@@ -24,6 +24,7 @@ export component LoginPage inherits Rectangle {
     callback sso-login(string, string, string);
     callback register();
     callback go-to-recovery();
+    callback go-to-link-device();
 
     background: Colors.background;
 
@@ -247,6 +248,19 @@ export component LoginPage inherits Rectangle {
 
                             TouchArea {
                                 clicked => { root.register(); }
+                            }
+                        }
+                    }
+
+                    // Link existing account on this device
+                    HorizontalLayout {
+                        alignment: center;
+                        Text {
+                            text: "Link to an existing account on another device";
+                            color: Colors.primary;
+                            font-size: Typography.xs;
+                            TouchArea {
+                                clicked => { root.go-to-link-device(); }
                             }
                         }
                     }

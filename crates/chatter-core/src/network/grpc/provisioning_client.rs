@@ -134,15 +134,21 @@ impl ProvisioningClient {
     /// # Arguments
     /// * `provisioning_uuid` - Session UUID from QR code
     /// * `envelope` - ECDH-encrypted ProvisionMessage
+    /// * `provisioning_code` - The same code primary embedded inside the
+    ///   encrypted envelope. Server stores it cleartext; new device echoes
+    ///   back the decrypted copy in `complete_device_linking` to prove it
+    ///   successfully decrypted. Server compares strict equality.
     pub async fn provision_device(
         &mut self,
         provisioning_uuid: &str,
         envelope: ProvisionEnvelope,
+        provisioning_code: &str,
     ) -> Result<(), NetworkError> {
         let request = ProvisionDeviceRequest {
             provisioning_uuid: provisioning_uuid.to_string(),
             envelope: Some(envelope),
             request_id: uuid::Uuid::new_v4().to_string(),
+            provisioning_code: provisioning_code.to_string(),
         };
 
         self.inner

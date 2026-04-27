@@ -252,6 +252,7 @@ pub async fn register_test_user(pool: &GrpcClientPool) -> Result<TestUser, Netwo
             "",         // No challenge ID for tests
             &[],        // No challenge response for tests
             &[0u8; 32], // Empty registration lock for tests
+            &[0u8; 32], // Empty username lookup hash for tests
         )
         .await?;
 

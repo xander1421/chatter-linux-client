@@ -39,7 +39,8 @@ export component EmojiPicker inherits Rectangle {
     property <bool> search-focused: search-input.has-focus;
 
     // Category icons: Recent (-1), Smileys (0), People (1), etc.
-    property <[string]> category-icons: ["🕐", "😀", "👋", "🐱", "🍎", "✈️", "⚽", "💡", "❤️", "🏳️"];
+    // Only SMP color-default emoji (code point ≥ U+1F000) to guarantee color presentation.
+    property <[string]> category-icons: ["\u{1F550}", "\u{1F600}", "\u{1F44B}", "\u{1F431}", "\u{1F34E}", "\u{1F680}", "\u{1F3C0}", "\u{1F4A1}", "\u{1F49C}", "\u{1F3F3}"];
     // Map icon index to category value: index 0 → -1 (Recent), index 1 → 0 (Smileys), etc.
     pure function icon-index-to-category(idx: int) -> int { idx - 1; }
     pure function category-to-icon-index(cat: int) -> int { cat + 1; }
@@ -221,7 +222,7 @@ export component EmojiPicker inherits Rectangle {
                 alignment: center;
                 spacing: Spacing.sm;
 
-                for swatch[tone-idx] in ["👋", "👋🏻", "👋🏼", "👋🏽", "👋🏾", "👋🏿"]: Rectangle {
+                for swatch[tone-idx] in ["\u{1F44B}", "\u{1F44B}\u{1F3FB}", "\u{1F44B}\u{1F3FC}", "\u{1F44B}\u{1F3FD}", "\u{1F44B}\u{1F3FE}", "\u{1F44B}\u{1F3FF}"]: Rectangle {
                     width: 28px;
                     height: 28px;
                     border-radius: Spacing.radius-sm;

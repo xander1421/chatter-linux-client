@@ -6,6 +6,12 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+// `TextEdit` is the std-widgets wrapper around `TextInput` — it adds the
+// gesture plumbing (long-press selection, double-tap word select,
+// tap-to-position cursor, native context menu) that raw `TextInput` lacks.
+// Required on Android where Slint's `SlintInputView` overlay swallows or
+// ignores the touch sequences a raw `TextInput` would need to handle.
+import { TextEdit } from "std-widgets.slint";
 
 // Pending attachment data for the attachment tray
 export struct PendingAttachmentData {
@@ -622,23 +628,26 @@ export component MessageComposer inherits Rectangle {
                     animate opacity { duration: 150ms; }
                 }
 
-                // Text input
-                text-input := TextInput {
+                // Text input — TextEdit wraps TextInput with the gesture
+                // plumbing (selection handles, tap-to-position cursor) that
+                // Android's IME bridge needs.
+                //
+                // TextEdit's `text` is `in-out` but the chained <=> bindings
+                // up to App.composer-text go through a ScrollView viewport
+                // which doesn't always propagate back up cleanly. We push
+                // updates explicitly from `edited(text)` so `can-send`
+                // (which depends on `root.text`) flips as the user types.
+                text-input := TextEdit {
                     x: Spacing.md;
                     y: Spacing.sm;
                     width: parent.width - Spacing.md * 2;
-                    color: Colors.text-primary;
-                    font-size: Typography.base;
-                    text <=> root.text;
+                    height: parent.height - Spacing.sm * 2;
+                    text: root.text;
                     enabled: !root.disabled;
                     wrap: word-wrap;
-                    single-line: false;
 
-                    // Handle Enter key - send on Enter, newline on Shift+Enter
-                    // Tab accepts ghost text when available
                     key-pressed(event) => {
                         if (event.text == "\n" && !event.modifiers.shift) {
-                            // Enter without Shift - send message
                             if (root.can-send) {
                                 if (root.is-editing) {
                                     root.send-edit(root.edit-message-id, root.text);
@@ -656,14 +665,12 @@ export component MessageComposer inherits Rectangle {
                         return reject;
                     }
 
-                    // Handle text changes for @ mention detection and typing indicator
-                    edited => {
-                        // Check for @ mention trigger
-                        if (self.text != "") {
-                            root.check-mention-trigger(self.text);
+                    edited(value) => {
+                        root.text = value;
+                        if (value != "") {
+                            root.check-mention-trigger(value);
                         }
-                        // Emit typing state change
-                        root.typing-changed(self.text != "");
+                        root.typing-changed(value != "");
                     }
                 }
 

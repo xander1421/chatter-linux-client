@@ -11,7 +11,7 @@
 #[cfg(target_os = "linux")]
 mod gl_linux;
 
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", feature = "desktop-media"))]
 mod gl_android;
 
 #[cfg(target_os = "windows")]
@@ -30,7 +30,7 @@ pub fn init_hw_video(window: &MainWindow) -> bool {
         gl_linux::init_gl_video(window)
     }
 
-    #[cfg(target_os = "android")]
+    #[cfg(all(target_os = "android", feature = "desktop-media"))]
     {
         gl_android::init_gl_video(window)
     }
@@ -45,7 +45,7 @@ pub fn init_hw_video(window: &MainWindow) -> bool {
         metal_ios::init_metal_video(window)
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows", target_os = "ios")))]
+    #[cfg(not(any(target_os = "linux", all(target_os = "android", feature = "desktop-media"), target_os = "windows", target_os = "ios")))]
     {
         let _ = window;
         tracing::info!("Hardware video not supported on this platform");
@@ -60,7 +60,7 @@ pub fn is_hw_available() -> bool {
         gl_linux::is_gl_available()
     }
 
-    #[cfg(target_os = "android")]
+    #[cfg(all(target_os = "android", feature = "desktop-media"))]
     {
         gl_android::is_gl_available()
     }
@@ -75,7 +75,7 @@ pub fn is_hw_available() -> bool {
         metal_ios::is_metal_available()
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows", target_os = "ios")))]
+    #[cfg(not(any(target_os = "linux", all(target_os = "android", feature = "desktop-media"), target_os = "windows", target_os = "ios")))]
     {
         false
     }
@@ -88,7 +88,7 @@ pub fn is_hw_connected() -> bool {
         gl_linux::is_gl_connected()
     }
 
-    #[cfg(target_os = "android")]
+    #[cfg(all(target_os = "android", feature = "desktop-media"))]
     {
         gl_android::is_gl_connected()
     }
@@ -103,7 +103,7 @@ pub fn is_hw_connected() -> bool {
         metal_ios::is_metal_connected()
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows", target_os = "ios")))]
+    #[cfg(not(any(target_os = "linux", all(target_os = "android", feature = "desktop-media"), target_os = "windows", target_os = "ios")))]
     {
         false
     }
@@ -117,7 +117,7 @@ pub fn start_hw_video(data: Vec<u8>) -> Option<f64> {
         gl_linux::start_gl_video(data)
     }
 
-    #[cfg(target_os = "android")]
+    #[cfg(all(target_os = "android", feature = "desktop-media"))]
     {
         gl_android::start_gl_video(data)
     }
@@ -132,7 +132,7 @@ pub fn start_hw_video(data: Vec<u8>) -> Option<f64> {
         metal_ios::start_metal_video(data)
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows", target_os = "ios")))]
+    #[cfg(not(any(target_os = "linux", all(target_os = "android", feature = "desktop-media"), target_os = "windows", target_os = "ios")))]
     {
         let _ = data;
         None
@@ -146,7 +146,7 @@ pub fn stop_hw_video() {
         gl_linux::stop_gl_video();
     }
 
-    #[cfg(target_os = "android")]
+    #[cfg(all(target_os = "android", feature = "desktop-media"))]
     {
         gl_android::stop_gl_video();
     }
@@ -169,7 +169,7 @@ pub fn set_hw_video_playing(playing: bool) {
         gl_linux::set_gl_video_playing(playing);
     }
 
-    #[cfg(target_os = "android")]
+    #[cfg(all(target_os = "android", feature = "desktop-media"))]
     {
         gl_android::set_gl_video_playing(playing);
     }
@@ -192,7 +192,7 @@ pub fn is_hw_video_active() -> bool {
         gl_linux::is_gl_video_active()
     }
 
-    #[cfg(target_os = "android")]
+    #[cfg(all(target_os = "android", feature = "desktop-media"))]
     {
         gl_android::is_gl_video_active()
     }
@@ -207,7 +207,7 @@ pub fn is_hw_video_active() -> bool {
         metal_ios::is_metal_video_active()
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows", target_os = "ios")))]
+    #[cfg(not(any(target_os = "linux", all(target_os = "android", feature = "desktop-media"), target_os = "windows", target_os = "ios")))]
     {
         false
     }
@@ -220,7 +220,7 @@ pub fn get_hw_video_position() -> Option<f64> {
         gl_linux::get_gl_video_position()
     }
 
-    #[cfg(target_os = "android")]
+    #[cfg(all(target_os = "android", feature = "desktop-media"))]
     {
         gl_android::get_gl_video_position()
     }
@@ -235,7 +235,7 @@ pub fn get_hw_video_position() -> Option<f64> {
         metal_ios::get_metal_video_position()
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows", target_os = "ios")))]
+    #[cfg(not(any(target_os = "linux", all(target_os = "android", feature = "desktop-media"), target_os = "windows", target_os = "ios")))]
     {
         None
     }
@@ -248,7 +248,7 @@ pub fn get_hw_video_duration() -> Option<f64> {
         gl_linux::get_gl_video_duration()
     }
 
-    #[cfg(target_os = "android")]
+    #[cfg(all(target_os = "android", feature = "desktop-media"))]
     {
         gl_android::get_gl_video_duration()
     }
@@ -263,7 +263,7 @@ pub fn get_hw_video_duration() -> Option<f64> {
         metal_ios::get_metal_video_duration()
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows", target_os = "ios")))]
+    #[cfg(not(any(target_os = "linux", all(target_os = "android", feature = "desktop-media"), target_os = "windows", target_os = "ios")))]
     {
         None
     }
@@ -276,7 +276,7 @@ pub fn seek_hw_video(position: f64) {
         gl_linux::seek_gl_video(position);
     }
 
-    #[cfg(target_os = "android")]
+    #[cfg(all(target_os = "android", feature = "desktop-media"))]
     {
         gl_android::seek_gl_video(position);
     }
@@ -291,7 +291,7 @@ pub fn seek_hw_video(position: f64) {
         metal_ios::seek_metal_video(position);
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows", target_os = "ios")))]
+    #[cfg(not(any(target_os = "linux", all(target_os = "android", feature = "desktop-media"), target_os = "windows", target_os = "ios")))]
     {
         let _ = position;
     }
@@ -304,7 +304,7 @@ pub fn set_hw_video_volume(volume: f64) {
         gl_linux::set_gl_video_volume(volume);
     }
 
-    #[cfg(target_os = "android")]
+    #[cfg(all(target_os = "android", feature = "desktop-media"))]
     {
         gl_android::set_gl_video_volume(volume);
     }
@@ -319,7 +319,7 @@ pub fn set_hw_video_volume(volume: f64) {
         metal_ios::set_metal_video_volume(volume);
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows", target_os = "ios")))]
+    #[cfg(not(any(target_os = "linux", all(target_os = "android", feature = "desktop-media"), target_os = "windows", target_os = "ios")))]
     {
         let _ = volume;
     }

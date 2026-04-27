@@ -10,6 +10,7 @@ import { Icons } from "theme/icons.slint";
 import { LoginPage } from "pages/login.slint";
 import { RegisterPage } from "pages/register.slint";
 import { AccountRecoveryPage } from "pages/account_recovery.slint";
+import { LinkDevicePage } from "pages/link_device.slint";
 import { LoadingPage } from "pages/loading.slint";
 import { WelcomePage } from "pages/welcome.slint";
 
@@ -26,7 +27,7 @@ import { MentionAutocomplete, MentionSuggestion } from "components/mention_autoc
 
 // Import modals
 import { CreateChannelModal, AIProviderOption, AIModelOption, CreateChannelConfig, PrivateGroupFriend } from "modals/create_channel.slint";
-import { UserProfileModal, EditProfileModal, RecoveryCodesModal } from "modals/mod.slint";
+import { UserProfileModal, EditProfileModal, RecoveryCodesModal, LinkDeviceApproveModal } from "modals/mod.slint";
 import { FriendRequestsModal, FriendRequest } from "modals/friend_requests.slint";
 import { FriendsModal, FriendData, UserSearchResult, FriendRequestData, BlockedUserData } from "modals/friends.slint";
 import { ForwardMessageModal, ForwardTarget } from "modals/forward_message.slint";
@@ -68,16 +69,10 @@ export component App inherits Rectangle {
     in property <length> safe-area-top: 0px;     // Android status bar (~24dp)
     in property <length> safe-area-bottom: 0px;  // Android nav bar / gesture area
 
-    // ========== Mobile navigation ==========
-    // True only on actual mobile devices (Android) — set by Rust at startup.
-    // Desktop narrow windows should NOT trigger mobile mode.
+    // True on Android — set by Rust at startup. Used only by inset polling
+    // wiring on the Rust side; the Slint layout itself is platform-agnostic
+    // (mobile renders the same split view as a narrow desktop window).
     in property <bool> is-mobile-platform: false;
-    // Active bottom nav tab on mobile: "chats", "calls", "contacts", "settings"
-    in-out property <string> mobile-active-tab: "chats";
-    // True when a conversation is open (channel/DM/group selected)
-    property <bool> has-active-conversation: channel-id != "";
-    // Callback when mobile back button is pressed (returns to chat list)
-    callback mobile-back();
     // Keyboard is considered open when bottom inset exceeds the nav bar threshold
     property <bool> keyboard-open: safe-area-bottom > 80px;
 
@@ -130,6 +125,30 @@ export component App inherits Rectangle {
     callback register-password-changed(string);
     callback register-pin-changed(string);
 
+    // ========== Link Device page properties (new device side) ==========
+    in property <image> link-device-qr;
+    in property <string> link-device-url: "";
+    in property <string> link-device-status: "Generate a QR to begin.";
+    in property <string> link-device-error: "";
+    in property <bool> link-device-active: false;
+    callback link-device-start();
+    callback link-device-cancel();
+    callback link-device-copy();
+
+    // ========== Link Device Approve modal (primary side) ==========
+    in-out property <string> link-approve-url: "";
+    in-out property <string> link-approve-password: "";
+    in property <string> link-approve-preview-name: "";
+    in property <string> link-approve-preview-server: "";
+    in property <bool> link-approve-preview-ready: false;
+    in property <string> link-approve-status: "";
+    in property <string> link-approve-error: "";
+    in property <bool> link-approve-busy: false;
+    callback link-approve-paste-changed(string);
+    callback link-approve-submit(string, string);  // url, password
+    callback link-approve-open();
+    callback link-approve-close();
+
     // ========== Recovery codes modal properties ==========
     in property <[string]> recovery-codes: [];
     callback recovery-codes-confirmed();
@@ -180,6 +199,8 @@ export component App inherits Rectangle {
     in property <bool> is-archived: false;
     in property <string> typing-indicator: "";
     in property <string> header-presence-status: "offline";
+    in property <image> channel-avatar-source;
+    in property <bool> channel-has-avatar: false;
     in property <[MessageItemData]> messages: [];
     in property <bool> loading-messages: false;
     in property <int> scroll-to-message-index: -1;  // Set to scroll to a specific message
@@ -565,6 +586,7 @@ export component App inherits Rectangle {
     callback go-to-register();
     callback go-to-login();
     callback go-to-recovery();
+    callback go-to-link-device();
     callback sso-login(string, string, string);
 
     // Welcome page callbacks
@@ -797,7 +819,9 @@ export component App inherits Rectangle {
     property <bool> is-small-screen: root.width < 800px;
     // Mobile layout: only on actual mobile devices (Android) with narrow screens.
     // Desktop narrow windows keep the collapsed sidebar instead of going fullscreen.
-    property <bool> is-mobile-screen: root.is-mobile-platform && root.width < 480px;
+    // is-small-screen drives the collapse-by-default + full-width side-panels.
+    // No separate "mobile-screen" mode — Android renders identically to a
+    // narrow desktop window, per the user's "1-to-1 with desktop" preference.
     // Track whether the user manually toggled collapse (vs auto-collapse on resize)
     property <bool> sidebar-user-collapsed: false;
 
@@ -812,17 +836,6 @@ export component App inherits Rectangle {
             root.sidebar-collapsed = false;
         }
     }
-    changed is-mobile-screen => {
-        if (root.is-mobile-screen) {
-            // On mobile, sidebar visibility is controlled by mobile-active-tab
-            // and has-active-conversation, not by sidebar-hidden
-            root.sidebar-hidden = true;
-            root.mobile-active-tab = "chats";
-        } else {
-            root.sidebar-hidden = false;
-        }
-    }
-
     // ========== Global keyboard shortcuts ==========
     FocusScope {
         width: 0;
@@ -870,11 +883,15 @@ export component App inherits Rectangle {
     }
 
     // ========== Main content layer ==========
-    // Explicit sizing ensures width flows to all child components for text wrapping.
-    // Safe area: content inset below status bar; bottom nav extends into gesture area.
+    // Apply ALL insets (system bars + IME) in ONE place — here. Inner layouts
+    // use `parent.height` directly, no further inset subtraction. Splitting
+    // top vs bottom across outer+inner caused keyboard-open to shift content
+    // down instead of shrink it. Per Slint mobile layout guidance
+    // (https://docs.slint.dev/latest/docs/slint/guide/platforms/mobile/general/):
+    // one rectangle, all insets.
     Rectangle {
         width: root.width;
-        height: root.height - root.safe-area-top;
+        height: root.height - root.safe-area-top - root.safe-area-bottom;
         y: root.safe-area-top;
 
         // Loading page
@@ -900,6 +917,9 @@ export component App inherits Rectangle {
             }
             go-to-recovery => {
                 root.go-to-recovery();
+            }
+            go-to-link-device => {
+                root.go-to-link-device();
             }
         }
 
@@ -943,6 +963,20 @@ export component App inherits Rectangle {
             }
         }
 
+        // Link new device (new-device side QR display)
+        if current-view == "link-device": LinkDevicePage {
+            qr-image: root.link-device-qr;
+            link-url: root.link-device-url;
+            status-text: root.link-device-status;
+            error: root.link-device-error;
+            linking: root.link-device-active;
+
+            start => { root.link-device-start(); }
+            cancel => { root.link-device-cancel(); }
+            copy-link => { root.link-device-copy(); }
+            go-to-login => { root.go-to-login(); }
+        }
+
         // Account recovery page
         if current-view == "recovery": AccountRecoveryPage {
             username <=> root.recovery-username;
@@ -970,13 +1004,10 @@ export component App inherits Rectangle {
             get-started => { root.welcome-get-started(); }
         }
 
-        // Main chat layout
-        // On mobile, leave room for the bottom nav + safe area; on desktop, subtract safe-area-bottom
+        // Main chat layout — parent Rectangle already accounts for all insets.
         if current-view == "main": VerticalLayout {
             width: 100%;
-            height: root.is-mobile-screen && !root.keyboard-open
-                ? parent.height - Spacing.bottom-nav-height - root.safe-area-bottom
-                : parent.height - root.safe-area-bottom;
+            height: parent.height;
 
             // Connection status banner (auto-hides when connected)
             ConnectionBanner {
@@ -990,8 +1021,9 @@ export component App inherits Rectangle {
 
             // Sidebar (width controlled by collapsed state; mobile-mode for full-width)
             Sidebar {
-                // On mobile: show full-width chat list when Chats tab is active and no conversation open
-                mobile-mode: root.is-mobile-screen && root.mobile-active-tab == "chats" && !root.has-active-conversation;
+                // Mobile treated as narrow desktop: always-visible split view
+                // with collapse toggle. No full-screen swap on conversation open.
+                mobile-mode: false;
                 mobile-width: root.width;
                 channels: root.channels;
                 dm-conversations: root.dm-conversations;
@@ -1003,8 +1035,8 @@ export component App inherits Rectangle {
                 user-initials: root.user-initials;
                 user-presence-status: root.user-presence-status;
                 user-custom-status: root.user-custom-status;
-                collapsed: root.is-mobile-screen ? false : (root.is-small-screen || root.sidebar-collapsed);
-                hidden: root.is-mobile-screen ? (root.mobile-active-tab != "chats" || root.has-active-conversation) : root.sidebar-hidden;
+                collapsed: root.is-small-screen || root.sidebar-collapsed;
+                hidden: root.sidebar-hidden;
                 pending-friend-requests: root.friends-received-requests.length;
                 pending-message-requests: root.pending-message-requests;
                 pending-group-invites: root.pending-group-invites;
@@ -1113,7 +1145,7 @@ export component App inherits Rectangle {
             Rectangle {
                 horizontal-stretch: 1;
                 vertical-stretch: 1;
-                visible: root.is-mobile-screen ? root.has-active-conversation : true;
+                visible: true;
                 // Clip this area to prevent inner panels from overflowing the whole app
                 clip: true;
 
@@ -1128,7 +1160,7 @@ export component App inherits Rectangle {
                     VerticalLayout {
                         horizontal-stretch: 1;
                         vertical-stretch: 1;
-                        visible: !(root.is-mobile-screen && (root.members-panel-visible || root.thread-panel-visible));
+                        visible: !(root.is-small-screen && (root.members-panel-visible || root.thread-panel-visible));
 
                         ActiveCallView {
                             vertical-stretch: 0;
@@ -1155,10 +1187,10 @@ export component App inherits Rectangle {
 
                     ChatLayout {
                     vertical-stretch: 1;
-                    visible: !(root.is-mobile-screen && (root.members-panel-visible || root.thread-panel-visible));
-                    hide-header: root.active-call-visible;
-                    show-back-button: root.is-mobile-screen;
-                    back-clicked => { root.mobile-back(); }
+                    visible: !(root.is-small-screen && (root.members-panel-visible || root.thread-panel-visible));
+                    hide-header: false;
+                    show-back-button: false;
+                    back-clicked => { }
                     channel-id: root.channel-id;
                     channel-name: root.channel-name;
                     channel-type: root.channel-type;
@@ -1168,6 +1200,8 @@ export component App inherits Rectangle {
                     is-archived: root.is-archived;
                     typing-indicator: root.typing-indicator;
                     presence-status: root.header-presence-status;
+                    channel-avatar-source: root.channel-avatar-source;
+                    channel-has-avatar: root.channel-has-avatar;
                     jarvis-thinking: root.jarvis-thinking;
                     messages: root.messages;
                     loading-messages: root.loading-messages;
@@ -1268,9 +1302,12 @@ export component App inherits Rectangle {
                 }
                     } // end VerticalLayout (call dock + ChatLayout)
 
-                // Members panel (side panel on desktop, full-screen overlay on mobile)
+                // Members panel — fixed 280px side panel on wide screens,
+                // fills the right column on narrow screens (where ChatLayout
+                // yields via `visible: false` above).
                 if root.members-panel-visible: MembersPanel {
-                    width: root.is-mobile-screen ? root.width : 280px;
+                    horizontal-stretch: root.is-small-screen ? 1 : 0;
+                    width: root.is-small-screen ? 0px : 280px;
                     height: 100%;
                     members: root.members-panel-members;
                     channel-name: root.channel-name;
@@ -1285,7 +1322,8 @@ export component App inherits Rectangle {
 
                 // Thread panel (side panel on desktop, full-screen overlay on mobile)
                 if root.thread-panel-visible: ThreadPanel {
-                    width: root.is-mobile-screen ? root.width : 320px;
+                    horizontal-stretch: root.is-small-screen ? 1 : 0;
+                    width: root.is-small-screen ? 0px : 320px;
                     height: 100%;
                     root-message-id: root.thread-root-message-id;
                     root-sender-name: root.thread-root-sender-name;
@@ -1313,29 +1351,9 @@ export component App inherits Rectangle {
         } // end inner HorizontalLayout (sidebar + chat)
         } // end VerticalLayout (banner + chat area)
 
-    // Mobile bottom navigation bar (absolute positioned, pinned to bottom, extends into gesture area)
-    if root.current-view == "main" && root.is-mobile-screen && !root.keyboard-open: MobileBottomNav {
-        y: parent.height - self.height;
-        width: 100%;
-        active-tab: root.mobile-active-tab;
-        chats-badge: root.total-unread-count;
-        contacts-badge: root.friends-received-requests.length;
-        safe-area-bottom: root.safe-area-bottom;
-
-        tab-selected(tab) => {
-            root.mobile-active-tab = tab;
-            if (tab == "calls") {
-                root.calls-tab-clicked();
-            }
-            if (tab == "contacts") {
-                root.active-modal = "friends";
-            }
-            if (tab == "settings") {
-                root.active-modal = "settings";
-                root.settings-clicked();
-            }
-        }
-    }
+    // Mobile bottom navigation removed — the single-tab bar that remained after
+    // dropping Calls / Contacts / Settings served no purpose and clipped the
+    // sidebar profile button. Navigation now goes through the sidebar only.
 
     // ========== Jarvis AI floating panel ==========
     // Floating panel that appears on top of chat when toggled
@@ -1383,8 +1401,8 @@ export component App inherits Rectangle {
     }
 
     // Create Channel Modal
-    CreateChannelModal {
-        show-modal: root.active-modal == "create-channel";
+    if root.active-modal == "create-channel": CreateChannelModal {
+        show-modal: true;
         channel-name <=> root.create-channel-name;
         channel-description <=> root.create-channel-description;
         selected-template <=> root.create-channel-template;
@@ -1428,8 +1446,8 @@ export component App inherits Rectangle {
     }
 
     // Invite to Private Group Modal
-    InvitePrivateGroupModal {
-        show-modal: root.active-modal == "invite-private-group";
+    if root.active-modal == "invite-private-group": InvitePrivateGroupModal {
+        show-modal: true;
         available-friends <=> root.invite-private-group-friends;
         selected-count <=> root.invite-private-group-selected-count;
         loading: root.invite-private-group-loading;
@@ -1449,8 +1467,8 @@ export component App inherits Rectangle {
     }
 
     // Invite Member to Channel Modal
-    InviteMemberModal {
-        show-modal: root.active-modal == "invite-member";
+    if root.active-modal == "invite-member": InviteMemberModal {
+        show-modal: true;
         channel-name: root.invite-member-channel-name;
         users <=> root.invite-member-users;
         selected-count <=> root.invite-member-selected-count;
@@ -1471,8 +1489,8 @@ export component App inherits Rectangle {
     }
 
     // Join Channel Modal
-    JoinChannelModal {
-        show-modal: root.active-modal == "join-channel";
+    if root.active-modal == "join-channel": JoinChannelModal {
+        show-modal: true;
         search-query <=> root.join-channel-search-query;
         search-results: root.join-channel-results;
         searching: root.join-channel-searching;
@@ -1492,8 +1510,8 @@ export component App inherits Rectangle {
     }
 
     // User Profile Modal
-    UserProfileModal {
-        show-modal: root.active-modal == "user-profile";
+    if root.active-modal == "user-profile": UserProfileModal {
+        show-modal: true;
         user-id: root.profile-user-id;
         display-name: root.profile-display-name;
         username: root.profile-username;
@@ -1541,8 +1559,8 @@ export component App inherits Rectangle {
     }
 
     // Edit Profile Modal
-    EditProfileModal {
-        show-modal: root.active-modal == "edit-profile";
+    if root.active-modal == "edit-profile": EditProfileModal {
+        show-modal: true;
         display-name <=> root.edit-profile-display-name;
         bio <=> root.edit-profile-bio;
         avatar: root.edit-profile-avatar;
@@ -1561,8 +1579,8 @@ export component App inherits Rectangle {
     }
 
     // Recovery Codes Modal
-    RecoveryCodesModal {
-        show-modal: root.active-modal == "recovery-codes";
+    if root.active-modal == "recovery-codes": RecoveryCodesModal {
+        show-modal: true;
         codes: root.recovery-codes;
 
         confirmed => {
@@ -1574,9 +1592,29 @@ export component App inherits Rectangle {
         }
     }
 
+    // Link Device Approve Modal (primary side)
+    if root.active-modal == "link-device-approve": LinkDeviceApproveModal {
+        show-modal: true;
+        link-url <=> root.link-approve-url;
+        password <=> root.link-approve-password;
+        preview-device-name: root.link-approve-preview-name;
+        preview-server-url: root.link-approve-preview-server;
+        preview-ready: root.link-approve-preview-ready;
+        status: root.link-approve-status;
+        error: root.link-approve-error;
+        approving: root.link-approve-busy;
+
+        close => {
+            root.active-modal = "none";
+            root.link-approve-close();
+        }
+        paste-changed(t) => { root.link-approve-paste-changed(t); }
+        approve(u, p) => { root.link-approve-submit(u, p); }
+    }
+
     // Friend Requests Modal (legacy)
-    FriendRequestsModal {
-        show-modal: root.active-modal == "friend-requests";
+    if root.active-modal == "friend-requests": FriendRequestsModal {
+        show-modal: true;
         active-tab: root.friend-requests-tab;
         received-requests: root.received-friend-requests;
         sent-requests: root.sent-friend-requests;
@@ -1600,8 +1638,8 @@ export component App inherits Rectangle {
     }
 
     // Friends Modal (comprehensive)
-    FriendsModal {
-        show-modal: root.active-modal == "friends";
+    if root.active-modal == "friends": FriendsModal {
+        show-modal: true;
         active-tab <=> root.friends-modal-tab;
         friends: root.friends-list;
         search-query <=> root.friends-search-query;
@@ -1690,8 +1728,8 @@ export component App inherits Rectangle {
     }
 
     // Forward Message Modal
-    ForwardMessageModal {
-        show-modal: root.active-modal == "forward-message";
+    if root.active-modal == "forward-message": ForwardMessageModal {
+        show-modal: true;
         message-preview: root.forward-message-preview;
         search-text <=> root.forward-search-text;
         targets: root.forward-targets;
@@ -1706,8 +1744,8 @@ export component App inherits Rectangle {
     }
 
     // Sessions Modal
-    SessionsModal {
-        show-modal: root.active-modal == "sessions";
+    if root.active-modal == "sessions": SessionsModal {
+        show-modal: true;
         sessions: root.sessions;
         loading: root.sessions-loading;
         revoking: root.sessions-revoking;
@@ -1721,11 +1759,14 @@ export component App inherits Rectangle {
         revoke-all-others => {
             root.revoke-all-sessions();
         }
+        link-new-device => {
+            root.link-approve-open();
+        }
     }
 
     // Search Modal
-    SearchModal {
-        show-modal: root.active-modal == "search";
+    if root.active-modal == "search": SearchModal {
+        show-modal: true;
         search-query <=> root.search-query;
         search-results: root.search-results;
         searching: root.search-searching;
@@ -1747,8 +1788,8 @@ export component App inherits Rectangle {
     }
 
     // Quick Switcher (Ctrl+K)
-    QuickSwitcher {
-        show-modal: root.active-modal == "quick-switcher";
+    if root.active-modal == "quick-switcher": QuickSwitcher {
+        show-modal: true;
         items: root.quick-switcher-items;
         search-query <=> root.quick-switcher-query;
         selected-index <=> root.quick-switcher-selected-index;
@@ -1766,8 +1807,8 @@ export component App inherits Rectangle {
     }
 
     // Channel Settings Modal
-    ChannelSettingsModal {
-        show-modal: root.active-modal == "channel-settings";
+    if root.active-modal == "channel-settings": ChannelSettingsModal {
+        show-modal: true;
         channel-id: root.channel-settings-id;
         channel-name: root.channel-settings-name;
         channel-description: root.channel-settings-description;
@@ -1828,8 +1869,8 @@ export component App inherits Rectangle {
     }
 
     // Create/Rename Section Modal
-    CreateSectionModal {
-        show-modal: root.active-modal == "create-section";
+    if root.active-modal == "create-section": CreateSectionModal {
+        show-modal: true;
         rename-mode: root.create-section-rename-mode;
         section-name <=> root.create-section-name;
         selected-emoji <=> root.create-section-emoji;
@@ -2074,8 +2115,8 @@ export component App inherits Rectangle {
 
     // ========== Call overlays (rendered above modals) ==========
     // Incoming call modal
-    IncomingCallModal {
-        show: root.incoming-call-visible;
+    if root.incoming-call-visible: IncomingCallModal {
+        show: true;
         call-data: root.incoming-call-data;
         replaces-active: root.incoming-call-replaces-active;
 
@@ -2090,8 +2131,8 @@ export component App inherits Rectangle {
     // (Active call view is now docked above ChatLayout — see chat column block.)
 
     // Device picker modal (for audio devices and screen sources)
-    DevicePicker {
-        show: root.device-picker-visible;
+    if root.device-picker-visible: DevicePicker {
+        show: true;
         title: root.device-picker-type == "audio" ? "Select Microphone" :
                root.device-picker-type == "audio_output" ? "Select Speaker" : "Select Screen to Share";
         picker-type: root.device-picker-type;
@@ -2123,8 +2164,8 @@ export component App inherits Rectangle {
     }
 
     // Image viewer overlay (rendered above modals)
-    ImageViewer {
-        show: root.image-viewer-visible;
+    if root.image-viewer-visible: ImageViewer {
+        show: true;
         source: root.image-viewer-source;
         filename: root.image-viewer-filename;
         size-display: root.image-viewer-size;
@@ -2136,8 +2177,8 @@ export component App inherits Rectangle {
     }
 
     // Video player overlay (rendered above modals)
-    VideoPlayer {
-        show: root.video-player-visible;
+    if root.video-player-visible: VideoPlayer {
+        show: true;
         frame: root.video-player-frame;
         filename: root.video-player-filename;
         progress: root.video-player-progress;
@@ -2393,9 +2434,10 @@ export component App inherits Rectangle {
         max-picker-width: min(280px, root.width - 32px);
         max-picker-height: min(320px, root.height - 128px);
 
-        // Position above the composer buttons (right side)
+        // Position above the composer buttons (right side). Lift with the
+        // IME so the picker doesn't get hidden behind the keyboard.
         x: root.width - self.width - Spacing.md;
-        y: root.height - self.height - 80px;
+        y: root.height - self.height - 80px - root.safe-area-bottom;
 
         emoji-selected(emoji) => {
             root.composer-emoji-picker-visible = false;
@@ -2429,9 +2471,9 @@ export component App inherits Rectangle {
         max-picker-width: min(320px, root.width - 32px);
         max-picker-height: min(400px, root.height - 128px);
 
-        // Position above the composer buttons (right side)
+        // Position above the composer buttons (right side). Lift with IME.
         x: root.width - self.width - Spacing.md;
-        y: root.height - self.height - 80px;
+        y: root.height - self.height - 80px - root.safe-area-bottom;
 
         gif-selected(id, url) => {
             root.composer-gif-picker-visible = false;

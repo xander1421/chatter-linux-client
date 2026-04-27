@@ -7,6 +7,6 @@ pub mod unfurl;
 pub mod youtube;
 
 // Re-exports for convenient access
-pub use link_preview::LinkPreviewGenerator;
+pub use link_preview::{LinkPreviewGenerator, PreviewFetcher};
 pub use unfurl::UrlUnfurler;
 pub use youtube::YouTubeExtractor;

@@ -48,6 +48,10 @@ pub mod keys {
     pub const SENDER_CERTIFICATE_REFRESH_AFTER: &str = "crypto.sender_certificate_refresh_after";
     /// Server key ID from the sender certificate (u32, for SealedSenderMessage envelope)
     pub const SENDER_CERTIFICATE_SERVER_KEY_ID: &str = "crypto.sender_certificate_server_key_id";
+    /// Local-only PIN fingerprint for re-auth gates (32 bytes, encrypted-at-rest).
+    /// Set on register / change-pin via `crypto::svr::derive_pin_fingerprint`.
+    /// Never sent to the server. Used by [`LinkDeviceService::verify_pin`].
+    pub const PIN_FINGERPRINT: &str = "crypto.pin_fingerprint";
 
     // UI settings
     pub const WINDOW_WIDTH: &str = "ui.window_width";

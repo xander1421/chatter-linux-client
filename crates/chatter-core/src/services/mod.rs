@@ -7,6 +7,7 @@ pub mod call_signaling;
 pub mod conversation;
 pub mod current_user;
 pub mod auth_service;
+pub mod link_device_service;
 pub mod session_service;
 pub mod account_service;
 pub mod device_service;
@@ -21,8 +22,11 @@ pub mod attachment;
 pub mod attachment_service;
 #[cfg(feature = "media")]
 pub mod call_worker;
+#[cfg(feature = "media")]
+pub mod call_notification_bridge;
 pub mod call_verification;
 pub mod notification_service;
+pub mod notification_stream;
 pub mod search_service;
 #[cfg(feature = "local-ai")]
 pub mod semantic_search;

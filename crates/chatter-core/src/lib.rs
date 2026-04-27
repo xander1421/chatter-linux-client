@@ -2,6 +2,29 @@
 //!
 //! Start with [`client::ChatterClient`] and the [`prelude`] module.
 
+// ── Internal macros ────────────────────────────────────────────────────────
+//
+// `service_accessor!(name, Ty, field)` expands to a single getter on
+// `ChatterClient` returning `&Arc<Ty>`. Default visibility is `pub(crate)`
+// to keep chatter-ui from reaching past the façade. Enabling the `testing`
+// feature widens the accessor to `pub` so integration tests (external to
+// this crate) can wire up real services.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! service_accessor {
+    ($name:ident, $ty:ty, $field:ident) => {
+        #[cfg(feature = "testing")]
+        pub fn $name(&self) -> &std::sync::Arc<$ty> {
+            &self.ui.$field
+        }
+
+        #[cfg(not(feature = "testing"))]
+        pub(crate) fn $name(&self) -> &std::sync::Arc<$ty> {
+            &self.ui.$field
+        }
+    };
+}
+
 // ── Public API ──────────────────────────────────────────────────────────────
 
 pub mod client;

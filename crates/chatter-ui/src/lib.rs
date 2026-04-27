@@ -26,90 +26,54 @@ pub fn rt_handle() -> &'static tokio::runtime::Handle {
     RT_HANDLE.get().expect("tokio runtime not initialized")
 }
 
-/// Android entry point - called by android-activity glue.
+/// Android: the app's internal data directory (`Context.getFilesDir()`),
+/// resolved from `AndroidApp::internal_data_path()` at `android_main` entry.
+/// Used by `app_init` to tell `ChatterClient` where to open the DB.
+#[cfg(target_os = "android")]
+static ANDROID_DATA_DIR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Android entry point — called by android-activity glue.
+///
+/// Runs on the dedicated android_main pthread that android-activity spawns.
+/// That thread owns the Looper; `AndroidApp::poll_events` (and therefore the
+/// Slint event loop) must run on this same thread. We cannot rehost the
+/// event loop elsewhere, so all initialization and the event loop execute
+/// inline here.
+///
+/// Modals and overlays in `ui/app.slint` are wrapped in `if cond:` blocks so
+/// their generated inner components become `sp::Conditional<...>` instead of
+/// being embedded inline in `InnerApp_root`. Without that wrapping the
+/// stack frame for `MainWindow::new()` exceeds the ~2MB default bionic
+/// thread stack and we crash with SIGSEGV inside Slint codegen.
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
-    // Set up the Slint Android platform backend
+    let data_dir = app
+        .internal_data_path()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "/data/data/com.chatter.client/files".to_string());
+    let _ = ANDROID_DATA_DIR.set(data_dir);
+
     slint::platform::set_platform(Box::new(
         i_slint_backend_android_activity::AndroidPlatform::new(app),
     ))
     .expect("Failed to set Android platform");
 
-    // Android notification sink is constructed here and injected into the
-    // client via ClientBuilder::notification_sink during app_init.
-    // Channel init (API 26+) happens lazily on first show(), or via sink.init().
-
-    // Two-phase startup:
-    // Phase 1: block_on() for async init (client, gRPC channels, window setup)
-    // Phase 2: rt.enter() + window.run() — Slint owns the thread, tokio reactor
-    //          stays accessible via the enter guard, worker threads stay alive
-    //
-    // We MUST NOT call window.run() inside block_on() — that suspends block_on's
-    // polling loop, killing the I/O reactor. gRPC channels bound to this reactor
-    // would stop working.
+    // Two-phase startup (see desktop `app_main` for the same split):
+    //   Phase 1: block_on(app_init) while the reactor is polling.
+    //   Phase 2: leave block_on, enter runtime ctx, run Slint event loop.
+    // Running `window.run()` inside `block_on` would stall the I/O reactor
+    // and kill any in-flight gRPC streams bound to it.
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-    let _ = RT_HANDLE.set(rt.handle().clone());
-
-    // Phase 1: async init inside block_on (reactor is polling here)
     let app_state = rt.block_on(app_init());
-
-    // Phase 2: drop out of block_on, enter runtime context, run Slint event loop.
-    // The enter guard keeps tokio's I/O reactor registered on this thread.
-    // Worker threads remain alive for rt_handle().spawn() from callbacks.
     let _guard = rt.enter();
 
-    setup_keyboard_inset_tracking(&app_state.window);
+    // Safe-area insets (status bar, nav bar, IME) are now bound in `main.slint`
+    // directly off the Window's built-in `safe-area-insets` and
+    // `virtual-keyboard-size` out properties — Slint's Android backend feeds
+    // them via `WindowInsetsCompat`, so no manual JNI polling is needed.
 
     app_run(app_state);
-}
-
-/// Poll Android system bar insets and update Slint safe-area properties.
-///
-/// NativeActivity's GL surface extends behind system bars (status bar, nav bar)
-/// and doesn't resize with `adjustResize`. We poll insets via JNI every 200ms
-/// using WindowInsets API and push changes to the Slint properties that control
-/// content positioning (see `app.slint` lines 771-774).
-#[cfg(target_os = "android")]
-fn setup_keyboard_inset_tracking(window: &MainWindow) {
-    use std::cell::Cell;
-
-    let weak = window.as_weak();
-    let last_top = std::rc::Rc::new(Cell::new(-1.0f32));
-    let last_bottom = std::rc::Rc::new(Cell::new(-1.0f32));
-
-    let timer = slint::Timer::default();
-    timer.start(
-        slint::TimerMode::Repeated,
-        std::time::Duration::from_millis(200),
-        move || {
-            if let Some(insets) = crate::platform::android::query_display_insets() {
-                let top_changed = (insets.top - last_top.get()).abs() > 0.5;
-                let bottom_changed = (insets.bottom - last_bottom.get()).abs() > 0.5;
-
-                if top_changed || bottom_changed {
-                    if let Some(window) = weak.upgrade() {
-                        if top_changed {
-                            window.set_safe_area_top(insets.top);
-                            last_top.set(insets.top);
-                        }
-                        if bottom_changed {
-                            window.set_safe_area_bottom(insets.bottom);
-                            last_bottom.set(insets.bottom);
-                        }
-                        tracing::debug!(
-                            top = insets.top,
-                            bottom = insets.bottom,
-                            "Safe area insets updated"
-                        );
-                    }
-                }
-            }
-        },
-    );
-
-    // Timer must live for the app's lifetime — it runs inside the Slint event loop
-    std::mem::forget(timer);
 }
 
 /// State produced by async init, consumed by the sync event loop.
@@ -142,6 +106,7 @@ pub async fn app_init() -> AppState {
         tracing::warn!("Security: Continuing with debugger detected - sensitive data may be exposed");
     }
 
+    #[cfg(feature = "desktop-media")]
     if let Err(e) = gstreamer::init() {
         tracing::warn!("GStreamer initialization failed: {} (media features may not work)", e);
     } else {
@@ -163,7 +128,14 @@ pub async fn app_init() -> AppState {
     let mut builder = chatter_core::client::ChatterClient::builder();
     #[cfg(target_os = "android")]
     {
-        builder = builder.data_dir("/data/data/com.chatter.client/files");
+        // Prefer the real `Context.getFilesDir()` path set by `android_main`.
+        // Fall back to the hardcoded sandboxed path only when the OnceLock
+        // is somehow unset (should never happen in a real app lifecycle).
+        let data_dir = ANDROID_DATA_DIR
+            .get()
+            .cloned()
+            .unwrap_or_else(|| "/data/data/com.chatter.client/files".to_string());
+        builder = builder.data_dir(data_dir);
 
         let android_sink = std::sync::Arc::new(
             crate::platform::android::AndroidNotifications::new(),
@@ -184,7 +156,10 @@ pub async fn app_init() -> AppState {
     };
     let ui_ctx = client.clone();
 
-    ui_ctx.restore_session();
+    // Async variant so an OIDC session that's near-expiry gets refreshed
+    // before the first RPC runs. Falls back to identical behaviour for
+    // password/device-auth sessions.
+    ui_ctx.restore_session_async().await;
 
     let _typing_cleanup = ui_ctx.start_typing_cleanup();
     tracing::info!("Typing indicator cleanup task started");
@@ -212,15 +187,6 @@ pub async fn app_init() -> AppState {
     // sidebar, bottom nav, etc.) when the screen is narrow.
     #[cfg(target_os = "android")]
     window.set_is_mobile_platform(true);
-
-    // Desktop: explicitly zero safe-area insets (only Android sets non-zero values
-    // via JNI inset polling). Prevents any stale or default-mismatch values from
-    // pushing the content area away from window edges.
-    #[cfg(not(target_os = "android"))]
-    {
-        window.set_safe_area_top(0.0);
-        window.set_safe_area_bottom(0.0);
-    }
 
     if bin_ui::video::init_hw_video(&window) {
         tracing::info!("Hardware-accelerated video enabled");

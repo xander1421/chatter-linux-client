@@ -44,6 +44,7 @@ pub mod unified_message_repo;
 pub mod vector_repo;
 
 pub use attachment_repo::AttachmentRepository;
+pub use call_repo::CallHistoryRepository;
 pub use channel_repo::ChannelRepository;
 pub use draft_repo::DraftRepository;
 pub use ephemeral_repo::EphemeralRepository;

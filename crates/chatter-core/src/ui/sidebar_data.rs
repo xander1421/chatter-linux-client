@@ -273,6 +273,38 @@ impl FriendRequestSendData {
 }
 
 
+/// Send-safe intermediate struct for FriendData (Friends-tab rows).
+/// Unifies server-side friendships and accepted anon-DM peers so both
+/// appear in the same list — `is_anon` is the discriminator, `user_id`
+/// doubles as the anon_dm_id for anon rows.
+#[derive(Clone, Debug)]
+pub struct FriendDataSendData {
+    pub user_id: String,
+    pub display_name: String,
+    pub username: String,
+    pub avatar_url: String,
+    pub avatar_bytes: Option<Vec<u8>>,
+    pub avatar_decoded: Option<(u32, u32, Vec<u8>)>,
+    pub presence_status: String,
+    pub custom_status: String,
+    pub is_anon: bool,
+}
+
+impl FriendDataSendData {
+    pub fn pre_decode_avatar(&mut self) {
+        if self.avatar_decoded.is_some() {
+            return;
+        }
+        if let Some(bytes) = &self.avatar_bytes {
+            if let Ok(img) = image::load_from_memory(bytes) {
+                let rgba = img.to_rgba8();
+                let (w, h) = rgba.dimensions();
+                self.avatar_decoded = Some((w, h, rgba.into_raw()));
+            }
+        }
+    }
+}
+
 /// Convert a presence status string to a hex color for Slint.
 ///
 /// Returns color values matching Colors.online/away/dnd/offline in Slint.

@@ -23,9 +23,7 @@ export component MainWindow inherits Window {
     in property <length> safe-area-top <=> app.safe-area-top;
     in property <length> safe-area-bottom <=> app.safe-area-bottom;
 
-    // ========== Mobile navigation ==========
     in property <bool> is-mobile-platform <=> app.is-mobile-platform;
-    callback mobile-back <=> app.mobile-back;
 
     // ========== View routing ==========
     in-out property <string> current-view <=> app.current-view;
@@ -131,6 +129,8 @@ export component MainWindow inherits Window {
     in-out property <bool> is-dm <=> app.is-dm;
     in property <string> typing-indicator <=> app.typing-indicator;
     in property <string> header-presence-status <=> app.header-presence-status;
+    in property <image> channel-avatar-source <=> app.channel-avatar-source;
+    in property <bool> channel-has-avatar <=> app.channel-has-avatar;
     in property <[MessageItemData]> messages <=> app.messages;
     in property <bool> loading-messages <=> app.loading-messages;
     in property <int> scroll-to-message-index <=> app.scroll-to-message-index;
@@ -516,6 +516,31 @@ export component MainWindow inherits Window {
     callback go-to-login <=> app.go-to-login;
     callback go-to-recovery <=> app.go-to-recovery;
     callback sso-login <=> app.sso-login;
+    callback go-to-link-device <=> app.go-to-link-device;
+
+    // ========== Link Device (new device side) ==========
+    in property <image> link-device-qr <=> app.link-device-qr;
+    in property <string> link-device-url <=> app.link-device-url;
+    in property <string> link-device-status <=> app.link-device-status;
+    in property <string> link-device-error <=> app.link-device-error;
+    in property <bool> link-device-active <=> app.link-device-active;
+    callback link-device-start <=> app.link-device-start;
+    callback link-device-cancel <=> app.link-device-cancel;
+    callback link-device-copy <=> app.link-device-copy;
+
+    // ========== Link Device Approve (primary side) ==========
+    in-out property <string> link-approve-url <=> app.link-approve-url;
+    in-out property <string> link-approve-password <=> app.link-approve-password;
+    in property <string> link-approve-preview-name <=> app.link-approve-preview-name;
+    in property <string> link-approve-preview-server <=> app.link-approve-preview-server;
+    in property <bool> link-approve-preview-ready <=> app.link-approve-preview-ready;
+    in property <string> link-approve-status <=> app.link-approve-status;
+    in property <string> link-approve-error <=> app.link-approve-error;
+    in property <bool> link-approve-busy <=> app.link-approve-busy;
+    callback link-approve-paste-changed <=> app.link-approve-paste-changed;
+    callback link-approve-submit <=> app.link-approve-submit;
+    callback link-approve-open <=> app.link-approve-open;
+    callback link-approve-close <=> app.link-approve-close;
 
     // ========== Welcome page callbacks ==========
     callback welcome-add-friends <=> app.welcome-add-friends;
@@ -706,9 +731,18 @@ export component MainWindow inherits Window {
     in property <string> toast-message <=> app.toast-message;
     in property <string> toast-variant <=> app.toast-variant;
 
-    // App fills the entire window - explicit sizing ensures width flows to children
+    // App fills the entire window - explicit sizing ensures width flows to children.
+    //
+    // Slint 1.15 splits two separate out-props:
+    //   * `safe-area-insets`  — system bars only (status bar / nav bar).
+    //   * `virtual-keyboard-size.height` — IME height when the keyboard is up.
+    // The Android backend feeds them from `WindowInsets.Type.systemBars()` and
+    // `WindowInsets.Type.ime()` respectively, so they must both be subtracted
+    // from the content area to lift the composer above the keyboard.
     app := App {
         width: root.width;
         height: root.height;
+        safe-area-top: root.safe-area-insets.top;
+        safe-area-bottom: root.safe-area-insets.bottom + root.virtual-keyboard-size.height;
     }
 }

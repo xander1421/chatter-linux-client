@@ -55,18 +55,16 @@ impl AnonInboxBackend for AnonDmService {
     fn add_reaction(
         &self, id: &Self::Id, target_sender: &UserId, target_ts_ns: u64,
         reactor: &UserId, emoji: &str,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         AnonDmService::add_reaction(self, id, target_sender, target_ts_ns, reactor, emoji)
-            .map(|_| ())
             .map_err(|e| e.to_string())
     }
 
     fn remove_reaction(
         &self, id: &Self::Id, target_sender: &UserId, target_ts_ns: u64,
         reactor: &UserId, emoji: &str,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         AnonDmService::remove_reaction(self, id, target_sender, target_ts_ns, reactor, emoji)
-            .map(|_| ())
             .map_err(|e| e.to_string())
     }
 

@@ -104,27 +104,5 @@ export component MobileBottomNav inherits Rectangle {
             badge-count: root.chats-badge;
             clicked => { root.tab-selected("chats"); }
         }
-
-        NavTab {
-            icon: Icons.phone;
-            label: "Calls";
-            active: root.active-tab == "calls";
-            clicked => { root.tab-selected("calls"); }
-        }
-
-        NavTab {
-            icon: Icons.users;
-            label: "Contacts";
-            active: root.active-tab == "contacts";
-            badge-count: root.contacts-badge;
-            clicked => { root.tab-selected("contacts"); }
-        }
-
-        NavTab {
-            icon: Icons.settings;
-            label: "Settings";
-            active: root.active-tab == "settings";
-            clicked => { root.tab-selected("settings"); }
-        }
     }
 }

@@ -119,6 +119,39 @@ pub fn dm_to_slint(channel: &Channel, other_user_name: &str, other_user_id: &str
     }
 }
 
+pub trait FriendDataExt {
+    fn to_slint(self) -> crate::FriendData;
+}
+
+impl FriendDataExt for chatter_core::ui::sidebar_data::FriendDataSendData {
+    fn to_slint(self) -> crate::FriendData {
+        let (avatar_source, has_avatar) = if let Some((w, h, pixels)) = self.avatar_decoded {
+            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                &pixels, w, h,
+            );
+            (slint::Image::from_rgba8(buffer), true)
+        } else if let Some(bytes) = &self.avatar_bytes {
+            match avatar_bytes_to_image(bytes) {
+                Some(img) => (img, true),
+                None => (slint::Image::default(), false),
+            }
+        } else {
+            (slint::Image::default(), false)
+        };
+        crate::FriendData {
+            user_id: self.user_id.into(),
+            display_name: self.display_name.into(),
+            username: self.username.into(),
+            avatar_url: self.avatar_url.into(),
+            presence_status: self.presence_status.into(),
+            custom_status: self.custom_status.into(),
+            is_anon: self.is_anon,
+            avatar_source,
+            has_avatar,
+        }
+    }
+}
+
 pub trait FriendRequestExt {
     fn to_slint(self) -> crate::FriendRequestData;
 }

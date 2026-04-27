@@ -110,6 +110,19 @@ export component ChannelListItem inherits Rectangle {
                 }
             }
         }
+
+        // Invite-only indicator on the far-right — green lock marks a
+        // private (gated) channel. Placed after the unread badge so it's
+        // visible regardless of unread state.
+        if root.channel-type == "private": VerticalLayout {
+            alignment: center;
+            Image {
+                source: Icons.lock;
+                width: 12px;
+                height: 12px;
+                colorize: Colors.success;
+            }
+        }
     }
 
     // Collapsed content layout - centered icon with badge overlay and self-contained tooltip

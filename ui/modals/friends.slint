@@ -17,6 +17,14 @@ export struct FriendData {
     avatar-url: string,
     presence-status: string,  // "online", "away", "dnd", "offline"
     custom-status: string,
+    // Anonymous contact flag. When true, `user-id` is the anon_dm_id and
+    // selecting the row opens the anon-DM conversation instead of the
+    // user profile. Anon rows carry avatars as bytes (no URL), so the
+    // Avatar component falls back to `avatar-source` when `has-avatar`
+    // is true.
+    is-anon: bool,
+    avatar-source: image,
+    has-avatar: bool,
 }
 
 // Search result for finding users
@@ -444,21 +452,38 @@ export component FriendsModal inherits Rectangle {
                                 }
                             }
 
-                            // QR Code Display
+                            // QR Code Display — theme-aware card with a small
+                            // white quiet-zone around the QR itself so camera
+                            // scanners still get the required light background.
                             if root.show-qr && root.my-code != "": Rectangle {
-                                height: 180px;
-                                background: white;
+                                background: Colors.neo-inset-bg;
                                 border-radius: Spacing.radius-md;
+                                border-width: 1px;
+                                border-color: Colors.neo-inset-shadow;
 
                                 VerticalLayout {
                                     alignment: center;
-                                    padding: Spacing.sm;
+                                    padding: Spacing.md;
+                                    spacing: Spacing.sm;
 
-                                    Image {
-                                        source: root.qr-code-image;
-                                        width: 150px;
-                                        height: 150px;
-                                        image-fit: contain;
+                                    // Centered white tile — wide enough for the
+                                    // QR plus ~8px quiet-zone padding each side.
+                                    HorizontalLayout {
+                                        alignment: center;
+
+                                        Rectangle {
+                                            width: 168px;
+                                            height: 168px;
+                                            background: white;
+                                            border-radius: Spacing.radius-sm;
+
+                                            Image {
+                                                source: root.qr-code-image;
+                                                width: 150px;
+                                                height: 150px;
+                                                image-fit: contain;
+                                            }
+                                        }
                                     }
 
                                     Text {

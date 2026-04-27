@@ -48,6 +48,13 @@ impl AttachmentDisplayData {
         if self.thumbnail_pixels.is_some() {
             return; // Already decoded
         }
+        // Audio / generic file attachments never have thumbnail bitmaps —
+        // skip the decode to avoid `image` noisily failing on a FLAC/OGG/etc.
+        // header. Videos still go through here: the video thumbnail is
+        // sender-provided as a JPEG/PNG in `thumbnail_bytes`.
+        if !self.is_image && !self.is_video {
+            return;
+        }
         if !self.thumbnail_bytes.is_empty() {
             self.thumbnail_pixels = image::load_from_memory(&self.thumbnail_bytes)
                 .ok()
@@ -139,8 +146,12 @@ impl AttachmentDisplayData {
             } else {
                 (false, Image::default(), self.width, self.height)
             }
-        } else {
+        } else if self.is_image || self.is_video {
+            // Only log when a thumbnail was actually expected (image/video);
+            // audio and generic files never have one, so suppress the noise.
             tracing::info!("No thumbnail source available for {}", self.filename);
+            (false, Image::default(), self.width, self.height)
+        } else {
             (false, Image::default(), self.width, self.height)
         };
 

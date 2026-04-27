@@ -290,4 +290,87 @@ impl ChannelService {
 
         Ok(())
     }
+
+    /// Mute a user in a channel (local-only — flips `is_muted` on the
+    /// channel membership). `duration` bounds the mute via `muted_until`.
+    /// Server-side enforcement happens via ChannelModeration events.
+    pub fn mute_user(
+        &self,
+        channel_id: &ChannelId,
+        user_id: &UserId,
+        duration: std::time::Duration,
+    ) -> Result<(), ChannelError> {
+        let _ = self.settings_repo.current_user_id()?;
+        let mut membership = self
+            .channel_repo
+            .get_membership(channel_id, user_id)?
+            .ok_or_else(|| ChannelError::InvalidInput(format!(
+                "user {} not a member of channel {}",
+                user_id, channel_id
+            )))?;
+        let chrono_duration = chrono::Duration::from_std(duration)
+            .unwrap_or(chrono::Duration::hours(1));
+        membership.is_muted = true;
+        membership.muted_until = Some(chrono::Utc::now() + chrono_duration);
+        self.channel_repo
+            .update_membership(&membership)
+            .map_err(ChannelError::Storage)?;
+        Ok(())
+    }
+
+    /// Unmute a user in a channel — clears `is_muted` on the membership.
+    pub fn unmute_user(
+        &self,
+        channel_id: &ChannelId,
+        user_id: &UserId,
+    ) -> Result<(), ChannelError> {
+        let _ = self.settings_repo.current_user_id()?;
+        let mut membership = self
+            .channel_repo
+            .get_membership(channel_id, user_id)?
+            .ok_or_else(|| ChannelError::InvalidInput(format!(
+                "user {} not a member of channel {}",
+                user_id, channel_id
+            )))?;
+        membership.is_muted = false;
+        membership.muted_until = None;
+        self.channel_repo
+            .update_membership(&membership)
+            .map_err(ChannelError::Storage)?;
+        Ok(())
+    }
+
+    /// Ban + distribute the rotated sender key + unblock sending. Same
+    /// orchestration as `kick_user_complete` so the client façade doesn't
+    /// have to stitch three services together.
+    pub async fn ban_user_complete(
+        &self,
+        channel_id: &ChannelId,
+        user_id: &UserId,
+        duration: Option<std::time::Duration>,
+        reason: Option<&str>,
+    ) -> Result<(), ChannelError> {
+        let skdm = self.ban_user(channel_id, user_id, duration, reason).await?;
+
+        if let Err(e) = self.message_service.distribute_skdm(channel_id, &skdm).await {
+            tracing::error!(
+                channel_id = %channel_id,
+                error = %e,
+                "Failed to distribute SKDM after ban — sending remains blocked"
+            );
+            return Err(ChannelError::SenderKeyRotationFailed(
+                format!("SKDM distribution failed after ban: {e}"),
+            ));
+        }
+
+        if let Err(e) = self.signal_service.unblock_channel_send(channel_id) {
+            tracing::warn!(
+                channel_id = %channel_id,
+                error = %e,
+                "Failed to unblock channel send after ban"
+            );
+        }
+
+        Ok(())
+    }
 }

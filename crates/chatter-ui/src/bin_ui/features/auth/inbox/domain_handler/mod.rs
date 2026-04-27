@@ -69,6 +69,11 @@ pub async fn handle_domain_event(
         // =========================================================================
         DomainEvent::FriendAccepted { friend_id, channel_id } => {
             social::handle_friend_accepted(window, ui_ctx, friend_id, channel_id);
+            // Friend just became mutual → Friends-tab list grows.
+            crate::bin_ui::features::auth::initial_data::refresh_friends_list(
+                window.clone(),
+                ui_ctx.clone(),
+            );
         }
 
         // =========================================================================
@@ -368,6 +373,11 @@ pub async fn handle_domain_event(
 
         DomainEvent::AnonDmRequestAccepted { conversation_id, peer_id, .. } => {
             anon::handle_dm_request_accepted(window, ui_ctx, conversation_id, peer_id);
+            // Accepted → anon peer becomes a Friends-tab contact.
+            crate::bin_ui::features::auth::initial_data::refresh_friends_list(
+                window.clone(),
+                ui_ctx.clone(),
+            );
         }
 
         DomainEvent::AnonDmInitReceived { .. } => {
@@ -501,6 +511,11 @@ pub async fn handle_domain_event(
             social::handle_anon_dm_profile_updated(
                 window, ui_ctx, conversation_id, user_id, display_name, avatar, avatar_url, bio, timestamp,
             );
+            // Name/avatar changed — refresh Friends-tab row too.
+            crate::bin_ui::features::auth::initial_data::refresh_friends_list(
+                window.clone(),
+                ui_ctx.clone(),
+            );
         }
 
         // Handled by EventHandlers state store (appends to message_state)
@@ -513,5 +528,74 @@ pub async fn handle_domain_event(
 
         // Sync events — UI can subscribe for progress display
         DomainEvent::SyncComplete { .. } => {}
+
+        // Multi-device lifecycle: a sibling device just joined this account.
+        // Log it (OS toast already fired from core via NotificationService)
+        // and refresh the sessions/devices modal if it's currently open so
+        // the new entry appears without manual re-fetch.
+        DomainEvent::DeviceLinked { device_name, approved_by_self, .. } => {
+            let label = device_name.unwrap_or_else(|| "a new device".to_string());
+            if approved_by_self {
+                tracing::info!(device = %label, "Approved + linked");
+            } else {
+                tracing::info!(device = %label, "New device linked to account");
+            }
+
+            // Always refresh on DeviceLinked — cheap (one ListDevices RPC) and
+            // means the sessions/devices modal shows the new entry without
+            // the user having to close + reopen it. If the modal is closed,
+            // the freshly-set model just sits in memory until next open.
+            let weak = window.clone();
+            let ui_ctx_for_refresh = ui_ctx.clone();
+            crate::rt_handle().spawn(async move {
+                match ui_ctx_for_refresh.list_sessions().await {
+                    Ok(sessions) => {
+                        let slint_sessions: Vec<crate::SessionInfo> = sessions
+                            .into_iter()
+                            .map(|s| crate::SessionInfo {
+                                device_id: s.device_id as i32,
+                                device_info: s.device_info.into(),
+                                ip_address: s.ip_address.into(),
+                                last_used: s
+                                    .last_used
+                                    .with_timezone(&chrono::Local)
+                                    .format("%Y-%m-%d %H:%M")
+                                    .to_string()
+                                    .into(),
+                                created_at: s
+                                    .created_at
+                                    .with_timezone(&chrono::Local)
+                                    .format("%Y-%m-%d")
+                                    .to_string()
+                                    .into(),
+                                is_current: s.is_current,
+                            })
+                            .collect();
+                        let count = slint_sessions.len() as i32;
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                w.set_sessions(slint::ModelRc::new(
+                                    slint::VecModel::from(slint_sessions),
+                                ));
+                                w.set_settings_session_count(count);
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to refresh sessions on DeviceLinked");
+                    }
+                }
+            });
+        }
+        // Events with no UI render — core handles the work, UI doesn't
+        // surface anything to the user.
+        DomainEvent::PushWakeup { .. } => {}
+        DomainEvent::SessionResetRequested { .. } => {}
+        DomainEvent::PeerDevicesChanged { .. } => {}
+        DomainEvent::PreKeyRefreshNeeded { .. } => {}
+        // Incoming calls are surfaced via a dedicated IncomingCallData
+        // channel + IncomingCallModal — handled outside this inbox
+        // domain-event path.
+        DomainEvent::IncomingCall { .. } => {}
     }
 }

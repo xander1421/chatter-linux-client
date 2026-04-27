@@ -63,6 +63,11 @@ export component ChatHeader inherits Rectangle {
     in property <string> typing-indicator: "";
     in property <string> presence-status: "offline";
 
+    // Optional custom channel/peer avatar — replaces the type glyph (#, @,
+    // shield, lock, bookmark) when the owner uploaded an icon.
+    in property <image> avatar-source;
+    in property <bool> has-avatar: false;
+
     // Jarvis AI thinking state
     in-out property <bool> jarvis-thinking: false;
 
@@ -128,32 +133,40 @@ export component ChatHeader inherits Rectangle {
                 clicked => { root.back-clicked(); }
             }
 
-            // Encryption indicator — always visible
-            VerticalLayout {
-                alignment: center;
-                Rectangle {
-                    width: 20px;
-                    height: 20px;
-                    Image {
-                        source: Icons.shield;
-                        width: 14px;
-                        height: 14px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        colorize: Colors.success;
-                    }
+            // Single leading icon per conversation type — no standalone
+            // "encrypted" shield (E2E is already implied by the purple shield
+            // on anon / private-group chats and by app-wide guarantees).
+            //
+            //   has-avatar     → channel icon (overrides the type glyph)
+            //   public         → `#`          (muted)
+            //   private        → lock         (muted) — invite-only channel
+            //   dm             → `@` + dot    (peer presence)
+            //   anon-dm        → purple shield
+            //   private-group  → purple shield
+            //   saved          → bookmark
+
+            if root.has-avatar: Rectangle {
+                width: 28px;
+                height: 28px;
+                border-radius: 14px;
+                clip: true;
+                y: (parent.height - self.height) / 2;
+                Image {
+                    source: root.avatar-source;
+                    width: 100%;
+                    height: 100%;
+                    image-fit: cover;
                 }
             }
 
-            // Channel icon - varies by type
-            if channel-type == "public": Text {
+            if !root.has-avatar && channel-type == "public": Text {
                 text: "#";
                 color: Colors.text-muted;
                 font-size: Typography.lg;
                 vertical-alignment: center;
             }
 
-            if is-private: Rectangle {
+            if !root.has-avatar && is-private: Rectangle {
                 width: 20px;
                 height: 20px;
                 y: (parent.height - self.height) / 2;
@@ -167,7 +180,7 @@ export component ChatHeader inherits Rectangle {
                 }
             }
 
-            if is-dm: HorizontalLayout {
+            if !root.has-avatar && is-dm: HorizontalLayout {
                 spacing: 4px;
                 alignment: center;
                 Text {
@@ -188,12 +201,12 @@ export component ChatHeader inherits Rectangle {
                 }
             }
 
-            if is-anon-dm: Rectangle {
+            if !root.has-avatar && (is-anon-dm || is-private-group): Rectangle {
                 width: 20px;
                 height: 20px;
                 y: (parent.height - self.height) / 2;
                 Image {
-                    source: Icons.lock;
+                    source: Icons.shield;
                     width: 16px;
                     height: 16px;
                     x: (parent.width - self.width) / 2;
@@ -202,21 +215,7 @@ export component ChatHeader inherits Rectangle {
                 }
             }
 
-            if is-private-group: Rectangle {
-                width: 20px;
-                height: 20px;
-                y: (parent.height - self.height) / 2;
-                Image {
-                    source: Icons.users;
-                    width: 16px;
-                    height: 16px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    colorize: Colors.primary;
-                }
-            }
-
-            if is-saved: Rectangle {
+            if !root.has-avatar && is-saved: Rectangle {
                 width: 20px;
                 height: 20px;
                 y: (parent.height - self.height) / 2;

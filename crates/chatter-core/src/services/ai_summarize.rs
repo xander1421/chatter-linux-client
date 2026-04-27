@@ -393,6 +393,7 @@ mod tests {
             id: "msg-1".to_string(),
             channel_id: "channel-1".to_string(),
             author_id: author_id.to_string(),
+            author_device_id: 0,
             parent_id: String::new(),
             content: Some(Content {
                 r#type: Some(Type::Text(text.to_string())),

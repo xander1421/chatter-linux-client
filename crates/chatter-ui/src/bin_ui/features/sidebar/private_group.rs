@@ -142,7 +142,9 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
             w.set_member_count(member_count);
             w.set_topic("".into());
             w.set_header_presence_status("offline".into());
-            
+            w.set_channel_has_avatar(false);
+            w.set_channel_avatar_source(slint::Image::default());
+
             // Convert and set messages
             let slint_messages: Vec<_> = display_messages
                 .iter()
@@ -298,6 +300,8 @@ async fn load_private_group_messages_internal(
         w.set_member_count(member_count);
         w.set_topic("".into());
         w.set_header_presence_status("offline".into());
+        w.set_channel_has_avatar(false);
+        w.set_channel_avatar_source(slint::Image::default());
 
         let slint_messages: Vec<_> = display_messages.iter().map(|m| m.to_slint_with_user(&current_user_id_str)).collect();
         w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
