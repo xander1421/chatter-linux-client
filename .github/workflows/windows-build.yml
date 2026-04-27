@@ -80,7 +80,10 @@ jobs:
       - name: Build (no local-ai)
         env:
           RUSTC_WRAPPER: ""
-          RUSTFLAGS: "-Ctarget-feature=+crt-static"
+          # rustflags (crt-static + /FORCE:MULTIPLE) come from
+          # .cargo/config.toml under [target.x86_64-pc-windows-msvc]. Do NOT
+          # set RUSTFLAGS here — env-level rustflags fully replace the config
+          # file rustflags, dropping /FORCE:MULTIPLE and re-breaking the link.
         run: cargo build --release
 
       - name: Bundle release artifact
