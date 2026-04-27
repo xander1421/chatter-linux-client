@@ -817,7 +817,7 @@ pub fn refresh_dm_list(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     presence_status: "online".to_string(),
                     last_message,
                     timestamp,
-                    unread_count: 0,
+                    unread_count: channel.unread_count,
                     is_typing: false,
                     is_anon: false,
                 };
