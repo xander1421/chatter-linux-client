@@ -272,3 +272,77 @@ fn update_dm_avatar(w: &MainWindow, channel_id: &str, bytes: &[u8]) {
         }
     }
 }
+
+/// Handle server-managed user profile updated event.
+///
+/// Mirrors `handle_anon_dm_profile_updated` but matches DM rows by
+/// `user_id` (server DMs are channel-scoped, but the row carries the
+/// peer user_id). Updates display name + status in sidebar, chat
+/// header, and profile modal in real-time.
+pub(super) fn handle_user_profile_updated(
+    window: &Weak<MainWindow>,
+    user_id: UserId,
+    display_name: String,
+    avatar_url: Option<String>,
+    status_message: Option<String>,
+    timestamp: u64,
+) {
+    tracing::info!(
+        user_id = %user_id,
+        %display_name,
+        ?avatar_url,
+        ?status_message,
+        timestamp,
+        "Server-managed user profile updated"
+    );
+
+    let weak = window.clone();
+    let user_id_str = user_id.to_string();
+    let display_name_slint: slint::SharedString = display_name.clone().into();
+    let initials = compute_initials(&display_name);
+
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(w) = weak.upgrade() else { return };
+
+        // 1. Sidebar DM rows — update display name + initials for matching peer.
+        let dms = w.get_dm_conversations();
+        for i in 0..dms.row_count() {
+            if let Some(mut dm) = dms.row_data(i) {
+                if dm.user_id == user_id_str {
+                    dm.display_name = display_name_slint.clone();
+                    dm.initials = initials.clone().into();
+                    dms.set_row_data(i, dm);
+                    break;
+                }
+            }
+        }
+
+        // 2. Chat header for active server DM.
+        if w.get_is_dm() {
+            for i in 0..dms.row_count() {
+                if let Some(dm) = dms.row_data(i) {
+                    if dm.is_selected && dm.user_id == user_id_str {
+                        w.set_channel_name(display_name_slint.clone());
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 3. Profile modal if currently showing this user.
+        if w.get_profile_user_id() == user_id_str {
+            w.set_profile_display_name(display_name_slint.clone());
+            if let Some(status) = status_message {
+                w.set_profile_status_text(status.into());
+            }
+        }
+    });
+}
+
+fn compute_initials(name: &str) -> String {
+    name.split_whitespace()
+        .filter_map(|w| w.chars().next())
+        .take(2)
+        .collect::<String>()
+        .to_uppercase()
+}

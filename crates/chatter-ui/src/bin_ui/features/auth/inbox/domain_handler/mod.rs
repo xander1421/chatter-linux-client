@@ -592,10 +592,24 @@ pub async fn handle_domain_event(
         DomainEvent::PushWakeup { .. } => {}
         DomainEvent::SessionResetRequested { .. } => {}
         DomainEvent::PeerDevicesChanged { .. } => {}
-        // Profile already upserted by core; sidebar/header rerender on
-        // next refresh tick reads the new display name + avatar via
-        // user_repo. No immediate UI surfacing required.
-        DomainEvent::UserProfileUpdated { .. } => {}
+        // Server-managed profile updated. Core already upserted user_repo.
+        // Refresh display_name + status across sidebar / header / profile
+        // modal in real time, then refresh friends-list (Friends tab).
+        DomainEvent::UserProfileUpdated {
+            user_id,
+            display_name,
+            avatar_url,
+            status_message,
+            timestamp,
+        } => {
+            social::handle_user_profile_updated(
+                window, user_id, display_name, avatar_url, status_message, timestamp,
+            );
+            crate::bin_ui::features::auth::initial_data::refresh_friends_list(
+                window.clone(),
+                ui_ctx.clone(),
+            );
+        }
         // Incoming calls are surfaced via a dedicated IncomingCallData
         // channel + IncomingCallModal — handled outside this inbox
         // domain-event path.
