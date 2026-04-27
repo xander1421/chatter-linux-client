@@ -47,7 +47,7 @@ aes-gcm = "0.10"
 aes = "0.8"
 cbc = "0.1"
 block-padding = "0.3"
-openssl = "0.10"
+openssl = { version = "0.10", features = ["vendored"] }
 chacha20poly1305 = "0.10"
 hpke = "0.12"
 x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
@@ -63,7 +63,7 @@ qrcode = "0.14"
 # ============================================================================
 # Database (SQLite + SQLCipher)
 # ============================================================================
-rusqlite = { version = "0.32", features = ["bundled-sqlcipher", "unlock_notify", "blob"] }
+rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl", "unlock_notify", "blob"] }
 memmap2 = "0.9"
 
 # ============================================================================
@@ -216,3 +216,12 @@ desktop-gstreamer = [
 # Compat alias — previous callers (desktop-cli, chatter-ui) keep working.
 desktop-media = ["media", "desktop-gstreamer"]
 local-ai = ["dep:mistralrs"]
+# Widens `ChatterClient` service accessors to `pub` so integration tests in
+# this crate's `tests/` directory (which are external consumers) can wire
+# real services against a live server. Do NOT enable for application builds —
+# chatter-ui must stay behind the façade.
+testing = []
+
+[package.metadata.docs.rs]
+# Enable the `testing` feature in generated docs so accessors appear.
+features = ["testing"]

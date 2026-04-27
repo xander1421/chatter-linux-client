@@ -2,7 +2,19 @@
 
 [target.x86_64-unknown-linux-gnu]
 linker = "clang"
-rustflags = ["-C", "link-arg=-fuse-ld=mold", "-C", "target-cpu=native"]
+# `--allow-multiple-definition`: webrtc-sys statically bundles BoringSSL and
+# openssl-sys (vendored) bundles OpenSSL; both export the same crypto symbols
+# (RSA_padding_*, PKCS1_MGF1, vpaes_*, …). mold refuses the duplicates. The
+# linker picks the first definition it sees (openssl-sys, since it's higher
+# in the link order) — BoringSSL in webrtc-sys is only used for DTLS/SRTP in
+# the WebRTC stack, and those paths don't reach this binary at runtime, so
+# the collision is benign. Required for the desktop build after the link-device
+# work pulled libsignal + webrtc into the same link target.
+rustflags = [
+    "-C", "link-arg=-fuse-ld=mold",
+    "-C", "link-arg=-Wl,--allow-multiple-definition",
+    "-C", "target-cpu=native",
+]
 
 [build]
 # Use sccache for compilation caching
@@ -14,3 +26,11 @@ jobs = 8
 [env]
 # Reduce debug info for faster builds (set to 2 for full debugging)
 CARGO_PROFILE_DEV_DEBUG = "0"
+# webrtc-sys 0.3.24 auto-compiles a VA-API H.264 encoder shim when
+# `libva.pc` is detected. The shim `#include`s internal webrtc headers
+# (`rtc_base/logging.h`, `rtc_base/checks.h`) that the prebuilt doesn't ship,
+# breaking the build. Route `pkg-config` through a wrapper that reports
+# `libva` as missing so webrtc-sys takes the non-VAAPI path. `LIBVA_NO_PKG_CONFIG`
+# alone doesn't help here because webrtc-sys uses `pkg_config::get_variable`
+# (which doesn't honor the `_NO_PKG_CONFIG` guards).
+PKG_CONFIG = { value = "tools/pkg-config-nolibva", relative = true }

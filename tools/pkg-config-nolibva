@@ -1,0 +1,14 @@
+#!/bin/sh
+# Shim around pkg-config that treats `libva` as missing. webrtc-sys 0.3.24
+# auto-builds a broken VA-API encoder shim when the system's `libva.pc` is
+# found — it pulls in internal webrtc headers the prebuilt doesn't ship.
+# Filter the package list before forwarding.
+
+for arg in "$@"; do
+    case "$arg" in
+        libva|libva-drm|libva-x11|libva-wayland)
+            exit 1
+            ;;
+    esac
+done
+exec pkg-config "$@"

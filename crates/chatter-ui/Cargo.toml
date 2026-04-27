@@ -112,7 +112,7 @@ desktop-media-no-livekit = [
     "dep:gstreamer-gl-egl", "dep:glutin_egl_sys"
 ]
 local-ai = ["chatter-core/local-ai"]
-mobile = ["dep:i-slint-backend-android-activity", "dep:android-activity", "slint/backend-android-activity-06"]
+mobile = ["dep:i-slint-backend-android-activity", "dep:android-activity", "slint/backend-android-activity-06", "slint/std"]
 
 # =============================================================================
 # Android Metadata (for cargo-apk)
@@ -140,10 +140,16 @@ name = "android.permission.POST_NOTIFICATIONS"
 
 [[package.metadata.android.activity]]
 config_changes = "orientation|screenSize|keyboardHidden"
-# adjustResize makes Android shrink the window when keyboard appears
+# adjustResize is what Slint's Android backend expects: it fires the
+# WindowInsetsAnimationCallback / OnGlobalLayoutListener that populates
+# `Window.safe-area-insets` and `virtual-keyboard-size`. We no longer do our
+# own JNI inset polling, so the manifest must match Slint's default.
 window_soft_input_mode = "adjustResize"
 
-# Release signing: set CHATTER_KEYSTORE_PATH and CHATTER_KEYSTORE_PASSWORD env vars.
-# [package.metadata.android.signing.release]
-# path = "${CHATTER_KEYSTORE_PATH}"
-# keystore_password = "${CHATTER_KEYSTORE_PASSWORD}"
+# Release signing — for local dev builds we reuse Android's debug keystore
+# (same one Android Studio uses). Production release builds should replace this
+# with a proper keystore and password. The device trusts this signature for
+# testing; the Play Store rejects APKs signed with it.
+[package.metadata.android.signing.release]
+path = "/home/alex/.android/debug.keystore"
+keystore_password = "android"
