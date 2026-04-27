@@ -172,6 +172,84 @@ pub enum DomainEvent {
     SavedMessageSynced {
         message: crate::domain::message::Message,
     },
+
+    // ========================================================================
+    // Multi-Device Lifecycle Events
+    // ========================================================================
+
+    /// A new linked device has joined this account.
+    ///
+    /// Fired on the *approving* primary device immediately after a successful
+    /// `provision_device` upload, and on *all other already-linked devices*
+    /// once the server fans out a device-add notification (server support
+    /// pending — see `project_multidevice_fanout_audit.md`).
+    ///
+    /// UI should surface a non-blocking toast / banner so the user can
+    /// confirm or revoke an unexpected pairing.
+    DeviceLinked {
+        /// Server-assigned device ID for the newly-linked device.
+        device_id: u32,
+        /// User-supplied device name from the QR payload, if any.
+        device_name: Option<String>,
+        /// Platform/model string supplied by the new device.
+        device_info: Option<String>,
+        /// True if this notification is being delivered to the device that
+        /// approved the link (versus a third device receiving fan-out).
+        approved_by_self: bool,
+    },
+
+    /// Server-initiated Signal session reset. Client wipes its local
+    /// ratchet / chain-key state with `peer_user_id` (or a specific
+    /// `peer_device_id` if set) so the next send rebuilds via X3DH.
+    /// Emitted by the gRPC notification stream consumer on SESSION_RESET.
+    SessionResetRequested {
+        peer_user_id: UserId,
+        /// When None, drop every session with every device of peer_user_id.
+        peer_device_id: Option<u32>,
+    },
+
+    /// A peer who shares a channel with the local user added or revoked a
+    /// device. Consumer must invalidate cached Signal sessions for
+    /// `peer_user_id` and re-distribute sender keys on next group send.
+    PeerDevicesChanged {
+        peer_user_id: UserId,
+        /// The device that was added or revoked.
+        device_id: u32,
+        /// `"added"` or `"revoked"`. Clients may use this to decide
+        /// whether to proactively fetch the new device's prekeys (added)
+        /// or just prune stale session state (revoked).
+        change_type: String,
+    },
+
+    /// Server maintenance workflow flagged this device's signed prekey as
+    /// stale OR its one-time prekey pool as low. Consumer calls
+    /// `RefreshPreKeys` RPC with fresh rotation material.
+    PreKeyRefreshNeeded {
+        /// Device this notification was emitted for.
+        device_id: u32,
+        /// Age of the current signed prekey in days (0 if not stale yet).
+        signed_prekey_age_days: u32,
+        /// Count of unused one-time prekeys remaining.
+        unused_otpk_count: u32,
+        stale_signed_prekey: bool,
+        low_otpk_pool: bool,
+    },
+    /// Incoming call presented by the call orchestrator. Bridged from
+    /// `CallOrchestratorEvent::IncomingPresented` so the desktop
+    /// notification listener (or any other domain-bus subscriber) can
+    /// surface an urgent toast even when the in-app call modal isn't
+    /// open. `peer_name` is the orchestrator's best-effort display name
+    /// (user-supplied or falls back to peer_id).
+    IncomingCall {
+        call_id: String,
+        peer_id: UserId,
+        peer_name: String,
+        is_video: bool,
+        /// Group channel context when the call is rung into a channel,
+        /// None for 1:1 DM calls.
+        channel_context: Option<String>,
+    },
+
     /// Call hangup received from peer (remote call ended).
     CallHangupReceived {
         call_id: String,
@@ -466,6 +544,36 @@ pub enum DomainEvent {
         messages_synced: usize,
         duration_ms: u64,
     },
+
+    /// Self-hosted ntfy push wake-up received.
+    ///
+    /// Fires whenever the `PushListener` receives an SSE `message` event from
+    /// the configured ntfy instance. The core uses this to trigger a one-shot
+    /// mailbox sync so any new messages are pulled; the UI can also react
+    /// (e.g., to animate an incoming-message indicator). The variant is
+    /// deliberately narrow — only the topic and privacy kind are exposed so
+    /// no server-supplied body text can leak into domain-logic code paths.
+    PushWakeup {
+        /// The ntfy topic the wake-up arrived on (already HMAC-obfuscated
+        /// by the server — purely opaque to the client).
+        topic: String,
+        /// Which privacy mode the backend is running in.
+        kind: PushKind,
+    },
+}
+
+/// Privacy mode of a push notification received from self-hosted ntfy.
+///
+/// Mirrors the server's `NTFY_PUSH_MODE` setting (see
+/// `internal/services/notification/push/ntfy.go`). Derived from the message
+/// body: in `content_free` mode the backend always sends the literal string
+/// `"New activity"`; anything else implies `full` mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PushKind {
+    /// Server is in content-free mode: wake-up only, no content leaks to ntfy.
+    ContentFree,
+    /// Server is in full mode: title/body contain sender + preview.
+    Full,
 }
 
 impl DomainEvent {
@@ -490,6 +598,8 @@ impl DomainEvent {
             DomainEvent::GroupMailboxReceived { channel_id, .. } => Some(*channel_id),
             DomainEvent::DeleteForMeSync { conversation_id, .. } => Some(*conversation_id),
             DomainEvent::SavedMessageSynced { message } => Some(message.conversation_id),
+            DomainEvent::DeviceLinked { .. } => None,
+            DomainEvent::IncomingCall { .. } => None,
             DomainEvent::CallHangupReceived { .. } => None,
             DomainEvent::CallKeyAnswerReceived { .. } => None,
             DomainEvent::GroupCallKeyReceived { channel_id, .. } => Some(*channel_id),
@@ -525,6 +635,10 @@ impl DomainEvent {
             DomainEvent::JarvisStats { .. } => None,
             DomainEvent::JarvisCleared { .. } => None,
             DomainEvent::SyncComplete { .. } => None,
+            DomainEvent::PushWakeup { .. } => None,
+            DomainEvent::SessionResetRequested { .. } => None,
+            DomainEvent::PeerDevicesChanged { .. } => None,
+            DomainEvent::PreKeyRefreshNeeded { .. } => None,
         }
     }
 

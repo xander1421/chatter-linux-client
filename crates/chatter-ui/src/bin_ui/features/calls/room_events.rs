@@ -8,6 +8,7 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::calls::LiveKitRoomEvent;
+use crate::bin_ui::converters::get_initials;
 use crate::{CallParticipantData, MainWindow};
 
 /// Wire room events to update UI (participant count, etc.).
@@ -71,6 +72,7 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                         // Replace placeholder (e.g. "Anonymous") with real identity
                                         p.user_id = identity.clone().into();
                                         p.display_name = display.clone().into();
+                                        p.initials = get_initials(&display).into();
                                         break;
                                     }
                                 }
@@ -83,10 +85,13 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             data.participant_count += 1;
 
                             // Add participant to list
+                            let new_initials = get_initials(&display);
                             let new_participant = CallParticipantData {
                                 user_id: identity.into(),
                                 display_name: display.into(),
+                                initials: new_initials.into(),
                                 avatar_url: "".into(),
+                                avatar_source: slint::Image::default(),
                                 is_muted: false,
                                 is_video_enabled: false,
                                 is_screen_sharing: false,

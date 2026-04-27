@@ -554,6 +554,149 @@ impl std::fmt::Debug for MobileCallSetup {
     }
 }
 
+// ============================================================================
+// Call History (local-only record of past calls)
+// ============================================================================
+
+/// Kind of peer a call was with.
+///
+/// Maps directly to the `peer_type` column in the `call_history` table
+/// (`'user' | 'anon' | 'group'`). Kept distinct from `CallType` because a
+/// video group call and a voice group call share a peer_type but differ
+/// in `has_video`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CallHistoryPeerType {
+    /// A known user (DM / channel call).
+    User,
+    /// An anonymous-DM peer (onion-style).
+    Anon,
+    /// A group call (anon group or regular channel group call).
+    Group,
+}
+
+impl CallHistoryPeerType {
+    /// Serialize for the `peer_type` TEXT column.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Anon => "anon",
+            Self::Group => "group",
+        }
+    }
+
+    /// Parse a `peer_type` TEXT column value.
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "user" => Some(Self::User),
+            "anon" => Some(Self::Anon),
+            "group" => Some(Self::Group),
+            _ => None,
+        }
+    }
+}
+
+/// Direction of the call relative to this device.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CallDirection {
+    Incoming,
+    Outgoing,
+}
+
+impl CallDirection {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Incoming => "incoming",
+            Self::Outgoing => "outgoing",
+        }
+    }
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "incoming" => Some(Self::Incoming),
+            "outgoing" => Some(Self::Outgoing),
+            _ => None,
+        }
+    }
+}
+
+/// Outcome of a historical call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CallResult {
+    /// Call connected and was hung up normally.
+    Completed,
+    /// Incoming call that was never answered (ringing expired / user away).
+    Missed,
+    /// Explicitly rejected by either side before connecting.
+    Declined,
+    /// Setup error (network, LiveKit, signaling failure).
+    Failed,
+}
+
+impl CallResult {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Missed => "missed",
+            Self::Declined => "declined",
+            Self::Failed => "failed",
+        }
+    }
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "completed" => Some(Self::Completed),
+            "missed" => Some(Self::Missed),
+            "declined" => Some(Self::Declined),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+/// A single entry in the local call history.
+///
+/// Written by the call signaling service when observable events occur
+/// (start, accept, decline, end, missed). Read by the UI via the bridge's
+/// `get_call_history` RPC. Purely local — no server sync until a call-history
+/// RPC exists.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CallHistoryEntry {
+    /// Stable local ID (typically the signaling `call_id` / room name).
+    pub id: String,
+    /// Remote peer identifier (user id, anon id, or group id — opaque to repo).
+    pub peer_id: String,
+    /// Peer entity kind.
+    pub peer_type: CallHistoryPeerType,
+    /// Peer display name at call time. Empty string when unknown.
+    pub peer_name: String,
+    /// Peer avatar URL at call time (nullable).
+    pub peer_avatar_url: Option<String>,
+    /// When the call started (our clock).
+    pub started_at: DateTime<Utc>,
+    /// When the call ended, or None if still in-progress.
+    pub ended_at: Option<DateTime<Utc>>,
+    /// Direction from this device's perspective.
+    pub direction: CallDirection,
+    /// Final outcome of the call.
+    pub result: CallResult,
+    /// Call length in seconds. None if the call never connected.
+    pub duration_secs: Option<i64>,
+    /// Whether this was a video call (vs voice-only).
+    pub has_video: bool,
+}
+
+/// Filter for listing call history entries.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CallHistoryFilter {
+    /// All entries, newest first.
+    #[default]
+    All,
+    /// Only missed calls.
+    Missed,
+    /// Only outgoing calls (placed by this device).
+    Outgoing,
+    /// Only incoming calls.
+    Incoming,
+}
+
 /// Pending DM call state during offer→answer exchange.
 ///
 /// Stored in core while waiting for the peer's ephemeral key answer.

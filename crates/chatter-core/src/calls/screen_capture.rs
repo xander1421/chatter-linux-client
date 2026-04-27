@@ -333,6 +333,12 @@ impl ScreenCapture {
         let temporary_error_count_clone = temporary_error_count.clone();
         let first_frame_received = Arc::new(AtomicBool::new(false));
         let first_frame_received_clone = first_frame_received.clone();
+        // Latched on the first Permanent error so the main loop can exit and
+        // the frame-request tick doesn't keep retriggering the callback at
+        // 30 Hz. Without this the error log spams once per tick forever.
+        let permanent_error_flagged = Arc::new(AtomicBool::new(false));
+        let permanent_error_flagged_cb = permanent_error_flagged.clone();
+        let running_cb = running.clone();
 
         // Start capture with callback
         capturer.start_capture(capture_source, move |result| {
@@ -369,7 +375,15 @@ impl ScreenCapture {
                             }
                         }
                         CaptureError::Permanent => {
-                            tracing::error!("Permanent capture error - screen sharing failed");
+                            // Latch + stop the main loop. Log only on the first
+                            // occurrence; subsequent callbacks (in-flight before
+                            // the loop reads the flag) stay silent.
+                            if !permanent_error_flagged_cb.swap(true, Ordering::SeqCst) {
+                                tracing::error!(
+                                    "Permanent capture error — stopping screen share (portal cancelled or source lost)"
+                                );
+                                running_cb.store(false, Ordering::SeqCst);
+                            }
                         }
                     }
                 }
@@ -380,6 +394,14 @@ impl ScreenCapture {
         let capture_start = Instant::now();
 
         while running.load(Ordering::SeqCst) {
+            // Bail early if the callback has flagged a permanent error. The
+            // callback already set `running = false` but the current tick may
+            // still be mid-flight; double-check here so we don't call
+            // capture_frame one more time and re-trigger the callback.
+            if permanent_error_flagged.load(Ordering::SeqCst) {
+                break;
+            }
+
             let start = Instant::now();
 
             // Request a frame
@@ -435,10 +457,12 @@ impl ScreenCapture {
         }
 
         let temp_errors = temporary_error_count.load(Ordering::Relaxed);
+        let permanent = permanent_error_flagged.load(Ordering::SeqCst);
         tracing::info!(
-            "Screen capture loop ended after {} frames ({} temporary errors during startup)",
+            "Screen capture loop ended after {} frames ({} temporary errors during startup, permanent_error={})",
             frame_count,
-            temp_errors
+            temp_errors,
+            permanent,
         );
     }
 

@@ -980,6 +980,77 @@ impl ChatterClient {
         }
     }
 
+    // ── Local call history (v053) ──────────────────────────────────
+    //
+    // These methods talk to the `call_history` SQLite table via
+    // `CallHistoryRepository`. This is purely client-local state: the
+    // server exposes no call-history RPC yet. Entries are produced by
+    // `CallSignalingService` on signaling events (start / accept /
+    // decline / end / missed) and consumed by the UI bridge.
+
+    /// List recent local call history entries.
+    ///
+    /// Used by the bridge `get_call_history` FFI. Results are sorted
+    /// newest-first. Pass `None` for `cursor` to start at the newest row.
+    pub fn list_call_history(
+        &self,
+        filter: crate::domain::call::CallHistoryFilter,
+        limit: u32,
+        cursor: Option<(chrono::DateTime<chrono::Utc>, String)>,
+    ) -> Result<Vec<crate::domain::call::CallHistoryEntry>, ClientError> {
+        self.call_history_repo()
+            .list(filter, limit, cursor)
+            .map_err(|e| ClientError::Inbox(format!("call history list: {}", e)))
+    }
+
+    /// Insert (or replace) a call history entry. Invoked by the call
+    /// signaling service — exposed on the client facade so other layers
+    /// (e.g. tests, bridge-initiated anon calls) can record entries
+    /// without depending on `CallSignalingService` directly.
+    pub fn record_call_history(
+        &self,
+        entry: &crate::domain::call::CallHistoryEntry,
+    ) -> Result<(), ClientError> {
+        self.call_history_repo()
+            .insert_entry(entry)
+            .map_err(|e| ClientError::Inbox(format!("call history insert: {}", e)))
+    }
+
+    /// Mark a previously-inserted call as ended with a duration.
+    pub fn mark_call_history_ended(
+        &self,
+        id: &str,
+        duration_secs: i64,
+    ) -> Result<(), ClientError> {
+        self.call_history_repo()
+            .mark_ended(id, duration_secs)
+            .map_err(|e| ClientError::Inbox(format!("call history mark_ended: {}", e)))
+    }
+
+    /// Delete a single call history entry (swipe-to-delete in the UI).
+    pub fn delete_call_history_entry(&self, id: &str) -> Result<(), ClientError> {
+        self.call_history_repo()
+            .delete(id)
+            .map_err(|e| ClientError::Inbox(format!("call history delete: {}", e)))
+    }
+
+    /// Clear all local call history.
+    pub fn clear_call_history(&self) -> Result<u64, ClientError> {
+        self.call_history_repo()
+            .delete_all()
+            .map_err(|e| ClientError::Inbox(format!("call history clear: {}", e)))
+    }
+
+    /// Accessor used by the history helpers above and by the signaling
+    /// service when it wants to record events from inside core.
+    fn call_history_repo(
+        &self,
+    ) -> crate::storage::repositories::CallHistoryRepository {
+        crate::storage::repositories::CallHistoryRepository::new(
+            self.ui.database.clone(),
+        )
+    }
+
     // ── Call lifecycle ─────────────────────────────────────────────
 
     /// End an active DM/channel call: send hangup, store history, leave.

@@ -45,43 +45,48 @@ export component IncomingCallModal inherits Rectangle {
             spacing: Spacing.xl;
             padding: Spacing.xxl;
 
-            // Caller avatar with pulse ring
-            Rectangle {
-                width: 96px;
-                height: 96px;
-                horizontal-stretch: 0;
+            // Caller avatar with pulse ring — horizontally centered
+            HorizontalLayout {
+                alignment: center;
 
-                // Pulse ring animation — Neo glow pulse
                 Rectangle {
                     width: 96px;
                     height: 96px;
-                    border-radius: 48px;
-                    background: transparent;
-                    border-width: 2px;
-                    border-color: Colors.glow-cyan.with-alpha(pulse-opacity);
-                    drop-shadow-blur: Spacing.neo-blur-md;
-                    drop-shadow-color: Colors.glow-cyan-soft;
+                    horizontal-stretch: 0;
 
-                    property <float> pulse-opacity: 0.0;
+                    // Pulse ring animation — Neo glow pulse
+                    Rectangle {
+                        width: 96px;
+                        height: 96px;
+                        border-radius: 48px;
+                        background: transparent;
+                        border-width: 2px;
+                        border-color: Colors.glow-cyan.with-alpha(pulse-opacity);
+                        drop-shadow-blur: Spacing.neo-blur-md;
+                        drop-shadow-color: Colors.glow-cyan-soft;
 
-                    animate pulse-opacity {
-                        duration: 1500ms;
-                        iteration-count: -1;
-                        easing: ease-out;
+                        property <float> pulse-opacity: 0.0;
+
+                        animate pulse-opacity {
+                            duration: 1500ms;
+                            iteration-count: -1;
+                            easing: ease-out;
+                        }
+
+                        init => {
+                            self.pulse-opacity = 0.8;
+                        }
                     }
 
-                    init => {
-                        self.pulse-opacity = 0.8;
+                    Avatar {
+                        width: 80px;
+                        height: 80px;
+                        x: 8px;
+                        y: 8px;
+                        size: 80px;
+                        source: call-data.caller-avatar-source;
+                        fallback-text: call-data.caller-initials;
                     }
-                }
-
-                Avatar {
-                    width: 80px;
-                    height: 80px;
-                    x: 8px;
-                    y: 8px;
-                    size: 80px;
-                    fallback-text: call-data.caller-name;
                 }
             }
 

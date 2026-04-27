@@ -51,6 +51,7 @@ pub mod v049_vector_embeddings;
 pub mod v050_pending_anon_group_messages;
 pub mod v051_fix_search_json_path;
 pub mod v052_reply_thumbnail;
+pub mod v053_call_history;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -105,6 +106,7 @@ pub use v049_vector_embeddings::V049VectorEmbeddings;
 pub use v050_pending_anon_group_messages::V050PendingAnonGroupMessages;
 pub use v051_fix_search_json_path::V051FixSearchJsonPath;
 pub use v052_reply_thumbnail::V052ReplyThumbnail;
+pub use v053_call_history::V053CallHistory;
 
 /// Trait for database migrations.
 ///
@@ -274,4 +276,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V050PendingAnonGroupMessages)
         .register(V051FixSearchJsonPath)
         .register(V052ReplyThumbnail)
+        .register(V053CallHistory)
 }

@@ -14,6 +14,7 @@ use chatter_core::client::ChatterClient;
 use chatter_core::client::calls::OutgoingCallStart;
 use chatter_core::domain::call::CallType;
 use chatter_core::state::ActiveConversation;
+use crate::bin_ui::converters::get_initials;
 use crate::{ActiveCallData, CallParticipantData, MainWindow};
 
 use super::timers::{start_call_timer, start_video_frame_timer};
@@ -117,10 +118,13 @@ fn render_calling_placeholder(
 ) {
     let Some(w) = weak.upgrade() else { return };
 
+    let local_initials = get_initials(&display_name);
     let local_participant = CallParticipantData {
         user_id: user_id.to_string().into(),
         display_name: display_name.into(),
+        initials: local_initials.into(),
         avatar_url: "".into(),
+        avatar_source: w.get_user_avatar_source(),
         is_muted: false,
         is_video_enabled: setup.is_video,
         is_screen_sharing: false,

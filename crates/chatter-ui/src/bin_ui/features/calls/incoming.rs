@@ -19,6 +19,7 @@ use chatter_core::services::call_worker::{
     CallEndReason, CallOrchestratorEvent, OrchestratedCallKind,
 };
 use crate::{ActiveCallData, CallParticipantData, MainWindow};
+use crate::bin_ui::converters::get_initials;
 
 use super::timers::{start_call_timer, start_video_frame_timer};
 
@@ -118,10 +119,14 @@ fn render_accepted_call(
             let frames = shared_frames.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
+                let local_initials = get_initials(&my_display_name);
+                let remote_initials = get_initials(&peer_name);
                 let local_participant = CallParticipantData {
                     user_id: current_user_id.clone().into(),
                     display_name: my_display_name.clone().into(),
+                    initials: local_initials.into(),
                     avatar_url: "".into(),
+                    avatar_source: w.get_user_avatar_source(),
                     is_muted: false,
                     is_video_enabled: is_video,
                     is_screen_sharing: false,
@@ -130,7 +135,9 @@ fn render_accepted_call(
                 let remote_participant = CallParticipantData {
                     user_id: peer_id.to_string().into(),
                     display_name: peer_name.clone().into(),
+                    initials: remote_initials.into(),
                     avatar_url: "".into(),
+                    avatar_source: slint::Image::default(),
                     is_muted: false,
                     is_video_enabled: is_video,
                     is_screen_sharing: false,
@@ -206,16 +213,21 @@ fn render_active_anon_call(
         let local_participant = CallParticipantData {
             user_id: "You".into(),
             display_name: "You".into(),
+            initials: "Y".into(),
             avatar_url: "".into(),
+            avatar_source: w.get_user_avatar_source(),
             is_muted: false,
             is_video_enabled: is_video,
             is_screen_sharing: false,
             is_speaking: false,
         };
+        let remote_initials = get_initials(&peer_display_name);
         let remote_participant = CallParticipantData {
             user_id: "Anonymous".into(),
             display_name: peer_display_name.into(),
+            initials: remote_initials.into(),
             avatar_url: "".into(),
+            avatar_source: slint::Image::default(),
             is_muted: false,
             is_video_enabled: is_video,
             is_screen_sharing: false,

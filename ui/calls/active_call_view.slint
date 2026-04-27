@@ -21,9 +21,21 @@ component ParticipantTile inherits Rectangle {
 
     background: Colors.surface;
     border-radius: Spacing.radius-lg;
-    border-width: 1px;
-    border-color: Colors.neo-highlight;
+    // Border + outer glow drive the "is speaking" affordance — both animate
+    // between idle and active so the transition feels alive rather than a
+    // hard on/off flip. Glow colour uses glow-cyan so it reads on dark OLED.
+    border-width: participant.is-speaking ? 3px : 1px;
+    border-color: participant.is-speaking ? Colors.glow-cyan : Colors.neo-highlight;
+    drop-shadow-blur: participant.is-speaking ? 18px : 0px;
+    drop-shadow-color: participant.is-speaking ? Colors.glow-cyan-soft : transparent;
+    drop-shadow-offset-x: 0px;
+    drop-shadow-offset-y: 0px;
     clip: true;
+
+    animate border-width { duration: 160ms; easing: ease-in-out; }
+    animate border-color { duration: 200ms; easing: ease-in-out; }
+    animate drop-shadow-blur { duration: 240ms; easing: ease-in-out; }
+    animate drop-shadow-color { duration: 240ms; easing: ease-in-out; }
 
     // Video frame or avatar placeholder
     if show-video && participant.is-video-enabled: Image {
@@ -42,11 +54,16 @@ component ParticipantTile inherits Rectangle {
             alignment: center;
             spacing: Spacing.sm;
 
-            Avatar {
-                width: 56px;
-                height: 56px;
-                size: 56px;
-                fallback-text: participant.display-name;
+            HorizontalLayout {
+                alignment: center;
+
+                Avatar {
+                    width: 56px;
+                    height: 56px;
+                    size: 56px;
+                    source: participant.avatar-source;
+                    fallback-text: participant.initials;
+                }
             }
 
             Text {
@@ -76,16 +93,6 @@ component ParticipantTile inherits Rectangle {
             y: (parent.height - self.height) / 2;
             colorize: Colors.text-primary;
         }
-    }
-
-    // Speaking glow
-    if participant.is-speaking: Rectangle {
-        width: 100%;
-        height: 100%;
-        border-radius: Spacing.radius-lg;
-        border-width: 2px;
-        border-color: Colors.primary;
-        background: transparent;
     }
 
     // Name label (bottom-right)
@@ -156,33 +163,6 @@ export component ActiveCallView inherits Rectangle {
                     overflow: elide;
                 }
 
-                if call-data.is-encrypted: Image {
-                    source: Icons.lock;
-                    width: 12px;
-                    height: 12px;
-                    colorize: Colors.primary;
-                    y: (parent.height - self.height) / 2;
-                }
-
-                if call-data.is-encrypted && call-data.verification-emoji-1 != "": Rectangle {
-                    width: verification-emojis.preferred-width + Spacing.sm;
-                    height: 18px;
-                    border-radius: Spacing.radius-sm;
-                    background: Colors.primary.with-alpha(0.2);
-                    y: (parent.height - self.height) / 2;
-
-                    verification-emojis := HorizontalLayout {
-                        padding-left: 4px;
-                        padding-right: 4px;
-                        spacing: 1px;
-
-                        Text { text: call-data.verification-emoji-1; font-size: Typography.xs; vertical-alignment: center; }
-                        Text { text: call-data.verification-emoji-2; font-size: Typography.xs; vertical-alignment: center; }
-                        Text { text: call-data.verification-emoji-3; font-size: Typography.xs; vertical-alignment: center; }
-                        Text { text: call-data.verification-emoji-4; font-size: Typography.xs; vertical-alignment: center; }
-                    }
-                }
-
                 Text {
                     text: format-duration(call-data.duration-seconds);
                     font-size: Typography.xs;
@@ -198,6 +178,38 @@ export component ActiveCallView inherits Rectangle {
                 }
 
                 Rectangle { horizontal-stretch: 1; }
+
+                // Security indicator — single pill on the right.
+                // If verification emojis are available, show the emoji SAS (implies encrypted).
+                // Otherwise show a plain lock glyph when encrypted.
+                if call-data.is-encrypted && call-data.verification-emoji-1 != "": Rectangle {
+                    width: verification-emojis.preferred-width + Spacing.md;
+                    height: 20px;
+                    border-radius: 10px;
+                    background: Colors.primary.with-alpha(0.15);
+                    border-width: 1px;
+                    border-color: Colors.primary.with-alpha(0.3);
+                    y: (parent.height - self.height) / 2;
+
+                    verification-emojis := HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        spacing: 2px;
+
+                        Text { text: call-data.verification-emoji-1; font-size: Typography.xs; vertical-alignment: center; }
+                        Text { text: call-data.verification-emoji-2; font-size: Typography.xs; vertical-alignment: center; }
+                        Text { text: call-data.verification-emoji-3; font-size: Typography.xs; vertical-alignment: center; }
+                        Text { text: call-data.verification-emoji-4; font-size: Typography.xs; vertical-alignment: center; }
+                    }
+                }
+
+                if call-data.is-encrypted && call-data.verification-emoji-1 == "": Image {
+                    source: Icons.lock;
+                    width: 12px;
+                    height: 12px;
+                    colorize: Colors.primary.with-alpha(0.7);
+                    y: (parent.height - self.height) / 2;
+                }
             }
         }
 

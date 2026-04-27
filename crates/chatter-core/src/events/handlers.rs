@@ -359,16 +359,14 @@ impl EventHandlers {
                     %emoji,
                     "Inbox event: ReactionAdded received"
                 );
-                // Determine if current user reacted (would need local user ID context)
-                // For now, assume not current user unless services layer provides that info
+                // Storage persistence (and the dedup gate) lives in
+                // `inbox_processor` (regular DM / channel) and `base_anon`
+                // (anon DM / group). Those layers only emit
+                // `DomainEvent::ReactionAdded` when the unified-reactions
+                // row was newly inserted, so this listener can update the
+                // in-memory cache unconditionally without double-counting.
                 self.streaming_state
                     .update_reaction(&cache_key, emoji.clone(), 1, None);
-                // Persist to DB so reactions survive reload
-                if let Some(ref svc) = self.message_service {
-                    if let Err(e) = svc.update_reaction_by_sender(&sender_id, sent_at_ns, &emoji, true) {
-                        tracing::warn!(?sender_id, sent_at_ns, error = %e, "Failed to persist reaction add to DB");
-                    }
-                }
             }
 
             DomainEvent::ReactionRemoved {
@@ -386,13 +384,10 @@ impl EventHandlers {
                     %emoji,
                     "Inbox event: ReactionRemoved received"
                 );
+                // See ReactionAdded: dedup happens upstream in inbox_processor
+                // / base_anon, so the in-memory cache update can be unconditional.
                 self.streaming_state
                     .update_reaction(&cache_key, emoji.clone(), -1, None);
-                if let Some(ref svc) = self.message_service {
-                    if let Err(e) = svc.update_reaction_by_sender(&sender_id, sent_at_ns, &emoji, false) {
-                        tracing::warn!(?sender_id, sent_at_ns, error = %e, "Failed to persist reaction remove to DB");
-                    }
-                }
             }
 
             // ================================================================
@@ -532,6 +527,24 @@ impl EventHandlers {
                 let channel_id = message.conversation_id;
                 trace!(?channel_id, message_id = ?message.id, "SavedMessageSynced: adding to state");
                 self.message_state.append_message(channel_id, message);
+            }
+
+            DomainEvent::DeviceLinked {
+                device_id,
+                device_name,
+                approved_by_self,
+                ..
+            } => {
+                // UI thread surfaces a toast / refreshes Devices modal via
+                // event bus subscription. State stores have nothing to update
+                // here — the device list lives on the server and is fetched
+                // on demand by the modal.
+                trace!(
+                    device_id,
+                    device_name = ?device_name,
+                    approved_by_self,
+                    "DeviceLinked: handled by UI thread"
+                );
             }
 
             // ================================================================
@@ -866,6 +879,30 @@ impl EventHandlers {
             DomainEvent::SyncComplete { .. } => {
                 // Sync completion is handled by the UI directly
             }
+
+            // ================================================================
+            // Push Notifications
+            // ================================================================
+            DomainEvent::PushWakeup { .. } => {
+                // Push wake-ups are consumed by the client (triggers sync) and
+                // by the UI directly (e.g., to show a reconnect spinner).
+                // No state-store update is required here.
+            }
+
+            // ================================================================
+            // Signal-protocol sync events
+            // ================================================================
+            // Handled by the Signal service / inbox handlers that own the
+            // ratchet + prekey stores. Nothing to mirror into UI state.
+            DomainEvent::SessionResetRequested { .. }
+            | DomainEvent::PeerDevicesChanged { .. }
+            | DomainEvent::PreKeyRefreshNeeded { .. } => {}
+
+            // IncomingCall surfaces as a desktop toast via
+            // spawn_notification_listener; no state-store mutation here
+            // (call UI subscribes to CallOrchestratorEvent directly for
+            // in-app modal state).
+            DomainEvent::IncomingCall { .. } => {}
         }
     }
 
