@@ -1,2 +1,22 @@
 target
 target-android
+
+# Runtime / agent state
+.claude/
+.codegraph/logs/
+output/
+offline_queue.json
+
+# rustc crash dumps
+rustc-ice-*.txt
+
+# Pitch decks / large media — distribute via Drive/S3, not git
+Chatter_Pitch_Deck*.pdf
+
+# Stale root design docs — superseded by .planning/
+/ALL_PHASES.md
+/ARCHITECTURE.md
+/FEATURES.md
+/PLAN.md
+/audit_backend_implementation.md
+/audit_signal_implementation.md
