@@ -39,7 +39,7 @@ use crate::services::user::UserService;
 use crate::services::typing_service::TypingService;
 use crate::state::{
     AuthState, ChatState, JarvisState, MessageState, OfflineState, OrgState, PinnedState,
-    PresenceState, PrivacyState, StreamingState, UIState, UserState,
+    PrivacyState, StreamingState, UIState, UserState,
 };
 use crate::storage::Database;
 use crate::system::Directories;
@@ -93,7 +93,6 @@ pub struct CoreServices {
     pub chat_state: ChatState,
     pub message_state: MessageState,
     pub user_state: UserState,
-    pub presence_state: PresenceState,
     pub privacy_state: PrivacyState,
     pub offline_state: OfflineState,
     pub streaming_state: StreamingState,
@@ -189,7 +188,6 @@ impl CoreServices {
             chat_state: ChatState::new(),
             message_state: MessageState::new(),
             user_state: UserState::new(),
-            presence_state: PresenceState::new(),
             privacy_state: PrivacyState::new(),
             offline_state: OfflineState::new(),
             streaming_state: StreamingState::new(),

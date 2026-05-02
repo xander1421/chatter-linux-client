@@ -160,7 +160,7 @@ impl ChannelService {
                 let mids = member_ids.clone();
                 let pw = password.map(str::to_string);
                 let desc = description.map(str::to_string);
-                let img = image_url.map(str::to_string);
+                let icon_bytes = icon.map(|b| b.to_vec());
                 async move {
                     client
                         .create_channel(
@@ -170,7 +170,7 @@ impl ChannelService {
                             mids,
                             pw.as_deref(),
                             desc.as_deref(),
-                            img.as_deref(),
+                            icon_bytes.as_deref(),
                         )
                         .await
                 }
