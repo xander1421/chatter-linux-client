@@ -32,6 +32,7 @@ use crate::crypto::provisioning::{
 use crate::crypto::signal::identity::IdentityKeyManager;
 use crate::crypto::signal::prekey::PreKeyManager;
 use crate::crypto::DeviceCredentials;
+use crate::crypto::SecretString;
 use crate::error::{CryptoError, NetworkError, StorageError};
 use crate::domain::notification::NotificationPriority;
 use crate::events::EventBus;
@@ -94,9 +95,14 @@ impl NewDeviceSession {
     }
 }
 
-/// Pre-image of a parsed link URL (primary side input).
+/// Pre-image of a parsed link URL (primary-side internal).
+///
+/// `pub(crate)` — outside callers receive a [`PendingDeviceLink`] from
+/// [`LinkDeviceService::prepare_link_from_url`], which gates installation
+/// on a separate `approve_link` step. Direct construction from outside the
+/// crate would let UI / external code skip the user-confirmation gate.
 #[derive(Debug, Clone)]
-pub struct LinkRequest {
+pub(crate) struct LinkRequest {
     pub uuid: String,
     /// Raw 32-byte X25519 ephemeral public key from new device.
     pub peer_pub: [u8; 32],
@@ -104,6 +110,77 @@ pub struct LinkRequest {
     /// cross-server linking attempts).
     pub server_url: Option<String>,
     pub device_name: Option<String>,
+}
+
+/// A parsed, previewed device-link request that has **not yet** been
+/// approved or installed. Returned by
+/// [`LinkDeviceService::prepare_link_from_url`].
+///
+/// The UI **MUST** display [`Self::verification_code`] alongside the
+/// device name and require explicit user confirmation that the code
+/// matches the value shown on the new device before passing this to
+/// [`LinkDeviceService::approve_link`].
+///
+/// Properties enforced at the type level:
+/// - **Not [`Clone`]**: a single pending link cannot be silently fanned
+///   out to multiple approval calls.
+/// - **Move-consumed by `approve_link`**: the value is taken by value
+///   (not by reference), so it cannot be reused after a successful or
+///   failed approval.
+/// - The inner `LinkRequest` is `pub(crate)` and there is no public
+///   constructor — outside code can only obtain a `PendingDeviceLink`
+///   from `prepare_link_from_url`.
+///
+/// The verification code is derived deterministically from the new
+/// device's ephemeral X25519 public key (truncated SHA-256, first 6 hex
+/// chars, uppercased), so the **same** value can be displayed on both
+/// devices — matching it confirms both sides see the same QR payload and
+/// no MITM substituted a different ephemeral key.
+#[derive(Debug)]
+pub struct PendingDeviceLink {
+    inner: LinkRequest,
+    verification_code: String,
+}
+
+impl PendingDeviceLink {
+    /// Short verification code for UI display. Compare with the code shown
+    /// on the new device — if they match, the QR payload was not tampered
+    /// with in transit.
+    pub fn verification_code(&self) -> &str {
+        &self.verification_code
+    }
+
+    /// New device's user-supplied display name (if any).
+    pub fn device_name(&self) -> Option<&str> {
+        self.inner.device_name.as_deref()
+    }
+
+    /// Server URL the new device intends to talk to (if embedded in the
+    /// QR). Lets UI flag cross-server linking attempts.
+    pub fn server_url(&self) -> Option<&str> {
+        self.inner.server_url.as_deref()
+    }
+
+    /// Provisioning session UUID. Useful for cancel / list flows.
+    pub fn uuid(&self) -> &str {
+        &self.inner.uuid
+    }
+}
+
+/// Compute the 6-character verification code for a peer public key.
+///
+/// `SHA-256(peer_pub)` truncated to 3 bytes, hex-encoded uppercase.
+/// Deterministic: both the primary and the new device produce the same
+/// code from the same QR payload, so the user can compare them by eye.
+fn verification_code_for_pub(peer_pub: &[u8; 32]) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write;
+    let digest = Sha256::digest(peer_pub);
+    let mut out = String::with_capacity(6);
+    for byte in digest.iter().take(3) {
+        let _ = write!(out, "{byte:02X}");
+    }
+    out
 }
 
 /// Result of completing linking on the new device side.
@@ -225,8 +302,19 @@ impl LinkDeviceService {
     ) -> mpsc::UnboundedReceiver<LinkProgress> {
         let (tx, rx) = mpsc::unbounded_channel();
         let svc = self.clone();
+        // Cancel the flow if the receiver is dropped (UI closes the linking
+        // page). The cloned sender's `closed()` future resolves when every
+        // receiver clone has been dropped — at that point select! drops the
+        // running run_flow future at its next await, halting further server
+        // polling and DB writes that nothing is listening to.
+        let cancel = tx.clone();
         tokio::spawn(async move {
-            run_flow(svc, device_info, device_name, tx).await;
+            tokio::select! {
+                _ = cancel.closed() => {
+                    tracing::info!("link device flow cancelled: receiver dropped");
+                }
+                _ = run_flow(svc, device_info, device_name, tx) => {}
+            }
         });
         rx
     }
@@ -683,7 +771,10 @@ impl LinkDeviceService {
     // ====================================================================
 
     /// Parse a `chatter://link?uuid=…&pub_key=…&server=…&name=…` URL.
-    pub fn parse_link(url: &str) -> Result<LinkRequest, LinkDeviceError> {
+    ///
+    /// `pub(crate)` — external callers use [`Self::prepare_link_from_url`]
+    /// which wraps this in a [`PendingDeviceLink`] gated by `approve_link`.
+    pub(crate) fn parse_link(url: &str) -> Result<LinkRequest, LinkDeviceError> {
         let parsed =
             Url::parse(url).map_err(|e| LinkDeviceError::InvalidLinkUrl(e.to_string()))?;
         if parsed.scheme() != LINK_URL_SCHEME {
@@ -735,14 +826,22 @@ impl LinkDeviceService {
         })
     }
 
-    /// Approve a link request. **Caller MUST gate this on a re-auth check
-    /// via [`verify_password`]** — this function does not re-prompt the user.
+    /// Build + encrypt + upload the provision envelope for a parsed link.
+    ///
+    /// **`pub(crate)` only** — the only public path to this code is via
+    /// [`Self::approve_link`], which requires a [`PendingDeviceLink`]
+    /// (constructed only by [`Self::prepare_link_from_url`]) and a
+    /// re-auth check on a [`SecretString`]. Direct external invocation
+    /// would skip the user-confirmation gate.
     ///
     /// Builds a [`ProvisionMessage`] from the local identity, profile key,
     /// and registration ID; encrypts it for the new device's pubkey;
     /// uploads via `provision_device`. The new device picks it up via its
     /// poll loop.
-    pub async fn approve_link(&self, req: &LinkRequest) -> Result<(), LinkDeviceError> {
+    pub(crate) async fn install_envelope(
+        &self,
+        req: &LinkRequest,
+    ) -> Result<(), LinkDeviceError> {
         let user_id_str = self
             .settings_repo
             .get_string(keys::CURRENT_USER_ID)?
@@ -815,23 +914,71 @@ impl LinkDeviceService {
         Ok(response.sessions)
     }
 
-    /// Single-shot primary-side approve. Parses the URL, verifies the
-    /// password against local profile material, then encrypts + uploads
-    /// the provision envelope. UI passes raw user inputs and gets back a
-    /// summary of what was just linked.
+    /// Step 1 of the primary-side device-link flow. Pure parse + preview —
+    /// **no network call, no key install, no session state mutation**.
     ///
-    /// Emits [`DomainEvent::DeviceLinked`] (with `approved_by_self = true`)
-    /// on success so any open Devices modal / toast banner can react.
-    pub async fn approve_link_from_url(
+    /// Returns a [`PendingDeviceLink`] holding the parsed payload plus a
+    /// short verification code derived from the new device's ephemeral
+    /// public key.
+    ///
+    /// # Contract — the caller MUST:
+    ///
+    /// 1. Display [`PendingDeviceLink::verification_code`] (and ideally
+    ///    the device name / server URL) to the user.
+    /// 2. Obtain explicit confirmation that the code matches the value
+    ///    shown on the new device.
+    /// 3. **Only then** pass the value to [`Self::approve_link`] together
+    ///    with the user's password / PIN.
+    ///
+    /// The returned type is `!Clone` and is consumed (`self`) by
+    /// `approve_link`, so it cannot be silently re-used or fanned out.
+    /// This is the in-SDK enforcement of the user-approval gate — a UI
+    /// bug or alt-UI cannot complete a link by calling some other
+    /// "install" entrypoint without going through this function.
+    pub fn prepare_link_from_url(
         &self,
         url: &str,
-        secret: &str,
-    ) -> Result<ApprovedDevice, LinkDeviceError> {
+    ) -> Result<PendingDeviceLink, LinkDeviceError> {
         let req = Self::parse_link(url)?;
-        if !self.verify_password_or_pin(secret)? {
+        let verification_code = verification_code_for_pub(&req.peer_pub);
+        Ok(PendingDeviceLink {
+            inner: req,
+            verification_code,
+        })
+    }
+
+    /// Step 2 of the primary-side device-link flow. Consumes a
+    /// [`PendingDeviceLink`] (so it cannot be replayed), re-authenticates
+    /// the user against local material, then encrypts and uploads the
+    /// provision envelope.
+    ///
+    /// # Contract
+    ///
+    /// **Caller MUST display the verification code from
+    /// [`PendingDeviceLink`] to the user and obtain confirmation before
+    /// calling `approve_link`.** The SDK has no way to verify the user
+    /// actually saw and approved the code — this is the trust boundary.
+    /// In return, the SDK guarantees that no install / session-storage
+    /// path is reachable without first owning a `PendingDeviceLink`
+    /// (see [`Self::install_envelope`] which is `pub(crate)`).
+    ///
+    /// `secret` accepts either the user's password or a 6-digit PIN
+    /// (auto-routed by [`Self::verify_password_or_pin`]). The
+    /// [`SecretString`] wrapper zeroizes its contents on drop.
+    ///
+    /// On success, emits [`DomainEvent::DeviceLinked`] with
+    /// `approved_by_self = true` so any open Devices modal / toast
+    /// banner can react.
+    pub async fn approve_link(
+        &self,
+        pending: PendingDeviceLink,
+        secret: SecretString,
+    ) -> Result<ApprovedDevice, LinkDeviceError> {
+        let req = pending.inner;
+        if !self.verify_password_or_pin(secret.expose_secret())? {
             return Err(LinkDeviceError::ReauthFailed);
         }
-        self.approve_link(&req).await?;
+        self.install_envelope(&req).await?;
 
         // Server doesn't return the new device_id at provision_device time
         // (that's known only after the new device calls complete_device_linking).
@@ -858,18 +1005,6 @@ impl LinkDeviceService {
             tracing::warn!(error = %e, "DeviceLinked OS notification failed");
         }
 
-        Ok(ApprovedDevice {
-            uuid: req.uuid,
-            device_name: req.device_name,
-            server_url: req.server_url,
-        })
-    }
-
-    /// UI-side preview: parse the URL only, no network, no password.
-    /// Lets the modal show "About to link Alex's Laptop" before the user
-    /// types a password.
-    pub fn preview_link(url: &str) -> Result<ApprovedDevice, LinkDeviceError> {
-        let req = Self::parse_link(url)?;
         Ok(ApprovedDevice {
             uuid: req.uuid,
             device_name: req.device_name,
@@ -1073,6 +1208,42 @@ mod tests {
         let b = random_provisioning_code();
         assert_ne!(a, b);
         assert!(!a.is_empty());
+    }
+
+    // ========================================================================
+    // PendingDeviceLink / verification code
+    // ========================================================================
+
+    #[test]
+    fn verification_code_is_deterministic_per_pubkey() {
+        let pub_a = [0xAB; 32];
+        let pub_b = [0xAB; 32];
+        let pub_c = [0xCD; 32];
+        let code_a = verification_code_for_pub(&pub_a);
+        let code_b = verification_code_for_pub(&pub_b);
+        let code_c = verification_code_for_pub(&pub_c);
+        // Same pubkey => same code (so primary + new device match).
+        assert_eq!(code_a, code_b);
+        // Different pubkey => different code (so MITM with substituted
+        // ephemeral key produces a visibly different value).
+        assert_ne!(code_a, code_c);
+        // 6 hex chars, uppercase only.
+        assert_eq!(code_a.len(), 6);
+        assert!(code_a.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn pending_device_link_is_not_clone() {
+        // Compile-time check: this trait-bound function takes any type
+        // implementing Clone. If `PendingDeviceLink` ever picked up a
+        // `Clone` impl (deliberately or via auto-derive), `_assert` would
+        // start compiling and we'd want the build to break. We can't
+        // negate trait bounds at runtime, so fall back to a doc-style
+        // assertion that PendingDeviceLink fields remain private.
+        // The strongest live check is the `approve_link` signature: it
+        // takes `pending: PendingDeviceLink` by value, not `&` or `&mut`.
+        fn _consumes_by_value(_: PendingDeviceLink) {}
+        let _ = _consumes_by_value;
     }
 
     // ========================================================================

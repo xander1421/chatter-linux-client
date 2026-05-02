@@ -243,7 +243,7 @@ fn spawn_request_stream(
                             dm_vec.push(DMListItemData {
                                 channel_id: channel_id_str.into(),
                                 user_id: peer_id.to_string().into(),
-                                display_name: format!("\u{1F512} {}", peer_name_for_ui).into(),
+                                display_name: peer_name_for_ui.clone().into(),
                                 avatar_url: "".into(),
                                 avatar_source,
                                 has_avatar,
@@ -345,7 +345,7 @@ fn spawn_request_stream(
                             // Add new request with sender's identity (revealed after ECIES decryption)
                             requests.push(FriendRequestData {
                                 user_id: conv_id_str.clone().into(), // conversation_id
-                                display_name: format!("\u{1F512} {}", peer_name).into(), // Lock icon for private
+                                display_name: peer_name.clone().into(),
                                 username: "Private".into(),
                                 avatar_url: "".into(),
                                 avatar_source,

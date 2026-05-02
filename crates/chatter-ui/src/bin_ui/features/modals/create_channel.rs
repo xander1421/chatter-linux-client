@@ -353,11 +353,11 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // Load friends
             let friends = ui_ctx.list_friends(100, 0).await.unwrap_or_default();
             for friendship in &friends {
-                let profile = ui_ctx.get_profile_local(&friendship.friend_id);
-                let display_name = profile.as_ref().map(|p| p.display_name.clone()).unwrap_or_else(|| friendship.friend_id.to_string());
-                seen_user_ids.insert(friendship.friend_id);
+                let profile = ui_ctx.get_profile_local(&friendship.addressee_id);
+                let display_name = profile.as_ref().map(|p| p.display_name.clone()).unwrap_or_else(|| friendship.addressee_id.to_string());
+                seen_user_ids.insert(friendship.addressee_id);
                 friend_data.push(PrivateGroupFriend {
-                    user_id: friendship.friend_id.to_string().into(),
+                    user_id: friendship.addressee_id.to_string().into(),
                     display_name: display_name.into(),
                     username: "".into(),
                     avatar_url: "".into(),

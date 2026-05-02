@@ -44,7 +44,7 @@ gstreamer = { version = "0.23", optional = true }
 gstreamer-app = { version = "0.23", optional = true }
 gstreamer-video = { version = "0.23", optional = true }
 gstreamer-gl = { version = "0.23", optional = true }
-livekit = { version = "0.7.32", default-features = false, features = ["tokio", "rustls-tls-webpki-roots"], optional = true }
+livekit = { version = "0.7.37", default-features = false, features = ["tokio", "rustls-tls-webpki-roots"], optional = true }
 livekit-api = { version = "0.4.14", default-features = false, features = ["services-tokio", "access-token", "webhooks", "signal-client-tokio", "rustls-tls-webpki-roots"], optional = true }
 rand = "0.9"
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "webp"] }

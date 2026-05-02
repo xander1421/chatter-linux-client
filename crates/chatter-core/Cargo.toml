@@ -130,7 +130,7 @@ libc = "0.2"
 # ============================================================================
 # WebRTC / LiveKit (desktop only, gated behind `desktop-media`)
 # ============================================================================
-livekit = { version = "0.7.32", default-features = false, features = ["tokio", "rustls-tls-webpki-roots"], optional = true }
+livekit = { version = "0.7.37", default-features = false, features = ["tokio", "rustls-tls-webpki-roots"], optional = true }
 livekit-api = { version = "0.4.14", default-features = false, features = ["services-tokio", "access-token", "webhooks", "signal-client-tokio", "rustls-tls-webpki-roots"], optional = true }
 # lazy_static removed — migrated to std::sync::LazyLock
 async-stream = "0.3.6"
@@ -149,7 +149,11 @@ tempfile = "3"
 [target.'cfg(not(target_os = "android"))'.dependencies]
 notify-rust = "4"
 arboard = { version = "3", features = ["wayland-data-control"] }
-rfd = "0.15"
+# gtk3 backend (in-process GtkFileChooserDialog) instead of the xdg-portal
+# default. Hyprland and other wlroots-derived compositors removed
+# `xdg_foreign`, which makes the portal FileChooser hang waiting for a
+# parent surface that can never be exported. gtk3 dialogs sidestep that.
+rfd = { version = "0.15", default-features = false, features = ["gtk3"] }
 open = "5.3.3"
 
 # ============================================================================
@@ -193,6 +197,7 @@ criterion = { version = "0.5", features = ["html_reports"] }
 mockall = "0.13"
 paste = "1.0"
 chrono = "0.4"
+proptest = "1"
 
 [[bench]]
 name = "attachment_decrypt"

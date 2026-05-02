@@ -75,24 +75,42 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
     let in_progress: Arc<Mutex<HashSet<UserId>>> = Arc::new(Mutex::new(HashSet::new()));
 
     // Get user ID from grpc_pool for UUID comparison
-    let auth_user_id = grpc_pool.auth_info().user_id;
+    let auth_user_id = grpc_pool.auth_info().user_id.clone();
 
     tokio::spawn(async move {
         tracing::info!("DM bootstrap handler started");
 
+        // Per-bootstrap tasks are owned by this JoinSet. When the handler
+        // exits (channel closed) or is aborted, the JoinSet drops and every
+        // in-flight bootstrap task is aborted with it — no detached writes
+        // continuing past the handler's lifetime.
+        let mut bootstrap_tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
+
         loop {
-            match event_rx.recv().await {
-                Ok(DomainEvent::KeyExchangeReceived {
-                    sender_id,
-                    conversation_id: _,
-                    ephemeral_public_key,
-                    timestamp: _,
-                }) => {
-                    // Check key length to determine message type:
-                    // - 64 bytes = bootstrap message (mailbox + conversation key)
-                    // - 0 bytes = bootstrap REQUEST (peer wants us to initiate)
-                    // - 32 bytes = regular key exchange response
-                    if ephemeral_public_key.len() == 64 {
+            tokio::select! {
+                // Drain finished tasks so the JoinSet doesn't grow unbounded.
+                // The `if !is_empty()` guard disables this branch when the set
+                // is empty (otherwise `join_next` returns `None` immediately
+                // and busy-loops select!).
+                Some(res) = bootstrap_tasks.join_next(), if !bootstrap_tasks.is_empty() => {
+                    if let Err(e) = res {
+                        if e.is_panic() {
+                            tracing::error!(error = %e, "DM bootstrap task panicked");
+                        }
+                    }
+                },
+                event = event_rx.recv() => match event {
+                    Ok(DomainEvent::KeyExchangeReceived {
+                        sender_id,
+                        conversation_id: _,
+                        ephemeral_public_key,
+                        timestamp: _,
+                    }) => {
+                        // Check key length to determine message type:
+                        // - 64 bytes = bootstrap message (mailbox + conversation key)
+                        // - 0 bytes = bootstrap REQUEST (peer wants us to initiate)
+                        // - 32 bytes = regular key exchange response
+                        if ephemeral_public_key.len() == 64 {
                         // Check if bootstrap is already in progress for this peer
                         {
                             let mut guard = in_progress.lock().await;
@@ -112,13 +130,12 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                             "BOOTSTRAP[3/4] Received 64-byte KeyExchange = bootstrap MESSAGE from peer"
                         );
 
-                        // Handle in tokio::spawn
                         let database = database.clone();
                         let grpc_pool = grpc_pool.clone();
                         let ephemeral_key = ephemeral_public_key.clone();
                         let in_progress_clone = in_progress.clone();
 
-                        tokio::spawn(async move {
+                        bootstrap_tasks.spawn(async move {
                             tracing::debug!(
                                 peer = %sender_id,
                                 "BOOTSTRAP[3/4] handler task started"
@@ -215,7 +232,7 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                             let grpc_pool = grpc_pool.clone();
                             let in_progress_clone = in_progress.clone();
 
-                            tokio::spawn(async move {
+                            bootstrap_tasks.spawn(async move {
                                 if let Err(e) = handle_bootstrap_request_async(
                                     database,
                                     grpc_pool,
@@ -262,9 +279,10 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                         count
                     );
                 }
-                Err(broadcast::error::RecvError::Closed) => {
-                    tracing::debug!("DM bootstrap handler: event channel closed");
-                    return;
+                    Err(broadcast::error::RecvError::Closed) => {
+                        tracing::debug!("DM bootstrap handler: event channel closed");
+                        return;
+                    }
                 }
             }
         }

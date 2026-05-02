@@ -379,22 +379,22 @@ fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let friends = ui_ctx.list_friends(100, 0).await.unwrap_or_default();
             for friendship in &friends {
                 // Skip existing members
-                if existing_members.contains(&friendship.friend_id) {
+                if existing_members.contains(&friendship.addressee_id) {
                     continue;
                 }
-                if seen_user_ids.contains(&friendship.friend_id) {
+                if seen_user_ids.contains(&friendship.addressee_id) {
                     continue;
                 }
 
-                let profile = ui_ctx.get_profile_local(&friendship.friend_id);
+                let profile = ui_ctx.get_profile_local(&friendship.addressee_id);
                 let display_name = profile
                     .as_ref()
                     .map(|p| p.display_name.clone())
-                    .unwrap_or_else(|| friendship.friend_id.to_string());
+                    .unwrap_or_else(|| friendship.addressee_id.to_string());
 
-                seen_user_ids.insert(friendship.friend_id);
+                seen_user_ids.insert(friendship.addressee_id);
                 friend_data.push(PrivateGroupFriend {
-                    user_id: friendship.friend_id.to_string().into(),
+                    user_id: friendship.addressee_id.to_string().into(),
                     display_name: display_name.into(),
                     username: "".into(),
                     avatar_url: "".into(),
@@ -495,25 +495,25 @@ async fn load_friends_as_invite_users(
 
     let friends = ui_ctx.list_friends(100, 0).await.unwrap_or_default();
     for friendship in &friends {
-        if !seen_user_ids.insert(friendship.friend_id) {
+        if !seen_user_ids.insert(friendship.addressee_id) {
             continue;
         }
 
-        let is_member = existing_members.contains(&friendship.friend_id);
-        let profile = ui_ctx.get_profile_local(&friendship.friend_id);
-        let user = ui_ctx.get_user_local(&friendship.friend_id);
+        let is_member = existing_members.contains(&friendship.addressee_id);
+        let profile = ui_ctx.get_profile_local(&friendship.addressee_id);
+        let user = ui_ctx.get_user_local(&friendship.addressee_id);
 
         let display_name = profile
             .as_ref()
             .map(|p| p.display_name.clone())
-            .unwrap_or_else(|| friendship.friend_id.to_string());
+            .unwrap_or_else(|| friendship.addressee_id.to_string());
         let username = user
             .as_ref()
             .map(|u| u.username.clone())
             .unwrap_or_default();
 
         user_data.push(InviteUser {
-            id: friendship.friend_id.to_string().into(),
+            id: friendship.addressee_id.to_string().into(),
             display_name: display_name.into(),
             username: username.into(),
             avatar_url: "".into(),

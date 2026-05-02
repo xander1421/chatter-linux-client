@@ -13,6 +13,7 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
+import { Typography } from "../theme/typography.slint";
 import { ChannelList, ChannelListItemData } from "channel_list.slint";
 import { DMList, DMListItemData } from "dm_list.slint";
 import { PrivateGroupList, PrivateGroupListItemData } from "private_group_list.slint";
@@ -162,7 +163,7 @@ export component Sidebar inherits Rectangle {
                     Text {
                         text: "Search...";
                         color: Colors.text-muted;
-                        font-size: 13px;
+                        font-size: Typography.sm2;
                         vertical-alignment: center;
                     }
                 }
@@ -225,7 +226,7 @@ export component Sidebar inherits Rectangle {
                         VerticalLayout { alignment: center; horizontal-stretch: 0;
                             Image { source: Icons.bookmark; width: 14px; height: 14px; colorize: Colors.text-secondary; }
                         }
-                        Text { text: "Saved Messages"; color: Colors.text-secondary; font-size: 13px; vertical-alignment: center; }
+                        Text { text: "Saved Messages"; color: Colors.text-secondary; font-size: Typography.sm2; vertical-alignment: center; }
                     }
                     if root.collapsed: TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
@@ -245,7 +246,7 @@ export component Sidebar inherits Rectangle {
                         VerticalLayout { alignment: center; horizontal-stretch: 0;
                             Image { source: Icons.users; width: 14px; height: 14px; colorize: Colors.text-secondary; }
                         }
-                        Text { text: "Friends"; color: Colors.text-secondary; font-size: 13px; vertical-alignment: center; }
+                        Text { text: "Friends"; color: Colors.text-secondary; font-size: Typography.sm2; vertical-alignment: center; }
                     }
                     if root.collapsed: TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
@@ -281,7 +282,7 @@ export component Sidebar inherits Rectangle {
                         Text {
                             text: "Message Requests";
                             color: Colors.primary;
-                            font-size: 13px;
+                            font-size: Typography.sm2;
                             font-weight: 600;
                             vertical-alignment: center;
                             horizontal-stretch: 1;
@@ -294,7 +295,7 @@ export component Sidebar inherits Rectangle {
                             Text {
                                 text: root.pending-message-requests > 9 ? "9+" : root.pending-message-requests;
                                 color: Colors.text-primary;
-                                font-size: 11px;
+                                font-size: Typography.xs2;
                                 font-weight: 700;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
@@ -359,7 +360,7 @@ export component Sidebar inherits Rectangle {
                         Text {
                             text: "Group Invites";
                             color: Colors.group-accent;
-                            font-size: 13px;
+                            font-size: Typography.sm2;
                             font-weight: 600;
                             vertical-alignment: center;
                             horizontal-stretch: 1;
@@ -372,7 +373,7 @@ export component Sidebar inherits Rectangle {
                             Text {
                                 text: root.pending-group-invites > 9 ? "9+" : root.pending-group-invites;
                                 color: Colors.text-primary;
-                                font-size: 11px;
+                                font-size: Typography.xs2;
                                 font-weight: 700;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
@@ -412,9 +413,94 @@ export component Sidebar inherits Rectangle {
                     }
                 }
 
-                // 5. CHANNELS SECTION
+                // 4. MESSAGES SECTION — header label/expander only meaningful when expanded.
+                // In collapsed mode the row would render as 32px of empty space, so zero it.
                 Rectangle {
-                    height: 32px;
+                    height: root.collapsed ? 0px : 32px;
+                    if !root.collapsed: HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 4px;
+                        TouchArea {
+                            horizontal-stretch: 1;
+                            mouse-cursor: pointer;
+                            clicked => { root.messages-expanded = !root.messages-expanded; }
+                            HorizontalLayout {
+                                padding-left: 2px;
+                                spacing: 4px;
+                                alignment: start;
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 0;
+                                    Image {
+                                        source: Icons.chevron-right;
+                                        width: 10px;
+                                        height: 10px;
+                                        colorize: Colors.text-muted;
+                                        transform-rotation: root.messages-expanded ? 90deg : 0deg;
+                                        animate transform-rotation { duration: 150ms; easing: ease-out; }
+                                    }
+                                }
+                                Text {
+                                    text: "Messages";
+                                    color: Colors.text-muted;
+                                    font-size: Typography.xs2;
+                                    font-weight: 600;
+                                    letter-spacing: 0.5px;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                        Rectangle {
+                            width: 28px;
+                            horizontal-stretch: 0;
+
+                            Rectangle {
+                                width: 24px;
+                                height: 24px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                border-radius: Spacing.radius-sm;
+                                background: add-dm-touch.has-hover ? Colors.surface-hover : transparent;
+
+                                Image {
+                                    source: Icons.user-plus;
+                                    width: 14px;
+                                    height: 14px;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    colorize: add-dm-touch.has-hover ? Colors.text-primary : Colors.text-muted;
+                                }
+                            }
+
+                            add-dm-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.friends-clicked(); }
+                            }
+                        }
+                    }
+                }
+
+                if root.messages-expanded: DMList {
+                    vertical-stretch: 0;
+                    conversations: root.dm-conversations;
+                    collapsed: root.collapsed;
+                    show-header: false;
+                    conversation-selected(id) => { root.dm-selected(id); }
+                    add-friend-clicked => { root.friends-clicked(); }
+                    dm-context-menu-requested(id, x, y) => {
+                        root.ctx-menu-conv-id = id;
+                        root.ctx-menu-conv-type = "dm";
+                        root.ctx-menu-x = x;
+                        root.ctx-menu-y = y;
+                        root.ctx-menu-current-section-id = "";
+                        root.ctx-menu-show = true;
+                    }
+                }
+
+                // 5. CHANNELS SECTION — header zeroed in collapsed mode (collapsed action rail
+                // below at line 593+ provides the find/new/section buttons).
+                Rectangle {
+                    height: root.collapsed ? 0px : 32px;
                     if !root.collapsed: HorizontalLayout {
                         padding-left: 6px;
                         padding-right: 4px;
@@ -441,7 +527,7 @@ export component Sidebar inherits Rectangle {
                                 Text {
                                     text: "Channels";
                                     color: Colors.text-muted;
-                                    font-size: 11px;
+                                    font-size: Typography.xs2;
                                     font-weight: 600;
                                     letter-spacing: 0.5px;
                                     vertical-alignment: center;
@@ -503,14 +589,48 @@ export component Sidebar inherits Rectangle {
                             }
                         }
                     }
-                    if root.collapsed: HorizontalLayout {
-                        alignment: center;
-                        Rectangle {
-                            width: 28px;
-                            height: 28px;
-                            Image { source: Icons.plus; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
-                            TouchArea { clicked => { root.create-channel-clicked(); } }
-                        }
+                }
+
+                // Collapsed channel-action rail: find / new-channel / new-section
+                if root.collapsed: VerticalLayout {
+                    spacing: 4px;
+                    padding-top: 4px;
+                    padding-bottom: 4px;
+
+                    TooltipArea {
+                        height: 32px; width: 44px; x: (parent.width - self.width) / 2;
+                        tooltip-text: "Find channel"; tooltip-enabled: true; placement: "right";
+                        HorizontalLayout { alignment: center; Rectangle {
+                            width: 28px; height: 28px; border-radius: Spacing.radius-sm;
+                            background: c-find-touch.has-hover ? Colors.surface-hover : transparent;
+                            Image { source: Icons.search; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                                colorize: c-find-touch.has-hover ? Colors.text-primary : Colors.text-muted; }
+                            c-find-touch := TouchArea { mouse-cursor: pointer; clicked => { root.join-channel-clicked(); } }
+                        } }
+                    }
+
+                    TooltipArea {
+                        height: 32px; width: 44px; x: (parent.width - self.width) / 2;
+                        tooltip-text: "New channel"; tooltip-enabled: true; placement: "right";
+                        HorizontalLayout { alignment: center; Rectangle {
+                            width: 28px; height: 28px; border-radius: Spacing.radius-sm;
+                            background: c-new-touch.has-hover ? Colors.surface-hover : transparent;
+                            Image { source: Icons.plus; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                                colorize: c-new-touch.has-hover ? Colors.text-primary : Colors.text-muted; }
+                            c-new-touch := TouchArea { mouse-cursor: pointer; clicked => { root.create-channel-clicked(); } }
+                        } }
+                    }
+
+                    TooltipArea {
+                        height: 32px; width: 44px; x: (parent.width - self.width) / 2;
+                        tooltip-text: "New section"; tooltip-enabled: true; placement: "right";
+                        HorizontalLayout { alignment: center; Rectangle {
+                            width: 28px; height: 28px; border-radius: Spacing.radius-sm;
+                            background: c-sec-touch.has-hover ? Colors.surface-hover : transparent;
+                            Image { source: Icons.folder; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                                colorize: c-sec-touch.has-hover ? Colors.text-primary : Colors.text-muted; }
+                            c-sec-touch := TouchArea { mouse-cursor: pointer; clicked => { root.create-section-clicked(); } }
+                        } }
                     }
                 }
 
@@ -519,6 +639,7 @@ export component Sidebar inherits Rectangle {
                     channels: root.channels;
                     collapsed: root.collapsed;
                     show-header: false;
+                    has-sibling-content: root.private-groups.length > 0;
                     channel-selected(id) => { root.channel-selected(id); }
                     channel-context-menu-requested(id, x, y) => {
                         root.ctx-menu-conv-id = id;
@@ -539,88 +660,6 @@ export component Sidebar inherits Rectangle {
                     group-context-menu-requested(id, x, y) => {
                         root.ctx-menu-conv-id = id;
                         root.ctx-menu-conv-type = "private_group";
-                        root.ctx-menu-x = x;
-                        root.ctx-menu-y = y;
-                        root.ctx-menu-current-section-id = "";
-                        root.ctx-menu-show = true;
-                    }
-                }
-
-                // 4. MESSAGES SECTION
-                Rectangle {
-                    height: 32px;
-                    if !root.collapsed: HorizontalLayout {
-                        padding-left: 6px;
-                        padding-right: 4px;
-                        TouchArea {
-                            horizontal-stretch: 1;
-                            mouse-cursor: pointer;
-                            clicked => { root.messages-expanded = !root.messages-expanded; }
-                            HorizontalLayout {
-                                padding-left: 2px;
-                                spacing: 4px;
-                                alignment: start;
-                                VerticalLayout {
-                                    alignment: center;
-                                    horizontal-stretch: 0;
-                                    Image {
-                                        source: Icons.chevron-right;
-                                        width: 10px;
-                                        height: 10px;
-                                        colorize: Colors.text-muted;
-                                        transform-rotation: root.messages-expanded ? 90deg : 0deg;
-                                        animate transform-rotation { duration: 150ms; easing: ease-out; }
-                                    }
-                                }
-                                Text {
-                                    text: "Messages";
-                                    color: Colors.text-muted;
-                                    font-size: 11px;
-                                    font-weight: 600;
-                                    letter-spacing: 0.5px;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-                        Rectangle {
-                            width: 28px;
-                            horizontal-stretch: 0;
-
-                            Rectangle {
-                                width: 24px;
-                                height: 24px;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                                border-radius: Spacing.radius-sm;
-                                background: add-dm-touch.has-hover ? Colors.surface-hover : transparent;
-
-                                Image {
-                                    source: Icons.user-plus;
-                                    width: 14px;
-                                    height: 14px;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                    colorize: add-dm-touch.has-hover ? Colors.text-primary : Colors.text-muted;
-                                }
-                            }
-
-                            add-dm-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => { root.friends-clicked(); }
-                            }
-                        }
-                    }
-                }
-
-                if root.messages-expanded: DMList {
-                    vertical-stretch: 0;
-                    conversations: root.dm-conversations;
-                    collapsed: root.collapsed;
-                    show-header: false;
-                    conversation-selected(id) => { root.dm-selected(id); }
-                    dm-context-menu-requested(id, x, y) => {
-                        root.ctx-menu-conv-id = id;
-                        root.ctx-menu-conv-type = "dm";
                         root.ctx-menu-x = x;
                         root.ctx-menu-y = y;
                         root.ctx-menu-current-section-id = "";
@@ -683,7 +722,7 @@ export component Sidebar inherits Rectangle {
                                 presence-color: root.user-presence-status == "online" ? Colors.online : Colors.offline;
                             }
                         }
-                        Text { text: root.user-display-name; color: Colors.text-secondary; font-size: 12px; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                        Text { text: root.user-display-name; color: Colors.text-secondary; font-size: Typography.xs; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                     }
                 }
                 VerticalLayout { alignment: center; horizontal-stretch: 0;
@@ -717,7 +756,7 @@ export component Sidebar inherits Rectangle {
                 TooltipArea {
                     height: 32px; width: 44px; x: (parent.width - self.width) / 2; tooltip-text: "Jarvis AI"; tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: 32px; height: 32px; border-radius: 16px; background: Colors.surface;
-                        Image { source: Icons.jarvis; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        Image { source: Icons.jarvis; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.primary; }
                         TouchArea { clicked => { root.jarvis-clicked(); } }
                     } }
                 }

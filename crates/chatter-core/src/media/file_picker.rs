@@ -1,6 +1,14 @@
 //! File picker.
 //!
 //! Native file dialogs using rfd (Rusty File Dialogs).
+//!
+//! On Linux rfd is built with the `gtk3` backend (in-process
+//! `GtkFileChooserDialog` via gtk-sys) rather than the portal/ashpd path.
+//! Hyprland and other wlroots-derived compositors removed `xdg_foreign`
+//! support, which makes the portal FileChooser unusable: without an
+//! exportable parent surface, xdg-desktop-portal-gtk's FileChooser impl
+//! hangs forever waiting for one. gtk3 dialogs render their own toplevel
+//! and don't need a parent identifier.
 
 use std::path::PathBuf;
 
@@ -119,54 +127,47 @@ impl FileFilter {
 /// All methods are stateless - configuration is passed per call.
 pub struct FilePicker;
 
+fn build_dialog(config: &FilePickerConfig) -> rfd::AsyncFileDialog {
+    let mut dialog = rfd::AsyncFileDialog::new();
+    if let Some(title) = &config.title {
+        dialog = dialog.set_title(title);
+    }
+    if let Some(path) = &config.default_path {
+        dialog = dialog.set_directory(path);
+    }
+    for filter in &config.filters {
+        let extensions: Vec<&str> = filter.extensions.iter().map(String::as_str).collect();
+        dialog = dialog.add_filter(&filter.name, &extensions);
+    }
+    dialog
+}
+
 impl FilePicker {
     /// Open a single file selection dialog.
     ///
     /// Returns `None` if the user cancels the dialog.
     pub async fn pick_file(config: FilePickerConfig) -> Option<PathBuf> {
-        let mut dialog = rfd::AsyncFileDialog::new();
-
-        if let Some(title) = &config.title {
-            dialog = dialog.set_title(title);
-        }
-
-        if let Some(path) = &config.default_path {
-            dialog = dialog.set_directory(path);
-        }
-
-        for filter in &config.filters {
-            // Convert Vec<String> to Vec<&str> for rfd
-            let extensions: Vec<&str> = filter.extensions.iter().map(String::as_str).collect();
-            dialog = dialog.add_filter(&filter.name, &extensions);
-        }
-
-        dialog.pick_file().await.map(|f| f.path().to_path_buf())
+        tracing::info!("[file_picker] pick_file — opening rfd dialog");
+        let result = build_dialog(&config)
+            .pick_file()
+            .await
+            .map(|f| f.path().to_path_buf());
+        tracing::info!(picked = result.is_some(), "[file_picker] pick_file returned");
+        result
     }
 
     /// Open a multiple file selection dialog.
     ///
     /// Returns an empty vector if the user cancels the dialog.
     pub async fn pick_files(config: FilePickerConfig) -> Vec<PathBuf> {
-        let mut dialog = rfd::AsyncFileDialog::new();
-
-        if let Some(title) = &config.title {
-            dialog = dialog.set_title(title);
-        }
-
-        if let Some(path) = &config.default_path {
-            dialog = dialog.set_directory(path);
-        }
-
-        for filter in &config.filters {
-            let extensions: Vec<&str> = filter.extensions.iter().map(String::as_str).collect();
-            dialog = dialog.add_filter(&filter.name, &extensions);
-        }
-
-        dialog
+        tracing::info!("[file_picker] pick_files — opening rfd dialog");
+        let result: Vec<PathBuf> = build_dialog(&config)
             .pick_files()
             .await
             .map(|files| files.into_iter().map(|f| f.path().to_path_buf()).collect())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        tracing::info!(count = result.len(), "[file_picker] pick_files returned");
+        result
     }
 
     /// Open a folder selection dialog.

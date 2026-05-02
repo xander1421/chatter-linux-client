@@ -36,7 +36,7 @@ pub fn refresh_friends_list(window_weak: Weak<MainWindow>, ui_ctx: Arc<ChatterCl
         if let Ok(pairs) = ui_ctx.list_friends_with_profiles().await {
             for (friendship, profile) in pairs {
                 friends_data.push(FriendDataSendData {
-                    user_id: friendship.friend_id.to_string(),
+                    user_id: friendship.addressee_id.to_string(),
                     display_name: profile.display_name.clone(),
                     username: String::new(),
                     avatar_url: profile.avatar_url.clone().unwrap_or_default(),
@@ -234,7 +234,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     // Convert to Send-safe UI types, fetching profiles for display names
     let mut received_ui: Vec<FriendRequestSendData> = Vec::with_capacity(received_requests.len());
     for f in received_requests {
-        let friend_id = f.friend_id;
+        let friend_id = f.addressee_id;
         let friend_id_str = friend_id.to_string();
 
         // Try to fetch profile from server
@@ -265,7 +265,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
 
     let mut sent_ui: Vec<FriendRequestSendData> = Vec::with_capacity(sent_requests.len());
     for f in sent_requests {
-        let friend_id = f.friend_id;
+        let friend_id = f.addressee_id;
         let friend_id_str = friend_id.to_string();
 
         // Try to fetch profile from server
@@ -335,7 +335,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                 let dm_item = DMListItemSendData {
                     channel_id: dm.id.to_string(),
                     user_id: peer_id_str.clone(),
-                    display_name: format!("\u{1F512} {}", peer_name), // Lock emoji prefix
+                    display_name: peer_name.clone(),
                     avatar_url: String::new(),
                     avatar_bytes: dm.peer_avatar.clone(),
                     avatar_decoded: None,
@@ -532,7 +532,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                 // on the User entity. We don't need it here — the modal
                 // only shows display_name prominently.
                 friends_data.push(FriendDataSendData {
-                    user_id: friendship.friend_id.to_string(),
+                    user_id: friendship.addressee_id.to_string(),
                     display_name: profile.display_name.clone(),
                     username: String::new(),
                     avatar_url: profile.avatar_url.clone().unwrap_or_default(),
@@ -914,7 +914,7 @@ pub fn refresh_anon_dms(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         let dm_item = DMListItemSendData {
                             channel_id: dm.id.to_string(),
                             user_id: peer_id_str.clone(),
-                            display_name: format!("\u{1F512} {}", peer_name), // Lock emoji prefix
+                            display_name: peer_name.clone(),
                             avatar_url: String::new(),
                             avatar_bytes: dm.peer_avatar.clone(),
                             avatar_decoded: None,

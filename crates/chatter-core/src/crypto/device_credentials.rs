@@ -3,10 +3,13 @@
 //! Device credential generation and storage for Signal-style device authentication.
 //! Implements device auth token generation and UAK (Unidentified Access Key) derivation.
 
+use std::fmt;
+
 use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use rand::RngCore;
 use subtle::ConstantTimeEq;
+use zeroize::Zeroize;
 
 use crate::error::CryptoError;
 
@@ -14,10 +17,28 @@ use crate::error::CryptoError;
 ///
 /// Random token used for HTTP Basic authentication with the server.
 /// Format: `{user_id}.{device_id}:{token_base64}` in Authorization header.
-#[derive(Debug, Clone)]
+///
+/// The token bytes are zeroized when the struct is dropped, and `Debug` is
+/// redacted so accidental `{:?}` formatting (panics, log statements) cannot
+/// leak the HTTP Basic password.
+#[derive(Clone)]
 pub struct DeviceToken {
     /// 32-byte random authentication token.
     token: [u8; 32],
+}
+
+impl fmt::Debug for DeviceToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeviceToken")
+            .field("token", &"[REDACTED 32 bytes]")
+            .finish()
+    }
+}
+
+impl Drop for DeviceToken {
+    fn drop(&mut self) {
+        self.token.zeroize();
+    }
 }
 
 impl DeviceToken {
@@ -57,7 +78,11 @@ impl DeviceToken {
 /// - UAK (16-byte key for sealed sender)
 ///
 /// Used by AuthInterceptor to construct Authorization headers.
-#[derive(Debug, Clone)]
+///
+/// The UAK is zeroized on drop; the auth token is zeroized via `DeviceToken`'s
+/// own `Drop`. `Debug` is redacted to keep the token and UAK out of any
+/// accidental `{:?}` output.
+#[derive(Clone)]
 pub struct DeviceCredentials {
     /// Signal device ID (1 for primary device, 2-127 for linked devices).
     device_id: u32,
@@ -67,6 +92,26 @@ pub struct DeviceCredentials {
     unidentified_access_key: [u8; 16],
     /// Whether to allow unrestricted unidentified access.
     unrestricted_unidentified_access: bool,
+}
+
+impl fmt::Debug for DeviceCredentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeviceCredentials")
+            .field("device_id", &self.device_id)
+            .field("auth_token", &"[REDACTED]")
+            .field("unidentified_access_key", &"[REDACTED 16 bytes]")
+            .field(
+                "unrestricted_unidentified_access",
+                &self.unrestricted_unidentified_access,
+            )
+            .finish()
+    }
+}
+
+impl Drop for DeviceCredentials {
+    fn drop(&mut self) {
+        self.unidentified_access_key.zeroize();
+    }
 }
 
 impl DeviceCredentials {
@@ -330,5 +375,24 @@ mod tests {
 
         creds.set_unrestricted_unidentified_access(false);
         assert!(!creds.allows_unrestricted_unidentified());
+    }
+
+    #[test]
+    fn test_device_token_debug_redacted() {
+        let token = DeviceToken::from_bytes(&[0xABu8; 32]).unwrap();
+        let dbg = format!("{:?}", token);
+        assert!(dbg.contains("REDACTED"), "debug output: {dbg}");
+        assert!(!dbg.contains("ab"), "raw bytes leaked in debug: {dbg}");
+        assert!(!dbg.contains("AB"), "raw bytes leaked in debug: {dbg}");
+    }
+
+    #[test]
+    fn test_device_credentials_debug_redacted() {
+        let creds = DeviceCredentials::from_stored(7, [0xABu8; 32], [0xCDu8; 16]);
+        let dbg = format!("{:?}", creds);
+        assert!(dbg.contains("REDACTED"), "debug output: {dbg}");
+        assert!(dbg.contains("device_id"), "device_id should still be visible: {dbg}");
+        assert!(!dbg.contains("ab"), "auth_token bytes leaked: {dbg}");
+        assert!(!dbg.contains("cd"), "uak bytes leaked: {dbg}");
     }
 }

@@ -126,11 +126,36 @@ impl ChatterClient {
         self.users().list_friend_requests(filter, limit, offset).await
     }
 
+    /// Convenience: every friend request the server knows about.
+    /// Equivalent to `list_friend_requests(FriendRequestFilter::All, 100, 0)`.
+    /// Use the parameterised variant when you actually need pagination
+    /// or a specific direction (Sent / Received / Pending / Accepted).
+    pub async fn list_all_friend_requests(
+        &self,
+    ) -> Result<Vec<crate::domain::user::Friendship>, crate::services::UserError> {
+        self.users().list_friend_requests(
+            crate::services::user::FriendRequestFilter::All,
+            100,
+            0,
+        ).await
+    }
+
+    /// Convenience: incoming-only friend requests.
+    pub async fn list_pending_friend_requests(
+        &self,
+    ) -> Result<Vec<crate::domain::user::Friendship>, crate::services::UserError> {
+        self.users().list_friend_requests(
+            crate::services::user::FriendRequestFilter::Received,
+            100,
+            0,
+        ).await
+    }
+
     pub async fn update_user_profile(
         &self,
-        display_name: Option<&str>,
-        avatar_url: Option<&str>,
-        status_message: Option<&crate::domain::user::StatusMessage>,
+        display_name: Option<String>,
+        avatar_url: Option<String>,
+        status_message: Option<crate::domain::user::StatusMessage>,
     ) -> Result<crate::domain::user::Profile, crate::services::UserError> {
         self.users().update_user_profile(display_name, avatar_url, status_message).await
     }
@@ -189,7 +214,7 @@ impl ChatterClient {
     pub async fn send_anon_dm_presence_update(
         &self,
         conversation_id: &crate::domain::anon_dm::AnonDmId,
-        presence: crate::proto::UserPresence,
+        presence: crate::domain::user::PresenceStatus,
     ) -> Result<(), crate::services::anon_dm::AnonDmError> {
         self.anon_dms().send_presence_update(conversation_id, presence).await
     }

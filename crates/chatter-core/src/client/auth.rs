@@ -53,6 +53,21 @@ use crate::system::Directories;
 use super::{ChatterClient, ClientError, RecoveryResult};
 
 impl ChatterClient {
+    /// Ensure the gRPC pool is connected before running an auth RPC.
+    ///
+    /// Called from [`Self::login`] and [`Self::register`]. The startup
+    /// `connect()` may have run before the user supplied a server URL
+    /// (e.g. first-run, where the URL is entered in the register form
+    /// itself), leaving the connection state at `Disconnected`. Without
+    /// this self-heal, every auth RPC bounces with "Not connected to
+    /// server" until the user manually retries `connect()`.
+    async fn ensure_connected_for_auth(self: &Arc<Self>) -> Result<(), ClientError> {
+        if self.is_connected() {
+            return Ok(());
+        }
+        self.connect().await
+    }
+
     // ── Auth (high-level) ───────────────────────────────────────────
 
     /// Log in and start all background services.
@@ -88,6 +103,12 @@ impl ChatterClient {
         device_name: &str,
         pin: Option<&str>,
     ) -> Result<LoginResult, ClientError> {
+        // If startup `connect()` failed (or hasn't run yet), the gRPC
+        // pool will reject auth RPCs with "Not connected to server".
+        // Self-heal here so callers don't have to remember to retry —
+        // common UX hazard when the user fixes the server URL after
+        // initial offline boot.
+        self.ensure_connected_for_auth().await?;
         let mut result = self.auth().do_login(username, password, device_name, pin).await?;
         self.auth_state().set_logged_in(
             result.user_id,
@@ -121,6 +142,8 @@ impl ChatterClient {
                 return Err(ClientError::Validation("PIN must be exactly 6 digits".into()));
             }
         }
+        // Self-heal a stale Disconnected state (see `login` for context).
+        self.ensure_connected_for_auth().await?;
         let result = self.auth().do_register(
             username, password, display_name, device_name, avatar, pin,
         ).await?;

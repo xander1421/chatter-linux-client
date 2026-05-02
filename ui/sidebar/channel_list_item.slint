@@ -6,6 +6,7 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
+import { Typography } from "../theme/typography.slint";
 import { TooltipArea } from "../components/tooltip.slint";
 
 export component ChannelListItem inherits Rectangle {
@@ -60,10 +61,19 @@ export component ChannelListItem inherits Rectangle {
                 }
             }
 
-            if !root.has-avatar: Image {
-                source: root.channel-type == "public" ? Icons.hash
-                      : root.channel-type == "private" ? Icons.lock
-                      : Icons.users;
+            // Private channels render as a purple dot instead of an icon —
+            // visual encryption marker without taking up icon space.
+            if !root.has-avatar && root.channel-type == "private": Rectangle {
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: Colors.primary;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+
+            if !root.has-avatar && root.channel-type != "private": Image {
+                source: root.channel-type == "public" ? Icons.hash : Icons.users;
                 width: 16px;
                 height: 16px;
                 x: (parent.width - self.width) / 2;
@@ -80,7 +90,7 @@ export component ChannelListItem inherits Rectangle {
             Text {
                 text: root.name;
                 color: root.selected ? Colors.text-primary : Colors.text-secondary;
-                font-size: 14px;
+                font-size: Typography.sm;
                 font-weight: root.unread-count > 0 ? 600 : 400;
                 vertical-alignment: center;
                 overflow: elide;
@@ -101,7 +111,7 @@ export component ChannelListItem inherits Rectangle {
                 badge-text := Text {
                     text: root.unread-count > 99 ? "99+" : root.unread-count;
                     color: Colors.text-primary;
-                    font-size: 11px;
+                    font-size: Typography.xs2;
                     font-weight: 600;
                     horizontal-alignment: center;
                     vertical-alignment: center;
@@ -148,10 +158,18 @@ export component ChannelListItem inherits Rectangle {
             }
         }
 
-        if !root.has-avatar: Image {
-            source: root.channel-type == "public" ? Icons.hash
-                  : root.channel-type == "private" ? Icons.lock
-                  : Icons.users;
+        // Collapsed view: private → purple dot, others → type icon.
+        if !root.has-avatar && root.channel-type == "private": Rectangle {
+            width: 10px;
+            height: 10px;
+            border-radius: 5px;
+            background: Colors.primary;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+        }
+
+        if !root.has-avatar && root.channel-type != "private": Image {
+            source: root.channel-type == "public" ? Icons.hash : Icons.users;
             width: 20px;
             height: 20px;
             x: (parent.width - self.width) / 2;
@@ -171,7 +189,7 @@ export component ChannelListItem inherits Rectangle {
             collapsed-badge-text := Text {
                 text: root.unread-count > 99 ? "99+" : root.unread-count;
                 color: Colors.text-primary;
-                font-size: 10px;
+                font-size: Typography.xxs;
                 font-weight: 600;
                 horizontal-alignment: center;
                 vertical-alignment: center;

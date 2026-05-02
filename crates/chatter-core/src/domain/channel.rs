@@ -58,7 +58,11 @@ pub struct Channel {
     pub channel_type: ChannelType,
     pub name: String,
     pub description: Option<String>,
-    pub image_url: Option<String>,
+    /// Channel icon as raw image bytes (PNG/JPEG/WebP, ≤64KB).
+    /// Server-managed channels store this plaintext alongside the
+    /// channel record — same trust level as the channel name. Encrypted
+    /// channels go through the anon-group icon path instead.
+    pub icon: Option<Vec<u8>>,
     pub owner_id: UserId,
     pub config: ChannelConfig,
     pub created_at: DateTime<Utc>,
@@ -82,7 +86,7 @@ impl Channel {
             channel_type,
             name,
             description: None,
-            image_url: None,
+            icon: None,
             owner_id,
             config: ChannelConfig::default(),
             created_at: now,

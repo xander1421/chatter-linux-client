@@ -6,7 +6,8 @@ use std::sync::Arc;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 
-use crate::crypto::attachment_crypto::AttachmentCrypto;
+use crate::crypto::attachment_crypto::{max_attachment_size, AttachmentCrypto};
+use crate::error::CryptoError;
 use crate::domain::attachment::{Attachment, AttachmentStatus, ContentLocation, FileMetadata};
 use crate::domain::ids::{AttachmentId, ChannelId};
 use crate::proto::chat_v1::FileChunk;
@@ -33,6 +34,16 @@ impl AttachmentService {
             .map_err(|e| AttachmentError::FileError(format!("Failed to read file metadata: {}", e)))?;
 
         let file_size = metadata.len();
+
+        // Enforce attachment size cap at the service boundary (defense-in-depth:
+        // also enforced inside encrypt_file_to_file, but this path uses gRPC
+        // streaming which bypasses encryption entirely).
+        let max_size = max_attachment_size();
+        if file_size > max_size {
+            return Err(AttachmentError::EncryptionError(
+                CryptoError::AttachmentTooLarge { size: file_size, max: max_size }.to_string(),
+            ));
+        }
         let filename = file_path
             .file_name()
             .and_then(|n| n.to_str())
@@ -415,6 +426,16 @@ impl AttachmentService {
             .map_err(|e| AttachmentError::FileError(format!("Failed to read file metadata: {}", e)))?
             .len();
 
+        // Enforce attachment size cap at the service boundary. The same check
+        // exists inside encrypt_file_to_file, but failing here avoids the work
+        // of opening a temp file / spawn_blocking for a known-rejected upload.
+        let max_size = max_attachment_size();
+        if plaintext_size > max_size {
+            return Err(AttachmentError::EncryptionError(
+                CryptoError::AttachmentTooLarge { size: plaintext_size, max: max_size }.to_string(),
+            ));
+        }
+
         let filename = file_path
             .file_name()
             .and_then(|n| n.to_str())
@@ -595,6 +616,17 @@ impl AttachmentService {
         mime_type: &str,
     ) -> Result<CdnUploadResult, AttachmentError> {
         let plaintext_size = content.len() as u64;
+
+        // Enforce attachment size cap at the service boundary. The in-memory
+        // encrypt() path does not check the cap itself, so this is the only
+        // gate that prevents oversized buffers (e.g. GIFs from Klipy/Tenor)
+        // from being uploaded.
+        let max_size = max_attachment_size();
+        if plaintext_size > max_size {
+            return Err(AttachmentError::EncryptionError(
+                CryptoError::AttachmentTooLarge { size: plaintext_size, max: max_size }.to_string(),
+            ));
+        }
 
         tracing::debug!(
             filename = %filename,
@@ -1048,4 +1080,166 @@ fn detect_mime_from_bytes(data: &[u8]) -> String {
     }
 
     "application/octet-stream".to_string()
+}
+
+#[cfg(test)]
+mod size_cap_tests {
+    //! Defense-in-depth tests: every public upload entrypoint must enforce the
+    //! attachment size cap returned by `max_attachment_size()`. Each test sets
+    //! the cap to 100 bytes, calls the entrypoint with a 200-byte payload, and
+    //! asserts the returned error round-trips Signal's `AttachmentTooLarge`
+    //! display string. The cap is then restored via the captured `original`.
+    use super::*;
+    use crate::crypto::attachment_crypto::{max_attachment_size, set_max_attachment_size};
+    use crate::services::attachment::AttachmentService;
+    use crate::storage::database::Database;
+    use crate::storage::repositories::AttachmentRepository;
+    use std::sync::{Arc, Mutex};
+
+    /// Serializes any test that mutates the process-global `MAX_ATTACHMENT_SIZE`.
+    /// Mirrors the lock used by `attachment_crypto::tests` since both suites
+    /// share the same atomic.
+    static SIZE_CAP_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Build a real but offline `AttachmentService`. The size cap check fires
+    /// before any gRPC or repository access, so `new_local` (no grpc pool) is
+    /// sufficient — the test will never reach those code paths.
+    fn make_service() -> (AttachmentService, tempfile::TempDir) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("size_cap_test.db");
+        let db = Arc::new(Database::open(&db_path, "testpass").unwrap());
+        db.run_migrations().unwrap();
+        let repo = Arc::new(AttachmentRepository::new(db));
+        (AttachmentService::new_local(repo), temp_dir)
+    }
+
+    #[tokio::test]
+    async fn upload_file_rejects_oversized_payload() {
+        let _guard = SIZE_CAP_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let original = max_attachment_size();
+        set_max_attachment_size(100);
+
+        let (svc, _tmp) = make_service();
+        let payload = vec![7u8; 200];
+        let input = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(input.path(), &payload).unwrap();
+
+        let result = svc
+            .upload_file(input.path(), &crate::domain::ids::ChannelId::new())
+            .await;
+
+        set_max_attachment_size(original);
+
+        match result {
+            Err(AttachmentError::EncryptionError(msg)) => {
+                assert!(msg.contains("attachment too large"), "unexpected msg: {}", msg);
+            }
+            other => panic!(
+                "expected EncryptionError(AttachmentTooLarge), got {:?}",
+                other.as_ref().err().map(|e| e.to_string())
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn upload_to_cdn_encrypted_rejects_oversized_payload() {
+        let _guard = SIZE_CAP_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let original = max_attachment_size();
+        set_max_attachment_size(100);
+
+        let (svc, _tmp) = make_service();
+        let payload = vec![7u8; 200];
+        let input = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(input.path(), &payload).unwrap();
+
+        let result = svc.upload_to_cdn_encrypted(input.path()).await;
+
+        set_max_attachment_size(original);
+
+        match result {
+            Err(AttachmentError::EncryptionError(msg)) => {
+                assert!(msg.contains("attachment too large"), "unexpected msg: {}", msg);
+            }
+            other => panic!(
+                "expected EncryptionError(AttachmentTooLarge), got {:?}",
+                other.as_ref().err().map(|e| e.to_string())
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn upload_bytes_to_cdn_encrypted_rejects_oversized_payload() {
+        let _guard = SIZE_CAP_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let original = max_attachment_size();
+        set_max_attachment_size(100);
+
+        let (svc, _tmp) = make_service();
+        let payload = vec![7u8; 200];
+
+        let result = svc
+            .upload_bytes_to_cdn_encrypted(&payload, "big.bin", "application/octet-stream")
+            .await;
+
+        set_max_attachment_size(original);
+
+        match result {
+            Err(AttachmentError::EncryptionError(msg)) => {
+                assert!(msg.contains("attachment too large"), "unexpected msg: {}", msg);
+            }
+            other => panic!(
+                "expected EncryptionError(AttachmentTooLarge), got {:?}",
+                other.as_ref().err().map(|e| e.to_string())
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn upload_file_under_default_cap_passes_check() {
+        // Confirms the size check itself does not reject a small payload at
+        // the default cap. We can't run the full upload without a gRPC pool,
+        // so we accept any non-`AttachmentTooLarge` outcome as proof that the
+        // size gate let the payload through.
+        let _guard = SIZE_CAP_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let original = max_attachment_size();
+        set_max_attachment_size(original);
+
+        let (svc, _tmp) = make_service();
+        let payload = vec![7u8; 32];
+        let input = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(input.path(), &payload).unwrap();
+
+        let result = svc
+            .upload_file(input.path(), &crate::domain::ids::ChannelId::new())
+            .await;
+
+        if let Err(AttachmentError::EncryptionError(ref msg)) = result {
+            assert!(
+                !msg.contains("attachment too large"),
+                "small payload incorrectly tripped size cap: {}",
+                msg
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn upload_bytes_under_default_cap_passes_check() {
+        let _guard = SIZE_CAP_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let original = max_attachment_size();
+        set_max_attachment_size(original);
+
+        let (svc, _tmp) = make_service();
+        let payload = vec![7u8; 32];
+
+        let result = svc
+            .upload_bytes_to_cdn_encrypted(&payload, "small.bin", "application/octet-stream")
+            .await;
+
+        if let Err(AttachmentError::EncryptionError(ref msg)) = result {
+            assert!(
+                !msg.contains("attachment too large"),
+                "small payload incorrectly tripped size cap: {}",
+                msg
+            );
+        }
+    }
 }

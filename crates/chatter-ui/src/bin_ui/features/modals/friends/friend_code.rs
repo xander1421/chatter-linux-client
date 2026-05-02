@@ -192,7 +192,7 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<Cha
 
             match ui_ctx.connect_via_friend_code(&code_str, None).await {
                 Ok(friendship) => {
-                    let friend_id = friendship.friend_id.to_string();
+                    let friend_id = friendship.addressee_id.to_string();
                     tracing::info!("Sent friend request via code to {}", friend_id);
 
                     // Core emits FriendRequestsUpdated — no explicit refresh needed.
@@ -308,7 +308,7 @@ pub(crate) fn wire_connect_private(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                                 let dm_item = crate::DMListItemData {
                                     channel_id: dm_id.to_string().into(),
                                     user_id: peer_id.to_string().into(),
-                                    display_name: "\u{1F512} Private (pending)".into(), // Lock emoji, pending until accepted
+                                    display_name: "Private (pending)".into(),
                                     avatar_url: "".into(),
                                     avatar_source: slint::Image::default(),
                                     has_avatar: false,

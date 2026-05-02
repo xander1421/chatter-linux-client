@@ -94,17 +94,23 @@ export component ChatHeader inherits Rectangle {
     property <bool> is-private-group: channel-type == "private-group";
     property <bool> is-saved: channel-type == "saved";
 
+    // No conversation open → suppress all conversation-scoped actions.
+    // Name is the reliable signal: anon DMs and saved messages can have
+    // synthetic / empty channel-id but always carry a name when opened,
+    // while nothing is set on app start before the user picks a chat.
+    property <bool> has-channel: channel-name != "";
+
     // Show member count for channels and private groups (not DMs)
-    property <bool> show-member-count: (channel-type == "public" || channel-type == "private" || is-private-group) && member-count > 0;
+    property <bool> show-member-count: has-channel && (channel-type == "public" || channel-type == "private" || is-private-group) && member-count > 0;
 
     // Show settings for regular channels and private groups, not for anon DMs or saved messages
-    property <bool> show-settings: (!is-anon-dm && !is-saved) || is-private-group;
+    property <bool> show-settings: has-channel && ((!is-anon-dm && !is-saved) || is-private-group);
 
     // Show invite button for channels and private groups only (not DMs, anon DMs, or saved)
-    property <bool> show-invite: !is-dm && !is-anon-dm && !is-saved;
+    property <bool> show-invite: has-channel && !is-dm && !is-anon-dm && !is-saved;
 
     // Show call buttons for everything except saved messages
-    property <bool> show-calls: !is-saved;
+    property <bool> show-calls: has-channel && !is-saved;
 
     // Layout (56px header) — Neo glassmorphism: translucent surface with edge definition
     height: 56px;
@@ -159,28 +165,23 @@ export component ChatHeader inherits Rectangle {
                 }
             }
 
-            if !root.has-avatar && channel-type == "public": Text {
+            if has-channel && !root.has-avatar && channel-type == "public": Text {
                 text: "#";
                 color: Colors.text-muted;
                 font-size: Typography.lg;
                 vertical-alignment: center;
             }
 
-            if !root.has-avatar && is-private: Rectangle {
-                width: 20px;
-                height: 20px;
+            // Private channels: purple dot in place of a lock icon.
+            if has-channel && !root.has-avatar && is-private: Rectangle {
+                width: 10px;
+                height: 10px;
+                border-radius: 5px;
+                background: Colors.primary;
                 y: (parent.height - self.height) / 2;
-                Image {
-                    source: Icons.lock;
-                    width: 16px;
-                    height: 16px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    colorize: Colors.text-muted;
-                }
             }
 
-            if !root.has-avatar && is-dm: HorizontalLayout {
+            if has-channel && !root.has-avatar && is-dm: HorizontalLayout {
                 spacing: 4px;
                 alignment: center;
                 Text {
@@ -201,7 +202,7 @@ export component ChatHeader inherits Rectangle {
                 }
             }
 
-            if !root.has-avatar && (is-anon-dm || is-private-group): Rectangle {
+            if has-channel && !root.has-avatar && (is-anon-dm || is-private-group): Rectangle {
                 width: 20px;
                 height: 20px;
                 y: (parent.height - self.height) / 2;
@@ -215,7 +216,7 @@ export component ChatHeader inherits Rectangle {
                 }
             }
 
-            if !root.has-avatar && is-saved: Rectangle {
+            if has-channel && !root.has-avatar && is-saved: Rectangle {
                 width: 20px;
                 height: 20px;
                 y: (parent.height - self.height) / 2;
@@ -344,13 +345,13 @@ export component ChatHeader inherits Rectangle {
                     icon: Icons.users;
                     clicked => { root.members-clicked(); }
                 }
-                if root.has-any-pinned: IconButton {
+                if has-channel && root.has-any-pinned: IconButton {
                     icon: Icons.pin;
                     icon-color: Colors.primary;
                     clicked => { root.pin-clicked(); }
                 }
                 if root.show-settings: IconButton {
-                    icon: Icons.settings;
+                    icon: Icons.more-vertical;
                     clicked => { root.settings-clicked(); }
                 }
             }

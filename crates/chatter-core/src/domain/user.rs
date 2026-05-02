@@ -228,10 +228,15 @@ pub enum FriendshipStatus {
 }
 
 /// Friend relationship between users.
+///
+/// `requester_id` is the user who sent the friend request; `addressee_id`
+/// is the user who received it. The naming is asymmetric on purpose so
+/// callers don't have to guess which side is which (the previous
+/// `user_id` / `friend_id` pair was ambiguous).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Friendship {
-    pub user_id: UserId,
-    pub friend_id: UserId,
+    pub requester_id: UserId,
+    pub addressee_id: UserId,
     pub status: FriendshipStatus,
     pub created_at: DateTime<Utc>,
 }
@@ -239,12 +244,26 @@ pub struct Friendship {
 impl Friendship {
     /// Create a new pending friendship request.
     #[must_use]
-    pub fn new_request(user_id: UserId, friend_id: UserId) -> Self {
+    pub fn new_request(requester_id: UserId, addressee_id: UserId) -> Self {
         Self {
-            user_id,
-            friend_id,
+            requester_id,
+            addressee_id,
             status: FriendshipStatus::Pending,
             created_at: Utc::now(),
+        }
+    }
+
+    /// The other party in the friendship from `viewer`'s perspective.
+    /// Returns `addressee_id` if viewer is the requester, otherwise
+    /// `requester_id`. None if viewer isn't part of the friendship.
+    #[must_use]
+    pub fn other_party(&self, viewer: &UserId) -> Option<&UserId> {
+        if &self.requester_id == viewer {
+            Some(&self.addressee_id)
+        } else if &self.addressee_id == viewer {
+            Some(&self.requester_id)
+        } else {
+            None
         }
     }
 

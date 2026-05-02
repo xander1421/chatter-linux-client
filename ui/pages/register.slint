@@ -201,7 +201,7 @@ export component RegisterPage inherits Rectangle {
                                     Text {
                                         text: preset.letter;
                                         color: Colors.text-primary;
-                                        font-size: 18px;
+                                        font-size: Typography.lg;
                                         font-weight: Typography.semibold;
                                         horizontal-alignment: center;
                                         vertical-alignment: center;
@@ -241,18 +241,18 @@ export component RegisterPage inherits Rectangle {
                                     if username-status == "checking": Text {
                                         text: "Checking availability...";
                                         color: Colors.text-muted;
-                                        font-size: 10px;
+                                        font-size: Typography.xxs;
                                     }
                                     if username-status == "available": Text {
                                         text: "\u{2713} Available";
                                         color: Colors.success;
-                                        font-size: 10px;
+                                        font-size: Typography.xxs;
                                         font-weight: 600;
                                     }
                                     if username-status == "taken": Text {
                                         text: "\u{2715} Already taken";
                                         color: Colors.error;
-                                        font-size: 10px;
+                                        font-size: Typography.xxs;
                                         font-weight: 600;
                                     }
                                 }
@@ -316,7 +316,7 @@ export component RegisterPage inherits Rectangle {
                                     color: root.password-strength == 1 ? Colors.error : 
                                            root.password-strength == 2 ? Colors.warning :
                                            root.password-strength == 3 ? Colors.info : Colors.success;
-                                    font-size: 10px;
+                                    font-size: Typography.xxs;
                                 }
                             }
 

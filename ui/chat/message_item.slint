@@ -89,7 +89,7 @@ export component MessageItem inherits Rectangle {
 
     // Callbacks
     callback reply-clicked(string, string);
-    callback react-clicked(string, string);
+    callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback thread-clicked(string);
     callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback message-clicked(string);
@@ -424,7 +424,7 @@ export component MessageItem inherits Rectangle {
                                         Text {
                                             text: span.text;
                                             color: span.code-block && !root.is-own ? Colors.code-text : Colors.text-primary;
-                                            font-family: "monospace";
+                                            font-family: Typography.font-family-mono;
                                             font-size: Typography.xs;
                                             wrap: word-wrap;
                                             max-width: root.width * 0.7 - Spacing.sm * 2 - 16px;
@@ -447,7 +447,7 @@ export component MessageItem inherits Rectangle {
                                             y: 2px;
                                             text: span.text;
                                             color: Colors.text-primary;
-                                            font-family: "monospace";
+                                            font-family: Typography.font-family-mono;
                                             font-size: Typography.xs;
                                         }
                                     }
@@ -1022,7 +1022,7 @@ export component MessageItem inherits Rectangle {
 
                 // Reactions pill - straddling bubble's bottom corner
                 // Half inside / half outside on both X and Y
-                if root.has-reactions: Rectangle {
+                if root.has-reactions: reactions-pill := Rectangle {
                     height: 22px;
                     width: reactions-row.preferred-width + 8px;
                     background: Colors.surface;
@@ -1065,7 +1065,11 @@ export component MessageItem inherits Rectangle {
 
                     TouchArea {
                         mouse-cursor: pointer;
-                        clicked => { root.react-clicked(root.sender-id, root.timestamp-ns); }
+                        clicked => {
+                            root.react-clicked(root.sender-id, root.timestamp-ns,
+                                reactions-pill.absolute-position.x,
+                                reactions-pill.absolute-position.y + reactions-pill.height);
+                        }
                     }
                 }
                 // Action buttons — float above top corner of bubble on opposed side
@@ -1120,7 +1124,7 @@ export component MessageItem inherits Rectangle {
                             }
 
                             // React button
-                            Rectangle {
+                            react-btn := Rectangle {
                                 height: 24px;
                                 width: 24px;
                                 background: react-btn-touch.has-hover ? Colors.surface-hover : transparent;
@@ -1140,7 +1144,9 @@ export component MessageItem inherits Rectangle {
                                 react-btn-touch := TouchArea {
                                     mouse-cursor: pointer;
                                     clicked => {
-                                        root.react-clicked(root.sender-id, root.timestamp-ns);
+                                        root.react-clicked(root.sender-id, root.timestamp-ns,
+                                            react-btn.absolute-position.x,
+                                            react-btn.absolute-position.y + react-btn.height);
                                     }
                                 }
                             }

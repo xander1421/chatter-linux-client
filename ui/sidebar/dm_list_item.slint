@@ -6,6 +6,7 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
+import { Typography } from "../theme/typography.slint";
 import { Avatar } from "../components/avatar.slint";
 import { TooltipArea } from "../components/tooltip.slint";
 
@@ -76,15 +77,23 @@ export component DMListItem inherits Rectangle {
         VerticalLayout {
             alignment: center;
 
-            Avatar {
-                size: 32px;
-                source: root.avatar-source;
-                fallback-text: root.initials;
-                show-presence: true;
-                presence-color: root.presence-status == "online" ? Colors.online
-                             : root.presence-status == "away" ? Colors.away
-                             : root.presence-status == "dnd" ? Colors.dnd
-                             : Colors.offline;
+            Rectangle {
+                width: 36px;
+                height: 36px;
+                border-radius: 18px;
+                border-width: root.selected ? 2px : 0px;
+                border-color: Colors.primary;
+
+                Avatar {
+                    size: 32px;
+                    source: root.avatar-source;
+                    fallback-text: root.initials;
+                    show-presence: true;
+                    presence-color: root.presence-status == "online" ? Colors.online
+                                 : root.presence-status == "away" ? Colors.away
+                                 : root.presence-status == "dnd" ? Colors.dnd
+                                 : Colors.offline;
+                }
             }
         }
 
@@ -101,7 +110,7 @@ export component DMListItem inherits Rectangle {
                 Text {
                     text: root.display-name;
                     color: root.selected ? Colors.text-primary : Colors.text-secondary;
-                    font-size: 14px;
+                    font-size: Typography.sm;
                     font-weight: root.unread-count > 0 ? 600 : 400;
                     overflow: elide;
                     horizontal-stretch: 1;
@@ -139,14 +148,14 @@ export component DMListItem inherits Rectangle {
                 Text {
                     text: "typing";
                     color: Colors.primary;
-                    font-size: 12px;
+                    font-size: Typography.xs;
                 }
             }
 
             if !root.is-typing: Text {
                 text: root.last-message;
                 color: Colors.text-muted;
-                font-size: 12px;
+                font-size: Typography.xs;
                 overflow: elide;
             }
         }
@@ -160,7 +169,7 @@ export component DMListItem inherits Rectangle {
             Text {
                 text: root.timestamp;
                 color: Colors.text-muted;
-                font-size: 11px;
+                font-size: Typography.xs2;
                 horizontal-alignment: right;
             }
 
@@ -177,7 +186,7 @@ export component DMListItem inherits Rectangle {
                     badge-text := Text {
                         text: root.unread-count > 99 ? "99+" : root.unread-count;
                         color: Colors.text-primary;
-                        font-size: 11px;
+                        font-size: Typography.xs2;
                         font-weight: 600;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -203,15 +212,23 @@ export component DMListItem inherits Rectangle {
             VerticalLayout {
                 alignment: center;
 
-                Avatar {
-                    size: 32px;
-                    source: root.avatar-source;
-                    fallback-text: root.initials;
-                    show-presence: true;
-                    presence-color: root.presence-status == "online" ? Colors.online
-                                 : root.presence-status == "away" ? Colors.away
-                                 : root.presence-status == "dnd" ? Colors.dnd
-                                 : Colors.offline;
+                Rectangle {
+                    width: 36px;
+                    height: 36px;
+                    border-radius: 18px;
+                    border-width: root.selected ? 2px : 0px;
+                    border-color: Colors.primary;
+
+                    Avatar {
+                        size: 32px;
+                        source: root.avatar-source;
+                        fallback-text: root.initials;
+                        show-presence: true;
+                        presence-color: root.presence-status == "online" ? Colors.online
+                                     : root.presence-status == "away" ? Colors.away
+                                     : root.presence-status == "dnd" ? Colors.dnd
+                                     : Colors.offline;
+                    }
                 }
             }
         }
@@ -228,7 +245,7 @@ export component DMListItem inherits Rectangle {
             collapsed-badge-text := Text {
                 text: root.unread-count > 99 ? "99+" : root.unread-count;
                 color: Colors.text-primary;
-                font-size: 10px;
+                font-size: Typography.xxs;
                 font-weight: 600;
                 horizontal-alignment: center;
                 vertical-alignment: center;

@@ -6,12 +6,6 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
-// `TextEdit` is the std-widgets wrapper around `TextInput` — it adds the
-// gesture plumbing (long-press selection, double-tap word select,
-// tap-to-position cursor, native context menu) that raw `TextInput` lacks.
-// Required on Android where Slint's `SlintInputView` overlay swallows or
-// ignores the touch sequences a raw `TextInput` would need to handle.
-import { TextEdit } from "std-widgets.slint";
 
 // Pending attachment data for the attachment tray
 export struct PendingAttachmentData {
@@ -49,18 +43,19 @@ export component MessageComposer inherits Rectangle {
     // Line height and sizing constants
     property <length> line-height: 22px;
     property <length> min-input-height: 36px;
-    property <length> max-input-height: 160px;  // ~6-7 lines max
+    // ~18 lines. Beyond this the message list above would collapse to nothing.
+    // Past this cap, the inner Rectangle clips and the cursor stays in view.
+    property <length> max-input-height: 400px;
     property <length> padding-vertical: Spacing.sm * 2;
 
-    // Estimate line count based on character count and available width
-    // ~8px per character at 14px font size; accounts for word-wrap lines
-    // On mobile the sidebar is hidden, so use full width; on desktop subtract sidebar width
-    property <int> chars-per-line: max(20, (root.width - 80px) / 8px);
-    property <int> estimated-wrap-lines: root.text.character-count / max(1, chars-per-line);
-    property <int> estimated-lines: max(1, estimated-wrap-lines + 1);
-
-    // Calculate input height based on content
-    property <length> content-height: max(min-input-height, min(max-input-height, estimated-lines * line-height + padding-vertical));
+    // Use the TextInput's actual `preferred-height` (recomputed by Slint's
+    // text shaper from the wrapped layout) instead of guessing from
+    // character count — guess undercounts when words don't break and the
+    // composer doesn't grow to match the visible wrapped text.
+    property <length> content-height: max(
+        min-input-height,
+        min(max-input-height, text-input.preferred-height + padding-vertical)
+    );
 
     // Attachment tray height
     property <length> attachment-tray-height: has-attachments ? 72px : 0px;
@@ -281,135 +276,153 @@ export component MessageComposer inherits Rectangle {
                 alignment: start;
 
                 // Bold button
-                Rectangle {
-                    width: 28px;
-                    height: 28px;
-                    border-radius: Spacing.radius-sm;
-                    background: fmt-bold-touch.has-hover ? Colors.surface-hover : transparent;
-                    accessible-role: button;
-                    accessible-label: "Bold";
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: Spacing.radius-sm;
+                        background: fmt-bold-touch.has-hover ? Colors.surface-hover : transparent;
+                        accessible-role: button;
+                        accessible-label: "Bold";
 
-                    Text {
-                        text: "B";
-                        color: Colors.text-secondary;
-                        font-size: Typography.sm;
-                        font-weight: Typography.bold;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
+                        Text {
+                            text: "B";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: Typography.bold;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
 
-                    fmt-bold-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.format-text("bold"); }
+                        fmt-bold-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.format-text("bold"); }
+                        }
                     }
                 }
 
                 // Italic button
-                Rectangle {
-                    width: 28px;
-                    height: 28px;
-                    border-radius: Spacing.radius-sm;
-                    background: fmt-italic-touch.has-hover ? Colors.surface-hover : transparent;
-                    accessible-role: button;
-                    accessible-label: "Italic";
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: Spacing.radius-sm;
+                        background: fmt-italic-touch.has-hover ? Colors.surface-hover : transparent;
+                        accessible-role: button;
+                        accessible-label: "Italic";
 
-                    Text {
-                        text: "I";
-                        color: Colors.text-secondary;
-                        font-size: Typography.sm;
-                        font-italic: true;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
+                        Text {
+                            text: "I";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-italic: true;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
 
-                    fmt-italic-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.format-text("italic"); }
+                        fmt-italic-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.format-text("italic"); }
+                        }
                     }
                 }
 
                 // Strikethrough button
-                Rectangle {
-                    width: 28px;
-                    height: 28px;
-                    border-radius: Spacing.radius-sm;
-                    background: fmt-strike-touch.has-hover ? Colors.surface-hover : transparent;
-                    accessible-role: button;
-                    accessible-label: "Strikethrough";
-
-                    Text {
-                        text: "S";
-                        color: Colors.text-secondary;
-                        font-size: Typography.sm;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    // Strikethrough line
+                VerticalLayout {
+                    alignment: center;
                     Rectangle {
-                        width: 10px;
-                        height: 1px;
-                        x: (parent.width - self.width) / 2;
-                        y: parent.height / 2;
-                        background: Colors.text-secondary;
-                    }
+                        width: 28px;
+                        height: 28px;
+                        border-radius: Spacing.radius-sm;
+                        background: fmt-strike-touch.has-hover ? Colors.surface-hover : transparent;
+                        accessible-role: button;
+                        accessible-label: "Strikethrough";
 
-                    fmt-strike-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.format-text("strikethrough"); }
+                        Text {
+                            text: "S";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        // Strikethrough line
+                        Rectangle {
+                            width: 10px;
+                            height: 1px;
+                            x: (parent.width - self.width) / 2;
+                            y: parent.height / 2;
+                            background: Colors.text-secondary;
+                        }
+
+                        fmt-strike-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.format-text("strikethrough"); }
+                        }
                     }
                 }
 
                 // Code button
-                Rectangle {
-                    width: 28px;
-                    height: 28px;
-                    border-radius: Spacing.radius-sm;
-                    background: fmt-code-touch.has-hover ? Colors.surface-hover : transparent;
-                    accessible-role: button;
-                    accessible-label: "Inline code";
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: Spacing.radius-sm;
+                        background: fmt-code-touch.has-hover ? Colors.surface-hover : transparent;
+                        accessible-role: button;
+                        accessible-label: "Inline code";
 
-                    Text {
-                        text: "</>";
-                        color: Colors.text-secondary;
-                        font-size: 10px;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
+                        Text {
+                            text: "</>";
+                            color: Colors.text-secondary;
+                            font-size: Typography.xxs;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
 
-                    fmt-code-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.format-text("code"); }
+                        fmt-code-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.format-text("code"); }
+                        }
                     }
                 }
 
                 // Separator
-                Rectangle {
-                    width: 1px;
-                    height: 20px;
-                    background: Colors.text-muted.with-alpha(0.2);
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 1px;
+                        height: 20px;
+                        background: Colors.text-muted.with-alpha(0.2);
+                    }
                 }
 
                 // Code block button
-                Rectangle {
-                    width: 36px;
-                    height: 28px;
-                    border-radius: Spacing.radius-sm;
-                    background: fmt-codeblock-touch.has-hover ? Colors.surface-hover : transparent;
-                    accessible-role: button;
-                    accessible-label: "Code block";
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: Spacing.radius-sm;
+                        background: fmt-codeblock-touch.has-hover ? Colors.surface-hover : transparent;
+                        accessible-role: button;
+                        accessible-label: "Code block";
 
-                    Text {
-                        text: "```";
-                        color: Colors.text-secondary;
-                        font-size: 10px;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
+                        Text {
+                            text: "```";
+                            color: Colors.text-secondary;
+                            font-size: Typography.xxs;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
 
-                    fmt-codeblock-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.format-text("codeblock"); }
+                        fmt-codeblock-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.format-text("codeblock"); }
+                        }
                     }
                 }
             }
@@ -628,23 +641,20 @@ export component MessageComposer inherits Rectangle {
                     animate opacity { duration: 150ms; }
                 }
 
-                // Text input — TextEdit wraps TextInput with the gesture
-                // plumbing (selection handles, tap-to-position cursor) that
-                // Android's IME bridge needs.
-                //
-                // TextEdit's `text` is `in-out` but the chained <=> bindings
-                // up to App.composer-text go through a ScrollView viewport
-                // which doesn't always propagate back up cleanly. We push
-                // updates explicitly from `edited(text)` so `can-send`
-                // (which depends on `root.text`) flips as the user types.
-                text-input := TextEdit {
+                // Text input — raw TextInput. A previous swap to std-widgets
+                // `TextEdit` (a ScrollView wrapper) intercepted pointer
+                // events on desktop, leaving the field unclickable.
+                text-input := TextInput {
                     x: Spacing.md;
                     y: Spacing.sm;
                     width: parent.width - Spacing.md * 2;
                     height: parent.height - Spacing.sm * 2;
-                    text: root.text;
+                    color: Colors.text-primary;
+                    font-size: Typography.base;
+                    text <=> root.text;
                     enabled: !root.disabled;
                     wrap: word-wrap;
+                    single-line: false;
 
                     key-pressed(event) => {
                         if (event.text == "\n" && !event.modifiers.shift) {
@@ -665,12 +675,11 @@ export component MessageComposer inherits Rectangle {
                         return reject;
                     }
 
-                    edited(value) => {
-                        root.text = value;
-                        if (value != "") {
-                            root.check-mention-trigger(value);
+                    edited => {
+                        if (self.text != "") {
+                            root.check-mention-trigger(self.text);
                         }
-                        root.typing-changed(value != "");
+                        root.typing-changed(self.text != "");
                     }
                 }
 

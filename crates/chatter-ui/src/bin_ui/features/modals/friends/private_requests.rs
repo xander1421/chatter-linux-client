@@ -279,7 +279,7 @@ fn add_anon_dm_to_sidebar(
     let mut dm_send_data = DMListItemSendData {
         channel_id: dm.id.to_string(),
         user_id: dm.peer_id.to_string(),
-        display_name: format!("\u{1F512} {}", peer_name), // Lock emoji for private
+        display_name: peer_name.to_string(),
         avatar_url: String::new(),
         avatar_bytes: dm.peer_avatar.clone(),
         avatar_decoded: None,

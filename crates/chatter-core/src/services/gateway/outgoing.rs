@@ -134,14 +134,18 @@ pub enum CallChannelId {
     AnonDm(AnonDmId),
 }
 
-/// Quote/reply context for channel DM outgoing messages.
 /// Quote/reply context for outgoing messages (all conversation types).
+///
+/// Field names use the `target_*` prefix so callers can tell at a glance
+/// that these refer to the *quoted* (target) message, not the new outgoing
+/// one. The Slint UI mental model already says `target_*` everywhere, so
+/// the SDK matches.
 pub struct QuoteIntent {
-    pub author_id: UserId,
-    pub timestamp: u64,
+    pub target_author_id: UserId,
+    pub target_timestamp: u64,
     /// Preview text for the quoted message. None for anon paths where
     /// the recipient already has the message locally.
-    pub preview_text: Option<String>,
+    pub target_preview: Option<String>,
 }
 
 // =============================================================================
@@ -523,7 +527,7 @@ async fn route_channel_dm(
         if let Some(ref q) = quote {
             message_service.send_dm_with_reply(
                 peer_id, dm_channel_id, text, path_refs,
-                &q.author_id, q.timestamp, q.preview_text.as_deref().unwrap_or(""),
+                &q.target_author_id, q.target_timestamp, q.target_preview.as_deref().unwrap_or(""),
                 mailbox_manager,
             ).await?
         } else {
@@ -646,7 +650,7 @@ async fn route_anon_dm(
 
     let (message_id, sent_at) = if let Some(q) = quote {
         anon_dm_service
-            .send_reply(conversation_id, text, attachment_pointers, &q.author_id, q.timestamp)
+            .send_reply(conversation_id, text, attachment_pointers, &q.target_author_id, q.target_timestamp)
             .await?
     } else {
         anon_dm_service
@@ -685,7 +689,7 @@ async fn route_anon_group(
 
     let (message_id, sent_at) = if let Some(q) = quote {
         anon_group_service
-            .send_reply(group_id, text, attachment_pointers, &q.author_id, q.timestamp)
+            .send_reply(group_id, text, attachment_pointers, &q.target_author_id, q.target_timestamp)
             .await?
     } else if attachment_pointers.is_empty() {
         anon_group_service

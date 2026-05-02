@@ -141,7 +141,7 @@ export component UserProfileModal inherits Rectangle {
                         Text {
                             text: root.is-verified ? "\u{2713}" : "?";
                             color: root.is-verified ? Colors.online : Colors.text-muted;
-                            font-size: 11px;
+                            font-size: Typography.xs2;
                             font-weight: Typography.bold;
                             horizontal-alignment: center;
                             vertical-alignment: center;
@@ -217,7 +217,7 @@ export component UserProfileModal inherits Rectangle {
                 Text {
                     text: "ABOUT ME";
                     color: Colors.text-muted;
-                    font-size: 11px;
+                    font-size: Typography.xs2;
                     font-weight: Typography.bold;
                     letter-spacing: 0.5px;
                 }
@@ -264,7 +264,7 @@ export component UserProfileModal inherits Rectangle {
                         Text {
                             text: "SAFETY NUMBER";
                             color: Colors.text-muted;
-                            font-size: 11px;
+                            font-size: Typography.xs2;
                             font-weight: Typography.bold;
                             letter-spacing: 0.5px;
                             vertical-alignment: center;
@@ -273,7 +273,7 @@ export component UserProfileModal inherits Rectangle {
                         Text {
                             text: root.show-safety-number ? "\u{25B2}" : "\u{25BC}";
                             color: safety-number-toggle.has-hover ? Colors.text-primary : Colors.text-muted;
-                            font-size: 10px;
+                            font-size: Typography.xxs;
                             vertical-alignment: center;
                         }
                     }
@@ -306,7 +306,7 @@ export component UserProfileModal inherits Rectangle {
                             width: parent.width - Spacing.md * 2;
                             text: root.safety-number;
                             color: Colors.text-primary;
-                            font-size: 13px;
+                            font-size: Typography.sm2;
                             font-weight: Typography.medium;
                             horizontal-alignment: center;
                             wrap: word-wrap;

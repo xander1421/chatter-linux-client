@@ -299,15 +299,29 @@ impl AttachmentCrypto {
     ) -> Result<Vec<u8>, CryptoError> {
         // Verify minimum length
         if ciphertext.len() < MIN_CIPHERTEXT_LENGTH {
-            return Err(CryptoError::AttachmentDecryptionFailed(
+            let err = CryptoError::AttachmentDecryptionFailed(
                 "ciphertext too short".to_string(),
-            ));
+            );
+            tracing::warn!(
+                target: "chatter::crypto::decrypt_failure",
+                kind = "attachment",
+                error = %err,
+                "decryption failure"
+            );
+            return Err(err);
         }
 
         // Verify digest first (constant-time comparison)
         let actual_digest = Self::compute_digest(ciphertext);
         if actual_digest.ct_eq(expected_digest).unwrap_u8() != 1 {
-            return Err(CryptoError::AttachmentDigestMismatch);
+            let err = CryptoError::AttachmentDigestMismatch;
+            tracing::warn!(
+                target: "chatter::crypto::decrypt_failure",
+                kind = "attachment",
+                error = %err,
+                "decryption failure"
+            );
+            return Err(err);
         }
 
         // Split key into AES and MAC portions
@@ -332,17 +346,40 @@ impl AttachmentCrypto {
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC finalize: {}", e)))?;
 
         if computed_hmac.ct_eq(expected_hmac).unwrap_u8() != 1 {
-            return Err(CryptoError::AttachmentMacMismatch);
+            let err = CryptoError::AttachmentMacMismatch;
+            tracing::warn!(
+                target: "chatter::crypto::decrypt_failure",
+                kind = "attachment",
+                error = %err,
+                "decryption failure"
+            );
+            return Err(err);
         }
 
         // Decrypt with hardware-accelerated AES-256-CBC via OpenSSL
-        let mut decrypted = Self::decrypt_aes_cbc_openssl(aes_key, iv, encrypted)?;
+        let mut decrypted = Self::decrypt_aes_cbc_openssl(aes_key, iv, encrypted)
+            .map_err(|e| {
+                tracing::warn!(
+                    target: "chatter::crypto::decrypt_failure",
+                    kind = "attachment",
+                    error = %e,
+                    "decryption failure"
+                );
+                e
+            })?;
 
         // Truncate to original plaintext size (remove zero padding)
         if plaintext_size > decrypted.len() {
-            return Err(CryptoError::AttachmentDecryptionFailed(
+            let err = CryptoError::AttachmentDecryptionFailed(
                 "plaintext_size exceeds decrypted data".to_string(),
-            ));
+            );
+            tracing::warn!(
+                target: "chatter::crypto::decrypt_failure",
+                kind = "attachment",
+                error = %err,
+                "decryption failure"
+            );
+            return Err(err);
         }
         decrypted.truncate(plaintext_size);
 
@@ -668,12 +705,19 @@ impl AttachmentCrypto {
 /// putter) so the whole file never has to fit in RAM. Cap raised from
 /// 100 MiB after users hit the limit on video files.
 ///
-/// Can be overridden via `CHATTER_MAX_ATTACHMENT_SIZE` environment variable.
+/// Override at startup via [`set_max_attachment_size`].
+const DEFAULT_MAX_ATTACHMENT_SIZE: u64 = 1024 * 1024 * 1024;
+
+static MAX_ATTACHMENT_SIZE: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(DEFAULT_MAX_ATTACHMENT_SIZE);
+
 pub fn max_attachment_size() -> u64 {
-    std::env::var("CHATTER_MAX_ATTACHMENT_SIZE")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1024 * 1024 * 1024)
+    MAX_ATTACHMENT_SIZE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Override the attachment size cap. Intended for startup config and tests.
+pub fn set_max_attachment_size(size: u64) {
+    MAX_ATTACHMENT_SIZE.store(size, std::sync::atomic::Ordering::Relaxed);
 }
 
 #[cfg(test)]
@@ -1070,11 +1114,14 @@ mod tests {
         assert_eq!(result.incremental_mac, recomputed_mac);
     }
 
+    /// Serializes any test that mutates the process-global `MAX_ATTACHMENT_SIZE`.
+    static MAX_SIZE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn test_max_attachment_size_enforcement() {
-        // This test uses env var to set a very small max size
-        // SAFETY: Single-threaded test (--test-threads=1), no concurrent env reads
-        unsafe { std::env::set_var("CHATTER_MAX_ATTACHMENT_SIZE", "100") };
+        let _guard = MAX_SIZE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let original = max_attachment_size();
+        set_max_attachment_size(100);
 
         let plaintext = vec![42u8; 200]; // 200 bytes, exceeds 100 byte limit
 
@@ -1088,9 +1135,94 @@ mod tests {
             output_file.path(),
         );
 
-        // SAFETY: Single-threaded test, cleaning up before any concurrent access
-        unsafe { std::env::remove_var("CHATTER_MAX_ATTACHMENT_SIZE") };
+        set_max_attachment_size(original);
 
         assert!(matches!(result, Err(CryptoError::AttachmentTooLarge { .. })));
+    }
+
+    /// Verify decryption-failure metric events fire on the attachment path.
+    ///
+    /// Uses a minimal Subscriber implementation (not a Layer over Registry)
+    /// to avoid interference from any global default subscriber another test
+    /// may install. See the "Operational metrics" section for targets.
+    #[test]
+    fn decrypt_failure_metric_fires_on_attachment_error() {
+        use std::sync::{Arc, Mutex};
+        use tracing::span;
+        use tracing::subscriber::with_default;
+        use tracing::{Event, Metadata, Subscriber};
+
+        #[derive(Clone, Default)]
+        struct CaptureSub {
+            events: Arc<Mutex<Vec<(String, String)>>>,
+        }
+        impl Subscriber for CaptureSub {
+            fn register_callsite(
+                &self,
+                _meta: &'static Metadata<'static>,
+            ) -> tracing::subscriber::Interest {
+                // Force per-event `enabled()` evaluation so prior test
+                // subscribers' cached "never" interest does not silence us.
+                tracing::subscriber::Interest::sometimes()
+            }
+            fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+                metadata.target().starts_with("chatter::crypto::")
+            }
+            fn new_span(&self, _attrs: &span::Attributes<'_>) -> span::Id {
+                span::Id::from_u64(1)
+            }
+            fn record(&self, _: &span::Id, _: &span::Record<'_>) {}
+            fn record_follows_from(&self, _: &span::Id, _: &span::Id) {}
+            fn event(&self, event: &Event<'_>) {
+                let target = event.metadata().target().to_string();
+                struct KindVisitor(Option<String>);
+                impl tracing::field::Visit for KindVisitor {
+                    fn record_debug(
+                        &mut self,
+                        field: &tracing::field::Field,
+                        value: &dyn std::fmt::Debug,
+                    ) {
+                        if field.name() == "kind" && self.0.is_none() {
+                            // Strip surrounding quotes if Debug-formatted.
+                            let s = format!("{:?}", value);
+                            self.0 = Some(s.trim_matches('"').to_string());
+                        }
+                    }
+                    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                        if field.name() == "kind" {
+                            self.0 = Some(value.to_string());
+                        }
+                    }
+                }
+                let mut v = KindVisitor(None);
+                event.record(&mut v);
+                self.events
+                    .lock()
+                    .unwrap()
+                    .push((target, v.0.unwrap_or_default()));
+            }
+            fn enter(&self, _: &span::Id) {}
+            fn exit(&self, _: &span::Id) {}
+        }
+
+        let sub = CaptureSub::default();
+        let events = sub.events.clone();
+
+        with_default(sub, || {
+            // Trigger an attachment decrypt failure: ciphertext too short.
+            let key = [0u8; KEY_SET_LENGTH];
+            let digest = [0u8; 32];
+            let bad = vec![0u8; 4]; // shorter than MIN_CIPHERTEXT_LENGTH
+            let _ = AttachmentCrypto::decrypt(&bad, &key, &digest, 0);
+        });
+
+        let captured = events.lock().unwrap().clone();
+        let hit = captured.iter().any(|(t, k)| {
+            t == "chatter::crypto::decrypt_failure" && k == "attachment"
+        });
+        assert!(
+            hit,
+            "expected decrypt_failure event with kind=attachment, got: {captured:?}"
+        );
     }
 }

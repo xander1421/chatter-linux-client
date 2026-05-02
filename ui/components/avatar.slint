@@ -19,36 +19,42 @@ export component Avatar inherits Rectangle {
 
     width: size;
     height: size;
-    border-radius: size / 2;
-    background: root.source.width > 0 ? Colors.surface : (root.fallback-bg.transparentize(1.0) == root.fallback-bg ? Colors.primary.transparentize(0.7) : root.fallback-bg);
-    clip: true;
+    background: transparent;
 
-    // Avatar image (shown when source has content)
-    if source.width > 0: Image {
+    // Clipped circle holding the image / fallback initials.
+    Rectangle {
         width: 100%;
         height: 100%;
-        source: root.source;
-        image-fit: cover;
+        border-radius: root.size / 2;
+        background: root.source.width > 0 ? Colors.surface : (root.fallback-bg.transparentize(1.0) == root.fallback-bg ? Colors.primary.transparentize(0.7) : root.fallback-bg);
+        clip: true;
+
+        if root.source.width > 0: Image {
+            width: 100%;
+            height: 100%;
+            source: root.source;
+            image-fit: cover;
+        }
+
+        if root.source.width <= 0: Text {
+            width: 100%;
+            height: 100%;
+            text: root.fallback-text;
+            color: Colors.text-primary;
+            font-size: root.size * 0.4;
+            font-weight: Typography.semibold;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
     }
 
-    // Fallback text (shown when no image)
-    if source.width <= 0: Text {
-        width: 100%;
-        height: 100%;
-        text: fallback-text;
-        color: Colors.text-primary;
-        font-size: size * 0.4;
-        font-weight: Typography.semibold;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-
-    // Presence indicator dot
+    // Presence indicator dot — bottom-left, sitting just outside the circle
+    // for maximum visibility (no longer clipped by the avatar mask).
     if show-presence: Rectangle {
-        x: root.width - self.width - 1px;
-        y: root.height - self.height - 1px;
-        width: root.size * 0.25;
+        width: root.size * 0.28;
         height: self.width;
+        x: -1px;
+        y: root.height - self.height + 1px;
         border-radius: self.width / 2;
         background: root.presence-color;
         border-width: 2px;

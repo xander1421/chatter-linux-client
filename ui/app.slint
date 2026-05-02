@@ -140,12 +140,17 @@ export component App inherits Rectangle {
     in-out property <string> link-approve-password: "";
     in property <string> link-approve-preview-name: "";
     in property <string> link-approve-preview-server: "";
+    // 6-char code derived from the new device's ephemeral pubkey. Must
+    // match the value displayed on the new device — this is the user's
+    // gate against MITM substitution of the QR ephemeral key.
+    in property <string> link-approve-verification-code: "";
     in property <bool> link-approve-preview-ready: false;
     in property <string> link-approve-status: "";
     in property <string> link-approve-error: "";
     in property <bool> link-approve-busy: false;
     callback link-approve-paste-changed(string);
-    callback link-approve-submit(string, string);  // url, password
+    callback link-approve-submit(string);  // password (pending link is
+                                            // already stashed on paste)
     callback link-approve-open();
     callback link-approve-close();
 
@@ -284,6 +289,8 @@ export component App inherits Rectangle {
     in-out property <string> reaction-picker-message-id: "";
     in-out property <string> reaction-picker-sender-id: "";
     in-out property <string> reaction-picker-timestamp-ns: "";
+    in-out property <length> reaction-picker-anchor-x: 0px;
+    in-out property <length> reaction-picker-anchor-y: 0px;
     in property <[EmojiData]> reaction-picker-emojis: [];
     in-out property <int> reaction-picker-selected-category: 0;
     in-out property <string> reaction-picker-search-query: "";
@@ -654,7 +661,7 @@ export component App inherits Rectangle {
     callback member-clicked(string);  // user-id
     callback message-clicked(string);
     callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
-    callback react-clicked(string, string);  // (sender_id, timestamp_ns)
+    callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback thread-clicked(string);
     callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback view-attachment(string);  // attachment ID - for viewing/opening attachments
@@ -1258,11 +1265,13 @@ export component App inherits Rectangle {
                     pinned-show-clicked => { root.pinned-show-clicked(); }
                     message-clicked(id) => { root.message-clicked(id); }
                     reply-clicked(sender-id, timestamp-ns) => { root.reply-clicked(sender-id, timestamp-ns); }
-                    react-clicked(sender-id, timestamp-ns) => {
+                    react-clicked(sender-id, timestamp-ns, x, y) => {
                         root.reaction-picker-sender-id = sender-id;
                         root.reaction-picker-timestamp-ns = timestamp-ns;
+                        root.reaction-picker-anchor-x = x;
+                        root.reaction-picker-anchor-y = y;
                         root.reaction-picker-visible = true;
-                        root.react-clicked(sender-id, timestamp-ns);
+                        root.react-clicked(sender-id, timestamp-ns, x, y);
                     }
                     thread-clicked(id) => { root.thread-clicked(id); }
                     more-clicked(sender-id, timestamp-ns, x, y) => { root.more-clicked(sender-id, timestamp-ns, x, y); }
@@ -1338,11 +1347,13 @@ export component App inherits Rectangle {
                     send-reply(text) => { root.send-thread-reply(text); }
                     load-more-replies => { root.load-more-thread-replies(); }
                     message-clicked(id) => { root.message-clicked(id); }
-                    react-clicked(sender-id, timestamp-ns) => {
+                    react-clicked(sender-id, timestamp-ns, x, y) => {
                         root.reaction-picker-sender-id = sender-id;
                         root.reaction-picker-timestamp-ns = timestamp-ns;
+                        root.reaction-picker-anchor-x = x;
+                        root.reaction-picker-anchor-y = y;
                         root.reaction-picker-visible = true;
-                        root.react-clicked(sender-id, timestamp-ns);
+                        root.react-clicked(sender-id, timestamp-ns, x, y);
                     }
                 }
 
@@ -1599,6 +1610,7 @@ export component App inherits Rectangle {
         password <=> root.link-approve-password;
         preview-device-name: root.link-approve-preview-name;
         preview-server-url: root.link-approve-preview-server;
+        verification-code: root.link-approve-verification-code;
         preview-ready: root.link-approve-preview-ready;
         status: root.link-approve-status;
         error: root.link-approve-error;
@@ -1609,7 +1621,7 @@ export component App inherits Rectangle {
             root.link-approve-close();
         }
         paste-changed(t) => { root.link-approve-paste-changed(t); }
-        approve(u, p) => { root.link-approve-submit(u, p); }
+        approve(p) => { root.link-approve-submit(p); }
     }
 
     // Friend Requests Modal (legacy)
@@ -2334,8 +2346,11 @@ export component App inherits Rectangle {
         emoji-list: root.reaction-picker-emojis;
         selected-category <=> root.reaction-picker-selected-category;
         search-query <=> root.reaction-picker-search-query;
-        position-x: root.width / 2 - 140px;  // Center horizontally
-        position-y: root.height / 2 - 176px;  // Center vertically
+        // Anchor near button. Flip above if no space below. Clamp horizontally.
+        position-x: max(8px, min(root.reaction-picker-anchor-x, root.width - 288px));
+        position-y: root.reaction-picker-anchor-y + 360px > root.height
+            ? max(8px, root.reaction-picker-anchor-y - 360px)
+            : root.reaction-picker-anchor-y + 4px;
 
         reaction-selected(sender-id, timestamp-ns, msg-id, emoji) => {
             root.reaction-picker-visible = false;

@@ -341,8 +341,8 @@ impl UserRepository {
             "INSERT INTO friendships (user_id, friend_id, status, created_at)
              VALUES (?1, ?2, ?3, ?4)",
             params![
-                friendship.user_id.to_string(),
-                friendship.friend_id.to_string(),
+                friendship.requester_id.to_string(),
+                friendship.addressee_id.to_string(),
                 friendship_status_to_i32(friendship.status),
                 friendship.created_at.to_rfc3339(),
             ],
@@ -366,10 +366,10 @@ impl UserRepository {
             params![user_id.to_string(), friend_id.to_string()],
             |row| {
                 Ok(Friendship {
-                    user_id: row.get::<_, String>(0)?.parse().map_err(|_| {
+                    requester_id: row.get::<_, String>(0)?.parse().map_err(|_| {
                         rusqlite::Error::InvalidParameterName("Invalid UUID".into())
                     })?,
-                    friend_id: row.get::<_, String>(1)?.parse().map_err(|_| {
+                    addressee_id: row.get::<_, String>(1)?.parse().map_err(|_| {
                         rusqlite::Error::InvalidParameterName("Invalid UUID".into())
                     })?,
                     status: friendship_status_from_i32(row.get(2)?),
@@ -392,14 +392,14 @@ impl UserRepository {
             "UPDATE friendships SET status = ?1 WHERE user_id = ?2 AND friend_id = ?3",
             params![
                 friendship_status_to_i32(friendship.status),
-                friendship.user_id.to_string(),
-                friendship.friend_id.to_string(),
+                friendship.requester_id.to_string(),
+                friendship.addressee_id.to_string(),
             ],
         )?;
         if rows == 0 {
             return Err(StorageError::NotFound(format!(
                 "Friendship {} -> {}",
-                friendship.user_id, friendship.friend_id
+                friendship.requester_id, friendship.addressee_id
             )));
         }
         Ok(())
@@ -418,10 +418,10 @@ impl UserRepository {
 
         while let Some(row) = rows.next()? {
             friendships.push(Friendship {
-                user_id: row.get::<_, String>(0)?.parse().map_err(|_| {
+                requester_id: row.get::<_, String>(0)?.parse().map_err(|_| {
                     rusqlite::Error::InvalidParameterName("Invalid UUID".into())
                 })?,
-                friend_id: row.get::<_, String>(1)?.parse().map_err(|_| {
+                addressee_id: row.get::<_, String>(1)?.parse().map_err(|_| {
                     rusqlite::Error::InvalidParameterName("Invalid UUID".into())
                 })?,
                 status: friendship_status_from_i32(row.get(2)?),

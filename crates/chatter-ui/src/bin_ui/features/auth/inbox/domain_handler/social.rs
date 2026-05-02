@@ -89,16 +89,17 @@ pub(super) fn handle_friend_accepted(
 pub(super) fn handle_presence_changed(
     window: &Weak<MainWindow>,
     user_id: UserId,
-    presence: chatter_core::proto::UserPresence,
+    presence: chatter_core::domain::user::PresenceStatus,
     timestamp: u64,
 ) {
+    use chatter_core::domain::user::PresenceStatus;
     let weak = window.clone();
     let user_id_str = user_id.to_string();
     let presence_str = match presence {
-        chatter_core::proto::UserPresence::Online => "online",
-        chatter_core::proto::UserPresence::Away => "away",
-        chatter_core::proto::UserPresence::DoNotDisturb => "dnd",
-        chatter_core::proto::UserPresence::Offline | _ => "offline",
+        PresenceStatus::Online => "online",
+        PresenceStatus::Away => "away",
+        PresenceStatus::DoNotDisturb => "dnd",
+        PresenceStatus::Offline => "offline",
     };
 
     let presence_slint: slint::SharedString = presence_str.into();

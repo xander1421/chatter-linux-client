@@ -333,7 +333,7 @@ pub enum DomainEvent {
 
     UserPresenceChanged {
         user_id: UserId,
-        presence: crate::proto::UserPresence,
+        presence: crate::domain::user::PresenceStatus,
         timestamp: u64,
     },
 

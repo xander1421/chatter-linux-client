@@ -111,7 +111,7 @@ impl ChannelService {
     /// * `channel_type` - Type of channel (Public, Private, DirectMessage)
     /// * `config` - Optional channel configuration
     /// * `description` - Optional channel description
-    /// * `image_url` - Optional channel image URL
+    /// * `icon` - Optional raw image bytes (PNG/JPEG/WebP, ≤64KB)
     /// * `password` - Optional password for private channels
     /// * `initial_members` - Initial member user IDs
     /// * `setup_mailbox` - Whether to setup group mailbox for encrypted channels
@@ -130,7 +130,7 @@ impl ChannelService {
         channel_type: ChannelType,
         config: Option<ChannelConfig>,
         description: Option<&str>,
-        image_url: Option<&str>,
+        icon: Option<&[u8]>,
         password: Option<&str>,
         initial_members: Vec<UserId>,
         setup_mailbox: bool,

@@ -37,7 +37,7 @@ export component MessageList inherits Rectangle {
     // Callbacks - Signal-style identification (sender_id, timestamp_ns)
     callback message-clicked(string);
     callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
-    callback react-clicked(string, string);  // (sender_id, timestamp_ns)
+    callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback thread-clicked(string);
     callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback load-more();
@@ -109,7 +109,7 @@ export component MessageList inherits Rectangle {
 
             Text {
                 text: "\u{1F4AC}\u{FE0F}"; // Speech bubbles emoji (with emoji variant selector)
-                font-size: 48px;
+                font-size: Typography.huge;
                 horizontal-alignment: center;
             }
 
@@ -287,8 +287,8 @@ export component MessageList inherits Rectangle {
                     root.reply-clicked(sender-id, timestamp-ns);
                 }
 
-                react-clicked(sender-id, timestamp-ns) => {
-                    root.react-clicked(sender-id, timestamp-ns);
+                react-clicked(sender-id, timestamp-ns, x, y) => {
+                    root.react-clicked(sender-id, timestamp-ns, x, y);
                 }
 
                 thread-clicked(id) => {
@@ -341,7 +341,7 @@ export component MessageList inherits Rectangle {
             Text {
                 text: "↓";
                 color: Colors.text-primary;
-                font-size: 20px;
+                font-size: Typography.xl;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }

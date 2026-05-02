@@ -16,7 +16,7 @@ export component MainWindow inherits Window {
     preferred-width: 800px;
     preferred-height: 600px;
     default-font-family: Typography.font-family;
-    default-font-size: 14px;
+    default-font-size: Typography.sm;
 
     // Expose App properties through MainWindow for Rust binding
     // ========== Safe area insets (Android status bar / nav bar) ==========
@@ -533,6 +533,7 @@ export component MainWindow inherits Window {
     in-out property <string> link-approve-password <=> app.link-approve-password;
     in property <string> link-approve-preview-name <=> app.link-approve-preview-name;
     in property <string> link-approve-preview-server <=> app.link-approve-preview-server;
+    in property <string> link-approve-verification-code <=> app.link-approve-verification-code;
     in property <bool> link-approve-preview-ready <=> app.link-approve-preview-ready;
     in property <string> link-approve-status <=> app.link-approve-status;
     in property <string> link-approve-error <=> app.link-approve-error;

@@ -49,7 +49,7 @@ component NavTab inherits Rectangle {
 
                 Text {
                     text: root.badge-count > 99 ? "99+" : root.badge-count;
-                    font-size: 10px;
+                    font-size: Typography.xxs;
                     font-weight: 700;
                     color: Colors.text-primary;
                     horizontal-alignment: center;
@@ -61,7 +61,7 @@ component NavTab inherits Rectangle {
         // Label
         Text {
             text: root.label;
-            font-size: 11px;
+            font-size: Typography.xs2;
             font-weight: root.active ? 600 : 400;
             color: root.active ? Colors.primary : Colors.text-muted;
             horizontal-alignment: center;
@@ -103,6 +103,28 @@ export component MobileBottomNav inherits Rectangle {
             active: root.active-tab == "chats";
             badge-count: root.chats-badge;
             clicked => { root.tab-selected("chats"); }
+        }
+
+        NavTab {
+            icon: Icons.phone;
+            label: "Calls";
+            active: root.active-tab == "calls";
+            clicked => { root.tab-selected("calls"); }
+        }
+
+        NavTab {
+            icon: Icons.users;
+            label: "Contacts";
+            active: root.active-tab == "contacts";
+            badge-count: root.contacts-badge;
+            clicked => { root.tab-selected("contacts"); }
+        }
+
+        NavTab {
+            icon: Icons.settings;
+            label: "Settings";
+            active: root.active-tab == "settings";
+            clicked => { root.tab-selected("settings"); }
         }
     }
 }

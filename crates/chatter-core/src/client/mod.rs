@@ -17,7 +17,7 @@
 mod anon_group;
 mod auth;
 pub mod calls;
-mod channels;
+pub mod channels;
 pub mod events;
 mod jarvis;
 mod link_device;
@@ -81,6 +81,7 @@ pub struct ClientBuilder {
     data_dir: Option<String>,
     notification_sink: Option<Arc<dyn crate::system::notification_sink::NotificationSink>>,
     reconnect_config: Option<crate::network::ReconnectConfig>,
+    max_attachment_size: Option<u64>,
 }
 
 impl ClientBuilder {
@@ -90,6 +91,7 @@ impl ClientBuilder {
             data_dir: None,
             notification_sink: None,
             reconnect_config: None,
+            max_attachment_size: None,
         }
     }
 
@@ -124,11 +126,25 @@ impl ClientBuilder {
         self
     }
 
+    /// Override the maximum attachment size in bytes. If `None`, the built-in
+    /// default (1 GiB) is used. Applied at startup via
+    /// `crate::crypto::set_max_attachment_size` so all upload entrypoints in
+    /// `AttachmentService` enforce the cap.
+    pub fn max_attachment_size(mut self, bytes: u64) -> Self {
+        self.max_attachment_size = Some(bytes);
+        self
+    }
+
     /// Build the client. Initializes database, crypto, and network pool.
     ///
     /// Must be called within a tokio runtime (e.g. inside `#[tokio::main]`
     /// or after `Runtime::new()`).
     pub fn build(self) -> Result<Arc<ChatterClient>, ClientError> {
+        // Apply the attachment size cap before any service is constructed so
+        // every upload path sees the configured value.
+        if let Some(cap) = self.max_attachment_size {
+            crate::crypto::set_max_attachment_size(cap);
+        }
         let ctx = AppContext::with_config_and_sink(self.server_url, self.data_dir, self.notification_sink)?;
         let ui = ctx.core_services();
         let reconnect_config = self.reconnect_config.unwrap_or_default();
@@ -1092,9 +1108,23 @@ impl ChatterClient {
     /// The gRPC pool is created at `build()` but connects lazily.
     /// This forces an immediate connection attempt to verify reachability.
     /// Optional — RPCs will auto-connect on first use if skipped.
+    ///
+    /// Side effect: updates `offline_state` so the rest of the SDK observes
+    /// `Connected` / `Disconnected` consistently. Without this, callers
+    /// would have to flip the state themselves after every `connect()` —
+    /// which is what `ensure_connected_for_auth()` used to do.
     pub async fn connect(&self) -> Result<(), ClientError> {
-        self.ui.auth_service.connect().await?;
-        Ok(())
+        use crate::network::connection::ConnectionState;
+        match self.ui.auth_service.connect().await {
+            Ok(()) => {
+                self.offline_state().set_connection_state(ConnectionState::Connected);
+                Ok(())
+            }
+            Err(e) => {
+                self.offline_state().set_connection_state(ConnectionState::Disconnected);
+                Err(e.into())
+            }
+        }
     }
 
     /// Start all background services after authentication.
@@ -1274,7 +1304,7 @@ impl ChatterClient {
         let h_prekey = self.ui.spawn_prekey_replenishment();
 
         // ── Presence ────────────────────────────────────────────────
-        self.set_presence(crate::proto::UserPresence::Online).await;
+        self.set_presence(crate::domain::user::PresenceStatus::Online).await;
         self.touch_activity();
 
         // ── Store handles for shutdown ───────────────────────────────
@@ -1310,10 +1340,10 @@ impl ChatterClient {
     ) -> Result<SendResult, SendError> {
         let uploaded = upload_attachments(pending_attachments, self.attachments()).await;
         let quote = if let Some(mut q) = quote {
-            if q.preview_text.is_none() && !conversation.is_anon() {
+            if q.target_preview.is_none() && !conversation.is_anon() {
                 let attachments_svc = self.attachments();
-                q.preview_text = self.messages()
-                    .get_by_sender_timestamp(&q.author_id, q.timestamp)
+                q.target_preview = self.messages()
+                    .get_by_sender_timestamp(&q.target_author_id, q.target_timestamp)
                     .ok().flatten()
                     .map(|m| {
                         let atts: Vec<_> = m
@@ -1723,9 +1753,9 @@ impl ChatterClient {
     /// Update the current user's profile.
     pub async fn update_profile(
         &self,
-        display_name: Option<&str>,
-        avatar_url: Option<&str>,
-        status: Option<&crate::domain::user::StatusMessage>,
+        display_name: Option<String>,
+        avatar_url: Option<String>,
+        status: Option<crate::domain::user::StatusMessage>,
     ) -> Result<crate::domain::Profile, crate::services::user::UserError> {
         self.users().update_user_profile(display_name, avatar_url, status).await
     }
@@ -1838,7 +1868,7 @@ impl ChatterClient {
     // ── Presence ─────────────────────────────────────────────────────
 
     /// Set presence status and broadcast to all anon DM conversations.
-    pub async fn set_presence(&self, presence: crate::proto::UserPresence) {
+    pub async fn set_presence(&self, presence: crate::domain::user::PresenceStatus) {
         let conversations = match self.anon_dms().list_conversations() {
             Ok(convs) => convs,
             Err(e) => {

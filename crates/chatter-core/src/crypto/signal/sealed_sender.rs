@@ -212,6 +212,14 @@ impl SealedSenderManager {
                 local_uuid = %local_uuid,
                 "SealedSender: decryption failed"
             );
+            // Operational metric: sealed sender decrypt failure rate.
+            // No secrets emitted — only the error string and a static kind.
+            tracing::warn!(
+                target: "chatter::crypto::decrypt_failure",
+                kind = "sealed_sender",
+                error = %e,
+                "decryption failure"
+            );
             // Match on typed enum variants instead of fragile string matching
             match e {
                 SignalProtocolError::SealedSenderSelfSend => {
@@ -380,7 +388,15 @@ impl SealedSenderManager {
     {
         sealed_sender_decrypt_to_usmc(ciphertext, identity_store)
             .await
-            .map_err(|e| CryptoError::InvalidSealedSenderMessage(e.to_string()))
+            .map_err(|e| {
+                tracing::warn!(
+                    target: "chatter::crypto::decrypt_failure",
+                    kind = "sealed_sender",
+                    error = %e,
+                    "decryption failure"
+                );
+                CryptoError::InvalidSealedSenderMessage(e.to_string())
+            })
     }
 }
 
@@ -516,6 +532,11 @@ pub fn validate_trust_root(cert: &SenderCertificate) -> bool {
         Ok(ts) => ts,
         Err(e) => {
             tracing::warn!("Failed to get certificate expiration: {}", e);
+            tracing::warn!(
+                target: "chatter::crypto::sealed_sender_cert_reject",
+                reason = "chain",
+                "sealed sender certificate rejected"
+            );
             return false;
         }
     };
@@ -526,6 +547,11 @@ pub fn validate_trust_root(cert: &SenderCertificate) -> bool {
             expiry.epoch_millis(),
             now_ms
         );
+        tracing::warn!(
+            target: "chatter::crypto::sealed_sender_cert_reject",
+            reason = "expired",
+            "sealed sender certificate rejected"
+        );
         return false;
     }
 
@@ -534,10 +560,29 @@ pub fn validate_trust_root(cert: &SenderCertificate) -> bool {
         Ok(true) => true,
         Ok(false) => {
             tracing::warn!("Sender certificate failed trust root validation");
+            tracing::warn!(
+                target: "chatter::crypto::sealed_sender_cert_reject",
+                reason = "trust_root",
+                "sealed sender certificate rejected"
+            );
             false
         }
         Err(e) => {
             tracing::warn!("Sender certificate validation error: {}", e);
+            // Distinguish signature errors from generic chain errors when
+            // libsignal's error string makes that clear; otherwise default
+            // to "signature" since validate() failures are signature checks.
+            let err_str = e.to_string();
+            let reason = if err_str.to_ascii_lowercase().contains("signature") {
+                "signature"
+            } else {
+                "chain"
+            };
+            tracing::warn!(
+                target: "chatter::crypto::sealed_sender_cert_reject",
+                reason = reason,
+                "sealed sender certificate rejected"
+            );
             false
         }
     }
@@ -741,7 +786,7 @@ mod tests {
         // so just test the wrapper logic with expiration calculations
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
+            .expect("system time before unix epoch")
             .as_millis() as u64;
 
         // Future expiration (24+ hours from now)

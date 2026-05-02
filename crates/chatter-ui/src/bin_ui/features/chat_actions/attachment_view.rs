@@ -315,7 +315,7 @@ fn show_image_preview(
 /// Display decrypted content based on file type.
 fn display_decrypted_content(
     weak: slint::Weak<MainWindow>,
-    secure_buffer: chatter_core::crypto::SecureBuffer,
+    secure_buffer: chatter_core::prelude::SecureBuffer,
     attachment_id: &str,
     filename: &str,
     file_size: u64,
@@ -346,7 +346,7 @@ fn display_decrypted_content(
 /// Play audio from decrypted buffer.
 fn play_audio_from_buffer(
     weak: slint::Weak<MainWindow>,
-    secure_buffer: chatter_core::crypto::SecureBuffer,
+    secure_buffer: chatter_core::prelude::SecureBuffer,
     attachment_id: &str,
 ) {
     let player_arc = audio_state::get_audio_player();
@@ -389,7 +389,7 @@ fn play_audio_from_buffer(
 /// Display image from decrypted buffer.
 fn display_image_from_buffer(
     weak: slint::Weak<MainWindow>,
-    secure_buffer: chatter_core::crypto::SecureBuffer,
+    secure_buffer: chatter_core::prelude::SecureBuffer,
     attachment_id: &str,
     filename: &str,
     file_size: u64,
@@ -477,7 +477,7 @@ fn display_image_from_buffer(
 /// Play video from decrypted buffer.
 fn play_video_from_buffer(
     weak: slint::Weak<MainWindow>,
-    secure_buffer: chatter_core::crypto::SecureBuffer,
+    secure_buffer: chatter_core::prelude::SecureBuffer,
     filename: &str,
 ) {
     let data = secure_buffer.as_slice().to_vec();
@@ -518,7 +518,7 @@ fn play_video_from_buffer(
 /// removed; the preview panel shows the file name, line count and plain text.
 fn display_code_from_buffer(
     weak: slint::Weak<MainWindow>,
-    secure_buffer: chatter_core::crypto::SecureBuffer,
+    secure_buffer: chatter_core::prelude::SecureBuffer,
     filename: &str,
 ) {
     let data = secure_buffer.as_slice().to_vec();
@@ -548,7 +548,7 @@ fn display_code_from_buffer(
 /// Display PDF from decrypted buffer.
 fn display_pdf_from_buffer(
     weak: slint::Weak<MainWindow>,
-    secure_buffer: chatter_core::crypto::SecureBuffer,
+    secure_buffer: chatter_core::prelude::SecureBuffer,
     filename: &str,
 ) {
     let data = secure_buffer.as_slice().to_vec();
@@ -580,7 +580,7 @@ fn display_pdf_from_buffer(
 /// for the async file picker.
 #[cfg(not(target_os = "android"))]
 fn save_file_from_buffer(
-    secure_buffer: chatter_core::crypto::SecureBuffer,
+    secure_buffer: chatter_core::prelude::SecureBuffer,
     filename: &str,
 ) {
     let data = secure_buffer.as_slice().to_vec();
@@ -627,7 +627,7 @@ fn save_file_from_buffer(
 
 #[cfg(target_os = "android")]
 fn save_file_from_buffer(
-    _secure_buffer: chatter_core::crypto::SecureBuffer,
+    _secure_buffer: chatter_core::prelude::SecureBuffer,
     _filename: &str,
 ) {
     tracing::warn!("Save file not supported on Android");

@@ -390,7 +390,8 @@ impl PresenceService {
         }
         
         if let Some(service) = &self.anon_dm_service {
-            if let Err(e) = service.send_presence_update(conversation_id, current).await {
+            let domain_current = proto_presence_to_domain(current);
+            if let Err(e) = service.send_presence_update(conversation_id, domain_current).await {
                 tracing::debug!(
                     conversation_id = %conversation_id,
                     error = %e,
@@ -430,8 +431,9 @@ impl PresenceService {
             let conv_id = conv.id;
             let service = service.clone();
             
+            let domain_presence = proto_presence_to_domain(presence);
             tokio::spawn(async move {
-                if let Err(e) = service.send_presence_update(&conv_id, presence).await {
+                if let Err(e) = service.send_presence_update(&conv_id, domain_presence).await {
                     tracing::debug!(
                         conversation_id = %conv_id,
                         error = %e,
@@ -448,7 +450,7 @@ impl PresenceService {
 // ============================================================================
 
 /// Convert domain PresenceStatus to proto UserPresence.
-fn domain_presence_to_proto(status: PresenceStatus) -> UserPresence {
+pub(crate) fn domain_presence_to_proto(status: PresenceStatus) -> UserPresence {
     match status {
         PresenceStatus::Offline => UserPresence::Offline,
         PresenceStatus::Online => UserPresence::Online,
@@ -458,7 +460,7 @@ fn domain_presence_to_proto(status: PresenceStatus) -> UserPresence {
 }
 
 /// Convert proto UserPresence to domain PresenceStatus.
-fn proto_presence_to_domain(proto: UserPresence) -> PresenceStatus {
+pub(crate) fn proto_presence_to_domain(proto: UserPresence) -> PresenceStatus {
     match proto {
         UserPresence::PresenceUnspecified => PresenceStatus::Offline,
         UserPresence::Offline => PresenceStatus::Offline,

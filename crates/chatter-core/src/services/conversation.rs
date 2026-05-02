@@ -80,19 +80,15 @@ impl ConversationHandle {
     pub async fn toggle_reaction(
         &self,
         emoji: &str,
-        target_author: &str,
+        target_author: &UserId,
         target_sent_timestamp: u64,
     ) -> Result<bool, ConversationError> {
-        let target_sender_id: UserId = match target_author.parse() {
-            Ok(id) => id,
-            Err(_) => return Err(ConversationError::NoConversation),
-        };
         // Per-user check — the summary aggregate would flip other users'
         // reactions off.
         let already = self
             .client
             .messages()
-            .user_has_reacted(&target_sender_id, target_sent_timestamp, emoji)
+            .user_has_reacted(target_author, target_sent_timestamp, emoji)
             .unwrap_or(false);
         let remove = already;
         self.send_reaction(emoji, target_author, target_sent_timestamp, remove).await?;
@@ -103,37 +99,38 @@ impl ConversationHandle {
     pub async fn send_reaction(
         &self,
         emoji: &str,
-        target_author: &str,
+        target_author: &UserId,
         target_sent_timestamp: u64,
         remove: bool,
     ) -> ConversationResult {
+        // Sub-services on the wire-format side still take &str (proto field
+        // type); convert once and reuse.
+        let target_author_str = target_author.to_string();
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
                 self.client.anon_dms()
-                    .send_reaction(id, emoji, target_author, target_sent_timestamp, remove)
+                    .send_reaction(id, emoji, &target_author_str, target_sent_timestamp, remove)
                     .await?;
                 // Persist own reaction
                 if let Some(user_id) = self.client.auth_state().get().current_user_id {
-                    let target_sender_id: UserId = target_author.parse().unwrap_or(user_id);
                     if remove {
-                        let _ = self.client.anon_dms().remove_reaction(id, &target_sender_id, target_sent_timestamp, &user_id, emoji);
+                        let _ = self.client.anon_dms().remove_reaction(id, target_author, target_sent_timestamp, &user_id, emoji);
                     } else {
-                        let _ = self.client.anon_dms().add_reaction(id, &target_sender_id, target_sent_timestamp, &user_id, emoji);
+                        let _ = self.client.anon_dms().add_reaction(id, target_author, target_sent_timestamp, &user_id, emoji);
                     }
                 }
                 Ok(())
             }
             ActiveConversation::AnonGroup(id) => {
                 self.client.anon_groups()
-                    .send_reaction(id, emoji, target_author, target_sent_timestamp, remove)
+                    .send_reaction(id, emoji, &target_author_str, target_sent_timestamp, remove)
                     .await?;
                 // Persist own reaction
                 if let Some(user_id) = self.client.auth_state().get().current_user_id {
-                    let target_sender_id: UserId = target_author.parse().unwrap_or(user_id);
                     if remove {
-                        let _ = self.client.anon_groups().remove_reaction(id, &target_sender_id, target_sent_timestamp, &user_id, emoji);
+                        let _ = self.client.anon_groups().remove_reaction(id, target_author, target_sent_timestamp, &user_id, emoji);
                     } else {
-                        let _ = self.client.anon_groups().add_reaction(id, &target_sender_id, target_sent_timestamp, &user_id, emoji);
+                        let _ = self.client.anon_groups().add_reaction(id, target_author, target_sent_timestamp, &user_id, emoji);
                     }
                 }
                 Ok(())
@@ -143,42 +140,36 @@ impl ConversationHandle {
                 // only needs target_author + target_sent_timestamp, so don't
                 // block the send on a local DB lookup.
                 let content = crate::services::build_reaction_content(
-                    emoji, remove, target_author, target_sent_timestamp,
+                    emoji, remove, &target_author_str, target_sent_timestamp,
                 );
                 self.send_dm_content(content, peer_id).await?;
                 // Best-effort local persist: no-op if the target message
                 // isn't in our DB (receiver may have scrolled past it).
-                if let Ok(sender_uid) = target_author.parse::<UserId>() {
-                    let _ = self.client.messages().update_reaction_by_sender(
-                        &sender_uid, target_sent_timestamp, emoji, !remove,
-                    );
-                }
+                let _ = self.client.messages().update_reaction_by_sender(
+                    target_author, target_sent_timestamp, emoji, !remove,
+                );
                 Ok(())
             }
             ActiveConversation::ServerDm { channel_id, .. } => {
                 let content = crate::services::build_reaction_content_with_channel(
-                    emoji, remove, target_author, target_sent_timestamp,
+                    emoji, remove, &target_author_str, target_sent_timestamp,
                     Some(&channel_id.to_string()),
                 );
                 self.send_channel_content(content, channel_id).await?;
-                if let Ok(sender_uid) = target_author.parse::<UserId>() {
-                    let _ = self.client.messages().update_reaction_by_sender(
-                        &sender_uid, target_sent_timestamp, emoji, !remove,
-                    );
-                }
+                let _ = self.client.messages().update_reaction_by_sender(
+                    target_author, target_sent_timestamp, emoji, !remove,
+                );
                 Ok(())
             }
             ActiveConversation::Channel(channel_id) => {
                 let content = crate::services::build_reaction_content_with_channel(
-                    emoji, remove, target_author, target_sent_timestamp,
+                    emoji, remove, &target_author_str, target_sent_timestamp,
                     Some(&channel_id.to_string()),
                 );
                 self.send_channel_content(content, channel_id).await?;
-                if let Ok(sender_uid) = target_author.parse::<UserId>() {
-                    let _ = self.client.messages().update_reaction_by_sender(
-                        &sender_uid, target_sent_timestamp, emoji, !remove,
-                    );
-                }
+                let _ = self.client.messages().update_reaction_by_sender(
+                    target_author, target_sent_timestamp, emoji, !remove,
+                );
                 Ok(())
             }
             ActiveConversation::None => Err(ConversationError::NoConversation),
@@ -219,11 +210,13 @@ impl ConversationHandle {
     /// Send a pin/unpin and persist locally.
     pub async fn send_pin(
         &self,
-        target_author: &str,
+        target_author: &UserId,
         target_sent_timestamp: u64,
         unpin: bool,
     ) -> ConversationResult {
         let new_pinned = !unpin;
+        // Sub-services on the proto side still take &str.
+        let target_author_str = target_author.to_string();
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
                 match self.client.anon_dms().set_message_pinned(id, target_sent_timestamp, new_pinned) {
@@ -232,7 +225,7 @@ impl ConversationHandle {
                     _ => {}
                 }
                 self.client.anon_dms()
-                    .send_pin(id, target_author, target_sent_timestamp, unpin)
+                    .send_pin(id, &target_author_str, target_sent_timestamp, unpin)
                     .await?;
                 Ok(())
             }
@@ -243,7 +236,7 @@ impl ConversationHandle {
                     _ => {}
                 }
                 self.client.anon_groups()
-                    .send_pin(id, target_author, target_sent_timestamp, unpin)
+                    .send_pin(id, &target_author_str, target_sent_timestamp, unpin)
                     .await?;
                 Ok(())
             }
@@ -450,7 +443,7 @@ impl ConversationHandle {
                     .map_err(|e| ConversationError::Other(e.to_string()))
             }
             ActiveConversation::MailboxDm { peer_id, .. } => {
-                let msg = self.lookup_message(&target_author.to_string(), target_sent_timestamp)?;
+                let msg = self.lookup_message(target_author, target_sent_timestamp)?;
                 let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
                 let content = crate::services::build_delete_for_me_content(
                     &peer_id.to_string(), &author_aci, target_sent_timestamp,
@@ -460,7 +453,7 @@ impl ConversationHandle {
                     .map_err(ConversationError::Message)
             }
             ActiveConversation::ServerDm { channel_id, .. } => {
-                let msg = self.lookup_message(&target_author.to_string(), target_sent_timestamp)?;
+                let msg = self.lookup_message(target_author, target_sent_timestamp)?;
                 let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
                 let content = crate::services::build_delete_for_me_content(
                     &channel_id.to_string(), &author_aci, target_sent_timestamp,
@@ -470,7 +463,7 @@ impl ConversationHandle {
                     .map_err(ConversationError::Message)
             }
             ActiveConversation::Channel(channel_id) => {
-                let msg = self.lookup_message(&target_author.to_string(), target_sent_timestamp)?;
+                let msg = self.lookup_message(target_author, target_sent_timestamp)?;
                 let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
                 let content = crate::services::build_delete_for_me_content(
                     &channel_id.to_string(), &author_aci, target_sent_timestamp,
@@ -508,7 +501,7 @@ impl ConversationHandle {
                 }
             }
             ActiveConversation::MailboxDm { .. } | ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_) => {
-                let msg = self.lookup_message(&target_author.to_string(), target_sent_timestamp)?;
+                let msg = self.lookup_message(target_author, target_sent_timestamp)?;
                 Ok(msg.as_text().map(|s| s.to_string()))
             }
             ActiveConversation::None => Err(ConversationError::NoConversation),
@@ -537,7 +530,7 @@ impl ConversationHandle {
                 }
             }
             ActiveConversation::MailboxDm { .. } | ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_) => {
-                let msg = self.lookup_message(&target_author.to_string(), target_sent_timestamp)?;
+                let msg = self.lookup_message(target_author, target_sent_timestamp)?;
                 Ok(msg.attachments)
             }
             ActiveConversation::None => Err(ConversationError::NoConversation),
@@ -569,7 +562,7 @@ impl ConversationHandle {
                 }
             }
             ActiveConversation::MailboxDm { .. } | ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_) => {
-                let msg = self.lookup_message(&target_author.to_string(), target_sent_timestamp)?;
+                let msg = self.lookup_message(target_author, target_sent_timestamp)?;
                 Ok(msg.sender_id == current_user_id)
             }
             ActiveConversation::None => Err(ConversationError::NoConversation),
@@ -845,13 +838,11 @@ impl ConversationHandle {
 
     fn lookup_message(
         &self,
-        sender_id_str: &str,
+        sender_id: &UserId,
         sent_timestamp: u64,
     ) -> ConversationResult<crate::domain::Message> {
-        let sender_id: UserId = sender_id_str.parse()
-            .map_err(|_| ConversationError::Other("Invalid sender ID".into()))?;
         self.client.messages()
-            .get_by_sender_timestamp(&sender_id, sent_timestamp)
+            .get_by_sender_timestamp(sender_id, sent_timestamp)
             .map_err(|e| ConversationError::Message(e))?
             .ok_or_else(|| ConversationError::Other("Message not found".into()))
     }

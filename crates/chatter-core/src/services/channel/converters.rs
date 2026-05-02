@@ -45,10 +45,10 @@ pub fn proto_to_domain_channel(proto: &chat_v1::Channel) -> Result<Channel, Chan
         } else {
             Some(proto.description.clone())
         },
-        image_url: if proto.img_url.is_empty() {
+        icon: if proto.icon.is_empty() {
             None
         } else {
-            Some(proto.img_url.clone())
+            Some(proto.icon.clone())
         },
         owner_id,
         config,
@@ -366,7 +366,7 @@ mod tests {
             members: vec![],
             created_at: 1706140800000,
             description: "A test channel".to_string(),
-            img_url: "https://example.com/img.png".to_string(),
+            icon: vec![0x89, b'P', b'N', b'G'],
             archived: false,
         };
 
@@ -374,10 +374,7 @@ mod tests {
         assert_eq!(channel.name, "test-channel");
         assert_eq!(channel.channel_type, ChannelType::Public);
         assert_eq!(channel.description, Some("A test channel".to_string()));
-        assert_eq!(
-            channel.image_url,
-            Some("https://example.com/img.png".to_string())
-        );
+        assert_eq!(channel.icon, Some(vec![0x89, b'P', b'N', b'G']));
         assert!(!channel.archived);
     }
 
@@ -392,14 +389,14 @@ mod tests {
             members: vec![],
             created_at: 1706140800000,
             description: "".to_string(), // Empty
-            img_url: "".to_string(),     // Empty
+            icon: Vec::new(),            // Empty
             archived: true,
         };
 
         let channel = proto_to_domain_channel(&proto).unwrap();
         assert_eq!(channel.channel_type, ChannelType::Private);
         assert_eq!(channel.description, None);
-        assert_eq!(channel.image_url, None);
+        assert_eq!(channel.icon, None);
         assert!(channel.archived);
     }
 }

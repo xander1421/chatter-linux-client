@@ -147,7 +147,7 @@ pub fn wire_react_clicked(window: &MainWindow) {
     let weak_window = window.as_weak();
 
     // Callback signature: (sender_id, timestamp_ns) - Signal-style identification
-    window.on_react_clicked(move |sender_id: SharedString, timestamp_ns: SharedString| {
+    window.on_react_clicked(move |sender_id: SharedString, timestamp_ns: SharedString, _x: f32, _y: f32| {
         let sender_id_str = sender_id.to_string();
         let timestamp_str = timestamp_ns.to_string();
         let weak = weak_window.clone();

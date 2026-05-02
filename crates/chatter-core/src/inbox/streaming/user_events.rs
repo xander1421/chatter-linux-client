@@ -182,11 +182,14 @@ async fn handle_user_event(
 
             let proto_presence = UserPresence::try_from(presence.presence)
                 .unwrap_or(UserPresence::Offline);
+            let domain_presence = crate::services::presence_service::proto_presence_to_domain(
+                proto_presence,
+            );
 
             if let Some(tx) = domain_tx {
                 let _ = tx.send(DomainEvent::UserPresenceChanged {
                     user_id,
-                    presence: proto_presence,
+                    presence: domain_presence,
                     timestamp: presence.timestamp,
                 });
             }

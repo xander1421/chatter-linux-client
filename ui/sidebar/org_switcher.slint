@@ -6,6 +6,7 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
+import { Typography } from "../theme/typography.slint";
 import { TooltipArea } from "../components/tooltip.slint";
 
 // Organization summary for the switcher list.
@@ -61,7 +62,7 @@ export component OrgSwitcher inherits Rectangle {
             Text {
                 text: org.initial != "" ? org.initial : org.name;
                 color: org.is-current ? Colors.text-primary : Colors.text-secondary;
-                font-size: 13px;
+                font-size: Typography.sm2;
                 font-weight: 700;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -137,7 +138,7 @@ export component OrgSwitcher inherits Rectangle {
                     Text {
                         text: root.current-org-initial != "" ? root.current-org-initial : root.current-org-name;
                         color: Colors.text-primary;
-                        font-size: 13px;
+                        font-size: Typography.sm2;
                         font-weight: 700;
                         horizontal-alignment: center;
                         vertical-alignment: center;

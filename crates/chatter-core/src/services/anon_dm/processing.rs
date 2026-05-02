@@ -143,18 +143,17 @@ impl AnonDmService {
         match &inner_content.content {
             Some(ContentType::AnonDmPresence(presence)) => {
                 use crate::proto::content_v1::anon_dm_presence;
-                use crate::proto::chat_v1::UserPresence;
 
-                let user_presence = match anon_dm_presence::Status::try_from(presence.status).ok() {
-                    Some(anon_dm_presence::Status::Online) => UserPresence::Online,
-                    Some(anon_dm_presence::Status::Away) => UserPresence::Away,
-                    Some(anon_dm_presence::Status::DoNotDisturb) => UserPresence::DoNotDisturb,
-                    Some(anon_dm_presence::Status::Offline) | _ => UserPresence::Offline,
+                let domain_presence = match anon_dm_presence::Status::try_from(presence.status).ok() {
+                    Some(anon_dm_presence::Status::Online) => crate::domain::user::PresenceStatus::Online,
+                    Some(anon_dm_presence::Status::Away) => crate::domain::user::PresenceStatus::Away,
+                    Some(anon_dm_presence::Status::DoNotDisturb) => crate::domain::user::PresenceStatus::DoNotDisturb,
+                    Some(anon_dm_presence::Status::Offline) | _ => crate::domain::user::PresenceStatus::Offline,
                 };
 
                 events.push(DomainEvent::UserPresenceChanged {
                     user_id: *sender_id,
-                    presence: user_presence,
+                    presence: domain_presence,
                     timestamp: presence.timestamp,
                 });
             }

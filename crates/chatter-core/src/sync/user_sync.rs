@@ -225,17 +225,17 @@ impl UserSync {
             Ok(local) => {
                 for friendship in local {
                     if friendship.status == FriendshipStatus::Accepted
-                        && !server_friend_ids.contains(&friendship.friend_id)
+                        && !server_friend_ids.contains(&friendship.addressee_id)
                     {
                         match self
                             .user_repo
-                            .delete_friendship(&friendship.user_id, &friendship.friend_id)
+                            .delete_friendship(&friendship.requester_id, &friendship.addressee_id)
                         {
                             Ok(()) => result.friendships_removed += 1,
                             Err(e) => {
                                 had_failure = true;
                                 tracing::debug!(
-                                    user_id = %friendship.friend_id,
+                                    user_id = %friendship.addressee_id,
                                     error = %e,
                                     "Failed to delete stale friendship during sync"
                                 );

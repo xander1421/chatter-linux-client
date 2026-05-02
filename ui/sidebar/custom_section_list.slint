@@ -7,6 +7,7 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
+import { Typography } from "../theme/typography.slint";
 import { Avatar } from "../components/avatar.slint";
 import { TooltipArea } from "../components/tooltip.slint";
 
@@ -97,7 +98,7 @@ component SectionConversationItem inherits Rectangle {
         Text {
             text: root.display-name;
             color: root.selected ? Colors.text-primary : Colors.text-secondary;
-            font-size: 13px;
+            font-size: Typography.sm2;
             font-weight: root.unread-count > 0 ? 600 : 400;
             vertical-alignment: center;
             overflow: elide;
@@ -115,7 +116,7 @@ component SectionConversationItem inherits Rectangle {
                 sec-badge-text := Text {
                     text: root.unread-count > 99 ? "99+" : root.unread-count;
                     color: Colors.text-primary;
-                    font-size: 10px;
+                    font-size: Typography.xxs;
                     font-weight: 600;
                     horizontal-alignment: center;
                     vertical-alignment: center;
@@ -235,7 +236,7 @@ component CustomSectionHeader inherits Rectangle {
                 // Emoji icon
                 Text {
                     text: root.icon-emoji;
-                    font-size: 12px;
+                    font-size: Typography.xs;
                     vertical-alignment: center;
                 }
 
@@ -243,7 +244,7 @@ component CustomSectionHeader inherits Rectangle {
                 Text {
                     text: root.name;
                     color: Colors.text-muted;
-                    font-size: 11px;
+                    font-size: Typography.xs2;
                     font-weight: 600;
                     letter-spacing: 0.5px;
                     vertical-alignment: center;
@@ -259,7 +260,7 @@ component CustomSectionHeader inherits Rectangle {
                     Text {
                         text: root.unread-count > 99 ? "99+" : root.unread-count;
                         color: Colors.text-primary;
-                        font-size: 10px;
+                        font-size: Typography.xxs;
                         font-weight: 600;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -334,7 +335,7 @@ component CustomSectionHeader inherits Rectangle {
             alignment: center;
             Text {
                 text: root.icon-emoji;
-                font-size: 14px;
+                font-size: Typography.sm;
                 vertical-alignment: center;
             }
         }
@@ -393,7 +394,7 @@ export component CustomSectionList inherits Rectangle {
                 Text {
                     text: "New Section";
                     color: Colors.text-muted;
-                    font-size: 11px;
+                    font-size: Typography.xs2;
                     font-weight: 500;
                     vertical-alignment: center;
                 }

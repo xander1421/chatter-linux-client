@@ -1,0 +1,35 @@
+[package]
+name = "chatter-core-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Standalone — explicitly NOT part of the parent workspace. (The root
+# Cargo.toml also lists this dir under `workspace.exclude`; this empty table
+# is the standard cargo-fuzz template's belt-and-braces.)
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# Disable default features — the crypto parsers under fuzz do not need
+# `desktop-media` (LiveKit + GStreamer) or `desktop-system` (keyring backends).
+# Pulling them in slows fuzz builds dramatically and surfaces unrelated
+# upstream version skew in non-crypto modules.
+chatter-core = { path = "..", default-features = false }
+
+[[bin]]
+name = "fuzz_envelope_parse"
+path = "fuzz_targets/fuzz_envelope_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_sealed_sender_cert"
+path = "fuzz_targets/fuzz_sealed_sender_cert.rs"
+test = false
+doc = false
+bench = false

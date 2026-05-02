@@ -373,6 +373,17 @@ pub struct JarvisContext {
 }
 
 impl JarvisContext {
+    /// Create a "no active conversation" context, suitable for global
+    /// Jarvis prompts (e.g. a side panel that's not scoped to any chat).
+    /// The empty `context_id` signals to the service that there's no
+    /// conversation history to consult.
+    pub fn none() -> Self {
+        Self {
+            context_type: ContextType::Channel,
+            context_id: String::new(),
+        }
+    }
+
     /// Create a context for a channel.
     pub fn channel(channel_id: ChannelId) -> Self {
         Self {

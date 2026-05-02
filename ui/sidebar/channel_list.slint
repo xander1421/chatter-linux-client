@@ -28,6 +28,10 @@ export component ChannelList inherits Rectangle {
     in property <[ChannelListItemData]> channels: [];
     in property <bool> collapsed: false;
     in property <bool> show-header: true;
+    // True when sibling lists in the same Channels section (e.g. private
+    // groups) have items. Suppresses the "no channels yet" empty state so
+    // it doesn't stack on top of the group list and confuse the user.
+    in property <bool> has-sibling-content: false;
 
     // Callbacks
     callback channel-selected(string);
@@ -54,7 +58,7 @@ export component ChannelList inherits Rectangle {
                 Text {
                     text: "Channels";
                     color: Colors.text-muted;
-                    font-size: 11px;
+                    font-size: Typography.xs2;
                     font-weight: 600;
                     letter-spacing: 0.5px;
                     vertical-alignment: center;
@@ -160,8 +164,10 @@ export component ChannelList inherits Rectangle {
             }
         }
 
-        // Empty state when no channels
-        if !root.collapsed && root.channels.length == 0: EmptyState {
+        // Empty state when no channels AND no sibling content (private
+        // groups render in the same section; their presence means the
+        // section is not empty even if classical channels are zero).
+        if !root.collapsed && root.channels.length == 0 && !root.has-sibling-content: EmptyState {
             icon: Icons.hash;
             message: "No channels yet";
             cta-text: "Browse channels";

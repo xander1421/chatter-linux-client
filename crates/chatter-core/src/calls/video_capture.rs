@@ -368,6 +368,7 @@ impl VideoCapture {
                     let frame = VideoFrame {
                         rotation: VideoRotation::VideoRotation0,
                         timestamp_us: (frame_count * 1_000_000 / fps as u64) as i64,
+                        frame_metadata: None,
                         buffer: i420_buffer,
                     };
 
@@ -609,6 +610,7 @@ impl VideoCapture {
             let frame = VideoFrame {
                 rotation: VideoRotation::VideoRotation0,
                 timestamp_us: (frame_count * 1_000_000 / fps as u64) as i64,
+                frame_metadata: None,
                 buffer,
             };
 

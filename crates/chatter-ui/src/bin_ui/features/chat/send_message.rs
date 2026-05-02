@@ -136,9 +136,9 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     None => return,
                 };
                 Some(gateway::QuoteIntent {
-                    author_id: reply.sender_id,
-                    timestamp: reply.timestamp,
-                    preview_text: None,
+                    target_author_id: reply.sender_id,
+                    target_timestamp: reply.timestamp,
+                    target_preview: None,
                 })
             } else {
                 None

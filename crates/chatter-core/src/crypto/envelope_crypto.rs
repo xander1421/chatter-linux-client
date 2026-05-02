@@ -161,7 +161,14 @@ pub fn decrypt_envelope(
 ) -> Result<([u8; 32], Vec<u8>), CryptoError> {
     // Minimum size: sender_pk (32) + nonce (24) + tag (16)
     if envelope.len() < 32 + NONCE_SIZE + 16 {
-        return Err(CryptoError::DecryptionFailed("Envelope too short".into()));
+        let err = CryptoError::DecryptionFailed("Envelope too short".into());
+        tracing::warn!(
+            target: "chatter::crypto::decrypt_failure",
+            kind = "sealed_sender",
+            error = %err,
+            "decryption failure"
+        );
+        return Err(err);
     }
 
     // Extract sender's public key
@@ -171,9 +178,14 @@ pub fn decrypt_envelope(
     // Verify sender if expected
     if let Some(expected) = expected_sender_identity {
         if sender_public != *expected {
-            return Err(CryptoError::DecryptionFailed(
-                "Sender identity mismatch".into(),
-            ));
+            let err = CryptoError::DecryptionFailed("Sender identity mismatch".into());
+            tracing::warn!(
+                target: "chatter::crypto::decrypt_failure",
+                kind = "sealed_sender",
+                error = %err,
+                "decryption failure"
+            );
+            return Err(err);
         }
     }
 
@@ -192,18 +204,45 @@ pub fn decrypt_envelope(
     let hkdf = Hkdf::<Sha256>::new(None, shared_secret.as_bytes());
     let mut decryption_key = [0u8; 32];
     hkdf.expand(ENVELOPE_HKDF_INFO, &mut decryption_key)
-        .map_err(|_| CryptoError::KeyDerivationFailed("HKDF expand failed".into()))?;
+        .map_err(|_| {
+            let err = CryptoError::KeyDerivationFailed("HKDF expand failed".into());
+            tracing::warn!(
+                target: "chatter::crypto::decrypt_failure",
+                kind = "sealed_sender",
+                error = %err,
+                "decryption failure"
+            );
+            err
+        })?;
 
     // Decrypt with XChaCha20-Poly1305
     let cipher = XChaCha20Poly1305::new_from_slice(&decryption_key)
-        .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
+        .map_err(|e| {
+            let err = CryptoError::DecryptionFailed(e.to_string());
+            tracing::warn!(
+                target: "chatter::crypto::decrypt_failure",
+                kind = "sealed_sender",
+                error = %err,
+                "decryption failure"
+            );
+            err
+        })?;
 
     // Zeroize decryption key after creating cipher (key is copied into cipher)
     decryption_key.zeroize();
 
     let plaintext = cipher
         .decrypt(nonce, ciphertext)
-        .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
+        .map_err(|e| {
+            let err = CryptoError::DecryptionFailed(e.to_string());
+            tracing::warn!(
+                target: "chatter::crypto::decrypt_failure",
+                kind = "sealed_sender",
+                error = %err,
+                "decryption failure"
+            );
+            err
+        })?;
 
     Ok((sender_public, plaintext))
 }

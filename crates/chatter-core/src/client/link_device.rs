@@ -9,9 +9,11 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
+use crate::crypto::SecretString;
 use crate::proto::provisioning_v1::ProvisioningSession;
 use crate::services::link_device_service::{
     ApprovedDevice, LinkDeviceError, LinkDeviceService, LinkProgress,
+    PendingDeviceLink,
 };
 use crate::storage::repositories::settings_repo::SettingsRepository;
 use crate::storage::repositories::user_repo::UserRepository;
@@ -76,29 +78,53 @@ impl ChatterClient {
 
     // ── Primary-side flow ──────────────────────────────────────────────
 
-    /// Single-shot primary-side approve. Parses the URL, verifies the
-    /// password (constant-time against local profile key), then encrypts +
-    /// uploads the provision envelope. Returns a summary for the UI to
-    /// display ("Linked Alex's Laptop").
+    /// Step 1 of the primary-side device-link flow.
+    ///
+    /// Parses the QR URL, derives a short verification code from the new
+    /// device's ephemeral public key, and returns a [`PendingDeviceLink`]
+    /// the UI must display before calling [`Self::approve_link`]. Pure
+    /// function — no network, no key install.
+    ///
+    /// **Caller MUST display the verification code from `PendingDeviceLink`
+    /// to the user and obtain confirmation before calling `approve_link`.**
+    /// The two-step shape (with a `!Clone`, move-consumed token) is what
+    /// stops a UI bug or alt-UI from completing a link without the user
+    /// actually approving it.
     ///
     /// Errors:
     /// - `InvalidLinkUrl(_)` — paste was malformed
-    /// - `ReauthFailed` — wrong password
-    /// - `ReauthUnsupportedForOidc` — OIDC user, no local password to check
-    /// - other variants surface network / crypto failures
-    pub async fn approve_link_from_url(
+    pub fn prepare_link_from_url(
         &self,
         url: &str,
-        password: &str,
-    ) -> Result<ApprovedDevice, LinkDeviceError> {
-        self.link_device().approve_link_from_url(url, password).await
+    ) -> Result<PendingDeviceLink, LinkDeviceError> {
+        self.link_device().prepare_link_from_url(url)
     }
 
-    /// Parse-only preview. Lets the approve modal show what device is
-    /// about to be linked before the user types a password. Pure function,
-    /// no network.
-    pub fn preview_link_url(url: &str) -> Result<ApprovedDevice, LinkDeviceError> {
-        LinkDeviceService::preview_link(url)
+    /// Step 2 of the primary-side device-link flow.
+    ///
+    /// Consumes the [`PendingDeviceLink`] (so it cannot be replayed),
+    /// verifies the user's password / PIN (constant-time against local
+    /// material), then encrypts and uploads the provision envelope.
+    /// Returns a summary for the UI to display ("Linked Alex's Laptop").
+    ///
+    /// **Caller MUST display the verification code from `PendingDeviceLink`
+    /// to the user and obtain confirmation before calling `approve_link`.**
+    /// The SDK cannot verify this on its own — it is the trust boundary
+    /// between UI and crypto core.
+    ///
+    /// `secret` accepts either the user's password or a 6-digit PIN; the
+    /// [`SecretString`] wrapper zeroizes its contents on drop.
+    ///
+    /// Errors:
+    /// - `ReauthFailed` — wrong password / PIN
+    /// - `ReauthUnsupportedForOidc` — OIDC user, no local password to check
+    /// - other variants surface network / crypto failures
+    pub async fn approve_link(
+        &self,
+        pending: PendingDeviceLink,
+        secret: SecretString,
+    ) -> Result<ApprovedDevice, LinkDeviceError> {
+        self.link_device().approve_link(pending, secret).await
     }
 
     pub async fn list_pending_links(

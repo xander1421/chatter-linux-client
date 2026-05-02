@@ -230,6 +230,7 @@ impl ChatterClient {
                                     Err(e) => {
                                         let es = e.to_string();
                                         if es.contains("no sender key")
+                                            || es.contains("missing sender key")
                                             || es.contains("SenderKeyRecord")
                                             || es.contains("not found")
                                         {
@@ -377,6 +378,40 @@ impl ChatterClient {
         // this client, so it stays here rather than inside the service.
         self.subscribe_channel_messages(&channel.id);
         Ok(channel)
+    }
+
+    /// Builder entry-point for creating a channel.
+    ///
+    /// Replaces the 7-positional-arg `create_channel` /
+    /// `create_channel_with_icon` calls with a fluent builder so callers
+    /// don't have to remember the order or pass `None`/`vec![]` placeholders
+    /// for fields they don't care about.
+    ///
+    /// ```ignore
+    /// client
+    ///     .new_channel("general", ChannelType::Public)
+    ///     .description("welcome")
+    ///     .members(vec![alice, bob])
+    ///     .icon_path(Path::new("logo.png"))
+    ///     .create()
+    ///     .await?;
+    /// ```
+    pub fn new_channel(
+        self: &Arc<Self>,
+        name: impl Into<String>,
+        channel_type: ChannelType,
+    ) -> ChannelBuilder {
+        ChannelBuilder {
+            client: self.clone(),
+            name: name.into(),
+            channel_type,
+            config: None,
+            description: None,
+            image_url: None,
+            icon_path: None,
+            password: None,
+            initial_members: Vec::new(),
+        }
     }
 
     /// Create a channel, atomically uploading the icon first if one is
@@ -552,4 +587,101 @@ impl ChatterClient {
         self.channels().search_channels(query, limit, 0, vec![ChannelType::Public]).await
     }
 
+}
+
+/// Fluent builder for `ChatterClient::new_channel(...)`.
+///
+/// All fields default to "unset" — only `name` and `channel_type` are
+/// required (passed at construction). Call `.create()` to send the
+/// CreateChannel RPC and run the post-create wiring (mailbox announce,
+/// SKDM distribution, stream subscription).
+pub struct ChannelBuilder {
+    client: Arc<crate::client::ChatterClient>,
+    name: String,
+    channel_type: ChannelType,
+    config: Option<crate::domain::channel::ChannelConfig>,
+    description: Option<String>,
+    image_url: Option<String>,
+    icon_path: Option<std::path::PathBuf>,
+    password: Option<String>,
+    initial_members: Vec<crate::domain::ids::UserId>,
+}
+
+impl ChannelBuilder {
+    /// Override the default `ChannelConfig` (encryption, persistence, …).
+    pub fn config(mut self, config: crate::domain::channel::ChannelConfig) -> Self {
+        self.config = Some(config);
+        self
+    }
+
+    /// Set the channel topic / description.
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Use an already-uploaded icon (CDN key). Mutually exclusive with
+    /// `icon_path`; the last setter wins.
+    pub fn image_url(mut self, image_url: impl Into<String>) -> Self {
+        self.image_url = Some(image_url.into());
+        self.icon_path = None;
+        self
+    }
+
+    /// Upload an icon from a local file before creating the channel.
+    /// Mutually exclusive with `image_url`.
+    pub fn icon_path(mut self, icon_path: impl Into<std::path::PathBuf>) -> Self {
+        self.icon_path = Some(icon_path.into());
+        self.image_url = None;
+        self
+    }
+
+    /// Set a join password (private channels).
+    pub fn password(mut self, password: impl Into<String>) -> Self {
+        self.password = Some(password.into());
+        self
+    }
+
+    /// Members to invite at creation time.
+    pub fn members(mut self, members: Vec<crate::domain::ids::UserId>) -> Self {
+        self.initial_members = members;
+        self
+    }
+
+    /// Add a single member.
+    pub fn add_member(mut self, member: crate::domain::ids::UserId) -> Self {
+        self.initial_members.push(member);
+        self
+    }
+
+    /// Execute the create. Uploads the icon first if `icon_path` is set.
+    pub async fn create(
+        self,
+    ) -> Result<Channel, crate::services::channel::ChannelError> {
+        if let Some(path) = self.icon_path {
+            self.client
+                .create_channel_with_icon(
+                    &self.name,
+                    self.channel_type,
+                    self.config,
+                    self.description.as_deref(),
+                    Some(path.as_path()),
+                    self.password.as_deref(),
+                    self.initial_members,
+                )
+                .await
+        } else {
+            self.client
+                .create_channel(
+                    &self.name,
+                    self.channel_type,
+                    self.config,
+                    self.description.as_deref(),
+                    self.image_url.as_deref(),
+                    self.password.as_deref(),
+                    self.initial_members,
+                )
+                .await
+        }
+    }
 }

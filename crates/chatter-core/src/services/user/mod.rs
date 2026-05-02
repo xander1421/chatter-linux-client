@@ -230,11 +230,17 @@ impl UserService {
     ///
     /// If display_name is provided, it is encrypted with the profile_key before sending.
     /// Server stores only ciphertext - it cannot read profile data.
+    /// Update the current user's profile.
+    ///
+    /// Owned `Option<String>` (rather than `Option<&str>`) is intentional —
+    /// `Option<&str>` plays badly with the async-Rust borrow checker because
+    /// the future captures references that must outlive every `.await`. The
+    /// owned variant lets callers pass `name.clone()` once and forget.
     pub async fn update_user_profile(
         &self,
-        display_name: Option<&str>,
-        avatar_url: Option<&str>,
-        status_message: Option<&StatusMessage>,
+        display_name: Option<String>,
+        avatar_url: Option<String>,
+        status_message: Option<StatusMessage>,
     ) -> Result<Profile, UserError> {
         use base64::Engine;
 
@@ -247,7 +253,7 @@ impl UserService {
 
         // SECURITY: Encrypt display_name with profile_key if being updated
         // Server never sees plaintext profile data - only the encrypted blob
-        let encrypted_display_name = if let Some(name) = display_name {
+        let encrypted_display_name = if let Some(ref name) = display_name {
             let profile_key_bytes = self
                 .settings_repo
                 .get_bytes(keys::PROFILE_KEY)?
@@ -267,10 +273,11 @@ impl UserService {
             display_name: encrypted_display_name
                 .unwrap_or_else(|| existing.display_name.clone()),
             avatar_url: avatar_url
-                .map(|s| s.to_string())
+                .clone()
                 .or_else(|| existing.avatar_url.clone())
                 .unwrap_or_default(),
             status_message: status_message
+                .as_ref()
                 .map(|s| s.text.clone())
                 .or_else(|| existing.status_message.as_ref().map(|s| s.text.clone()))
                 .unwrap_or_default(),
@@ -318,7 +325,7 @@ impl UserService {
         // Decrypt the display name before storing locally
         // The server returns the encrypted version, but we want plaintext in local storage
         if let Some(plaintext_name) = display_name {
-            profile.display_name = plaintext_name.to_string();
+            profile.display_name = plaintext_name;
         }
 
         self.user_repo.upsert_profile(&profile)?;
@@ -353,8 +360,8 @@ impl UserService {
         }
 
         let friendship = Friendship {
-            user_id: current_user,
-            friend_id: *friend_id,
+            requester_id: current_user,
+            addressee_id: *friend_id,
             status: FriendshipStatus::Pending,
             created_at: Utc::now(),
         };
@@ -413,8 +420,8 @@ impl UserService {
 
         if accept {
             let friendship = Friendship {
-                user_id: current_user,
-                friend_id: *friend_id,
+                requester_id: current_user,
+                addressee_id: *friend_id,
                 status: FriendshipStatus::Accepted,
                 created_at: Utc::now(),
             };
@@ -453,8 +460,8 @@ impl UserService {
                 .map_err(|_| UserError::InvalidInput("invalid friend user ID".to_string()))?;
 
             let friendship = Friendship {
-                user_id: current_user,
-                friend_id,
+                requester_id: current_user,
+                addressee_id: friend_id,
                 status: FriendshipStatus::Accepted,
                 created_at: Utc::now(),
             };
@@ -493,8 +500,8 @@ impl UserService {
                 .map_err(|_| UserError::InvalidInput("invalid friend user ID".to_string()))?;
 
             let friendship = Friendship {
-                user_id: current_user,
-                friend_id,
+                requester_id: current_user,
+                addressee_id: friend_id,
                 status: FriendshipStatus::Accepted,
                 created_at: Utc::now(),
             };
@@ -552,8 +559,8 @@ impl UserService {
             let status = proto_friend_status_to_domain(request.status);
 
             let friendship = Friendship {
-                user_id: current_user,
-                friend_id,
+                requester_id: current_user,
+                addressee_id: friend_id,
                 status,
                 created_at: Utc::now(),
             };
@@ -608,8 +615,8 @@ impl UserService {
         }
 
         let friendship = Friendship {
-            user_id: current_user,
-            friend_id: *user_id,
+            requester_id: current_user,
+            addressee_id: *user_id,
             status: FriendshipStatus::Blocked,
             created_at: Utc::now(),
         };
@@ -658,8 +665,8 @@ impl UserService {
                 .map_err(|_| UserError::InvalidInput("invalid blocked user ID".to_string()))?;
 
             let friendship = Friendship {
-                user_id: current_user,
-                friend_id: user_id,
+                requester_id: current_user,
+                addressee_id: user_id,
                 status: FriendshipStatus::Blocked,
                 created_at: Utc::now(),
             };

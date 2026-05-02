@@ -3,6 +3,11 @@ members = [
     "crates/chatter-core",
     "crates/chatter-ui",
 ]
+# The fuzz crate must NOT be a workspace member — otherwise libfuzzer-sys
+# (which requires `-Z sanitizer=address` and a nightly toolchain) gets pulled
+# into normal `cargo build` resolution. It lives under chatter-core/fuzz/ and
+# is built standalone via `cargo +nightly fuzz run …`.
+exclude = ["crates/chatter-core/fuzz"]
 resolver = "3"
 
 # android-activity 0.6.1 from crates.io (git main was causing JVM attach failures)
@@ -30,3 +35,18 @@ codegen-units = 1
 panic = "abort"
 strip = true
 opt-level = "z"
+
+# =============================================================================
+# Release-Dev Profile — Optimized binary that still uses the dev trust root.
+# Use for perf/RSS testing against the local docker-compose dev server.
+# debug-assertions=true keeps cfg(debug_assertions) active, which selects the
+# development sealed-sender trust root (config.rs). Without this, release
+# builds reject sealed sender messages signed by the dev Vault key (GRA-249).
+# =============================================================================
+[profile.release-dev]
+inherits = "release"
+opt-level = 3
+debug-assertions = true
+overflow-checks = false
+strip = "debuginfo"
+lto = "thin"

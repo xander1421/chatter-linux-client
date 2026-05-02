@@ -106,11 +106,37 @@ fn wire_search_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     None => continue,
                 };
 
-                // Get channel name
-                let channel_name = ui_ctx
-                    .get_channel_local(&result.conversation_id)
-                    .map(|c| c.name)
-                    .unwrap_or_else(|| "Unknown".to_string());
+                // Get conversation name — dispatch by conversation_type so anon
+                // results get the correct peer/group name instead of "Unknown".
+                let channel_name = match msg.conversation_type {
+                    chatter_core::domain::message::ConversationType::Channel
+                    | chatter_core::domain::message::ConversationType::ServerDm
+                    | chatter_core::domain::message::ConversationType::MailboxDm => ui_ctx
+                        .get_channel_local(&result.conversation_id)
+                        .map(|c| c.name)
+                        .unwrap_or_else(|| "Unknown".to_string()),
+                    chatter_core::domain::message::ConversationType::AnonDm => {
+                        let anon_id_str = result.conversation_id.to_string();
+                        anon_id_str
+                            .parse::<chatter_core::domain::anon_dm::AnonDmId>()
+                            .ok()
+                            .and_then(|id| ui_ctx.get_anon_dm_conversation(&id))
+                            .and_then(|c| c.peer_display_name)
+                            .unwrap_or_else(|| "Private Chat".to_string())
+                    }
+                    chatter_core::domain::message::ConversationType::AnonGroup => {
+                        let anon_id_str = result.conversation_id.to_string();
+                        anon_id_str
+                            .parse::<chatter_core::domain::anon_group::AnonGroupId>()
+                            .ok()
+                            .and_then(|id| ui_ctx.get_anon_group(&id))
+                            .map(|g| g.name)
+                            .unwrap_or_else(|| "Private Group".to_string())
+                    }
+                    chatter_core::domain::message::ConversationType::SavedMessages => {
+                        "Saved Messages".to_string()
+                    }
+                };
 
                 // Get sender name
                 let sender_name = msg
@@ -188,43 +214,67 @@ fn wire_search_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
-            let channel_id = message.conversation_id;
+            let conv_id_str = message.conversation_id.to_string();
 
-            // 2. Switch to the channel
-            ui_ctx.chat_state().set_active_channel(channel_id);
-            ui_ctx.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
-            
-            let ui_ctx_for_sel = ui_ctx.clone();
-            let weak_for_sel = weak.clone();
+            // 2. Dispatch navigation by conversation type. Each path fires the
+            //    matching slint sidebar callback so the existing dm/channel/
+            //    private-group loaders run end-to-end (sets active conversation,
+            //    loads messages, refreshes selection). Search-click for anon
+            //    DM and anon group used to navigate as Channel and broke.
+            let weak_for_dispatch = weak.clone();
+            let conv_type = message.conversation_type;
             let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_for_sel.upgrade() {
-                    crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx_for_sel);
+                if let Some(w) = weak_for_dispatch.upgrade() {
+                    let id_slint: slint::SharedString = conv_id_str.into();
+                    match conv_type {
+                        chatter_core::domain::message::ConversationType::Channel => {
+                            w.invoke_channel_selected(id_slint);
+                        }
+                        chatter_core::domain::message::ConversationType::ServerDm
+                        | chatter_core::domain::message::ConversationType::MailboxDm
+                        | chatter_core::domain::message::ConversationType::AnonDm => {
+                            w.invoke_dm_selected(id_slint);
+                        }
+                        chatter_core::domain::message::ConversationType::AnonGroup => {
+                            w.invoke_private_group_selected(id_slint);
+                        }
+                        chatter_core::domain::message::ConversationType::SavedMessages => {
+                            tracing::warn!("Search-click on Saved Messages not yet wired");
+                            w.set_loading_messages(false);
+                        }
+                    }
                 }
             });
 
-            // 3. Load channel messages
-            // For now we just use the standard load_channel_into_ui which loads latest 50.
-            // In a more complete implementation, we would load around the target message.
-            crate::bin_ui::features::sidebar::channel::load_channel_into_ui(
-                weak.clone(),
-                channel_id,
-                ui_ctx.clone(),
-            ).await;
-
-            // 4. Find the message index and scroll to it
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    let messages = w.get_messages();
-                    for i in 0..messages.row_count() {
-                        if let Some(msg) = messages.row_data(i) {
-                            if msg.message_id == message_id_str {
-                                w.set_scroll_to_message_index(i as i32);
-                                tracing::debug!("Scrolling to message index {}", i);
-                                break;
+            // 3. Scroll-to-message after the loader has populated the model.
+            //    The sidebar loaders are async + UI-threaded; poll briefly.
+            let weak_scroll = weak.clone();
+            let target_id = message_id_str.clone();
+            tokio::spawn(async move {
+                for _ in 0..20 {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    let target_id = target_id.clone();
+                    let weak_inner = weak_scroll.clone();
+                    let found = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    let found_set = found.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak_inner.upgrade() {
+                            let messages = w.get_messages();
+                            for i in 0..messages.row_count() {
+                                if let Some(msg) = messages.row_data(i) {
+                                    if msg.message_id == target_id {
+                                        w.set_scroll_to_message_index(i as i32);
+                                        found_set.store(true, std::sync::atomic::Ordering::SeqCst);
+                                        break;
+                                    }
+                                }
                             }
                         }
+                    });
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    if found.load(std::sync::atomic::Ordering::SeqCst) {
+                        break;
                     }
-
                 }
             });
         });

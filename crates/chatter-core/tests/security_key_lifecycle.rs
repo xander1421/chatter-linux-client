@@ -353,7 +353,8 @@ fn test_svr_keypair_from_pin() {
     let kp2 = svr::SvrKeypair::new_from_pin("1234", "user1").unwrap();
 
     assert_eq!(kp1.public_key_bytes(), kp2.public_key_bytes(), "Same PIN must produce same keypair");
-    assert_eq!(kp1.secret_bytes(), kp2.secret_bytes());
+    let secrets_match = kp1.with_secret_bytes(|a| kp2.with_secret_bytes(|b| a == b));
+    assert!(secrets_match, "Same PIN must produce same secret bytes");
     assert_ne!(kp1.public_key_bytes(), [0u8; 32], "Public key should not be all zeros");
 }
 

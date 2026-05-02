@@ -640,7 +640,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             );
             
             match ui_ctx
-                .update_user_profile(Some(&display_name), avatar_url.as_deref(), status_msg.as_ref())
+                .update_user_profile(Some(display_name.clone()), avatar_url.clone(), status_msg.clone())
                 .await
             {
                 Ok(profile) => {

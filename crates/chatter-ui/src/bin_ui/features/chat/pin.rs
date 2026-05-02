@@ -82,9 +82,16 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = weak_window.clone();
 
         tokio::spawn(async move {
+            let target_author: chatter_core::domain::UserId = match sender_id_str.parse() {
+                Ok(id) => id,
+                Err(_) => {
+                    tracing::error!(sender_id = %sender_id_str, "invalid sender id for pin");
+                    return;
+                }
+            };
             // Send pin/unpin via ConversationHandle (dispatches to correct service)
             if let Err(e) = handle.send_pin(
-                &sender_id_str, target_sent_timestamp, unpin,
+                &target_author, target_sent_timestamp, unpin,
             ).await {
                 tracing::error!(error = %e, "Failed to send pin");
                 return;

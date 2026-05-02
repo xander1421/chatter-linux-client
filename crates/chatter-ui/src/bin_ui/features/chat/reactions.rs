@@ -33,9 +33,16 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
         let weak = weak_window.clone();
 
         tokio::spawn(async move {
+            let target_author: chatter_core::domain::UserId = match sender_id_str.parse() {
+                Ok(id) => id,
+                Err(_) => {
+                    tracing::error!(sender_id = %sender_id_str, "invalid sender id for reaction");
+                    return;
+                }
+            };
             // Core decides add/remove from local state — UI doesn't query.
             let now_reacted = match handle
-                .toggle_reaction(&emoji_str, &sender_id_str, target_sent_timestamp)
+                .toggle_reaction(&emoji_str, &target_author, target_sent_timestamp)
                 .await
             {
                 Ok(state) => state,

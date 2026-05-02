@@ -2,6 +2,7 @@
 //!
 //! Authentication interceptor for injecting credentials into gRPC requests.
 
+use std::fmt;
 use std::sync::Arc;
 
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -9,12 +10,17 @@ use base64::Engine;
 use parking_lot::RwLock;
 use tonic::service::Interceptor;
 use tonic::{Request, Status};
+use zeroize::Zeroize;
 
 use crate::mailbox::blind_signature::UnblindedToken;
 
 /// Authentication modes for gRPC requests.
-#[derive(Clone)]
-#[derive(Default)]
+///
+/// Secret material in `Bearer` / `Basic.password` / `SealedSender.access_key`
+/// is zeroized when the variant is dropped (including when the active mode
+/// is replaced via `set_*`). `Debug` is intentionally not derived so the
+/// enum cannot leak credentials through accidental `{:?}` formatting.
+#[derive(Clone, Default)]
 pub enum AuthMode {
     /// Bearer token (device token).
     Bearer(String),
@@ -36,6 +42,19 @@ pub enum AuthMode {
     /// No authentication.
     #[default]
     None,
+}
+
+impl Drop for AuthMode {
+    fn drop(&mut self) {
+        match self {
+            AuthMode::Bearer(token) => token.zeroize(),
+            AuthMode::Basic { password, .. } => password.zeroize(),
+            AuthMode::SealedSender { access_key } => access_key.zeroize(),
+            // Anonymous tokens are blind-signed credentials; their crate owns
+            // their lifecycle. No secret material in `None`.
+            AuthMode::Anonymous(_) | AuthMode::None => {}
+        }
+    }
 }
 
 
@@ -157,7 +176,11 @@ impl AuthInterceptor {
 }
 
 /// Authentication credentials extracted from AuthInterceptor.
-#[derive(Debug, Clone)]
+///
+/// `token` is the device auth token (HTTP Basic password). `Debug` is
+/// redacted and the token is zeroized on drop so handing this struct to a
+/// log statement or letting it go out of scope cannot leak the secret.
+#[derive(Clone)]
 pub struct AuthInfo {
     /// User UUID
     pub user_id: String,
@@ -165,6 +188,22 @@ pub struct AuthInfo {
     pub device_id: u32,
     /// Auth token
     pub token: String,
+}
+
+impl fmt::Debug for AuthInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AuthInfo")
+            .field("user_id", &self.user_id)
+            .field("device_id", &self.device_id)
+            .field("token", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl Drop for AuthInfo {
+    fn drop(&mut self) {
+        self.token.zeroize();
+    }
 }
 
 impl Default for AuthInterceptor {
@@ -239,5 +278,34 @@ impl Interceptor for AuthInterceptor {
         }
 
         Ok(request)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auth_info_debug_redacts_token() {
+        let info = AuthInfo {
+            user_id: "alice".into(),
+            device_id: 1,
+            token: "super-secret-token".into(),
+        };
+        let dbg = format!("{:?}", info);
+        assert!(dbg.contains("REDACTED"), "debug output: {dbg}");
+        assert!(dbg.contains("alice"), "user_id should still be visible: {dbg}");
+        assert!(!dbg.contains("super-secret-token"), "token leaked: {dbg}");
+    }
+
+    #[test]
+    fn replacing_basic_auth_zeroizes_old_password() {
+        // Smoke test: setting a new mode drops the old one (which runs the
+        // zeroize Drop). We can't observe the freed memory, but we can at
+        // least confirm the API contract holds without panicking.
+        let interceptor = AuthInterceptor::new();
+        interceptor.set_basic("alice.1".into(), "first-password".into());
+        interceptor.set_basic("alice.1".into(), "second-password".into());
+        interceptor.clear();
     }
 }

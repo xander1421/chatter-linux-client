@@ -112,7 +112,6 @@ pub(crate) fn wire_attachment_clicked(window: &MainWindow, chat_state: ChatState
 
         #[cfg(not(target_os = "android"))]
         {
-            // Use tokio::spawn for the file picker (async operation)
             tokio::spawn(async move {
                 use chatter_core::media::file_picker::{FileFilter, FilePicker, FilePickerConfig};
 
@@ -134,16 +133,13 @@ pub(crate) fn wire_attachment_clicked(window: &MainWindow, chat_state: ChatState
 
                 tracing::info!("Selected {} file(s) for attachment", selected_files.len());
 
-                // Process each file
                 for file_path in selected_files {
                     if let Err(e) = process_and_add_file(file_path, &chat_state, &weak).await {
                         tracing::error!("{}", e);
                     }
                 }
 
-                tracing::info!(
-                    "Added file(s) to pending attachments",
-                );
+                tracing::info!("Added file(s) to pending attachments");
             });
         }
         #[cfg(target_os = "android")]

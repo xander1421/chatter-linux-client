@@ -215,8 +215,9 @@ impl AnonDmService {
     pub async fn send_presence_update(
         &self,
         conversation_id: &AnonDmId,
-        presence: crate::proto::UserPresence,
+        presence: crate::domain::user::PresenceStatus,
     ) -> Result<(), AnonDmError> {
+        use crate::domain::user::PresenceStatus;
         // Silently ignore if blocked
         if self.check_conversation_not_blocked(conversation_id).is_err() {
             return Ok(());
@@ -234,13 +235,12 @@ impl AnonDmService {
             }
         };
 
-        // Map UserPresence to anon_dm_presence::Status
+        // Map domain PresenceStatus to wire-level anon_dm_presence::Status.
         let status = match presence {
-            crate::proto::UserPresence::Online => anon_dm_presence::Status::Online,
-            crate::proto::UserPresence::Away => anon_dm_presence::Status::Away,
-            crate::proto::UserPresence::DoNotDisturb => anon_dm_presence::Status::DoNotDisturb,
-            crate::proto::UserPresence::Offline => anon_dm_presence::Status::Offline,
-            _ => anon_dm_presence::Status::Offline,
+            PresenceStatus::Online => anon_dm_presence::Status::Online,
+            PresenceStatus::Away => anon_dm_presence::Status::Away,
+            PresenceStatus::DoNotDisturb => anon_dm_presence::Status::DoNotDisturb,
+            PresenceStatus::Offline => anon_dm_presence::Status::Offline,
         };
 
         // Create AnonDmPresence message

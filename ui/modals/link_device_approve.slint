@@ -19,6 +19,10 @@ export component LinkDeviceApproveModal inherits Rectangle {
     // Preview state populated by core after parse.
     in property <string> preview-device-name: "";
     in property <string> preview-server-url: "";
+    // 6-char verification code derived from the new device's ephemeral
+    // public key. Must match the value shown on the new device — this is
+    // the user's gate against MITM substitution of the QR ephemeral key.
+    in property <string> verification-code: "";
     in property <bool> preview-ready: false;
     // Status / error from core.
     in property <string> error: "";
@@ -27,7 +31,7 @@ export component LinkDeviceApproveModal inherits Rectangle {
 
     callback close();
     callback paste-changed(string);   // URL textbox changed → core re-parses
-    callback approve(string, string); // (url, password)
+    callback approve(string);         // password (pending link is held in core)
 
     Modal {
         show: root.show-modal;
@@ -77,6 +81,27 @@ export component LinkDeviceApproveModal inherits Rectangle {
                         font-size: Typography.xs;
                         wrap: word-wrap;
                     }
+
+                    // Verification-code gate. The user MUST eyeball this
+                    // against the code displayed on the new device before
+                    // approving — it confirms there's no MITM swapping
+                    // ephemeral keys.
+                    Rectangle {
+                        height: 1px;
+                        background: Colors.border;
+                    }
+                    Text {
+                        text: "Verify this code matches the new device:";
+                        color: Colors.text-secondary;
+                        font-size: Typography.xs;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: root.verification-code;
+                        color: Colors.text-primary;
+                        font-size: Typography.lg;
+                        font-weight: Typography.bold;
+                    }
                 }
             }
 
@@ -115,7 +140,7 @@ export component LinkDeviceApproveModal inherits Rectangle {
                     loading: root.approving;
                     disabled: root.approving || !root.preview-ready || root.password == "";
                     clicked => {
-                        root.approve(root.link-url, root.password);
+                        root.approve(root.password);
                     }
                 }
             }

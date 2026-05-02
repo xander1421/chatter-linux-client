@@ -25,7 +25,7 @@ use slint::Weak;
 use chatter_core::domain::ids::MessageId;
 use chatter_core::domain::message::{ConversationType, Message, MessageContent, SystemMessage};
 use chrono::Utc;
-use chatter_core::inbox::handlers::DomainEvent;
+use chatter_core::events::DomainEvent;
 use chatter_core::client::ChatterClient;
 use crate::MainWindow;
 

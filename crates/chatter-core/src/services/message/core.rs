@@ -834,7 +834,7 @@ impl MessageService {
         // Resolve quoted message locally to fill in any missing fields.
         let original = self
             .message_repo
-            .get_by_sender_timestamp(&quote.author_id, quote.timestamp)
+            .get_by_sender_timestamp(&quote.target_author_id, quote.target_timestamp)
             .ok()
             .flatten();
         let original_attachments: Vec<_> = original
@@ -849,9 +849,9 @@ impl MessageService {
         let reply_to_id = original
             .as_ref()
             .map(|m| m.id)
-            .unwrap_or_else(|| crate::domain::ids::MessageId::from_timestamp(quote.timestamp));
+            .unwrap_or_else(|| crate::domain::ids::MessageId::from_timestamp(quote.target_timestamp));
         let reply_to_text = quote
-            .preview_text
+            .target_preview
             .clone()
             .or_else(|| {
                 original.as_ref().map(|m| {
@@ -871,7 +871,7 @@ impl MessageService {
             .unwrap_or((None, None));
 
         message.reply_to = Some(reply_to_id);
-        message.reply_to_author_id = Some(quote.author_id);
+        message.reply_to_author_id = Some(quote.target_author_id);
         message.reply_to_text = reply_to_text;
         message.reply_to_thumbnail = reply_thumb;
         message.reply_to_thumbnail_mime = reply_thumb_mime;

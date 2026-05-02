@@ -434,7 +434,7 @@ mod tests {
 
         pool.auth().set_bearer("test-token".to_string());
 
-        match pool.auth().current_mode() {
+        match &pool.auth().current_mode() {
             super::super::interceptors::AuthMode::Bearer(token) => {
                 assert_eq!(token, "test-token");
             }

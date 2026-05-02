@@ -96,7 +96,10 @@ pub async fn app_init() -> AppState {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into()),
+                .add_directive(tracing::Level::INFO.into())
+                .add_directive("glycin=warn".parse().unwrap())
+                .add_directive("glycin_utils=warn".parse().unwrap())
+                .add_directive("zbus=warn".parse().unwrap()),
         )
         .init();
 
