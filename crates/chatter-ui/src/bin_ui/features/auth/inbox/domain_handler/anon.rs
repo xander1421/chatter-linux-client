@@ -10,7 +10,9 @@ use slint::Weak;
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::anon_dm::AnonDmId;
 use chatter_core::domain::anon_group::AnonGroupId;
-use chatter_core::domain::ids::UserId;
+use chatter_core::domain::ids::{MessageId, UserId};
+use chatter_core::domain::message::{ConversationType, Message, MessageContent, SystemMessage};
+use chrono::Utc;
 use crate::MainWindow;
 
 // =========================================================================
@@ -153,4 +155,95 @@ pub(super) fn handle_group_updated(
             );
         }
     });
+}
+
+// =========================================================================
+// Anonymous Group Membership Events (system-message synthesis)
+//
+// `Member{Joined,Left,Kicked}` events arrive as bare metadata; the UI shows
+// them as "X joined", "X left", "X removed by Y" system bubbles. Build the
+// synthetic Message here so mod.rs stays a pure dispatch table.
+// =========================================================================
+
+fn synthetic_system_message(
+    group_id: AnonGroupId,
+    actor_id: UserId,
+    content: SystemMessage,
+) -> Message {
+    let now = Utc::now();
+    Message {
+        id: MessageId::new(),
+        conversation_id: group_id.into(),
+        conversation_type: ConversationType::AnonGroup,
+        sender_id: Some(actor_id),
+        device_id: None,
+        content: MessageContent::System(content),
+        encrypted_content: None,
+        thread_id: None,
+        reply_to: None,
+        reply_to_author_id: None,
+        reply_to_text: None,
+        reply_to_thumbnail: None,
+        reply_to_thumbnail_mime: None,
+        attachments: Vec::new(),
+        is_pinned: false,
+        is_edited: false,
+        is_deleted: false,
+        is_read: true,
+        sent_at: now.timestamp_nanos_opt().unwrap_or(0) as u64,
+        created_at: now,
+        updated_at: now,
+        edited_at: None,
+        reaction_counts: Vec::new(),
+        current_user_reactions: Vec::new(),
+        mentioned_integrations: Vec::new(),
+        targets_ai_bot: false,
+        delivery_status: String::new(),
+    }
+}
+
+pub(super) fn handle_group_member_joined(
+    window: &Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    group_id: AnonGroupId,
+    user_id: UserId,
+) {
+    let message = synthetic_system_message(
+        group_id,
+        user_id,
+        SystemMessage::UserJoined(user_id),
+    );
+    super::messaging::handle_message_received(window, ui_ctx, message);
+    super::messaging::update_active_channel_member_count(window, ui_ctx, group_id.into());
+}
+
+pub(super) fn handle_group_member_left(
+    window: &Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    group_id: AnonGroupId,
+    user_id: UserId,
+) {
+    let message = synthetic_system_message(
+        group_id,
+        user_id,
+        SystemMessage::UserLeft(user_id),
+    );
+    super::messaging::handle_message_received(window, ui_ctx, message);
+    super::messaging::update_active_channel_member_count(window, ui_ctx, group_id.into());
+}
+
+pub(super) fn handle_group_member_kicked(
+    window: &Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    group_id: AnonGroupId,
+    user_id: UserId,
+    kicked_by: UserId,
+) {
+    let message = synthetic_system_message(
+        group_id,
+        kicked_by, // sender = admin who did it
+        SystemMessage::UserRemoved { by: kicked_by, removed: user_id },
+    );
+    super::messaging::handle_message_received(window, ui_ctx, message);
+    super::messaging::update_active_channel_member_count(window, ui_ctx, group_id.into());
 }

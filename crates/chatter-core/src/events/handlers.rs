@@ -35,7 +35,6 @@
 //!     chat_state,
 //!     pinned_state,
 //!     user_state,
-//!     presence_state,
 //!     streaming_state,
 //!     offline_state,
 //! );

@@ -28,6 +28,9 @@ impl Migration for V003Channels {
             channel_type INTEGER NOT NULL,
             name TEXT NOT NULL,
             description TEXT,
+            -- Historical column. v054 renames + retypes this to `icon BLOB`.
+            -- Keep the old name here so upgrade paths don't double-create
+            -- the column.
             image_url TEXT,
             owner_id TEXT NOT NULL,
             -- Config fields (flattened for simplicity)

@@ -144,15 +144,19 @@ pub async fn load_channel_into_ui(
     let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
     let ui_ctx_gifs = ui_ctx.clone();
 
-    // Channel icon (uploaded at creation) — decoded from the attachment
-    // cache. `slint::Image` is `!Send`, so carry the raw RGBA across the
-    // thread-hop and build the `Image` inside `run_ui!`.
+    // Channel icon (raw bytes stored on the Channel record). Decode on the
+    // worker thread — `slint::Image` is `!Send`, so we carry the RGBA
+    // across the thread-hop and build the `Image` inside `run_ui!`.
     let channel_icon_pixels = channel
-        .image_url
+        .icon
         .as_deref()
-        .filter(|u| !u.is_empty())
-        .and_then(|url| ui_ctx.get_channel_icon_pixels(url))
-        .map(|p| (p.rgba.to_vec(), p.width, p.height));
+        .filter(|b| !b.is_empty())
+        .and_then(|bytes| image::load_from_memory(bytes).ok())
+        .map(|img| {
+            let rgba = img.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            (rgba.into_raw(), w, h)
+        });
 
     run_ui!(weak, |w| {
         w.set_channel_name(group_name.into());

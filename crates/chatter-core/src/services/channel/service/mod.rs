@@ -329,7 +329,7 @@ impl ChannelService {
         channel_id: &ChannelId,
         name: Option<&str>,
         description: Option<&str>,
-        image_url: Option<&str>,
+        icon: Option<&[u8]>,
         config: Option<ChannelConfig>,
     ) -> Result<Channel, ChannelError> {
         let _ = self.settings_repo.current_user_id()?;
@@ -356,9 +356,9 @@ impl ChannelService {
                 .map(|s| s.to_string())
                 .or_else(|| existing.description.clone())
                 .unwrap_or_default(),
-            img_url: image_url
-                .map(|s| s.to_string())
-                .or_else(|| existing.image_url.clone())
+            icon: icon
+                .map(|b| b.to_vec())
+                .or_else(|| existing.icon.clone())
                 .unwrap_or_default(),
             archived: existing.archived,
         };
@@ -370,8 +370,8 @@ impl ChannelService {
         if description.is_some() {
             paths.push("description".to_string());
         }
-        if image_url.is_some() {
-            paths.push("img_url".to_string());
+        if icon.is_some() {
+            paths.push("icon".to_string());
         }
         if config.is_some() {
             paths.push("config".to_string());

@@ -60,7 +60,7 @@ impl ChannelClient {
     /// * `initial_member_ids` - Optional list of initial member IDs
     /// * `password` - Optional password for private channels
     /// * `description` - Optional channel description
-    /// * `img_url` - Optional channel image URL
+    /// * `icon` - Optional raw image bytes for the channel icon (≤64KB)
     #[allow(clippy::too_many_arguments)]
     pub async fn create_channel(
         &mut self,
@@ -70,7 +70,7 @@ impl ChannelClient {
         initial_member_ids: Vec<String>,
         password: Option<&str>,
         description: Option<&str>,
-        img_url: Option<&str>,
+        icon: Option<&[u8]>,
     ) -> Result<impl Stream<Item = Result<ChannelEvent, NetworkError>> + use<>, NetworkError> {
         let request = CreateChannelRequest {
             name: name.to_string(),
@@ -80,7 +80,7 @@ impl ChannelClient {
             password: password.unwrap_or("").to_string(),
             request_id: uuid::Uuid::new_v4().to_string(),
             description: description.unwrap_or("").to_string(),
-            img_url: img_url.unwrap_or("").to_string(),
+            icon: icon.map(<[u8]>::to_vec).unwrap_or_default(),
         };
 
         let response = self
@@ -630,7 +630,7 @@ mod tests {
             members: vec![],
             created_at: 0,
             description: "A test channel".to_string(),
-            img_url: "".to_string(),
+            icon: Vec::new(),
             archived: false,
         };
 

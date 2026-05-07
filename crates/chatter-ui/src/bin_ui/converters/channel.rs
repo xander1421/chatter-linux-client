@@ -10,19 +10,12 @@ use super::utils::{avatar_bytes_to_image, channel_type_to_string, get_initials};
 
 /// Convert a domain Channel to Slint ChannelListItemData.
 ///
-/// Queries the attachment channel-icon cache via the `ChatterClient` façade for
-/// the decoded pixels of `channel.image_url`. Builds a slint::Image from the
-/// pixels at the UI-thread boundary only — no image-decode or caching logic
-/// lives here.
-pub fn channel_to_slint(channel: &Channel, ui_ctx: &ChatterClient) -> crate::ChannelListItemData {
-    let (avatar_source, has_avatar) = match channel.image_url.as_deref() {
-        Some(url) if !url.is_empty() => match ui_ctx.get_channel_icon_pixels(url) {
-            Some(pixels) => {
-                let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                    &pixels.rgba, pixels.width, pixels.height,
-                );
-                (slint::Image::from_rgba8(buffer), true)
-            }
+/// Decodes `channel.icon` (raw image bytes) into a `slint::Image` at the
+/// UI-thread boundary only — no image-decode or caching logic lives here.
+pub fn channel_to_slint(channel: &Channel, _ui_ctx: &ChatterClient) -> crate::ChannelListItemData {
+    let (avatar_source, has_avatar) = match channel.icon.as_deref() {
+        Some(bytes) if !bytes.is_empty() => match avatar_bytes_to_image(bytes) {
+            Some(img) => (img, true),
             None => (slint::Image::default(), false),
         },
         _ => (slint::Image::default(), false),

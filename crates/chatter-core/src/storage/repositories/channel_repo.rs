@@ -35,7 +35,7 @@ impl ChannelRepository {
         let conn = self.db.connection()?;
         conn.execute(
             "INSERT INTO channels (
-                id, channel_type, name, description, image_url, owner_id,
+                id, channel_type, name, description, icon, owner_id,
                 persistence, max_members, default_ttl_seconds,
                 allow_reactions, allow_threads, allow_attachments, require_encryption,
                 created_at, updated_at, archived
@@ -45,7 +45,7 @@ impl ChannelRepository {
                 channel_type_to_i32(channel.channel_type),
                 channel.name,
                 channel.description,
-                channel.image_url,
+                channel.icon,
                 channel.owner_id.to_string(),
                 persistence_to_i32(channel.config.persistence),
                 channel.config.max_members,
@@ -69,7 +69,7 @@ impl ChannelRepository {
         let conn = self.db.connection()?;
         let rows = conn.execute(
             "INSERT OR IGNORE INTO channels (
-                id, channel_type, name, description, image_url, owner_id,
+                id, channel_type, name, description, icon, owner_id,
                 persistence, max_members, default_ttl_seconds,
                 allow_reactions, allow_threads, allow_attachments, require_encryption,
                 created_at, updated_at, archived
@@ -79,7 +79,7 @@ impl ChannelRepository {
                 channel_type_to_i32(channel.channel_type),
                 channel.name,
                 channel.description,
-                channel.image_url,
+                channel.icon,
                 channel.owner_id.to_string(),
                 persistence_to_i32(channel.config.persistence),
                 channel.config.max_members,
@@ -100,7 +100,7 @@ impl ChannelRepository {
     pub fn get(&self, id: &ChannelId) -> Result<Option<Channel>, StorageError> {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, channel_type, name, description, image_url, owner_id,
+            "SELECT id, channel_type, name, description, icon, owner_id,
                     persistence, max_members, default_ttl_seconds,
                     allow_reactions, allow_threads, allow_attachments, require_encryption,
                     created_at, updated_at, archived,
@@ -124,7 +124,7 @@ impl ChannelRepository {
         let conn = self.db.connection()?;
         let rows = conn.execute(
             "UPDATE channels SET
-                channel_type = ?1, name = ?2, description = ?3, image_url = ?4, owner_id = ?5,
+                channel_type = ?1, name = ?2, description = ?3, icon = ?4, owner_id = ?5,
                 persistence = ?6, max_members = ?7, default_ttl_seconds = ?8,
                 allow_reactions = ?9, allow_threads = ?10, allow_attachments = ?11, require_encryption = ?12,
                 updated_at = ?13, archived = ?14
@@ -133,7 +133,7 @@ impl ChannelRepository {
                 channel_type_to_i32(channel.channel_type),
                 channel.name,
                 channel.description,
-                channel.image_url,
+                channel.icon,
                 channel.owner_id.to_string(),
                 persistence_to_i32(channel.config.persistence),
                 channel.config.max_members,
@@ -160,7 +160,7 @@ impl ChannelRepository {
         let conn = self.db.connection()?;
         conn.execute(
             "INSERT INTO channels (
-                id, channel_type, name, description, image_url, owner_id,
+                id, channel_type, name, description, icon, owner_id,
                 persistence, max_members, default_ttl_seconds,
                 allow_reactions, allow_threads, allow_attachments, require_encryption,
                 created_at, updated_at, archived
@@ -169,7 +169,7 @@ impl ChannelRepository {
                 channel_type = excluded.channel_type,
                 name = excluded.name,
                 description = excluded.description,
-                image_url = excluded.image_url,
+                icon = excluded.icon,
                 owner_id = excluded.owner_id,
                 persistence = excluded.persistence,
                 max_members = excluded.max_members,
@@ -185,7 +185,7 @@ impl ChannelRepository {
                 channel_type_to_i32(channel.channel_type),
                 channel.name,
                 channel.description,
-                channel.image_url,
+                channel.icon,
                 channel.owner_id.to_string(),
                 persistence_to_i32(channel.config.persistence),
                 channel.config.max_members,
@@ -241,7 +241,7 @@ impl ChannelRepository {
     ) -> Result<Vec<Channel>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT c.id, c.channel_type, c.name, c.description, c.image_url, c.owner_id,
+            "SELECT c.id, c.channel_type, c.name, c.description, c.icon, c.owner_id,
                     c.persistence, c.max_members, c.default_ttl_seconds,
                     c.allow_reactions, c.allow_threads, c.allow_attachments, c.require_encryption,
                     c.created_at, c.updated_at, c.archived,
@@ -276,7 +276,7 @@ impl ChannelRepository {
     ) -> Result<Option<Channel>, StorageError> {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
-            "SELECT c.id, c.channel_type, c.name, c.description, c.image_url, c.owner_id,
+            "SELECT c.id, c.channel_type, c.name, c.description, c.icon, c.owner_id,
                     c.persistence, c.max_members, c.default_ttl_seconds,
                     c.allow_reactions, c.allow_threads, c.allow_attachments, c.require_encryption,
                     c.created_at, c.updated_at, c.archived,
@@ -309,7 +309,7 @@ impl ChannelRepository {
     pub fn list_by_type(&self, channel_type: ChannelType) -> Result<Vec<Channel>, StorageError> {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, channel_type, name, description, image_url, owner_id,
+            "SELECT id, channel_type, name, description, icon, owner_id,
                     persistence, max_members, default_ttl_seconds,
                     allow_reactions, allow_threads, allow_attachments, require_encryption,
                     created_at, updated_at, archived,
@@ -627,7 +627,7 @@ fn row_to_channel(row: &rusqlite::Row<'_>) -> rusqlite::Result<Channel> {
         channel_type: channel_type_from_i32(row.get(1)?),
         name: row.get(2)?,
         description: row.get(3)?,
-        image_url: row.get(4)?,
+        icon: row.get(4)?,
         owner_id: row
             .get::<_, String>(5)?
             .parse()
@@ -767,7 +767,7 @@ mod tests {
                     channel_type INTEGER NOT NULL DEFAULT 0,
                     name TEXT NOT NULL,
                     description TEXT,
-                    image_url TEXT,
+                    icon BLOB,
                     owner_id TEXT NOT NULL,
                     persistence INTEGER NOT NULL DEFAULT 0,
                     max_members INTEGER,

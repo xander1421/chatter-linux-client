@@ -45,7 +45,7 @@ use crate::services::user::UserService;
 use crate::services::conversation::ConversationHandle;
 use crate::state::{
     ActiveConversation, AuthState, ChatState, JarvisState, MessageState, OfflineState,
-    OrgState, PinnedState, PresenceState, PrivacyState, StreamingState, UIState, UserState,
+    OrgState, PinnedState, PrivacyState, StreamingState, UIState, UserState,
 };
 use crate::state::chat_state::PendingAttachment;
 use crate::storage::settings_keys;
@@ -367,12 +367,12 @@ impl ChatterClient {
         channel_type: ChannelType,
         config: Option<crate::domain::channel::ChannelConfig>,
         description: Option<&str>,
-        image_url: Option<&str>,
+        icon: Option<&[u8]>,
         password: Option<&str>,
         initial_members: Vec<crate::domain::ids::UserId>,
     ) -> Result<Channel, crate::services::channel::ChannelError> {
         let (channel, _mailbox_setup) = self.channels()
-            .create_channel(name, channel_type, config, description, image_url, password, initial_members, true)
+            .create_channel(name, channel_type, config, description, icon, password, initial_members, true)
             .await?;
         // Stream subscription owns tasks + the pending-decrypt queue held by
         // this client, so it stays here rather than inside the service.
@@ -407,18 +407,20 @@ impl ChatterClient {
             channel_type,
             config: None,
             description: None,
-            image_url: None,
+            icon: None,
             icon_path: None,
             password: None,
             initial_members: Vec::new(),
         }
     }
 
-    /// Create a channel, atomically uploading the icon first if one is
-    /// provided. UI should pass `icon_path` and let core decide whether to
-    /// upload — keeps the two-step (upload → create) dance out of the UI.
+    /// Create a channel, reading the icon file from disk if one is
+    /// provided. UI may pass `icon_path` and let core handle the read +
+    /// size validation. The bytes are sent inline in the channel proto
+    /// — server stores them plaintext alongside the channel name.
     ///
-    /// If the icon upload fails, the channel is not created.
+    /// If the icon read fails or the file exceeds the 64KB cap, the
+    /// channel is not created.
     pub async fn create_channel_with_icon(
         self: &Arc<Self>,
         name: &str,
@@ -429,15 +431,22 @@ impl ChatterClient {
         password: Option<&str>,
         initial_members: Vec<crate::domain::ids::UserId>,
     ) -> Result<Channel, crate::services::channel::ChannelError> {
-        let image_url: Option<String> = match icon_path {
-            Some(path) => match self.attachments().upload_channel_icon(path).await {
-                Ok(key) => {
-                    tracing::info!(cdn_key = %key, "Uploaded channel icon to CDN");
-                    Some(key)
+        let icon_bytes: Option<Vec<u8>> = match icon_path {
+            Some(path) => match tokio::fs::read(path).await {
+                Ok(bytes) => {
+                    if bytes.len() > 65_536 {
+                        return Err(crate::services::channel::ChannelError::InvalidInput(
+                            format!(
+                                "icon too large: {} bytes (max 65536)",
+                                bytes.len()
+                            ),
+                        ));
+                    }
+                    Some(bytes)
                 }
                 Err(e) => {
                     return Err(crate::services::channel::ChannelError::InvalidInput(format!(
-                        "icon upload failed: {}",
+                        "icon read failed: {}",
                         e
                     )));
                 }
@@ -449,7 +458,7 @@ impl ChatterClient {
             channel_type,
             config,
             description,
-            image_url.as_deref(),
+            icon_bytes.as_deref(),
             password,
             initial_members,
         )
@@ -601,7 +610,7 @@ pub struct ChannelBuilder {
     channel_type: ChannelType,
     config: Option<crate::domain::channel::ChannelConfig>,
     description: Option<String>,
-    image_url: Option<String>,
+    icon: Option<Vec<u8>>,
     icon_path: Option<std::path::PathBuf>,
     password: Option<String>,
     initial_members: Vec<crate::domain::ids::UserId>,
@@ -620,19 +629,19 @@ impl ChannelBuilder {
         self
     }
 
-    /// Use an already-uploaded icon (CDN key). Mutually exclusive with
-    /// `icon_path`; the last setter wins.
-    pub fn image_url(mut self, image_url: impl Into<String>) -> Self {
-        self.image_url = Some(image_url.into());
+    /// Set the channel icon as raw image bytes (PNG/JPEG/WebP, ≤64KB).
+    /// Mutually exclusive with `icon_path`; the last setter wins.
+    pub fn icon(mut self, bytes: impl Into<Vec<u8>>) -> Self {
+        self.icon = Some(bytes.into());
         self.icon_path = None;
         self
     }
 
-    /// Upload an icon from a local file before creating the channel.
-    /// Mutually exclusive with `image_url`.
+    /// Read the icon from a local file before creating the channel.
+    /// Mutually exclusive with `icon`.
     pub fn icon_path(mut self, icon_path: impl Into<std::path::PathBuf>) -> Self {
         self.icon_path = Some(icon_path.into());
-        self.image_url = None;
+        self.icon = None;
         self
     }
 
@@ -654,7 +663,7 @@ impl ChannelBuilder {
         self
     }
 
-    /// Execute the create. Uploads the icon first if `icon_path` is set.
+    /// Execute the create. Reads the icon from disk if `icon_path` is set.
     pub async fn create(
         self,
     ) -> Result<Channel, crate::services::channel::ChannelError> {
@@ -677,7 +686,7 @@ impl ChannelBuilder {
                     self.channel_type,
                     self.config,
                     self.description.as_deref(),
-                    self.image_url.as_deref(),
+                    self.icon.as_deref(),
                     self.password.as_deref(),
                     self.initial_members,
                 )

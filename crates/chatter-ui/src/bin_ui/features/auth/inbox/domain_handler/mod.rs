@@ -16,15 +16,13 @@ mod calls;
 mod helpers;
 pub(crate) use helpers::{recompute_total_unread, update_unread_count};
 mod messaging;
+mod sessions;
 mod social;
 
 use std::sync::Arc;
 
 use slint::Weak;
 
-use chatter_core::domain::ids::MessageId;
-use chatter_core::domain::message::{ConversationType, Message, MessageContent, SystemMessage};
-use chrono::Utc;
 use chatter_core::events::DomainEvent;
 use chatter_core::client::ChatterClient;
 use crate::MainWindow;
@@ -248,108 +246,15 @@ pub async fn handle_domain_event(
         }
 
         DomainEvent::AnonGroupMemberJoined { group_id, user_id, .. } => {
-            let now = Utc::now();
-            let message = Message {
-                id: MessageId::new(),
-                conversation_id: group_id.into(),
-                conversation_type: ConversationType::AnonGroup,
-                sender_id: Some(user_id),
-                device_id: None,
-                content: MessageContent::System(SystemMessage::UserJoined(user_id)),
-                encrypted_content: None,
-                thread_id: None,
-                reply_to: None,
-                reply_to_author_id: None,
-                reply_to_text: None,
-                reply_to_thumbnail: None,
-                reply_to_thumbnail_mime: None,
-                attachments: Vec::new(),
-                is_pinned: false,
-                is_edited: false,
-                is_deleted: false,
-                is_read: true,
-                sent_at: now.timestamp_nanos_opt().unwrap_or(0) as u64,
-                created_at: now,
-                updated_at: now,
-                edited_at: None,
-                reaction_counts: Vec::new(),
-                current_user_reactions: Vec::new(),
-                mentioned_integrations: Vec::new(),
-                targets_ai_bot: false,
-                delivery_status: String::new(),
-            };
-            messaging::handle_message_received(window, ui_ctx, message);
-            messaging::update_active_channel_member_count(window, ui_ctx, group_id.into());
+            anon::handle_group_member_joined(window, ui_ctx, group_id, user_id);
         }
 
         DomainEvent::AnonGroupMemberLeft { group_id, user_id } => {
-            let now = Utc::now();
-            let message = Message {
-                id: MessageId::new(),
-                conversation_id: group_id.into(),
-                conversation_type: ConversationType::AnonGroup,
-                sender_id: Some(user_id),
-                device_id: None,
-                content: MessageContent::System(SystemMessage::UserLeft(user_id)),
-                encrypted_content: None,
-                thread_id: None,
-                reply_to: None,
-                reply_to_author_id: None,
-                reply_to_text: None,
-                reply_to_thumbnail: None,
-                reply_to_thumbnail_mime: None,
-                attachments: Vec::new(),
-                is_pinned: false,
-                is_edited: false,
-                is_deleted: false,
-                is_read: true,
-                sent_at: now.timestamp_nanos_opt().unwrap_or(0) as u64,
-                created_at: now,
-                updated_at: now,
-                edited_at: None,
-                reaction_counts: Vec::new(),
-                current_user_reactions: Vec::new(),
-                mentioned_integrations: Vec::new(),
-                targets_ai_bot: false,
-                delivery_status: String::new(),
-            };
-            messaging::handle_message_received(window, ui_ctx, message);
-            messaging::update_active_channel_member_count(window, ui_ctx, group_id.into());
+            anon::handle_group_member_left(window, ui_ctx, group_id, user_id);
         }
 
         DomainEvent::AnonGroupMemberKicked { group_id, user_id, kicked_by } => {
-            let now = Utc::now();
-            let message = Message {
-                id: MessageId::new(),
-                conversation_id: group_id.into(),
-                conversation_type: ConversationType::AnonGroup,
-                sender_id: Some(kicked_by), // Admin who did it
-                device_id: None,
-                content: MessageContent::System(SystemMessage::UserRemoved { by: kicked_by, removed: user_id }),
-                encrypted_content: None,
-                thread_id: None,
-                reply_to: None,
-                reply_to_author_id: None,
-                reply_to_text: None,
-                reply_to_thumbnail: None,
-                reply_to_thumbnail_mime: None,
-                attachments: Vec::new(),
-                is_pinned: false,
-                is_edited: false,
-                is_deleted: false,
-                is_read: true,
-                sent_at: now.timestamp_nanos_opt().unwrap_or(0) as u64,
-                created_at: now,
-                updated_at: now,
-                edited_at: None,
-                reaction_counts: Vec::new(),
-                current_user_reactions: Vec::new(),
-                mentioned_integrations: Vec::new(),
-                targets_ai_bot: false,
-                delivery_status: String::new(),
-            };
-            messaging::handle_message_received(window, ui_ctx, message);
-            messaging::update_active_channel_member_count(window, ui_ctx, group_id.into());
+            anon::handle_group_member_kicked(window, ui_ctx, group_id, user_id, kicked_by);
         }
 
         DomainEvent::AnonGroupBootstrapComplete { group_id } => {
@@ -534,58 +439,7 @@ pub async fn handle_domain_event(
         // and refresh the sessions/devices modal if it's currently open so
         // the new entry appears without manual re-fetch.
         DomainEvent::DeviceLinked { device_name, approved_by_self, .. } => {
-            let label = device_name.unwrap_or_else(|| "a new device".to_string());
-            if approved_by_self {
-                tracing::info!(device = %label, "Approved + linked");
-            } else {
-                tracing::info!(device = %label, "New device linked to account");
-            }
-
-            // Always refresh on DeviceLinked — cheap (one ListDevices RPC) and
-            // means the sessions/devices modal shows the new entry without
-            // the user having to close + reopen it. If the modal is closed,
-            // the freshly-set model just sits in memory until next open.
-            let weak = window.clone();
-            let ui_ctx_for_refresh = ui_ctx.clone();
-            crate::rt_handle().spawn(async move {
-                match ui_ctx_for_refresh.list_sessions().await {
-                    Ok(sessions) => {
-                        let slint_sessions: Vec<crate::SessionInfo> = sessions
-                            .into_iter()
-                            .map(|s| crate::SessionInfo {
-                                device_id: s.device_id as i32,
-                                device_info: s.device_info.into(),
-                                ip_address: s.ip_address.into(),
-                                last_used: s
-                                    .last_used
-                                    .with_timezone(&chrono::Local)
-                                    .format("%Y-%m-%d %H:%M")
-                                    .to_string()
-                                    .into(),
-                                created_at: s
-                                    .created_at
-                                    .with_timezone(&chrono::Local)
-                                    .format("%Y-%m-%d")
-                                    .to_string()
-                                    .into(),
-                                is_current: s.is_current,
-                            })
-                            .collect();
-                        let count = slint_sessions.len() as i32;
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                w.set_sessions(slint::ModelRc::new(
-                                    slint::VecModel::from(slint_sessions),
-                                ));
-                                w.set_settings_session_count(count);
-                            }
-                        });
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "Failed to refresh sessions on DeviceLinked");
-                    }
-                }
-            });
+            sessions::handle_device_linked(window, ui_ctx, device_name, approved_by_self);
         }
         // Events with no UI render — core handles the work, UI doesn't
         // surface anything to the user.
