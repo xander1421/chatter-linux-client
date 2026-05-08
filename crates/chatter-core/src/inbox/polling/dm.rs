@@ -355,6 +355,29 @@ fn dispatch_dm_content(
                 ChannelId::new()
             };
 
+            // Server-managed DM channels (ChannelType::DirectMessage) get
+            // their text messages from `MessageService::StreamMessages` —
+            // see `inbox/streaming/server_dm.rs`. The mailbox layer still
+            // carries typing / receipts / reactions / call signals for these
+            // peers (they share transport), but the chat body would be
+            // duplicated as `MailboxDm` if we persisted it here, polluting
+            // the conversation_type bucket and producing two DB rows per
+            // message. Skip the persistence + `DmReceived` event branch in
+            // that case; non-DM channels (e.g. anon DMs synthesised through
+            // this code path) still flow through normally.
+            let is_server_dm = match channel_repo.get(&dm_channel_id) {
+                Ok(Some(ch)) => ch.channel_type == crate::domain::channel::ChannelType::DirectMessage,
+                _ => false,
+            };
+            if is_server_dm {
+                tracing::debug!(
+                    peer_id = %peer_id,
+                    channel_id = %dm_channel_id,
+                    "skipping mailbox poll for ServerDm channel — handled by stream listener"
+                );
+                return;
+            }
+
             // Store message in local database for persistence
             if current_user_id.is_some() {
                 let msg_id = message_id

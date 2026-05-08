@@ -936,6 +936,59 @@ impl InboxEventProcessor {
                             friend_id,
                             channel_id: ch_id,
                         });
+
+                        // Spawn a ServerDm stream listener for the freshly
+                        // accepted friend's DM channel. Boot-time spawn in
+                        // `inbox/provider.rs::run_loop` only sees channels
+                        // that already exist on disk; without this, the
+                        // first session after a friend accept would have
+                        // to fall back to the (slower) mailbox path until
+                        // the next restart.
+                        //
+                        // Verify the channel row landed locally first —
+                        // if it hasn't synced yet we skip and rely on the
+                        // next-boot spawn (or the next inbox cycle to
+                        // re-emit). Both grpc_pool and message_repo are
+                        // pub(crate) on the underlying services, so this
+                        // doesn't bend any module boundaries.
+                        if let Some(current_user_id) =
+                            self.client.auth_state().get().current_user_id
+                        {
+                            match self.channel_service.get_channel_local(&ch_id) {
+                                Ok(Some(_)) => {
+                                    let _ = crate::inbox::streaming::spawn_server_dm_listener(
+                                        ch_id,
+                                        self.channel_service.grpc_pool.clone(),
+                                        self.event_bus.clone(),
+                                        self.message_service.message_repo.clone(),
+                                        current_user_id,
+                                    );
+                                    tracing::info!(
+                                        channel_id = %ch_id,
+                                        "FriendAccepted: spawned ServerDm stream listener"
+                                    );
+                                }
+                                Ok(None) => {
+                                    tracing::debug!(
+                                        channel_id = %ch_id,
+                                        "FriendAccepted: channel not yet in local DB — \
+                                         deferring listener spawn until next boot / inbox cycle"
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        channel_id = %ch_id,
+                                        error = %e,
+                                        "FriendAccepted: channel lookup failed — skipping listener spawn"
+                                    );
+                                }
+                            }
+                        } else {
+                            tracing::debug!(
+                                channel_id = %ch_id,
+                                "FriendAccepted: no current user — skipping listener spawn"
+                            );
+                        }
                     }
                     _ => {
                         tracing::warn!(

@@ -510,6 +510,65 @@ async fn route_channel_dm(
     file_paths: Vec<PathBuf>,
     quote: Option<QuoteIntent>,
 ) -> Result<SendResult, MessageError> {
+    // Branch on the channel's conversation_type. Server-friend DMs
+    // (`ChannelType::DirectMessage`, mapped to `ConversationType::ServerDm`
+    // in domain/channel.rs:122) take the gRPC SendMessage path so the
+    // server-managed DM channel actually receives the message and the
+    // local row is tagged ServerDm. Everything else (private-friend DMs,
+    // unknown rows) falls through to the existing mailbox sealed-sender
+    // path which writes ConversationType::MailboxDm.
+    let is_server_dm = matches!(
+        message_service.channel_repo.get(dm_channel_id),
+        Ok(Some(ref ch))
+            if ch.conversation_type() == crate::domain::message::ConversationType::ServerDm
+    );
+
+    if is_server_dm {
+        // ServerDm: go through gRPC SendMessage. Uploads from `file_paths`
+        // are not yet supported here — callers (UI + bridges) pre-upload
+        // via `upload_pending_attachments()` before constructing the
+        // intent. If the gateway is handed raw `file_paths` we surface
+        // it as InvalidContent rather than silently dropping them on
+        // the floor.
+        if !file_paths.is_empty() && attachment_pointers.is_empty() {
+            return Err(MessageError::InvalidContent(
+                "ServerDm route does not yet support raw file_paths; pre-upload to AttachmentPointer".to_string(),
+            ));
+        }
+
+        let sent_at = crate::util::time::TimestampNanos::now().as_u64();
+        let dm_result = message_service
+            .send_server_dm(dm_channel_id, peer_id, text, attachment_pointers, sent_at)
+            .await?;
+
+        // Persist quote/reply context so reply bubbles survive a reload —
+        // mirrors the behaviour of the channel + mailbox-DM paths.
+        let mut dm_result = dm_result;
+        if let (Some(msg), Some(q)) = (dm_result.message.take(), quote) {
+            dm_result.message = Some(
+                message_service
+                    .persist_outgoing_reply_context(msg, &q)
+                    .unwrap_or_else(|(m, err)| {
+                        tracing::warn!(
+                            error = %err,
+                            "Failed to persist outgoing ServerDm reply context; quote will be visible this session only"
+                        );
+                        m
+                    }),
+            );
+        }
+
+        return Ok(SendResult {
+            sent_at: dm_result.sent_at,
+            message: dm_result.message,
+            attachment_ids: dm_result.attachment_ids,
+            gif_attachment_ids: dm_result.gif_attachment_ids,
+            bootstrap_initiated: dm_result.bootstrap_initiated,
+            anon_message_id: None,
+            call_result: None,
+        });
+    }
+
     // Use pre-uploaded pointers if available, otherwise upload from file paths
     // NOTE: when `attachment_pointers` is non-empty we still go through the
     // plain `send_dm_with_pointers` path (no quote-aware variant exists yet),

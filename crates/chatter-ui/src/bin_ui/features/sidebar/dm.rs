@@ -172,15 +172,33 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Err(_) => ChannelId::new(),
             };
 
-            chat_state.set_active_conversation(chatter_core::state::ActiveConversation::ServerDm {
-                peer_id: peer_id.clone(),
-                channel_id,
-            });
+            // Branch on the channel's actual conversation_type. Server-managed
+            // DMs (DirectMessage rows) live under `ConversationType::ServerDm`;
+            // mailbox DMs (private friends, no server channel row) fall back to
+            // `MailboxDm`. `get_channel_local` returning None correctly maps to
+            // the MailboxDm branch — those conversations have no channel row.
+            let conv_type = ui_ctx
+                .get_channel_local(&channel_id)
+                .map(|c| c.conversation_type())
+                .unwrap_or(chatter_core::domain::message::ConversationType::MailboxDm);
+
+            let active = if conv_type == chatter_core::domain::message::ConversationType::ServerDm {
+                chatter_core::state::ActiveConversation::ServerDm {
+                    peer_id: peer_id.clone(),
+                    channel_id,
+                }
+            } else {
+                chatter_core::state::ActiveConversation::MailboxDm {
+                    peer_id: peer_id.clone(),
+                    channel_id,
+                }
+            };
+            chat_state.set_active_conversation(active);
             let ui_ctx_for_sel = ui_ctx.clone();
             run_ui!(weak, |w| super::refresh_selection(&w, &ui_ctx_for_sel));
 
             // Load pins
-            let (msg_ids, preview) = match ui_ctx.load_pinned_for_channel(&channel_id, &chatter_core::domain::message::ConversationType::ServerDm).await {
+            let (msg_ids, preview) = match ui_ctx.load_pinned_for_channel(&channel_id, &conv_type).await {
                 Ok(pinned) if !pinned.is_empty() => {
                     let ids = pinned.iter().map(|p| p.message_id).collect();
                     let preview = pinned[0].preview.clone();
@@ -191,7 +209,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             super::apply_pinned_ui(&weak, &pinned_state, channel_id, msg_ids, preview);
 
             // Load messages
-            let messages = match ui_ctx.get_messages_local_asc(&channel_id, &chatter_core::domain::message::ConversationType::ServerDm, None, 50) {
+            let messages = match ui_ctx.get_messages_local_asc(&channel_id, &conv_type, None, 50) {
                 Ok(msgs) => msgs,
                 Err(e) => {
                     tracing::error!("Failed to list DM messages: {}", e);

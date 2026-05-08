@@ -16,6 +16,7 @@ mod forward;
 mod group;
 pub mod core;
 pub mod conversion;
+mod server_dm;
 mod thread;
 mod pin;
 mod saved;
