@@ -932,25 +932,29 @@ impl InboxEventProcessor {
                     channel_id.parse::<crate::domain::ids::ChannelId>(),
                 ) {
                     (Ok(friend_id), Ok(ch_id)) => {
+                        // Fetch + persist the freshly-created DirectMessage
+                        // channel before anything else. The receiver side
+                        // gets the channel_id from the friend-status event
+                        // but doesn't have the channel row locally yet, so
+                        // both the sidebar refresh (reads local DB) and the
+                        // ServerDm stream listener spawn would no-op.
+                        if let Err(e) =
+                            self.channel_service.get_channel_with_memberships(&ch_id).await
+                        {
+                            tracing::warn!(
+                                channel_id = %ch_id,
+                                error = %e,
+                                "FriendAccepted: failed to fetch DM channel — sidebar / listener will be deferred to next sync"
+                            );
+                        }
+
                         self.event_bus.emit_domain(DomainEvent::FriendAccepted {
                             friend_id,
                             channel_id: ch_id,
                         });
 
-                        // Spawn a ServerDm stream listener for the freshly
-                        // accepted friend's DM channel. Boot-time spawn in
-                        // `inbox/provider.rs::run_loop` only sees channels
-                        // that already exist on disk; without this, the
-                        // first session after a friend accept would have
-                        // to fall back to the (slower) mailbox path until
-                        // the next restart.
-                        //
-                        // Verify the channel row landed locally first —
-                        // if it hasn't synced yet we skip and rely on the
-                        // next-boot spawn (or the next inbox cycle to
-                        // re-emit). Both grpc_pool and message_repo are
-                        // pub(crate) on the underlying services, so this
-                        // doesn't bend any module boundaries.
+                        // Spawn a ServerDm stream listener now that the
+                        // channel row should be present locally.
                         if let Some(current_user_id) =
                             self.client.auth_state().get().current_user_id
                         {
@@ -971,8 +975,7 @@ impl InboxEventProcessor {
                                 Ok(None) => {
                                     tracing::debug!(
                                         channel_id = %ch_id,
-                                        "FriendAccepted: channel not yet in local DB — \
-                                         deferring listener spawn until next boot / inbox cycle"
+                                        "FriendAccepted: channel still missing after fetch — deferring listener spawn"
                                     );
                                 }
                                 Err(e) => {

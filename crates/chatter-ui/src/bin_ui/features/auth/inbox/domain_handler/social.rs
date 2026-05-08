@@ -60,6 +60,11 @@ pub(super) fn handle_friend_requests_updated(
 }
 
 /// Handle friend accepted event.
+///
+/// On the receiver side, the server-side DirectMessage channel was just
+/// created but isn't in our local channel_repo yet. We fetch + persist it
+/// before refreshing the sidebar so `refresh_dm_list` (which reads only
+/// from local storage) actually sees the new DM.
 pub(super) fn handle_friend_accepted(
     window: &Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
@@ -69,19 +74,29 @@ pub(super) fn handle_friend_accepted(
     let weak = window.clone();
     let ui_ctx = ui_ctx.clone();
 
-    // Add DM channel to sidebar, then re-merge anon DMs so they aren't lost
-    let _ = slint::invoke_from_event_loop(move || {
-        if let Some(w) = weak.upgrade() {
-            // Refresh regular DM list (replaces entire list)
-            super::super::super::initial_data::refresh_dm_list(&w, &ui_ctx);
-            // Re-add anon DMs that were dropped by the full replace
-            super::super::super::initial_data::refresh_anon_dms(&w, &ui_ctx);
-            tracing::info!(
+    tokio::spawn(async move {
+        if let Err(e) = ui_ctx.get_channel_with_memberships(&channel_id).await {
+            tracing::warn!(
                 friend_id = %friend_id,
                 channel_id = %channel_id,
-                "Friend accepted - refreshed DM sidebar with anon DMs preserved"
+                error = %e,
+                "Friend accepted - failed to fetch DM channel; sidebar will be stale until next sync"
             );
         }
+
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                // Refresh regular DM list (replaces entire list)
+                super::super::super::initial_data::refresh_dm_list(&w, &ui_ctx);
+                // Re-add anon DMs that were dropped by the full replace
+                super::super::super::initial_data::refresh_anon_dms(&w, &ui_ctx);
+                tracing::info!(
+                    friend_id = %friend_id,
+                    channel_id = %channel_id,
+                    "Friend accepted - refreshed DM sidebar with anon DMs preserved"
+                );
+            }
+        });
     });
 }
 
