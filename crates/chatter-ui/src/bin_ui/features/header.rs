@@ -505,8 +505,8 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                     Some(id) => id,
                     None => return,
                 };
-                let is_owner = group.owner_id == current_user_id || group.my_role == chatter_core::domain::anon_group::AnonGroupRole::Owner;
-                let is_admin = group.my_role == chatter_core::domain::anon_group::AnonGroupRole::Admin;
+                let is_owner = group.is_current_user_owner(&current_user_id);
+                let is_admin = group.is_current_user_admin(&current_user_id);
 
                 // Convert members to Slint data
                 let mut slint_members = Vec::with_capacity(members.len());

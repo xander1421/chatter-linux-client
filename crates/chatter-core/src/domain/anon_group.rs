@@ -206,6 +206,22 @@ impl AnonGroup {
         matches!(self.my_role, AnonGroupRole::Admin | AnonGroupRole::Owner)
     }
 
+    /// Check if the given user is the owner of this group.
+    ///
+    /// True when either `owner_id` matches `user_id`, or `my_role` is `Owner`
+    /// (covers the case where `owner_id` is stale but the local role is current).
+    pub fn is_current_user_owner(&self, user_id: &UserId) -> bool {
+        self.owner_id == *user_id || self.my_role == AnonGroupRole::Owner
+    }
+
+    /// Check if the given user has the admin role in this group.
+    ///
+    /// Note: this checks for the `Admin` role specifically (not owner). For
+    /// "admin or owner" semantics, combine with [`Self::is_current_user_owner`].
+    pub fn is_current_user_admin(&self, _user_id: &UserId) -> bool {
+        self.my_role == AnonGroupRole::Admin
+    }
+
     /// Check if the group is ready for messaging.
     pub fn is_ready(&self) -> bool {
         self.status.can_send() && self.bootstrap_complete
