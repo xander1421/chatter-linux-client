@@ -95,6 +95,11 @@ async fn register_and_start(
         .register(username, PASSWORD, display_name, "e2e-test", None, Some(PIN))
         .await
         .expect("registration failed");
+    if let Err(e) = client.start().await {
+        if !matches!(e, chatter_core::client::ClientError::AlreadyStarted) {
+            panic!("client.start failed: {e:?}");
+        }
+    }
     result.user_id
 }
 
@@ -195,11 +200,11 @@ async fn t2_friend_request() {
     // Verify: both users see each other as friends
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    let a_friends = client_a.list_friends().await.expect("list_friends failed for A");
-    let b_friends = client_b.list_friends().await.expect("list_friends failed for B");
+    let a_friends = client_a.list_friends(50, 0).await.expect("list_friends failed for A");
+    let b_friends = client_b.list_friends(50, 0).await.expect("list_friends failed for B");
 
-    let a_has_b = a_friends.iter().any(|f| f.friend_id == uid_b);
-    let b_has_a = b_friends.iter().any(|f| f.friend_id == uid_a);
+    let a_has_b = a_friends.iter().any(|f| f.other_party(&uid_a) == Some(&uid_b));
+    let b_has_a = b_friends.iter().any(|f| f.other_party(&uid_b) == Some(&uid_a));
 
     assert!(a_has_b, "A should see B as friend");
     assert!(b_has_a, "B should see A as friend");
@@ -314,6 +319,7 @@ async fn t4_channel_create_and_join() {
             ChannelType::Public,
             None,
             Some("E2E test channel"),
+            None,
             None,
             vec![],
         )
@@ -448,6 +454,7 @@ async fn t6_group_chat() {
             ChannelType::Private,
             None,
             Some("E2E group test"),
+            None,
             None,
             vec![uid_b.clone()],
         )
@@ -701,10 +708,10 @@ async fn t2_inner() {
     tokio::time::sleep(Duration::from_secs(2)).await;
     client_a.respond_friend_request(&uid_b, true).await.unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
-    let a_friends = client_a.list_friends().await.unwrap();
-    let b_friends = client_b.list_friends().await.unwrap();
-    assert!(a_friends.iter().any(|f| f.friend_id == uid_b));
-    assert!(b_friends.iter().any(|f| f.friend_id == uid_a));
+    let a_friends = client_a.list_friends(50, 0).await.unwrap();
+    let b_friends = client_b.list_friends(50, 0).await.unwrap();
+    assert!(a_friends.iter().any(|f| f.other_party(&uid_a) == Some(&uid_b)));
+    assert!(b_friends.iter().any(|f| f.other_party(&uid_b) == Some(&uid_a)));
     client_a.shutdown().await;
     client_b.shutdown().await;
 }
@@ -746,7 +753,7 @@ async fn t4_inner() {
     register_and_start(&client_a, &unique_user("t4a"), "Alice").await;
     register_and_start(&client_b, &unique_user("t4b"), "Bob").await;
     let ch_name = format!("e2e-ch-{}", chrono::Utc::now().timestamp_millis() % 100000);
-    let ch = client_a.create_channel(&ch_name, ChannelType::Public, None, Some("test"), None, vec![]).await.unwrap();
+    let ch = client_a.create_channel(&ch_name, ChannelType::Public, None, Some("test"), None, None, vec![]).await.unwrap();
     let results = client_b.search_channels(&ch_name, 10).await.unwrap();
     assert!(results.iter().any(|c| c.id == ch.id));
     client_b.join_channel(&ch.id, None).await.unwrap();
@@ -785,7 +792,7 @@ async fn t6_inner() {
     register_and_start(&client_a, &unique_user("t6a"), "Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("t6b"), "Bob").await;
     let grp_name = format!("e2e-grp-{}", chrono::Utc::now().timestamp_millis() % 100000);
-    let grp = client_a.create_channel(&grp_name, ChannelType::Private, None, Some("test"), None, vec![uid_b]).await.unwrap();
+    let grp = client_a.create_channel(&grp_name, ChannelType::Private, None, Some("test"), None, None, vec![uid_b]).await.unwrap();
     // Wait for SKDM propagation — needs longer in suite mode when server is under load
     tokio::time::sleep(Duration::from_secs(5)).await;
     client_b.subscribe_channel_messages(&grp.id);
