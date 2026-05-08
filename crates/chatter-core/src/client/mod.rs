@@ -1863,8 +1863,16 @@ impl ChatterClient {
     ) -> Result<Vec<Message>, crate::services::message::MessageError> {
         match conversation {
             ActiveConversation::Channel(id) => {
-                // All channels use encrypted group mailboxes → stored as AnonGroup
-                self.messages().get_messages_local(id, &ConversationType::AnonGroup, None, limit)
+                // Resolve from the channel row — `Channel::conversation_type()`
+                // returns `AnonGroup` for encrypted channels and `Channel` for
+                // plain ones. Send-path stores under the same value, so a
+                // hardcoded `AnonGroup` here misses every public/unencrypted
+                // channel's locally-stored messages and the chat reads empty.
+                let conv_type = crate::services::message::conversion::conversation_type_for_channel(
+                    &self.ui.channel_repo,
+                    id,
+                );
+                self.messages().get_messages_local(id, &conv_type, None, limit)
             }
             ActiveConversation::ServerDm { channel_id: id, .. } => {
                 self.messages().get_messages_local(id, &ConversationType::ServerDm, None, limit)
