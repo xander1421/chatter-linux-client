@@ -8,6 +8,7 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
+use chatter_core::services::quick_switcher::{arrange_entries, QuickSwitcherEntry};
 
 use crate::{MainWindow, QuickSwitcherItem};
 
@@ -69,19 +70,22 @@ fn wire_select(window: &MainWindow) {
 }
 
 /// Collect all conversations from sidebar models into quick switcher items.
-/// Returns at most 20 items, prioritizing those with unread messages.
+///
+/// Aggregates channels/DMs/private-groups from the slint sidebar models into
+/// `chatter-core` domain entries, delegates ordering + capping to
+/// [`arrange_entries`], then converts to the slint row type.
 fn collect_all_items(window: &MainWindow) -> Vec<QuickSwitcherItem> {
-    let mut items: Vec<QuickSwitcherItem> = Vec::new();
+    let mut entries: Vec<QuickSwitcherEntry> = Vec::new();
 
     // Channels
     let channels = window.get_channels();
     for i in 0..channels.row_count() {
         if let Some(ch) = channels.row_data(i) {
-            items.push(QuickSwitcherItem {
-                id: ch.channel_id.clone(),
-                name: ch.name.clone(),
+            entries.push(QuickSwitcherEntry {
+                id: ch.channel_id.to_string(),
+                name: ch.name.to_string(),
                 conv_type: "channel".into(),
-                presence_status: SharedString::default(),
+                presence_status: String::new(),
                 unread_count: ch.unread_count,
             });
         }
@@ -91,11 +95,11 @@ fn collect_all_items(window: &MainWindow) -> Vec<QuickSwitcherItem> {
     let dms = window.get_dm_conversations();
     for i in 0..dms.row_count() {
         if let Some(dm) = dms.row_data(i) {
-            items.push(QuickSwitcherItem {
-                id: dm.channel_id.clone(),
-                name: dm.display_name.clone(),
+            entries.push(QuickSwitcherEntry {
+                id: dm.channel_id.to_string(),
+                name: dm.display_name.to_string(),
                 conv_type: "dm".into(),
-                presence_status: dm.presence_status.clone(),
+                presence_status: dm.presence_status.to_string(),
                 unread_count: dm.unread_count,
             });
         }
@@ -105,25 +109,27 @@ fn collect_all_items(window: &MainWindow) -> Vec<QuickSwitcherItem> {
     let groups = window.get_private_groups();
     for i in 0..groups.row_count() {
         if let Some(g) = groups.row_data(i) {
-            items.push(QuickSwitcherItem {
-                id: g.group_id.clone(),
-                name: g.name.clone(),
+            entries.push(QuickSwitcherEntry {
+                id: g.group_id.to_string(),
+                name: g.name.to_string(),
                 conv_type: "private_group".into(),
-                presence_status: SharedString::default(),
+                presence_status: String::new(),
                 unread_count: g.unread_count,
             });
         }
     }
 
-    // Sort: unread first, then alphabetical
-    items.sort_by(|a, b| {
-        b.unread_count.cmp(&a.unread_count)
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-    });
-
-    // Cap at 20
-    items.truncate(20);
-    items
+    // Ordering + cap live in chatter-core (unread-first, then alphabetical).
+    arrange_entries(entries)
+        .into_iter()
+        .map(|e| QuickSwitcherItem {
+            id: e.id.into(),
+            name: e.name.into(),
+            conv_type: e.conv_type.into(),
+            presence_status: e.presence_status.into(),
+            unread_count: e.unread_count,
+        })
+        .collect()
 }
 
 /// Set the quick switcher items on the window.
