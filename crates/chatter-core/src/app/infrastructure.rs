@@ -17,9 +17,11 @@ use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::network::streaming::{ReactionAggregator, TypingAggregator};
 use crate::storage::repositories::{
-    AnonDmRepository, AnonGroupRepository, JarvisGraphRepository, JarvisMemoryRepository,
-    SectionRepository, UnifiedConversationRepository, VectorRepository,
+    AnonDmRepository, AnonGroupRepository, SectionRepository, UnifiedConversationRepository,
+    VectorRepository,
 };
+#[cfg(feature = "jarvis")]
+use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
 use crate::storage::{
     AttachmentRepository, ChannelRepository, Database, DraftRepository, KeyStore,
     MessageRepository, ReactionRepository, SearchIndex, SettingsRepository, UserRepository,
@@ -80,8 +82,10 @@ pub struct InfrastructureContainer {
     /// Unified conversation repository.
     pub(crate) unified_conversation_repo: Arc<UnifiedConversationRepository>,
     /// Jarvis memory repository.
+    #[cfg(feature = "jarvis")]
     pub(crate) jarvis_memory_repo: Arc<JarvisMemoryRepository>,
     /// Jarvis graph repository.
+    #[cfg(feature = "jarvis")]
     pub(crate) jarvis_graph_repo: Arc<JarvisGraphRepository>,
     /// Custom sidebar section repository.
     pub(crate) section_repo: Arc<SectionRepository>,
@@ -220,7 +224,9 @@ impl InfrastructureContainer {
         let anon_group_repo = Arc::new(AnonGroupRepository::new(database.clone()));
         let anon_dm_repo = Arc::new(AnonDmRepository::new(database.clone()));
         let unified_conversation_repo = Arc::new(UnifiedConversationRepository::new(database.clone()));
+        #[cfg(feature = "jarvis")]
         let jarvis_memory_repo = Arc::new(JarvisMemoryRepository::new(database.clone()));
+        #[cfg(feature = "jarvis")]
         let jarvis_graph_repo = Arc::new(JarvisGraphRepository::new(database.clone()));
         let section_repo = Arc::new(SectionRepository::new(database.clone()));
         let vector_repo = Arc::new(VectorRepository::new(database.clone()));
@@ -284,7 +290,9 @@ impl InfrastructureContainer {
             anon_group_repo,
             anon_dm_repo,
             unified_conversation_repo,
+            #[cfg(feature = "jarvis")]
             jarvis_memory_repo,
+            #[cfg(feature = "jarvis")]
             jarvis_graph_repo,
             section_repo,
             vector_repo,

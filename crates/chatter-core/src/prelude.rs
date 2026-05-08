@@ -19,6 +19,7 @@ pub use crate::crypto::{SecretString, SecureBuffer};
 pub use crate::services::user::FriendRequestFilter;
 
 // Jarvis context (used by `ChatterClient::jarvis_ask` etc.)
+#[cfg(feature = "jarvis")]
 pub use crate::domain::jarvis::{ContextType as JarvisContextType, JarvisContext};
 
 // Device link approval flow — the pending struct is `!Clone` and feeds

@@ -58,13 +58,17 @@ pub fn open_channel_settings(
         };
 
         let current_user_id = ui_ctx.session_current_user_id();
-        let is_owner = current_user_id.as_ref() == Some(&channel.owner_id);
-        let is_dm = channel.channel_type == ChannelType::DirectMessage;
-
-        let can_edit = is_owner && !is_dm;
-        let can_manage_members = is_owner && !is_dm;
-        let can_archive = is_owner && !is_dm;
-        let can_delete = is_owner && !is_dm;
+        let is_dm = channel.is_dm();
+        let (is_owner, can_edit, can_manage_members, can_archive, can_delete) = match current_user_id.as_ref() {
+            Some(uid) => (
+                channel.is_owner(uid),
+                channel.can_user_edit(uid),
+                channel.can_user_manage_members(uid),
+                channel.can_user_archive(uid),
+                channel.can_user_delete(uid),
+            ),
+            None => (false, false, false, false, false),
+        };
 
         let created_at = channel.created_at.with_timezone(&chrono::Local).format("%b %d, %Y").to_string();
 

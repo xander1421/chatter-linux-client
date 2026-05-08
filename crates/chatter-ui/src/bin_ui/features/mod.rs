@@ -19,6 +19,7 @@ pub mod connection;
 pub mod chat_actions;
 pub mod composer;
 pub mod header;
+#[cfg(feature = "jarvis")]
 pub mod jarvis;
 pub mod modals;
 pub mod navigation;
@@ -48,6 +49,7 @@ pub fn wire_all(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     thread::wire(window, ui_ctx);
     #[cfg(feature = "desktop-media")]
     calls::wire(window, ui_ctx);
+    #[cfg(feature = "jarvis")]
     jarvis::wire_jarvis_panel(window, ui_ctx);
     status::wire(window, ui_ctx);
     connection::wire(window, ui_ctx);

@@ -32,7 +32,6 @@ use crate::services::gateway::outgoing::{
     OwnedOutgoingServices, OutgoingIntent, QuoteIntent, SendError, SendResult,
     route_outgoing_owned,
 };
-use crate::services::jarvis::JarvisService;
 use crate::services::ai::LocalAIService;
 use crate::services::mailbox_manager::MailboxManager;
 use crate::services::message::MessageService;
@@ -44,7 +43,7 @@ use crate::services::typing_service::TypingService;
 use crate::services::user::UserService;
 use crate::services::conversation::ConversationHandle;
 use crate::state::{
-    ActiveConversation, AuthState, ChatState, JarvisState, MessageState, OfflineState,
+    ActiveConversation, AuthState, ChatState, MessageState, OfflineState,
     OrgState, PinnedState, PrivacyState, StreamingState, UIState, UserState,
 };
 use crate::state::chat_state::PendingAttachment;

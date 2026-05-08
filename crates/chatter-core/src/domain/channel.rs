@@ -128,6 +128,44 @@ impl Channel {
             _ => ConversationType::Channel,
         }
     }
+
+    /// Whether `user_id` owns this channel.
+    #[must_use]
+    pub fn is_owner(&self, user_id: &UserId) -> bool {
+        &self.owner_id == user_id
+    }
+
+    /// Whether `user_id` may edit this channel's metadata (name, description, icon).
+    ///
+    /// Owner-only, and DMs are not editable (no name/description to set).
+    #[must_use]
+    pub fn can_user_edit(&self, user_id: &UserId) -> bool {
+        self.is_owner(user_id) && !self.is_dm()
+    }
+
+    /// Whether `user_id` may add/remove members or change roles.
+    ///
+    /// Owner-only, and DMs have a fixed two-party membership.
+    #[must_use]
+    pub fn can_user_manage_members(&self, user_id: &UserId) -> bool {
+        self.is_owner(user_id) && !self.is_dm()
+    }
+
+    /// Whether `user_id` may archive/unarchive this channel.
+    ///
+    /// Owner-only, and DMs cannot be archived.
+    #[must_use]
+    pub fn can_user_archive(&self, user_id: &UserId) -> bool {
+        self.is_owner(user_id) && !self.is_dm()
+    }
+
+    /// Whether `user_id` may delete this channel.
+    ///
+    /// Owner-only, and DMs are deleted via the DM-delete flow, not channel delete.
+    #[must_use]
+    pub fn can_user_delete(&self, user_id: &UserId) -> bool {
+        self.is_owner(user_id) && !self.is_dm()
+    }
 }
 
 /// Channel member role.

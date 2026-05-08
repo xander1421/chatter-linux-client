@@ -35,6 +35,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         if text.trim().is_empty() && !has_attachments { return; }
 
         // Check for Jarvis slash commands first (/ask, /summarize, /knowledge, /remember)
+        #[cfg(feature = "jarvis")]
         if let Some(cmd) = crate::bin_ui::features::jarvis::parse_slash_command(&text) {
             let ui_ctx = ui_ctx_jarvis.clone();
             let channel_id = chat_state.get().active_channel_id;
@@ -46,6 +47,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
 
         // Check for @Jarvis mention - intercept before sending to channel
+        #[cfg(feature = "jarvis")]
         if crate::bin_ui::features::jarvis::contains_jarvis_mention(&text) {
             if let Some(query) = crate::bin_ui::features::jarvis::extract_jarvis_query(&text) {
                 let ui_ctx = ui_ctx_jarvis.clone();
@@ -233,6 +235,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 ///
 /// Dispatch + state recording lives in `ChatterClient::jarvis_execute`.
 /// This function only manages the UI thinking-placeholder lifecycle.
+#[cfg(feature = "jarvis")]
 async fn handle_jarvis_slash_command(
     ui_ctx: &Arc<ChatterClient>,
     cmd: chatter_core::services::jarvis::JarvisCommand,

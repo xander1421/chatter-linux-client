@@ -22,6 +22,7 @@ import { CustomSectionList, CustomSectionData, SectionConversationData } from "c
 import { SectionContextMenu, SectionHeaderContextMenu } from "section_context_menu.slint";
 import { Avatar } from "../components/avatar.slint";
 import { TooltipArea } from "../components/tooltip.slint";
+import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 
 export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, CustomSectionData, SectionConversationData }
 
@@ -725,7 +726,7 @@ export component Sidebar inherits Rectangle {
                         Text { text: root.user-display-name; color: Colors.text-secondary; font-size: Typography.xs; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                     }
                 }
-                VerticalLayout { alignment: center; horizontal-stretch: 0;
+                if JarvisGlobal.enabled : VerticalLayout { alignment: center; horizontal-stretch: 0;
                     Rectangle {
                         width: 24px; height: 24px; border-radius: 4px;
                         background: jarvis-touch.has-hover ? Colors.surface-hover : transparent;
@@ -753,7 +754,7 @@ export component Sidebar inherits Rectangle {
             // Collapsed view: Vertical stack of icons
             if root.collapsed: VerticalLayout {
                 alignment: end; spacing: 8px; padding-bottom: 8px;
-                TooltipArea {
+                if JarvisGlobal.enabled : TooltipArea {
                     height: 32px; width: 44px; x: (parent.width - self.width) / 2; tooltip-text: "Jarvis AI"; tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: 32px; height: 32px; border-radius: 16px; background: Colors.surface;
                         Image { source: Icons.jarvis; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.primary; }

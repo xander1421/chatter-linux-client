@@ -6,6 +6,7 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 
 // Data struct for chat header (mirrors Rust ChatHeaderData)
 export struct ChatHeaderData {
@@ -264,7 +265,7 @@ export component ChatHeader inherits Rectangle {
         Rectangle {
             horizontal-stretch: 1;
             // Topic text
-            if root.topic != "" && root.typing-indicator == "" && !root.jarvis-thinking: Text {
+            if root.topic != "" && root.typing-indicator == "" && !(JarvisGlobal.enabled && root.jarvis-thinking): Text {
                 width: 100%;
                 text: root.topic;
                 color: Colors.text-muted;
@@ -275,7 +276,7 @@ export component ChatHeader inherits Rectangle {
             }
 
             // Typing indicator
-            if root.typing-indicator != "" && !root.jarvis-thinking: HorizontalLayout {
+            if root.typing-indicator != "" && !(JarvisGlobal.enabled && root.jarvis-thinking): HorizontalLayout {
                 alignment: center;
                 Text {
                     text: root.typing-indicator;
@@ -287,7 +288,7 @@ export component ChatHeader inherits Rectangle {
             }
 
             // Jarvis thinking
-            if root.jarvis-thinking: HorizontalLayout {
+            if JarvisGlobal.enabled && root.jarvis-thinking: HorizontalLayout {
                 spacing: 6px;
                 alignment: center;
                 for i in [0, 1, 2]: Rectangle {

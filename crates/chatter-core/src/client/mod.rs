@@ -19,9 +19,11 @@ mod auth;
 pub mod calls;
 pub mod channels;
 pub mod events;
+#[cfg(feature = "jarvis")]
 mod jarvis;
 mod link_device;
 mod messaging;
+mod notification;
 mod pin;
 mod profile;
 
@@ -55,6 +57,7 @@ use crate::services::gateway::outgoing::{
     OwnedOutgoingServices, OutgoingIntent, QuoteIntent, SendError, SendResult,
     route_outgoing_owned,
 };
+#[cfg(feature = "jarvis")]
 use crate::services::jarvis::JarvisService;
 use crate::services::ai::LocalAIService;
 use crate::services::mailbox_manager::MailboxManager;
@@ -67,9 +70,11 @@ use crate::services::typing_service::TypingService;
 use crate::services::user::UserService;
 use crate::services::conversation::ConversationHandle;
 use crate::state::{
-    ActiveConversation, AuthState, ChatState, JarvisState, MessageState, OfflineState,
+    ActiveConversation, AuthState, ChatState, MessageState, OfflineState,
     OrgState, PinnedState, PrivacyState, StreamingState, UIState, UserState,
 };
+#[cfg(feature = "jarvis")]
+use crate::state::JarvisState;
 use crate::state::chat_state::PendingAttachment;
 use crate::storage::settings_keys;
 use crate::system::Directories;
@@ -274,6 +279,7 @@ impl ChatterClient {
     crate::service_accessor!(anon_groups, AnonGroupService, anon_group_service);
     crate::service_accessor!(signal, SignalService, signal_service);
     crate::service_accessor!(ai, AIService, ai_service);
+    #[cfg(feature = "jarvis")]
     crate::service_accessor!(jarvis, JarvisService, jarvis_service);
     crate::service_accessor!(mailbox_manager, MailboxManager, mailbox_manager);
     crate::service_accessor!(local_ai, LocalAIService, local_ai_service);
@@ -1016,6 +1022,7 @@ impl ChatterClient {
     pub fn streaming_state(&self) -> &StreamingState { &self.ui.streaming_state }
     pub fn pinned_state(&self) -> &PinnedState { &self.ui.pinned_state }
     pub fn privacy_state(&self) -> &PrivacyState { &self.ui.privacy_state }
+    #[cfg(feature = "jarvis")]
     pub fn jarvis_state(&self) -> &JarvisState { &self.ui.jarvis_state }
     pub fn org_state(&self) -> &OrgState { &self.ui.org_state }
 
@@ -1263,6 +1270,7 @@ impl ChatterClient {
         let h_dm_bootstrap = self.ctx.spawn_dm_bootstrap_handler();
 
         // ── AI services ─────────────────────────────────────────────
+        #[cfg(feature = "jarvis")]
         let jarvis = crate::services::jarvis::JarvisBackgroundBuilder::new(
             self.jarvis().clone(),
         )
@@ -1308,9 +1316,13 @@ impl ChatterClient {
 
         // ── Store handles for shutdown ───────────────────────────────
         let mut tasks = self.tasks.lock();
-        tasks.extend([h_events, h_inbox, h_skdm_retry, h_channel_stream, h_channel_bootstrap, h_dm_bootstrap, jarvis.maintenance, h_ai, h_prekey]);
-        if let Some(observer) = jarvis.observer {
-            tasks.push(observer);
+        tasks.extend([h_events, h_inbox, h_skdm_retry, h_channel_stream, h_channel_bootstrap, h_dm_bootstrap, h_ai, h_prekey]);
+        #[cfg(feature = "jarvis")]
+        {
+            tasks.push(jarvis.maintenance);
+            if let Some(observer) = jarvis.observer {
+                tasks.push(observer);
+            }
         }
 
         Ok(())

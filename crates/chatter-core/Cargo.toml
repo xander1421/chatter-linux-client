@@ -221,6 +221,7 @@ desktop-gstreamer = [
 # Compat alias — previous callers (desktop-cli, chatter-ui) keep working.
 desktop-media = ["media", "desktop-gstreamer"]
 local-ai = ["dep:mistralrs"]
+jarvis = []
 # Widens `ChatterClient` service accessors to `pub` so integration tests in
 # this crate's `tests/` directory (which are external consumers) can wire
 # real services against a live server. Do NOT enable for application builds —

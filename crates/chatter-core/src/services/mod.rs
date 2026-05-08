@@ -65,6 +65,7 @@ pub mod anon_group;
 pub mod anon_dm;
 pub(crate) mod anon_shared;
 pub mod svr_backup_service;
+#[cfg(feature = "jarvis")]
 pub mod jarvis;
 pub mod validation;
 #[cfg(not(target_os = "android"))]
@@ -169,6 +170,7 @@ pub use anon_group::{AnonGroupError, AnonGroupService};
 pub use anon_dm::{AnonDmError, AnonDmService};
 
 // Re-exports for Jarvis AI assistant
+#[cfg(feature = "jarvis")]
 pub use jarvis::{JarvisError, JarvisService, JarvisBackground, JarvisBackgroundBuilder};
 
 // Re-exports for SVR backup service

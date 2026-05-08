@@ -191,6 +191,14 @@ pub async fn app_init() -> AppState {
     #[cfg(target_os = "android")]
     window.set_is_mobile_platform(true);
 
+    // Jarvis feature gate: flip the Slint global so jarvis surfaces render.
+    // Slint can't `cfg`-gate, so we use a runtime bool driven by the Cargo feature.
+    #[cfg(feature = "jarvis")]
+    {
+        use slint::ComponentHandle;
+        window.global::<JarvisGlobal>().set_enabled(true);
+    }
+
     if bin_ui::video::init_hw_video(&window) {
         tracing::info!("Hardware-accelerated video enabled");
     } else {

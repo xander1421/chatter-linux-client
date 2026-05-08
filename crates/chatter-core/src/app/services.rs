@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use crate::services::ai::{LocalAIActorHandle, LocalAIService};
+#[cfg(feature = "jarvis")]
 use crate::services::jarvis::JarvisService;
 use crate::services::ai_service::AIService;
 use crate::services::memory_service::MemoryService;
@@ -100,6 +101,7 @@ pub struct ServiceContainer {
     /// Local AI service (high-level API for summarization, smart replies).
     pub local_ai_service: Arc<LocalAIService>,
     /// Jarvis AI assistant service.
+    #[cfg(feature = "jarvis")]
     pub jarvis_service: Arc<JarvisService>,
     /// Section service for custom sidebar sections.
     pub section_service: Arc<SectionService>,
@@ -319,6 +321,7 @@ impl ServiceContainer {
         }
 
         // 20. Jarvis AI assistant service
+        #[cfg(feature = "jarvis")]
         let jarvis_service = Arc::new(JarvisService::new(
             infra.jarvis_memory_repo.clone(),
             infra.jarvis_graph_repo.clone(),
@@ -385,6 +388,7 @@ impl ServiceContainer {
             anon_dm_service,
             local_ai,
             local_ai_service,
+            #[cfg(feature = "jarvis")]
             jarvis_service,
             typing_service,
             channel_bootstrap_service,

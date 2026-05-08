@@ -36,7 +36,9 @@ pub mod user_repo;
 pub mod anon_group_repo;
 pub mod anon_dm_repo;
 pub(crate) mod repo_utils;
+#[cfg(feature = "jarvis")]
 pub mod jarvis_memory_repo;
+#[cfg(feature = "jarvis")]
 pub mod jarvis_graph_repo;
 pub mod section_repo;
 pub mod unified_conversation_repo;
@@ -59,7 +61,9 @@ pub use settings_repo::{keys as settings_keys, SettingsRepository};
 pub use user_repo::UserRepository;
 pub use anon_group_repo::AnonGroupRepository;
 pub use anon_dm_repo::AnonDmRepository;
+#[cfg(feature = "jarvis")]
 pub use jarvis_memory_repo::JarvisMemoryRepository;
+#[cfg(feature = "jarvis")]
 pub use jarvis_graph_repo::JarvisGraphRepository;
 pub use section_repo::SectionRepository;
 pub use vector_repo::{VectorRepository, StoredEmbedding, EmbeddingSourceType};

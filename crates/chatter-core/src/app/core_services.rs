@@ -15,6 +15,7 @@ use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::services::ai_service::AIService;
 use crate::services::anon_dm::AnonDmService;
 use crate::services::ai::LocalAIService;
+#[cfg(feature = "jarvis")]
 use crate::services::jarvis::JarvisService;
 use crate::services::notification_service::NotificationService;
 use crate::system::notification_sink::NotificationSink;
@@ -38,9 +39,11 @@ use crate::services::section_service::SectionService;
 use crate::services::user::UserService;
 use crate::services::typing_service::TypingService;
 use crate::state::{
-    AuthState, ChatState, JarvisState, MessageState, OfflineState, OrgState, PinnedState,
+    AuthState, ChatState, MessageState, OfflineState, OrgState, PinnedState,
     PrivacyState, StreamingState, UIState, UserState,
 };
+#[cfg(feature = "jarvis")]
+use crate::state::JarvisState;
 use crate::storage::Database;
 use crate::system::Directories;
 use crate::ui::bridge::UiBridge;
@@ -79,6 +82,7 @@ pub struct CoreServices {
     pub anon_group_service: Arc<AnonGroupService>,
     pub anon_dm_service: Arc<AnonDmService>,
     pub local_ai_service: Arc<LocalAIService>,
+    #[cfg(feature = "jarvis")]
     pub jarvis_service: Arc<JarvisService>,
     pub notification_service: Arc<NotificationService>,
     pub section_service: Arc<SectionService>,
@@ -98,6 +102,7 @@ pub struct CoreServices {
     pub streaming_state: StreamingState,
     pub org_state: OrgState,
     pub pinned_state: PinnedState,
+    #[cfg(feature = "jarvis")]
     pub jarvis_state: JarvisState,
 
     // Event bus
@@ -164,6 +169,7 @@ impl CoreServices {
             anon_group_service: services.anon_group_service.clone(),
             anon_dm_service: services.anon_dm_service.clone(),
             local_ai_service: services.local_ai_service.clone(),
+            #[cfg(feature = "jarvis")]
             jarvis_service: services.jarvis_service.clone(),
             notification_service: {
                 let svc = NotificationService::new(notification_sink);
@@ -193,6 +199,7 @@ impl CoreServices {
             streaming_state: StreamingState::new(),
             org_state: services.org_state.clone(),
             pinned_state: PinnedState::new(),
+            #[cfg(feature = "jarvis")]
             jarvis_state: JarvisState::new(),
             event_bus: infra.event_bus.clone(),
 

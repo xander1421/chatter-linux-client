@@ -16,6 +16,7 @@ pub use crate::services::mailbox_manager::MailboxManager;
 #[cfg(feature = "media")]
 pub use crate::services::call_worker::CallWorkerHandle;
 pub use crate::services::conversation::ConversationHandle;
+#[cfg(feature = "jarvis")]
 pub use crate::services::jarvis::JarvisBackgroundBuilder;
 pub use crate::services::pin_service::PinService;
 pub use crate::services::call_verification::CallVerification;

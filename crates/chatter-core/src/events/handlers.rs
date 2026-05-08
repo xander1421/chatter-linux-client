@@ -885,10 +885,35 @@ impl EventHandlers {
             // ================================================================
             // Jarvis AI Events
             // ================================================================
-            DomainEvent::JarvisResponse { .. }
-            | DomainEvent::JarvisStats { .. }
-            | DomainEvent::JarvisCleared { .. } => {
-                // Jarvis events are handled by the UI directly
+            DomainEvent::JarvisResponse { .. } => {
+                #[cfg(feature = "jarvis")]
+                {
+                    // Jarvis events are handled by the UI directly
+                }
+                #[cfg(not(feature = "jarvis"))]
+                {
+                    tracing::warn!(target: "chatter::jarvis", "received JarvisResponse but jarvis feature disabled");
+                }
+            }
+            DomainEvent::JarvisStats { .. } => {
+                #[cfg(feature = "jarvis")]
+                {
+                    // Jarvis events are handled by the UI directly
+                }
+                #[cfg(not(feature = "jarvis"))]
+                {
+                    tracing::warn!(target: "chatter::jarvis", "received JarvisStats but jarvis feature disabled");
+                }
+            }
+            DomainEvent::JarvisCleared { .. } => {
+                #[cfg(feature = "jarvis")]
+                {
+                    // Jarvis events are handled by the UI directly
+                }
+                #[cfg(not(feature = "jarvis"))]
+                {
+                    tracing::warn!(target: "chatter::jarvis", "received JarvisCleared but jarvis feature disabled");
+                }
             }
 
             // ================================================================

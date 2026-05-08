@@ -112,6 +112,7 @@ desktop-media-no-livekit = [
     "dep:gstreamer-gl-egl", "dep:glutin_egl_sys"
 ]
 local-ai = ["chatter-core/local-ai"]
+jarvis = ["chatter-core/jarvis"]
 mobile = ["dep:i-slint-backend-android-activity", "dep:android-activity", "slint/backend-android-activity-06", "slint/std"]
 
 # =============================================================================

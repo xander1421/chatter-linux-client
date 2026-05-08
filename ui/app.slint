@@ -60,6 +60,7 @@ import { IncomingCallModal, ActiveCallView, DevicePicker, IncomingCallData, Acti
 
 // Import Jarvis AI assistant
 import { JarvisPanel, JarvisMessageData } from "jarvis/mod.slint";
+import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 
 // Re-export types for Rust binding
 export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, CustomSectionData, SectionConversationData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, OrgMemberData, OrgDashboardData, QuickSwitcherItem }
@@ -851,7 +852,7 @@ export component App inherits Rectangle {
 
         key-pressed(event) => {
             // Ctrl+J: Toggle Jarvis panel
-            if (event.modifiers.control && event.text == "j") {
+            if (JarvisGlobal.enabled && event.modifiers.control && event.text == "j") {
                 root.jarvis-panel-visible = !root.jarvis-panel-visible;
                 return accept;
             }
@@ -1136,9 +1137,11 @@ export component App inherits Rectangle {
                     root.search-clicked();
                 }
                 jarvis-clicked => {
-                    root.jarvis-panel-visible = !root.jarvis-panel-visible;
-                    if !root.jarvis-panel-visible {
-                        root.jarvis-panel-close();
+                    if (JarvisGlobal.enabled) {
+                        root.jarvis-panel-visible = !root.jarvis-panel-visible;
+                        if !root.jarvis-panel-visible {
+                            root.jarvis-panel-close();
+                        }
                     }
                 }
                 settings-clicked => {
@@ -1368,7 +1371,7 @@ export component App inherits Rectangle {
 
     // ========== Jarvis AI floating panel ==========
     // Floating panel that appears on top of chat when toggled
-    if root.jarvis-panel-visible: Rectangle {
+    if JarvisGlobal.enabled && root.jarvis-panel-visible: Rectangle {
         x: parent.width - min(380px, parent.width - 16px);
         y: 60px;
         width: min(360px, parent.width - 32px);

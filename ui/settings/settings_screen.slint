@@ -8,6 +8,7 @@ import { Input } from "../components/input.slint";
 import { Avatar } from "../components/avatar.slint";
 import { Toggle } from "../components/toggle.slint";
 import { NeoActionToggle } from "../components/neo_action_toggle.slint";
+import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 
 export component SettingsScreen inherits Rectangle {
     // User profile data
@@ -1186,7 +1187,7 @@ export component SettingsScreen inherits Rectangle {
                                 font-weight: Typography.semibold;
                             }
 
-                            Text {
+                            if JarvisGlobal.enabled : Text {
                                 text: "Configure local AI for Jarvis assistant (requires GPU)";
                                 color: Colors.text-muted;
                                 font-size: Typography.sm;

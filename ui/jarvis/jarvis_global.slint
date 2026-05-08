@@ -1,0 +1,10 @@
+// Jarvis feature flag — runtime global.
+//
+// Slint can't `cfg`-gate, so the `jarvis` Cargo feature flips this property
+// from Rust at startup. Slint surfaces wrap interactive elements in
+// `if JarvisGlobal.enabled : ...` so they render as no-ops when the feature
+// is off.
+
+export global JarvisGlobal {
+    in-out property <bool> enabled: false;
+}
