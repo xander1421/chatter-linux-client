@@ -56,11 +56,12 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             .unwrap_or((false, None));
 
         let dm_id_str_for_ui = dm_id_str.clone();
+        let ui_ctx_for_ui = ui_ctx.clone();
         run_ui!(weak, |w| {
             w.set_loading_messages(true);
 
             // Clear unread count in sidebar
-            crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(&w, &dm_id_str_for_ui, 0);
+            crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(&w, &ui_ctx_for_ui, &dm_id_str_for_ui, 0);
 
 
             // Clear composer state

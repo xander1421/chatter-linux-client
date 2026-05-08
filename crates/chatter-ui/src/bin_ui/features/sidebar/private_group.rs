@@ -120,9 +120,10 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
         // Update UI to show selected group and messages
         let group_name = group.name.clone();
         let ui_ctx_gifs = ui_ctx.clone();
+        let ui_ctx_for_ui = ui_ctx.clone();
         run_ui!(weak_window, |w| {
             // Clear unread count in sidebar
-            crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(&w, &group_id_str, 0);
+            crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(&w, &ui_ctx_for_ui, &group_id_str, 0);
 
             // Clear composer state
             w.set_composer_is_replying(false);
@@ -290,9 +291,10 @@ async fn load_private_group_messages_internal(
     let group_name = group.name.clone();
     let group_id_str = group_id.to_string();
     let ui_ctx_gifs = ui_ctx.clone();
+    let ui_ctx_for_ui = ui_ctx.clone();
     run_ui!(weak, |w| {
         // Clear unread count in sidebar
-        crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(&w, &group_id_str, 0);
+        crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(&w, &ui_ctx_for_ui, &group_id_str, 0);
 
         w.set_channel_name(group_name.into());
         w.set_channel_type("private-group".into());

@@ -209,16 +209,18 @@ pub(super) fn handle_message_received(
 /// Handle unread count updated event.
 pub(super) fn handle_unread_count_updated(
     window: &Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
     channel_id: ChannelId,
     peer_id: Option<UserId>,
     unread_count: u32,
 ) {
     let weak = window.clone();
+    let ui_ctx = ui_ctx.clone();
     let channel_id_str = channel_id.to_string();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
             // Update sidebar unread badge
-            super::helpers::update_unread_count(&w, &channel_id_str, unread_count);
+            super::helpers::update_unread_count(&w, &ui_ctx, &channel_id_str, unread_count);
         }
     });
     tracing::debug!(

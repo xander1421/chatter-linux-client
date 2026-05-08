@@ -600,7 +600,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
             crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx_for_refresh);
 
             // Compute initial total unread count for mobile bottom nav badge
-            crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(&w);
+            crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(&w, &ui_ctx_for_refresh);
 
             w.set_user_display_name(user_display_name.into());
             w.set_user_initials(user_initials.into());

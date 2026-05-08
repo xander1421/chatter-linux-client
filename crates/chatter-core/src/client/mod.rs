@@ -1574,6 +1574,23 @@ impl ChatterClient {
         self.ui.conversation_repo.list_all()
     }
 
+    /// Total unread count across all conversation types (channels, server/mailbox
+    /// DMs, anon DMs, anon groups). Used to drive sidebar/mobile badge totals.
+    ///
+    /// Aggregation lives here (not in the UI) so the UI doesn't have to walk
+    /// per-bucket Slint models — it gets one authoritative number. Counts come
+    /// from `is_read = 0` rows in the unified messages table.
+    ///
+    /// Returns 0 on storage error rather than propagating, since a missing
+    /// badge count is preferable to a UI hard-fail on every recompute.
+    pub fn total_unread_count(&self) -> u32 {
+        self.ui
+            .conversation_repo
+            .list_all()
+            .map(|convs| convs.iter().map(|c| c.unread_count).sum())
+            .unwrap_or(0)
+    }
+
     /// List channel members with profile information.
     pub fn list_members_with_profiles(
         &self,

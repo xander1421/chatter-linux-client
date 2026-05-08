@@ -30,11 +30,12 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         crate::bin_ui::gif_state::clear_inline_gifs();
 
         let channel_id_str_for_ui = channel_id_str.clone();
+        let ui_ctx_for_ui = ui_ctx.clone();
         run_ui!(weak, |w| {
             w.set_loading_messages(true);
 
             // Clear unread count in sidebar
-            crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(&w, &channel_id_str_for_ui, 0);
+            crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(&w, &ui_ctx_for_ui, &channel_id_str_for_ui, 0);
 
             // Clear composer reply/edit state to prevent stale context
             w.set_composer_is_replying(false);

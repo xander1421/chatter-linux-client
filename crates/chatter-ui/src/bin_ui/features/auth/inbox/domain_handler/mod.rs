@@ -45,7 +45,7 @@ pub async fn handle_domain_event(
             peer_id,
             unread_count,
         } => {
-            messaging::handle_unread_count_updated(window, channel_id, peer_id, unread_count);
+            messaging::handle_unread_count_updated(window, ui_ctx, channel_id, peer_id, unread_count);
         }
 
         // =========================================================================
