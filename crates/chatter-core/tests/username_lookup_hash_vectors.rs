@@ -55,7 +55,8 @@ fn fixture_matches_rust_implementation() {
 
     for v in &fx.vectors {
         let want = hex::decode(&v.expected_hex).expect("bad hex in fixture");
-        let got = hash_username_lookup(&v.username);
+        let got = hash_username_lookup(&v.username)
+            .expect("hash should succeed for valid fixture username");
         assert_eq!(
             got.as_slice(),
             want.as_slice(),

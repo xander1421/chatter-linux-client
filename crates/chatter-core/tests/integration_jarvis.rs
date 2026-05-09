@@ -2,6 +2,8 @@
 //!
 //! Tests memory storage, knowledge graph, and service functionality.
 
+#![cfg(feature = "jarvis")]
+
 use std::sync::Arc;
 use tempfile::TempDir;
 

@@ -10,8 +10,9 @@
 //!
 //! These tests use pure crypto functions with no server dependencies.
 
+use chatter_core::crypto::derive_uak;
 use chatter_core::crypto::signal::sealed_sender::{
-    generate_uak_from_profile_key, combine_uaks_for_group,
+    combine_uaks_for_group,
     UAK_LENGTH, PROFILE_KEY_LENGTH,
 };
 use chatter_core::domain::ids::{ChannelId, DeviceId, MessageId, UserId};
@@ -32,8 +33,7 @@ use chatter_core::domain::ids::{ChannelId, DeviceId, MessageId, UserId};
 #[test]
 fn test_uak_derivation_from_profile_key() {
     let profile_key = [42u8; PROFILE_KEY_LENGTH];
-    let uak = generate_uak_from_profile_key(&profile_key)
-        .expect("UAK derivation should succeed");
+    let uak = derive_uak(&profile_key);
 
     assert_eq!(uak.len(), UAK_LENGTH, "UAK should be {} bytes", UAK_LENGTH);
 
@@ -51,8 +51,8 @@ fn test_uak_derivation_from_profile_key() {
 fn test_uak_derivation_deterministic() {
     let profile_key = [99u8; PROFILE_KEY_LENGTH];
 
-    let uak1 = generate_uak_from_profile_key(&profile_key).unwrap();
-    let uak2 = generate_uak_from_profile_key(&profile_key).unwrap();
+    let uak1 = derive_uak(&profile_key);
+    let uak2 = derive_uak(&profile_key);
 
     assert_eq!(uak1, uak2, "Same profile key must produce same UAK");
 }
@@ -63,18 +63,22 @@ fn test_uak_derivation_different_keys() {
     let key1 = [1u8; PROFILE_KEY_LENGTH];
     let key2 = [2u8; PROFILE_KEY_LENGTH];
 
-    let uak1 = generate_uak_from_profile_key(&key1).unwrap();
-    let uak2 = generate_uak_from_profile_key(&key2).unwrap();
+    let uak1 = derive_uak(&key1);
+    let uak2 = derive_uak(&key2);
 
     assert_ne!(uak1, uak2, "Different profile keys should produce different UAKs");
 }
 
-/// Test that invalid profile key length is rejected.
+/// Profile-key length is enforced by the type system.
+///
+/// `derive_uak` accepts `&[u8; 32]` only; passing a shorter key fails
+/// at compile time. This test asserts the runtime contract that a valid
+/// 32-byte key produces a UAK of the expected length.
 #[test]
-fn test_uak_derivation_invalid_key_length() {
-    let short_key = [0u8; 16]; // Too short
-    let result = generate_uak_from_profile_key(&short_key);
-    assert!(result.is_err(), "Short profile key should be rejected");
+fn test_uak_derivation_correct_output_length() {
+    let key = [0u8; PROFILE_KEY_LENGTH];
+    let uak = derive_uak(&key);
+    assert_eq!(uak.len(), UAK_LENGTH);
 }
 
 // ---------------------------------------------------------------------------

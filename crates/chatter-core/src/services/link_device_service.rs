@@ -369,9 +369,15 @@ impl LinkDeviceService {
     /// single "confirm with password or PIN" input regardless of whether
     /// the session is password- or OIDC-based.
     pub fn verify_password_or_pin(&self, secret: &str) -> Result<bool, LinkDeviceError> {
-        let looks_like_pin = secret.len() == 6 && secret.chars().all(|c| c.is_ascii_digit());
-        if looks_like_pin {
-            return self.verify_pin(secret);
+        // Try PIN first (cheap local HMAC compare against the stored
+        // fingerprint). PIN and password share format constraints now (both
+        // are 8+ printable ASCII), so we can't tell them apart by shape -
+        // we attempt PIN, and fall through to password if PIN validation
+        // rejects the input or the fingerprint doesn't match.
+        if crate::crypto::svr::validate_pin(secret).is_ok() {
+            if let Ok(true) = self.verify_pin(secret) {
+                return Ok(true);
+            }
         }
         match self.verify_password(secret) {
             Ok(v) => Ok(v),
@@ -1351,25 +1357,27 @@ mod tests {
 
     #[test]
     fn verify_pin_accepts_correct_pin() {
-        let (svc, _db) = setup_service("alice", None, Some("123456"));
-        assert_eq!(svc.verify_pin("123456").unwrap(), true);
+        let (svc, _db) = setup_service("alice", None, Some("12345678"));
+        assert_eq!(svc.verify_pin("12345678").unwrap(), true);
     }
 
     #[test]
     fn verify_pin_rejects_wrong_pin() {
-        let (svc, _db) = setup_service("alice", None, Some("123456"));
-        assert_eq!(svc.verify_pin("000000").unwrap(), false);
+        let (svc, _db) = setup_service("alice", None, Some("12345678"));
+        assert_eq!(svc.verify_pin("00000000").unwrap(), false);
     }
 
     #[test]
     fn verify_pin_format_validation() {
-        let (svc, _db) = setup_service("alice", None, Some("123456"));
+        let (svc, _db) = setup_service("alice", None, Some("12345678"));
+        // Too short (< MIN_PIN_LENGTH).
         assert!(matches!(
-            svc.verify_pin("12345").unwrap_err(),
+            svc.verify_pin("1234567").unwrap_err(),
             LinkDeviceError::Invalid(_)
         ));
+        // Non-printable ASCII rejected even at the right length.
         assert!(matches!(
-            svc.verify_pin("12345a").unwrap_err(),
+            svc.verify_pin("1234\t678").unwrap_err(),
             LinkDeviceError::Invalid(_)
         ));
     }
@@ -1377,33 +1385,33 @@ mod tests {
     #[test]
     fn verify_pin_no_fingerprint_errors() {
         // Password-only account, no PIN persisted.
-        let (svc, _db) = setup_service("alice", Some("hunter2"), None);
+        let (svc, _db) = setup_service("alice", Some("hunter2-strong"), None);
         assert!(matches!(
-            svc.verify_pin("123456").unwrap_err(),
+            svc.verify_pin("12345678").unwrap_err(),
             LinkDeviceError::Invalid(_)
         ));
     }
 
     #[test]
-    fn verify_password_or_pin_routes_pin_for_six_digits() {
-        let (svc, _db) = setup_service("alice", Some("hunter2"), Some("123456"));
-        // 6-digit input => PIN path
-        assert_eq!(svc.verify_password_or_pin("123456").unwrap(), true);
-        // longer input => password path
-        assert_eq!(svc.verify_password_or_pin("hunter2").unwrap(), true);
+    fn verify_password_or_pin_routes_pin_first() {
+        let (svc, _db) = setup_service("alice", Some("hunter2-strong"), Some("12345678"));
+        // Correct PIN matches via PIN path.
+        assert_eq!(svc.verify_password_or_pin("12345678").unwrap(), true);
+        // Correct password also matches via password fallback.
+        assert_eq!(svc.verify_password_or_pin("hunter2-strong").unwrap(), true);
     }
 
     #[test]
     fn verify_password_or_pin_oidc_pin_works() {
         // OIDC session (no password) but PIN configured.
-        let (svc, _db) = setup_service("alice", None, Some("987654"));
-        assert_eq!(svc.verify_password_or_pin("987654").unwrap(), true);
+        let (svc, _db) = setup_service("alice", None, Some("98765432"));
+        assert_eq!(svc.verify_password_or_pin("98765432").unwrap(), true);
     }
 
     #[test]
     fn verify_password_or_pin_oidc_password_attempt_returns_false() {
-        let (svc, _db) = setup_service("alice", None, Some("987654"));
-        // Long string => password path => OIDC unsupported gets folded to false.
-        assert_eq!(svc.verify_password_or_pin("anything-long").unwrap(), false);
+        let (svc, _db) = setup_service("alice", None, Some("98765432"));
+        // Wrong secret => PIN mismatch + OIDC has no password => false.
+        assert_eq!(svc.verify_password_or_pin("anything-long-wrong").unwrap(), false);
     }
 }

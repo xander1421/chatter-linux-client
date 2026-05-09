@@ -34,7 +34,7 @@ use chatter_core::state::ActiveConversation;
 
 const SERVER_URL: &str = "http://localhost:50051";
 const EVENT_TIMEOUT: Duration = Duration::from_secs(30);
-const PIN: &str = "123456";
+const PIN: &str = "12345678";
 const PASSWORD: &str = "TestPass123!";
 
 // ============================================================================

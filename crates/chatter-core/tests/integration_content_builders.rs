@@ -129,6 +129,7 @@ fn test_build_reply_content() {
         "author-uuid-123",
         1000000000,
         "Original message text",
+        vec![], // quote_attachments
         2000000000,
     );
 

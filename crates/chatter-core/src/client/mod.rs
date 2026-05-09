@@ -62,6 +62,7 @@ use crate::services::jarvis::JarvisService;
 use crate::services::ai::LocalAIService;
 use crate::services::mailbox_manager::MailboxManager;
 use crate::services::message::MessageService;
+use crate::services::message_gateway::MessageGateway;
 use crate::services::pin_service::PinService;
 use crate::services::session_service::{SessionError, SessionService};
 use crate::services::signal_service::SignalService;
@@ -276,6 +277,7 @@ impl ChatterClient {
     // services against a live server.
     crate::service_accessor!(auth, AuthService, auth_service);
     crate::service_accessor!(messages, MessageService, message_service);
+    crate::service_accessor!(message_gateway, MessageGateway, message_gateway);
     crate::service_accessor!(channels, ChannelService, channel_service);
     crate::service_accessor!(users, UserService, user_service);
     crate::service_accessor!(attachments, AttachmentService, attachment_service);

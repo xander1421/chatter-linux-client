@@ -13,7 +13,7 @@ use chatter_core::crypto::{
     AttachmentCrypto, KEY_SET_LENGTH,
 };
 use chatter_core::crypto::profile_crypto;
-use chatter_core::crypto::signal::sealed_sender::generate_uak_from_profile_key;
+use chatter_core::crypto::derive_uak;
 use chatter_core::services::{
     build_text_content, build_typing_content,
     build_data_message_content,
@@ -301,18 +301,25 @@ fn test_profile_avatar_size_limit() {
 // UAK — Input Validation
 // ===========================================================================
 
-/// UAK: rejects profile keys that are too short.
+/// UAK: profile-key length is enforced by the type system.
+///
+/// `derive_uak` accepts `&[u8; 32]` only; passing a shorter or empty
+/// slice fails at compile time. This test asserts the runtime contract
+/// that it produces a deterministic 16-byte UAK from a valid input.
 #[test]
-fn test_uak_rejects_short_profile_key() {
-    let result = generate_uak_from_profile_key(&[0u8; 16]); // Too short
-    assert!(result.is_err(), "16-byte profile key must be rejected");
+fn test_uak_produces_16_byte_output() {
+    let key = [42u8; 32];
+    let uak = derive_uak(&key);
+    assert_eq!(uak.len(), 16, "UAK must be 16 bytes");
 }
 
-/// UAK: rejects empty profile key.
+/// UAK: derivation is deterministic for a given profile key.
 #[test]
-fn test_uak_rejects_empty_profile_key() {
-    let result = generate_uak_from_profile_key(&[]);
-    assert!(result.is_err(), "Empty profile key must be rejected");
+fn test_uak_deterministic_for_same_profile_key() {
+    let key = [7u8; 32];
+    let uak1 = derive_uak(&key);
+    let uak2 = derive_uak(&key);
+    assert_eq!(uak1, uak2, "Same profile key must produce same UAK");
 }
 
 // ===========================================================================

@@ -15,7 +15,6 @@ use chatter_core::crypto::{
     SecretKey32, SecretKey64, SecretString, SecureBuffer,
 };
 use chatter_core::crypto::signal::sealed_sender::{
-    generate_uak_from_profile_key,
     UAK_LENGTH, PROFILE_KEY_LENGTH,
 };
 use chatter_core::crypto::svr;
@@ -374,7 +373,7 @@ fn test_svr_keypair_different_pins() {
 #[test]
 fn test_sealed_sender_uak_length() {
     let profile_key = [42u8; PROFILE_KEY_LENGTH];
-    let uak = generate_uak_from_profile_key(&profile_key).unwrap();
+    let uak = derive_uak(&profile_key);
     assert_eq!(uak.len(), UAK_LENGTH);
 }
 
@@ -389,13 +388,13 @@ fn test_cached_certificate_properties() {
     // the server's signing key. Instead we verify the UAK and certificate
     // validation functions work correctly with proper inputs.
 
-    // Verify generate_uak_from_profile_key matches derive_uak for same input
+    // The legacy `generate_uak_from_profile_key` was unified into `derive_uak`.
+    // Verify `derive_uak` is deterministic for the same input.
     let profile_key = [42u8; 32];
-    let uak_sealed = generate_uak_from_profile_key(&profile_key).unwrap();
-    let uak_device = derive_uak(&profile_key);
+    let uak_a = derive_uak(&profile_key);
+    let uak_b = derive_uak(&profile_key);
 
-    // Both should produce the same result since they derive from the same profile key
-    // (implementation may differ but the UAK space is the same)
-    assert_eq!(uak_sealed.len(), uak_device.len(),
-        "Both UAK derivation paths should produce same-length keys");
+    assert_eq!(uak_a, uak_b,
+        "derive_uak must be deterministic for the same profile key");
+    assert_eq!(uak_a.len(), UAK_LENGTH);
 }

@@ -52,11 +52,13 @@ async fn test_lookup_username_exact_match() {
 
     let mut user_client = UserClient::new(pool.channel(), pool.auth_clone());
 
-    let hash = chatter_core::crypto::auth_crypto::hash_username_lookup(&user.username);
+    let hash = chatter_core::crypto::auth_crypto::hash_username_lookup(&user.username)
+        .expect("hash should succeed for valid registered username");
     let found = assert_ok(user_client.lookup_username(hash).await);
-    assert_eq!(found.as_deref(), Some(user.id.to_string().as_str()));
+    assert_eq!(found.as_deref(), Some(user.user_id.as_str()));
 
-    let missing = chatter_core::crypto::auth_crypto::hash_username_lookup("does_not_exist_xyz");
+    let missing = chatter_core::crypto::auth_crypto::hash_username_lookup("does_not_exist_xyz")
+        .expect("hash should succeed for valid lookup string");
     assert_eq!(assert_ok(user_client.lookup_username(missing).await), None);
 }
 

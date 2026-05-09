@@ -238,9 +238,26 @@ pub async fn register_test_user(pool: &GrpcClientPool) -> Result<TestUser, Netwo
     // Generate unidentified access key (16 bytes) for sealed sender
     let uak = random_uak();
 
+    // Server now requires a registration challenge proving identity-key
+    // possession. Mirror what `AuthService::register` does in the SDK:
+    // hash the (password_hash, username) pair, request a challenge, sign
+    // the returned nonce with our identity private key (XEdDSA).
+    let auth_lookup_hash =
+        chatter_core::crypto::auth_crypto::derive_login_auth_hash(&password_hash, &username);
+    let username_hash_hex = hex::encode(auth_lookup_hash);
+    // SDK strips the leading 0x05 type byte before sending; match that.
+    let identity_public_key_stripped = &identity_public_key[1..];
+    let challenge = auth_client
+        .request_registration_challenge(&username_hash_hex, identity_public_key_stripped)
+        .await?;
+    let challenge_response = identity_key_pair
+        .private_key()
+        .calculate_signature(&challenge.challenge_nonce, &mut rand::rng())
+        .expect("XEdDSA challenge signing should succeed");
+
     let result = auth_client
         .register_and_wait(
-            &username,
+            &username_hash_hex,        // PRIVACY: Send hash, matches SDK (server stores hash, not plaintext)
             &password_hash,
             &encrypted_display_name,
             identity_public_key.as_ref(),
@@ -249,10 +266,10 @@ pub async fn register_test_user(pool: &GrpcClientPool) -> Result<TestUser, Netwo
             &uak,
             Some(prekey_bundle),
             Vec::new(), // No additional one-time prekeys for tests
-            "",         // No challenge ID for tests
-            &[],        // No challenge response for tests
-            &[0u8; 32], // Empty registration lock for tests
-            &[0u8; 32], // Empty username lookup hash for tests
+            &challenge.challenge_id,
+            &challenge_response,
+            &[0u8; 32],        // Empty registration lock for tests
+            &auth_lookup_hash, // Username lookup hash (same value, used for nickname.discriminator lookup)
         )
         .await?;
 

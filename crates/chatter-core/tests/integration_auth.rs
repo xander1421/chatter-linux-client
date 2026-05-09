@@ -73,6 +73,9 @@ async fn test_register_user_stream() {
     };
 
     let password_hash = random_password_hash();
+    let username_lookup_hash =
+        chatter_core::crypto::auth_crypto::hash_username_lookup(&username)
+            .expect("hash should succeed for valid username");
     let stream = assert_ok(
         auth_client
             .register(
@@ -88,6 +91,7 @@ async fn test_register_user_stream() {
                 "",         // No challenge ID for tests
                 &[],        // No challenge response for tests
                 &[0u8; 32], // Empty registration lock for tests
+                &username_lookup_hash,
             )
             .await,
     );
@@ -180,6 +184,9 @@ async fn test_register_duplicate_username() {
     let dup_profile_key = random_profile_key();
     let dup_encrypted_name = encrypt_test_display_name(&dup_profile_key, "Duplicate User");
     let dup_uak = chatter_core::crypto::derive_uak(&dup_profile_key);
+    let dup_username_lookup_hash =
+        chatter_core::crypto::auth_crypto::hash_username_lookup(&user.username)
+            .expect("hash should succeed for valid username");
     let result = auth_client
         .register_and_wait(
             &user.username,
@@ -194,6 +201,7 @@ async fn test_register_duplicate_username() {
             "",         // No challenge ID for tests
             &[],        // No challenge response for tests
             &[0u8; 32], // Empty registration lock for tests
+            &dup_username_lookup_hash,
         )
         .await;
 
