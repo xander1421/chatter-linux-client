@@ -52,13 +52,18 @@ async fn test_lookup_username_exact_match() {
 
     let mut user_client = UserClient::new(pool.channel(), pool.auth_clone());
 
-    let hash = chatter_core::crypto::auth_crypto::hash_username_lookup(&user.username)
-        .expect("hash should succeed for valid registered username");
+    // `register_test_user` stores `hash_username_lookup(full_username)` as
+    // the discovery hash. Mirror that here so the lookup resolves to the
+    // user we just registered.
+    let hash = chatter_core::crypto::auth_crypto::hash_username_lookup(&user.full_username)
+        .expect("full_username should satisfy Signal grammar");
     let found = assert_ok(user_client.lookup_username(hash).await);
     assert_eq!(found.as_deref(), Some(user.user_id.as_str()));
 
-    let missing = chatter_core::crypto::auth_crypto::hash_username_lookup("does_not_exist_xyz")
-        .expect("hash should succeed for valid lookup string");
+    // A different (random) hash should resolve to no user.
+    use rand::RngCore;
+    let mut missing = [0u8; 32];
+    rand::rng().fill_bytes(&mut missing);
     assert_eq!(assert_ok(user_client.lookup_username(missing).await), None);
 }
 

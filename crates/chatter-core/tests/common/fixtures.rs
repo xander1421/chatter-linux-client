@@ -21,8 +21,12 @@ use libsignal_protocol::{kem, IdentityKeyPair, KeyPair, KyberPreKeyId, KyberPreK
 /// Test user data returned after registration.
 #[derive(Debug, Clone)]
 pub struct TestUser {
-    /// Unique username.
+    /// Unique base nickname (no discriminator). Pre-Signal grammar.
     pub username: String,
+    /// Full Signal-grammar username `nickname.discriminator` — the value
+    /// the Ristretto255 lookup hash was computed over and what
+    /// `LookupUsername` resolves on the server.
+    pub full_username: String,
     /// Display name (plaintext).
     pub display_name: String,
     /// Encrypted display name (nonce || ciphertext || auth_tag).
@@ -33,6 +37,11 @@ pub struct TestUser {
     pub password: String,
     /// 32-byte Ed25519 public key.
     pub public_key: Vec<u8>,
+    /// Serialized identity key pair (private + public) for tests that need to
+    /// upload follow-on prekey bundles signed by the same identity. The
+    /// server enforces "all devices share the same identity key" — if a test
+    /// re-generates a fresh `IdentityKeyPair`, the upload is rejected.
+    pub identity_key_pair_bytes: Vec<u8>,
     /// 32-byte device auth token.
     pub device_auth_token: Vec<u8>,
     /// 32-byte profile key.
@@ -168,6 +177,15 @@ pub async fn create_streaming_test_pool() -> Result<Arc<GrpcClientPool>, Network
 /// Includes a real Signal Protocol prekey bundle for sealed sender support.
 pub async fn register_test_user(pool: &GrpcClientPool) -> Result<TestUser, NetworkError> {
     let username = unique_username();
+    // Build a Signal-grammar `nickname.discriminator` — required so the
+    // server's `LookupUsername` RPC (which matches against the Ristretto
+    // lookup hash) can resolve us back. Without this the integration test
+    // `test_lookup_username_exact_match` returns None.
+    let full_username = chatter_core::crypto::auth_crypto::username_candidates(&username)
+        .map_err(|e| NetworkError::Unknown(format!("invalid test nickname: {e}")))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| NetworkError::Unknown("no username candidates".to_string()))?;
     let display_name = format!("Test User {}", &username[10..18]);
     let (password, password_hash) = random_password();
     let device_auth_token = random_device_auth_token();
@@ -255,6 +273,11 @@ pub async fn register_test_user(pool: &GrpcClientPool) -> Result<TestUser, Netwo
         .calculate_signature(&challenge.challenge_nonce, &mut rand::rng())
         .expect("XEdDSA challenge signing should succeed");
 
+    // Ristretto255 lookup hash over the full `name.discriminator` —
+    // server's LookupUsername RPC matches against THIS column.
+    let username_lookup = chatter_core::crypto::auth_crypto::hash_username_lookup(&full_username)
+        .map_err(|e| NetworkError::Unknown(format!("hash_username_lookup failed: {e}")))?;
+
     let result = auth_client
         .register_and_wait(
             &username_hash_hex,        // PRIVACY: Send hash, matches SDK (server stores hash, not plaintext)
@@ -268,18 +291,20 @@ pub async fn register_test_user(pool: &GrpcClientPool) -> Result<TestUser, Netwo
             Vec::new(), // No additional one-time prekeys for tests
             &challenge.challenge_id,
             &challenge_response,
-            &[0u8; 32],        // Empty registration lock for tests
-            &auth_lookup_hash, // Username lookup hash (same value, used for nickname.discriminator lookup)
+            &[0u8; 32],         // Empty registration lock for tests
+            &username_lookup,   // hash_username_lookup(full_username) for the discovery RPC
         )
         .await?;
 
     Ok(TestUser {
         username,
+        full_username,
         display_name,
         encrypted_display_name,
         password_hash,
         password,
         public_key: identity_public_key.as_ref().to_vec(),
+        identity_key_pair_bytes: identity_key_pair.serialize().into_vec(),
         device_auth_token,
         profile_key,
         user_id: result.user_id,
@@ -317,13 +342,16 @@ pub fn mock_test_user() -> TestUser {
     )
     .expect("Display name encryption should succeed");
 
+    let full_username = format!("{}.42", &username);
     TestUser {
         username,
+        full_username,
         display_name,
         encrypted_display_name,
         password_hash,
         password,
         public_key: random_public_key(),
+        identity_key_pair_bytes: Vec::new(),
         device_auth_token: random_device_auth_token(),
         profile_key,
         user_id: uuid::Uuid::new_v4().to_string(),
