@@ -136,9 +136,15 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     let mut channel_domain_list: Vec<chatter_core::domain::channel::Channel> = Vec::new();
     let mut dm_list: Vec<DMListItemSendData> = Vec::new();
 
+    // Anon Mode: when on, drop server-friend DMs and public/private
+    // channels from the sidebar models. Anon DMs (is_anon=true rows below)
+    // and anon groups stay because they have no server-side identity link.
+    let anon_mode = ui_ctx.anon_mode_enabled();
+
     for channel in &channels {
         match channel.channel_type {
             ChannelType::DirectMessage => {
+                if anon_mode { continue; }
                 // Core handles peer-id detection, last-message fetch, "You: "
                 // prefixing, preview truncation, and local-time formatting —
                 // we just render the returned struct.
@@ -157,6 +163,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                 dm_list.push(dm_item);
             }
             ChannelType::Public | ChannelType::Private => {
+                if anon_mode { continue; }
                 channel_domain_list.push(channel.clone());
             }
             ChannelType::SavedMessages => {
@@ -740,18 +747,23 @@ async fn load_channel_into_ui_from_services(
 pub fn refresh_dm_list(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let window_weak = window.as_weak();
-    
+
     tokio::spawn(async move {
         // Get current user ID for DM peer detection
         let current_user_id = ui_ctx.auth_state().get().current_user_id;
-        
+
         // Get channels from local storage
         let channels = ui_ctx.get_channels_mru();
 
         let mut dm_list: Vec<DMListItemSendData> = Vec::new();
 
+        // Anon Mode: drop server DMs from the rebuilt list — anon DM
+        // entries are merged in by `refresh_anon_dms` separately.
+        let anon_mode = ui_ctx.anon_mode_enabled();
+
         // Process regular DMs
         for channel in &channels {
+            if anon_mode { break; }
             if channel.channel_type == ChannelType::DirectMessage {
                 // Find the OTHER user (not ourselves)
                 let other_user_id = if let Some(current_id) = current_user_id {
@@ -973,27 +985,31 @@ pub fn refresh_anon_dms(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
         }
 
-        // Get existing DM list and merge with anon DMs
+        // Get existing DM list and merge with anon DMs.
+        // Anon Mode: drop existing non-anon rows entirely (they were already
+        // suppressed by `refresh_dm_list`'s anon_mode short-circuit, but
+        // any racing inserts that snuck in get cleaned here).
+        let anon_mode = ui_ctx.anon_mode_enabled();
         if let Some(w) = window_weak.upgrade() {
             let existing_dms = w.get_dm_conversations();
             let mut all_dms = Vec::new();
-            
+
             // Add existing regular DMs (non-anon) — the is_anon flag is the
             // only discriminator now.
             let existing_count = existing_dms.iter().count();
             for i in 0..existing_count {
                 if let Some(dm) = existing_dms.iter().nth(i) {
-                    if !dm.is_anon {
+                    if !dm.is_anon && !anon_mode {
                         all_dms.push(dm);
                     }
                 }
             }
-            
+
             // Add the anon DMs
             for dm in dm_list {
                 all_dms.push(dm.to_slint());
             }
-            
+
             let dm_model = VecModel::from(all_dms);
             w.set_dm_conversations(ModelRc::new(dm_model));
             crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);

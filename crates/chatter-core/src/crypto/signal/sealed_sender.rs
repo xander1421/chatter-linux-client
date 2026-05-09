@@ -30,7 +30,22 @@ use libsignal_protocol::{
     ProtocolAddress, PublicKey, ServiceId, SessionRecord, SessionStore,
     SignalProtocolError, SignedPreKeyStore, Timestamp,
 };
-use rand::{rngs::StdRng, SeedableRng};
+// SECURITY: each ephemeral-key draw must hit the OS directly so a process
+// memory disclosure cannot rewind the RNG.
+//
+// In rand 0.9, `OsRng` implements only `TryRngCore + TryCryptoRng` (its
+// syscalls are fallible). libsignal-protocol wants the infallible
+// `RngCore + CryptoRng` traits. `OsRng.unwrap_err()` returns an
+// `UnwrapErr<OsRng>` adapter that satisfies both - each draw still goes to
+// the OS getrandom() syscall; on the (effectively impossible on Linux post-
+// boot) failure path it panics rather than silently producing weak output.
+//
+// We deliberately do NOT use `StdRng::from_os_rng()` here: that seeds a
+// userspace ChaCha PRG once and then every draw within the call comes from
+// that single seed - a process memory disclosure recovers the seed and
+// reproduces every ephemeral key.
+use rand::rngs::OsRng;
+use rand::TryRngCore;
 
 use crate::config::TRUST_ROOT_PUBLIC_KEY;
 use crate::error::CryptoError;
@@ -111,7 +126,7 @@ impl SealedSenderManager {
             "SealedSender: starting encryption"
         );
 
-        let mut rng = StdRng::from_os_rng();
+        let mut rng = OsRng.unwrap_err();
         let now = SystemTime::now();
 
         tracing::debug!(destination = %destination, "SealedSender: calling sealed_sender_encrypt");
@@ -298,7 +313,7 @@ impl SealedSenderManager {
     where
         I: IdentityKeyStore,
     {
-        let mut rng = StdRng::from_os_rng();
+        let mut rng = OsRng.unwrap_err();
 
         sealed_sender_encrypt_from_usmc(destination, usmc, identity_store, &mut rng)
             .await
@@ -335,7 +350,7 @@ impl SealedSenderManager {
             "SealedSender: starting multi-recipient encryption"
         );
 
-        let mut rng = StdRng::from_os_rng();
+        let mut rng = OsRng.unwrap_err();
 
         let result = sealed_sender_multi_recipient_encrypt(
             destinations,
@@ -415,51 +430,6 @@ pub const UAK_LENGTH: usize = 16;
 
 /// Profile key length in bytes.
 pub const PROFILE_KEY_LENGTH: usize = 32;
-
-/// Generate Unidentified Access Key (UAK) from a profile key.
-///
-/// The UAK is derived by encrypting a zero block with the profile key using AES-GCM.
-/// This matches Signal's UAK derivation in `ProfileCipher`.
-///
-/// # Arguments
-///
-/// * `profile_key` - 32-byte profile key
-///
-/// # Returns
-///
-/// 16-byte UAK derived from the profile key.
-///
-/// # Signal Reference
-///
-/// See `Signal-server/service/.../UnidentifiedAccessUtil.java` and
-/// `Signal-Desktop/ts/Crypto.ts` for the reference implementation.
-pub fn generate_uak_from_profile_key(profile_key: &[u8]) -> Result<[u8; UAK_LENGTH], CryptoError> {
-    if profile_key.len() != PROFILE_KEY_LENGTH {
-        return Err(CryptoError::InvalidKeyLength {
-            expected: PROFILE_KEY_LENGTH,
-            got: profile_key.len(),
-        });
-    }
-
-    // Create AES-256-GCM cipher with profile key
-    let cipher = Aes256Gcm::new_from_slice(profile_key)
-        .map_err(|e| CryptoError::KeyDerivationFailed(e.to_string()))?;
-
-    // Use 12-byte zero nonce (Signal's standard for UAK derivation)
-    let nonce = Nonce::from_slice(&[0u8; 12]);
-
-    // Encrypt 16 zero bytes to derive UAK
-    let plaintext = [0u8; UAK_LENGTH];
-    let ciphertext = cipher
-        .encrypt(nonce, plaintext.as_ref())
-        .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
-
-    // First 16 bytes of ciphertext is the UAK
-    let mut uak = [0u8; UAK_LENGTH];
-    uak.copy_from_slice(&ciphertext[..UAK_LENGTH]);
-
-    Ok(uak)
-}
 
 /// Combine multiple UAKs for group sealed sender.
 ///
@@ -701,37 +671,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_generate_uak_from_profile_key() {
-        // Create a test profile key
+    fn test_derive_uak_deterministic() {
+        use crate::crypto::derive_uak;
+
         let mut profile_key = [0u8; PROFILE_KEY_LENGTH];
         profile_key[0] = 0x42;
         profile_key[31] = 0x42;
 
-        let uak = generate_uak_from_profile_key(&profile_key).expect("UAK generation should succeed");
-
-        // UAK should be 16 bytes
+        let uak = derive_uak(&profile_key);
         assert_eq!(uak.len(), UAK_LENGTH);
 
-        // UAK should be deterministic
-        let uak2 = generate_uak_from_profile_key(&profile_key).expect("UAK generation should succeed");
-        assert_eq!(uak, uak2);
+        // Deterministic for the same key.
+        assert_eq!(uak, derive_uak(&profile_key));
 
-        // Different profile key should give different UAK
+        // Different key, different UAK.
         let mut different_key = profile_key;
         different_key[0] = 0x43;
-        let different_uak = generate_uak_from_profile_key(&different_key).expect("UAK generation should succeed");
-        assert_ne!(uak, different_uak);
-    }
-
-    #[test]
-    fn test_generate_uak_rejects_invalid_length() {
-        let short_key = [0u8; 16];
-        let result = generate_uak_from_profile_key(&short_key);
-        assert!(result.is_err());
-
-        let long_key = [0u8; 64];
-        let result = generate_uak_from_profile_key(&long_key);
-        assert!(result.is_err());
+        assert_ne!(uak, derive_uak(&different_key));
     }
 
     #[test]

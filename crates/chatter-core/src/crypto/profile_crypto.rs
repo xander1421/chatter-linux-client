@@ -8,9 +8,31 @@ use rand::RngCore;
 
 use crate::error::CryptoError;
 
-/// Padded lengths per Signal spec (prevent length inference).
-pub const PADDED_NAME_LENGTH: usize = 128;
-pub const PADDED_STATUS_LENGTH: usize = 256;
+/// Display-name padding buckets per Signal spec
+/// (`Signal-Android/.../ProfileCipher.java::NAME_PADDED_LENGTH_{1,2}`).
+/// Short names ride the small bucket; longer ones bump up. Multi-bucket
+/// padding hides exact length within each bucket and saves bandwidth vs a
+/// single global maximum.
+pub const NAME_PADDED_LENGTH_SHORT: usize = 53;
+pub const NAME_PADDED_LENGTH_LONG: usize = 257;
+
+/// Status / "about" padding buckets per Signal spec
+/// (`ABOUT_PADDED_LENGTH_{1,2,3}`).
+pub const STATUS_PADDED_LENGTH_SHORT: usize = 128;
+pub const STATUS_PADDED_LENGTH_MID: usize = 254;
+pub const STATUS_PADDED_LENGTH_LONG: usize = 512;
+
+/// Maximum supported display-name length (the largest bucket).
+pub const MAX_NAME_LENGTH: usize = NAME_PADDED_LENGTH_LONG;
+/// Maximum supported status length (the largest bucket).
+pub const MAX_STATUS_LENGTH: usize = STATUS_PADDED_LENGTH_LONG;
+
+/// Pick the smallest padding bucket that fits `len` bytes.
+///
+/// Returns `None` if no bucket fits (caller should reject as oversized).
+fn pick_bucket(len: usize, buckets: &[usize]) -> Option<usize> {
+    buckets.iter().copied().find(|&b| len <= b)
+}
 
 /// Encrypt profile item with padding.
 ///
@@ -94,19 +116,47 @@ pub fn decrypt_profile_item(
     })
 }
 
-/// Encrypt display name (128-byte padded length).
+/// Encrypt display name. Pads to the smallest Signal name-bucket (53 or 257).
 pub fn encrypt_display_name(profile_key: &[u8; 32], name: &str) -> Result<Vec<u8>, CryptoError> {
-    encrypt_profile_item(profile_key, name, PADDED_NAME_LENGTH)
+    let bucket = pick_bucket(
+        name.len(),
+        &[NAME_PADDED_LENGTH_SHORT, NAME_PADDED_LENGTH_LONG],
+    )
+    .ok_or_else(|| {
+        CryptoError::Validation(format!(
+            "display name too long: {} > {}",
+            name.len(),
+            MAX_NAME_LENGTH
+        ))
+    })?;
+    encrypt_profile_item(profile_key, name, bucket)
 }
 
-/// Decrypt display name.
+/// Decrypt display name. Bucket is recovered from ciphertext length; the
+/// trailing-zero strip in `decrypt_profile_item` handles all bucket sizes.
 pub fn decrypt_display_name(profile_key: &[u8; 32], encrypted: &[u8]) -> Result<String, CryptoError> {
     decrypt_profile_item(profile_key, encrypted)
 }
 
-/// Encrypt status message (256-byte padded length).
+/// Encrypt status message. Pads to the smallest Signal about-bucket
+/// (128 / 254 / 512).
 pub fn encrypt_status(profile_key: &[u8; 32], status: &str) -> Result<Vec<u8>, CryptoError> {
-    encrypt_profile_item(profile_key, status, PADDED_STATUS_LENGTH)
+    let bucket = pick_bucket(
+        status.len(),
+        &[
+            STATUS_PADDED_LENGTH_SHORT,
+            STATUS_PADDED_LENGTH_MID,
+            STATUS_PADDED_LENGTH_LONG,
+        ],
+    )
+    .ok_or_else(|| {
+        CryptoError::Validation(format!(
+            "status too long: {} > {}",
+            status.len(),
+            MAX_STATUS_LENGTH
+        ))
+    })?;
+    encrypt_profile_item(profile_key, status, bucket)
 }
 
 /// Decrypt status message.
@@ -197,12 +247,21 @@ mod tests {
 
         let encrypted = encrypt_display_name(&profile_key, name).unwrap();
 
-        // Verify structure: 12-byte nonce + padded ciphertext + 16-byte tag
-        // Padded plaintext is 128 bytes, so ciphertext is 128 + 16 = 144 bytes
-        assert_eq!(encrypted.len(), 12 + PADDED_NAME_LENGTH + 16);
+        // Short name fits the 53-byte bucket: 12-byte nonce + 53 + 16-byte tag.
+        assert_eq!(encrypted.len(), 12 + NAME_PADDED_LENGTH_SHORT + 16);
 
         let decrypted = decrypt_display_name(&profile_key, &encrypted).unwrap();
         assert_eq!(decrypted, name);
+    }
+
+    #[test]
+    fn long_name_uses_long_bucket() {
+        let profile_key = [0x42u8; 32];
+        // 100 bytes overflows the 53-byte bucket → 257-byte bucket.
+        let name = "a".repeat(100);
+        let encrypted = encrypt_display_name(&profile_key, &name).unwrap();
+        assert_eq!(encrypted.len(), 12 + NAME_PADDED_LENGTH_LONG + 16);
+        assert_eq!(decrypt_display_name(&profile_key, &encrypted).unwrap(), name);
     }
 
     #[test]
@@ -212,11 +271,26 @@ mod tests {
 
         let encrypted = encrypt_status(&profile_key, status).unwrap();
 
-        // Padded plaintext is 256 bytes, so ciphertext is 256 + 16 = 272 bytes
-        assert_eq!(encrypted.len(), 12 + PADDED_STATUS_LENGTH + 16);
+        // Short status fits the 128-byte bucket.
+        assert_eq!(encrypted.len(), 12 + STATUS_PADDED_LENGTH_SHORT + 16);
 
         let decrypted = decrypt_status(&profile_key, &encrypted).unwrap();
         assert_eq!(decrypted, status);
+    }
+
+    #[test]
+    fn status_buckets_promote_with_length() {
+        let profile_key = [0x42u8; 32];
+        for (n, bucket) in [
+            (50, STATUS_PADDED_LENGTH_SHORT),
+            (200, STATUS_PADDED_LENGTH_MID),
+            (400, STATUS_PADDED_LENGTH_LONG),
+        ] {
+            let s = "a".repeat(n);
+            let enc = encrypt_status(&profile_key, &s).unwrap();
+            assert_eq!(enc.len(), 12 + bucket + 16, "len={n} expected bucket={bucket}");
+            assert_eq!(decrypt_status(&profile_key, &enc).unwrap(), s);
+        }
     }
 
     #[test]
@@ -242,9 +316,8 @@ mod tests {
     #[test]
     fn test_max_length_name() {
         let profile_key = [0x42u8; 32];
-        // 128 bytes exactly (ASCII, so 128 chars)
-        let name = "a".repeat(PADDED_NAME_LENGTH);
-
+        // Exactly the largest bucket size still encrypts cleanly.
+        let name = "a".repeat(MAX_NAME_LENGTH);
         let encrypted = encrypt_display_name(&profile_key, &name).unwrap();
         let decrypted = decrypt_display_name(&profile_key, &encrypted).unwrap();
         assert_eq!(decrypted, name);
@@ -253,9 +326,8 @@ mod tests {
     #[test]
     fn test_too_long_name() {
         let profile_key = [0x42u8; 32];
-        // 129 bytes - should fail
-        let name = "a".repeat(PADDED_NAME_LENGTH + 1);
-
+        // One byte past the largest bucket - rejected.
+        let name = "a".repeat(MAX_NAME_LENGTH + 1);
         let result = encrypt_display_name(&profile_key, &name);
         assert!(result.is_err());
     }

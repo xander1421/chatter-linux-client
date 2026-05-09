@@ -330,9 +330,8 @@ impl LinkDeviceService {
     pub fn verify_pin(&self, pin: &str) -> Result<bool, LinkDeviceError> {
         use subtle::ConstantTimeEq;
 
-        if pin.len() != 6 || !pin.chars().all(|c| c.is_ascii_digit()) {
-            return Err(LinkDeviceError::Invalid("PIN must be 6 digits".into()));
-        }
+        crate::crypto::svr::validate_pin(pin)
+            .map_err(|e| LinkDeviceError::Invalid(e.to_string()))?;
 
         let user_id_str = self
             .settings_repo

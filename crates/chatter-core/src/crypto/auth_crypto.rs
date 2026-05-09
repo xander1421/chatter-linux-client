@@ -97,36 +97,58 @@ pub fn derive_delivery_token(profile_key: &[u8; 32]) -> [u8; 12] {
     token
 }
 
-/// Fixed salt for the Signal-style username-discovery hash. Bumping the `v1`
-/// suffix re-rolls every registered account's lookup hash (requires a
-/// coordinated server-side re-hash).
-const USERNAME_LOOKUP_SALT: &[u8] = b"chatter/username-discovery/v1";
+/// Compute the Signal-compatible username discovery hash.
+///
+/// `username` must be in `nickname.discriminator` form (e.g. `alice.4711`).
+/// The discriminator is picked at registration via [`username_candidates`]
+/// and makes wordlist enumeration of registered usernames infeasible: even
+/// with a complete dictionary of nicknames, an attacker has to grind 2-5
+/// digits of discriminator per nickname per query.
+///
+/// Returns the 32-byte Ristretto255 compressed point that libsignal's
+/// `usernames::Username` uses as its lookup hash. Verification of ownership
+/// (the user proves they know the secret scalars behind the point) is
+/// handled by [`username_proof`] / [`verify_username_proof`].
+///
+/// # Errors
+/// Returns the underlying `usernames::UsernameError` if `username` does not
+/// match Signal's nickname grammar (length, charset, separator presence,
+/// discriminator range).
+pub fn hash_username_lookup(username: &str) -> Result<[u8; 32], usernames::UsernameError> {
+    Ok(usernames::Username::new(username)?.hash())
+}
 
-/// Derive a 32-byte Signal-style discovery hash of a username.
+/// Pick a set of `nickname.discriminator` candidates for registration.
 ///
-/// **Discovery only.** Use [`derive_login_auth_hash`] for login lookup -
-/// the discovery hash is scoped to (username) alone so any party can resolve
-/// `alice.42 -> ACI`, while login lookup must additionally bind the password
-/// so server-side enumeration cannot map names to accounts without proof of
-/// possession.
+/// libsignal's `Username::candidates_from` generates several candidates in
+/// the standard discriminator ranges (`[0-99, 100-999, ...]`). The caller
+/// tries them in order at registration; the first one not already taken
+/// (server-enforced uniqueness on the lookup hash) wins.
+pub fn username_candidates(nickname: &str) -> Result<Vec<String>, usernames::UsernameError> {
+    let mut rng = rand::rng();
+    let limits = usernames::NicknameLimits::new(3, 32);
+    usernames::Username::candidates_from(&mut rng, nickname, limits)
+}
+
+/// Generate a zero-knowledge proof that the caller owns `username`.
 ///
-/// HKDF-SHA256 with:
-/// * salt = [`USERNAME_LOOKUP_SALT`] (domain separator, global constant)
-/// * IKM  = lowercased, trimmed UTF-8 of the username
-/// * info = `b"lookup"`
-///
-/// The discovery hash is lightweight (not Argon2) because the server must
-/// rate-limit and quota the lookup endpoint anyway — a slow KDF on the
-/// client adds no extra protection against an attacker who can already
-/// query the server.
-#[must_use]
-pub fn hash_username_lookup(username: &str) -> [u8; 32] {
-    let normalized = username.trim().to_lowercase();
-    let hk = Hkdf::<Sha256>::new(Some(USERNAME_LOOKUP_SALT), normalized.as_bytes());
-    let mut out = [0u8; 32];
-    hk.expand(b"lookup", &mut out)
-        .expect("HKDF expand cannot fail for 32-byte output");
-    out
+/// The verifier learns only the lookup hash; the caller proves possession
+/// of the secret scalars committed to by the hash. Used by username-change
+/// flows, profile-link verification, etc.
+pub fn username_proof(username: &str) -> Result<Vec<u8>, usernames::UsernameError> {
+    let mut randomness = [0u8; 32];
+    OsRng
+        .try_fill_bytes(&mut randomness)
+        .expect("OS CSPRNG must not fail");
+    usernames::Username::new(username)?.proof(&randomness)
+}
+
+/// Verify a zero-knowledge proof of ownership produced by [`username_proof`].
+pub fn verify_username_proof(
+    proof: &[u8],
+    hash: [u8; 32],
+) -> Result<(), usernames::ProofVerificationFailure> {
+    usernames::Username::verify_proof(proof, hash)
 }
 
 #[cfg(test)]
@@ -172,16 +194,46 @@ mod tests {
         // username->ACI could also forge login lookup keys.
         let pw = hash_password("p");
         let auth = derive_login_auth_hash(&pw, "alice");
-        let lookup = hash_username_lookup("alice");
+        let lookup = hash_username_lookup("alice.42").unwrap();
         assert_ne!(auth, lookup);
     }
 
     #[test]
-    fn lookup_hash_is_normalized() {
-        let h1 = hash_username_lookup("dave");
-        let h2 = hash_username_lookup("  DAVE ");
-        assert_eq!(h1, h2);
-        let h3 = hash_username_lookup("eve");
-        assert_ne!(h1, h3);
+    fn lookup_hash_requires_discriminator() {
+        // Plain nickname without `.discriminator` must be rejected -
+        // forgetting to attach a discriminator was the whole pre-fix bug
+        // (trivially enumerable by wordlist).
+        assert!(hash_username_lookup("dave").is_err());
+        assert!(hash_username_lookup("dave.").is_err());
+    }
+
+    #[test]
+    fn lookup_hash_changes_with_discriminator() {
+        let h1 = hash_username_lookup("dave.42").unwrap();
+        let h2 = hash_username_lookup("dave.43").unwrap();
+        let h3 = hash_username_lookup("eve.42").unwrap();
+        assert_ne!(h1, h2, "different discriminators yield different hashes");
+        assert_ne!(h1, h3, "different nicknames yield different hashes");
+    }
+
+    #[test]
+    fn proof_verifies_for_owner_only() {
+        let proof = username_proof("alice.42").unwrap();
+        let hash = hash_username_lookup("alice.42").unwrap();
+        assert!(verify_username_proof(&proof, hash).is_ok());
+
+        let other_hash = hash_username_lookup("alice.43").unwrap();
+        assert!(verify_username_proof(&proof, other_hash).is_err());
+    }
+
+    #[test]
+    fn candidates_are_well_formed() {
+        let cands = username_candidates("alice").unwrap();
+        assert!(!cands.is_empty());
+        for c in &cands {
+            assert!(c.starts_with("alice."));
+            // Every candidate must round-trip through Username::new.
+            assert!(hash_username_lookup(c).is_ok(), "invalid candidate: {c}");
+        }
     }
 }

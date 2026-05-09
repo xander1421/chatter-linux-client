@@ -199,6 +199,15 @@ pub async fn app_init() -> AppState {
         window.global::<JarvisGlobal>().set_enabled(true);
     }
 
+    // Anon Mode: enforce default-off on every fresh window. The core flag
+    // is already false (in-memory AtomicBool), this keeps the Slint global
+    // in sync defensively. Auto-revert on restart is the privacy property
+    // of this feature; do NOT persist this flag.
+    {
+        use slint::ComponentHandle;
+        window.global::<AnonMode>().set_enabled(false);
+    }
+
     if bin_ui::video::init_hw_video(&window) {
         tracing::info!("Hardware-accelerated video enabled");
     } else {

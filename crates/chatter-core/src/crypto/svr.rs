@@ -12,15 +12,69 @@ use zeroize::Zeroize;
 
 use crate::error::CryptoError;
 
-/// The parameters for Argon2id hashing for PIN derivation.
-/// These should provide a good balance between memory hardness and computation time.
+/// Minimum PIN length enforced at the crypto layer.
+///
+/// 8 ASCII characters at ~36 alphabet entropy give ~41 bits of password
+/// entropy. Without an enclave protecting the SVR backup, this is the user's
+/// only defense against an attacker who has stolen the wrapped backup blob:
+/// the search space size dictates the offline brute-force cost. Coupled with
+/// [`get_argon2_params`] below, 41 bits × ~10^9 Argon2 ops/sec/GPU pushes a
+/// full-keyspace search to multi-decade scale, which is the best a software-
+/// only deployment can do. A real enclave (SGX/Nitro/etc.) would let us drop
+/// this to 4-6 chars while remaining safe.
+pub const MIN_PIN_LENGTH: usize = 8;
+pub const MAX_PIN_LENGTH: usize = 64;
+
+/// Argon2id parameters for PIN derivation.
+///
+/// `m=128 MiB`, `t=8`, `p=4`, output = 32 bytes.
+///
+/// **Why these numbers (no-enclave deployment):** every Argon2 invocation
+/// must dominate offline brute-force cost. Bumped from the prior `(64 MiB,
+/// 3)` because in a software-only deployment the SVR backup is plain
+/// ciphertext on Postgres, so an attacker who steals the DB does an offline
+/// attack against (PIN entropy × Argon2 work). The current numbers cost
+/// roughly ~2-3 seconds per derivation on a modern mobile device and
+/// multiple seconds of GPU time per attacker guess. With [`MIN_PIN_LENGTH`]
+/// = 8, the combined cost makes full-keyspace search infeasible on
+/// commodity hardware.
+///
+/// If you switch to an enclave-backed SVR (see SECURITY.md, "SVR enclave
+/// gap"), these can drop back to (64 MiB, 3) - the enclave provides the
+/// throttling guarantee instead of work factor.
 fn get_argon2_params() -> Params {
     Params::new(
-        65536, // m_cost (64 MB)
-        3,     // t_cost (3 iterations)
-        4,     // p_cost (4 lanes)
+        131072,   // m_cost (128 MiB)
+        8,        // t_cost (8 iterations)
+        4,        // p_cost (4 lanes)
         Some(32), // output length (32 bytes)
-    ).expect("Valid Argon2 parameters")
+    )
+    .expect("Valid Argon2 parameters")
+}
+
+/// Validate a PIN's wire shape.
+///
+/// `MIN_PIN_LENGTH..=MAX_PIN_LENGTH` ASCII printable bytes. Numeric-only
+/// PINs are still allowed (a 6-digit numeric PIN is rejected; an 8-digit
+/// numeric PIN is permitted but discouraged). The crypto layer cannot
+/// enforce true password strength - that's a UX-layer concern.
+pub fn validate_pin(pin: &str) -> Result<(), CryptoError> {
+    if pin.len() < MIN_PIN_LENGTH {
+        return Err(CryptoError::Validation(format!(
+            "PIN must be at least {MIN_PIN_LENGTH} characters",
+        )));
+    }
+    if pin.len() > MAX_PIN_LENGTH {
+        return Err(CryptoError::Validation(format!(
+            "PIN must be at most {MAX_PIN_LENGTH} characters",
+        )));
+    }
+    if !pin.chars().all(|c| c.is_ascii_graphic()) {
+        return Err(CryptoError::Validation(
+            "PIN must contain only printable ASCII characters".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Derive a 32-byte secret from a PIN and a salt (username) using Argon2id.
@@ -221,5 +275,57 @@ mod tests {
 
         let eq = kp1.with_secret_bytes(|a| kp2.with_secret_bytes(|b| a == b));
         assert!(eq, "same (pin, username) must produce the same secret bytes");
+    }
+
+    #[test]
+    fn validate_pin_rejects_too_short() {
+        // 6-digit PINs were the pre-fix default - rejected now without an
+        // enclave to throttle attempts. See SECURITY.md "SVR enclave gap".
+        for short in &["", "1", "12", "1234567", "abc"] {
+            assert!(
+                validate_pin(short).is_err(),
+                "{short:?} should be rejected as too short"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_pin_rejects_too_long() {
+        let too_long = "a".repeat(MAX_PIN_LENGTH + 1);
+        assert!(validate_pin(&too_long).is_err());
+    }
+
+    #[test]
+    fn validate_pin_accepts_minimum_length() {
+        assert!(validate_pin("abcdefgh").is_ok(), "8 chars exactly accepted");
+        assert!(validate_pin("12345678").is_ok(), "8 ASCII digits accepted");
+        assert!(validate_pin("AaBbCc12").is_ok(), "mixed alphanumeric accepted");
+        assert!(validate_pin("Pa$$w0rd!").is_ok(), "symbols accepted");
+    }
+
+    #[test]
+    fn validate_pin_rejects_non_printable() {
+        // Tab, newline, control chars all rejected.
+        assert!(validate_pin("abcdef\tgh").is_err());
+        assert!(validate_pin("abcdef\ngh").is_err());
+        assert!(validate_pin("abcdef\x00gh").is_err());
+    }
+
+    #[test]
+    fn validate_pin_rejects_non_ascii() {
+        // Unicode rejected - keeps PIN bytes deterministic across locales.
+        assert!(validate_pin("hunter2é").is_err());
+    }
+
+    /// Argon2 params changed from `(64 MiB, 3, 4)` to `(128 MiB, 8, 4)`. This
+    /// test pins the new parameters so a future drop back to the old numbers
+    /// without enclave protection fails CI loudly.
+    #[test]
+    fn argon2_params_match_no_enclave_baseline() {
+        let p = get_argon2_params();
+        assert_eq!(p.m_cost(), 131072, "expected 128 MiB memory cost");
+        assert_eq!(p.t_cost(), 8, "expected 8 iterations");
+        assert_eq!(p.p_cost(), 4, "expected 4 lanes");
+        assert_eq!(p.output_len(), Some(32));
     }
 }

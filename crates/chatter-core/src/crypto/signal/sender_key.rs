@@ -37,7 +37,12 @@ use libsignal_protocol::{
     process_sender_key_distribution_message, ProtocolAddress, SenderKeyDistributionMessage,
     SenderKeyMessage, SenderKeyStore,
 };
-use rand::{rngs::StdRng, SeedableRng};
+// SECURITY: each sender-key draw must hit the OS directly so a process
+// memory disclosure cannot rewind the RNG. See the long comment in
+// `sealed_sender.rs` for why we use `OsRng.unwrap_err()` rather than
+// `StdRng::from_os_rng()`.
+use rand::rngs::OsRng;
+use rand::TryRngCore;
 use uuid::Uuid;
 
 use crate::error::CryptoError;
@@ -111,7 +116,7 @@ impl SenderKeyManager {
             distribution_id = %distribution_id,
             "[SENDER_KEY] Creating distribution message"
         );
-        let mut rng = StdRng::from_os_rng();
+        let mut rng = OsRng.unwrap_err();
         let result = create_sender_key_distribution_message(sender, distribution_id, sender_key_store, &mut rng)
             .await
             .map_err(|e| {
@@ -239,7 +244,7 @@ impl SenderKeyManager {
             plaintext_len = plaintext.len(),
             "[SENDER_KEY] Encrypting message for group"
         );
-        let mut rng = StdRng::from_os_rng();
+        let mut rng = OsRng.unwrap_err();
         let result = group_encrypt(sender_key_store, sender, distribution_id, plaintext, &mut rng)
             .await
             .map_err(|e| {

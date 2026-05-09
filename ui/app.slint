@@ -62,6 +62,10 @@ import { IncomingCallModal, ActiveCallView, DevicePicker, IncomingCallData, Acti
 import { JarvisPanel, JarvisMessageData } from "jarvis/mod.slint";
 import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 
+// Import anon mode global + PIN modal
+import { AnonMode } from "anon_mode/anon_mode_global.slint";
+import { AnonModePinModal } from "modals/anon_mode_pin.slint";
+
 // Re-export types for Rust binding
 export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, CustomSectionData, SectionConversationData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, OrgMemberData, OrgDashboardData, QuickSwitcherItem }
 
@@ -820,6 +824,13 @@ export component App inherits Rectangle {
     callback jarvis-clear();
     callback toggle-jarvis-panel();
 
+    // ========== Anon mode (PIN modal + toggle) ==========
+    in-out property <string> anon-mode-pin: "";
+    in property <string> anon-mode-pin-error: "";
+    in property <bool> anon-mode-verifying: false;
+    callback toggle-anon-mode();              // sidebar button → Rust handler
+    callback submit-anon-mode-pin(string);    // PIN modal submit → Rust verify
+
     background: Colors.background;
 
     // ========== Responsive sidebar auto-collapse ==========
@@ -1147,6 +1158,9 @@ export component App inherits Rectangle {
                 settings-clicked => {
                     root.active-modal = "settings";
                     root.settings-clicked();
+                }
+                anon-mode-clicked => {
+                    root.toggle-anon-mode();
                 }
             }
 
@@ -1880,6 +1894,21 @@ export component App inherits Rectangle {
         }
         delete-channel => {
             root.channel-settings-delete();
+        }
+    }
+
+    // Anon Mode PIN gate
+    if root.active-modal == "anon-mode-pin": AnonModePinModal {
+        show-modal: true;
+        pin <=> root.anon-mode-pin;
+        error: root.anon-mode-pin-error;
+        verifying: root.anon-mode-verifying;
+
+        close => {
+            root.active-modal = "none";
+        }
+        submit(pin) => {
+            root.submit-anon-mode-pin(pin);
         }
     }
 

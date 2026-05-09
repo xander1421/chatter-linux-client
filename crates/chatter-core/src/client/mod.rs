@@ -167,6 +167,7 @@ impl ClientBuilder {
             link_device_service: std::sync::OnceLock::new(),
             #[cfg(not(target_os = "android"))]
             oidc_service: std::sync::OnceLock::new(),
+            anon_mode: AtomicBool::new(false),
         }))
     }
 }
@@ -252,6 +253,12 @@ pub struct ChatterClient {
     link_device_service: std::sync::OnceLock<Arc<crate::services::link_device_service::LinkDeviceService>>,
     #[cfg(not(target_os = "android"))]
     oidc_service: std::sync::OnceLock<Arc<crate::services::oidc_service::OidcService>>,
+    /// In-memory "Anon Mode" UI flag. When set, the UI hides server-friend
+    /// DMs + public channels and shows only anon DMs / anon groups. Pure
+    /// presentation toggle — no send-path or storage gating. Resets to
+    /// false on every client construction (not persisted by design — auto
+    /// revert on restart is the privacy property).
+    anon_mode: AtomicBool,
 }
 
 impl ChatterClient {
@@ -1035,6 +1042,35 @@ impl ChatterClient {
         use crate::storage::settings_keys;
         let repo = SettingsRepository::new(self.ui.database.clone());
         let _ = repo.set(settings_keys::SIDEBAR_COLLAPSED, &collapsed);
+    }
+
+    // ── Anon Mode (in-memory UI filter) ────────────────────────────────
+    //
+    // Pure presentation flag: when true, the UI hides server-friend DMs,
+    // public/private channels, and the Friends/Saved entry points; only
+    // anon DMs and anon groups remain visible. Not persisted by design —
+    // every fresh client starts with anon_mode = false so privacy
+    // properties auto-revert on restart.
+
+    /// Read the in-memory anon-mode flag.
+    pub fn anon_mode_enabled(&self) -> bool {
+        self.anon_mode.load(Ordering::Acquire)
+    }
+
+    /// Flip the in-memory anon-mode flag. Callers (the UI handler) are
+    /// responsible for re-running sidebar refresh helpers after flip;
+    /// this method does not emit a domain event because the flag is a
+    /// presentation concern, not a chatter-core state change.
+    pub fn set_anon_mode_enabled(&self, enabled: bool) {
+        self.anon_mode.store(enabled, Ordering::Release);
+    }
+
+    /// PIN-gate for enabling anon mode. Wraps `LinkDeviceService::verify_pin`
+    /// and squashes any error into `false` so the UI can render a single
+    /// "wrong PIN / no PIN set / storage error" message without leaking
+    /// distinctions a UI shouldn't surface differently.
+    pub fn verify_pin_for_anon_mode(&self, pin: &str) -> bool {
+        self.link_device().verify_pin(pin).unwrap_or(false)
     }
 
     pub fn offline_state(&self) -> &OfflineState { &self.ui.offline_state }

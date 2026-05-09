@@ -1021,25 +1021,19 @@ mod tests {
 
     #[test]
     fn test_uak_for_sealed_sender() {
-        use crate::crypto::signal::sealed_sender::{
-            combine_uaks_for_group, generate_uak_from_profile_key, UAK_LENGTH,
-        };
+        use crate::crypto::derive_uak;
+        use crate::crypto::signal::sealed_sender::{combine_uaks_for_group, UAK_LENGTH};
 
-        // Create test profile keys
         let profile_key_1 = [0x11u8; 32];
         let profile_key_2 = [0x22u8; 32];
 
-        // Generate UAKs
-        let uak1 = generate_uak_from_profile_key(&profile_key_1).expect("UAK generation failed");
-        let uak2 = generate_uak_from_profile_key(&profile_key_2).expect("UAK generation failed");
+        let uak1 = derive_uak(&profile_key_1);
+        let uak2 = derive_uak(&profile_key_2);
 
         assert_eq!(uak1.len(), UAK_LENGTH);
         assert_eq!(uak2.len(), UAK_LENGTH);
-
-        // Different profile keys should produce different UAKs
         assert_ne!(uak1, uak2);
 
-        // Combined UAK for group send
         let combined = combine_uaks_for_group(&[uak1, uak2]);
         assert_eq!(combined.len(), UAK_LENGTH);
 

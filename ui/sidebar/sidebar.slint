@@ -23,6 +23,7 @@ import { SectionContextMenu, SectionHeaderContextMenu } from "section_context_me
 import { Avatar } from "../components/avatar.slint";
 import { TooltipArea } from "../components/tooltip.slint";
 import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
+import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 
 export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, CustomSectionData, SectionConversationData }
 
@@ -75,6 +76,7 @@ export component Sidebar inherits Rectangle {
     callback search-clicked();
     callback jarvis-clicked();
     callback settings-clicked();
+    callback anon-mode-clicked();
     callback create-section-clicked();
     callback section-toggle-expanded(/* section-id */ string);
     callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ string);
@@ -107,10 +109,12 @@ export component Sidebar inherits Rectangle {
          : root.collapsed ? Spacing.sidebar-width-collapsed
          : Spacing.sidebar-width;
     visible: root.mobile-mode ? true : !root.hidden;
-    // Neo 2.0: sidebar is a raised surface with right-edge highlight
-    background: Colors.surface;
+    // Neo 2.0: sidebar is a raised surface with right-edge highlight.
+    // In Anon Mode, slightly shift the surface tint toward primary so the
+    // user has a constant visual cue the mode is active.
+    background: AnonMode.enabled ? Colors.primary.with-alpha(0.08) : Colors.surface;
     border-width: 1px;
-    border-color: Colors.neo-highlight;
+    border-color: AnonMode.enabled ? Colors.primary.with-alpha(0.4) : Colors.neo-highlight;
     drop-shadow-blur: Spacing.neo-blur-md;
     drop-shadow-offset-x: Spacing.neo-offset-md;
     drop-shadow-color: Colors.neo-shadow;
@@ -217,7 +221,7 @@ export component Sidebar inherits Rectangle {
                 padding-bottom: Spacing.md;
 
                 // QUICK LINKS (top navigation)
-                Rectangle {
+                if !AnonMode.enabled : Rectangle {
                     height: 34px;
                     background: saved-touch.has-hover ? Colors.surface-hover : transparent;
                     accessible-role: button;
@@ -237,7 +241,7 @@ export component Sidebar inherits Rectangle {
                     saved-touch := TouchArea { clicked => { root.saved-messages-clicked(); } }
                 }
 
-                Rectangle {
+                if !AnonMode.enabled : Rectangle {
                     height: 34px;
                     background: friends-touch.has-hover ? Colors.surface-hover : transparent;
                     accessible-role: button;
@@ -500,7 +504,9 @@ export component Sidebar inherits Rectangle {
 
                 // 5. CHANNELS SECTION — header zeroed in collapsed mode (collapsed action rail
                 // below at line 593+ provides the find/new/section buttons).
-                Rectangle {
+                // Hidden entirely in Anon Mode — anon groups live below in a
+                // separate model so this filter only kills server channels.
+                if !AnonMode.enabled : Rectangle {
                     height: root.collapsed ? 0px : 32px;
                     if !root.collapsed: HorizontalLayout {
                         padding-left: 6px;
@@ -593,7 +599,7 @@ export component Sidebar inherits Rectangle {
                 }
 
                 // Collapsed channel-action rail: find / new-channel / new-section
-                if root.collapsed: VerticalLayout {
+                if root.collapsed && !AnonMode.enabled : VerticalLayout {
                     spacing: 4px;
                     padding-top: 4px;
                     padding-bottom: 4px;
@@ -635,7 +641,7 @@ export component Sidebar inherits Rectangle {
                     }
                 }
 
-                if root.channels-expanded: ChannelList {
+                if root.channels-expanded && !AnonMode.enabled : ChannelList {
                     vertical-stretch: 0;
                     channels: root.channels;
                     collapsed: root.collapsed;
@@ -734,6 +740,16 @@ export component Sidebar inherits Rectangle {
                         jarvis-touch := TouchArea { clicked => { root.jarvis-clicked(); } }
                     }
                 }
+                // Anon mode toggle — shield icon, glows when active
+                VerticalLayout { alignment: center; horizontal-stretch: 0;
+                    Rectangle {
+                        width: 24px; height: 24px; border-radius: 4px;
+                        background: anon-touch.has-hover ? Colors.surface-hover : (AnonMode.enabled ? Colors.primary.with-alpha(0.15) : transparent);
+                        Image { source: Icons.shield; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                            colorize: AnonMode.enabled ? Colors.primary : Colors.text-muted; }
+                        anon-touch := TouchArea { clicked => { root.anon-mode-clicked(); } }
+                    }
+                }
                 VerticalLayout { alignment: center; horizontal-stretch: 0;
                     Rectangle {
                         width: 24px; height: 24px; border-radius: 4px;
@@ -759,6 +775,17 @@ export component Sidebar inherits Rectangle {
                     HorizontalLayout { alignment: center; Rectangle { width: 32px; height: 32px; border-radius: 16px; background: Colors.surface;
                         Image { source: Icons.jarvis; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.primary; }
                         TouchArea { clicked => { root.jarvis-clicked(); } }
+                    } }
+                }
+                TooltipArea {
+                    height: 32px; width: 44px; x: (parent.width - self.width) / 2;
+                    tooltip-text: AnonMode.enabled ? "Anon Mode (active) - tap to disable" : "Anon Mode";
+                    tooltip-enabled: true; placement: "right";
+                    HorizontalLayout { alignment: center; Rectangle { width: 32px; height: 32px; border-radius: 16px;
+                        background: AnonMode.enabled ? Colors.primary.with-alpha(0.2) : Colors.surface;
+                        Image { source: Icons.shield; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                            colorize: AnonMode.enabled ? Colors.primary : Colors.text-secondary; }
+                        TouchArea { clicked => { root.anon-mode-clicked(); } }
                     } }
                 }
                 TooltipArea {

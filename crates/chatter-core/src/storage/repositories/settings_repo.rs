@@ -33,6 +33,11 @@ pub mod keys {
     pub const DISPLAY_NAME: &str = "auth.display_name";
     /// Currently active organization ID (UUID string)
     pub const CURRENT_ORG_ID: &str = "auth.current_org_id";
+    /// Full Signal-style `nickname.discriminator` chosen at registration.
+    /// Used as the input to `hash_username_lookup` for discovery flows; the
+    /// raw nickname alone is insufficient (Signal's lookup hash binds the
+    /// random discriminator to defeat wordlist enumeration).
+    pub const FULL_USERNAME: &str = "auth.full_username";
     /// Current user's avatar (raw image bytes, stored locally, encrypted when shared)
     pub const AVATAR: &str = "profile.avatar";
 

@@ -201,9 +201,8 @@ impl SvrBackupService {
         use crate::storage::repositories::settings_repo::keys;
         use zeroize::Zeroize;
 
-        if pin.len() != 6 || !pin.chars().all(|c| c.is_ascii_digit()) {
-            return Err(SvrBackupError::Generic("PIN must be exactly 6 digits".into()));
-        }
+        crate::crypto::svr::validate_pin(pin)
+            .map_err(|e| SvrBackupError::Generic(e.to_string()))?;
 
         let stored = self
             .signal_service

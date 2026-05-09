@@ -16,6 +16,7 @@ use zeroize::Zeroize;
 
 use crate::crypto::auth_crypto::{
     derive_login_auth_hash, generate_profile_key, hash_password, hash_username_lookup,
+    username_candidates,
 };
 use crate::crypto::signal::identity::IdentityKeyManager;
 use crate::crypto::signal::prekey::PreKeyManager;
@@ -418,10 +419,9 @@ impl AuthService {
 
         // Derive SVR public key - required for registration
         let svr_public_key = if let Some(p) = pin {
-            // Validate PIN is exactly 6 digits
-            if p.len() != 6 || !p.chars().all(|c| c.is_ascii_digit()) {
-                return Err(AuthError::RegistrationFailed("PIN must be exactly 6 digits".to_string()));
-            }
+            crate::crypto::svr::validate_pin(p).map_err(|e| {
+                AuthError::RegistrationFailed(format!("invalid PIN: {e}"))
+            })?;
             let keypair = crate::crypto::svr::SvrKeypair::new_from_pin(p, username)?;
             keypair.public_key_bytes().to_vec()
         } else {
@@ -619,12 +619,21 @@ impl AuthService {
         let auth_lookup_hash = derive_login_auth_hash(&password_hash, username);
         let username_hash = hex::encode(auth_lookup_hash);
 
+        // Pick a Signal-style `nickname.discriminator` candidate. The random
+        // discriminator binds into the Ristretto255 lookup hash so wordlist
+        // enumeration of registered nicknames is infeasible. On uniqueness
+        // collision the server rejects and the user re-runs registration.
+        let full_username = username_candidates(username)
+            .map_err(|e| AuthError::RegistrationFailed(format!("invalid nickname: {e}")))?
+            .into_iter()
+            .next()
+            .ok_or_else(|| AuthError::RegistrationFailed("no username candidates".into()))?;
+
         // Derive SVR public key and registration lock - required for registration
         let (svr_public_key, mut registration_lock) = if let Some(p) = pin {
-            // Validate PIN is exactly 6 digits
-            if p.len() != 6 || !p.chars().all(|c| c.is_ascii_digit()) {
-                return Err(AuthError::RegistrationFailed("PIN must be exactly 6 digits".to_string()));
-            }
+            crate::crypto::svr::validate_pin(p).map_err(|e| {
+                AuthError::RegistrationFailed(format!("invalid PIN: {e}"))
+            })?;
             let keypair = crate::crypto::svr::SvrKeypair::new_from_pin(p, username)?;
             // SECURITY: Registration lock prevents account takeover without PIN
             let reg_lock = crate::crypto::svr::derive_registration_lock(p, username)?;
@@ -655,6 +664,10 @@ impl AuthService {
         self.settings_repo.set_bytes(keys::PROFILE_KEY, &profile_key)?;
         // Store login-auth fingerprint for offline password re-auth gates.
         self.settings_repo.set_bytes(keys::AUTH_LOOKUP_HASH, &auth_lookup_hash)?;
+        // Persist the chosen nickname.discriminator so discovery / lookup
+        // flows can reproduce the Ristretto255 hash without prompting.
+        self.settings_repo
+            .set_string(keys::FULL_USERNAME, &full_username)?;
 
         // Store local-only PIN fingerprint so re-auth gates (e.g. linked-device
         // approval for OIDC sessions) can verify the PIN without a server
@@ -782,9 +795,11 @@ impl AuthService {
         // Profile key stays client-side for profile encryption
         // SECURITY: display_name is encrypted with profile key (server sees only ciphertext)
         // SECURITY: challenge_id and response prove identity key possession
-        // Signal-style discovery hash: independent of profile_key, lets
-        // any peer look up "alice" → ACI via LookupUsername.
-        let username_lookup = hash_username_lookup(username);
+        //
+        // Signal-style discovery hash: Ristretto255 commitment over the
+        // already-chosen `nickname.discriminator` (see `full_username` above).
+        let username_lookup = hash_username_lookup(&full_username)
+            .map_err(|e| AuthError::RegistrationFailed(format!("lookup hash failed: {e}")))?;
         let result = auth_client
             .register_and_wait(
                 &username_hash, // PRIVACY: Send hash, not plaintext username
@@ -1048,9 +1063,8 @@ impl AuthService {
     ) -> Result<i32, AuthError> {
         use zeroize::Zeroize;
 
-        if new_pin.len() != 6 || !new_pin.chars().all(|c| c.is_ascii_digit()) {
-            return Err(AuthError::InvalidInput("PIN must be exactly 6 digits".into()));
-        }
+        crate::crypto::svr::validate_pin(new_pin)
+            .map_err(|e| AuthError::InvalidInput(e.to_string()))?;
         if recovery_code.len() != 8 || !recovery_code.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Err(AuthError::InvalidInput(
                 "Recovery code must be exactly 8 alphanumeric characters".into(),

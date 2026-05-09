@@ -1,0 +1,10 @@
+// Anon mode runtime flag — Slint global mirroring `JarvisGlobal`.
+//
+// When `enabled = true`, the sidebar hides server-friend DMs and public
+// channels and shows only anon DMs + anon groups. Default-off; PIN-gated
+// on enable from the Rust side. In-memory only — resets to off on every
+// fresh window (lib.rs forces this after login bring-up).
+
+export global AnonMode {
+    in-out property <bool> enabled: false;
+}

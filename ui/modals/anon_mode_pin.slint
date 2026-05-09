@@ -1,0 +1,81 @@
+// AnonModePinModal — 6-digit PIN gate for enabling Anon Mode.
+//
+// Reuses the standard Modal chrome + Input/Button components. The Rust
+// handler (sidebar/anon_mode.rs) owns verification: it calls
+// `ChatterClient::verify_pin_for_anon_mode(pin)` and on success flips the
+// `AnonMode.enabled` global + refreshes sidebar lists. On failure it sets
+// `error` so the inline message renders.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Modal } from "../components/modal.slint";
+import { Button } from "../components/button.slint";
+import { Input } from "../components/input.slint";
+
+export component AnonModePinModal inherits Rectangle {
+    in property <bool> show-modal: false;
+    in-out property <string> pin: "";
+    in property <string> error: "";
+    in property <bool> verifying: false;
+
+    callback close();
+    callback submit(string);
+
+    Modal {
+        show: root.show-modal;
+        title: "Enter PIN to enable Anon Mode";
+        modal-width: 420px;
+
+        close => { root.close(); }
+
+        VerticalLayout {
+            spacing: Spacing.md;
+
+            Text {
+                text: "Anon Mode hides server-friend DMs and public channels — only your anonymous DMs and groups remain visible. Enter your 6-digit PIN to enable.";
+                color: Colors.text-secondary;
+                font-size: Typography.sm;
+                wrap: word-wrap;
+            }
+
+            Input {
+                placeholder: "6-digit PIN";
+                password: true;
+                text <=> root.pin;
+                disabled: root.verifying;
+                accepted(value) => {
+                    if (value != "" && !root.verifying) {
+                        root.submit(value);
+                    }
+                }
+            }
+
+            if root.error != "": Text {
+                text: root.error;
+                color: Colors.error;
+                font-size: Typography.sm;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                Button {
+                    text: "Cancel";
+                    variant: "secondary";
+                    disabled: root.verifying;
+                    clicked => { root.close(); }
+                }
+                Button {
+                    text: root.verifying ? "" : "Enable";
+                    variant: "primary";
+                    loading: root.verifying;
+                    disabled: root.verifying || root.pin == "";
+                    clicked => {
+                        root.submit(root.pin);
+                    }
+                }
+            }
+        }
+    }
+}

@@ -126,7 +126,8 @@ impl ChatterClient {
 
     /// Register a new account and start all background services.
     ///
-    /// PIN must be exactly 6 ASCII digits if provided.
+    /// PIN must satisfy [`crypto::svr::validate_pin`] if provided
+    /// (8-64 printable ASCII chars).
     pub async fn register(
         self: &Arc<Self>,
         username: &str,
@@ -137,9 +138,8 @@ impl ChatterClient {
         pin: Option<&str>,
     ) -> Result<LoginResult, ClientError> {
         if let Some(p) = pin {
-            if p.len() != 6 || !p.chars().all(|c| c.is_ascii_digit()) {
-                return Err(ClientError::Validation("PIN must be exactly 6 digits".into()));
-            }
+            crate::crypto::svr::validate_pin(p)
+                .map_err(|e| ClientError::Validation(e.to_string()))?;
         }
         // Self-heal a stale Disconnected state (see `login` for context).
         self.ensure_connected_for_auth().await?;
@@ -243,14 +243,14 @@ impl ChatterClient {
     ///
     /// Re-encrypts the identity key backup with a new PIN-derived secret and
     /// atomically updates the server-side backup, registration lock, and SVR
-    /// public key. Both old and new PINs must be exactly 6 ASCII digits.
+    /// public key. Both PINs must satisfy [`crypto::svr::validate_pin`].
     ///
     /// All sensitive intermediates (secrets, keys) are zeroized on every path.
     ///
     /// # Arguments
     ///
-    /// * `old_pin` - Current 6-digit PIN.
-    /// * `new_pin` - New 6-digit PIN.
+    /// * `old_pin` - Current PIN.
+    /// * `new_pin` - New PIN (must differ from `old_pin`).
     /// * `username` - Plaintext username (salt for Argon2id derivation).
     pub async fn change_pin(
         &self,
@@ -258,19 +258,18 @@ impl ChatterClient {
         new_pin: &str,
         username: &str,
     ) -> Result<(), ClientError> {
-        use crate::crypto::svr::{derive_registration_lock, derive_svr_secret, SvrKeypair};
+        use crate::crypto::svr::{
+            derive_registration_lock, derive_svr_secret, validate_pin, SvrKeypair,
+        };
         use crate::storage::repositories::settings_repo::keys;
         use zeroize::Zeroize;
 
-        // 1. Validate both PINs (6 digits) and ensure they differ
-        if old_pin.len() != 6 || !old_pin.chars().all(|c| c.is_ascii_digit()) {
-            return Err(ClientError::Validation("Old PIN must be exactly 6 digits".into()));
-        }
-        if new_pin.len() != 6 || !new_pin.chars().all(|c| c.is_ascii_digit()) {
-            return Err(ClientError::Validation("New PIN must be exactly 6 digits".into()));
-        }
+        validate_pin(old_pin).map_err(|e| ClientError::Validation(format!("old PIN: {e}")))?;
+        validate_pin(new_pin).map_err(|e| ClientError::Validation(format!("new PIN: {e}")))?;
         if old_pin == new_pin {
-            return Err(ClientError::Validation("New PIN must be different from current PIN".into()));
+            return Err(ClientError::Validation(
+                "New PIN must be different from current PIN".into(),
+            ));
         }
 
         // 2. Get identity keypair from signal store (private 32 bytes + public 33 bytes)

@@ -2,6 +2,7 @@
 //!
 //! Handles channel/DM selection, settings, and profile.
 
+mod anon_mode;
 pub mod channel;
 pub mod dm;
 mod navigation;
@@ -41,6 +42,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     navigation::subscribe_org_state(window, ui_ctx);
     sections::wire_section_callbacks(window, ui_ctx);
     sections::load_sections(window, ui_ctx);
+    anon_mode::wire(window, ui_ctx);
 }
 
 /// Recompute `is_selected` on every sidebar model item from the typed
@@ -348,6 +350,14 @@ pub(crate) fn create_dm_sidebar_entry(
     timestamp: &str,
 ) {
     use slint::Model;
+
+    // Anon Mode suppresses server-DM sidebar entries entirely. The DM is
+    // still persisted to local storage by core; it just doesn't surface in
+    // the sidebar until the user disables anon mode and a refresh runs.
+    if ui_ctx.anon_mode_enabled() {
+        return;
+    }
+
     let peer_id_str = peer_id.to_string();
 
     match ui_ctx.get_dm_channel_for_peer(peer_id) {

@@ -283,8 +283,8 @@ fn test_profile_padding_normalizes_size() {
     let short_enc = profile_crypto::encrypt_display_name(&key, "A").unwrap();
     let long_enc = profile_crypto::encrypt_display_name(&key, "A Very Long Display Name That Is Much Longer").unwrap();
 
-    // Both should produce ciphertext of similar size due to padding to PADDED_NAME_LENGTH
-    // The difference should only be the GCM overhead, not proportional to name length
+    // Both names fit the 53-byte short-name bucket, so ciphertexts have
+    // identical length; only their lengths within the bucket are hidden.
     let size_diff = (short_enc.len() as i64 - long_enc.len() as i64).unsigned_abs();
     assert!(size_diff == 0, "Padded ciphertext sizes should be identical, got diff={}", size_diff);
 }
