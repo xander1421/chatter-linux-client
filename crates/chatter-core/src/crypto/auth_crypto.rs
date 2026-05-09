@@ -1,46 +1,86 @@
 //! Authentication crypto helpers.
 //!
-//! Password hashing, profile key derivation, and username hashing. These are
-//! the three primitives shared by login, registration, and recovery flows.
+//! Primitives shared by login, registration, and recovery:
+//! - [`hash_password`]: SHA-256 of password (sent to server as auth credential)
+//! - [`generate_profile_key`]: random 32 bytes (Signal-style)
+//! - [`derive_login_auth_hash`]: deterministic, password-keyed login lookup
+//! - [`hash_username_lookup`]: deterministic, username-only discovery hash
+//! - [`derive_delivery_token`]: 96-bit profile-key-derived sealed-sender token
 //!
 //! # Privacy
 //!
-//! Usernames are never sent to the server in plaintext. Instead, the client
-//! derives a profile key from `(password, username)` via HKDF-SHA256, then
-//! HMAC-SHA256s the normalized username with that key. The server only ever
-//! sees the resulting hex digest.
+//! Usernames are never sent to the server in plaintext. The login lookup
+//! hash is keyed by `SHA-256(password)`, so an unauthenticated party cannot
+//! enumerate accounts by username alone.
 //!
 //! # Determinism
 //!
-//! `(password, username) -> username_hash` is deterministic, so a user can
-//! log in from any device with only those two inputs.
+//! `(password, username) -> login_auth_hash` is deterministic, so a user
+//! can authenticate from any device with only those two inputs. The profile
+//! key is NOT deterministic from password (Signal-aligned); fresh devices
+//! recover it from SVR backup using PIN.
 
 use hkdf::Hkdf;
-use hmac::{Hmac, Mac};
+use rand::TryRngCore;
+use rand::rngs::OsRng;
 use sha2::{Digest, Sha256};
-
-use crate::error::CryptoError;
 
 /// Hash a password with SHA-256.
 ///
-/// Used as IKM for [`derive_profile_key`] and as the credential sent to the
-/// server (which stores only its own Argon2id-derived digest).
+/// Used as the auth credential sent to the server (which stores only its own
+/// Argon2id-derived digest of these bytes) and as IKM for
+/// [`derive_login_auth_hash`].
+///
+/// NOTE: This output must NEVER be used as IKM for the profile key. Profile
+/// keys are random ([`generate_profile_key`]); deriving them from password
+/// material would mean a server-side breach + Argon2 crack recovers the
+/// profile key for every account. See Signal-Android `ProfileKeyUtil`.
 #[must_use]
 pub fn hash_password(password: &str) -> [u8; 32] {
     Sha256::digest(password.as_bytes()).into()
 }
 
-/// Derive a 32-byte profile key from a password hash and username.
+/// Generate a fresh 32-byte profile key from the OS CSPRNG.
 ///
-/// Uses HKDF-SHA256 with `info = "chatter_profile_key_{username}"` for domain
-/// separation. Output is suitable for HMAC-SHA256 and AES-256-GCM.
-pub fn derive_profile_key(password_hash: &[u8], username: &str) -> Result<[u8; 32], CryptoError> {
-    let hk = Hkdf::<Sha256>::new(None, password_hash);
-    let info = format!("chatter_profile_key_{}", username.trim().to_lowercase());
-    let mut profile_key = [0u8; 32];
-    hk.expand(info.as_bytes(), &mut profile_key)
-        .map_err(|_| CryptoError::KeyDerivationFailed("HKDF expand failed for profile key".into()))?;
-    Ok(profile_key)
+/// Signal-aligned: profile keys are random, NOT derived from password, PIN,
+/// or any deterministic input. The key is persisted locally and (in the
+/// multi-device case) wrapped under a PIN-derived key in the SVR backup so
+/// other devices can recover it. Reference:
+/// `Signal-Android/app/src/main/java/org/thoughtcrime/securesms/crypto/ProfileKeyUtil.java`
+/// `return new ProfileKey(Util.getSecretBytes(32));`
+#[must_use]
+pub fn generate_profile_key() -> [u8; 32] {
+    let mut k = [0u8; 32];
+    OsRng
+        .try_fill_bytes(&mut k)
+        .expect("OS CSPRNG must not fail");
+    k
+}
+
+/// Derive the per-account login lookup hash, independent of the profile key.
+///
+/// Server stores this 32-byte hash in the username column and looks accounts
+/// up by it during login/register. Keyed off `(SHA-256(password), username)`
+/// so any device with the same credentials reproduces it - no profile_key
+/// chicken-and-egg on a fresh device.
+///
+/// HKDF-SHA256:
+///   salt = `b"chatter/login-auth/v1"` (domain separator)
+///   IKM  = SHA-256(password)
+///   info = `b"login-auth:" || lowercased(trim(username))`
+///
+/// Why this replaces the old `hash_username(username, profile_key)`: profile
+/// keys are now random, so a profile-key-keyed lookup hash would require the
+/// client to fetch the SVR backup BEFORE login - but SVR fetch is itself
+/// authenticated. This derivation breaks the cycle.
+#[must_use]
+pub fn derive_login_auth_hash(password_hash: &[u8], username: &str) -> [u8; 32] {
+    let hk = Hkdf::<Sha256>::new(Some(b"chatter/login-auth/v1"), password_hash);
+    let info = format!("login-auth:{}", username.trim().to_lowercase());
+    let mut out = [0u8; 32];
+    hk.expand(info.as_bytes(), &mut out)
+        .expect("HKDF expand cannot fail for 32-byte output");
+    out
 }
 
 /// Derive a 12-byte (96-bit) delivery token from a profile key.
@@ -57,25 +97,6 @@ pub fn derive_delivery_token(profile_key: &[u8; 32]) -> [u8; 12] {
     token
 }
 
-/// Hash a username with HMAC-SHA256 keyed by the profile key, hex-encoded.
-///
-/// Server never sees plaintext usernames; only this digest. Same `(password,
-/// username)` pair always yields the same hash so login works from any device.
-///
-/// This is the **auth hash**: scoped to the owner's profile key so another
-/// user cannot derive it without that key. For Signal-style cross-user
-/// discovery use [`hash_username_lookup`] instead.
-#[must_use]
-pub fn hash_username(username: &str, profile_key: &[u8; 32]) -> String {
-    type HmacSha256 = Hmac<Sha256>;
-
-    let normalized = username.trim().to_lowercase();
-    let mut mac = HmacSha256::new_from_slice(profile_key)
-        .expect("HMAC can take key of any size");
-    mac.update(normalized.as_bytes());
-    hex::encode(mac.finalize().into_bytes())
-}
-
 /// Fixed salt for the Signal-style username-discovery hash. Bumping the `v1`
 /// suffix re-rolls every registered account's lookup hash (requires a
 /// coordinated server-side re-hash).
@@ -83,10 +104,11 @@ const USERNAME_LOOKUP_SALT: &[u8] = b"chatter/username-discovery/v1";
 
 /// Derive a 32-byte Signal-style discovery hash of a username.
 ///
-/// Unlike [`hash_username`], this hash is **not** scoped to a profile key —
-/// any client that knows `alice.42` can reproduce it and ask the server
-/// `LookupUsername(hash) -> ACI`. That is the intended asymmetry: the auth
-/// hash protects login, the lookup hash makes the account findable.
+/// **Discovery only.** Use [`derive_login_auth_hash`] for login lookup -
+/// the discovery hash is scoped to (username) alone so any party can resolve
+/// `alice.42 -> ACI`, while login lookup must additionally bind the password
+/// so server-side enumeration cannot map names to accounts without proof of
+/// possession.
 ///
 /// HKDF-SHA256 with:
 /// * salt = [`USERNAME_LOOKUP_SALT`] (domain separator, global constant)
@@ -112,32 +134,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn profile_key_is_deterministic() {
+    fn profile_key_is_random() {
+        let k1 = generate_profile_key();
+        let k2 = generate_profile_key();
+        assert_ne!(k1, k2, "two CSPRNG draws must differ with overwhelming probability");
+        assert_ne!(k1, [0u8; 32], "must not be all zeros");
+    }
+
+    #[test]
+    fn login_auth_hash_is_deterministic_and_normalized() {
         let pw = hash_password("hunter2");
-        let k1 = derive_profile_key(&pw, "Alice").unwrap();
-        let k2 = derive_profile_key(&pw, "alice  ").unwrap();
-        assert_eq!(k1, k2, "username normalization (trim + lowercase) must apply");
+        let h1 = derive_login_auth_hash(&pw, "Alice");
+        let h2 = derive_login_auth_hash(&pw, "alice  ");
+        assert_eq!(h1, h2, "username trim+lowercase normalization must apply");
+        assert_eq!(h1.len(), 32);
     }
 
     #[test]
-    fn profile_key_differs_by_password() {
-        let k1 = derive_profile_key(&hash_password("a"), "bob").unwrap();
-        let k2 = derive_profile_key(&hash_password("b"), "bob").unwrap();
-        assert_ne!(k1, k2);
+    fn login_auth_hash_differs_by_password() {
+        let h1 = derive_login_auth_hash(&hash_password("a"), "bob");
+        let h2 = derive_login_auth_hash(&hash_password("b"), "bob");
+        assert_ne!(h1, h2);
     }
 
     #[test]
-    fn username_hash_is_deterministic() {
-        let pw = hash_password("pw");
-        let pk = derive_profile_key(&pw, "carol").unwrap();
-        let h1 = hash_username("carol", &pk);
-        let h2 = hash_username("  CAROL ", &pk);
-        assert_eq!(h1, h2);
-        assert_eq!(h1.len(), 64, "hex-encoded SHA-256 digest");
+    fn login_auth_hash_differs_by_username() {
+        let pw = hash_password("same");
+        let h1 = derive_login_auth_hash(&pw, "alice");
+        let h2 = derive_login_auth_hash(&pw, "bob");
+        assert_ne!(h1, h2);
     }
 
     #[test]
-    fn lookup_hash_is_profile_key_free_and_normalized() {
+    fn login_auth_hash_independent_of_lookup_hash() {
+        // Critical invariant: login auth hash MUST NOT equal the public
+        // discovery hash. If they collided, any party who can resolve
+        // username->ACI could also forge login lookup keys.
+        let pw = hash_password("p");
+        let auth = derive_login_auth_hash(&pw, "alice");
+        let lookup = hash_username_lookup("alice");
+        assert_ne!(auth, lookup);
+    }
+
+    #[test]
+    fn lookup_hash_is_normalized() {
         let h1 = hash_username_lookup("dave");
         let h2 = hash_username_lookup("  DAVE ");
         assert_eq!(h1, h2);

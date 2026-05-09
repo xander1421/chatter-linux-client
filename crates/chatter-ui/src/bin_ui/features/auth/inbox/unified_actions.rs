@@ -222,13 +222,11 @@ pub fn handle_delete(
 pub fn handle_pin(
     weak_window: &slint::Weak<MainWindow>,
     chat_state: &ChatState,
-    pinned_state: &chatter_core::state::PinnedState,
     source: EventSource,
     target_sent_timestamp: u64,
     is_pinned: bool,
 ) {
     let chat_state = chat_state.clone();
-    let pinned_state = pinned_state.clone();
     let weak = weak_window.clone();
 
     let _ = slint::invoke_from_event_loop(move || {
@@ -264,14 +262,14 @@ pub fn handle_pin(
                         model.set_row_data(i, updated_msg);
                     }
 
-                    // Update pinned_state
+                    // Update pinned-bar substate
                     if let Ok(msg_id) =
                         msg.message_id.to_string().parse::<chatter_core::domain::ids::MessageId>()
                     {
                         if is_pinned {
-                            pinned_state.add_pinned_message(msg_id);
+                            chat_state.add_pinned_message(msg_id);
                         } else {
-                            pinned_state.remove_pinned_message(&msg_id);
+                            chat_state.remove_pinned_message(&msg_id);
                         }
                     }
                     break;
@@ -279,7 +277,7 @@ pub fn handle_pin(
             }
         }
 
-        let pinned_count = pinned_state.get().pinned_message_ids.len() as i32;
+        let pinned_count = chat_state.pinned_total_count() as i32;
         window.set_has_pinned_messages(pinned_count > 0);
         window.set_pinned_total_count(pinned_count);
         if is_pinned && !preview.is_empty() {

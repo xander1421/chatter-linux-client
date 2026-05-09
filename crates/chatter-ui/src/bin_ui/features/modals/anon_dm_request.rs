@@ -384,7 +384,6 @@ fn spawn_action_stream(
     ui_ctx: Arc<ChatterClient>,
 ) -> tokio::task::JoinHandle<()> {
     let chat_state = ui_ctx.chat_state().clone();
-    let pinned_state = ui_ctx.pinned_state().clone();
     let mut event_rx = ui_ctx.subscribe_events();
 
     tokio::spawn(async move {
@@ -466,7 +465,7 @@ fn spawn_action_stream(
                         .map(u64::from_be_bytes)
                         .unwrap_or(0);
                     unified_actions::handle_pin(
-                        &weak_window, &chat_state, &pinned_state,
+                        &weak_window, &chat_state,
                         EventSource::Channel(channel_id),
                         target_sent_timestamp, true, // is_pinned = true
                     );
@@ -482,7 +481,7 @@ fn spawn_action_stream(
                         .map(u64::from_be_bytes)
                         .unwrap_or(0);
                     unified_actions::handle_pin(
-                        &weak_window, &chat_state, &pinned_state,
+                        &weak_window, &chat_state,
                         EventSource::Channel(channel_id),
                         target_sent_timestamp, false, // is_pinned = false (unpin)
                     );

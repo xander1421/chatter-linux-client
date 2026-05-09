@@ -83,7 +83,7 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
                 _ => (vec![], String::new()),
             };
-            super::apply_pinned_ui(&weak, &ui_ctx.pinned_state(), channel_id, msg_ids, preview);
+            super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), channel_id, msg_ids, preview);
 
             load_channel_into_ui(
                 weak,

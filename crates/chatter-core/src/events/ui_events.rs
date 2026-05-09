@@ -15,8 +15,26 @@
 //! - **Settings**: Settings panel navigation
 //! - **Toast**: Transient notifications
 
-use crate::domain::ids::{ChannelId, MessageId};
-use crate::state::ui_state::ModalType;
+use crate::domain::ids::{ChannelId, MessageId, UserId};
+
+/// Types of modals that can be displayed.
+///
+/// Carries the payload needed to render the modal (e.g. which user
+/// profile to show). UI consumers translate the variant into a Slint
+/// `active_modal` string + auxiliary properties.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ModalType {
+    /// Application settings modal.
+    Settings,
+    /// Create new channel modal.
+    CreateChannel,
+    /// User profile view modal.
+    UserProfile(UserId),
+    /// Channel settings modal.
+    ChannelSettings(ChannelId),
+    /// Forward message modal.
+    Forward(MessageId),
+}
 
 /// UI-specific events for view layer reactivity.
 ///

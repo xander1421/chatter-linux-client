@@ -3,7 +3,6 @@
 //! Rust to Slint UI bridge and adapters.
 
 pub mod adapters;
-pub mod bridge;
 pub mod chat_data;
 pub mod commands;
 pub mod emoji_data;
@@ -13,9 +12,6 @@ pub mod handlers;
 pub mod picker_data;
 pub mod sidebar_data;
 pub mod widgets;
-
-// Re-export bridge types for convenience
-pub use bridge::UiBridge;
 
 // Re-export chat data types
 pub use chat_data::{

@@ -52,6 +52,12 @@ pub mod keys {
     /// Set on register / change-pin via `crypto::svr::derive_pin_fingerprint`.
     /// Never sent to the server. Used by [`LinkDeviceService::verify_pin`].
     pub const PIN_FINGERPRINT: &str = "crypto.pin_fingerprint";
+    /// Local-only password re-auth fingerprint (32 bytes, encrypted-at-rest).
+    /// Equal to `derive_login_auth_hash(SHA-256(password), username)`. Lets
+    /// [`LinkDeviceService::verify_password_for_oidc_link`] re-check the user
+    /// password without a network round-trip. Same value (hex-encoded) is what
+    /// the server stores in the `username` column for login lookup.
+    pub const AUTH_LOOKUP_HASH: &str = "crypto.auth_lookup_hash";
 
     // UI settings
     pub const WINDOW_WIDTH: &str = "ui.window_width";

@@ -39,14 +39,12 @@ use crate::services::section_service::SectionService;
 use crate::services::user::UserService;
 use crate::services::typing_service::TypingService;
 use crate::state::{
-    AuthState, ChatState, MessageState, OfflineState, OrgState, PinnedState,
-    PrivacyState, StreamingState, UIState, UserState,
+    AuthState, ChatState, MessageState, OfflineState, OrgState, PrivacyState, UserState,
 };
 #[cfg(feature = "jarvis")]
 use crate::state::JarvisState;
 use crate::storage::Database;
 use crate::system::Directories;
-use crate::ui::bridge::UiBridge;
 
 use super::infrastructure::InfrastructureContainer;
 use super::services::ServiceContainer;
@@ -92,16 +90,13 @@ pub struct CoreServices {
     pub conversation_repo: Arc<crate::storage::repositories::UnifiedConversationRepository>,
 
     // State stores
-    pub ui_state: UIState,
     pub auth_state: AuthState,
     pub chat_state: ChatState,
     pub message_state: MessageState,
     pub user_state: UserState,
     pub privacy_state: PrivacyState,
     pub offline_state: OfflineState,
-    pub streaming_state: StreamingState,
     pub org_state: OrgState,
-    pub pinned_state: PinnedState,
     #[cfg(feature = "jarvis")]
     pub jarvis_state: JarvisState,
 
@@ -189,16 +184,13 @@ impl CoreServices {
             conversation_repo: services.conversation_repo.clone(),
 
             // State stores
-            ui_state: UIState::new(),
             auth_state: AuthState::new(),
             chat_state: ChatState::new(),
             message_state: MessageState::new(),
             user_state: UserState::new(),
             privacy_state: PrivacyState::new(),
             offline_state: OfflineState::new(),
-            streaming_state: StreamingState::new(),
             org_state: services.org_state.clone(),
-            pinned_state: PinnedState::new(),
             #[cfg(feature = "jarvis")]
             jarvis_state: JarvisState::new(),
             event_bus: infra.event_bus.clone(),
@@ -219,15 +211,6 @@ impl CoreServices {
             call_service,
             device_inbox_provider,
         }
-    }
-
-    /// Creates a UiBridge for Slint integration.
-    pub fn ui_bridge(&self) -> UiBridge {
-        UiBridge::new(
-            self.ui_state.clone(),
-            self.auth_state.clone(),
-            self.event_bus.clone(),
-        )
     }
 
     /// Check if connected to the server.

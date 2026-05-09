@@ -25,7 +25,7 @@ use tokio::sync::mpsc;
 use url::Url;
 use zeroize::Zeroizing;
 
-use crate::crypto::auth_crypto::{derive_profile_key, hash_password};
+use crate::crypto::auth_crypto::{derive_login_auth_hash, hash_password};
 use crate::crypto::provisioning::{
     decrypt_envelope, encrypt_envelope, ProvisioningKeypair,
 };
@@ -404,20 +404,23 @@ impl LinkDeviceService {
             .get(&user_id)?
             .ok_or(LinkDeviceError::NotLoggedIn)?;
 
-        let stored_profile_key = self
+        // Re-auth via login_auth_hash: derive from entered password and
+        // compare to the stored fingerprint. Profile_key cannot be used here
+        // any more (it is random, not derivable from password).
+        let stored_auth_hash = self
             .settings_repo
-            .get_bytes(keys::PROFILE_KEY)?
+            .get_bytes(keys::AUTH_LOOKUP_HASH)?
             .ok_or(LinkDeviceError::ReauthUnsupportedForOidc)?;
-        if stored_profile_key.len() != 32 {
+        if stored_auth_hash.len() != 32 {
             return Err(LinkDeviceError::Invalid(
-                "stored profile key has wrong length".into(),
+                "stored auth_lookup_hash has wrong length".into(),
             ));
         }
 
         let password_hash = hash_password(password);
-        let derived = derive_profile_key(&password_hash, &user.username)?;
+        let derived = derive_login_auth_hash(&password_hash, &user.username);
 
-        Ok(derived.ct_eq(stored_profile_key.as_slice()).unwrap_u8() == 1)
+        Ok(derived.ct_eq(stored_auth_hash.as_slice()).unwrap_u8() == 1)
     }
 
     fn provisioning_client(&self) -> Result<ProvisioningClient, LinkDeviceError> {
@@ -1250,7 +1253,7 @@ mod tests {
     // verify_password / verify_pin / verify_password_or_pin
     // ========================================================================
 
-    use crate::crypto::auth_crypto::{derive_profile_key, hash_password};
+    use crate::crypto::auth_crypto::{derive_login_auth_hash, hash_password};
     use crate::crypto::svr::derive_pin_fingerprint;
     use crate::domain::ids::UserId;
     use crate::domain::user::User;
@@ -1296,9 +1299,9 @@ mod tests {
 
         if let Some(pw) = password {
             let pw_hash = hash_password(pw);
-            let profile_key = derive_profile_key(&pw_hash, username).unwrap();
+            let auth_hash = derive_login_auth_hash(&pw_hash, username);
             settings_repo
-                .set_bytes(keys::PROFILE_KEY, &profile_key)
+                .set_bytes(keys::AUTH_LOOKUP_HASH, &auth_hash)
                 .unwrap();
         }
         if let Some(p) = pin {

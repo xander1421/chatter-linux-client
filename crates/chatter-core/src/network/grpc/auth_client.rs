@@ -30,10 +30,6 @@ use crate::proto::chat_v1::{
 };
 // NOTE: ServerTrustRootResponse removed - trust root is hardcoded in config.rs per Signal's security model
 
-// Username hashing lives in `crypto::auth_crypto`. Re-exported here so existing
-// callers in the network layer don't need to change their imports.
-pub use crate::crypto::auth_crypto::hash_username;
-
 /// Auth service client wrapper.
 ///
 /// Wraps the generated AuthServiceClient with ergonomic APIs and error mapping.

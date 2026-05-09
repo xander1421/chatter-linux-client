@@ -15,7 +15,7 @@ use std::sync::Arc;
 use zeroize::Zeroize;
 
 use crate::crypto::auth_crypto::{
-    derive_profile_key, hash_password, hash_username, hash_username_lookup,
+    derive_login_auth_hash, generate_profile_key, hash_password, hash_username_lookup,
 };
 use crate::crypto::signal::identity::IdentityKeyManager;
 use crate::crypto::signal::prekey::PreKeyManager;
@@ -401,8 +401,20 @@ impl AuthService {
         }
 
         let password_hash = hash_password(password);
-        let profile_key = derive_profile_key(&password_hash, username)?;
-        let username_hash = hash_username(username, &profile_key);
+        let auth_lookup_hash = derive_login_auth_hash(&password_hash, username);
+        let username_hash = hex::encode(auth_lookup_hash);
+
+        // Profile key: existing-device login loads it from local settings; a
+        // fresh device has none here and recovers it from SVR backup AFTER
+        // successful login (see `Client::attempt_svr_restore`). This avoids
+        // the chicken-and-egg of needing profile_key to authenticate before
+        // the authenticated SVR fetch can return profile_key.
+        let stored_profile_key: Option<[u8; 32]> = self
+            .settings_repo
+            .get_bytes(keys::PROFILE_KEY)
+            .ok()
+            .flatten()
+            .and_then(|bytes| <[u8; 32]>::try_from(bytes.as_slice()).ok());
 
         // Derive SVR public key - required for registration
         let svr_public_key = if let Some(p) = pin {
@@ -430,16 +442,28 @@ impl AuthService {
         let stored_device_id: Option<u32> = self.settings_repo.get(keys::CURRENT_DEVICE_ID).ok().flatten();
         let device_id_for_creds = stored_device_id.unwrap_or(1);
 
-        // Generate device credentials
-        let credentials = DeviceCredentials::generate(device_id_for_creds, &profile_key);
+        // Generate device credentials. UAK is derived from profile_key when
+        // available (existing device); on a fresh device with no local
+        // profile_key we send a transient random UAK and the post-login SVR
+        // restore + the next session bootstrap will derive the correct UAK
+        // from the recovered profile_key.
+        let credentials = match &stored_profile_key {
+            Some(pk) => DeviceCredentials::generate(device_id_for_creds, pk),
+            None => {
+                let mut tmp_pk = generate_profile_key();
+                let creds = DeviceCredentials::generate(device_id_for_creds, &tmp_pk);
+                tmp_pk.zeroize();
+                creds
+            }
+        };
 
         // Call server login with hashed username
         let response = auth_client
             .login(
-                &username_hash, // PRIVACY: Send hash, not plaintext username
+                &username_hash, // PRIVACY: password-keyed login lookup, not plaintext username
                 password_hash.as_slice(),
                 device_info,
-                &svr_public_key, // Derived from PIN or empty
+                &svr_public_key, // Derived from PIN
                 credentials.auth_token().as_bytes(),
                 credentials.unidentified_access_key(),
                 stored_device_id,
@@ -465,25 +489,33 @@ impl AuthService {
         })?;
         let device_id = session.device_id;
 
-        // PRIVACY: Decrypt display_name from server (it's base64-encoded encrypted)
-        let display_name = if user_profile.display_name.is_empty() {
-            String::new()
-        } else {
-            let encrypted_bytes = base64::engine::general_purpose::STANDARD
-                .decode(&user_profile.display_name)
-                .map_err(|e| AuthError::RegistrationFailed(format!("invalid display_name encoding: {}", e)))?;
-            crate::crypto::profile_crypto::decrypt_display_name(&profile_key, &encrypted_bytes)
-                .map_err(|e| AuthError::RegistrationFailed(format!("failed to decrypt display_name: {}", e)))?
+        // PRIVACY: decrypt display_name with the locally-known profile_key.
+        // Fresh-device case has no profile_key yet; the post-login SVR
+        // restore plus a follow-up profile fetch will populate display_name.
+        let display_name = match (&stored_profile_key, user_profile.display_name.is_empty()) {
+            (_, true) => String::new(),
+            (Some(pk), false) => {
+                let encrypted_bytes = base64::engine::general_purpose::STANDARD
+                    .decode(&user_profile.display_name)
+                    .map_err(|e| AuthError::RegistrationFailed(format!("invalid display_name encoding: {}", e)))?;
+                crate::crypto::profile_crypto::decrypt_display_name(pk, &encrypted_bytes)
+                    .map_err(|e| AuthError::RegistrationFailed(format!("failed to decrypt display_name: {}", e)))?
+            }
+            (None, false) => String::new(),
         };
 
         // Persist auth state in settings
         self.settings_repo.set_string(keys::CURRENT_USER_ID, &user_id.to_string())?;
         self.settings_repo.set(keys::CURRENT_DEVICE_ID, &device_id)?;
         self.settings_repo.set_string(keys::DISPLAY_NAME, &display_name)?;
-        
-        // SECURITY: Store profile key and auth token in encrypted settings
-        self.settings_repo.set_bytes(keys::PROFILE_KEY, &profile_key)?;
+
+        // SECURITY: store auth token. profile_key is NOT touched on login -
+        // it is set at registration (random) and on a fresh device is loaded
+        // by SVR restore. Overwriting from login would either be a no-op or
+        // corrupt state.
         self.settings_repo.set_bytes(keys::DEVICE_AUTH_TOKEN, credentials.auth_token().as_bytes())?;
+        // Persist login-auth fingerprint for offline password re-auth.
+        self.settings_repo.set_bytes(keys::AUTH_LOOKUP_HASH, &auth_lookup_hash)?;
 
         // Refresh local PIN fingerprint (re-auth gate for linked-device approval).
         if let Some(p) = pin {
@@ -577,10 +609,15 @@ impl AuthService {
             self.identity_manager.reset_for_new_registration()?;
         }
 
-        // SECURITY: Profile key stays client-side only — never sent to server.
+        // SECURITY: Profile key stays client-side only - never sent to server.
+        // Signal-aligned: profile_key is 32 random bytes from CSPRNG, NOT
+        // derived from password. See `crypto::auth_crypto::generate_profile_key`.
+        // SVR backup uploads the wrapped profile_key after registration so
+        // other devices can recover it via PIN.
         let password_hash = hash_password(password);
-        let profile_key = derive_profile_key(&password_hash, username)?;
-        let username_hash = hash_username(username, &profile_key);
+        let profile_key = generate_profile_key();
+        let auth_lookup_hash = derive_login_auth_hash(&password_hash, username);
+        let username_hash = hex::encode(auth_lookup_hash);
 
         // Derive SVR public key and registration lock - required for registration
         let (svr_public_key, mut registration_lock) = if let Some(p) = pin {
@@ -616,6 +653,8 @@ impl AuthService {
         // Store profile key locally (needed for profile encryption)
         // Stored in SQLCipher encrypted database
         self.settings_repo.set_bytes(keys::PROFILE_KEY, &profile_key)?;
+        // Store login-auth fingerprint for offline password re-auth gates.
+        self.settings_repo.set_bytes(keys::AUTH_LOOKUP_HASH, &auth_lookup_hash)?;
 
         // Store local-only PIN fingerprint so re-auth gates (e.g. linked-device
         // approval for OIDC sessions) can verify the PIN without a server
@@ -1025,12 +1064,9 @@ impl AuthService {
 
         let mut registration_lock = crate::crypto::svr::derive_registration_lock(new_pin, username)?;
 
-        let username_hash = {
-            let mut profile_key = derive_profile_key(&password_hash, username)?;
-            let h = hash_username(username, &profile_key);
-            profile_key.zeroize();
-            h
-        };
+        // Login lookup hash is profile-key-free (HKDF over SHA-256(password)),
+        // matching what the server stores in the username column.
+        let username_hash = hex::encode(derive_login_auth_hash(&password_hash, username));
 
         let result = auth_client
             .use_recovery_code(

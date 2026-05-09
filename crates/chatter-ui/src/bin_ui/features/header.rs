@@ -295,33 +295,33 @@ fn wire_search_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
 fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Previous pinned message
-    let pinned_state = ui_ctx.pinned_state().clone();
+    let chat_state_prev_nav = ui_ctx.chat_state().clone();
     let weak_window = window.as_weak();
     let ui_ctx_prev = ui_ctx.clone();
     let chat_state = ui_ctx.chat_state().clone();
 
     window.on_pinned_prev_clicked(move || {
-        pinned_state.navigate_prev();
-        update_pinned_ui_from_loaded_messages(weak_window.clone(), pinned_state.clone(), ui_ctx_prev.clone(), chat_state.active_conversation());
+        chat_state_prev_nav.pinned_navigate_prev();
+        update_pinned_ui_from_loaded_messages(weak_window.clone(), chat_state_prev_nav.clone(), ui_ctx_prev.clone(), chat_state.active_conversation());
     });
 
     // Next pinned message
-    let pinned_state = ui_ctx.pinned_state().clone();
+    let chat_state_next_nav = ui_ctx.chat_state().clone();
     let weak_window = window.as_weak();
     let ui_ctx_next = ui_ctx.clone();
     let chat_state = ui_ctx.chat_state().clone();
 
     window.on_pinned_next_clicked(move || {
-        pinned_state.navigate_next();
-        update_pinned_ui_from_loaded_messages(weak_window.clone(), pinned_state.clone(), ui_ctx_next.clone(), chat_state.active_conversation());
+        chat_state_next_nav.pinned_navigate_next();
+        update_pinned_ui_from_loaded_messages(weak_window.clone(), chat_state_next_nav.clone(), ui_ctx_next.clone(), chat_state.active_conversation());
     });
 
     // Dismiss pinned bar
-    let pinned_state = ui_ctx.pinned_state().clone();
+    let chat_state_dismiss = ui_ctx.chat_state().clone();
     let weak_window = window.as_weak();
 
     window.on_pinned_dismiss_clicked(move || {
-        pinned_state.dismiss();
+        chat_state_dismiss.pinned_dismiss();
         if let Some(w) = weak_window.upgrade() {
             w.set_has_pinned_messages(false);
         }
@@ -329,33 +329,32 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 
     // Re-show dismissed pinned bar (pin button in header)
-    let pinned_state = ui_ctx.pinned_state().clone();
+    let chat_state_show = ui_ctx.chat_state().clone();
     let weak_window = window.as_weak();
     let ui_ctx_show = ui_ctx.clone();
     let chat_state = ui_ctx.chat_state().clone();
 
     window.on_pinned_show_clicked(move || {
-        let state = pinned_state.get();
-        if state.pinned_message_ids.is_empty() {
+        if chat_state_show.pinned_total_count() == 0 {
             return;
         }
         // Un-dismiss and reset to first pinned message
-        pinned_state.navigate_to(0);
-        pinned_state.undismiss();
+        chat_state_show.pinned_navigate_to(0);
+        chat_state_show.pinned_undismiss();
         update_pinned_ui_from_loaded_messages(
             weak_window.clone(),
-            pinned_state.clone(),
+            chat_state_show.clone(),
             ui_ctx_show.clone(),
             chat_state.active_conversation(),
         );
     });
 
     // Go to pinned message (scroll to it in chat)
-    let pinned_state = ui_ctx.pinned_state().clone();
+    let chat_state_goto = ui_ctx.chat_state().clone();
     let weak_window = window.as_weak();
 
     window.on_pinned_go_to_message(move || {
-        if let Some(message_id) = pinned_state.current_message_id() {
+        if let Some(message_id) = chat_state_goto.pinned_current_message_id() {
             let message_id_str = message_id.to_string();
 
             // Already on UI thread - no need for invoke_from_event_loop
@@ -402,14 +401,14 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// falling back to PinService (regular channels) or AnonGroupService (private groups).
 fn update_pinned_ui_from_loaded_messages(
     weak_window: slint::Weak<MainWindow>,
-    pinned_state: chatter_core::state::PinnedState,
+    chat_state: chatter_core::state::ChatState,
     ui_ctx: Arc<ChatterClient>,
     conversation: ActiveConversation,
 ) {
-    let state = pinned_state.get();
-    let current_index = state.current_index as i32;
-    let total_count = state.pinned_message_ids.len() as i32;
-    let current_msg_id = pinned_state.current_message_id();
+    let state = chat_state.get();
+    let current_index = state.pinned.current_index as i32;
+    let total_count = state.pinned.pinned_message_ids.len() as i32;
+    let current_msg_id = chat_state.pinned_current_message_id();
 
     // First try to get preview from currently loaded UI messages (works for all types)
     let msg_id_str = current_msg_id.map(|id| id.to_string()).unwrap_or_default();

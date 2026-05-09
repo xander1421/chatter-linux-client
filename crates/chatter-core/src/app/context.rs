@@ -226,8 +226,7 @@ impl AppContext {
 
         let handlers = EventHandlers::new(
             self.core_services.message_state.clone(),
-            self.core_services.pinned_state.clone(),
-            self.core_services.streaming_state.clone(),
+            self.core_services.chat_state.clone(),
         )
         .with_group_coordinator(self.infrastructure.group_coordinator.clone())
         .with_message_service(self.core_services.message_service.clone())

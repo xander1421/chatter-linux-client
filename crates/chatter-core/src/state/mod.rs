@@ -28,38 +28,33 @@
 //! ui_state.open_modal(ModalType::Settings);
 //! ```
 
-pub mod app_state;
 pub mod auth_state;
-pub mod call_state;
 pub mod chat_state;
 pub mod message_state;
 pub mod offline_state;
 pub mod org_state;
-pub mod pinned_state;
 pub mod privacy_state;
 pub mod store;
-pub mod streaming_state;
-pub mod ui_state;
 pub mod user_state;
 #[cfg(feature = "jarvis")]
 pub mod jarvis_state;
 
 // Re-export core state types
 pub use auth_state::{AuthState, AuthStateData};
-pub use chat_state::{ActiveConversation, ChatState, ChatStateData, PendingAttachment, ThreadPanel};
+pub use chat_state::{
+    ActiveConversation, ChatState, ChatStateData, PendingAttachment, PinnedSubstate,
+    ReactionSummary, StreamingSubstate, ThreadPanel,
+};
 pub use message_state::{MessageState, MessageStateData, PaginationCursor};
-pub use pinned_state::{PinnedState, PinnedStateData};
 pub use privacy_state::{ConversationPrivacySettings, PrivacyState, PrivacyStateData};
 pub use store::{StateSnapshot, Store};
-pub use ui_state::{ModalType, Theme, UIState, UIStateData};
 pub use user_state::{UserState, UserStateData};
 
 // Organization state re-exports
 pub use org_state::{OrgState, OrgStateData, OrgSummary};
 
-// Streaming and offline state re-exports
+// Offline state re-exports
 pub use offline_state::{OfflineState, OfflineStateData};
-pub use streaming_state::{ReactionSummary, StreamingState, StreamingStateData};
 
 // Jarvis AI assistant state re-exports
 #[cfg(feature = "jarvis")]

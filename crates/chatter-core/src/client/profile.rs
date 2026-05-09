@@ -44,7 +44,7 @@ use crate::services::user::UserService;
 use crate::services::conversation::ConversationHandle;
 use crate::state::{
     ActiveConversation, AuthState, ChatState, MessageState, OfflineState,
-    OrgState, PinnedState, PrivacyState, StreamingState, UIState, UserState,
+    OrgState, PrivacyState, UserState,
 };
 use crate::state::chat_state::PendingAttachment;
 use crate::storage::settings_keys;

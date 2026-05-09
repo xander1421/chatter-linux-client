@@ -72,10 +72,7 @@ async fn test_appcontext_three_tier_initialization() {
             let _ = client.chat_state();
             let _ = client.message_state();
             let _ = client.user_state();
-            let _ = client.ui_state();
             let _ = client.offline_state();
-            let _ = client.streaming_state();
-            let _ = client.pinned_state();
             let _ = client.privacy_state();
             let _ = client.jarvis_state();
 
@@ -125,10 +122,7 @@ async fn test_chatter_client_builder() {
             let _ = client.chat_state();
             let _ = client.message_state();
             let _ = client.user_state();
-            let _ = client.ui_state();
             let _ = client.offline_state();
-            let _ = client.streaming_state();
-            let _ = client.pinned_state();
             let _ = client.privacy_state();
             let _ = client.jarvis_state();
 

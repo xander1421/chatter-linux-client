@@ -154,13 +154,13 @@ pub(crate) fn refresh_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
 /// to update the pinned message bar after loading pinned messages.
 pub(crate) fn apply_pinned_ui(
     weak: &slint::Weak<MainWindow>,
-    pinned_state: &chatter_core::state::PinnedState,
+    chat_state: &chatter_core::state::ChatState,
     channel_id: chatter_core::domain::ids::ChannelId,
     message_ids: Vec<chatter_core::domain::ids::MessageId>,
     preview: String,
 ) {
     if message_ids.is_empty() {
-        pinned_state.clear();
+        chat_state.clear_pinned();
         run_ui!(weak, |w| {
             w.set_has_pinned_messages(false);
             w.set_pinned_message_preview("".into());
@@ -168,8 +168,8 @@ pub(crate) fn apply_pinned_ui(
         });
     } else {
         let total_count = message_ids.len() as i32;
-        pinned_state.set_pinned_messages(channel_id, message_ids);
-        let should_show = pinned_state.should_show();
+        chat_state.set_pinned_messages(channel_id, message_ids);
+        let should_show = chat_state.pinned_should_show();
         run_ui!(weak, |w| {
             w.set_has_pinned_messages(should_show);
             w.set_pinned_message_preview(preview.into());

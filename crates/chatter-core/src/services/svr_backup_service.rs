@@ -184,26 +184,38 @@ impl SvrBackupService {
         result
     }
 
-    /// Public retry: derive profile key from password, then run the same
+    /// Public retry: load profile_key from local settings, then run the same
     /// flow as [`backup_from_pin`]. Used when the initial backup at
     /// registration failed and the user is re-authenticating.
+    ///
+    /// Profile_key is random (Signal-aligned) and stored locally at
+    /// registration; this retry just reads it. The caller must already have
+    /// gated the operation behind a password / PIN re-auth check (e.g.
+    /// `LinkDeviceService::verify_password_for_oidc_link`).
     pub async fn retry_from_credentials(
         &self,
         pin: &str,
         username: &str,
-        password: &str,
     ) -> Result<(), SvrBackupError> {
-        use crate::crypto::auth_crypto::{derive_profile_key, hash_password};
         use crate::crypto::svr::derive_svr_secret;
+        use crate::storage::repositories::settings_repo::keys;
         use zeroize::Zeroize;
 
         if pin.len() != 6 || !pin.chars().all(|c| c.is_ascii_digit()) {
             return Err(SvrBackupError::Generic("PIN must be exactly 6 digits".into()));
         }
 
-        let password_hash = hash_password(password);
-        let mut profile_key = derive_profile_key(&password_hash, username)
-            .map_err(SvrBackupError::Crypto)?;
+        let stored = self
+            .signal_service
+            .settings_repo
+            .get_bytes(keys::PROFILE_KEY)
+            .map_err(|e| SvrBackupError::Generic(format!("settings read failed: {e}")))?
+            .ok_or_else(|| SvrBackupError::Generic("no local profile_key to back up".into()))?;
+        if stored.len() != 32 {
+            return Err(SvrBackupError::Generic("local profile_key has wrong length".into()));
+        }
+        let mut profile_key = [0u8; 32];
+        profile_key.copy_from_slice(&stored);
 
         let mut private_bytes = self.signal_service.actor.get_identity_private_key().await
             .map_err(|e| {

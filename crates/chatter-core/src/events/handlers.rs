@@ -15,8 +15,7 @@
 //!                                                 +--------------+
 //!                                                 | State Stores |
 //!                                                 | - MessageState
-//!                                                 | - StreamingState
-//!                                                 | - PinnedState
+//!                                                 | - ChatState  (pinned + streaming substates)
 //!                                                 | - etc.
 //!                                                 +--------------+
 //! ```
@@ -26,17 +25,13 @@
 //! ```ignore
 //! // Create state stores
 //! let message_state = MessageState::new();
-//! let streaming_state = StreamingState::new();
+//! let chat_state = ChatState::new();
 //! // ... etc
 //!
 //! // Create event handlers with all state stores
 //! let handlers = EventHandlers::new(
 //!     message_state,
 //!     chat_state,
-//!     pinned_state,
-//!     user_state,
-//!     streaming_state,
-//!     offline_state,
 //! );
 //!
 //! // Spawn the event loop
@@ -54,7 +49,7 @@ use tracing::{debug, trace, warn};
 use crate::events::bus::EventBus;
 use crate::inbox::handlers::DomainEvent;
 use crate::mailbox::group::GroupCoordinator;
-use crate::state::{MessageState, PinnedState, StreamingState};
+use crate::state::{ChatState, MessageState};
 
 /// Event handlers that bridge domain events to state stores.
 ///
@@ -71,10 +66,8 @@ use crate::state::{MessageState, PinnedState, StreamingState};
 pub struct EventHandlers {
     /// Message cache and draft state.
     message_state: MessageState,
-    /// Pinned messages navigation state.
-    pinned_state: PinnedState,
-    /// Real-time streaming data (typing, reactions).
-    streaming_state: StreamingState,
+    /// Chat-side state: active conversation + pinned-bar + streaming ephemera.
+    chat_state: ChatState,
     /// Group mailbox coordinator for NDSS '21 per-group mailboxes.
     group_coordinator: Option<Arc<GroupCoordinator>>,
     /// Message service for DB persistence of edits/deletes.
@@ -93,18 +86,12 @@ impl EventHandlers {
     /// # Arguments
     ///
     /// * `message_state` - Message cache and draft state
-    /// * `pinned_state` - Pinned messages navigation state
-    /// * `streaming_state` - Real-time streaming data (typing, reactions)
+    /// * `chat_state`    - Active conversation + pinned-bar + streaming ephemera
     #[must_use]
-    pub fn new(
-        message_state: MessageState,
-        pinned_state: PinnedState,
-        streaming_state: StreamingState,
-    ) -> Self {
+    pub fn new(message_state: MessageState, chat_state: ChatState) -> Self {
         Self {
             message_state,
-            pinned_state,
-            streaming_state,
+            chat_state,
             group_coordinator: None,
             message_service: None,
             anon_group_service: None,
@@ -364,7 +351,7 @@ impl EventHandlers {
                 // `DomainEvent::ReactionAdded` when the unified-reactions
                 // row was newly inserted, so this listener can update the
                 // in-memory cache unconditionally without double-counting.
-                self.streaming_state
+                self.chat_state
                     .update_reaction(&cache_key, emoji.clone(), 1, None);
             }
 
@@ -385,7 +372,7 @@ impl EventHandlers {
                 );
                 // See ReactionAdded: dedup happens upstream in inbox_processor
                 // / base_anon, so the in-memory cache update can be unconditional.
-                self.streaming_state
+                self.chat_state
                     .update_reaction(&cache_key, emoji.clone(), -1, None);
             }
 
@@ -409,7 +396,7 @@ impl EventHandlers {
                     .update_message(&channel_id, &message_id, |msg| {
                         msg.is_pinned = true;
                     });
-                self.pinned_state.add_pinned_message(message_id);
+                self.chat_state.add_pinned_message(message_id);
                 if let Some(ref svc) = self.message_service {
                     if let Err(e) = svc.set_message_pinned(&message_id, true) {
                         tracing::warn!(?message_id, error = %e, "Failed to persist pin to DB");
@@ -441,7 +428,7 @@ impl EventHandlers {
                 }
                 
                 // Remove from pinned state
-                self.pinned_state.remove_pinned_message(&message_id);
+                self.chat_state.remove_pinned_message(&message_id);
                 
                 tracing::debug!(?channel_id, ?message_id, "Marked message as unpinned in state and DB");
             }
@@ -961,10 +948,10 @@ impl EventHandlers {
         channel_id: crate::domain::ids::ChannelId,
         user_id: crate::domain::ids::UserId,
     ) {
-        let mut typers = self.streaming_state.get_typing_users(&channel_id);
+        let mut typers = self.chat_state.get_typing_users(&channel_id);
         if !typers.contains(&user_id) {
             typers.push(user_id);
-            self.streaming_state.set_typing_users(channel_id, typers);
+            self.chat_state.set_typing_users(channel_id, typers);
         }
     }
 
@@ -977,10 +964,10 @@ impl EventHandlers {
         channel_id: crate::domain::ids::ChannelId,
         user_id: crate::domain::ids::UserId,
     ) {
-        let mut typers = self.streaming_state.get_typing_users(&channel_id);
+        let mut typers = self.chat_state.get_typing_users(&channel_id);
         if let Some(pos) = typers.iter().position(|id| *id == user_id) {
             typers.remove(pos);
-            self.streaming_state.set_typing_users(channel_id, typers);
+            self.chat_state.set_typing_users(channel_id, typers);
         }
     }
 }
@@ -1000,7 +987,7 @@ mod tests {
     use crate::domain::message::{ConversationType, Message, MessageContent};
 
     fn create_handlers() -> EventHandlers {
-        EventHandlers::new(MessageState::new(), PinnedState::new(), StreamingState::new())
+        EventHandlers::new(MessageState::new(), ChatState::new())
     }
 
     fn create_test_message(channel_id: ChannelId) -> Message {
@@ -1091,7 +1078,7 @@ mod tests {
             channel_id,
         });
 
-        let typers = handlers.streaming_state.get_typing_users(&channel_id);
+        let typers = handlers.chat_state.get_typing_users(&channel_id);
         assert_eq!(typers.len(), 1);
         assert!(typers.contains(&user_id));
     }
@@ -1108,7 +1095,7 @@ mod tests {
             channel_id,
         });
         assert_eq!(
-            handlers.streaming_state.get_typing_users(&channel_id).len(),
+            handlers.chat_state.get_typing_users(&channel_id).len(),
             1
         );
 
@@ -1118,7 +1105,7 @@ mod tests {
             channel_id,
         });
         assert!(handlers
-            .streaming_state
+            .chat_state
             .get_typing_users(&channel_id)
             .is_empty());
     }
@@ -1139,7 +1126,7 @@ mod tests {
             channel_id,
         });
 
-        let typers = handlers.streaming_state.get_typing_users(&channel_id);
+        let typers = handlers.chat_state.get_typing_users(&channel_id);
         assert_eq!(typers.len(), 2);
         assert!(typers.contains(&user1));
         assert!(typers.contains(&user2));
@@ -1150,7 +1137,7 @@ mod tests {
             channel_id,
         });
 
-        let typers = handlers.streaming_state.get_typing_users(&channel_id);
+        let typers = handlers.chat_state.get_typing_users(&channel_id);
         assert_eq!(typers.len(), 1);
         assert!(!typers.contains(&user1));
         assert!(typers.contains(&user2));
@@ -1172,7 +1159,7 @@ mod tests {
             channel_id,
         });
 
-        let typers = handlers.streaming_state.get_typing_users(&channel_id);
+        let typers = handlers.chat_state.get_typing_users(&channel_id);
         assert_eq!(typers.len(), 1);
     }
 
@@ -1196,7 +1183,7 @@ mod tests {
         });
 
         let cache_key = MessageId::from_sender_timestamp(&sender_id, sent_at_ns);
-        let reactions = handlers.streaming_state.get_reactions(&cache_key);
+        let reactions = handlers.chat_state.get_reactions(&cache_key);
         assert!(reactions.is_some());
         let reactions = reactions.unwrap();
         assert_eq!(reactions.len(), 1);
@@ -1231,7 +1218,7 @@ mod tests {
 
         // Should be removed entirely when count hits 0
         let cache_key = MessageId::from_sender_timestamp(&sender_id, sent_at_ns);
-        let reactions = handlers.streaming_state.get_reactions(&cache_key);
+        let reactions = handlers.chat_state.get_reactions(&cache_key);
         assert!(reactions.is_none());
     }
 
@@ -1263,8 +1250,8 @@ mod tests {
         assert!(messages[0].is_pinned);
 
         // Check pinned state
-        assert_eq!(handlers.pinned_state.total_count(), 1);
-        assert_eq!(handlers.pinned_state.current_message_id(), Some(message_id));
+        assert_eq!(handlers.chat_state.pinned_total_count(), 1);
+        assert_eq!(handlers.chat_state.pinned_current_message_id(), Some(message_id));
     }
 
     #[test]
@@ -1297,7 +1284,7 @@ mod tests {
         assert!(!messages[0].is_pinned);
 
         // Check pinned state
-        assert_eq!(handlers.pinned_state.total_count(), 0);
+        assert_eq!(handlers.chat_state.pinned_total_count(), 0);
     }
 
     // ========================================================================

@@ -101,15 +101,15 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             let new_pinned_state = !unpin;
 
-            // Update pinned_state
+            // Update pinned-bar substate
             if let Ok(msg_id) = msg_id_str.parse::<chatter_core::domain::ids::MessageId>() {
                 if new_pinned_state {
-                    ui_ctx.pinned_state().add_pinned_message(msg_id);
+                    ui_ctx.chat_state().add_pinned_message(msg_id);
                 } else {
-                    ui_ctx.pinned_state().remove_pinned_message(&msg_id);
+                    ui_ctx.chat_state().remove_pinned_message(&msg_id);
                 }
             }
-            let pinned_count = ui_ctx.pinned_state().get().pinned_message_ids.len();
+            let pinned_count = ui_ctx.chat_state().pinned_total_count();
 
             // For DM/Channel, generate preview from stored message + attachments
             let preview_text = match handle.conversation() {

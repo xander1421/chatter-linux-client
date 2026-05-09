@@ -63,7 +63,7 @@ pub(crate) fn recompute_total_unread(window: &MainWindow, ui_ctx: &Arc<ChatterCl
 /// Handle pin/unpin domain events for UI update.
 ///
 /// Updates the message's `is_pinned` flag, the pinned bar preview/count,
-/// and the `PinnedState` so that navigation arrows work correctly.
+/// and the `ChatState` pinned-bar substate so that navigation arrows work correctly.
 pub(super) fn handle_pin_ui_update(
     window: &Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
@@ -72,7 +72,7 @@ pub(super) fn handle_pin_ui_update(
     unpin: bool,
 ) {
     let weak = window.clone();
-    let pinned_state = ui_ctx.pinned_state().clone();
+    let chat_state = ui_ctx.chat_state().clone();
     let ui_ctx_active = ui_ctx.clone();
     let channel_id_str = channel_id.to_string();
     let target_ts_str = target_sent_timestamp.to_string();
@@ -118,12 +118,12 @@ pub(super) fn handle_pin_ui_update(
                         model.set_row_data(i, updated_msg);
                     }
 
-                    // Update pinned_state with the real message_id from the UI model
+                    // Update pinned-bar substate with the real message_id from the UI model
                     if let Ok(msg_id) = msg.message_id.to_string().parse::<chatter_core::domain::ids::MessageId>() {
                         if new_pinned {
-                            pinned_state.add_pinned_message(msg_id);
+                            chat_state.add_pinned_message(msg_id);
                         } else {
-                            pinned_state.remove_pinned_message(&msg_id);
+                            chat_state.remove_pinned_message(&msg_id);
                         }
                     }
                     break;
@@ -131,7 +131,7 @@ pub(super) fn handle_pin_ui_update(
             }
         }
 
-        let pinned_count = pinned_state.get().pinned_message_ids.len() as i32;
+        let pinned_count = chat_state.pinned_total_count() as i32;
         if unpin {
             w.set_pinned_total_count(pinned_count);
             w.set_has_pinned_messages(pinned_count > 0);

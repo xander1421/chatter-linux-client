@@ -83,7 +83,6 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
         tokio::spawn(async move {
             let chat_state = ui_ctx.chat_state().clone();
-            let pinned_state = ui_ctx.pinned_state().clone();
 
             // 1. Handle Anon DM selection
             if is_anon_dm {
@@ -113,7 +112,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     (ids, preview)
                 };
                 let channel_id = anon_dm_id.to_string().parse().unwrap_or_else(|_| ChannelId::new());
-                super::apply_pinned_ui(&weak, &pinned_state, channel_id, msg_ids, preview);
+                super::apply_pinned_ui(&weak, &chat_state, channel_id, msg_ids, preview);
 
                 // Load messages
                 let messages = match ui_ctx.get_anon_dm_messages_asc(&anon_dm_id, None, 50) {
@@ -206,7 +205,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
                 _ => (vec![], String::new()),
             };
-            super::apply_pinned_ui(&weak, &pinned_state, channel_id, msg_ids, preview);
+            super::apply_pinned_ui(&weak, &chat_state, channel_id, msg_ids, preview);
 
             // Load messages
             let messages = match ui_ctx.get_messages_local_asc(&channel_id, &conv_type, None, 50) {

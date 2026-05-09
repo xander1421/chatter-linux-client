@@ -71,7 +71,7 @@ use crate::services::user::UserService;
 use crate::services::conversation::ConversationHandle;
 use crate::state::{
     ActiveConversation, AuthState, ChatState, MessageState, OfflineState,
-    OrgState, PinnedState, PrivacyState, StreamingState, UIState, UserState,
+    OrgState, PrivacyState, UserState,
 };
 #[cfg(feature = "jarvis")]
 use crate::state::JarvisState;
@@ -1017,10 +1017,27 @@ impl ChatterClient {
     }
     pub fn message_state(&self) -> &MessageState { &self.ui.message_state }
     pub fn user_state(&self) -> &UserState { &self.ui.user_state }
-    pub fn ui_state(&self) -> &UIState { &self.ui.ui_state }
+
+    /// Persistent sidebar collapsed flag (settings-backed). Defaults to false.
+    pub fn sidebar_collapsed(&self) -> bool {
+        use crate::storage::repositories::settings_repo::SettingsRepository;
+        use crate::storage::settings_keys;
+        let repo = SettingsRepository::new(self.ui.database.clone());
+        repo.get::<bool>(settings_keys::SIDEBAR_COLLAPSED)
+            .ok()
+            .flatten()
+            .unwrap_or(false)
+    }
+
+    /// Persist sidebar collapsed flag.
+    pub fn set_sidebar_collapsed(&self, collapsed: bool) {
+        use crate::storage::repositories::settings_repo::SettingsRepository;
+        use crate::storage::settings_keys;
+        let repo = SettingsRepository::new(self.ui.database.clone());
+        let _ = repo.set(settings_keys::SIDEBAR_COLLAPSED, &collapsed);
+    }
+
     pub fn offline_state(&self) -> &OfflineState { &self.ui.offline_state }
-    pub fn streaming_state(&self) -> &StreamingState { &self.ui.streaming_state }
-    pub fn pinned_state(&self) -> &PinnedState { &self.ui.pinned_state }
     pub fn privacy_state(&self) -> &PrivacyState { &self.ui.privacy_state }
     #[cfg(feature = "jarvis")]
     pub fn jarvis_state(&self) -> &JarvisState { &self.ui.jarvis_state }

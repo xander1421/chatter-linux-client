@@ -190,28 +190,23 @@ pub(crate) fn wire_create_join_channel(window: &MainWindow) {
 }
 
 pub(crate) fn wire_toggle_sidebar(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let ui_state = ui_ctx.ui_state().clone();
+    let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();
 
     window.on_toggle_sidebar(move || {
-        let ui_state = ui_state.clone();
+        let ui_ctx = ui_ctx.clone();
         let weak = weak_window.clone();
 
-        // Get the current collapsed state and persist it via UI state
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
-                let collapsed = w.get_sidebar_collapsed();
-                // Persist via UI state (which handles storage internally)
-                ui_state.set_sidebar_collapsed(collapsed);
+                ui_ctx.set_sidebar_collapsed(w.get_sidebar_collapsed());
             }
         });
     });
 }
 
 pub(crate) fn load_sidebar_collapsed_state(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    // Load saved collapsed state from UI state on startup
-    let collapsed = ui_ctx.ui_state().get().sidebar_collapsed;
-    window.set_sidebar_collapsed(collapsed);
+    window.set_sidebar_collapsed(ui_ctx.sidebar_collapsed());
 }
 
 /// Wire message requests click handler.

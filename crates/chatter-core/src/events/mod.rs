@@ -33,11 +33,11 @@
 //!
 //! // Create state stores
 //! let message_state = MessageState::new();
-//! let streaming_state = StreamingState::new();
+//! let chat_state = ChatState::new();
 //! // ... other states
 //!
 //! // Create and spawn event handlers
-//! let handlers = EventHandlers::new(message_state, chat_state, ...);
+//! let handlers = EventHandlers::new(message_state, chat_state);
 //! handlers.spawn(event_bus.clone());
 //!
 //! // UI subscribes to events

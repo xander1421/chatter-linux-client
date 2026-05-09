@@ -1,8 +1,14 @@
 //! Chat state.
 //!
-//! Active channel, threads (up to 3 concurrent).
+//! Active channel, threads (up to 3 concurrent), pinned-bar navigation,
+//! and streaming ephemera (typing indicators, reactions). All of these are
+//! gated on the active conversation, so they live in a single `Store` for
+//! one subscription stream and one source of truth.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Instant;
+
 use tokio::sync::broadcast;
 
 use crate::domain::anon_dm::AnonDmId;
@@ -243,9 +249,62 @@ impl ThreadPanel {
     }
 }
 
+// ============================================================================
+// Pinned messages bar (Telegram-style navigation)
+// ============================================================================
+
+/// Pinned messages bar state.
+///
+/// Tracks the pinned messages for the current channel and navigation
+/// position through them (Telegram-style). Lives inside [`ChatStateData`]
+/// as `pinned`.
+#[derive(Clone, Debug, Default)]
+pub struct PinnedSubstate {
+    /// Current channel (pinned messages context).
+    pub channel_id: Option<ChannelId>,
+    /// Ordered list of pinned message IDs.
+    pub pinned_message_ids: Vec<MessageId>,
+    /// Current navigation position (0-based).
+    pub current_index: usize,
+    /// Whether the pinned bar has been dismissed by user.
+    /// Resets when switching channels or when new message is pinned.
+    pub is_dismissed: bool,
+}
+
+// ============================================================================
+// Streaming ephemera (typing indicators, reactions)
+// ============================================================================
+
+/// Simplified reaction data for UI display.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReactionSummary {
+    /// The emoji for this reaction.
+    pub emoji: String,
+    /// Number of users who reacted with this emoji.
+    pub count: u32,
+    /// Whether the current user has reacted with this emoji.
+    pub user_reacted: bool,
+}
+
+/// Streaming state data for real-time updates (typing, reactions).
+///
+/// Lives inside [`ChatStateData`] as `streaming`. The `TypingAggregator` and
+/// `ReactionAggregator` in the network layer handle raw stream processing;
+/// services bridge from those aggregators into this substate.
+#[derive(Clone, Debug, Default)]
+pub struct StreamingSubstate {
+    /// Who is typing per channel.
+    pub typing_by_channel: HashMap<ChannelId, Vec<UserId>>,
+    /// Recent reactions per message (limited cache for display).
+    pub recent_reactions: HashMap<MessageId, Vec<ReactionSummary>>,
+    /// When typing state was last updated (for staleness detection).
+    pub last_typing_update: Option<Instant>,
+}
+
 /// Chat navigation state data.
 ///
-/// Tracks the currently active channel, open thread panels, and pending attachments.
+/// Tracks the currently active channel, open thread panels, pending
+/// attachments, the pinned-bar navigation substate, and streaming ephemera.
 #[derive(Clone, Debug, Default)]
 pub struct ChatStateData {
     /// Currently selected channel ID.
@@ -258,7 +317,11 @@ pub struct ChatStateData {
     pub active_thread_index: Option<usize>,
     /// Pending attachments for the current message being composed.
     pub pending_attachments: Vec<PendingAttachment>,
-    
+    /// Pinned-bar navigation state for the active channel.
+    pub pinned: PinnedSubstate,
+    /// Real-time ephemera (typing indicators + recent reactions cache).
+    pub streaming: StreamingSubstate,
+
     // Call-related state
     /// Incoming call ID.
     pub incoming_call_id: Option<String>,
@@ -554,6 +617,281 @@ impl ChatState {
             state.group_call_key = None;
         });
     }
+
+    // ========================================================================
+    // Pinned messages bar (Telegram-style navigation)
+    //
+    // All methods operate on `state.pinned` and notify subscribers through the
+    // single ChatState store.
+    // ========================================================================
+
+    /// Set pinned messages for a channel.
+    ///
+    /// Resets the navigation index to 0 and clears dismissed state.
+    pub fn set_pinned_messages(&self, channel_id: ChannelId, message_ids: Vec<MessageId>) {
+        self.store.update(|state| {
+            state.pinned.channel_id = Some(channel_id);
+            state.pinned.pinned_message_ids = message_ids;
+            state.pinned.current_index = 0;
+            state.pinned.is_dismissed = false; // Reset on channel change
+        });
+    }
+
+    /// Clear all pinned-bar state.
+    pub fn clear_pinned(&self) {
+        self.store.update(|state| {
+            state.pinned.channel_id = None;
+            state.pinned.pinned_message_ids.clear();
+            state.pinned.current_index = 0;
+            state.pinned.is_dismissed = false;
+        });
+    }
+
+    /// Navigate to the next pinned message (wraps around).
+    pub fn pinned_navigate_next(&self) {
+        self.store.update(|state| {
+            if !state.pinned.pinned_message_ids.is_empty() {
+                state.pinned.current_index =
+                    (state.pinned.current_index + 1) % state.pinned.pinned_message_ids.len();
+            }
+        });
+    }
+
+    /// Navigate to the previous pinned message (wraps around).
+    pub fn pinned_navigate_prev(&self) {
+        self.store.update(|state| {
+            if !state.pinned.pinned_message_ids.is_empty() {
+                if state.pinned.current_index == 0 {
+                    state.pinned.current_index = state.pinned.pinned_message_ids.len() - 1;
+                } else {
+                    state.pinned.current_index -= 1;
+                }
+            }
+        });
+    }
+
+    /// Navigate to a specific pinned-message index. Clamps to valid range.
+    pub fn pinned_navigate_to(&self, index: usize) {
+        self.store.update(|state| {
+            if !state.pinned.pinned_message_ids.is_empty() {
+                state.pinned.current_index = index.min(state.pinned.pinned_message_ids.len() - 1);
+            }
+        });
+    }
+
+    /// Dismiss the pinned bar.
+    ///
+    /// The bar will reappear when switching channels or when a new message is pinned.
+    pub fn pinned_dismiss(&self) {
+        self.store.update(|state| {
+            state.pinned.is_dismissed = true;
+        });
+    }
+
+    /// Un-dismiss the pinned bar (re-show it).
+    pub fn pinned_undismiss(&self) {
+        self.store.update(|state| {
+            state.pinned.is_dismissed = false;
+        });
+    }
+
+    /// Check if the pinned bar is dismissed.
+    #[must_use]
+    pub fn pinned_is_dismissed(&self) -> bool {
+        self.store.get().pinned.is_dismissed
+    }
+
+    /// Check if the pinned bar should be visible.
+    ///
+    /// Returns true if there are pinned messages and the bar is not dismissed.
+    #[must_use]
+    pub fn pinned_should_show(&self) -> bool {
+        let state = self.store.get();
+        !state.pinned.pinned_message_ids.is_empty() && !state.pinned.is_dismissed
+    }
+
+    /// Get the currently focused pinned message ID.
+    #[must_use]
+    pub fn pinned_current_message_id(&self) -> Option<MessageId> {
+        let state = self.store.get();
+        state
+            .pinned
+            .pinned_message_ids
+            .get(state.pinned.current_index)
+            .copied()
+    }
+
+    /// Get the total count of pinned messages.
+    #[must_use]
+    pub fn pinned_total_count(&self) -> usize {
+        self.store.get().pinned.pinned_message_ids.len()
+    }
+
+    /// Check if there are multiple pinned messages (2 or more).
+    ///
+    /// Useful for showing navigation controls.
+    #[must_use]
+    pub fn pinned_has_multiple(&self) -> bool {
+        self.store.get().pinned.pinned_message_ids.len() >= 2
+    }
+
+    /// Add a pinned message to the list (deduped, appended at end).
+    pub fn add_pinned_message(&self, message_id: MessageId) {
+        self.store.update(|state| {
+            if !state.pinned.pinned_message_ids.contains(&message_id) {
+                state.pinned.pinned_message_ids.push(message_id);
+            }
+        });
+    }
+
+    /// Remove a pinned message from the list (adjusts current index).
+    pub fn remove_pinned_message(&self, message_id: &MessageId) {
+        self.store.update(|state| {
+            if let Some(index) = state
+                .pinned
+                .pinned_message_ids
+                .iter()
+                .position(|id| id == message_id)
+            {
+                state.pinned.pinned_message_ids.remove(index);
+
+                // Adjust current_index if needed
+                if state.pinned.pinned_message_ids.is_empty() {
+                    state.pinned.current_index = 0;
+                } else if state.pinned.current_index >= state.pinned.pinned_message_ids.len() {
+                    state.pinned.current_index = state.pinned.pinned_message_ids.len() - 1;
+                }
+            }
+        });
+    }
+
+    // ========================================================================
+    // Streaming ephemera: typing indicators
+    // ========================================================================
+
+    /// Get users currently typing in a channel.
+    #[must_use]
+    pub fn get_typing_users(&self, channel_id: &ChannelId) -> Vec<UserId> {
+        self.store
+            .get()
+            .streaming
+            .typing_by_channel
+            .get(channel_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Set the list of users typing in a channel.
+    ///
+    /// Replaces the current list and notifies subscribers. An empty `users`
+    /// list removes the channel entry.
+    pub fn set_typing_users(&self, channel_id: ChannelId, users: Vec<UserId>) {
+        self.store.update(|state| {
+            if users.is_empty() {
+                state.streaming.typing_by_channel.remove(&channel_id);
+            } else {
+                state.streaming.typing_by_channel.insert(channel_id, users);
+            }
+            state.streaming.last_typing_update = Some(Instant::now());
+        });
+    }
+
+    /// Clear typing state for a channel.
+    pub fn clear_typing(&self, channel_id: &ChannelId) {
+        self.store.update(|state| {
+            state.streaming.typing_by_channel.remove(channel_id);
+            state.streaming.last_typing_update = Some(Instant::now());
+        });
+    }
+
+    /// Get the last typing update time.
+    #[must_use]
+    pub fn last_typing_update(&self) -> Option<Instant> {
+        self.store.get().streaming.last_typing_update
+    }
+
+    // ========================================================================
+    // Streaming ephemera: reactions cache
+    // ========================================================================
+
+    /// Get reactions for a message.
+    #[must_use]
+    pub fn get_reactions(&self, message_id: &MessageId) -> Option<Vec<ReactionSummary>> {
+        self.store
+            .get()
+            .streaming
+            .recent_reactions
+            .get(message_id)
+            .cloned()
+    }
+
+    /// Set reactions for a message (replaces the current list).
+    pub fn set_reactions(&self, message_id: MessageId, reactions: Vec<ReactionSummary>) {
+        self.store.update(|state| {
+            if reactions.is_empty() {
+                state.streaming.recent_reactions.remove(&message_id);
+            } else {
+                state.streaming.recent_reactions.insert(message_id, reactions);
+            }
+        });
+    }
+
+    /// Update a single reaction on a message.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_id` - The message to update
+    /// * `emoji` - The emoji being reacted with
+    /// * `delta` - Change in count (+1 for add, -1 for remove)
+    /// * `user_reacted` - If `Some`, sets whether the current user has reacted
+    pub fn update_reaction(
+        &self,
+        message_id: &MessageId,
+        emoji: String,
+        delta: i32,
+        user_reacted: Option<bool>,
+    ) {
+        self.store.update(|state| {
+            let reactions = state
+                .streaming
+                .recent_reactions
+                .entry(*message_id)
+                .or_default();
+
+            // Find existing reaction for this emoji
+            if let Some(reaction) = reactions.iter_mut().find(|r| r.emoji == emoji) {
+                // Update existing reaction
+                reaction.count = (reaction.count as i32 + delta).max(0) as u32;
+                if let Some(reacted) = user_reacted {
+                    reaction.user_reacted = reacted;
+                }
+
+                // Remove if count is zero
+                if reaction.count == 0 {
+                    reactions.retain(|r| r.emoji != emoji);
+                }
+            } else if delta > 0 {
+                // Add new reaction entry (only if adding)
+                reactions.push(ReactionSummary {
+                    emoji,
+                    count: delta as u32,
+                    user_reacted: user_reacted.unwrap_or(false),
+                });
+            }
+
+            // Clean up empty entries
+            if reactions.is_empty() {
+                state.streaming.recent_reactions.remove(message_id);
+            }
+        });
+    }
+
+    /// Clear all streaming ephemera (typing + reactions cache).
+    pub fn clear_streaming(&self) {
+        self.store.update(|state| {
+            state.streaming = StreamingSubstate::default();
+        });
+    }
 }
 
 impl Default for ChatState {
@@ -795,5 +1133,618 @@ mod tests {
         assert_eq!(panel.channel_id, channel_id);
         assert_eq!(panel.root_message_id, root_id);
         assert_eq!(panel.reply_count, 10);
+    }
+
+    // ========================================================================
+    // Pinned-bar substate tests (relocated from pinned_state.rs)
+    // ========================================================================
+    mod pinned_tests {
+        use super::*;
+
+        #[test]
+        fn test_pinned_state_default() {
+            let state = ChatState::new();
+            let data = state.get();
+
+            assert!(data.pinned.channel_id.is_none());
+            assert!(data.pinned.pinned_message_ids.is_empty());
+            assert_eq!(data.pinned.current_index, 0);
+            assert!(!data.pinned.is_dismissed);
+        }
+
+        #[test]
+        fn test_set_pinned_messages() {
+            let state = ChatState::new();
+            let channel_id = ChannelId::new();
+            let msg1 = MessageId::new();
+            let msg2 = MessageId::new();
+
+            state.set_pinned_messages(channel_id, vec![msg1, msg2]);
+            let data = state.get();
+
+            assert_eq!(data.pinned.channel_id, Some(channel_id));
+            assert_eq!(data.pinned.pinned_message_ids.len(), 2);
+            assert_eq!(data.pinned.current_index, 0);
+        }
+
+        #[test]
+        fn test_set_pinned_messages_resets_index() {
+            let state = ChatState::new();
+            let channel_id = ChannelId::new();
+
+            state.set_pinned_messages(
+                channel_id,
+                vec![MessageId::new(), MessageId::new(), MessageId::new()],
+            );
+            state.pinned_navigate_to(2);
+            assert_eq!(state.get().pinned.current_index, 2);
+
+            // Setting new messages should reset index
+            state.set_pinned_messages(channel_id, vec![MessageId::new()]);
+            assert_eq!(state.get().pinned.current_index, 0);
+        }
+
+        #[test]
+        fn test_clear_pinned() {
+            let state = ChatState::new();
+            let channel_id = ChannelId::new();
+
+            state.set_pinned_messages(channel_id, vec![MessageId::new()]);
+            state.pinned_dismiss();
+            state.clear_pinned();
+
+            let data = state.get();
+            assert!(data.pinned.channel_id.is_none());
+            assert!(data.pinned.pinned_message_ids.is_empty());
+            assert_eq!(data.pinned.current_index, 0);
+            assert!(!data.pinned.is_dismissed);
+        }
+
+        #[test]
+        fn test_navigate_next_wraparound() {
+            let state = ChatState::new();
+            let channel_id = ChannelId::new();
+            let msg1 = MessageId::new();
+            let msg2 = MessageId::new();
+            let msg3 = MessageId::new();
+
+            state.set_pinned_messages(channel_id, vec![msg1, msg2, msg3]);
+
+            assert_eq!(state.pinned_current_message_id(), Some(msg1));
+
+            state.pinned_navigate_next();
+            assert_eq!(state.pinned_current_message_id(), Some(msg2));
+
+            state.pinned_navigate_next();
+            assert_eq!(state.pinned_current_message_id(), Some(msg3));
+
+            // Wrap around
+            state.pinned_navigate_next();
+            assert_eq!(state.pinned_current_message_id(), Some(msg1));
+        }
+
+        #[test]
+        fn test_navigate_prev_wraparound() {
+            let state = ChatState::new();
+            let channel_id = ChannelId::new();
+            let msg1 = MessageId::new();
+            let msg2 = MessageId::new();
+            let msg3 = MessageId::new();
+
+            state.set_pinned_messages(channel_id, vec![msg1, msg2, msg3]);
+
+            // Start at first, go back to wrap to last
+            state.pinned_navigate_prev();
+            assert_eq!(state.pinned_current_message_id(), Some(msg3));
+
+            state.pinned_navigate_prev();
+            assert_eq!(state.pinned_current_message_id(), Some(msg2));
+
+            state.pinned_navigate_prev();
+            assert_eq!(state.pinned_current_message_id(), Some(msg1));
+        }
+
+        #[test]
+        fn test_navigate_empty_list() {
+            let state = ChatState::new();
+
+            // Should not panic
+            state.pinned_navigate_next();
+            state.pinned_navigate_prev();
+            state.pinned_navigate_to(5);
+
+            assert!(state.pinned_current_message_id().is_none());
+        }
+
+        #[test]
+        fn test_navigate_to() {
+            let state = ChatState::new();
+            let channel_id = ChannelId::new();
+            let msg1 = MessageId::new();
+            let msg2 = MessageId::new();
+            let msg3 = MessageId::new();
+
+            state.set_pinned_messages(channel_id, vec![msg1, msg2, msg3]);
+
+            state.pinned_navigate_to(2);
+            assert_eq!(state.pinned_current_message_id(), Some(msg3));
+
+            // Out of bounds - should clamp
+            state.pinned_navigate_to(100);
+            assert_eq!(state.pinned_current_message_id(), Some(msg3));
+        }
+
+        #[test]
+        fn test_dismiss() {
+            let state = ChatState::new();
+            let channel_id = ChannelId::new();
+
+            state.set_pinned_messages(channel_id, vec![MessageId::new()]);
+            assert!(!state.pinned_is_dismissed());
+            assert!(state.pinned_should_show());
+
+            state.pinned_dismiss();
+            assert!(state.pinned_is_dismissed());
+            assert!(!state.pinned_should_show());
+        }
+
+        #[test]
+        fn test_should_show() {
+            let state = ChatState::new();
+            let channel_id = ChannelId::new();
+
+            // No pinned messages - should not show
+            assert!(!state.pinned_should_show());
+
+            // Has pinned messages - should show
+            state.set_pinned_messages(channel_id, vec![MessageId::new()]);
+            assert!(state.pinned_should_show());
+
+            // Dismissed - should not show
+            state.pinned_dismiss();
+            assert!(!state.pinned_should_show());
+
+            // New channel resets dismissed
+            state.set_pinned_messages(ChannelId::new(), vec![MessageId::new()]);
+            assert!(state.pinned_should_show());
+        }
+
+        #[test]
+        fn test_current_message_id() {
+            let state = ChatState::new();
+            assert!(state.pinned_current_message_id().is_none());
+
+            let channel_id = ChannelId::new();
+            let msg = MessageId::new();
+            state.set_pinned_messages(channel_id, vec![msg]);
+
+            assert_eq!(state.pinned_current_message_id(), Some(msg));
+        }
+
+        #[test]
+        fn test_total_count() {
+            let state = ChatState::new();
+            assert_eq!(state.pinned_total_count(), 0);
+
+            let channel_id = ChannelId::new();
+            state.set_pinned_messages(channel_id, vec![MessageId::new(), MessageId::new()]);
+
+            assert_eq!(state.pinned_total_count(), 2);
+        }
+
+        #[test]
+        fn test_has_multiple() {
+            let state = ChatState::new();
+            let channel_id = ChannelId::new();
+
+            assert!(!state.pinned_has_multiple());
+
+            state.set_pinned_messages(channel_id, vec![MessageId::new()]);
+            assert!(!state.pinned_has_multiple());
+
+            state.set_pinned_messages(channel_id, vec![MessageId::new(), MessageId::new()]);
+            assert!(state.pinned_has_multiple());
+        }
+
+        #[test]
+        fn test_add_pinned_message() {
+            let state = ChatState::new();
+            let channel_id = ChannelId::new();
+            let msg1 = MessageId::new();
+            let msg2 = MessageId::new();
+
+            state.set_pinned_messages(channel_id, vec![msg1]);
+            state.add_pinned_message(msg2);
+
+            let data = state.get();
+            assert_eq!(data.pinned.pinned_message_ids.len(), 2);
+            assert!(data.pinned.pinned_message_ids.contains(&msg2));
+
+            // Adding duplicate should not add again
+            state.add_pinned_message(msg1);
+            assert_eq!(state.pinned_total_count(), 2);
+        }
+
+        #[test]
+        fn test_remove_pinned_message() {
+            let state = ChatState::new();
+            let channel_id = ChannelId::new();
+            let msg1 = MessageId::new();
+            let msg2 = MessageId::new();
+            let msg3 = MessageId::new();
+
+            state.set_pinned_messages(channel_id, vec![msg1, msg2, msg3]);
+            state.pinned_navigate_to(2); // Focus msg3
+
+            state.remove_pinned_message(&msg2);
+
+            let data = state.get();
+            assert_eq!(data.pinned.pinned_message_ids.len(), 2);
+            assert!(!data.pinned.pinned_message_ids.contains(&msg2));
+            // Index should still be valid (pointing to msg3, now at index 1)
+            assert_eq!(data.pinned.current_index, 1);
+        }
+
+        #[test]
+        fn test_remove_pinned_message_adjusts_index() {
+            let state = ChatState::new();
+            let channel_id = ChannelId::new();
+            let msg1 = MessageId::new();
+            let msg2 = MessageId::new();
+
+            state.set_pinned_messages(channel_id, vec![msg1, msg2]);
+            state.pinned_navigate_to(1); // Focus msg2
+
+            // Remove msg2 (the one at current index)
+            state.remove_pinned_message(&msg2);
+
+            let data = state.get();
+            assert_eq!(data.pinned.pinned_message_ids.len(), 1);
+            assert_eq!(data.pinned.current_index, 0); // Adjusted to valid range
+        }
+
+        #[test]
+        fn test_remove_last_pinned_message() {
+            let state = ChatState::new();
+            let channel_id = ChannelId::new();
+            let msg = MessageId::new();
+
+            state.set_pinned_messages(channel_id, vec![msg]);
+            state.remove_pinned_message(&msg);
+
+            let data = state.get();
+            assert!(data.pinned.pinned_message_ids.is_empty());
+            assert_eq!(data.pinned.current_index, 0);
+        }
+
+        #[tokio::test]
+        async fn test_pinned_state_subscribe() {
+            let state = ChatState::new();
+            let mut rx = state.subscribe();
+            let channel_id = ChannelId::new();
+            let msg = MessageId::new();
+
+            state.set_pinned_messages(channel_id, vec![msg]);
+
+            let received = rx.recv().await.unwrap();
+            assert_eq!(received.pinned.pinned_message_ids.len(), 1);
+        }
+
+        #[test]
+        fn test_pinned_state_clone_shares_state() {
+            let state1 = ChatState::new();
+            let state2 = state1.clone();
+            let channel_id = ChannelId::new();
+
+            state1.set_pinned_messages(channel_id, vec![MessageId::new(), MessageId::new()]);
+            assert_eq!(state2.pinned_total_count(), 2);
+
+            state1.pinned_navigate_next();
+            assert_eq!(state2.get().pinned.current_index, 1);
+        }
+    }
+
+    // ========================================================================
+    // Streaming substate tests (relocated from streaming_state.rs)
+    // ========================================================================
+    mod streaming_tests {
+        use super::*;
+        use uuid::Uuid;
+
+        fn make_channel_id() -> ChannelId {
+            ChannelId(Uuid::new_v4())
+        }
+
+        fn make_user_id() -> UserId {
+            UserId(Uuid::new_v4())
+        }
+
+        fn make_message_id() -> MessageId {
+            MessageId(Uuid::new_v4())
+        }
+
+        // ==================== Typing Tests ====================
+
+        #[test]
+        fn test_set_and_get_typing_users() {
+            let state = ChatState::new();
+            let channel_id = make_channel_id();
+            let user1 = make_user_id();
+            let user2 = make_user_id();
+
+            // Initially empty
+            assert!(state.get_typing_users(&channel_id).is_empty());
+
+            // Set typing users
+            state.set_typing_users(channel_id.clone(), vec![user1.clone(), user2.clone()]);
+
+            let typers = state.get_typing_users(&channel_id);
+            assert_eq!(typers.len(), 2);
+            assert!(typers.contains(&user1));
+            assert!(typers.contains(&user2));
+        }
+
+        #[test]
+        fn test_clear_typing() {
+            let state = ChatState::new();
+            let channel_id = make_channel_id();
+            let user1 = make_user_id();
+
+            state.set_typing_users(channel_id.clone(), vec![user1]);
+            assert!(!state.get_typing_users(&channel_id).is_empty());
+
+            state.clear_typing(&channel_id);
+            assert!(state.get_typing_users(&channel_id).is_empty());
+        }
+
+        #[test]
+        fn test_set_empty_typing_removes_entry() {
+            let state = ChatState::new();
+            let channel_id = make_channel_id();
+            let user1 = make_user_id();
+
+            state.set_typing_users(channel_id.clone(), vec![user1]);
+            state.set_typing_users(channel_id.clone(), vec![]);
+
+            // Should be removed from the map
+            assert!(state.get().streaming.typing_by_channel.get(&channel_id).is_none());
+        }
+
+        #[test]
+        fn test_last_typing_update() {
+            let state = ChatState::new();
+            let channel_id = make_channel_id();
+
+            // Initially none
+            assert!(state.last_typing_update().is_none());
+
+            // After setting typing users
+            state.set_typing_users(channel_id.clone(), vec![make_user_id()]);
+            assert!(state.last_typing_update().is_some());
+
+            // After clearing
+            let before_clear = state.last_typing_update();
+            state.clear_typing(&channel_id);
+            let after_clear = state.last_typing_update();
+
+            // Should have updated the timestamp
+            assert!(after_clear >= before_clear);
+        }
+
+        // ==================== Reaction Tests ====================
+
+        #[test]
+        fn test_set_and_get_reactions() {
+            let state = ChatState::new();
+            let message_id = make_message_id();
+
+            // Initially none
+            assert!(state.get_reactions(&message_id).is_none());
+
+            // Set reactions
+            let reactions = vec![
+                ReactionSummary {
+                    emoji: "\u{1f44d}".to_string(),
+                    count: 5,
+                    user_reacted: true,
+                },
+                ReactionSummary {
+                    emoji: "\u{2764}\u{fe0f}".to_string(),
+                    count: 3,
+                    user_reacted: false,
+                },
+            ];
+
+            state.set_reactions(message_id.clone(), reactions.clone());
+
+            let retrieved = state.get_reactions(&message_id).unwrap();
+            assert_eq!(retrieved.len(), 2);
+            assert_eq!(retrieved[0].emoji, "\u{1f44d}");
+            assert_eq!(retrieved[0].count, 5);
+            assert!(retrieved[0].user_reacted);
+        }
+
+        #[test]
+        fn test_update_reaction_increment() {
+            let state = ChatState::new();
+            let message_id = make_message_id();
+
+            // Set initial reactions
+            state.set_reactions(
+                message_id.clone(),
+                vec![ReactionSummary {
+                    emoji: "\u{1f44d}".to_string(),
+                    count: 2,
+                    user_reacted: false,
+                }],
+            );
+
+            // Increment
+            state.update_reaction(&message_id, "\u{1f44d}".to_string(), 1, None);
+
+            let reactions = state.get_reactions(&message_id).unwrap();
+            assert_eq!(reactions[0].count, 3);
+            assert!(!reactions[0].user_reacted); // Unchanged
+        }
+
+        #[test]
+        fn test_update_reaction_decrement() {
+            let state = ChatState::new();
+            let message_id = make_message_id();
+
+            // Set initial reactions
+            state.set_reactions(
+                message_id.clone(),
+                vec![ReactionSummary {
+                    emoji: "\u{1f44d}".to_string(),
+                    count: 2,
+                    user_reacted: true,
+                }],
+            );
+
+            // Decrement
+            state.update_reaction(&message_id, "\u{1f44d}".to_string(), -1, Some(false));
+
+            let reactions = state.get_reactions(&message_id).unwrap();
+            assert_eq!(reactions[0].count, 1);
+            assert!(!reactions[0].user_reacted); // Changed
+        }
+
+        #[test]
+        fn test_update_reaction_removes_at_zero() {
+            let state = ChatState::new();
+            let message_id = make_message_id();
+
+            // Set initial reactions
+            state.set_reactions(
+                message_id.clone(),
+                vec![ReactionSummary {
+                    emoji: "\u{1f44d}".to_string(),
+                    count: 1,
+                    user_reacted: false,
+                }],
+            );
+
+            // Decrement to zero
+            state.update_reaction(&message_id, "\u{1f44d}".to_string(), -1, None);
+
+            // Should be removed entirely
+            assert!(state.get_reactions(&message_id).is_none());
+        }
+
+        #[test]
+        fn test_update_reaction_adds_new() {
+            let state = ChatState::new();
+            let message_id = make_message_id();
+
+            // Add new reaction to message with no reactions
+            state.update_reaction(&message_id, "\u{1f389}".to_string(), 1, Some(true));
+
+            let reactions = state.get_reactions(&message_id).unwrap();
+            assert_eq!(reactions.len(), 1);
+            assert_eq!(reactions[0].emoji, "\u{1f389}");
+            assert_eq!(reactions[0].count, 1);
+            assert!(reactions[0].user_reacted);
+        }
+
+        #[test]
+        fn test_update_reaction_ignores_negative_new() {
+            let state = ChatState::new();
+            let message_id = make_message_id();
+
+            // Trying to decrement a non-existent reaction should do nothing
+            state.update_reaction(&message_id, "\u{1f44d}".to_string(), -1, None);
+
+            assert!(state.get_reactions(&message_id).is_none());
+        }
+
+        // ==================== General Tests ====================
+
+        #[test]
+        fn test_clear_streaming() {
+            let state = ChatState::new();
+
+            // Add some data
+            let channel_id = make_channel_id();
+            let message_id = make_message_id();
+
+            state.set_typing_users(channel_id.clone(), vec![make_user_id()]);
+            state.set_reactions(
+                message_id.clone(),
+                vec![ReactionSummary {
+                    emoji: "\u{1f44d}".to_string(),
+                    count: 1,
+                    user_reacted: false,
+                }],
+            );
+
+            // Clear everything
+            state.clear_streaming();
+
+            assert!(state.get_typing_users(&channel_id).is_empty());
+            assert!(state.get_reactions(&message_id).is_none());
+            assert!(state.last_typing_update().is_none());
+        }
+
+        #[tokio::test]
+        async fn test_subscribe_receives_typing_updates() {
+            let state = ChatState::new();
+            let mut rx = state.subscribe();
+
+            let channel_id = make_channel_id();
+            let user1 = make_user_id();
+
+            state.set_typing_users(channel_id.clone(), vec![user1.clone()]);
+
+            let received = rx.recv().await.unwrap();
+            let typers = received.streaming.typing_by_channel.get(&channel_id).unwrap();
+            assert_eq!(typers.len(), 1);
+            assert!(typers.contains(&user1));
+        }
+
+        #[tokio::test]
+        async fn test_subscribe_receives_reaction_updates() {
+            let state = ChatState::new();
+            let mut rx = state.subscribe();
+
+            let message_id = make_message_id();
+
+            state.set_reactions(
+                message_id.clone(),
+                vec![ReactionSummary {
+                    emoji: "\u{1f44d}".to_string(),
+                    count: 1,
+                    user_reacted: true,
+                }],
+            );
+
+            let received = rx.recv().await.unwrap();
+            let reactions = received.streaming.recent_reactions.get(&message_id).unwrap();
+            assert_eq!(reactions.len(), 1);
+            assert_eq!(reactions[0].emoji, "\u{1f44d}");
+        }
+
+        #[test]
+        fn test_streaming_default_impl() {
+            let state = ChatState::default();
+            let data = state.get();
+            assert!(data.streaming.typing_by_channel.is_empty());
+            assert!(data.streaming.recent_reactions.is_empty());
+            assert!(data.streaming.last_typing_update.is_none());
+        }
+
+        #[test]
+        fn test_streaming_clone_shares_state() {
+            let state1 = ChatState::new();
+            let state2 = state1.clone();
+
+            let channel_id = make_channel_id();
+            let user1 = make_user_id();
+
+            state1.set_typing_users(channel_id.clone(), vec![user1.clone()]);
+
+            // Both should see the update
+            assert_eq!(state2.get_typing_users(&channel_id), vec![user1]);
+        }
     }
 }

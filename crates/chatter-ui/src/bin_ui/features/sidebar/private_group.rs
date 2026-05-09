@@ -201,7 +201,7 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
                 (ids, preview)
             };
             let channel_id = group_id.to_string().parse().unwrap_or_else(|_| ChannelId::new());
-            super::apply_pinned_ui(&weak, &ui_ctx.pinned_state(), channel_id, msg_ids, preview);
+            super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), channel_id, msg_ids, preview);
 
             // Mark messages as read
             let handle = ui_ctx.conversation(chatter_core::state::ActiveConversation::AnonGroup(group_id));

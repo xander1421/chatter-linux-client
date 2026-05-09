@@ -44,7 +44,7 @@ use crate::services::user::UserService;
 use crate::services::conversation::ConversationHandle;
 use crate::state::{
     ActiveConversation, AuthState, ChatState, MessageState, OfflineState,
-    OrgState, PinnedState, PrivacyState, StreamingState, UIState, UserState,
+    OrgState, PrivacyState, UserState,
 };
 use crate::state::chat_state::PendingAttachment;
 use crate::storage::settings_keys;
@@ -223,17 +223,16 @@ impl ChatterClient {
 
     /// Retry SVR backup creation if it failed during registration.
     ///
-    /// Delegates to `SvrBackupService::retry_from_credentials` which derives
-    /// all key material from `(pin, username, password)` and uploads the
-    /// backup. Sensitive intermediates are zeroized inside the service.
+    /// Delegates to `SvrBackupService::retry_from_credentials` which reads
+    /// the locally-stored profile_key and uploads it under a PIN-derived
+    /// SVR secret. Caller must have already password-re-auth-gated the user.
     pub async fn retry_svr_backup(
         &self,
         pin: &str,
         username: &str,
-        password: &str,
     ) -> Result<(), ClientError> {
         self.svr_backup()
-            .retry_from_credentials(pin, username, password)
+            .retry_from_credentials(pin, username)
             .await
             .map_err(|e| ClientError::Validation(format!("SVR backup upload failed: {}", e)))?;
         tracing::info!("SVR backup retry succeeded");
