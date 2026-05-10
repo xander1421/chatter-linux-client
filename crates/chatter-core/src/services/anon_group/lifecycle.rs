@@ -373,11 +373,21 @@ impl AnonGroupService {
         .with_profile(profile_key, my_display_name, my_avatar);
         self.anon_group_repo.add_member(&my_member)?;
 
-        // 4. Add inviter with their mailbox key and profile
+        // 4. Add inviter with their mailbox key and profile.
+        //
+        // SECURITY: default the inviter to `Member`, NOT `Owner`. The invite
+        // envelope is sealed-sender-authenticated as coming from `inviter_id`
+        // but carries no proof that this user owns the group. Trusting the
+        // invite to assert ownership lets any group member relay an invite
+        // and be recorded as Owner until the next authoritative member-list
+        // broadcast overwrites the row. During that window, role-gated
+        // local actions (UI controls, kick/ban prompts) trust the wrong
+        // actor. Member is the safe lower bound; the next member-list
+        // signal upgrades to Owner / Admin if applicable.
         let inviter_member = AnonGroupMember::with_mailbox(
             group_id,
             inviter_id,
-            AnonGroupRole::Owner, // Assume owner until we get member list
+            AnonGroupRole::Member,
             inviter_mailbox_pk,
         )
         .with_profile(inviter_profile_key, inviter_display_name.clone(), inviter_avatar);
