@@ -213,9 +213,12 @@ impl Database {
         // This significantly speeds up reading large attachments from SQLCipher
         conn.pragma_update(None, "cache_size", "-65536")?;
 
-        // mmap_size: memory-map up to 256MB of the database file
-        // This allows the OS to handle caching and can be faster than SQLite's cache
-        conn.pragma_update(None, "mmap_size", "268435456")?;
+        // Intentionally NOT setting `mmap_size`: SQLCipher disables
+        // mmap-based I/O on encrypted databases (see
+        // https://www.zetetic.net/sqlcipher/sqlcipher-api/#mmap_size). The
+        // pragma is silently ignored today, but if a future SQLCipher build
+        // ever loosened that, mapped pages would expose plaintext to the
+        // OS page cache. Don't set it.
 
         // Create reader pool for concurrent read access
         let readers = Arc::new(ReaderPool::new(
@@ -283,9 +286,10 @@ impl Database {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "busy_timeout", "5000")?;
 
-        // Performance optimizations for large BLOB streaming
+        // Performance optimizations for large BLOB streaming.
+        // Intentionally NOT setting `mmap_size` - SQLCipher refuses mmap
+        // on encrypted databases; see writer-side comment.
         conn.pragma_update(None, "cache_size", "-65536")?; // 64MB cache
-        conn.pragma_update(None, "mmap_size", "268435456")?; // 256MB mmap
 
         Ok(conn)
     }
