@@ -122,13 +122,20 @@ impl ReaderPool {
         let passphrase = self.passphrase.lock();
         conn.pragma_update(None, "key", &**passphrase)
             .map_err(|e| StorageError::Encryption(format!("Failed to set reader key: {}", e)))?;
+        // Pin KDF params (see writer-side comment).
+        conn.pragma_update(None, "cipher_compatibility", "4")
+            .map_err(|e| StorageError::Encryption(format!("Failed to pin cipher_compatibility: {}", e)))?;
+        conn.pragma_update(None, "kdf_iter", "256000")
+            .map_err(|e| StorageError::Encryption(format!("Failed to pin kdf_iter: {}", e)))?;
+        conn.pragma_update(None, "cipher_page_size", "4096")
+            .map_err(|e| StorageError::Encryption(format!("Failed to pin cipher_page_size: {}", e)))?;
 
         conn.execute_batch("SELECT count(*) FROM sqlite_master;")
             .map_err(|e| StorageError::Encryption(format!("Invalid reader key: {}", e)))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "busy_timeout", "5000")?;
         conn.pragma_update(None, "cache_size", "-65536")?;
-        conn.pragma_update(None, "mmap_size", "268435456")?;
+        // mmap intentionally not set: SQLCipher ignores on encrypted DBs.
 
         Ok(conn)
     }
@@ -185,6 +192,18 @@ impl Database {
         // The passphrase must be set before any other operations
         conn.pragma_update(None, "key", passphrase)
             .map_err(|e| StorageError::Encryption(format!("Failed to set encryption key: {}", e)))?;
+
+        // SECURITY: pin SQLCipher KDF parameters so a future library bump
+        // can't silently lower them. SQLCipher 4 defaults are PBKDF2-SHA512
+        // with 256k iterations + 4096-byte page size; we restate them
+        // explicitly so the values are part of our schema contract, not a
+        // dependency-version contract.
+        conn.pragma_update(None, "cipher_compatibility", "4")
+            .map_err(|e| StorageError::Encryption(format!("Failed to pin cipher_compatibility: {}", e)))?;
+        conn.pragma_update(None, "kdf_iter", "256000")
+            .map_err(|e| StorageError::Encryption(format!("Failed to pin kdf_iter: {}", e)))?;
+        conn.pragma_update(None, "cipher_page_size", "4096")
+            .map_err(|e| StorageError::Encryption(format!("Failed to pin cipher_page_size: {}", e)))?;
 
         // Verify the key is correct by selecting from sqlite_master
         // This works for both new and existing databases
@@ -277,6 +296,13 @@ impl Database {
         let passphrase = self.readers.passphrase.lock();
         conn.pragma_update(None, "key", &**passphrase)
             .map_err(|e| StorageError::Encryption(format!("Failed to set reader key: {}", e)))?;
+        // Pin KDF params (see writer-side comment).
+        conn.pragma_update(None, "cipher_compatibility", "4")
+            .map_err(|e| StorageError::Encryption(format!("Failed to pin cipher_compatibility: {}", e)))?;
+        conn.pragma_update(None, "kdf_iter", "256000")
+            .map_err(|e| StorageError::Encryption(format!("Failed to pin kdf_iter: {}", e)))?;
+        conn.pragma_update(None, "cipher_page_size", "4096")
+            .map_err(|e| StorageError::Encryption(format!("Failed to pin cipher_page_size: {}", e)))?;
 
         // Verify the key
         conn.execute_batch("SELECT count(*) FROM sqlite_master;")
