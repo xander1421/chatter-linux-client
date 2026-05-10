@@ -101,6 +101,7 @@ impl UserBuilder {
             password,
             password_hash,
             public_key: random_public_key(),
+            identity_key_pair_bytes: Vec::new(),
             device_auth_token: random_device_auth_token(),
             profile_key,
             user_id: self.user_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),

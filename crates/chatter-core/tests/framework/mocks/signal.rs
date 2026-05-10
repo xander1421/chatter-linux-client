@@ -191,10 +191,6 @@ pub trait SealedSenderServiceTrait: Send + Sync {
         ciphertext: Vec<u8>,
     ) -> impl std::future::Future<Output = MockResult<(String, u32, Vec<u8>)>> + Send; // (sender_id, device_id, plaintext)
 
-    /// Get sender certificate.
-    fn get_sender_certificate(
-        &self,
-    ) -> impl std::future::Future<Output = MockResult<Vec<u8>>> + Send;
 }
 
 // ============================================================================

@@ -148,11 +148,15 @@ async fn test_upload_prekeys_for_device() {
     let pool = assert_ok(create_test_pool().await);
     let user = assert_ok(setup_authenticated_test(&pool).await);
 
-    // Generate new prekey bundle
+    // Generate new prekey bundle. Reuse the registered identity key pair —
+    // server enforces "all devices for a user share the same identity key"
+    // (signal_protocol.go::StoreSignalPreKeyBundle), so a fresh keypair
+    // would be rejected with an identity-key-mismatch error.
     use chatter_core::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
     use chatter_core::proto::chat_v1::SignalPreKeyBundle;
 
-    let identity_key_pair = IdentityKeyPair::generate(&mut rand::rng());
+    let identity_key_pair = IdentityKeyPair::try_from(user.identity_key_pair_bytes.as_slice())
+        .expect("registered identity key pair should deserialize");
     let identity_public_key = identity_key_pair.identity_key().serialize();
 
     let signed_prekey_pair = KeyPair::generate(&mut rand::rng());
@@ -171,10 +175,11 @@ async fn test_upload_prekeys_for_device() {
             id: 10,
             public_key: signed_prekey_pair.public_key.serialize().to_vec(),
             signature: signed_prekey_signature.into_vec(),
+            // Server's UploadPreKeyBundle interprets this as Unix seconds.
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_millis() as u64,
+                .as_secs(),
         }),
         one_time_prekey: Some(PreKeyRecord {
             id: 100,
@@ -302,10 +307,12 @@ async fn test_sender_certificate_per_device() {
 
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
 
-    // Request sender certificate for this device
+    // Request sender certificate for this device. Server reads device_id
+    // from the authenticated session, so we don't pass it explicitly.
+    let _ = user.device_id;
     let response = assert_ok(
         auth_client
-            .request_sender_certificate(user.device_id, None)
+            .request_sender_certificate(None)
             .await,
     );
 

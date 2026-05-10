@@ -56,6 +56,11 @@ async fn test_send_sealed_message_to_user() {
         return;
     }
 
+    // Sealed sender is mutually exclusive with Basic auth — server now
+    // returns "provide exactly one auth method (anonymous credential, UAK,
+    // or Basic auth)" when both are present. Clear the pool's Basic auth
+    // before sending so only the UAK header survives.
+    pool.auth().clear();
     let mut msg_client = MessageClient::new(pool.channel(), pool.auth_clone());
 
     // Create a sealed sender message with realistic envelope size
@@ -66,10 +71,14 @@ async fn test_send_sealed_message_to_user() {
     let sealed_message = SealedSenderMessage {
         sealed_body,
         server_key_id: 1,
+        // Server expects Unix nanoseconds for sealed-sender freshness
+        // (`time.Unix(0, int64(sealedMsg.Timestamp))`); seconds or millis
+        // would be far in the past relative to "now ± 5min" and rejected
+        // as "sealed message too old".
         timestamp: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_millis() as u64,
+            .as_nanos() as u64,
     };
 
     // Send sealed message with UAK for anonymous delivery
@@ -626,9 +635,10 @@ async fn test_request_sender_certificate() {
 
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
 
-    // Request a new sender certificate (valid for 7 days)
+    // Request a new sender certificate (valid for 7 days). Server reads
+    // the requesting device_id from the authenticated session.
     let result = auth_client
-        .request_sender_certificate(1, Some(std::time::Duration::from_secs(7 * 24 * 60 * 60)))
+        .request_sender_certificate(Some(std::time::Duration::from_secs(7 * 24 * 60 * 60)))
         .await;
 
     assert!(

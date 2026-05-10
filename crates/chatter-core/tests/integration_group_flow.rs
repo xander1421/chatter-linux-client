@@ -546,15 +546,18 @@ async fn test_group_message_pagination() {
 
     assert!(page1.messages.len() <= 5, "First page should have at most 5 messages");
 
-    // Get second page using cursor
-    if let Some(last_msg) = page1.messages.last() {
+    // Get second page using next_page_token. `reference_message_id` is a
+    // "messages around this ID" cursor (returns both newer and older
+    // messages bracketing it), so it can't be used to walk strictly
+    // forward through the channel — that's what `page_token` is for.
+    if !page1.next_page_token.is_empty() {
         let page2 = assert_ok(
             msg_client
                 .get_messages(
                     &channel_id,
                     5,
-                    Some(&last_msg.id),
                     None,
+                    Some(&page1.next_page_token),
                     MessageSortDirection::SortNewestFirst,
                     None,
                     None,

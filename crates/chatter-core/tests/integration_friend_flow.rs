@@ -237,6 +237,15 @@ async fn test_friends_can_create_dm_channel() {
             let mut channel_id = String::new();
             while let Some(result) = stream.next().await {
                 let event = result.expect("Stream error");
+                // Server populates the top-level `channel_id` field on every
+                // ChannelEvent (see channels.go::pbEvent.ChannelId = event.ChannelID).
+                // The inner `Event::ChannelCreated` carries the full Channel
+                // payload, but for DMs the server may resolve to an existing
+                // channel and emit only operation-status events, in which
+                // case the only id available is the top-level one.
+                if !event.channel_id.is_empty() && channel_id.is_empty() {
+                    channel_id = event.channel_id.clone();
+                }
                 if let Some(payload) = event.event {
                     use chatter_core::proto::chat_v1::channel_event::Event;
                     if let Event::ChannelCreated(ch) = payload {
