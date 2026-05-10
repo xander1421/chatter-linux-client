@@ -64,31 +64,40 @@ impl Keyring {
     }
 
     /// Retrieves the database passphrase.
-    /// 
+    ///
     /// Priority:
-    /// 1. CHATTER_DB_PASSPHRASE env var
-    /// 2. Local .passphrase file (Default)
-    /// 3. System Keyring (Only if CHATTER_USE_KEYRING is set)
+    /// 1. `CHATTER_DB_PASSPHRASE` env var
+    /// 2. System Keyring IFF `CHATTER_USE_KEYRING` is set
+    /// 3. Local `.passphrase` file (default — see SECURITY.md "DB passphrase
+    ///    at rest")
+    ///
+    /// SECURITY: the default local-file mode is naked - the passphrase sits
+    /// at `<db>.passphrase` mode 0600. Anything that can read the user's
+    /// home (compromised browser, sync agent, backup tool, second user on
+    /// a misconfigured box) recovers the SQLCipher key. Set
+    /// `CHATTER_USE_KEYRING=1` to delegate to Secret Service / Keychain /
+    /// Credential Manager instead.
     pub fn get_passphrase(&self) -> Result<String, SystemError> {
-        // 1. Env Var override
         if let Ok(passphrase) = std::env::var("CHATTER_DB_PASSPHRASE") {
             return Ok(passphrase);
         }
 
-        // 2. Check for System Keyring Opt-in
         if std::env::var("CHATTER_USE_KEYRING").is_ok() {
             tracing::debug!("CHATTER_USE_KEYRING is set, accessing system keyring");
             return self.entry()?.get_password().map_err(map_keyring_error);
         }
 
-        // 3. Default: Local file
-        if self.local_path.exists() {
-            let pass = std::fs::read_to_string(&self.local_path)
-                .map_err(|e| SystemError::Keyring(format!("Failed to read local passphrase: {}", e)))?;
-            return Ok(pass.trim().to_string());
-        }
+        self.read_local_file()
+    }
 
-        Err(SystemError::Keyring("No passphrase found locally".to_string()))
+    /// Read the on-disk default passphrase.
+    fn read_local_file(&self) -> Result<String, SystemError> {
+        if !self.local_path.exists() {
+            return Err(SystemError::Keyring("No passphrase found locally".into()));
+        }
+        let pass = std::fs::read_to_string(&self.local_path)
+            .map_err(|e| SystemError::Keyring(format!("Failed to read local passphrase: {}", e)))?;
+        Ok(pass.trim().to_string())
     }
 
     pub fn get_passphrase_with_retry(
@@ -96,12 +105,12 @@ impl Keyring {
         max_retries: u32,
         retry_delay_secs: u64,
     ) -> Result<String, SystemError> {
-        // If not using keyring, retry is irrelevant
+        // Retry only matters for the keyring path (Secret Service unlock
+        // prompt). Env var + local file are synchronous.
         if std::env::var("CHATTER_USE_KEYRING").is_err() {
             return self.get_passphrase();
         }
 
-        // Keyring-specific retry logic
         tracing::info!("Accessing system keyring... (please unlock if prompted)");
         for attempt in 0..=max_retries {
             if attempt > 0 {
@@ -125,14 +134,16 @@ impl Keyring {
             return Ok(());
         }
 
-        // 1. If Opt-in to Keyring
         if std::env::var("CHATTER_USE_KEYRING").is_ok() {
             return self.entry()?
                 .set_password(passphrase)
                 .map_err(map_keyring_error);
         }
 
-        // 2. Default: Store in local file with restricted permissions
+        self.write_local_file(passphrase)
+    }
+
+    fn write_local_file(&self, passphrase: &str) -> Result<(), SystemError> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
@@ -140,10 +151,10 @@ impl Keyring {
                 .write(true)
                 .create(true)
                 .truncate(true)
-                .mode(0o600) // Owner Read/Write only
+                .mode(0o600)
                 .open(&self.local_path)
                 .map_err(|e| SystemError::Keyring(e.to_string()))?;
-            
+
             use std::io::Write;
             file.write_all(passphrase.as_bytes())
                 .map_err(|e| SystemError::Keyring(e.to_string()))?;
@@ -164,11 +175,12 @@ impl Keyring {
         max_retries: u32,
         retry_delay_secs: u64,
     ) -> Result<(), SystemError> {
+        // Retry only matters for the keyring path. Env var + local file
+        // are synchronous.
         if std::env::var("CHATTER_USE_KEYRING").is_err() {
             return self.set_passphrase(passphrase);
         }
 
-        // Keyring-specific retry logic
         for attempt in 0..=max_retries {
             if attempt > 0 {
                 std::thread::sleep(std::time::Duration::from_secs(retry_delay_secs));
@@ -232,15 +244,13 @@ mod tests {
         let keyring = Keyring::new(db_path);
         let test_pass = "test-passphrase-local";
 
-        // Should start empty
+        // Default is local file - no env var manipulation needed.
         assert!(keyring.get_passphrase().is_err());
 
-        // Set and get (defaults to local file)
         keyring.set_passphrase(test_pass).expect("Should set");
         let retrieved = keyring.get_passphrase().expect("Should get");
         assert_eq!(retrieved, test_pass);
-        
-        // Verify file exists
+
         assert!(keyring.local_path.exists());
     }
 
