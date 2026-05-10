@@ -37,8 +37,13 @@ use crate::error::CryptoError;
 /// Nonce size for XChaCha20-Poly1305 (24 bytes).
 const NONCE_SIZE: usize = 24;
 
-/// HKDF info string for envelope key derivation.
-const ENVELOPE_HKDF_INFO: &[u8] = b"NDSS21-MailboxEnvelope-v1";
+/// HKDF info label for envelope key derivation. The derived key is bound to
+/// both endpoints by appending `sender_x25519_pub || recipient_x25519_pub`
+/// after this label per RFC 5869 §3.3 — this prevents cross-mailbox key
+/// reuse when a sender talks to multiple anonymous mailboxes that share an
+/// X25519 keypair, and gives explicit destination binding the inner Signal
+/// layer was previously relied on to provide.
+const ENVELOPE_HKDF_INFO: &[u8] = b"NDSS21-MailboxEnvelope-v2";
 
 /// Convert an Ed25519 public key to X25519 public key.
 ///
@@ -111,15 +116,32 @@ pub fn encrypt_envelope(
     // Compute ECDH shared secret
     let shared_secret = sender_identity_private.diffie_hellman(&recipient_pk);
 
-    // Derive encryption key using HKDF
+    // RFC 7748 §6.1: reject low-order public keys that collapse ECDH to a
+    // constant. Without this gate an attacker can submit a low-order
+    // mailbox-public substitute and force every recipient to derive the
+    // same envelope key.
+    if !shared_secret.was_contributory() {
+        return Err(CryptoError::KeyDerivationFailed(
+            "non-contributory ECDH (low-order public key)".into(),
+        ));
+    }
+
+    let sender_public = X25519PublicKey::from(sender_identity_private);
+
+    // Derive encryption key using HKDF, binding both endpoint public keys
+    // into the info parameter (see ENVELOPE_HKDF_INFO doc comment).
     let hkdf = Hkdf::<Sha256>::new(None, shared_secret.as_bytes());
+    let mut info = Vec::with_capacity(ENVELOPE_HKDF_INFO.len() + 64);
+    info.extend_from_slice(ENVELOPE_HKDF_INFO);
+    info.extend_from_slice(sender_public.as_bytes());
+    info.extend_from_slice(recipient_pk.as_bytes());
     let mut encryption_key = [0u8; 32];
-    hkdf.expand(ENVELOPE_HKDF_INFO, &mut encryption_key)
+    hkdf.expand(&info, &mut encryption_key)
         .map_err(|_| CryptoError::KeyDerivationFailed("HKDF expand failed".into()))?;
 
     // Generate random nonce
     let mut nonce_bytes = [0u8; NONCE_SIZE];
-    rand::fill(&mut nonce_bytes);
+    {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut nonce_bytes).expect("OS CSPRNG must not fail");}
     let nonce = XNonce::from_slice(&nonce_bytes);
 
     // Encrypt with XChaCha20-Poly1305
@@ -134,7 +156,6 @@ pub fn encrypt_envelope(
         .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
 
     // Build envelope: sender_public (32) || nonce (24) || ciphertext
-    let sender_public = X25519PublicKey::from(sender_identity_private);
     let mut envelope = Vec::with_capacity(32 + NONCE_SIZE + ciphertext.len());
     envelope.extend_from_slice(sender_public.as_bytes());
     envelope.extend_from_slice(&nonce_bytes);
@@ -195,15 +216,38 @@ pub fn decrypt_envelope(
 
     // Convert recipient's Ed25519 private key to X25519
     let recipient_x25519 = ed25519_to_x25519_private(recipient_mailbox_private);
+    let recipient_x25519_public = X25519PublicKey::from(&recipient_x25519);
 
     // Compute ECDH shared secret
     let sender_pk = X25519PublicKey::from(sender_public);
     let shared_secret = recipient_x25519.diffie_hellman(&sender_pk);
 
-    // Derive decryption key using HKDF
+    // RFC 7748 §6.1: reject low-order sender public keys that collapse
+    // ECDH to a constant. Without this gate an attacker can blast envelopes
+    // with a low-order sender key and force every recipient to derive a
+    // deterministic decryption key.
+    if !shared_secret.was_contributory() {
+        let err = CryptoError::DecryptionFailed(
+            "non-contributory ECDH (low-order sender key)".into(),
+        );
+        tracing::warn!(
+            target: "chatter::crypto::decrypt_failure",
+            kind = "sealed_sender",
+            error = %err,
+            "decryption failure"
+        );
+        return Err(err);
+    }
+
+    // Derive decryption key using HKDF, binding both endpoint public keys
+    // into the info parameter (see ENVELOPE_HKDF_INFO doc comment).
     let hkdf = Hkdf::<Sha256>::new(None, shared_secret.as_bytes());
+    let mut info = Vec::with_capacity(ENVELOPE_HKDF_INFO.len() + 64);
+    info.extend_from_slice(ENVELOPE_HKDF_INFO);
+    info.extend_from_slice(&sender_public);
+    info.extend_from_slice(recipient_x25519_public.as_bytes());
     let mut decryption_key = [0u8; 32];
-    hkdf.expand(ENVELOPE_HKDF_INFO, &mut decryption_key)
+    hkdf.expand(&info, &mut decryption_key)
         .map_err(|_| {
             let err = CryptoError::KeyDerivationFailed("HKDF expand failed".into());
             tracing::warn!(
@@ -256,7 +300,7 @@ mod tests {
     fn test_ed25519_to_x25519_conversion() {
         // Generate Ed25519 keypair
         let mut seed = [0u8; 32];
-        rand::fill(&mut seed);
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut seed).expect("OS CSPRNG must not fail");}
         let signing_key = SigningKey::from_bytes(&seed);
         let verifying_key = signing_key.verifying_key();
 
@@ -276,12 +320,12 @@ mod tests {
     fn test_envelope_roundtrip() {
         // Generate sender identity (X25519)
         let mut sender_seed = [0u8; 32];
-        rand::fill(&mut sender_seed);
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut sender_seed).expect("OS CSPRNG must not fail");}
         let sender_private = X25519PrivateKey::from(sender_seed);
 
         // Generate recipient mailbox (Ed25519)
         let mut recipient_seed = [0u8; 32];
-        rand::fill(&mut recipient_seed);
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut recipient_seed).expect("OS CSPRNG must not fail");}
         let recipient_signing = SigningKey::from_bytes(&recipient_seed);
         let recipient_public = recipient_signing.verifying_key();
 
@@ -309,18 +353,18 @@ mod tests {
     fn test_envelope_wrong_recipient() {
         // Generate sender identity
         let mut sender_seed = [0u8; 32];
-        rand::fill(&mut sender_seed);
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut sender_seed).expect("OS CSPRNG must not fail");}
         let sender_private = X25519PrivateKey::from(sender_seed);
 
         // Generate recipient mailbox
         let mut recipient_seed = [0u8; 32];
-        rand::fill(&mut recipient_seed);
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut recipient_seed).expect("OS CSPRNG must not fail");}
         let recipient_signing = SigningKey::from_bytes(&recipient_seed);
         let recipient_public = recipient_signing.verifying_key();
 
         // Generate wrong recipient
         let mut wrong_seed = [0u8; 32];
-        rand::fill(&mut wrong_seed);
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut wrong_seed).expect("OS CSPRNG must not fail");}
 
         // Encrypt to correct recipient
         let plaintext = b"Secret message";
@@ -340,13 +384,13 @@ mod tests {
     fn test_envelope_sender_verification() {
         // Generate sender identity
         let mut sender_seed = [0u8; 32];
-        rand::fill(&mut sender_seed);
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut sender_seed).expect("OS CSPRNG must not fail");}
         let sender_private = X25519PrivateKey::from(sender_seed);
         let sender_public = X25519PublicKey::from(&sender_private);
 
         // Generate recipient mailbox
         let mut recipient_seed = [0u8; 32];
-        rand::fill(&mut recipient_seed);
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut recipient_seed).expect("OS CSPRNG must not fail");}
         let recipient_signing = SigningKey::from_bytes(&recipient_seed);
         let recipient_public = recipient_signing.verifying_key();
 
