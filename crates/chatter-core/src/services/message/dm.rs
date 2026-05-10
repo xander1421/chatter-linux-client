@@ -98,10 +98,13 @@ impl MessageService {
             .as_ref()
             .ok_or_else(|| MessageError::DmError("No peer mailbox address".into()))?;
 
+        // Per-direction key: outbound mailbox-layer encryption uses our
+        // send_key (XChaCha20-Poly1305). Peer's matching recv_key is
+        // derived deterministically from the same shared root.
         let shared_secret = conversation
             .conversation_key
             .as_ref()
-            .and_then(|k| k.get_shared_secret())
+            .and_then(|k| k.send_key())
             .ok_or_else(|| MessageError::DmError("No shared secret".into()))?;
 
         // Serialize Content proto
@@ -125,7 +128,7 @@ impl MessageService {
         // Layer 2: Mailbox encryption for each device (sender anonymity)
         // All ciphertexts go to same mailbox - server fans out to devices
         for (device_id, signal_ciphertext) in peer_ciphertexts {
-            let mailbox_encrypted = encrypt_dm_bytes(&signal_ciphertext, shared_secret)
+            let mailbox_encrypted = encrypt_dm_bytes(&signal_ciphertext, &shared_secret)
                 .map_err(|e| MessageError::EncryptionFailed(format!("Mailbox encrypt: {}", e)))?;
 
             self.send_to_mailbox_retried(

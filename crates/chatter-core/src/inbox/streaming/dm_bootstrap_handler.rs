@@ -613,7 +613,13 @@ async fn send_pending_messages_after_bootstrap(
         }
     };
 
-    let shared_secret = match conversation.conversation_key.and_then(|k| k.shared_secret) {
+    // Encrypting outbound pending messages → use send_key for per-direction
+    // separation.
+    let shared_secret = match conversation
+        .conversation_key
+        .as_ref()
+        .and_then(|k| k.send_key())
+    {
         Some(s) => s,
         None => {
             tracing::error!(peer = %peer_id, "No shared secret after bootstrap");

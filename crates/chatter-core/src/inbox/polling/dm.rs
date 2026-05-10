@@ -95,9 +95,10 @@ pub async fn poll_dm_mailboxes(
                     .map(|m| m.message_id.clone())
                     .collect();
 
-                // Get shared secret for this conversation (will be reloaded after bootstrap)
+                // Per-direction key: inbound mailbox-layer decryption uses
+                // recv_key so the peer's send_key matches.
                 let mut shared_secret: Option<[u8; 32]> = match conversation_manager.load_conversation(&peer_id) {
-                    Ok(Some(conv)) => conv.conversation_key.and_then(|k| k.shared_secret),
+                    Ok(Some(conv)) => conv.conversation_key.as_ref().and_then(|k| k.recv_key()),
                     Ok(None) => {
                         tracing::warn!(peer_id = %peer_id, "No conversation state for DM");
                         None
@@ -192,13 +193,13 @@ pub async fn poll_dm_mailboxes(
                                 "BOOTSTRAP[4/4] SUCCESS - RESPONSE processed, shared secret established!"
                             );
 
-                            // Reload shared secret so remaining messages in this batch can be decrypted
+                            // Reload recv_key so remaining messages in this batch can be decrypted
                             shared_secret = conversation_manager
                                 .load_conversation(&peer_id)
                                 .ok()
                                 .flatten()
                                 .and_then(|c| c.conversation_key)
-                                .and_then(|k| k.shared_secret);
+                                .and_then(|k| k.recv_key());
 
                             tracing::info!(
                                 peer_id = %peer_id,
