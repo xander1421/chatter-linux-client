@@ -348,7 +348,9 @@ pub async fn app_init() -> AppState {
         let username = format!("dev{}", suffix);
         let display_name = format!("Dev User {}", suffix);
         let password = "devpass123";
-        let pin = "123456";
+        // PIN must satisfy `crypto::svr::validate_pin`: 8-64 ASCII printable
+        // (was "123456" pre round-1 / round-5 PIN refactor; rejected now).
+        let pin = "12345678";
         let server_url = if cfg!(target_os = "android") {
             "http://192.168.0.7:50051"
         } else {

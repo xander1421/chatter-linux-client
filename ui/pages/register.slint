@@ -359,7 +359,7 @@ export component RegisterPage inherits Rectangle {
                             }
 
                             Input {
-                                placeholder: "Create a PIN (at least 4 digits)";
+                                placeholder: "Create a PIN (8+ characters)";
                                 password: true;
                                 text <=> root.pin;
                                 disabled: root.loading;

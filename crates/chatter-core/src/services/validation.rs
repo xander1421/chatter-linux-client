@@ -32,14 +32,19 @@ pub fn password_strength(password: &str) -> i32 {
 }
 
 /// PIN strength level: 0 = empty, 1 = weak, 2 = fair, 3 = strong.
+///
+/// Aligned with `crypto::svr::validate_pin` which requires
+/// `MIN_PIN_LENGTH = 8` ASCII printable characters. Anything shorter
+/// will be rejected at registration / change-PIN time, so the UI
+/// surfaces it as weak.
 pub fn pin_strength(pin: &str) -> i32 {
     let len = pin.len();
     if len == 0 {
         0
-    } else if len < 4 {
-        1 // weak
-    } else if len < 6 {
-        2 // fair
+    } else if len < crate::crypto::svr::MIN_PIN_LENGTH {
+        1 // weak — will be rejected by validate_pin
+    } else if len < 12 {
+        2 // fair — meets minimum but easy to brute force
     } else {
         3 // strong
     }
@@ -88,8 +93,10 @@ mod tests {
     #[test]
     fn pin_strength_levels() {
         assert_eq!(pin_strength(""), 0);
-        assert_eq!(pin_strength("12"), 1);
-        assert_eq!(pin_strength("1234"), 2);
-        assert_eq!(pin_strength("123456"), 3);
+        assert_eq!(pin_strength("12"), 1, "below MIN_PIN_LENGTH = weak");
+        assert_eq!(pin_strength("1234567"), 1, "7 chars still below 8 min");
+        assert_eq!(pin_strength("12345678"), 2, "exactly 8 = fair");
+        assert_eq!(pin_strength("12345678901"), 2, "11 chars = fair");
+        assert_eq!(pin_strength("123456789012"), 3, "12+ chars = strong");
     }
 }
