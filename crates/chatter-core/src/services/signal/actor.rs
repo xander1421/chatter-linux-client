@@ -12,7 +12,7 @@ use libsignal_protocol::{
     SenderCertificate, SessionRecord,
 };
 use uuid::Uuid;
-use rand::SeedableRng;
+use rand::TryRngCore;
 
 use crate::domain::ids::{ChannelId, UserId};
 use crate::error::{ServiceError, CryptoError};
@@ -184,7 +184,7 @@ impl SignalActorHandle {
                         SignalCommand::RefreshPrekeys { count, response } => {
                             use crate::crypto::signal::PreKeyManager;
                             let prekey_manager = PreKeyManager::new(store.key_store());
-                            let mut rng = rand::rngs::StdRng::from_os_rng();
+                            let mut rng = rand::rngs::OsRng.unwrap_err();
 
                             let start_id = prekey_manager.get_next_prekey_id().map_err(ServiceError::Crypto);
                             if let Err(e) = start_id { let _ = response.send(Err(e)); continue; }
@@ -232,7 +232,7 @@ impl SignalActorHandle {
                         }
 
                         SignalCommand::EstablishSession { address, bundle, response } => {
-                            let mut rng = rand::rngs::StdRng::from_os_rng();
+                            let mut rng = rand::rngs::OsRng.unwrap_err();
                             let mut store2 = store.clone();
                             let res = SessionManager::establish_session(&address, &mut store, &mut store2, &bundle, &mut rng)
                                 .await
@@ -249,7 +249,7 @@ impl SignalActorHandle {
                         }
 
                         SignalCommand::EncryptIdentified { plaintext, recipient_address, response } => {
-                            let mut rng = rand::rngs::StdRng::from_os_rng();
+                            let mut rng = rand::rngs::OsRng.unwrap_err();
                             let mut store2 = store.clone();
                             let res = match libsignal_protocol::message_encrypt(&plaintext, &recipient_address, &mut store, &mut store2, std::time::SystemTime::now(), &mut rng).await {
                                 Ok(ciphertext) => {
@@ -284,7 +284,7 @@ impl SignalActorHandle {
                         }
 
                         SignalCommand::DecryptIdentified { ciphertext, sender_address, response } => {
-                            let mut rng = rand::rngs::StdRng::from_os_rng();
+                            let mut rng = rand::rngs::OsRng.unwrap_err();
                             let mut store2 = store.clone();
                             let mut store3 = store.clone();
                             let mut store4 = store.clone();
@@ -308,32 +308,67 @@ impl SignalActorHandle {
                                 Err(e) => { let _ = response.send(Err(e)); continue; }
                             };
                             let sender_address = ProtocolAddress::new(sender_id, device_id_struct);
-                            
+
                             let mut store2 = store.clone();
                             let mut store3 = store.clone();
                             let mut store4 = store.clone();
                             let store6 = store.clone();
 
+                            // SECURITY: snapshot the currently-persisted session before
+                            // the convergence trial loop. Each candidate has to be written
+                            // to the SessionStore for libsignal to consume, but on
+                            // AllFailed we MUST restore the prior session - otherwise a
+                            // crafted envelope that fails every candidate replaces the
+                            // active session with whichever inactive candidate was tried
+                            // last. That breaks message ordering and forces a prekey
+                            // fetch on next send (sealed-sender side-channel).
+                            let session_key = format!(
+                                "{}:{}",
+                                sender_address.name(),
+                                sender_address.device_id()
+                            );
+                            let prior_session: Option<Vec<u8>> = store2
+                                .key_store()
+                                .load_session(&session_key)
+                                .ok()
+                                .flatten();
+
                             let mut final_res = Ok(ConvergenceResult::AllFailed { errors: vec!["No sessions to try".into()] });
-                            
+                            let mut committed = false;
+
                             for (session_id, record) in sessions {
-                                let mut rng = rand::rngs::StdRng::from_os_rng();
+                                let mut rng = rand::rngs::OsRng.unwrap_err();
                                 if let Ok(serialized) = record.serialize() {
-                                    if store2.key_store().store_session(&format!("{}:{}", sender_address.name(), sender_address.device_id()), &serialized).is_ok() {
+                                    if store2.key_store().store_session(&session_key, &serialized).is_ok() {
                                         if let Ok(prekey_msg) = libsignal_protocol::PreKeySignalMessage::try_from(envelope.as_slice()) {
                                             if let Ok(plaintext) = libsignal_protocol::message_decrypt_prekey(&prekey_msg, &sender_address, &mut store, &mut store2, &mut store3, &store6, &mut store4, &mut rng).await {
                                                 final_res = Ok(ConvergenceResult::ActiveSession { plaintext, session_id });
+                                                committed = true;
                                                 break;
                                             }
                                         } else if let Ok(signal_msg) = libsignal_protocol::SignalMessage::try_from(envelope.as_slice()) {
                                             if let Ok(plaintext) = libsignal_protocol::message_decrypt_signal(&signal_msg, &sender_address, &mut store, &mut store2, &mut rng).await {
                                                 final_res = Ok(ConvergenceResult::ActiveSession { plaintext, session_id });
+                                                committed = true;
                                                 break;
                                             }
                                         }
                                     }
                                 }
                             }
+
+                            if !committed {
+                                // Restore prior session (or delete if none existed).
+                                match prior_session {
+                                    Some(bytes) => {
+                                        let _ = store2.key_store().store_session(&session_key, &bytes);
+                                    }
+                                    None => {
+                                        let _ = store2.key_store().delete_session(&session_key);
+                                    }
+                                }
+                            }
+
                             let _ = response.send(final_res);
                         }
 
@@ -524,7 +559,7 @@ impl SignalActorHandle {
                             use libsignal_protocol::{IdentityKeyStore, GenericSignedPreKey};
                             use crate::crypto::signal::PreKeyManager;
                             let prekey_manager = PreKeyManager::new(store.key_store());
-                            let mut rng = rand::rngs::StdRng::from_os_rng();
+                            let mut rng = rand::rngs::OsRng.unwrap_err();
 
                             let res = (|| {
                                 let identity = futures::executor::block_on(store.get_identity_key_pair())
