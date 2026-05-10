@@ -1065,9 +1065,12 @@ impl AuthService {
 
         crate::crypto::svr::validate_pin(new_pin)
             .map_err(|e| AuthError::InvalidInput(e.to_string()))?;
-        if recovery_code.len() != 8 || !recovery_code.chars().all(|c| c.is_ascii_alphanumeric()) {
+        // Recovery codes are 12 chars from the safe alphabet (~59.5 bits).
+        // Accept 12-char alphanumeric input and let the server reject any
+        // code that is no longer in its hash store.
+        if recovery_code.len() != 12 || !recovery_code.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Err(AuthError::InvalidInput(
-                "Recovery code must be exactly 8 alphanumeric characters".into(),
+                "Recovery code must be exactly 12 alphanumeric characters".into(),
             ));
         }
 
