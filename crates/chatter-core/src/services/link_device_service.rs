@@ -363,7 +363,7 @@ impl LinkDeviceService {
         Ok(derived.ct_eq(stored.as_slice()).unwrap_u8() == 1)
     }
 
-    /// Convenience: verify EITHER a password OR a 6-digit PIN against local
+    /// Convenience: verify EITHER a password OR a PIN against local
     /// material. Tries the cheaper password check first when input doesn't
     /// look like a PIN; otherwise falls through to PIN. Lets the UI keep a
     /// single "confirm with password or PIN" input regardless of whether
@@ -970,7 +970,7 @@ impl LinkDeviceService {
     /// path is reachable without first owning a `PendingDeviceLink`
     /// (see [`Self::install_envelope`] which is `pub(crate)`).
     ///
-    /// `secret` accepts either the user's password or a 6-digit PIN
+    /// `secret` accepts either the user's password or a PIN
     /// (auto-routed by [`Self::verify_password_or_pin`]). The
     /// [`SecretString`] wrapper zeroizes its contents on drop.
     ///

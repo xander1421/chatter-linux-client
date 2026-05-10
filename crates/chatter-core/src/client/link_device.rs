@@ -112,7 +112,7 @@ impl ChatterClient {
     /// The SDK cannot verify this on its own — it is the trust boundary
     /// between UI and crypto core.
     ///
-    /// `secret` accepts either the user's password or a 6-digit PIN; the
+    /// `secret` accepts either the user's password or PIN; the
     /// [`SecretString`] wrapper zeroizes its contents on drop.
     ///
     /// Errors:

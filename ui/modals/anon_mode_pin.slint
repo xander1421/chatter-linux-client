@@ -1,4 +1,4 @@
-// AnonModePinModal — 6-digit PIN gate for enabling Anon Mode.
+// AnonModePinModal — PIN gate for enabling Anon Mode.
 //
 // Reuses the standard Modal chrome + Input/Button components. The Rust
 // handler (sidebar/anon_mode.rs) owns verification: it calls
@@ -33,14 +33,14 @@ export component AnonModePinModal inherits Rectangle {
             spacing: Spacing.md;
 
             Text {
-                text: "Anon Mode hides server-friend DMs and public channels — only your anonymous DMs and groups remain visible. Enter your 6-digit PIN to enable.";
+                text: "Anon Mode hides server-friend DMs and public channels — only your anonymous DMs and groups remain visible. Enter your PIN to enable.";
                 color: Colors.text-secondary;
                 font-size: Typography.sm;
                 wrap: word-wrap;
             }
 
             Input {
-                placeholder: "6-digit PIN";
+                placeholder: "PIN";
                 password: true;
                 text <=> root.pin;
                 disabled: root.verifying;

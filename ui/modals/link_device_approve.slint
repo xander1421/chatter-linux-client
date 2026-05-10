@@ -44,7 +44,7 @@ export component LinkDeviceApproveModal inherits Rectangle {
             spacing: Spacing.md;
 
             Text {
-                text: "Paste the link from your new device. You'll be asked to confirm with your password or 6-digit PIN to authorize.";
+                text: "Paste the link from your new device. You'll be asked to confirm with your password or PIN to authorize.";
                 color: Colors.text-secondary;
                 font-size: Typography.sm;
                 wrap: word-wrap;
@@ -106,7 +106,7 @@ export component LinkDeviceApproveModal inherits Rectangle {
             }
 
             Input {
-                placeholder: "Password or 6-digit PIN";
+                placeholder: "Password or PIN";
                 password: true;
                 text <=> root.password;
                 disabled: root.approving || !root.preview-ready;

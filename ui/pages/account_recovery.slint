@@ -190,11 +190,11 @@ export component AccountRecoveryPage inherits Rectangle {
                     }
 
                     Input {
-                        placeholder: "6-digit PIN (e.g., 123456)";
+                        placeholder: "PIN (8+ characters)";
                         text <=> root.new-pin;
                         disabled: root.loading;
                         error: submitted && new-pin-empty;
-                        error-message: submitted && new-pin-empty ? "PIN is required (6 digits)" : "";
+                        error-message: submitted && new-pin-empty ? "PIN is required (8+ characters)" : "";
                     }
                 }
 
