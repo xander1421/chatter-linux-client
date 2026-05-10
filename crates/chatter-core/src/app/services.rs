@@ -161,6 +161,7 @@ impl ServiceContainer {
         let message_gateway = Arc::new(MessageGateway::with_sesame(
             (*signal_service).clone(),
             infra.message_repo.clone(),
+            infra.channel_repo.clone(),
             infra.sesame_manager.clone(),
         ));
 

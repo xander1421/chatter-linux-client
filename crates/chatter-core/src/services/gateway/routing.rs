@@ -96,6 +96,40 @@ impl MessageGateway {
             "[SKDM_RECV] Decoded SKDM, processing sender key"
         );
 
+        // SECURITY: defense-in-depth — only install SKDMs from current
+        // channel members. Server-side `authz.CanSendMessage` already
+        // gates publishing and `authz.CanGetChannelMessages` /
+        // `CanStreamMessages` gate delivery, so a stored-but-unused SKDM
+        // from a non-member is benign at the protocol level. Still, we
+        // refuse to store keys for distributions we have no membership
+        // record for - it surfaces tampering early and matches Signal's
+        // pattern (Signal-Android `MessageContentProcessor` filters
+        // SKDMs through the `DecryptedGroup` member check before install).
+        if let Ok(channel_id) = skdm.channel_id.parse::<ChannelId>() {
+            match self.channel_repo.get_membership(&channel_id, sender_id) {
+                Ok(Some(_)) => {} // sender is a current member; proceed
+                Ok(None) => {
+                    tracing::warn!(
+                        sender_id = %sender_id,
+                        channel_id = %channel_id,
+                        "SECURITY: dropping SKDM from non-member sender"
+                    );
+                    return Err(ServiceError::Validation(
+                        "SKDM sender is not a current channel member".into(),
+                    ));
+                }
+                Err(e) => {
+                    tracing::error!(
+                        sender_id = %sender_id,
+                        channel_id = %channel_id,
+                        error = %e,
+                        "Failed to verify SKDM sender membership; failing closed"
+                    );
+                    return Err(ServiceError::Storage(e));
+                }
+            }
+        }
+
         // Process the SKDM so we can decrypt future messages from this sender
         self.signal_service
             .process_sender_key(sender_id, sender_device_id, &skdm)
@@ -274,10 +308,42 @@ impl MessageGateway {
             ServiceError::Validation(format!("Invalid channel_id in SenderKeyRequest: {}", e))
         })?;
 
+        // SECURITY: only honor SKDM requests from current channel members.
+        //
+        // Without this gate, a kicked or banned user can send a
+        // `SenderKeyRequest` for the channel they were removed from to any
+        // remaining member; the remaining member would ship them a fresh
+        // SKDM, defeating the lazy rotation that runs on
+        // `ChannelMemberLeft` events. (Signal does not have a `pull-SKDM`
+        // RPC at all - SKDMs are piggy-backed on outbound group sends and
+        // the sender filters by current `DecryptedGroup` membership.)
+        match self.channel_repo.get_membership(&channel_id, requester_id) {
+            Ok(Some(_)) => {} // current member — proceed
+            Ok(None) => {
+                tracing::warn!(
+                    requester_id = %requester_id,
+                    channel_id = %channel_id,
+                    "SECURITY: dropping SenderKeyRequest from non-member"
+                );
+                return Err(ServiceError::Validation(
+                    "requester is not a current channel member".into(),
+                ));
+            }
+            Err(e) => {
+                tracing::error!(
+                    requester_id = %requester_id,
+                    channel_id = %channel_id,
+                    error = %e,
+                    "Failed to check requester membership; failing closed"
+                );
+                return Err(ServiceError::Storage(e));
+            }
+        }
+
         tracing::info!(
             requester_id = %requester_id,
             channel_id = %channel_id,
-            "Received sender key request, creating SKDM to respond"
+            "Received sender key request from confirmed member, creating SKDM to respond"
         );
 
         // Create our SKDM for this channel

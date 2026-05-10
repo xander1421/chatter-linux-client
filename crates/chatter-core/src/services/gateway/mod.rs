@@ -94,6 +94,7 @@ pub enum CallHangupReason {
 pub struct MessageGateway {
     pub(crate) signal_service: SignalService,
     pub(crate) message_repo: Arc<MessageRepository>,
+    pub(crate) channel_repo: Arc<crate::storage::repositories::channel_repo::ChannelRepository>,
     pub(crate) sesame_manager: Option<Arc<SesameManager<SqliteSesameStore>>>,
 }
 
@@ -102,10 +103,12 @@ impl MessageGateway {
     pub fn new(
         signal_service: SignalService,
         message_repo: Arc<MessageRepository>,
+        channel_repo: Arc<crate::storage::repositories::channel_repo::ChannelRepository>,
     ) -> Self {
         Self {
             signal_service,
             message_repo,
+            channel_repo,
             sesame_manager: None,
         }
     }
@@ -114,11 +117,13 @@ impl MessageGateway {
     pub fn with_sesame(
         signal_service: SignalService,
         message_repo: Arc<MessageRepository>,
+        channel_repo: Arc<crate::storage::repositories::channel_repo::ChannelRepository>,
         sesame_manager: Arc<SesameManager<SqliteSesameStore>>,
     ) -> Self {
         Self {
             signal_service,
             message_repo,
+            channel_repo,
             sesame_manager: Some(sesame_manager),
         }
     }
