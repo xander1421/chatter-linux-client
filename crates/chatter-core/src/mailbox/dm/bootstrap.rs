@@ -466,6 +466,48 @@ impl DmBootstrap {
         // Check if we already have a conversation
         let existing = self.conversation_manager.load_conversation(&sender_id)?;
 
+        // SECURITY: gate re-bootstrap of an established conversation.
+        //
+        // Without this check, any envelope that decrypts via the established
+        // sealed-sender path would silently overwrite the existing
+        // `shared_secret` and `their_ephemeral_public`. That breaks two
+        // properties at once:
+        //   1. Replay protection (#6): a captured (or server-replayed)
+        //      bootstrap can be re-applied repeatedly, pinning the session
+        //      to whatever ephemeral the attacker recorded.
+        //   2. Re-key gating (#3): libsignal's `process_prekey_bundle`
+        //      gates session replacement on `is_trusted_identity`; chatter
+        //      had no equivalent identity-key trust gate at this layer.
+        //
+        // Idempotent re-delivery of the SAME bootstrap (same peer ephemeral)
+        // is benign — we no-op and return the existing mailbox response.
+        // A DIFFERENT ephemeral against an established conversation is
+        // rejected; legitimate rotation (peer device reset etc.) requires
+        // an out-of-band conversation reset by the user.
+        if let Some(ex_key) = existing.as_ref().and_then(|c| c.conversation_key.as_ref())
+        {
+            if ex_key.is_established() {
+                if ex_key.their_ephemeral_public == Some(peer_conversation_pk) {
+                    tracing::debug!(
+                        peer_id = %sender_id,
+                        "DM bootstrap: idempotent re-delivery of established session — no-op"
+                    );
+                    let our_mailbox = existing.as_ref().and_then(|c| c.our_mailbox.clone());
+                    return Ok(our_mailbox.map(|mailbox| BootstrapResponse {
+                        our_mailbox_public_key: mailbox.public_key,
+                        our_ephemeral_public: ex_key.our_ephemeral_public,
+                        peer_mailbox_public_key: peer_mailbox_pk,
+                        peer_id: sender_id,
+                    }));
+                }
+                tracing::warn!(
+                    peer_id = %sender_id,
+                    "SECURITY: dropping bootstrap with new ephemeral against established conversation"
+                );
+                return Err(MailboxError::ConversationExists);
+            }
+        }
+
         // Save peer's mailbox address
         let peer_mailbox = PeerMailbox {
             public_key: peer_mailbox_pk,
