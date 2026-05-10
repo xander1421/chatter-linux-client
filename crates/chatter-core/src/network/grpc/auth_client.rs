@@ -21,7 +21,7 @@ use crate::proto::chat_v1::{
     DeleteAccountRequest,
     GetActiveSessionsRequest, GetActiveSessionsResponse, GetPreKeyBundleRequest,
     GetPreKeyBundleResponse, GetPreKeyStatsRequest, GetPreKeyStatsResponse,
-    GetSenderCertificateRequest, GetSenderCertificateResponse, InvalidateAllSessionsRequest,
+    InvalidateAllSessionsRequest,
     InvalidateSessionRequest, ListDevicesRequest, ListDevicesResponse, LoginRequest, LogoutRequest,
     RefreshPreKeysRequest, RegenerateRecoveryCodesRequest, RegisterRequest, RegistrationResult,
     RenameDeviceRequest, RequestSenderCertificateRequest, RequestSenderCertificateResponse,
@@ -653,17 +653,19 @@ impl AuthClient {
     /// Certificate is signed by server and used for sealed sender.
     /// Valid for up to 30 days (default 7 days). Cache and refresh before expiration.
     ///
+    /// The server reads the requesting device id from the authenticated
+    /// session, so this RPC takes only the validity duration. Letting the
+    /// client supply a device id was a sender-impersonation primitive (cf.
+    /// Signal-Server `CertificateController` which reads `auth.deviceId()`).
+    ///
     /// # Arguments
     ///
-    /// * `device_id` - Device ID for certificate
     /// * `validity_duration` - Optional custom validity period
     pub async fn request_sender_certificate(
         &mut self,
-        device_id: u32,
         validity_duration: Option<std::time::Duration>,
     ) -> Result<RequestSenderCertificateResponse, NetworkError> {
         let request = RequestSenderCertificateRequest {
-            device_id,
             validity_period: validity_duration.map(|d| prost_types::Duration {
                 seconds: d.as_secs() as i64,
                 nanos: d.subsec_nanos() as i32,
@@ -677,26 +679,9 @@ impl AuthClient {
             .map_err(|s| NetworkError::from_status(&s))
     }
 
-    /// Get cached sender certificate if still valid.
-    ///
-    /// Returns certificate with `exists` and `expired` status flags.
-    /// If expired or not exists, request a new certificate.
-    ///
-    /// # Arguments
-    ///
-    /// * `device_id` - Device ID to get certificate for
-    pub async fn get_sender_certificate(
-        &mut self,
-        device_id: u32,
-    ) -> Result<GetSenderCertificateResponse, NetworkError> {
-        let request = GetSenderCertificateRequest { device_id };
-
-        self.inner
-            .get_sender_certificate(request)
-            .await
-            .map(|r| r.into_inner())
-            .map_err(|s| NetworkError::from_status(&s))
-    }
+    // NOTE: get_sender_certificate() removed for privacy — sealed sender
+    // certificates are stateless and never stored server-side. Use
+    // request_sender_certificate() and cache the result locally.
 
     // NOTE: get_server_trust_root() removed - trust root is hardcoded in config.rs
     // per Signal's security model. See crate::config::TRUST_ROOT_PUBLIC_KEY
@@ -712,7 +697,7 @@ impl AuthClient {
     /// # Arguments
     ///
     /// * `username` - Hashed username
-    /// * `recovery_code` - 8-character one-time recovery code
+    /// * `recovery_code` - 12-character one-time recovery code
     /// * `new_password_hash` - SHA256 hash of the new password
     /// * `new_svr_public_key` - New SVR public key derived from new PIN
     /// * `new_registration_lock` - New registration lock derived from new PIN

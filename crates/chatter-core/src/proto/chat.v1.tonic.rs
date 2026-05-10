@@ -604,32 +604,6 @@ pub mod auth_service_client {
             self.inner.unary(req, path, codec).await
         }
         ///
-        pub async fn get_sender_certificate(
-            &mut self,
-            request: impl tonic::IntoRequest<super::GetSenderCertificateRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::GetSenderCertificateResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.AuthService/GetSenderCertificate",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.AuthService", "GetSenderCertificate"));
-            self.inner.unary(req, path, codec).await
-        }
-        ///
         pub async fn get_pre_key_bundle(
             &mut self,
             request: impl tonic::IntoRequest<super::GetPreKeyBundleRequest>,
@@ -704,6 +678,12 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "GetPreKeyStats"));
             self.inner.unary(req, path, codec).await
         }
+        /** ResetSession forcibly invalidates Signal session state between the
+ calling device and a named peer. The server emits a device-targeted
+ notification to the requester's own device(s) telling the local
+ Signal client to drop its session(s) with the peer; the next send
+ will rebuild via X3DH from a fresh prekey bundle.
+*/
         pub async fn reset_session(
             &mut self,
             request: impl tonic::IntoRequest<super::ResetSessionRequest>,

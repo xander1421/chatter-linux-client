@@ -111,8 +111,7 @@ impl SignalService {
         let device_id_struct = DeviceId::try_from(device_id).map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
         let address = ProtocolAddress::new(recipient_id.to_string(), device_id_struct);
 
-        let local_device_id = self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID)?.ok_or(ServiceError::NotLoggedIn)?;
-        let sender_cert = self.get_or_request_sender_certificate(auth_client, local_device_id).await?;
+        let sender_cert = self.get_or_request_sender_certificate(auth_client).await?;
 
         self.actor.encrypt_sealed(plaintext.to_vec(), sender_cert, address).await
     }
@@ -179,10 +178,12 @@ impl SignalService {
     }
 
     /// Get sender certificate from cache or request a new one.
+    ///
+    /// The server picks the device id from the authenticated session, so
+    /// this no longer takes a device_id argument.
     pub(crate) async fn get_or_request_sender_certificate(
         &self,
         auth_client: &mut AuthClient,
-        device_id: u32,
     ) -> Result<SenderCertificate, ServiceError> {
         let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
 
@@ -200,7 +201,7 @@ impl SignalService {
             }
         }
 
-        let cert_response = auth_client.request_sender_certificate(device_id, None).await?;
+        let cert_response = auth_client.request_sender_certificate(None).await?;
         let proto_cert = cert_response.certificate.ok_or(ServiceError::Validation("Missing certificate".into()))?;
         let sender_cert = SenderCertificate::deserialize(&proto_cert.certificate).map_err(|_| ServiceError::Validation("Invalid cert".into()))?;
 
@@ -384,11 +385,9 @@ impl SignalService {
         // First ensure we have sessions with all devices
         let device_ids = self.ensure_sessions_all_devices(auth_client, recipient_id).await?;
 
-        // Get sender certificate once (used for all encryptions)
-        let local_device_id = self.settings_repo
-            .get::<u32>(keys::CURRENT_DEVICE_ID)?
-            .ok_or(ServiceError::NotLoggedIn)?;
-        let sender_cert = self.get_or_request_sender_certificate(auth_client, local_device_id).await?;
+        // Get sender certificate once (used for all encryptions). The
+        // server picks the device id from the authenticated session.
+        let sender_cert = self.get_or_request_sender_certificate(auth_client).await?;
 
         // Encrypt to each device
         let mut ciphertexts: HashMap<u32, Vec<u8>> = HashMap::with_capacity(device_ids.len());

@@ -1349,15 +1349,9 @@ impl ChatterClient {
             let grpc_pool = self.ui.grpc_pool.clone();
             tokio::spawn(async move {
                 let mut auth = grpc_pool.auth_client();
-                let device_id: Option<u32> = signal.settings_repo
-                    .get(crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID)
-                    .ok()
-                    .flatten();
-                if let Some(did) = device_id {
-                    match signal.get_or_request_sender_certificate(&mut auth, did).await {
-                        Ok(_) => tracing::info!("Sender certificate pre-fetched"),
-                        Err(e) => tracing::warn!("Failed to pre-fetch sender certificate: {}", e),
-                    }
+                match signal.get_or_request_sender_certificate(&mut auth).await {
+                    Ok(_) => tracing::info!("Sender certificate pre-fetched"),
+                    Err(e) => tracing::warn!("Failed to pre-fetch sender certificate: {}", e),
                 }
             });
         }

@@ -172,7 +172,7 @@ impl ChatterClient {
     /// # Arguments
     ///
     /// * `username` - The plaintext username (will be hashed before sending)
-    /// * `recovery_code` - 8-character alphanumeric recovery code (A-Z, 2-9)
+    /// * `recovery_code` - 12-character alphanumeric recovery code (A-Z, 2-9)
     /// * `new_password` - The new password to set
     /// * `new_pin` - The new 6-digit PIN for SVR key derivation
     pub async fn use_recovery_code(
