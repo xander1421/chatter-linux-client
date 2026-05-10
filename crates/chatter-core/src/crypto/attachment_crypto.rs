@@ -30,7 +30,6 @@ use openssl::hash::{Hasher, MessageDigest};
 use openssl::pkey::PKey;
 use openssl::sign::Signer;
 use openssl::symm::{Cipher, Crypter, Mode};
-use rand::RngCore;
 use subtle::ConstantTimeEq;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 

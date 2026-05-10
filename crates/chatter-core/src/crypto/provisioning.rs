@@ -44,7 +44,6 @@ use aes::cipher::{
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use prost::Message;
-use rand::RngCore;
 use rand_core_06::OsRng;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;

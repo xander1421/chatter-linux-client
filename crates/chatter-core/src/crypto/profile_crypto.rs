@@ -4,7 +4,6 @@
 //! Uses AES-256-GCM with random nonce, padded to fixed lengths to prevent length inference.
 
 use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
-use rand::RngCore;
 
 use crate::error::CryptoError;
 

@@ -7,7 +7,6 @@ use std::fmt;
 
 use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use rand::RngCore;
 use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 

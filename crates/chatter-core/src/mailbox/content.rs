@@ -6,7 +6,6 @@
 //! message size inference attacks. All messages within a bucket appear
 //! identical in size to the server.
 
-use rand::RngCore;
 
 use crate::error::ContentError;
 

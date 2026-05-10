@@ -19,10 +19,6 @@
 
 use std::time::{Duration, SystemTime};
 
-use aes_gcm::{
-    aead::{Aead, KeyInit},
-    Aes256Gcm, Nonce,
-};
 use libsignal_protocol::{
     sealed_sender_decrypt, sealed_sender_decrypt_to_usmc, sealed_sender_encrypt,
     sealed_sender_encrypt_from_usmc, sealed_sender_multi_recipient_encrypt,

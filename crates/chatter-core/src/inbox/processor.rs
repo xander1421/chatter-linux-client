@@ -5,7 +5,6 @@
 
 use std::fmt;
 
-use rand::SeedableRng;
 
 use libsignal_protocol::{
     DeviceId, IdentityKeyStore, KyberPreKeyStore, PreKeySignalMessage, PreKeyStore,
