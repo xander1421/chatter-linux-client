@@ -159,7 +159,7 @@ pub fn encrypt_backup(
 
     // Generate random 12-byte nonce
     let mut nonce_bytes = [0u8; NONCE_SIZE];
-    rand::fill(&mut nonce_bytes);
+    {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut nonce_bytes).expect("OS CSPRNG must not fail");}
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     // Serialize then encrypt

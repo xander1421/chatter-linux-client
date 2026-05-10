@@ -127,7 +127,13 @@ impl IdentityKeyManager {
             .get_identity()?
             .ok_or(CryptoError::NoIdentity)?;
 
-        key_pair.private_key().calculate_signature(data, &mut rand::rng())
+        // SECURITY: XEdDSA signing nonce must come from the OS, not a
+        // userspace ChaCha PRG seeded once via ThreadRng. Memory disclosure
+        // of the PRG state would reveal the nonce and let an attacker
+        // recover the identity private key from the signature.
+        use rand::TryRngCore;
+        let mut rng = rand::rngs::OsRng.unwrap_err();
+        key_pair.private_key().calculate_signature(data, &mut rng)
             .map(|sig| sig.into_vec())
             .map_err(|e| CryptoError::Protocol(e.to_string()))
     }

@@ -61,7 +61,7 @@ pub fn encrypt_profile_item(
 
     // Generate random nonce
     let mut nonce_bytes = [0u8; 12];
-    rand::rng().fill_bytes(&mut nonce_bytes);
+    {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut nonce_bytes).expect("OS CSPRNG must not fail");}
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     // Encrypt
@@ -194,7 +194,7 @@ pub fn encrypt_avatar(profile_key: &[u8; 32], avatar: &[u8]) -> Result<Vec<u8>, 
 
     // Generate random nonce
     let mut nonce_bytes = [0u8; 12];
-    rand::rng().fill_bytes(&mut nonce_bytes);
+    {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut nonce_bytes).expect("OS CSPRNG must not fail");}
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     // Encrypt

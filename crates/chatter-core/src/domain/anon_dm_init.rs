@@ -295,10 +295,10 @@ mod tests {
         let mut identity_key = [0u8; 33];
         let mut delivery_token = [0u8; 12];
 
-        rand::RngCore::fill_bytes(&mut rand::rng(), &mut mailbox_pk);
-        rand::RngCore::fill_bytes(&mut rand::rng(), &mut identity_key[1..]);
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut mailbox_pk).expect("OS CSPRNG must not fail");}
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut identity_key[1..]).expect("OS CSPRNG must not fail");}
         identity_key[0] = 0x05;
-        rand::RngCore::fill_bytes(&mut rand::rng(), &mut delivery_token);
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut delivery_token).expect("OS CSPRNG must not fail");}
 
         let msg = AnonDmInitMessage::new(
             AnonDmId::new(),

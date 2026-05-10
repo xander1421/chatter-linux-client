@@ -129,7 +129,7 @@ pub fn encrypt_envelope(
     let (aes_key, mac_key) = derive_keys(&shared)?;
 
     let mut iv = [0u8; IV_LEN];
-    rand::rng().fill_bytes(&mut iv);
+    {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut iv).expect("OS CSPRNG must not fail");}
 
     let plaintext = message.encode_to_vec();
     let ct = Aes256CbcEnc::new(aes_key.as_ref().into(), (&iv).into())

@@ -553,7 +553,7 @@ impl MessageProcessor {
                 }
             })?;
 
-        let mut rng = rand::rngs::StdRng::from_os_rng();
+        let mut rng = { use rand::TryRngCore as _; rand::rngs::OsRng.unwrap_err() };
         let plaintext = libsignal_protocol::message_decrypt_prekey(
             &prekey_msg,
             &sender_address,
@@ -608,7 +608,7 @@ impl MessageProcessor {
                 }
             })?;
 
-        let mut rng = rand::rngs::StdRng::from_os_rng();
+        let mut rng = { use rand::TryRngCore as _; rand::rngs::OsRng.unwrap_err() };
         let plaintext = libsignal_protocol::message_decrypt_signal(
             &signal_msg,
             &sender_address,

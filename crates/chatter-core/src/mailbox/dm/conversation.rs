@@ -214,7 +214,7 @@ impl ConversationKey {
     pub fn new() -> Self {
         // Generate random X25519 keypair
         let mut secret_bytes = [0u8; 32];
-        rand::fill(&mut secret_bytes);
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut secret_bytes).expect("OS CSPRNG must not fail");}
         let secret = X25519Secret::from(secret_bytes);
         let public = X25519PublicKey::from(&secret);
 
@@ -270,6 +270,53 @@ impl ConversationKey {
     /// Check if this key has an established shared secret.
     pub fn is_established(&self) -> bool {
         self.shared_secret.is_some()
+    }
+
+    /// Per-direction send (encryption) key.
+    ///
+    /// Returns the 32-byte XChaCha20-Poly1305 key the local peer should use
+    /// to encrypt outbound DM frames. Derived from the established
+    /// `shared_secret` via HKDF-SHA256 with direction-tagged info; both
+    /// peers agree on direction by lex-comparing the two ephemeral
+    /// public keys.
+    ///
+    /// Without per-direction separation, both peers encrypted with the same
+    /// 32-byte key under random 24-byte XChaCha nonces. A nonce collision
+    /// between the two peers (likelier with a memory-disclosed userspace
+    /// PRG; see round-1 / round-5 RNG audits) produces keystream reuse
+    /// across the two directions, and XOR of any two such messages reveals
+    /// plaintext XOR.
+    pub fn send_key(&self) -> Option<[u8; 32]> {
+        let root = self.shared_secret?;
+        let their = self.their_ephemeral_public?;
+        Self::derive_directional_key(&root, &self.our_ephemeral_public, &their, true)
+    }
+
+    /// Per-direction receive (decryption) key.
+    pub fn recv_key(&self) -> Option<[u8; 32]> {
+        let root = self.shared_secret?;
+        let their = self.their_ephemeral_public?;
+        Self::derive_directional_key(&root, &self.our_ephemeral_public, &their, false)
+    }
+
+    fn derive_directional_key(
+        root: &[u8; 32],
+        our_public: &[u8; 32],
+        their_public: &[u8; 32],
+        is_send: bool,
+    ) -> Option<[u8; 32]> {
+        // Choose info string so the smaller-pubkey peer's send key
+        // equals the bigger-pubkey peer's recv key, and vice versa.
+        let we_are_a = our_public < their_public;
+        let info: &[u8] = if (we_are_a && is_send) || (!we_are_a && !is_send) {
+            b"chatter-dm-conversation-v1/send-from-A"
+        } else {
+            b"chatter-dm-conversation-v1/send-from-B"
+        };
+        let hk = hkdf::Hkdf::<sha2::Sha256>::new(None, root);
+        let mut out = [0u8; 32];
+        hk.expand(info, &mut out).ok()?;
+        Some(out)
     }
 
     /// Get the shared secret if established.

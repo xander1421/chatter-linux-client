@@ -52,7 +52,7 @@ async fn perform_dummy_poll(
         let mut decoys_guard = decoys.write().await;
         while decoys_guard.len() < MAX_DECOY_MAILBOXES {
             let mut key = [0u8; 32];
-            rand::fill(&mut key[..]);
+            {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut key[..]).expect("OS CSPRNG must not fail");}
             decoys_guard.push(key);
         }
     }

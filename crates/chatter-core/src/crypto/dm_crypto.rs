@@ -33,7 +33,7 @@ pub fn encrypt_dm_message(plaintext: &str, shared_secret: &[u8; 32]) -> Result<V
 
     // Generate random nonce
     let mut nonce_bytes = [0u8; NONCE_SIZE];
-    rand::fill(&mut nonce_bytes);
+    {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut nonce_bytes).expect("OS CSPRNG must not fail");}
     let nonce = XNonce::from_slice(&nonce_bytes);
 
     // Encrypt
@@ -69,7 +69,7 @@ pub fn encrypt_dm_bytes(plaintext: &[u8], shared_secret: &[u8; 32]) -> Result<Ve
 
     // Generate random nonce
     let mut nonce_bytes = [0u8; NONCE_SIZE];
-    rand::fill(&mut nonce_bytes);
+    {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut nonce_bytes).expect("OS CSPRNG must not fail");}
     let nonce = XNonce::from_slice(&nonce_bytes);
 
     // Encrypt

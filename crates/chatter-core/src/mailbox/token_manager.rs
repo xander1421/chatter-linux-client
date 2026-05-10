@@ -262,7 +262,7 @@ impl TokenManager {
             // Generate Ed25519 keypair
             // Use raw random bytes to avoid rand_core version conflicts
             let mut secret_bytes = [0u8; 32];
-            rand::fill(&mut secret_bytes);
+            {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut secret_bytes).expect("OS CSPRNG must not fail");}
             let signing_key = SigningKey::from_bytes(&secret_bytes);
             let verifying_key = VerifyingKey::from(&signing_key);
 
@@ -707,7 +707,7 @@ impl TokenManager {
 
         for _ in 0..request_count {
             let mut secret_bytes = [0u8; 32];
-            rand::fill(&mut secret_bytes);
+            {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut secret_bytes).expect("OS CSPRNG must not fail");}
             let signing_key = SigningKey::from_bytes(&secret_bytes);
             let verifying_key = VerifyingKey::from(&signing_key);
 

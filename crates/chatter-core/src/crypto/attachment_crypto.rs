@@ -162,7 +162,7 @@ impl AttachmentCrypto {
         // before any unwinding; the returned `EncryptedAttachment` carries its
         // own `ZeroizeOnDrop` via `EncryptedAttachment`'s derive.
         let mut key: Zeroizing<[u8; KEY_SET_LENGTH]> = Zeroizing::new([0u8; KEY_SET_LENGTH]);
-        rand::rng().fill_bytes(&mut *key);
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut *key).expect("OS CSPRNG must not fail");}
 
         // Split key into AES and MAC portions
         let aes_key = &key[..AES_KEY_LENGTH];
@@ -170,7 +170,7 @@ impl AttachmentCrypto {
 
         // Generate random IV (16 bytes)
         let mut iv = [0u8; IV_LENGTH];
-        rand::rng().fill_bytes(&mut iv);
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut iv).expect("OS CSPRNG must not fail");}
 
         // Pad plaintext using log-bucketing
         let padded_size = Self::padded_size(plaintext.len());
@@ -499,12 +499,12 @@ impl AttachmentCrypto {
         // the local `Zeroizing` wrapper is dropped (zeroizing its copy) at
         // function exit.
         let mut key: Zeroizing<[u8; KEY_SET_LENGTH]> = Zeroizing::new([0u8; KEY_SET_LENGTH]);
-        rand::RngCore::fill_bytes(&mut rand::rng(), key.as_mut_slice());
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(key.as_mut_slice()).expect("OS CSPRNG must not fail");}
         let aes_key = &key[..AES_KEY_LENGTH];
         let mac_key = &key[AES_KEY_LENGTH..];
 
         let mut iv = [0u8; IV_LENGTH];
-        rand::RngCore::fill_bytes(&mut rand::rng(), &mut iv);
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut iv).expect("OS CSPRNG must not fail");}
 
         // Open files
         let mut input = std::io::BufReader::new(

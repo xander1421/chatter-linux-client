@@ -150,7 +150,7 @@ impl KeyRollingService {
 
         // 3. Generate new Ed25519 keypair
         let mut secret_bytes = [0u8; 32];
-        rand::fill(&mut secret_bytes);
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut secret_bytes).expect("OS CSPRNG must not fail");}
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret_bytes);
         let verifying_key = signing_key.verifying_key();
 
@@ -230,7 +230,7 @@ impl KeyRollingService {
 
         // 3. Generate new Ed25519 keypair
         let mut secret_bytes = [0u8; 32];
-        rand::fill(&mut secret_bytes);
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut secret_bytes).expect("OS CSPRNG must not fail");}
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret_bytes);
         let verifying_key = signing_key.verifying_key();
 

@@ -83,7 +83,7 @@ impl ContentEncoder {
         // Fill remaining with random bytes (not zeros)
         let padding_start = LENGTH_PREFIX_SIZE + content.len();
         if padding_start < padded_size {
-            rand::rng().fill_bytes(&mut padded[padding_start..]);
+            {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut padded[padding_start..]).expect("OS CSPRNG must not fail");}
         }
 
         Ok(padded)

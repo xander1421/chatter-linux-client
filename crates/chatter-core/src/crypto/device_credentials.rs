@@ -45,7 +45,7 @@ impl DeviceToken {
     /// Generate a new random device token.
     pub fn generate() -> Self {
         let mut token = [0u8; 32];
-        rand::rng().fill_bytes(&mut token);
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut token).expect("OS CSPRNG must not fail");}
         Self { token }
     }
 

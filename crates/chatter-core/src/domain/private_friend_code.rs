@@ -200,10 +200,10 @@ mod tests {
         let user_id = UserId::new();
         let mut identity_key = [0u8; 33];
         identity_key[0] = 0x05; // Type byte
-        rand::RngCore::fill_bytes(&mut rand::rng(), &mut identity_key[1..]);
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut identity_key[1..]).expect("OS CSPRNG must not fail");}
 
         let mut delivery_token = [0u8; 12];
-        rand::RngCore::fill_bytes(&mut rand::rng(), &mut delivery_token);
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut delivery_token).expect("OS CSPRNG must not fail");}
 
         let code = PrivateFriendCode::new(user_id, identity_key, delivery_token);
 
@@ -229,7 +229,7 @@ mod tests {
     #[test]
     fn test_delivery_token_derivation() {
         let mut profile_key = [0u8; 32];
-        rand::RngCore::fill_bytes(&mut rand::rng(), &mut profile_key);
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut profile_key).expect("OS CSPRNG must not fail");}
 
         let token1 = PrivateFriendCode::derive_delivery_token(&profile_key);
         let token2 = PrivateFriendCode::derive_delivery_token(&profile_key);
