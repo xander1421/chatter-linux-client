@@ -4,7 +4,7 @@
 //! preventing sensitive data (like decrypted attachments) from persisting
 //! in memory after use.
 
-use std::io::{Cursor, Read, Seek};
+use std::io::{Read, Seek};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Buffer that securely wipes contents when dropped.
@@ -62,11 +62,17 @@ impl SecureBuffer {
 
     /// Create a cursor for reading the buffer.
     ///
-    /// Useful for APIs that require `Read + Seek` traits.
-    /// Note: The cursor contains a clone of the data.
+    /// Useful for APIs that require `Read + Seek` traits. Returns a
+    /// [`SecureCursor`] (zeroizes its `Vec<u8>` on drop) rather than a
+    /// plain `std::io::Cursor`, so the clone of decrypted material doesn't
+    /// leak into freed allocator memory on `Drop`.
+    ///
+    /// Note: the cursor contains a clone of the data; only the clone is
+    /// zeroized when the cursor drops. The original `SecureBuffer` still
+    /// owns + zeroizes its own copy.
     #[must_use]
-    pub fn cursor(&self) -> Cursor<Vec<u8>> {
-        Cursor::new(self.data.clone())
+    pub fn cursor(&self) -> SecureCursor {
+        SecureCursor::new(self.data.clone())
     }
 
     /// Convert to a cursor, consuming the buffer.
