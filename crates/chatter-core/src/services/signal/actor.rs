@@ -222,7 +222,9 @@ impl SignalActorHandle {
                                         id: u32::from(kpk.id().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?),
                                         public_key: kpk.public_key().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.serialize().to_vec(),
                                         signature: kpk.signature().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.to_vec(),
-                                        timestamp: kpk.timestamp().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.epoch_millis(),
+                                        // Chatter-owned wire field: nanoseconds. libsignal stores ms,
+                                        // so multiply when emitting on the wire.
+                                        timestamp: kpk.timestamp().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.epoch_millis() * 1_000_000,
                                     };
                                     out.push(proto);
                                 }
@@ -574,7 +576,9 @@ impl SignalActorHandle {
                                     id: u32::from(spk.id().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?),
                                     public_key: spk.public_key().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.serialize().to_vec(),
                                     signature: spk.signature().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.to_vec(),
-                                    timestamp: spk.timestamp().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.epoch_millis(),
+                                    // Chatter-owned wire field: nanoseconds. libsignal stores ms,
+                                    // so multiply when emitting on the wire.
+                                    timestamp: spk.timestamp().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.epoch_millis() * 1_000_000,
                                 };
 
                                 // Generate new Kyber prekey (PQXDH pairing — must rotate together)
@@ -586,7 +590,9 @@ impl SignalActorHandle {
                                     id: u32::from(kpk.id().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?),
                                     public_key: kpk.public_key().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.serialize().to_vec(),
                                     signature: kpk.signature().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.to_vec(),
-                                    timestamp: kpk.timestamp().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.epoch_millis(),
+                                    // Chatter-owned wire field: nanoseconds. libsignal stores ms,
+                                    // so multiply when emitting on the wire.
+                                    timestamp: kpk.timestamp().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.epoch_millis() * 1_000_000,
                                 };
 
                                 Ok((spk_proto, kpk_proto))

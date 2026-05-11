@@ -735,7 +735,9 @@ impl AuthService {
         let signed_prekey_id: u32 = signed_prekey.id().map_err(|e| CryptoError::Protocol(e.to_string()))?.into();
         let signed_prekey_public = signed_prekey.public_key().map_err(|e| CryptoError::Protocol(e.to_string()))?.serialize();
         let signed_prekey_sig = signed_prekey.signature().map_err(|e| CryptoError::Protocol(e.to_string()))?;
-        let signed_prekey_ts = signed_prekey.timestamp().map_err(|e| CryptoError::Protocol(e.to_string()))?.epoch_millis();
+        // Chatter-owned wire field is nanoseconds; libsignal-native Timestamp
+        // stores milliseconds. Convert via ×1_000_000 on the wire.
+        let signed_prekey_ts = signed_prekey.timestamp().map_err(|e| CryptoError::Protocol(e.to_string()))?.epoch_millis() * 1_000_000;
 
         // Extract Kyber prekey values
         let kyber_id: u32 = kyber_prekey.id().map_err(|e| CryptoError::Protocol(e.to_string()))?.into();
@@ -769,7 +771,7 @@ impl AuthService {
                 timestamp: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .expect("Time should move forward")
-                    .as_millis() as u64,
+                    .as_nanos() as u64,
             }),
             unidentified_access_key: Some(uak.to_vec()), // Client-derived UAK (16 bytes)
             // Per NDSS '21: Do NOT enable unrestricted access by default.
