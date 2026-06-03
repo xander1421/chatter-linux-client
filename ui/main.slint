@@ -413,20 +413,18 @@ export component MainWindow inherits Window {
     in property <bool> sessions-loading <=> app.sessions-loading;
     in property <bool> sessions-revoking <=> app.sessions-revoking;
 
-    // Search modal properties
-    in-out property <string> search-query <=> app.search-query;
-    in property <[SearchResult]> search-results <=> app.search-results;
-    in property <bool> search-searching <=> app.search-searching;
-    in property <int> search-result-count <=> app.search-result-count;
-    in-out property <bool> search-all-channels <=> app.search-all-channels;
-
-    // Quick switcher properties
-    in property <[QuickSwitcherItem]> quick-switcher-items <=> app.quick-switcher-items;
-    in-out property <string> quick-switcher-query <=> app.quick-switcher-query;
-    in-out property <int> quick-switcher-selected-index <=> app.quick-switcher-selected-index;
-    callback quick-switcher-search <=> app.quick-switcher-search;
-    callback quick-switcher-select <=> app.quick-switcher-select;
-    callback quick-switcher-opened <=> app.quick-switcher-opened;
+    // Unified search (top bar)
+    in property <[QuickSwitcherItem]> unified-search-conversations <=> app.unified-search-conversations;
+    in property <[SearchResult]> unified-search-messages <=> app.unified-search-messages;
+    in property <bool> unified-search-searching <=> app.unified-search-searching;
+    in-out property <string> unified-search-query <=> app.unified-search-query;
+    in-out property <bool> unified-search-open <=> app.unified-search-open;
+    in-out property <int> unified-search-selected-index <=> app.unified-search-selected-index;
+    in-out property <string> search-shortcut-pref <=> app.search-shortcut-pref;
+    callback unified-search-opened <=> app.unified-search-opened;
+    callback unified-search-changed <=> app.unified-search-changed;
+    callback unified-search-conversation-selected <=> app.unified-search-conversation-selected;
+    callback unified-search-message-selected <=> app.unified-search-message-selected;
 
     // Settings properties
     in property <string> settings-display-name <=> app.settings-display-name;
@@ -588,7 +586,6 @@ export component MainWindow inherits Window {
     callback org-update-member-role <=> app.org-update-member-role;
 
     // ========== Chat callbacks ==========
-    callback search-clicked <=> app.search-clicked;
     callback chat-settings-clicked <=> app.chat-settings-clicked;
     callback invite-member <=> app.invite-member;
     callback message-clicked <=> app.message-clicked;
@@ -671,9 +668,6 @@ export component MainWindow inherits Window {
     callback forward-message <=> app.forward-message;
     callback revoke-session <=> app.revoke-session;
     callback revoke-all-sessions <=> app.revoke-all-sessions;
-    callback search-messages <=> app.search-messages;
-    callback search-result-clicked <=> app.search-result-clicked;
-    callback search-toggle-scope <=> app.search-toggle-scope;
 
     // ========== Settings callbacks ==========
     callback settings-edit-profile <=> app.settings-edit-profile;

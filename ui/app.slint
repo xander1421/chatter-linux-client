@@ -33,13 +33,11 @@ import { FriendsModal, FriendData, UserSearchResult, FriendRequestData, BlockedU
 import { ForwardMessageModal, ForwardTarget } from "modals/forward_message.slint";
 import { SessionsModal, SessionInfo } from "modals/sessions.slint";
 import { JoinChannelModal, SearchResultChannel } from "modals/join_channel.slint";
-import { SearchModal, SearchResult } from "modals/search_modal.slint";
 import { ChannelSettingsModal, ChannelMemberData } from "modals/channel_settings.slint";
 import { InvitePrivateGroupModal } from "modals/invite_private_group.slint";
 import { InviteMemberModal, InviteUser } from "modals/invite_member.slint";
 import { CreateSectionModal } from "modals/create_section.slint";
-import { QuickSwitcher, QuickSwitcherItem } from "modals/quick_switcher.slint";
-import { UnifiedSearch } from "components/unified_search.slint";
+import { UnifiedSearch, QuickSwitcherItem, SearchResult } from "components/unified_search.slint";
 
 // Import settings
 import { SettingsScreen } from "settings/settings_screen.slint";
@@ -85,14 +83,6 @@ export component App inherits Rectangle {
     // ========== View routing ==========
     // Views: "loading", "login", "register", "recovery", "main"
     in-out property <string> current-view: "loading";
-
-    // ========== Quick switcher (Ctrl+K) ==========
-    in property <[QuickSwitcherItem]> quick-switcher-items: [];
-    in-out property <string> quick-switcher-query: "";
-    in-out property <int> quick-switcher-selected-index: 0;
-    callback quick-switcher-search(string);
-    callback quick-switcher-select(string, string);
-    callback quick-switcher-opened();
 
     // ========== Unified search (top bar) ==========
     in property <[QuickSwitcherItem]> unified-search-conversations: [];
@@ -513,13 +503,6 @@ export component App inherits Rectangle {
     in property <bool> sessions-loading: false;
     in property <bool> sessions-revoking: false;
 
-    // Search modal properties
-    in-out property <string> search-query: "";
-    in property <[SearchResult]> search-results: [];
-    in property <bool> search-searching: false;
-    in property <int> search-result-count: 0;
-    in-out property <bool> search-all-channels: false;
-
     // Channel settings modal properties
     in property <string> channel-settings-id: "";
     in property <string> channel-settings-name: "";
@@ -674,7 +657,6 @@ export component App inherits Rectangle {
     callback org-update-member-role(string, string);
 
     // ========== Chat callbacks ==========
-    callback search-clicked();
     callback chat-settings-clicked();
     callback invite-member();
     callback members-panel-toggle();
@@ -777,11 +759,6 @@ export component App inherits Rectangle {
     // Sessions
     callback revoke-session(int);
     callback revoke-all-sessions();
-
-    // Search
-    callback search-messages(string);
-    callback search-result-clicked(string);
-    callback search-toggle-scope();
 
     // Settings
     callback settings-edit-profile();
@@ -1156,9 +1133,6 @@ export component App inherits Rectangle {
                 remove-from-section(conv-id) => {
                     root.remove-from-section(conv-id);
                 }
-                search-clicked => {
-                    root.search-clicked();
-                }
                 jarvis-clicked => {
                     if (JarvisGlobal.enabled) {
                         root.jarvis-panel-visible = !root.jarvis-panel-visible;
@@ -1290,7 +1264,6 @@ export component App inherits Rectangle {
                     gif-results: root.composer-gif-picker-results;
                     gif-search-query: root.composer-gif-picker-search;
 
-                    search-clicked => { root.search-clicked(); }
                     settings-clicked => { root.chat-settings-clicked(); }
                     voice-call-clicked => { root.start-voice-call(); }
                     video-call-clicked => { root.start-video-call(); }
@@ -1825,48 +1798,6 @@ export component App inherits Rectangle {
         }
     }
 
-    // Search Modal
-    if root.active-modal == "search": SearchModal {
-        show-modal: true;
-        search-query <=> root.search-query;
-        search-results: root.search-results;
-        searching: root.search-searching;
-        result-count: root.search-result-count;
-        search-all-channels <=> root.search-all-channels;
-
-        close => {
-            root.active-modal = "none";
-        }
-        search(query) => {
-            root.search-messages(query);
-        }
-        result-clicked(message-id) => {
-            root.search-result-clicked(message-id);
-        }
-        toggle-scope => {
-            root.search-toggle-scope();
-        }
-    }
-
-    // Quick Switcher (Ctrl+K)
-    if root.active-modal == "quick-switcher": QuickSwitcher {
-        show-modal: true;
-        items: root.quick-switcher-items;
-        search-query <=> root.quick-switcher-query;
-        selected-index <=> root.quick-switcher-selected-index;
-
-        close => {
-            root.active-modal = "none";
-        }
-        item-selected(id, conv-type) => {
-            root.active-modal = "none";
-            root.quick-switcher-select(id, conv-type);
-        }
-        search-changed(query) => {
-            root.quick-switcher-search(query);
-        }
-    }
-
     // Channel Settings Modal
     if root.active-modal == "channel-settings": ChannelSettingsModal {
         show-modal: true;
@@ -2034,7 +1965,7 @@ export component App inherits Rectangle {
                 }
 
                 for shortcut in [
-                    { key: "Ctrl + F", action: "Search messages" },
+                    { key: "Ctrl + K / Ctrl + F", action: "Search" },
                     { key: "Ctrl + ,", action: "Open settings" },
                     { key: "Ctrl + J", action: "Toggle AI assistant" },
                     { key: "Ctrl + /", action: "Show this dialog" },

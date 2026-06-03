@@ -5,8 +5,26 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
-import { QuickSwitcherItem } from "../modals/quick_switcher.slint";
-import { SearchResult } from "../modals/search_modal.slint";
+
+export struct QuickSwitcherItem {
+    id: string,
+    name: string,
+    // "channel", "dm", "private_group", "anon_dm"
+    conv-type: string,
+    presence-status: string,
+    unread-count: int,
+}
+
+export struct SearchResult {
+    message-id: string,
+    channel-id: string,
+    channel-name: string,
+    sender-name: string,
+    content-preview: string,
+    timestamp: string,
+    highlight-start: int,
+    highlight-end: int,
+}
 
 // One "Jump to" conversation row.
 component ConvRow inherits Rectangle {

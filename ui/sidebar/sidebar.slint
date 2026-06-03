@@ -73,7 +73,6 @@ export component Sidebar inherits Rectangle {
     callback message-requests-clicked();
     callback group-invites-clicked();
     callback toggle-collapsed();
-    callback search-clicked();
     callback jarvis-clicked();
     callback settings-clicked();
     callback anon-mode-clicked();
@@ -133,81 +132,6 @@ export component Sidebar inherits Rectangle {
             is-loading: root.org-loading;
             org-selected(id) => { root.org-selected(id); }
             manage-org-clicked => { root.manage-org-clicked(); }
-        }
-
-        // ════════════════════════════════════════
-        // 2. SEARCH BAR — Neo 2.0 inset surface
-        // ════════════════════════════════════════
-        if !root.collapsed: Rectangle {
-            height: 40px;
-            Rectangle {
-                x: Spacing.sm;
-                y: 4px;
-                width: parent.width - 2 * Spacing.sm;
-                height: 32px;
-                border-radius: Spacing.radius-sm;
-                // Neo inset: pressed-in search field
-                background: search-touch.has-hover ? Colors.surface-hover : Colors.neo-inset-bg;
-                border-width: 1px;
-                border-color: search-touch.has-hover ? Colors.neo-highlight-strong : Colors.neo-inset-shadow;
-
-                HorizontalLayout {
-                    padding-left: Spacing.sm;
-                    spacing: Spacing.sm;
-                    alignment: start;
-                    VerticalLayout {
-                        alignment: center;
-                        horizontal-stretch: 0;
-                        Image {
-                            source: Icons.search;
-                            width: 14px;
-                            height: 14px;
-                            colorize: Colors.text-muted;
-                        }
-                    }
-                    Text {
-                        text: "Search...";
-                        color: Colors.text-muted;
-                        font-size: Typography.sm2;
-                        vertical-alignment: center;
-                    }
-                }
-                search-touch := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => { root.search-clicked(); }
-                }
-            }
-        }
-
-        // Collapsed: search icon
-        if root.collapsed: TooltipArea {
-            height: 36px;
-            width: 44px;
-            x: (parent.width - self.width) / 2;
-            tooltip-text: "Search";
-            tooltip-enabled: root.collapsed;
-            placement: "right";
-            HorizontalLayout {
-                alignment: center;
-                Rectangle {
-                    width: 28px;
-                    height: 28px;
-                    border-radius: Spacing.radius-sm;
-                    background: csearch-touch.has-hover ? Colors.surface-hover : transparent;
-                    Image {
-                        source: Icons.search;
-                        width: 16px;
-                        height: 16px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        colorize: Colors.text-muted;
-                    }
-                }
-            }
-            csearch-touch := TouchArea {
-                mouse-cursor: pointer;
-                clicked => { root.search-clicked(); }
-            }
         }
 
         // ════════════════════════════════════════
