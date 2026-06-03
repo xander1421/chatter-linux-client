@@ -81,6 +81,7 @@ fn wire_conversation_selected(window: &MainWindow) {
                 "channel" => w.invoke_channel_selected(id),
                 "dm" | "anon_dm" => w.invoke_dm_selected(id),
                 "private_group" => w.invoke_private_group_selected(id),
+                "saved_messages" => w.invoke_saved_messages_clicked(),
                 _ => {}
             }
         }
@@ -159,6 +160,16 @@ fn wire_message_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// Collect conversations from sidebar models, filter+arrange via core.
 fn filter_to_items(query: &str, window: &MainWindow) -> Vec<QuickSwitcherItem> {
     let mut entries: Vec<QuickSwitcherEntry> = Vec::new();
+
+    // Saved Messages — always a jump target (opened via its dedicated callback,
+    // so the id is a sentinel, not a real channel id).
+    entries.push(QuickSwitcherEntry {
+        id: "saved-messages".into(),
+        name: "Saved Messages".into(),
+        conv_type: "saved_messages".into(),
+        presence_status: String::new(),
+        unread_count: 0,
+    });
 
     let channels = window.get_channels();
     for i in 0..channels.row_count() {

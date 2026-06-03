@@ -55,7 +55,7 @@ component ConvRow inherits Rectangle {
         padding-right: Spacing.md;
         spacing: Spacing.sm;
         Text {
-            text: root.conv-type == "channel" ? "#" : root.conv-type == "private_group" ? "🔒" : root.conv-type == "anon_dm" ? "👤" : "@";
+            text: root.conv-type == "saved_messages" ? "🔖" : root.conv-type == "channel" ? "#" : root.conv-type == "private_group" ? "🔒" : root.conv-type == "anon_dm" ? "👤" : "@";
             color: root.selected ? Colors.primary : Colors.text-muted;
             font-size: Typography.sm;
             font-weight: Typography.semibold;
