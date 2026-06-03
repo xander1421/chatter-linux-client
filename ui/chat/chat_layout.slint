@@ -87,7 +87,6 @@ export component ChatLayout inherits Rectangle {
     callback back-clicked();
 
     // Header callbacks
-    callback search-clicked();
     callback settings-clicked();
     callback invite-clicked();
     callback members-clicked();
@@ -171,9 +170,6 @@ export component ChatLayout inherits Rectangle {
 
             back-clicked => {
                 root.back-clicked();
-            }
-            search-clicked => {
-                root.search-clicked();
             }
             settings-clicked => {
                 root.settings-clicked();
