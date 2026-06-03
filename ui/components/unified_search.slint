@@ -152,17 +152,21 @@ export component UnifiedSearch inherits Rectangle {
 
     height: 44px;
 
-    // Keyboard-triggered open (Ctrl+K/F) flips `open` from the parent without
-    // a click, so focus the input here too — otherwise the cursor stays out of
-    // the field and the shortcut can't type.
+    // `open` is a momentary trigger: the parent (bar click or the global
+    // Ctrl+K/F shortcut) sets it true; we show the popup and immediately reset
+    // it so the next request always re-fires `changed`. Slint's PopupWindow has
+    // no close notification, so we don't try to mirror its state — the popup
+    // closes itself on click-outside, Escape, or selecting a result.
     changed open => {
         if (self.open) {
-            input.focus();
+            palette-popup.show();
+            self.open = false;
         }
     }
 
     // Activate the highlighted row (Enter / accepted).
     function activate-selected() {
+        palette-popup.close();
         if root.selected-index < root.conversations.length {
             root.conversation-selected(
                 root.conversations[root.selected-index].id,
@@ -173,7 +177,7 @@ export component UnifiedSearch inherits Rectangle {
         }
     }
 
-    // Resting bar (centered, max-width capped).
+    // Resting bar (centered, max-width capped). Click opens the popup.
     bar := Rectangle {
         width: min(640px, parent.width - Spacing.lg * 2);
         height: 36px;
@@ -182,7 +186,7 @@ export component UnifiedSearch inherits Rectangle {
         border-radius: Spacing.radius-md;
         background: Colors.neo-inset-bg;
         border-width: 1px;
-        border-color: input.has-focus ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
+        border-color: open-touch.has-hover ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
 
         HorizontalLayout {
             padding-left: Spacing.md;
@@ -194,122 +198,154 @@ export component UnifiedSearch inherits Rectangle {
                 colorize: Colors.text-muted;
                 y: (parent.height - self.height) / 2;
             }
-            input := TextInput {
-                text <=> root.query;
+            // Resting label — shows the placeholder, or the active query while open.
+            Text {
+                text: root.query == "" ? "Search…" : root.query;
+                color: root.query == "" ? Colors.text-muted : Colors.text-primary;
                 font-size: Typography.sm;
-                color: Colors.text-primary;
                 vertical-alignment: center;
                 horizontal-stretch: 1;
-                single-line: true;
-                edited => {
-                    root.selected-index = 0;
-                    root.open = true;
-                    root.query-changed(root.query);
-                }
-                accepted => { root.activate-selected(); }
-                // Nav keys are handled here (on the focused input) — a sibling
-                // FocusScope can't see them because the input holds focus.
-                key-pressed(event) => {
-                    if (event.text == Key.UpArrow) {
-                        if (root.selected-index > 0) { root.selected-index -= 1; }
-                        return accept;
-                    }
-                    if (event.text == Key.DownArrow) {
-                        if (root.selected-index < root.total-count - 1) { root.selected-index += 1; }
-                        return accept;
-                    }
-                    if (event.text == Key.Escape) {
-                        root.open = false;
-                        return accept;
-                    }
-                    return reject;
-                }
-            }
-            if root.query == "" && !input.has-focus: Text {
-                text: "Search…";
-                color: Colors.text-muted;
-                font-size: Typography.sm;
-                vertical-alignment: center;
+                overflow: elide;
             }
         }
 
-        // Open the palette on focus/click.
         open-touch := TouchArea {
             clicked => {
                 root.open = true;
-                input.focus();
                 root.opened();
             }
         }
     }
 
-    // Dropdown palette anchored directly under the bar.
-    if root.open: Rectangle {
+    // Anchored popup palette. Holds the live input + results so click-outside
+    // dismissal works (an inline dropdown can't catch outside clicks). The
+    // PopupWindow renders in its own top layer above the chat content.
+    palette-popup := PopupWindow {
         x: bar.x;
         y: bar.y + bar.height + Spacing.xs;
         width: bar.width;
-        height: min(palette.preferred-height, 420px);
-        background: Colors.surface;
-        border-radius: Spacing.radius-lg;
-        border-width: 1px;
-        border-color: Colors.neo-highlight-strong;
-        drop-shadow-blur: Spacing.neo-blur-lg;
-        drop-shadow-color: Colors.neo-shadow-strong;
+        close-policy: close-on-click-outside;
+        forward-focus: popup-input;
 
-        TouchArea {} // swallow clicks so the outside-catcher doesn't close it
+        Rectangle {
+            width: bar.width;
+            height: min(palette.preferred-height, 420px);
+            background: Colors.surface;
+            border-radius: Spacing.radius-lg;
+            border-width: 1px;
+            border-color: Colors.neo-highlight-strong;
+            drop-shadow-blur: Spacing.neo-blur-lg;
+            drop-shadow-color: Colors.neo-shadow-strong;
 
-        palette := VerticalLayout {
-            padding: Spacing.sm;
-            spacing: Spacing.xxs;
+            palette := VerticalLayout {
+                padding: Spacing.sm;
+                spacing: Spacing.xxs;
 
-            if root.query == "": Text {
-                text: "Recent conversations";
-                color: Colors.text-muted;
-                font-size: Typography.xs;
-                horizontal-alignment: left;
-            }
+                // Live search input (focused on open via forward-focus).
+                Rectangle {
+                    height: 32px;
+                    border-radius: Spacing.radius-md;
+                    background: Colors.neo-inset-bg;
+                    border-width: 1px;
+                    border-color: popup-input.has-focus ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
 
-            Flickable {
-                vertical-stretch: 1;
-                VerticalLayout {
-                    spacing: Spacing.xxs;
-
-                    // Jump to (conversations)
-                    if root.conversations.length > 0: Text {
-                        text: "Jump to";
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
+                    HorizontalLayout {
+                        padding-left: Spacing.sm;
+                        padding-right: Spacing.sm;
+                        spacing: Spacing.sm;
+                        Image {
+                            source: Icons.search;
+                            width: 14px; height: 14px;
+                            colorize: Colors.text-muted;
+                            y: (parent.height - self.height) / 2;
+                        }
+                        popup-input := TextInput {
+                            text <=> root.query;
+                            font-size: Typography.sm;
+                            color: Colors.text-primary;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            single-line: true;
+                            edited => {
+                                root.selected-index = 0;
+                                root.query-changed(root.query);
+                            }
+                            accepted => { root.activate-selected(); }
+                            // Nav keys handled on the focused input.
+                            key-pressed(event) => {
+                                if (event.text == Key.UpArrow) {
+                                    if (root.selected-index > 0) { root.selected-index -= 1; }
+                                    return accept;
+                                }
+                                if (event.text == Key.DownArrow) {
+                                    if (root.selected-index < root.total-count - 1) { root.selected-index += 1; }
+                                    return accept;
+                                }
+                                if (event.text == Key.Escape) {
+                                    palette-popup.close();
+                                    return accept;
+                                }
+                                return reject;
+                            }
+                        }
+                        if root.query == "" && !popup-input.has-focus: Text {
+                            text: "Search…";
+                            color: Colors.text-muted;
+                            font-size: Typography.sm;
+                            vertical-alignment: center;
+                        }
                     }
-                    for c[i] in root.conversations: ConvRow {
-                        item-id: c.id;
-                        name: c.name;
-                        conv-type: c.conv-type;
-                        unread-count: c.unread-count;
-                        selected: i == root.selected-index;
-                        clicked(id, t) => { root.conversation-selected(id, t); }
-                    }
+                }
 
-                    // Messages (content)
-                    if root.messages.length > 0: Text {
-                        text: "Messages";
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
-                    }
-                    for m[j] in root.messages: MsgRow {
-                        message-id: m.message-id;
-                        channel-name: m.channel-name;
-                        sender-name: m.sender-name;
-                        content-preview: m.content-preview;
-                        timestamp: m.timestamp;
-                        selected: (root.conversations.length + j) == root.selected-index;
-                        clicked(id) => { root.message-selected(id); }
-                    }
+                if root.query == "": Text {
+                    text: "Recent conversations";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    horizontal-alignment: left;
+                }
 
-                    if root.total-count == 0 && root.query != "" && !root.searching: Text {
-                        text: "No results";
-                        color: Colors.text-muted;
-                        font-size: Typography.sm;
-                        horizontal-alignment: center;
+                Flickable {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        spacing: Spacing.xxs;
+
+                        // Jump to (conversations)
+                        if root.conversations.length > 0: Text {
+                            text: "Jump to";
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                        }
+                        for c[i] in root.conversations: ConvRow {
+                            item-id: c.id;
+                            name: c.name;
+                            conv-type: c.conv-type;
+                            unread-count: c.unread-count;
+                            selected: i == root.selected-index;
+                            clicked(id, t) => { palette-popup.close(); root.conversation-selected(id, t); }
+                        }
+
+                        // Messages (content)
+                        if root.messages.length > 0: Text {
+                            text: "Messages";
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                        }
+                        for m[j] in root.messages: MsgRow {
+                            message-id: m.message-id;
+                            channel-name: m.channel-name;
+                            sender-name: m.sender-name;
+                            content-preview: m.content-preview;
+                            timestamp: m.timestamp;
+                            selected: (root.conversations.length + j) == root.selected-index;
+                            clicked(id) => { palette-popup.close(); root.message-selected(id); }
+                        }
+
+                        if root.total-count == 0 && root.query != "" && !root.searching: Text {
+                            text: "No results";
+                            color: Colors.text-muted;
+                            font-size: Typography.sm;
+                            horizontal-alignment: center;
+                        }
                     }
                 }
             }
