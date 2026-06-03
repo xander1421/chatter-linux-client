@@ -768,6 +768,7 @@ export component App inherits Rectangle {
     callback settings-delete-account();
     callback settings-read-receipts-changed(bool);
     callback settings-typing-indicators-changed(bool);
+    callback settings-search-shortcut-changed(string);
     callback settings-copy-fingerprint();
     callback settings-sealed-sender-changed(bool);
     callback settings-refresh-keys();
@@ -2019,6 +2020,7 @@ export component App inherits Rectangle {
         password-error: root.settings-password-error;
         read-receipts-enabled <=> root.settings-read-receipts;
         typing-indicators-enabled <=> root.settings-typing-indicators;
+        search-shortcut <=> root.search-shortcut-pref;
         identity-fingerprint: root.settings-identity-fingerprint;
         sealed-sender-unrestricted <=> root.settings-sealed-sender-unrestricted;
         prekey-count: root.settings-prekey-count;
@@ -2064,6 +2066,9 @@ export component App inherits Rectangle {
         }
         typing-indicators-changed(value) => {
             root.settings-typing-indicators-changed(value);
+        }
+        search-shortcut-changed(value) => {
+            root.settings-search-shortcut-changed(value);
         }
         copy-fingerprint-clicked => {
             root.settings-copy-fingerprint();

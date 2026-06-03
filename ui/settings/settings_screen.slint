@@ -41,6 +41,7 @@ export component SettingsScreen inherits Rectangle {
     // Privacy settings
     in-out property <bool> read-receipts-enabled: true;
     in-out property <bool> typing-indicators-enabled: true;
+    in-out property <string> search-shortcut: "both";   // "k" | "f" | "both"
 
     // Encryption settings
     in property <string> identity-fingerprint: "";
@@ -71,6 +72,7 @@ export component SettingsScreen inherits Rectangle {
     // Privacy callbacks
     callback read-receipts-changed(bool);
     callback typing-indicators-changed(bool);
+    callback search-shortcut-changed(string);
 
     // Encryption callbacks
     callback copy-fingerprint-clicked();
@@ -929,6 +931,83 @@ export component SettingsScreen inherits Rectangle {
                                         toggled(value) => {
                                             root.typing-indicators-enabled = value;
                                             root.typing-indicators-changed(value);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Search shortcut setting (3-way segmented selector)
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+                                border-width: 1px;
+                                border-color: Colors.neo-highlight;
+                                drop-shadow-blur: Spacing.neo-blur-sm;
+                                drop-shadow-offset-x: Spacing.neo-offset-sm;
+                                drop-shadow-offset-y: Spacing.neo-offset-sm;
+                                drop-shadow-color: Colors.neo-shadow;
+
+                                HorizontalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.md;
+
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        spacing: Spacing.sm;
+
+                                        Text {
+                                            text: "Search shortcut";
+                                            color: Colors.text-primary;
+                                            font-size: Typography.sm;
+                                            font-weight: Typography.medium;
+                                        }
+
+                                        Text {
+                                            text: "Which keys open search";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: Spacing.xs;
+                                        vertical-stretch: 0;
+                                        alignment: center;
+
+                                        for opt[idx] in [
+                                            { key: "k", label: "Ctrl+K" },
+                                            { key: "f", label: "Ctrl+F" },
+                                            { key: "both", label: "Both" },
+                                        ]: Rectangle {
+                                            property <bool> selected: root.search-shortcut == opt.key;
+                                            height: 32px;
+                                            min-width: 56px;
+                                            border-radius: Spacing.radius-md;
+                                            background: selected ? Colors.primary : Colors.surface-hover;
+                                            border-width: 1px;
+                                            border-color: selected ? Colors.primary : Colors.neo-highlight;
+
+                                            HorizontalLayout {
+                                                padding-left: Spacing.sm;
+                                                padding-right: Spacing.sm;
+                                                Text {
+                                                    text: opt.label;
+                                                    vertical-alignment: center;
+                                                    horizontal-alignment: center;
+                                                    color: selected ? Colors.text-primary : Colors.text-secondary;
+                                                    font-size: Typography.xs;
+                                                    font-weight: selected ? Typography.semibold : Typography.medium;
+                                                }
+                                            }
+
+                                            TouchArea {
+                                                mouse-cursor: pointer;
+                                                clicked => {
+                                                    root.search-shortcut = opt.key;
+                                                    root.search-shortcut-changed(opt.key);
+                                                }
+                                            }
                                         }
                                     }
                                 }

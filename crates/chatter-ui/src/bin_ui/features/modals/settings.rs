@@ -67,6 +67,20 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         let _ = ui_ctx_typing.set_typing_indicators_enabled(enabled);
     });
 
+    // Search shortcut selector
+    let ui_ctx_shortcut = ui_ctx.clone();
+    let weak_shortcut = window.as_weak();
+    window.on_settings_search_shortcut_changed(move |value: SharedString| {
+        let shortcut = chatter_core::services::search::SearchShortcut::from_str(value.as_str());
+        if let Err(e) = ui_ctx_shortcut.set_search_shortcut(shortcut) {
+            tracing::error!("Failed to save search shortcut: {}", e);
+            return;
+        }
+        if let Some(w) = weak_shortcut.upgrade() {
+            w.set_search_shortcut_pref(shortcut.as_str().into());
+        }
+    });
+
     // Copy fingerprint
     let ui_ctx_fp = ui_ctx.clone();
     window.on_settings_copy_fingerprint(move || {

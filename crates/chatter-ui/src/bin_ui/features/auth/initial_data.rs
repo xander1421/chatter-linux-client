@@ -591,6 +591,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     let pending_message_requests_count = private_requests_ui.len() as i32;
     let ui_ctx_for_refresh = ui_ctx.clone();
     let ui_ctx_for_convert = ui_ctx.clone();
+    let search_shortcut_pref = ui_ctx.get_search_shortcut().as_str();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = window_weak_ui.upgrade() {
             let channel_list: Vec<ChannelListItemData> = channel_domain_list
@@ -612,6 +613,10 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
             w.set_user_display_name(user_display_name.into());
             w.set_user_initials(user_initials.into());
             w.set_user_presence_status("online".into());
+
+            // Hydrate the persisted search-shortcut preference so the
+            // FocusScope picks the right combo (Ctrl+K / Ctrl+F / Both) at startup.
+            w.set_search_shortcut_pref(search_shortcut_pref.into());
 
             // Set user's own avatar if available
             if let Some((pixels, width, height)) = user_avatar_decoded {
