@@ -62,7 +62,6 @@ use crate::services::jarvis::JarvisService;
 use crate::services::ai::LocalAIService;
 use crate::services::mailbox_manager::MailboxManager;
 use crate::services::message::MessageService;
-use crate::services::message_gateway::MessageGateway;
 use crate::services::pin_service::PinService;
 use crate::services::session_service::{SessionError, SessionService};
 use crate::services::signal_service::SignalService;
@@ -277,7 +276,6 @@ impl ChatterClient {
     // services against a live server.
     crate::service_accessor!(auth, AuthService, auth_service);
     crate::service_accessor!(messages, MessageService, message_service);
-    crate::service_accessor!(message_gateway, MessageGateway, message_gateway);
     crate::service_accessor!(channels, ChannelService, channel_service);
     crate::service_accessor!(users, UserService, user_service);
     crate::service_accessor!(attachments, AttachmentService, attachment_service);
@@ -1046,6 +1044,28 @@ impl ChatterClient {
         let _ = repo.set(settings_keys::SIDEBAR_COLLAPSED, &collapsed);
     }
 
+    /// Read the user's search-shortcut preference (defaults to `Both`).
+    pub fn get_search_shortcut(&self) -> crate::services::search::SearchShortcut {
+        use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+        let repo = SettingsRepository::new(self.ui.database.clone());
+        let raw = repo
+            .get_string(keys::SEARCH_SHORTCUT)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        crate::services::search::SearchShortcut::from_str(&raw)
+    }
+
+    /// Persist the user's search-shortcut preference.
+    pub fn set_search_shortcut(
+        &self,
+        shortcut: crate::services::search::SearchShortcut,
+    ) -> Result<(), crate::error::StorageError> {
+        use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+        let repo = SettingsRepository::new(self.ui.database.clone());
+        repo.set_string(keys::SEARCH_SHORTCUT, shortcut.as_str())
+    }
+
     // ── Anon Mode (in-memory UI filter) ────────────────────────────────
     //
     // Pure presentation flag: when true, the UI hides server-friend DMs,
@@ -1691,6 +1711,20 @@ impl ChatterClient {
         tokio::spawn(async move {
             client.refresh_and_emit_friend_requests().await;
         });
+
+        // On accept, establish the DM Signal session in the background so the
+        // first call offer / message skips first-contact Sesame bootstrap on
+        // the call path. No-op on the higher-UUID side (Sesame tie-break).
+        if accept {
+            let client = Arc::clone(self);
+            let peer = *user_id;
+            tokio::spawn(async move {
+                if let Err(e) = client.messages().prewarm_dm_session(&peer).await {
+                    tracing::warn!(peer_id = %peer, error = %e, "prewarm DM session after friend accept failed");
+                }
+            });
+        }
+
         Ok(result)
     }
 
@@ -2201,6 +2235,22 @@ impl ChatterClient {
 
     /// Graceful shutdown. Stops inbox, aborts background tasks, disconnects.
     pub async fn shutdown(&self) {
+        // Leave any active call first. The call worker holds capture
+        // threads (audio, video, screen) and a LiveKit Room whose
+        // RoomManager pumps frames into `SharedVideoFrames`, which in
+        // turn pushes UI updates via `slint::invoke_from_event_loop`.
+        // If we don't end the call before signalling shutdown, those
+        // pushes keep saturating the Slint event queue and a posted
+        // `quit_event_loop` request can't drain — the window won't
+        // close. Ending the call here stops the frame pump at the
+        // source so the loop falls idle and quits.
+        #[cfg(feature = "media")]
+        {
+            if let Err(e) = self.call_leave_room().await {
+                tracing::warn!("Error leaving call during shutdown: {}", e);
+            }
+        }
+
         // Signal the ntfy push listener (if any) to exit cleanly so its SSE
         // connection closes instead of being torn down via `abort()`.
         if let Some(tx) = self.push_shutdown.lock().take() {

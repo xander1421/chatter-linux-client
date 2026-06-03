@@ -73,6 +73,7 @@ pub mod keys {
     pub const FONT_SIZE: &str = "ui.font_size";
     pub const MESSAGE_FONT_SIZE: &str = "ui.message_font_size";
     pub const COMPACT_MODE: &str = "ui.compact_mode";
+    pub const SEARCH_SHORTCUT: &str = "ui.search_shortcut";
 
     // Notification privacy settings
     // Controls what metadata leaks to the OS notification system.
