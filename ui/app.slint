@@ -37,7 +37,7 @@ import { ChannelSettingsModal, ChannelMemberData } from "modals/channel_settings
 import { InvitePrivateGroupModal } from "modals/invite_private_group.slint";
 import { InviteMemberModal, InviteUser } from "modals/invite_member.slint";
 import { CreateSectionModal } from "modals/create_section.slint";
-import { UnifiedSearch, QuickSwitcherItem, SearchResult } from "components/unified_search.slint";
+import { UnifiedSearch, UnifiedSearchBar, QuickSwitcherItem, SearchResult } from "components/unified_search.slint";
 
 // Import settings
 import { SettingsScreen } from "settings/settings_screen.slint";
@@ -1173,23 +1173,13 @@ export component App inherits Rectangle {
                         vertical-stretch: 1;
                         visible: !(root.is-small-screen && (root.members-panel-visible || root.thread-panel-visible));
 
-                        UnifiedSearch {
+                        UnifiedSearchBar {
                             visible: !root.active-call-fullscreen;
-                            conversations: root.unified-search-conversations;
-                            messages: root.unified-search-messages;
-                            searching: root.unified-search-searching;
-                            query <=> root.unified-search-query;
-                            open <=> root.unified-search-open;
-                            selected-index <=> root.unified-search-selected-index;
-                            opened => { root.unified-search-opened(); }
-                            query-changed(q) => { root.unified-search-changed(q); }
-                            conversation-selected(id, t) => {
-                                root.unified-search-conversation-selected(id, t);
-                                root.unified-search-open = false;
-                            }
-                            message-selected(id) => {
-                                root.unified-search-message-selected(id);
-                                root.unified-search-open = false;
+                            open => {
+                                root.unified-search-query = "";
+                                root.unified-search-selected-index = 0;
+                                root.unified-search-open = true;
+                                root.unified-search-opened();
                             }
                         }
 
@@ -1800,6 +1790,27 @@ export component App inherits Rectangle {
     }
 
     // Channel Settings Modal
+    // Unified search overlay (opened by the bar or the Ctrl+K / Ctrl+F shortcut).
+    if root.unified-search-open: UnifiedSearch {
+        show: true;
+        conversations: root.unified-search-conversations;
+        messages: root.unified-search-messages;
+        searching: root.unified-search-searching;
+        query <=> root.unified-search-query;
+        selected-index <=> root.unified-search-selected-index;
+        opened => { root.unified-search-opened(); }
+        query-changed(q) => { root.unified-search-changed(q); }
+        conversation-selected(id, t) => {
+            root.unified-search-conversation-selected(id, t);
+            root.unified-search-open = false;
+        }
+        message-selected(id) => {
+            root.unified-search-message-selected(id);
+            root.unified-search-open = false;
+        }
+        close => { root.unified-search-open = false; }
+    }
+
     if root.active-modal == "channel-settings": ChannelSettingsModal {
         show-modal: true;
         channel-id: root.channel-settings-id;

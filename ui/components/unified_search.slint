@@ -1,5 +1,11 @@
-// Unified search — Slack-style top-bar search + dropdown palette.
+// Unified search — Slack-style top bar + full-window overlay palette.
 // Replaces QuickSwitcher (Ctrl+K) and SearchModal (Ctrl+F).
+//
+// Two exported pieces sharing window state:
+//   - UnifiedSearchBar : the inline resting pill (top of the chat column).
+//   - UnifiedSearch    : the App-root overlay palette (boolean-driven `if`),
+//                        same pattern as every other modal here — which makes
+//                        the global shortcut + click-outside + Escape reliable.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -133,51 +139,11 @@ component MsgRow inherits Rectangle {
     }
 }
 
-// Top-bar search. Resting = pill; open = dropdown palette anchored beneath.
-export component UnifiedSearch inherits Rectangle {
-    in property <[QuickSwitcherItem]> conversations: [];
-    in property <[SearchResult]> messages: [];
-    in property <bool> searching: false;
-    in-out property <string> query: "";
-    in-out property <bool> open: false;
-    in-out property <int> selected-index: 0;
-
-    callback opened();
-    callback query-changed(string);
-    callback conversation-selected(string, string);
-    callback message-selected(string);
-
-    // Combined navigable count: conversations first, then messages.
-    property <int> total-count: root.conversations.length + root.messages.length;
-
+// Inline resting bar (top of chat column). Click opens the overlay.
+export component UnifiedSearchBar inherits Rectangle {
+    callback open();
     height: 44px;
 
-    // `open` is a momentary trigger: the parent (bar click or the global
-    // Ctrl+K/F shortcut) sets it true; we show the popup and immediately reset
-    // it so the next request always re-fires `changed`. Slint's PopupWindow has
-    // no close notification, so we don't try to mirror its state — the popup
-    // closes itself on click-outside, Escape, or selecting a result.
-    changed open => {
-        if (self.open) {
-            palette-popup.show();
-            self.open = false;
-        }
-    }
-
-    // Activate the highlighted row (Enter / accepted).
-    function activate-selected() {
-        palette-popup.close();
-        if root.selected-index < root.conversations.length {
-            root.conversation-selected(
-                root.conversations[root.selected-index].id,
-                root.conversations[root.selected-index].conv-type);
-        } else if root.selected-index < root.total-count {
-            root.message-selected(
-                root.messages[root.selected-index - root.conversations.length].message-id);
-        }
-    }
-
-    // Resting bar (centered, max-width capped). Click opens the popup.
     bar := Rectangle {
         width: min(640px, parent.width - Spacing.lg * 2);
         height: 36px;
@@ -186,7 +152,7 @@ export component UnifiedSearch inherits Rectangle {
         border-radius: Spacing.radius-md;
         background: Colors.neo-inset-bg;
         border-width: 1px;
-        border-color: open-touch.has-hover ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
+        border-color: touch.has-hover ? Colors.neo-highlight-strong : Colors.neo-inset-shadow;
 
         HorizontalLayout {
             padding-left: Spacing.md;
@@ -198,154 +164,187 @@ export component UnifiedSearch inherits Rectangle {
                 colorize: Colors.text-muted;
                 y: (parent.height - self.height) / 2;
             }
-            // Resting label — shows the placeholder, or the active query while open.
             Text {
-                text: root.query == "" ? "Search…" : root.query;
-                color: root.query == "" ? Colors.text-muted : Colors.text-primary;
+                text: "Search…";
+                color: Colors.text-muted;
                 font-size: Typography.sm;
                 vertical-alignment: center;
                 horizontal-stretch: 1;
-                overflow: elide;
             }
         }
 
-        open-touch := TouchArea {
-            clicked => {
-                root.open = true;
-                root.opened();
-            }
+        touch := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.open(); }
+        }
+    }
+}
+
+// Full-window overlay palette (rendered at App root via `if open`).
+export component UnifiedSearch inherits Rectangle {
+    in property <bool> show: false;
+    in property <[QuickSwitcherItem]> conversations: [];
+    in property <[SearchResult]> messages: [];
+    in property <bool> searching: false;
+    in-out property <string> query: "";
+    in-out property <int> selected-index: 0;
+
+    callback opened();
+    callback query-changed(string);
+    callback conversation-selected(string, string);
+    callback message-selected(string);
+    callback close();
+
+    property <int> total-count: root.conversations.length + root.messages.length;
+
+    visible: root.show;
+
+    function activate-selected() {
+        if root.selected-index < root.conversations.length {
+            root.conversation-selected(
+                root.conversations[root.selected-index].id,
+                root.conversations[root.selected-index].conv-type);
+        } else if root.selected-index < root.total-count {
+            root.message-selected(
+                root.messages[root.selected-index - root.conversations.length].message-id);
         }
     }
 
-    // Anchored popup palette. Holds the live input + results so click-outside
-    // dismissal works (an inline dropdown can't catch outside clicks). The
-    // PopupWindow renders in its own top layer above the chat content.
-    palette-popup := PopupWindow {
-        x: bar.x;
-        y: bar.y + bar.height + Spacing.xs;
-        width: bar.width;
-        close-policy: close-on-click-outside;
-        forward-focus: popup-input;
+    // Dim backdrop — clicking outside the panel closes.
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: Colors.overlay;
+        TouchArea { clicked => { root.close(); } }
+    }
 
-        Rectangle {
-            width: bar.width;
-            height: min(palette.preferred-height, 420px);
-            background: Colors.surface;
-            border-radius: Spacing.radius-lg;
-            border-width: 1px;
-            border-color: Colors.neo-highlight-strong;
-            drop-shadow-blur: Spacing.neo-blur-lg;
-            drop-shadow-color: Colors.neo-shadow-strong;
+    // Palette panel — near top, centered.
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: min(72px, parent.height * 0.1);
+        width: min(640px, parent.width - 32px);
+        height: min(content.preferred-height, parent.height - 160px);
+        background: Colors.surface;
+        border-radius: Spacing.radius-lg;
+        border-width: 1px;
+        border-color: Colors.neo-highlight-strong;
+        drop-shadow-blur: Spacing.neo-blur-lg;
+        drop-shadow-color: Colors.neo-shadow-strong;
 
-            palette := VerticalLayout {
-                padding: Spacing.sm;
-                spacing: Spacing.xxs;
+        // Swallow clicks so they don't reach the backdrop.
+        TouchArea {}
 
-                // Live search input (focused on open via forward-focus).
-                Rectangle {
-                    height: 32px;
-                    border-radius: Spacing.radius-md;
-                    background: Colors.neo-inset-bg;
-                    border-width: 1px;
-                    border-color: popup-input.has-focus ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
+        content := VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.sm;
 
-                    HorizontalLayout {
-                        padding-left: Spacing.sm;
-                        padding-right: Spacing.sm;
-                        spacing: Spacing.sm;
-                        Image {
-                            source: Icons.search;
-                            width: 14px; height: 14px;
-                            colorize: Colors.text-muted;
-                            y: (parent.height - self.height) / 2;
+            // Search input — focused when the overlay appears.
+            Rectangle {
+                height: 40px;
+                border-radius: Spacing.radius-md;
+                background: Colors.neo-inset-bg;
+                border-width: 1px;
+                border-color: search-input.has-focus ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
+
+                HorizontalLayout {
+                    padding-left: Spacing.md;
+                    padding-right: Spacing.md;
+                    spacing: Spacing.sm;
+                    Image {
+                        source: Icons.search;
+                        width: 16px; height: 16px;
+                        colorize: Colors.text-muted;
+                        y: (parent.height - self.height) / 2;
+                    }
+                    search-input := TextInput {
+                        text <=> root.query;
+                        font-size: Typography.sm;
+                        color: Colors.text-primary;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        single-line: true;
+                        // Focus as soon as the overlay is created.
+                        init => { self.focus(); }
+                        edited => {
+                            root.selected-index = 0;
+                            root.query-changed(root.query);
                         }
-                        popup-input := TextInput {
-                            text <=> root.query;
-                            font-size: Typography.sm;
-                            color: Colors.text-primary;
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
-                            single-line: true;
-                            edited => {
-                                root.selected-index = 0;
-                                root.query-changed(root.query);
+                        accepted => { root.activate-selected(); }
+                        key-pressed(event) => {
+                            if (event.text == Key.UpArrow) {
+                                if (root.selected-index > 0) { root.selected-index -= 1; }
+                                return accept;
                             }
-                            accepted => { root.activate-selected(); }
-                            // Nav keys handled on the focused input.
-                            key-pressed(event) => {
-                                if (event.text == Key.UpArrow) {
-                                    if (root.selected-index > 0) { root.selected-index -= 1; }
-                                    return accept;
-                                }
-                                if (event.text == Key.DownArrow) {
-                                    if (root.selected-index < root.total-count - 1) { root.selected-index += 1; }
-                                    return accept;
-                                }
-                                if (event.text == Key.Escape) {
-                                    palette-popup.close();
-                                    return accept;
-                                }
-                                return reject;
+                            if (event.text == Key.DownArrow) {
+                                if (root.selected-index < root.total-count - 1) { root.selected-index += 1; }
+                                return accept;
                             }
-                        }
-                        if root.query == "" && !popup-input.has-focus: Text {
-                            text: "Search…";
-                            color: Colors.text-muted;
-                            font-size: Typography.sm;
-                            vertical-alignment: center;
+                            if (event.text == Key.Escape) {
+                                root.close();
+                                return accept;
+                            }
+                            return reject;
                         }
                     }
+                    if root.query == "" && !search-input.has-focus: Text {
+                        text: "Search…";
+                        color: Colors.text-muted;
+                        font-size: Typography.sm;
+                        vertical-alignment: center;
+                    }
                 }
+            }
 
-                if root.query == "": Text {
-                    text: "Recent conversations";
-                    color: Colors.text-muted;
-                    font-size: Typography.xs;
-                    horizontal-alignment: left;
-                }
+            if root.query == "": Text {
+                text: "Recent conversations";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                horizontal-alignment: left;
+            }
 
-                Flickable {
-                    vertical-stretch: 1;
-                    VerticalLayout {
-                        spacing: Spacing.xxs;
+            Flickable {
+                vertical-stretch: 1;
+                min-height: 40px;
+                max-height: 420px;
+                VerticalLayout {
+                    spacing: Spacing.xxs;
 
-                        // Jump to (conversations)
-                        if root.conversations.length > 0: Text {
-                            text: "Jump to";
-                            color: Colors.text-muted;
-                            font-size: Typography.xs;
-                        }
-                        for c[i] in root.conversations: ConvRow {
-                            item-id: c.id;
-                            name: c.name;
-                            conv-type: c.conv-type;
-                            unread-count: c.unread-count;
-                            selected: i == root.selected-index;
-                            clicked(id, t) => { palette-popup.close(); root.conversation-selected(id, t); }
-                        }
+                    // Jump to (conversations)
+                    if root.conversations.length > 0: Text {
+                        text: "Jump to";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                    }
+                    for c[i] in root.conversations: ConvRow {
+                        item-id: c.id;
+                        name: c.name;
+                        conv-type: c.conv-type;
+                        unread-count: c.unread-count;
+                        selected: i == root.selected-index;
+                        clicked(id, t) => { root.conversation-selected(id, t); }
+                    }
 
-                        // Messages (content)
-                        if root.messages.length > 0: Text {
-                            text: "Messages";
-                            color: Colors.text-muted;
-                            font-size: Typography.xs;
-                        }
-                        for m[j] in root.messages: MsgRow {
-                            message-id: m.message-id;
-                            channel-name: m.channel-name;
-                            sender-name: m.sender-name;
-                            content-preview: m.content-preview;
-                            timestamp: m.timestamp;
-                            selected: (root.conversations.length + j) == root.selected-index;
-                            clicked(id) => { palette-popup.close(); root.message-selected(id); }
-                        }
+                    // Messages (content)
+                    if root.messages.length > 0: Text {
+                        text: "Messages";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                    }
+                    for m[j] in root.messages: MsgRow {
+                        message-id: m.message-id;
+                        channel-name: m.channel-name;
+                        sender-name: m.sender-name;
+                        content-preview: m.content-preview;
+                        timestamp: m.timestamp;
+                        selected: (root.conversations.length + j) == root.selected-index;
+                        clicked(id) => { root.message-selected(id); }
+                    }
 
-                        if root.total-count == 0 && root.query != "" && !root.searching: Text {
-                            text: "No results";
-                            color: Colors.text-muted;
-                            font-size: Typography.sm;
-                            horizontal-alignment: center;
-                        }
+                    if root.total-count == 0 && root.query != "" && !root.searching: Text {
+                        text: "No results";
+                        color: Colors.text-muted;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
                     }
                 }
             }
