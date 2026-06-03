@@ -39,6 +39,7 @@ import { InvitePrivateGroupModal } from "modals/invite_private_group.slint";
 import { InviteMemberModal, InviteUser } from "modals/invite_member.slint";
 import { CreateSectionModal } from "modals/create_section.slint";
 import { QuickSwitcher, QuickSwitcherItem } from "modals/quick_switcher.slint";
+import { UnifiedSearch } from "components/unified_search.slint";
 
 // Import settings
 import { SettingsScreen } from "settings/settings_screen.slint";
@@ -92,6 +93,20 @@ export component App inherits Rectangle {
     callback quick-switcher-search(string);
     callback quick-switcher-select(string, string);
     callback quick-switcher-opened();
+
+    // ========== Unified search (top bar) ==========
+    in property <[QuickSwitcherItem]> unified-search-conversations: [];
+    in property <[SearchResult]> unified-search-messages: [];
+    in property <bool> unified-search-searching: false;
+    in-out property <string> unified-search-query: "";
+    in-out property <bool> unified-search-open: false;
+    in-out property <int> unified-search-selected-index: 0;
+    // Loaded from SettingsRepository at startup: "k" | "f" | "both".
+    in-out property <string> search-shortcut-pref: "both";
+    callback unified-search-opened();
+    callback unified-search-changed(string);
+    callback unified-search-conversation-selected(string, string);
+    callback unified-search-message-selected(string);
 
     // ========== Connection status ==========
     // "connected", "connecting", "reconnecting", "disconnected", "failed"
@@ -867,17 +882,14 @@ export component App inherits Rectangle {
                 root.jarvis-panel-visible = !root.jarvis-panel-visible;
                 return accept;
             }
-            // Ctrl+K: Open quick switcher
-            if (event.modifiers.control && event.text == "k") {
-                root.quick-switcher-query = "";
-                root.quick-switcher-selected-index = 0;
-                root.active-modal = "quick-switcher";
-                root.quick-switcher-opened();
-                return accept;
-            }
-            // Ctrl+F: Open search
-            if (event.modifiers.control && event.text == "f") {
-                root.active-modal = "search";
+            // Ctrl+K / Ctrl+F: open unified search (which combo depends on pref)
+            if (event.modifiers.control
+                && ((event.text == "k" && root.search-shortcut-pref != "f")
+                 || (event.text == "f" && root.search-shortcut-pref != "k"))) {
+                root.unified-search-query = "";
+                root.unified-search-selected-index = 0;
+                root.unified-search-open = true;
+                root.unified-search-opened();
                 return accept;
             }
             // Ctrl+,: Open settings
@@ -1185,6 +1197,26 @@ export component App inherits Rectangle {
                         horizontal-stretch: 1;
                         vertical-stretch: 1;
                         visible: !(root.is-small-screen && (root.members-panel-visible || root.thread-panel-visible));
+
+                        UnifiedSearch {
+                            visible: !root.active-call-fullscreen;
+                            conversations: root.unified-search-conversations;
+                            messages: root.unified-search-messages;
+                            searching: root.unified-search-searching;
+                            query <=> root.unified-search-query;
+                            open <=> root.unified-search-open;
+                            selected-index <=> root.unified-search-selected-index;
+                            opened => { root.unified-search-opened(); }
+                            query-changed(q) => { root.unified-search-changed(q); }
+                            conversation-selected(id, t) => {
+                                root.unified-search-conversation-selected(id, t);
+                                root.unified-search-open = false;
+                            }
+                            message-selected(id) => {
+                                root.unified-search-message-selected(id);
+                                root.unified-search-open = false;
+                            }
+                        }
 
                         ActiveCallView {
                             vertical-stretch: 0;

@@ -28,6 +28,7 @@ pub mod quick_switcher;
 pub mod sidebar;
 pub mod status;
 pub mod thread;
+pub mod unified_search;
 
 use std::sync::Arc;
 
@@ -54,6 +55,7 @@ pub fn wire_all(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     status::wire(window, ui_ctx);
     connection::wire(window, ui_ctx);
     quick_switcher::wire(window, ui_ctx);
+    unified_search::wire(window, ui_ctx);
     notifications::wire(window, ui_ctx);
 
     // Initialize inline GIF animation system
