@@ -55,6 +55,7 @@ pub mod embed_service;
 // Removed - gif_service.rs file was deleted
 pub mod organization_service;
 pub mod quick_switcher;
+pub mod search;
 pub mod section_service;
 pub mod signal;
 pub mod channel_event_service;
