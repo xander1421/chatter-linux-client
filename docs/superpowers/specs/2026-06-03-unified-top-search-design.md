@@ -95,9 +95,9 @@ returned lists. The split quick-switcher/search-messages glue is replaced.
 ### 5. Removals (clean break — no fallbacks/shims)
 
 - Sidebar top "Search..." field and its `search-clicked()` path.
-- Sidebar Channels-header **magnifier** icon. The Channels header keeps `+`
-  (create channel) and gains a **separate search button beside it** that opens the
-  unified palette.
+- Sidebar Channels-header **magnifier** icon (`join-channel-clicked()`, sidebar.slint
+  ~556) **and** the collapsed-rail "Find channel" icon (~607). No new sidebar button
+  replaces them — the `+` is the single Channels-header control.
 - `ui/modals/search_modal.slint` and `ui/modals/quick_switcher.slint` modals,
   plus their now-dead Slint properties/callbacks and Rust wiring. Replaced by the
   new `ui/components/unified_search.slint` and a single
@@ -114,6 +114,20 @@ returned lists. The split quick-switcher/search-messages glue is replaced.
   configured) open the one unified search.
 - Update the keyboard-shortcuts help dialog (app.slint ~2025) accordingly.
 
+### 7. Channels modal: Join folded into Create as a tab
+
+Independent of the global search work, the Channels-header `+` becomes the single
+entry point for both creating and joining a channel:
+
+- The create-channel modal gains a tab switcher: **Create Channel** | **Join Channel**.
+- The existing `ui/modals/join_channel.slint` view (search public channels / paste
+  channel ID, with `SearchResultChannel` results) is lifted in as the **Join** tab —
+  its search box, results list, and Join/Cancel actions move under the tab.
+- The standalone Join Channel modal trigger (`join-channel-clicked()`) is removed;
+  `create-channel-clicked()` opens the tabbed modal (default tab: Create).
+- `join-channel-search-query`, `join-channel-results`, `join-channel-searching`
+  properties and `search-channels` callback are retained but now drive the Join tab.
+
 ## Out of scope
 
 - Server-side / global search beyond what `search_messages_local` already does.
@@ -126,10 +140,12 @@ returned lists. The split quick-switcher/search-messages glue is replaced.
 2. Clicking it or pressing the configured shortcut opens a dropdown palette
    showing "Jump to" (conversations/people) and "Messages" (content) sections.
 3. Arrow keys move across both sections; Enter opens the highlighted result.
-4. Sidebar top search field and Channels-header magnifier are gone; a search
-   button sits beside the Channels `+`.
-5. The old SearchModal and QuickSwitcher modals are fully removed (no dead code).
-6. Settings exposes the shortcut choice; changing it changes which combo opens
+4. Sidebar top search field, Channels-header magnifier, and collapsed "Find
+   channel" icon are gone; `+` is the only Channels-header control.
+5. The Channels `+` opens a tabbed modal (Create | Join); the standalone Join
+   Channel modal is gone and its search/paste-ID view lives under the Join tab.
+6. The old SearchModal and QuickSwitcher modals are fully removed (no dead code).
+7. Settings exposes the shortcut choice; changing it changes which combo opens
    search; default is Both.
-7. `cargo run -p chatter-ui` launches and all flows work (verification per repo
+8. `cargo run -p chatter-ui` launches and all flows work (verification per repo
    rule: run, don't just build/check).
