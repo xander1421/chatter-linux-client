@@ -1,0 +1,297 @@
+// Unified search — Slack-style top-bar search + dropdown palette.
+// Replaces QuickSwitcher (Ctrl+K) and SearchModal (Ctrl+F).
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { QuickSwitcherItem } from "../modals/quick_switcher.slint";
+import { SearchResult } from "../modals/search_modal.slint";
+
+// One "Jump to" conversation row.
+component ConvRow inherits Rectangle {
+    in property <string> item-id;
+    in property <string> name;
+    in property <string> conv-type;
+    in property <int> unread-count;
+    in property <bool> selected: false;
+    callback clicked(string, string);
+
+    height: 40px;
+    border-radius: Spacing.radius-sm;
+    background: root.selected ? Colors.neo-inset-bg : touch.has-hover ? Colors.surface-hover : transparent;
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(root.item-id, root.conv-type); }
+    }
+
+    HorizontalLayout {
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        spacing: Spacing.sm;
+        Text {
+            text: root.conv-type == "channel" ? "#" : root.conv-type == "private_group" ? "🔒" : root.conv-type == "anon_dm" ? "👤" : "@";
+            color: root.selected ? Colors.primary : Colors.text-muted;
+            font-size: Typography.sm;
+            font-weight: Typography.semibold;
+            width: 20px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.name;
+            color: root.selected ? Colors.text-primary : Colors.text-secondary;
+            font-size: Typography.sm;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        if root.unread-count > 0: Rectangle {
+            width: 20px; height: 20px; border-radius: 10px;
+            background: Colors.primary; y: (parent.height - self.height) / 2;
+            Text {
+                text: root.unread-count > 99 ? "99+" : root.unread-count;
+                color: Colors.text-primary; font-size: Typography.xs;
+                horizontal-alignment: center; vertical-alignment: center;
+                width: 100%; height: 100%;
+            }
+        }
+    }
+}
+
+// One "Messages" content row.
+component MsgRow inherits Rectangle {
+    in property <string> message-id;
+    in property <string> channel-name;
+    in property <string> sender-name;
+    in property <string> content-preview;
+    in property <string> timestamp;
+    in property <bool> selected: false;
+    callback clicked(string);
+
+    height: 56px;
+    border-radius: Spacing.radius-sm;
+    background: root.selected ? Colors.neo-inset-bg : touch.has-hover ? Colors.surface-hover : transparent;
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(root.message-id); }
+    }
+
+    VerticalLayout {
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        padding-top: Spacing.xs;
+        padding-bottom: Spacing.xs;
+        spacing: 2px;
+        HorizontalLayout {
+            spacing: Spacing.sm;
+            Text {
+                text: root.sender-name;
+                color: Colors.text-primary;
+                font-size: Typography.xs;
+                font-weight: Typography.semibold;
+            }
+            Text {
+                text: root.channel-name;
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            Text {
+                text: root.timestamp;
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+            }
+        }
+        Text {
+            text: root.content-preview;
+            color: Colors.text-secondary;
+            font-size: Typography.sm;
+            overflow: elide;
+        }
+    }
+}
+
+// Top-bar search. Resting = pill; open = dropdown palette anchored beneath.
+export component UnifiedSearch inherits Rectangle {
+    in property <[QuickSwitcherItem]> conversations: [];
+    in property <[SearchResult]> messages: [];
+    in property <bool> searching: false;
+    in-out property <string> query: "";
+    in-out property <bool> open: false;
+    in-out property <int> selected-index: 0;
+
+    callback opened();
+    callback query-changed(string);
+    callback conversation-selected(string, string);
+    callback message-selected(string);
+
+    // Combined navigable count: conversations first, then messages.
+    property <int> total-count: root.conversations.length + root.messages.length;
+
+    height: 44px;
+
+    // Activate the highlighted row (Enter / accepted).
+    function activate-selected() {
+        if root.selected-index < root.conversations.length {
+            root.conversation-selected(
+                root.conversations[root.selected-index].id,
+                root.conversations[root.selected-index].conv-type);
+        } else if root.selected-index < root.total-count {
+            root.message-selected(
+                root.messages[root.selected-index - root.conversations.length].message-id);
+        }
+    }
+
+    // Resting bar (centered, max-width capped).
+    bar := Rectangle {
+        width: min(640px, parent.width - Spacing.lg * 2);
+        height: 36px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: Spacing.radius-md;
+        background: Colors.neo-inset-bg;
+        border-width: 1px;
+        border-color: input.has-focus ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
+
+        HorizontalLayout {
+            padding-left: Spacing.md;
+            padding-right: Spacing.md;
+            spacing: Spacing.sm;
+            Image {
+                source: Icons.search;
+                width: 16px; height: 16px;
+                colorize: Colors.text-muted;
+                y: (parent.height - self.height) / 2;
+            }
+            input := TextInput {
+                text <=> root.query;
+                font-size: Typography.sm;
+                color: Colors.text-primary;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                edited => {
+                    root.selected-index = 0;
+                    root.open = true;
+                    root.query-changed(root.query);
+                }
+                accepted => { root.activate-selected(); }
+            }
+            if root.query == "" && !input.has-focus: Text {
+                text: "Search…";
+                color: Colors.text-muted;
+                font-size: Typography.sm;
+                vertical-alignment: center;
+            }
+        }
+
+        // Open the palette on focus/click.
+        open-touch := TouchArea {
+            clicked => {
+                root.open = true;
+                input.focus();
+                root.opened();
+            }
+        }
+    }
+
+    // Dropdown palette anchored directly under the bar.
+    if root.open: Rectangle {
+        x: bar.x;
+        y: bar.y + bar.height + Spacing.xs;
+        width: bar.width;
+        height: min(palette.preferred-height, 420px);
+        background: Colors.surface;
+        border-radius: Spacing.radius-lg;
+        border-width: 1px;
+        border-color: Colors.neo-highlight-strong;
+        drop-shadow-blur: Spacing.neo-blur-lg;
+        drop-shadow-color: Colors.neo-shadow-strong;
+
+        TouchArea {} // swallow clicks so the outside-catcher doesn't close it
+
+        palette := VerticalLayout {
+            padding: Spacing.sm;
+            spacing: Spacing.xxs;
+
+            if root.query == "": Text {
+                text: "Recent conversations";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                horizontal-alignment: left;
+            }
+
+            Flickable {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    spacing: Spacing.xxs;
+
+                    // Jump to (conversations)
+                    if root.conversations.length > 0: Text {
+                        text: "Jump to";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                    }
+                    for c[i] in root.conversations: ConvRow {
+                        item-id: c.id;
+                        name: c.name;
+                        conv-type: c.conv-type;
+                        unread-count: c.unread-count;
+                        selected: i == root.selected-index;
+                        clicked(id, t) => { root.conversation-selected(id, t); }
+                    }
+
+                    // Messages (content)
+                    if root.messages.length > 0: Text {
+                        text: "Messages";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                    }
+                    for m[j] in root.messages: MsgRow {
+                        message-id: m.message-id;
+                        channel-name: m.channel-name;
+                        sender-name: m.sender-name;
+                        content-preview: m.content-preview;
+                        timestamp: m.timestamp;
+                        selected: (root.conversations.length + j) == root.selected-index;
+                        clicked(id) => { root.message-selected(id); }
+                    }
+
+                    if root.total-count == 0 && root.query != "" && !root.searching: Text {
+                        text: "No results";
+                        color: Colors.text-muted;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // Arrow / Escape navigation across the combined list.
+        FocusScope {
+            width: 0; height: 0;
+            key-pressed(event) => {
+                if event.text == Key.UpArrow {
+                    if root.selected-index > 0 { root.selected-index -= 1; }
+                    return accept;
+                }
+                if event.text == Key.DownArrow {
+                    if root.selected-index < root.total-count - 1 { root.selected-index += 1; }
+                    return accept;
+                }
+                if event.text == Key.Return {
+                    root.activate-selected();
+                    return accept;
+                }
+                if event.text == Key.Escape {
+                    root.open = false;
+                    return accept;
+                }
+                reject
+            }
+        }
+    }
+}
