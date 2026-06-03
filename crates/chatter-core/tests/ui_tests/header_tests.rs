@@ -5,17 +5,6 @@
 // ============================================================================
 
 #[test]
-fn test_search_clicked_callback() {
-    // Simulate: on_search_clicked
-    let mut show_search_modal = false;
-
-    // Callback action
-    show_search_modal = true;
-
-    assert!(show_search_modal);
-}
-
-#[test]
 fn test_pinned_clicked_callback() {
     // Simulate: on_pinned_clicked
     let mut show_pinned_bar = false;

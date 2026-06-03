@@ -200,12 +200,30 @@ export component UnifiedSearch inherits Rectangle {
                 color: Colors.text-primary;
                 vertical-alignment: center;
                 horizontal-stretch: 1;
+                single-line: true;
                 edited => {
                     root.selected-index = 0;
                     root.open = true;
                     root.query-changed(root.query);
                 }
                 accepted => { root.activate-selected(); }
+                // Nav keys are handled here (on the focused input) — a sibling
+                // FocusScope can't see them because the input holds focus.
+                key-pressed(event) => {
+                    if (event.text == Key.UpArrow) {
+                        if (root.selected-index > 0) { root.selected-index -= 1; }
+                        return accept;
+                    }
+                    if (event.text == Key.DownArrow) {
+                        if (root.selected-index < root.total-count - 1) { root.selected-index += 1; }
+                        return accept;
+                    }
+                    if (event.text == Key.Escape) {
+                        root.open = false;
+                        return accept;
+                    }
+                    return reject;
+                }
             }
             if root.query == "" && !input.has-focus: Text {
                 text: "Search…";
@@ -294,30 +312,6 @@ export component UnifiedSearch inherits Rectangle {
                         horizontal-alignment: center;
                     }
                 }
-            }
-        }
-
-        // Arrow / Escape navigation across the combined list.
-        FocusScope {
-            width: 0; height: 0;
-            key-pressed(event) => {
-                if event.text == Key.UpArrow {
-                    if root.selected-index > 0 { root.selected-index -= 1; }
-                    return accept;
-                }
-                if event.text == Key.DownArrow {
-                    if root.selected-index < root.total-count - 1 { root.selected-index += 1; }
-                    return accept;
-                }
-                if event.text == Key.Return {
-                    root.activate-selected();
-                    return accept;
-                }
-                if event.text == Key.Escape {
-                    root.open = false;
-                    return accept;
-                }
-                reject
             }
         }
     }
