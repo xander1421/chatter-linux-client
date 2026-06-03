@@ -134,6 +134,15 @@ export component UnifiedSearch inherits Rectangle {
 
     height: 44px;
 
+    // Keyboard-triggered open (Ctrl+K/F) flips `open` from the parent without
+    // a click, so focus the input here too — otherwise the cursor stays out of
+    // the field and the shortcut can't type.
+    changed open => {
+        if (self.open) {
+            input.focus();
+        }
+    }
+
     // Activate the highlighted row (Enter / accepted).
     function activate-selected() {
         if root.selected-index < root.conversations.length {
