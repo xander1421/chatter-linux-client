@@ -19,6 +19,21 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_changed(window, ui_ctx);
     wire_conversation_selected(window);
     wire_message_selected(window, ui_ctx);
+    wire_resolve(window, ui_ctx);
+    wire_person_selected(window, ui_ctx);
+}
+
+/// True when `q` looks like a Signal `nickname.discriminator` handle — the only
+/// shape `lookup_by_username` accepts. Gates resolve-on-Enter so the field
+/// only probes the existence oracle for full discriminated handles (no
+/// enumeration / no partial-prefix probing).
+fn looks_like_handle(q: &str) -> bool {
+    match q.trim().rsplit_once('.') {
+        Some((nick, disc)) => {
+            !nick.is_empty() && !disc.is_empty() && disc.bytes().all(|b| b.is_ascii_digit())
+        }
+        None => false,
+    }
 }
 
 /// On open: populate conversations (empty query → recent), clear messages.
@@ -39,6 +54,13 @@ fn wire_changed(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     window.on_unified_search_changed(move |query: SharedString| {
         let query_str = query.to_string();
+
+        // People: flag handle-shaped queries (enables the resolve-on-Enter
+        // prompt) and invalidate any prior resolution for the new query.
+        if let Some(w) = weak.upgrade() {
+            w.set_unified_search_query_is_handle(looks_like_handle(&query_str));
+            w.set_unified_search_person_status("".into());
+        }
 
         // Conversations: synchronous, core-ranked.
         if let Some(w) = weak.upgrade() {
@@ -69,6 +91,68 @@ fn wire_changed(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             });
         });
+    });
+}
+
+/// On Enter over a `nickname.discriminator` query: exact-handle lookup.
+/// Privacy: exact-match only (no enumeration); resolves to a single user or none.
+fn wire_resolve(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
+    window.on_unified_search_resolve(move |query: SharedString| {
+        let handle = query.to_string();
+        if !looks_like_handle(&handle) {
+            return;
+        }
+        if let Some(w) = weak.upgrade() {
+            w.set_unified_search_person_handle(handle.clone().into());
+            w.set_unified_search_person_status("searching".into());
+        }
+        let weak_bg = weak.clone();
+        let ui_ctx = ui_ctx.clone();
+        tokio::spawn(async move {
+            let (status, id, name) = match ui_ctx.lookup_by_username(&handle).await {
+                Ok(Some(uid)) => {
+                    let display = ui_ctx
+                        .get_user_profile(&uid)
+                        .await
+                        .map(|p| p.display_name)
+                        .unwrap_or_default();
+                    let name = if display.is_empty() { handle.clone() } else { display };
+                    ("found".to_string(), uid.to_string(), name)
+                }
+                _ => ("notfound".to_string(), String::new(), String::new()),
+            };
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_bg.upgrade() {
+                    w.set_unified_search_person_id(id.into());
+                    w.set_unified_search_person_name(name.into());
+                    w.set_unified_search_person_status(status.into());
+                }
+            });
+        });
+    });
+}
+
+/// On selecting a resolved person: open their profile modal (where the
+/// add-friend / safety-number actions live).
+fn wire_person_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
+    window.on_unified_search_person_selected(move |uid: SharedString| {
+        let user_id = match uid.to_string().parse::<chatter_core::domain::ids::UserId>() {
+            Ok(id) => id,
+            Err(_) => return,
+        };
+        if let Some(w) = weak.upgrade() {
+            crate::bin_ui::features::modals::open_user_profile(
+                &w,
+                &user_id,
+                ui_ctx.auth_state(),
+                ui_ctx.user_state(),
+                Some(&ui_ctx),
+            );
+        }
     });
 }
 

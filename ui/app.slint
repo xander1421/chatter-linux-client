@@ -97,6 +97,14 @@ export component App inherits Rectangle {
     callback unified-search-changed(string);
     callback unified-search-conversation-selected(string, string);
     callback unified-search-message-selected(string);
+    // People (exact-handle resolve-on-Enter)
+    in property <bool> unified-search-query-is-handle: false;
+    in property <string> unified-search-person-status: "";
+    in property <string> unified-search-person-id: "";
+    in property <string> unified-search-person-name: "";
+    in property <string> unified-search-person-handle: "";
+    callback unified-search-resolve(string);
+    callback unified-search-person-selected(string);
 
     // ========== Connection status ==========
     // "connected", "connecting", "reconnecting", "disconnected", "failed"
@@ -1798,8 +1806,18 @@ export component App inherits Rectangle {
         searching: root.unified-search-searching;
         query <=> root.unified-search-query;
         selected-index <=> root.unified-search-selected-index;
+        query-is-handle: root.unified-search-query-is-handle;
+        person-status: root.unified-search-person-status;
+        person-id: root.unified-search-person-id;
+        person-name: root.unified-search-person-name;
+        person-handle: root.unified-search-person-handle;
         opened => { root.unified-search-opened(); }
         query-changed(q) => { root.unified-search-changed(q); }
+        resolve(q) => { root.unified-search-resolve(q); }
+        person-selected(uid) => {
+            root.unified-search-person-selected(uid);
+            root.unified-search-open = false;
+        }
         conversation-selected(id, t) => {
             root.unified-search-conversation-selected(id, t);
             root.unified-search-open = false;

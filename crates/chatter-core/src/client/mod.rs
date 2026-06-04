@@ -1056,6 +1056,17 @@ impl ChatterClient {
         crate::services::search::SearchShortcut::from_str(&raw)
     }
 
+    /// The current account's full Signal-style `nickname.discriminator` handle,
+    /// chosen at registration and persisted under `keys::FULL_USERNAME`. This is
+    /// the exact form `lookup_by_username` expects. `None` before registration.
+    pub fn full_username(&self) -> Option<String> {
+        use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+        SettingsRepository::new(self.ui.database.clone())
+            .get_string(keys::FULL_USERNAME)
+            .ok()
+            .flatten()
+    }
+
     /// Persist the user's search-shortcut preference.
     pub fn set_search_shortcut(
         &self,

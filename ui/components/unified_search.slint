@@ -139,6 +139,50 @@ component MsgRow inherits Rectangle {
     }
 }
 
+// One resolved "People" row (exact-handle lookup result).
+component PersonRow inherits Rectangle {
+    in property <string> name;
+    in property <string> handle;
+    callback clicked();
+
+    height: 44px;
+    border-radius: Spacing.radius-sm;
+    background: touch.has-hover ? Colors.surface-hover : transparent;
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        spacing: Spacing.sm;
+        Text {
+            text: "👤";
+            color: Colors.primary;
+            font-size: Typography.sm;
+            width: 20px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        VerticalLayout {
+            padding-top: Spacing.xs;
+            padding-bottom: Spacing.xs;
+            Text {
+                text: root.name;
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+            }
+            Text {
+                text: "@" + root.handle;
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+            }
+        }
+    }
+}
+
 // Inline resting bar (top of chat column). Click opens the overlay.
 export component UnifiedSearchBar inherits Rectangle {
     callback open();
@@ -194,6 +238,17 @@ export component UnifiedSearch inherits Rectangle {
     callback conversation-selected(string, string);
     callback message-selected(string);
     callback close();
+
+    // People (exact-handle resolve-on-Enter). `query-is-handle` is set by the
+    // glue when the query looks like `nickname.discriminator`. `person-status`:
+    // "" idle | "searching" | "found" | "notfound".
+    in property <bool> query-is-handle: false;
+    in property <string> person-status: "";
+    in property <string> person-id: "";
+    in property <string> person-name: "";
+    in property <string> person-handle: "";
+    callback resolve(string);
+    callback person-selected(string);
 
     property <int> total-count: root.conversations.length + root.messages.length;
 
@@ -269,7 +324,15 @@ export component UnifiedSearch inherits Rectangle {
                             root.selected-index = 0;
                             root.query-changed(root.query);
                         }
-                        accepted => { root.activate-selected(); }
+                        accepted => {
+                            if (root.person-status == "found") {
+                                root.person-selected(root.person-id);
+                            } else if (root.query-is-handle) {
+                                root.resolve(root.query);
+                            } else {
+                                root.activate-selected();
+                            }
+                        }
                         key-pressed(event) => {
                             if (event.text == Key.UpArrow) {
                                 if (root.selected-index > 0) { root.selected-index -= 1; }
@@ -300,6 +363,36 @@ export component UnifiedSearch inherits Rectangle {
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 horizontal-alignment: left;
+            }
+
+            // People — exact-handle resolution (resolve-on-Enter, no enumeration).
+            if root.query-is-handle || root.person-status != "": VerticalLayout {
+                spacing: Spacing.xxs;
+                Text {
+                    text: "People";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                }
+                if root.person-status == "found": PersonRow {
+                    name: root.person-name;
+                    handle: root.person-handle;
+                    clicked => { root.person-selected(root.person-id); }
+                }
+                if root.person-status == "searching": Text {
+                    text: "Searching @" + root.person-handle + "…";
+                    color: Colors.text-muted;
+                    font-size: Typography.sm;
+                }
+                if root.person-status == "notfound": Text {
+                    text: "No user @" + root.person-handle;
+                    color: Colors.text-muted;
+                    font-size: Typography.sm;
+                }
+                if root.person-status == "": Text {
+                    text: "Press ↵ to find @" + root.query;
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                }
             }
 
             Flickable {
@@ -340,7 +433,7 @@ export component UnifiedSearch inherits Rectangle {
                         clicked(id) => { root.message-selected(id); }
                     }
 
-                    if root.total-count == 0 && root.query != "" && !root.searching: Text {
+                    if root.total-count == 0 && root.query != "" && !root.searching && !root.query-is-handle: Text {
                         text: "No results";
                         color: Colors.text-muted;
                         font-size: Typography.sm;
