@@ -55,4 +55,9 @@ dependencies {
     implementation("androidx.games:games-activity:4.4.0")
     // GameActivity extends AppCompatActivity → needs an AppCompat theme + runtime.
     implementation("androidx.appcompat:appcompat:1.7.0")
+    // CameraX (modern Camera2 stack) for call video capture — feeds I420 frames
+    // to Rust/LiveKit. Not the deprecated android.hardware.Camera.
+    implementation("androidx.camera:camera-core:1.4.1")
+    implementation("androidx.camera:camera-camera2:1.4.1")
+    implementation("androidx.camera:camera-lifecycle:1.4.1")
 }

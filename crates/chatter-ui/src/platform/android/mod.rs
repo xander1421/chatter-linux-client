@@ -6,6 +6,7 @@
 //! .slint code binds those directly — no Rust polling required.
 
 pub mod activity;
+pub mod camera;
 pub mod file_picker;
 pub mod notifications;
 pub mod permissions;

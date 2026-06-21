@@ -130,7 +130,7 @@ jarvis = ["chatter-core/jarvis"]
 # which is mutually exclusive with `game-activity`. We select the backend +
 # game-activity directly on the dep above, and `android_main` sets the platform
 # manually via `AndroidPlatform::new(app)` (no slint backend-selector needed).
-mobile = ["dep:i-slint-backend-android-activity", "dep:android-activity", "i-slint-backend-selector/backend-android-activity", "slint/std"]
+mobile = ["dep:i-slint-backend-android-activity", "dep:android-activity", "i-slint-backend-selector/backend-android-activity", "slint/std", "chatter-core/media"]
 
 # =============================================================================
 # Android Metadata (for cargo-apk)

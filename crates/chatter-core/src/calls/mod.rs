@@ -7,6 +7,8 @@ mod audio_capture;
 mod audio_playback;
 mod video_capture;
 mod video_playback;
+#[cfg(target_os = "android")]
+pub mod android_camera;
 #[cfg(not(target_os = "android"))]
 mod screen_capture;
 pub mod shared_frames;

@@ -256,6 +256,21 @@ impl VideoCapture {
 
         #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
+            // Android: drive CameraX via the registered platform camera. Falls
+            // back to the test pattern only if no platform camera registered.
+            #[cfg(target_os = "android")]
+            {
+                if crate::calls::android_camera::run_capture(
+                    video_source.clone(),
+                    running.clone(),
+                    width,
+                    height,
+                    fps,
+                ) {
+                    tracing::info!("Video capture loop ended");
+                    return;
+                }
+            }
             tracing::error!("Video capture not implemented for this platform");
             Self::fallback_capture_loop(video_source, running, width, height, fps);
         }

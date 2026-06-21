@@ -6,9 +6,14 @@ import android.os.Bundle
 import android.provider.OpenableColumns
 import android.util.Log
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageProxy
+import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import com.google.androidgamesdk.GameActivity
 import java.io.File
+import java.util.concurrent.Executors
 
 /**
  * GameActivity host for the Slint/Rust client.
@@ -95,6 +100,110 @@ class MainActivity : GameActivity() {
 
     /** Implemented in Rust (libchatter_ui.so). Delivers grant results. */
     private external fun nativeOnPermissionsResult(granted: Array<String>, denied: Array<String>)
+
+    // --- Camera capture (CameraX → I420 → Rust/LiveKit) ------------------------
+    private var cameraProvider: ProcessCameraProvider? = null
+    private val cameraExecutor = Executors.newSingleThreadExecutor()
+
+    /** Called from Rust (JNI) when a call starts publishing video. */
+    @Suppress("unused", "UNUSED_PARAMETER")
+    fun startCamera(width: Int, height: Int, fps: Int) {
+        runOnUiThread {
+            val future = ProcessCameraProvider.getInstance(this)
+            future.addListener({
+                val provider = try {
+                    future.get()
+                } catch (e: Exception) {
+                    Log.e(TAG, "CameraProvider unavailable", e)
+                    return@addListener
+                }
+                cameraProvider = provider
+                val analysis = ImageAnalysis.Builder()
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
+                    .build()
+                analysis.setAnalyzer(cameraExecutor) { image ->
+                    try {
+                        val i420 = yuv420ToI420(image)
+                        nativeOnCameraFrame(
+                            i420,
+                            image.width,
+                            image.height,
+                            image.imageInfo.rotationDegrees,
+                            image.imageInfo.timestamp / 1000, // ns → µs
+                        )
+                    } catch (e: Exception) {
+                        Log.e(TAG, "frame convert failed", e)
+                    } finally {
+                        image.close()
+                    }
+                }
+                try {
+                    provider.unbindAll()
+                    provider.bindToLifecycle(this, CameraSelector.DEFAULT_FRONT_CAMERA, analysis)
+                } catch (e: Exception) {
+                    Log.e(TAG, "bindToLifecycle failed", e)
+                }
+            }, ContextCompat.getMainExecutor(this))
+        }
+    }
+
+    /** Called from Rust (JNI) when video capture stops. */
+    @Suppress("unused")
+    fun stopCamera() {
+        runOnUiThread { cameraProvider?.unbindAll() }
+    }
+
+    /** Convert a YUV_420_888 ImageProxy to tightly-packed I420 (Y, then U, V). */
+    private fun yuv420ToI420(image: ImageProxy): ByteArray {
+        val w = image.width
+        val h = image.height
+        val ySize = w * h
+        val cSize = (w / 2) * (h / 2)
+        val out = ByteArray(ySize + 2 * cSize)
+        copyPlane(image.planes[0], w, h, out, 0)
+        copyPlane(image.planes[1], w / 2, h / 2, out, ySize)
+        copyPlane(image.planes[2], w / 2, h / 2, out, ySize + cSize)
+        return out
+    }
+
+    private fun copyPlane(plane: ImageProxy.PlaneProxy, width: Int, height: Int, out: ByteArray, offset: Int) {
+        val buffer = plane.buffer
+        val rowStride = plane.rowStride
+        val pixelStride = plane.pixelStride
+        var outPos = offset
+        if (pixelStride == 1) {
+            for (r in 0 until height) {
+                buffer.position(r * rowStride)
+                buffer.get(out, outPos, width)
+                outPos += width
+            }
+        } else {
+            // Interleaved chroma (pixelStride 2): pick every Nth byte per row.
+            val rowBuf = ByteArray(rowStride)
+            for (r in 0 until height) {
+                buffer.position(r * rowStride)
+                val toRead = minOf(rowStride, buffer.remaining())
+                buffer.get(rowBuf, 0, toRead)
+                var i = 0
+                var c = 0
+                while (c < width) {
+                    out[outPos++] = rowBuf[i]
+                    i += pixelStride
+                    c++
+                }
+            }
+        }
+    }
+
+    /** Implemented in Rust (libchatter_ui.so). Delivers one I420 camera frame. */
+    private external fun nativeOnCameraFrame(
+        i420: ByteArray,
+        width: Int,
+        height: Int,
+        rotation: Int,
+        timestampUs: Long,
+    )
 
     private companion object {
         const val TAG = "ChatterFilePicker"
