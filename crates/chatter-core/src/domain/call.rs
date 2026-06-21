@@ -483,6 +483,14 @@ pub struct AnonCallSetupResult {
     pub is_video: bool,
     /// Display name of the remote peer.
     pub peer_display_name: String,
+    /// Shared anchor for the duration timer: ns since epoch from the callee's
+    /// `AnonCallAnswer.timestamp`. Both peers anchor on the same value so
+    /// their displayed durations match regardless of wall-clock skew.
+    pub started_at_ns: u64,
+    /// Cached avatar bytes for the remote peer, sourced from the local
+    /// `AnonDm.peer_avatar` row. Threaded so the active-call tile shows the
+    /// peer's picture immediately on connect without an HTTP round-trip.
+    pub peer_avatar: Option<Vec<u8>>,
 }
 
 /// Outcome of `handle_anon_call_answer`.

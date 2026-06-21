@@ -35,6 +35,12 @@ pub struct VideoFrameData {
 pub struct SharedVideoFrames {
     frames: Arc<RwLock<HashMap<String, VideoFrameData>>>,
     frame_counter: Arc<RwLock<u64>>,
+    /// Wakes any task awaiting a fresh frame. The UI subscriber uses this
+    /// to push render updates the moment a frame arrives instead of
+    /// polling on a fixed-interval timer. `Notify` coalesces multiple
+    /// `notify_one` calls into a single wake-up so a burst of late frames
+    /// turns into one render pass.
+    notify: Arc<tokio::sync::Notify>,
 }
 
 impl SharedVideoFrames {
@@ -43,7 +49,70 @@ impl SharedVideoFrames {
         Self {
             frames: Arc::new(RwLock::new(HashMap::new())),
             frame_counter: Arc::new(RwLock::new(0)),
+            notify: Arc::new(tokio::sync::Notify::new()),
         }
+    }
+
+    /// Handle to the frame-arrival notifier. Callers can `notify.notified().await`
+    /// to be woken whenever `set_frame_rotated` lands a new frame.
+    pub fn notifier(&self) -> Arc<tokio::sync::Notify> {
+        self.notify.clone()
+    }
+
+    /// Subscribe to frame updates with a rate-limited push callback.
+    ///
+    /// Spawns a tokio task on `rt` that waits on the internal `Notify`
+    /// and, no more often than `min_interval`, invokes `on_frames` with
+    /// a snapshot of every current frame. The returned `Arc<AtomicBool>`
+    /// is the stop flag — set it to `true` to terminate the subscriber.
+    ///
+    /// The callback runs on the tokio runtime, not the caller's UI
+    /// thread; consumers needing to touch UI state should re-dispatch
+    /// (e.g. `slint::invoke_from_event_loop`) inside the closure. Keeping
+    /// the rate-limit + snapshot logic here lets the UI crate stay a thin
+    /// presentation layer that only knows how to draw what core hands it.
+    pub fn subscribe<F>(
+        &self,
+        rt: &tokio::runtime::Handle,
+        min_interval: std::time::Duration,
+        mut on_frames: F,
+    ) -> Arc<std::sync::atomic::AtomicBool>
+    where
+        F: FnMut(Vec<(String, VideoFrameData)>) + Send + 'static,
+    {
+        let notifier = self.notify.clone();
+        let frames = self.frames.clone();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop_for_task = stop.clone();
+        rt.spawn(async move {
+            use std::sync::atomic::Ordering;
+            use std::time::Instant;
+            let mut last_emit = Instant::now()
+                .checked_sub(min_interval)
+                .unwrap_or_else(Instant::now);
+            loop {
+                notifier.notified().await;
+                if stop_for_task.load(Ordering::Relaxed) {
+                    break;
+                }
+                let since = last_emit.elapsed();
+                if since < min_interval {
+                    tokio::time::sleep(min_interval - since).await;
+                }
+                last_emit = Instant::now();
+
+                let snapshot: Vec<(String, VideoFrameData)> = frames
+                    .read()
+                    .iter()
+                    .map(|(id, frame)| (id.clone(), frame.clone()))
+                    .collect();
+                if snapshot.is_empty() {
+                    continue;
+                }
+                on_frames(snapshot);
+            }
+        });
+        stop
     }
 
     /// Store a frame for a participant.
@@ -73,6 +142,12 @@ impl SharedVideoFrames {
             frame_id,
             rotation_degrees,
         });
+        drop(frames);
+
+        // Wake the UI subscriber so it renders this frame without waiting
+        // for the next polling tick. `notify_one` coalesces — if the UI
+        // hasn't drained yet we don't queue up wakeups.
+        self.notify.notify_one();
     }
 
     /// Get a frame for a participant (clones the data).

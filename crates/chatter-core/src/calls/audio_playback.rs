@@ -3,7 +3,7 @@
 //! Receives audio frames from remote participants via LiveKit and plays
 //! them through the local audio output device using CPAL.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -47,6 +47,9 @@ pub struct AudioPlayback {
     is_active: Arc<AtomicBool>,
     /// Volume (0.0 to 1.0).
     volume: Arc<RwLock<f32>>,
+    /// Participants whose audio is locally muted — frames decoded but
+    /// discarded before mixing so the wire still flows but nothing plays.
+    muted_peers: Arc<RwLock<HashSet<String>>>,
 }
 
 struct ActiveAudioStream {
@@ -70,6 +73,7 @@ impl AudioPlayback {
             channels: Arc::new(RwLock::new(2)),        // Default, updated on init
             is_active: Arc::new(AtomicBool::new(true)),
             volume: Arc::new(RwLock::new(1.0f32)),
+            muted_peers: Arc::new(RwLock::new(HashSet::new())),
         })
     }
 
@@ -177,6 +181,7 @@ impl AudioPlayback {
         let stop_signal = Arc::new(AtomicBool::new(false));
         let stop_signal_clone = stop_signal.clone();
         let sample_buffer = self.sample_buffer.clone();
+        let muted_peers = self.muted_peers.clone();
         let target_sample_rate = *self.sample_rate.read() as i32;
         let target_channels = *self.channels.read() as usize;
 
@@ -192,6 +197,13 @@ impl AudioPlayback {
             while !stop_signal_clone.load(Ordering::Relaxed) {
                 match audio_stream.next().await {
                     Some(frame) => {
+                        // Drain the wire even when locally muted — drop the
+                        // frame after decode so the LiveKit ring buffer
+                        // doesn't back up.
+                        if muted_peers.read().contains(&participant_id_clone) {
+                            continue;
+                        }
+
                         // Convert audio frame to f32 samples
                         let samples: Vec<f32> = frame
                             .data
@@ -241,6 +253,22 @@ impl AudioPlayback {
     /// Set playback volume (0.0 to 1.0).
     pub fn set_volume(&self, vol: f32) {
         *self.volume.write() = vol.clamp(0.0, 1.0);
+    }
+
+    /// Locally mute/unmute a remote participant's audio. Frames keep
+    /// decoding (so the connection stays healthy and unmute is instant);
+    /// muted frames are simply discarded before mixing.
+    pub fn set_peer_muted(&self, participant_id: &str, muted: bool) {
+        let mut set = self.muted_peers.write();
+        if muted {
+            set.insert(participant_id.to_string());
+        } else {
+            set.remove(participant_id);
+        }
+    }
+
+    pub fn is_peer_muted(&self, participant_id: &str) -> bool {
+        self.muted_peers.read().contains(participant_id)
     }
 
     /// Get current volume.

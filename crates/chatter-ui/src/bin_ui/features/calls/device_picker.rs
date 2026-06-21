@@ -82,37 +82,53 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Show screen source picker (desktop only)
     window.on_show_screen_source_picker({
         let weak = weak.clone();
+        let ui_ctx = ui_ctx.clone();
         move || {
             #[cfg(target_os = "android")]
             { tracing::warn!("Screen source picker not available on Android"); return; }
             #[cfg(not(target_os = "android"))]
-            if let Some(w) = weak.upgrade() {
-                // Enumerate screen sources using LiveKit's desktop_capturer
-                match ScreenCapture::list_sources() {
-                    Ok(sources) => {
-                        let source_count = sources.len();
-                        let ui_sources: Vec<ScreenSourceData> = sources
-                            .into_iter()
-                            .enumerate()
-                            .map(|(idx, s)| ScreenSourceData {
-                                id: s.id.to_string().into(),
-                                name: s.name.into(),
-                                width: 0, // Not available from libwebrtc
-                                height: 0,
-                                is_monitor: s.source_type == ScreenSourceType::Monitor,
-                                is_primary: idx == 0 && s.source_type == ScreenSourceType::Monitor,
-                            })
-                            .collect();
+            {
+                let weak = weak.clone();
+                let ui_ctx = ui_ctx.clone();
+                slint::spawn_local(async move {
+                    // Gate on the room being connected. During an outgoing
+                    // "Calling…" call there is no room yet, so opening the
+                    // picker would only end in a `NotInCall` failure after the
+                    // user selected a source (and the OS portal dialog would
+                    // never appear). Don't surface the picker until connected.
+                    if !ui_ctx.call_is_connected().await {
+                        tracing::info!("Screen share unavailable — call not connected yet");
+                        return;
+                    }
+                    let Some(w) = weak.upgrade() else { return };
+                    // Enumerate screen sources using LiveKit's desktop_capturer
+                    match ScreenCapture::list_sources() {
+                        Ok(sources) => {
+                            let source_count = sources.len();
+                            let ui_sources: Vec<ScreenSourceData> = sources
+                                .into_iter()
+                                .enumerate()
+                                .map(|(idx, s)| ScreenSourceData {
+                                    id: s.id.to_string().into(),
+                                    name: s.name.into(),
+                                    width: 0, // Not available from libwebrtc
+                                    height: 0,
+                                    is_monitor: s.source_type == ScreenSourceType::Monitor,
+                                    is_primary: idx == 0 && s.source_type == ScreenSourceType::Monitor,
+                                })
+                                .collect();
 
-                        w.set_screen_sources(ModelRc::new(VecModel::from(ui_sources)));
-                        w.set_device_picker_type("screen".into());
-                        w.set_device_picker_visible(true);
-                        tracing::info!("Showing screen source picker with {} sources", source_count);
+                            w.set_screen_sources(ModelRc::new(VecModel::from(ui_sources)));
+                            w.set_device_picker_type("screen".into());
+                            w.set_device_picker_visible(true);
+                            tracing::info!("Showing screen source picker with {} sources", source_count);
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to enumerate screen sources: {}", e);
+                        }
                     }
-                    Err(e) => {
-                        tracing::error!("Failed to enumerate screen sources: {}", e);
-                    }
-                }
+                })
+                .unwrap();
             }
         }
     });

@@ -451,6 +451,24 @@ impl CallKeyState {
 
         Ok(())
     }
+
+    /// Compute the NEXT epoch's key WITHOUT advancing this state.
+    ///
+    /// Used to pre-install `epoch + 1` in LiveKit so a peer whose ratchet
+    /// timer fires slightly ahead can decrypt immediately. The value is
+    /// identical to `current_key` after a subsequent [`ratchet`] call — same
+    /// HKDF derivation — so installing it now and re-installing it on the next
+    /// tick is idempotent.
+    pub fn peek_next_key(&self) -> Result<[u8; 32], CryptoError> {
+        let next_epoch = self.epoch + 1;
+        let info = format!("{}:epoch:{}", self.call_id, next_epoch);
+        let hkdf = Hkdf::<Sha256>::new(Some(CALL_KEY_SALT), &self.current_key);
+
+        let mut next = [0u8; 32];
+        hkdf.expand(info.as_bytes(), &mut next)
+            .map_err(|_| CryptoError::KeyDerivationFailed("Key peek failed".into()))?;
+        Ok(next)
+    }
 }
 
 #[cfg(test)]

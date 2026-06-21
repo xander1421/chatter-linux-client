@@ -10,6 +10,9 @@ export struct CallParticipantData {
     is-video-enabled: bool,
     is-screen-sharing: bool,
     is-speaking: bool,
+    // Local viewer controls — affect this client only, not the wire.
+    is-audio-muted-locally: bool,
+    is-video-paused-locally: bool,
 }
 
 export struct ActiveCallData {

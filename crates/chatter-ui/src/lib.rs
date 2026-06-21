@@ -105,6 +105,27 @@ pub async fn app_init() -> AppState {
 
     tracing::info!("Chatter Client v0.1.0 ({})", std::env::consts::OS);
 
+    // SIGINT handler — register BEFORE GStreamer / Slint / LiveKit init.
+    // Several of those libs touch signal masks or install their own
+    // handlers on native threads, and if `tokio::signal::ctrl_c` is
+    // registered after them its installation can lose the race (or its
+    // signal handler thread can end up with SIGINT masked). Registering
+    // first means tokio's `sigaction` is in place before anyone else
+    // can interfere. The handler only posts the quit event; the real
+    // cleanup (leave call, stop services) runs in `app_run` after
+    // `window.run()` returns, via `ChatterClient::shutdown`.
+    #[cfg(not(target_os = "android"))]
+    {
+        let shutdown_token = shutdown_token.clone();
+        tokio::spawn(async move {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                tracing::info!("Ctrl+C received, initiating shutdown...");
+                shutdown_token.cancel();
+                slint::quit_event_loop().ok();
+            }
+        });
+    }
+
     if !init_antidebug() {
         tracing::warn!("Security: Continuing with debugger detected - sensitive data may be exposed");
     }
@@ -382,18 +403,6 @@ pub async fn app_init() -> AppState {
             }
         }
     });
-
-    #[cfg(not(target_os = "android"))]
-    {
-        let shutdown_for_ctrlc = shutdown_token.clone();
-        tokio::spawn(async move {
-            if tokio::signal::ctrl_c().await.is_ok() {
-                tracing::info!("Ctrl+C received, initiating shutdown...");
-                shutdown_for_ctrlc.cancel();
-                slint::quit_event_loop().ok();
-            }
-        });
-    }
 
     AppState {
         window,

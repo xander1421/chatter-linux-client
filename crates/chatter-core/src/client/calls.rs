@@ -248,6 +248,19 @@ impl ChatterClient {
             .await
             .map_err(|e| ClientError::Inbox(e.to_string()))?;
 
+        // Register the active call so the orchestrator can resolve its kind on
+        // hangup. A group/channel call has no single peer, so we use a nil
+        // UserId (the orchestrator only consults peer_id for the DM
+        // replace-active policy, which group calls don't use). Without this,
+        // `end_active_call` finds no active slot and never leaves the room.
+        use crate::services::call_worker::{CallHandle, OrchestratedCallKind};
+        call_worker.orch_mark_connected(
+            CallHandle::from(call.id.to_string().as_str()),
+            OrchestratedCallKind::GroupChannel,
+            crate::domain::ids::UserId::from_uuid(uuid::Uuid::nil()),
+            matches!(call_type, crate::domain::call::CallType::Video),
+        );
+
         // Publish microphone immediately
         if let Err(e) = call_worker.publish_microphone(None).await {
             tracing::error!("Failed to publish microphone: {}", e);
@@ -492,6 +505,24 @@ impl ChatterClient {
         }
     }
 
+    /// True only when the LiveKit room is fully connected.
+    ///
+    /// Distinct from "there is an active call" — an outgoing call sits in the
+    /// "Calling…" state (no room) until the peer answers. Media actions like
+    /// screen share need the room, so the UI gates on this before opening the
+    /// source picker; otherwise `publish_screen_share` fails `NotInCall` after
+    /// the user has already interacted (and the OS portal dialog never opens).
+    #[cfg(feature = "media")]
+    pub async fn call_is_connected(&self) -> bool {
+        match self.call_service().get().cloned() {
+            Some(worker) => matches!(
+                worker.room_state().await,
+                crate::calls::RoomState::Connected { .. }
+            ),
+            None => false,
+        }
+    }
+
     /// Return the currently-active call, if any. Used by the remote-hangup
     /// handler to match incoming hangup events against the live call.
     #[cfg(feature = "media")]
@@ -506,6 +537,23 @@ impl ChatterClient {
     pub fn call_set_camera_enabled(&self, enabled: bool) {
         if let Some(worker) = self.call_service().get() {
             worker.set_camera_enabled(enabled);
+        }
+    }
+
+    /// Locally mute/unmute a remote participant's audio. The LiveKit
+    /// stream stays subscribed; muted frames are dropped before mixing.
+    #[cfg(feature = "media")]
+    pub fn call_set_peer_audio_muted(&self, participant_id: String, muted: bool) {
+        if let Some(worker) = self.call_service().get() {
+            worker.set_peer_audio_muted(participant_id, muted);
+        }
+    }
+
+    /// Locally pause/resume a remote participant's video.
+    #[cfg(feature = "media")]
+    pub fn call_set_peer_video_paused(&self, participant_id: String, paused: bool) {
+        if let Some(worker) = self.call_service().get() {
+            worker.set_peer_video_paused(participant_id, paused);
         }
     }
 
@@ -655,44 +703,6 @@ impl ChatterClient {
         &self,
     ) -> Option<crate::services::call_worker::CallWorkerHandle> {
         self.call_service().get().cloned()
-    }
-
-    /// Notify the orchestrator that an outgoing / pending call has connected
-    /// and should be installed as the active call. Callers use this from the
-    /// answer-handling path (caller side of a call).
-    #[cfg(feature = "media")]
-    pub fn notify_call_connected(
-        &self,
-        call_id: &str,
-        kind: crate::services::call_worker::OrchestratedCallKind,
-        peer_id: crate::domain::ids::UserId,
-        is_video: bool,
-    ) {
-        if let Some(worker) = self.call_service().get().cloned() {
-            worker.orch_mark_connected(
-                crate::services::call_worker::CallHandle::from(call_id),
-                kind,
-                peer_id,
-                is_video,
-            );
-        }
-    }
-
-    /// Notify the orchestrator that a tracked call ended (locally or by the
-    /// remote peer). Clears the slot and emits `ActiveEnded` /
-    /// `IncomingWithdrawn` depending on where the call lived.
-    #[cfg(feature = "media")]
-    pub fn notify_call_ended(
-        &self,
-        call_id: &str,
-        reason: crate::services::call_worker::CallEndReason,
-    ) {
-        if let Some(worker) = self.call_service().get().cloned() {
-            worker.orch_mark_ended(
-                crate::services::call_worker::CallHandle::from(call_id),
-                reason,
-            );
-        }
     }
 
     /// Decline a presented incoming call. Runs the orchestrator transition
@@ -961,6 +971,9 @@ impl ChatterClient {
         is_outgoing: bool,
         duration_seconds: i64,
     ) {
+        use crate::domain::message::{ConversationType, MessageContent};
+        use crate::domain::ids::MessageId;
+
         let duration_str = if duration_seconds > 0 {
             format!("{}:{:02}", duration_seconds / 60, duration_seconds % 60)
         } else {
@@ -972,11 +985,55 @@ impl ChatterClient {
         let user_id = self.auth_state().get().current_user_id
             .unwrap_or_else(crate::domain::ids::UserId::new);
 
-        if let Err(e) = self.anon_dms().store_text_message(
+        let message_id = match self.anon_dms().store_text_message(
             conversation_id, &user_id, &text, sent_at,
         ) {
-            tracing::error!(error = %e, "Failed to store anon call history");
-        }
+            Ok(id) => id,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to store anon call history");
+                return;
+            }
+        };
+
+        // Insert succeeded — emit a DomainEvent::MessageReceived so the chat
+        // model picks up the new row in real time. Without this the bubble
+        // only appears after the user re-navigates into the channel and the
+        // load path reads it from the DB.
+        let channel_id: crate::domain::ids::ChannelId = (*conversation_id).into();
+        let now = chrono::Utc::now();
+        let msg_uuid = message_id.as_str().parse::<uuid::Uuid>()
+            .map(MessageId::from_uuid)
+            .unwrap_or_else(|_| MessageId::new());
+        let domain_msg = crate::domain::message::Message {
+            id: msg_uuid,
+            conversation_id: channel_id,
+            conversation_type: ConversationType::AnonDm,
+            sender_id: Some(user_id),
+            device_id: None,
+            content: MessageContent::Text(text),
+            encrypted_content: None,
+            thread_id: None,
+            reply_to: None,
+            reply_to_author_id: None,
+            reply_to_text: None,
+            reply_to_thumbnail: None,
+            reply_to_thumbnail_mime: None,
+            attachments: vec![],
+            is_pinned: false,
+            is_edited: false,
+            is_deleted: false,
+            is_read: true,
+            sent_at,
+            created_at: now,
+            updated_at: now,
+            edited_at: None,
+            reaction_counts: vec![],
+            current_user_reactions: vec![],
+            mentioned_integrations: vec![],
+            targets_ai_bot: false,
+            delivery_status: String::new(),
+        };
+        self.event_bus().emit_domain(DomainEvent::MessageReceived { message: domain_msg });
     }
 
     // ── Local call history (v053) ──────────────────────────────────
@@ -1065,6 +1122,23 @@ impl ChatterClient {
             .map_err(|e| ClientError::Inbox(e.to_string()))
     }
 
+    /// End an active group/channel call: store history and leave the room.
+    ///
+    /// Unlike a DM call there is no single peer to notify — leaving the
+    /// LiveKit room broadcasts `ParticipantDisconnected` to the other
+    /// members, and the initiator rotates the key for those remaining. No
+    /// DM hangup is sent (the DM hangup path resolves a single peer, which is
+    /// meaningless for a multi-member channel).
+    #[cfg(feature = "media")]
+    pub async fn end_group_call(&self, duration_secs: i64) -> Result<(), ClientError> {
+        let call_worker = self.call_service().get()
+            .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;
+        self.call_signaling()
+            .end_group_call(call_worker, duration_secs)
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
+    }
+
     /// End an active anonymous call: send hangup, store history, leave.
     ///
     /// Returns the conversation_id for UI bubble insertion.
@@ -1101,8 +1175,11 @@ impl ChatterClient {
             OrchestratedCallKind::AnonDm | OrchestratedCallKind::AnonGroup => {
                 self.end_anon_call(duration_secs).await.map(|_| ())
             }
-            OrchestratedCallKind::DmStandard | OrchestratedCallKind::GroupChannel => {
+            OrchestratedCallKind::DmStandard => {
                 self.end_dm_call(duration_secs).await
+            }
+            OrchestratedCallKind::GroupChannel => {
+                self.end_group_call(duration_secs).await
             }
         }
     }

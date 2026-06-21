@@ -36,8 +36,6 @@ struct GLVideoState {
     pipeline: Option<gst::Pipeline>,
     /// Next frame ready for rendering.
     next_frame: Arc<Mutex<Option<(gst_video::VideoInfo, gst::Buffer)>>>,
-    /// Current frame being displayed.
-    current_frame: Option<gst_gl::GLVideoFrame<gst_gl::gl_video_frame::Readable>>,
     /// GStreamer GL context (wrapped from Slint's EGL context).
     gst_gl_context: Option<gst_gl::GLContext>,
     /// Whether GL is connected.
@@ -82,15 +80,21 @@ pub fn init_gl_video(window: &MainWindow) -> bool {
         return false;
     }
 
-    // Create GL video state with explicit GL elements
-    // Using glupload + glcolorconvert instead of glsinkbin gives better control
-    // over GL context sharing and fixes YUV->RGBA conversion for AVI files
+    // The appsink delivers CPU-side RGBA system memory. videoconvert does the
+    // YUV->RGBA conversion (correct colorimetry for every stream), and we hand
+    // the bytes to the proven manual GL uploader in `gl_call` (glTexImage2D on
+    // the render thread, in Slint's own context) instead of GStreamer's
+    // glupload/glcolorconvert.
+    //
+    // The old GPU path (glupload -> glcolorconvert -> GLMemory) rendered solid
+    // green for software-decoded AVI: glupload mishandles the padded buffers
+    // such decoders emit (see gstreamer bug 729896), so glcolorconvert sampled
+    // an empty texture -> YUV(0,0,0) = green. mp4's buffers happen to be tight
+    // so the same path worked. The manual uploader is reliable for all formats.
     let appsink = gst_app::AppSink::builder()
         .caps(
             &gst_video::VideoCapsBuilder::new()
-                .features([gst_gl::CAPS_FEATURE_MEMORY_GL_MEMORY])
                 .format(gst_video::VideoFormat::Rgba)
-                .field("texture-target", "2D")
                 .build(),
         )
         .enable_last_sample(false)
@@ -119,7 +123,6 @@ pub fn init_gl_video(window: &MainWindow) -> bool {
         glcolorconvert,
         pipeline: None,
         next_frame: Arc::new(Mutex::new(None)),
-        current_frame: None,
         gst_gl_context: None,
         connected: false,
         duration_ms: 0,
@@ -148,6 +151,9 @@ pub fn init_gl_video(window: &MainWindow) -> bool {
                         tracing::warn!("GL_VIDEO_STATE is None in RenderingSetup");
                     }
                 });
+                // Multiplex the single rendering notifier: also load the
+                // call-video GL texture uploader's function table.
+                super::gl_call::on_rendering_setup(graphics_api);
             }
             slint::RenderingState::BeforeRendering => {
                 // Fetch next frame and update video player
@@ -173,12 +179,17 @@ pub fn init_gl_video(window: &MainWindow) -> bool {
                         }
                     }
                 });
+                // Multiplex the notifier: drain the call-video frame inbox and
+                // upload remote participant frames into persistent GL textures
+                // (in-place glTexSubImage2D, no 30 MB Skia copy per frame).
+                if let Some(w) = weak.upgrade() {
+                    super::gl_call::on_before_rendering(&w);
+                }
             }
             slint::RenderingState::RenderingTeardown => {
                 // Clean up GL resources
                 GL_VIDEO_STATE.with(|cell| {
                     if let Some(ref mut video_state) = *cell.borrow_mut() {
-                        video_state.current_frame = None;
                         if let Ok(mut next) = video_state.next_frame.lock() {
                             *next = None;
                         }
@@ -187,6 +198,8 @@ pub fn init_gl_video(window: &MainWindow) -> bool {
                         }
                     }
                 });
+                // Multiplex the notifier: delete all call-video textures.
+                super::gl_call::on_teardown();
             }
             _ => {}
         }
@@ -280,7 +293,7 @@ fn connect_gl_context(
         gst_app::AppSinkCallbacks::builder()
             .new_sample(move |appsink| {
                 let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Flushing)?;
-                let mut buffer = sample.buffer_owned().unwrap();
+                let buffer = sample.buffer_owned().unwrap();
 
                 // Increment frame count and log occasionally
                 let count = frame_count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -290,36 +303,8 @@ fn connect_gl_context(
                     tracing::debug!("GL video: {} frames received", count);
                 }
 
-                // Get GL context and set sync point
-                {
-                    let context = match (buffer.n_memory() > 0)
-                        .then(|| buffer.peek_memory(0))
-                        .and_then(|m| m.downcast_memory_ref::<gst_gl::GLBaseMemory>())
-                        .map(|m| m.context())
-                    {
-                        Some(context) => context.clone(),
-                        None => {
-                            // Buffer doesn't contain GL memory - glupload didn't work
-                            if count == 0 {
-                                tracing::error!(
-                                    "GL video: buffer has no GL memory - glupload not working. \
-                                    GL context sharing may have failed."
-                                );
-                            }
-                            return Err(gst::FlowError::Error);
-                        }
-                    };
-
-                    // Set sync point for GPU synchronization
-                    if let Some(meta) = buffer.meta::<gst_gl::GLSyncMeta>() {
-                        meta.set_sync_point(&context);
-                    } else {
-                        let buffer = buffer.make_mut();
-                        let meta = gst_gl::GLSyncMeta::add(buffer, &context);
-                        meta.set_sync_point(&context);
-                    }
-                }
-
+                // System-memory RGBA. The actual GPU upload happens on the
+                // render thread in fetch_next_frame (gl_call manual uploader).
                 let info = sample
                     .caps()
                     .and_then(|caps| gst_video::VideoInfo::from_caps(caps).ok())
@@ -336,78 +321,46 @@ fn connect_gl_context(
     Ok(())
 }
 
-/// Fetch the next frame as a Slint image.
+/// Fetch the next frame and upload it to a GL texture for rendering.
+///
+/// Runs on the render thread (Slint's BeforeRendering notifier). Maps the
+/// system-memory RGBA buffer the appsink delivered, repacks it tightly (the
+/// buffer may carry stride padding), and uploads it via the proven `gl_call`
+/// manual uploader, returning a `BorrowedOpenGLTexture` Slint image.
 fn fetch_next_frame(state: &mut GLVideoState) -> Option<slint::Image> {
     // Track frame statistics for debugging
     static FRAME_FETCH_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-    if let Some((info, buffer)) = state.next_frame.lock().ok()?.take() {
-        let count = FRAME_FETCH_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if count == 0 {
-            tracing::info!(
-                "GL video: first frame fetched for rendering, size: {}x{}",
-                info.width(),
-                info.height()
-            );
-        }
+    let (info, buffer) = state.next_frame.lock().ok()?.take()?;
+    let count = FRAME_FETCH_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        // Wait for GPU sync
-        if let Some(sync_meta) = buffer.meta::<gst_gl::GLSyncMeta>() {
-            if let Some(ref ctx) = state.gst_gl_context {
-                sync_meta.wait(ctx);
-            }
-        }
-
-        // Convert to GL video frame
-        match gst_gl::GLVideoFrame::from_buffer_readable(buffer, &info) {
-            Ok(frame) => {
-                state.current_frame = Some(frame);
-            }
-            Err(e) => {
-                if count == 0 {
-                    tracing::error!("GL video: failed to create GLVideoFrame: {:?}", e);
-                }
-                return None;
-            }
-        }
+    let width = info.width();
+    let height = info.height();
+    if count == 0 {
+        tracing::info!(
+            "GL video: first frame fetched for rendering, size: {}x{}",
+            width,
+            height
+        );
     }
 
-    // Get texture from current frame
-    state.current_frame.as_ref().and_then(|frame| {
-        let texture_id = match frame.texture_id(0) {
-            Ok(id) => id,
-            Err(e) => {
-                tracing::error!("GL video: failed to get texture ID: {:?}", e);
-                return None;
-            }
-        };
-        let texture: std::num::NonZeroU32 = match texture_id.try_into() {
-            Ok(t) => t,
-            Err(_) => {
-                tracing::error!("GL video: texture ID is 0 (invalid)");
-                return None;
-            }
-        };
-        let width = frame.width();
-        let height = frame.height();
-
-        // Log texture info occasionally for debugging
-        let count = FRAME_FETCH_COUNT.load(std::sync::atomic::Ordering::Relaxed);
-        if count == 1 || count % 300 == 0 {
-            tracing::debug!(
-                "GL video: frame {} - texture={}, size={}x{}",
-                count,
-                texture_id,
-                width,
-                height
-            );
+    // Map the RGBA frame and copy into a tightly-packed buffer (stride == w*4),
+    // honoring the source stride which may be padded.
+    let vframe = gst_video::VideoFrameRef::from_buffer_ref_readable(buffer.as_ref(), &info).ok()?;
+    let src = vframe.plane_data(0).ok()?;
+    let src_stride = vframe.plane_stride()[0] as usize;
+    let row_bytes = (width as usize) * 4;
+    let mut tight = vec![0u8; row_bytes * height as usize];
+    for y in 0..height as usize {
+        let s = y * src_stride;
+        let d = y * row_bytes;
+        if s + row_bytes > src.len() {
+            break;
         }
+        tight[d..d + row_bytes].copy_from_slice(&src[s..s + row_bytes]);
+    }
 
-        Some(unsafe {
-            slint::BorrowedOpenGLTextureBuilder::new_gl_2d_rgba_texture(texture, [width, height].into())
-                .build()
-        })
-    })
+    super::gl_call::upload_media_player_frame(&tight, width, height)
 }
 
 /// Start playing video from memory using GL rendering.
@@ -562,8 +515,6 @@ pub fn start_gl_video(data: Vec<u8>) -> Option<f64> {
         let video_linked_clone = video_linked.clone();
 
         // Handle decodebin pad-added - connect both video AND audio
-        let glupload = state.glupload.clone();
-        let glcolorconvert = state.glcolorconvert.clone();
         let appsink_clone = state.appsink.clone();
         let pipeline_weak = pipeline.downgrade();
         let audio_elements_arc = state.audio_elements.clone();
@@ -602,22 +553,41 @@ pub fn start_gl_video(data: Vec<u8>) -> Option<f64> {
                                 }
                             };
 
+                            // Force videoconvert to emit tightly-packed system-memory RGBA.
+                            // The appsink delivers these bytes to the render thread, where
+                            // gl_call uploads them to a GL texture manually (reliable for the
+                            // padded software-decoded buffers that broke glupload).
+                            let rgba_filter = match gst::ElementFactory::make("capsfilter")
+                                .property(
+                                    "caps",
+                                    gst_video::VideoCapsBuilder::new()
+                                        .format(gst_video::VideoFormat::Rgba)
+                                        .build(),
+                                )
+                                .build()
+                            {
+                                Ok(e) => e,
+                                Err(e) => {
+                                    tracing::error!("GL video: failed to create rgba capsfilter: {}", e);
+                                    return;
+                                }
+                            };
+
                             let appsink_element: &gst::Element = appsink_clone.upcast_ref();
                             let elements: &[&gst::Element] = &[
                                 &queue,
                                 &videoconvert,
-                                &glupload,
-                                &glcolorconvert,
+                                &rgba_filter,
                                 appsink_element,
                             ];
 
                             if let Err(e) = pipeline.add_many(elements) {
-                                tracing::error!("GL video: failed to add GL elements: {:?}", e);
+                                tracing::error!("GL video: failed to add video elements: {:?}", e);
                                 return;
                             }
 
                             if let Err(e) = gst::Element::link_many(elements) {
-                                tracing::error!("GL video: failed to link GL elements: {:?}", e);
+                                tracing::error!("GL video: failed to link video elements: {:?}", e);
                                 return;
                             }
 
@@ -633,7 +603,7 @@ pub fn start_gl_video(data: Vec<u8>) -> Option<f64> {
                                     return;
                                 }
                                 video_linked_clone.store(true, std::sync::atomic::Ordering::SeqCst);
-                                tracing::info!("GL video pipeline linked: decodebin -> queue -> videoconvert -> glupload -> glcolorconvert -> appsink");
+                                tracing::info!("GL video pipeline linked: decodebin -> queue -> videoconvert -> RGBA -> appsink (manual GL upload)");
                             }
                         }
                     } else if name.starts_with("audio/") {
@@ -869,7 +839,6 @@ pub fn stop_gl_video() {
             state.is_playing = false;
             state.duration_ms = 0;
             state.pending_volume = None;
-            state.current_frame = None;
             if let Ok(mut next) = state.next_frame.lock() {
                 *next = None;
             }
@@ -919,8 +888,7 @@ pub fn seek_gl_video(position: f64) {
 
                 tracing::debug!("GL video seeking to {}s", position);
 
-                // Clear current frame so we get fresh frame after seek
-                state.current_frame = None;
+                // Clear pending frame so we get a fresh frame after seek
                 if let Ok(mut next) = state.next_frame.lock() {
                     *next = None;
                 }

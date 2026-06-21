@@ -9,9 +9,59 @@ use slint::ComponentHandle;
 use chatter_core::client::ChatterClient;
 #[cfg(not(target_os = "android"))]
 use chatter_core::calls::ScreenCapture;
-use crate::MainWindow;
+use slint::{Model, ModelRc, SharedString, VecModel};
+use crate::{CallParticipantData, MainWindow};
 
 use super::timers::{get_call_duration_secs, stop_call_timer, stop_video_frame_timer};
+
+/// Toggle the local participant's `is_screen_sharing` flag in the active-call
+/// model so their own tile picks up the screen-share badge. Remote peers'
+/// flags are driven by `LiveKitRoomEvent::TrackSubscribed` in `room_events.rs`;
+/// the local user never receives that event for their own publish, so we
+/// flip it here.
+#[cfg(not(target_os = "android"))]
+fn set_local_participant_screen_sharing(window: &MainWindow, local_user_id: &str, sharing: bool) {
+    let mut data = window.get_active_call_data();
+    let updated: Vec<CallParticipantData> = (0..data.participants.row_count())
+        .map(|i| {
+            let mut p = data.participants.row_data(i).unwrap_or_default();
+            if p.user_id.to_string() == local_user_id {
+                p.is_screen_sharing = sharing;
+            }
+            p
+        })
+        .collect();
+    data.participants = ModelRc::new(VecModel::from(updated));
+    window.set_active_call_data(data);
+}
+
+/// Mutate the participant entry matching `target_user_id` via `f`, leaving
+/// every other entry untouched, and push the updated model back onto the
+/// window. Returns the (post-mutation) participant if found.
+fn update_participant<F>(
+    window: &MainWindow,
+    target_user_id: &str,
+    mut f: F,
+) -> Option<CallParticipantData>
+where
+    F: FnMut(&mut CallParticipantData),
+{
+    let mut data = window.get_active_call_data();
+    let mut found: Option<CallParticipantData> = None;
+    let updated: Vec<CallParticipantData> = (0..data.participants.row_count())
+        .map(|i| {
+            let mut p = data.participants.row_data(i).unwrap_or_default();
+            if p.user_id.to_string() == target_user_id {
+                f(&mut p);
+                found = Some(p.clone());
+            }
+            p
+        })
+        .collect();
+    data.participants = ModelRc::new(VecModel::from(updated));
+    window.set_active_call_data(data);
+    found
+}
 
 /// Wire active call control callbacks.
 pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -64,14 +114,24 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             slint::spawn_local(async move {
                 let new_state = !_ui_ctx.call_is_screen_sharing().await;
                 if new_state {
+                    // No room during the outgoing "Calling…" state — starting a
+                    // share now fails NotInCall. Gate on the connected room.
+                    if !_ui_ctx.call_is_connected().await {
+                        tracing::info!("Screen share unavailable — call not connected yet");
+                        return;
+                    }
                     match ScreenCapture::primary_source() {
                         Ok(source) => {
                             if let Err(e) = _ui_ctx.call_publish_screen_share(source).await {
                                 tracing::error!("Failed to start screen share: {}", e);
                             } else {
                                 tracing::info!("Screen share started");
+                                let local_id = _ui_ctx.session_current_user_id().map(|u| u.to_string());
                                 if let Some(w) = _weak.upgrade() {
                                     w.set_call_is_screen_sharing(true);
+                                    if let Some(id) = local_id {
+                                        set_local_participant_screen_sharing(&w, &id, true);
+                                    }
                                 }
                             }
                         }
@@ -82,14 +142,69 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 } else {
                     _ui_ctx.call_stop_screen_share();
                     tracing::info!("Screen share stopped");
+                    let local_id = _ui_ctx.session_current_user_id().map(|u| u.to_string());
                     if let Some(w) = _weak.upgrade() {
                         w.set_call_is_screen_sharing(false);
+                        if let Some(id) = local_id {
+                            set_local_participant_screen_sharing(&w, &id, false);
+                        }
                     }
                 }
             })
             .unwrap();
             #[cfg(target_os = "android")]
             tracing::warn!("Screen sharing not available on Android");
+        }
+    });
+
+    // Per-peer local audio mute toggle.
+    window.on_call_peer_audio_mute_toggle({
+        let ui_ctx = ui_ctx.clone();
+        let weak = window.as_weak();
+        move |user_id: SharedString| {
+            let Some(w) = weak.upgrade() else { return };
+            let uid = user_id.to_string();
+            let updated = update_participant(&w, &uid, |p| {
+                p.is_audio_muted_locally = !p.is_audio_muted_locally;
+            });
+            let Some(p) = updated else { return };
+            ui_ctx.call_set_peer_audio_muted(uid.clone(), p.is_audio_muted_locally);
+            tracing::info!(
+                peer = %uid,
+                muted = p.is_audio_muted_locally,
+                "Per-peer audio mute toggled (local)"
+            );
+        }
+    });
+
+    // Per-peer local video pause toggle. Flipping `is_video_enabled` makes
+    // the tile fall back to the avatar while paused, since the core layer
+    // also drops the cached frame from `shared_frames`.
+    window.on_call_peer_video_pause_toggle({
+        let ui_ctx = ui_ctx.clone();
+        let weak = window.as_weak();
+        move |user_id: SharedString| {
+            let Some(w) = weak.upgrade() else { return };
+            let uid = user_id.to_string();
+            let updated = update_participant(&w, &uid, |p| {
+                p.is_video_paused_locally = !p.is_video_paused_locally;
+                if p.is_video_paused_locally {
+                    p.is_video_enabled = false;
+                } else {
+                    // Resuming — let the next decoded frame flip the tile
+                    // back to video by re-marking video as enabled. If no
+                    // frames arrive, the TrackUnsubscribed handler will
+                    // clear it again.
+                    p.is_video_enabled = true;
+                }
+            });
+            let Some(p) = updated else { return };
+            ui_ctx.call_set_peer_video_paused(uid.clone(), p.is_video_paused_locally);
+            tracing::info!(
+                peer = %uid,
+                paused = p.is_video_paused_locally,
+                "Per-peer video pause toggled (local)"
+            );
         }
     });
 

@@ -11,6 +11,13 @@
 #[cfg(target_os = "linux")]
 mod gl_linux;
 
+/// Call-video GL texture uploader (Linux). Persistent per-participant GL
+/// textures updated in place, fed by `timers.rs` and uploaded inside
+/// `gl_linux`'s rendering notifier. Public so `features::calls::timers` can
+/// publish frames into its inbox.
+#[cfg(target_os = "linux")]
+pub mod gl_call;
+
 #[cfg(all(target_os = "android", feature = "desktop-media"))]
 mod gl_android;
 

@@ -18,6 +18,16 @@ component ParticipantTile inherits Rectangle {
     in property <image> video-frame;
     in property <bool> is-local: false;
     in property <bool> show-video: true;
+    // When true, screen-share frames fill the tile (image-fit: cover) so an
+    // ultrawide capture isn't letterboxed inside a 16:9 viewport. The
+    // grid tiles leave this off so the overview stays uncropped; only the
+    // single maximized fullscreen tile sets it.
+    in property <bool> fill-mode: false;
+    callback clicked();
+
+    TouchArea {
+        clicked => { root.clicked(); }
+    }
 
     background: Colors.surface;
     border-radius: Spacing.radius-lg;
@@ -37,12 +47,18 @@ component ParticipantTile inherits Rectangle {
     animate drop-shadow-blur { duration: 240ms; easing: ease-in-out; }
     animate drop-shadow-color { duration: 240ms; easing: ease-in-out; }
 
-    // Video frame or avatar placeholder
+    // Video frame or avatar placeholder. Screen-share streams use
+    // `contain` to preserve aspect (an ultrawide 5120x1440 capture gets
+    // letterboxed instead of crop-zoomed, otherwise huge regions of the
+    // shared desktop sit outside the tile). Camera tracks stay on `cover`
+    // so a 16:9 face video fills the tile cleanly without bars.
     if show-video && participant.is-video-enabled: Image {
         source: video-frame;
         width: 100%;
         height: 100%;
-        image-fit: cover;
+        image-fit: participant.is-screen-sharing
+            ? (fill-mode ? cover : contain)
+            : cover;
     }
 
     if !show-video || !participant.is-video-enabled: Rectangle {
@@ -95,6 +111,26 @@ component ParticipantTile inherits Rectangle {
         }
     }
 
+    // Screen-share indicator (top-right) — tells the streamer themselves
+    // "you are sharing" and tells viewers which tile is the screen feed.
+    if participant.is-screen-sharing: Rectangle {
+        x: parent.width - self.width - Spacing.xs;
+        y: Spacing.xs;
+        width: 22px;
+        height: 22px;
+        border-radius: 11px;
+        background: Colors.glow-cyan.with-alpha(0.85);
+
+        Image {
+            source: Icons.monitor;
+            width: 13px;
+            height: 13px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            colorize: Colors.text-primary;
+        }
+    }
+
     // Name label (bottom-right)
     Rectangle {
         x: parent.width - self.width - Spacing.xs;
@@ -122,17 +158,47 @@ export component ActiveCallView inherits Rectangle {
     in property <bool> is-screen-sharing: false;
     in property <image> local-video-frame;
     in property <[image]> remote-video-frames;
+    // When true, the dock expands to fill the viewport (chat panel hides at
+    // the parent layout). Driven by app.slint, toggled via the fullscreen
+    // button on the maximized tile.
+    in property <bool> fullscreen: false;
+    // -1 = grid view, 0..n = that tile is maximized.
+    property <int> maximized-index: -1;
+    // Derived properties only evaluate meaningfully when maximized-index >= 0;
+    // the explicit guard avoids `remote-video-frames[-1]` (Slint indexes the
+    // array eagerly and a negative index aborts the per-frame property
+    // re-eval, which silently drops the binding update path for the grid
+    // tiles too).
+    property <bool> maximized-is-local: maximized-index >= 0
+        && maximized-index == call-data.participant-count - 1;
+    property <image> maximized-video-frame: maximized-index < 0
+        ? local-video-frame
+        : (maximized-is-local
+            ? local-video-frame
+            : (remote-video-frames.length > maximized-index
+                ? remote-video-frames[maximized-index]
+                : local-video-frame));
 
     callback toggle-mute();
     callback toggle-video();
     callback toggle-screen-share();
     callback end-call();
     callback show-audio-settings();
+    // Per-peer local controls — only the local viewer is affected.
+    callback peer-audio-mute-toggle(string);
+    callback peer-video-pause-toggle(string);
+    // Asks the parent layout to grow the dock to the full viewport.
+    callback fullscreen-toggle();
 
     // Dock: collapses to zero height when hidden so parent VerticalLayout
     // reclaims the space and the underlying chat header/messages fill it.
+    // In fullscreen mode `vertical-stretch: 1` (set by the parent in
+    // app.slint) plus a large `max-height` lets the dock grow to occupy
+    // the full chat-column slot; otherwise we pin it at 280px.
     visible: show;
-    height: show ? 280px : 0px;
+    min-height: show ? (fullscreen ? 0px : 280px) : 0px;
+    max-height: show ? (fullscreen ? 100000px : 280px) : 0px;
+    preferred-height: show ? 280px : 0px;
     background: Colors.surface.with-alpha(0.6);
     border-width: 1px;
     border-color: Colors.neo-inset-shadow;
@@ -218,7 +284,7 @@ export component ActiveCallView inherits Rectangle {
             vertical-stretch: 1;
             background: transparent;
 
-            if call-data.participant-count == 1: ParticipantTile {
+            if maximized-index < 0 && call-data.participant-count == 1: ParticipantTile {
                 x: Spacing.sm;
                 y: Spacing.sm;
                 width: parent.width - 2 * Spacing.sm;
@@ -226,9 +292,10 @@ export component ActiveCallView inherits Rectangle {
                 participant: call-data.participants[0];
                 video-frame: local-video-frame;
                 is-local: true;
+                clicked => { root.maximized-index = 0; }
             }
 
-            if call-data.participant-count == 2: HorizontalLayout {
+            if maximized-index < 0 && call-data.participant-count == 2: HorizontalLayout {
                 padding: Spacing.sm;
                 padding-bottom: 56px; // leave room for floating controls
                 spacing: Spacing.sm;
@@ -237,6 +304,7 @@ export component ActiveCallView inherits Rectangle {
                     horizontal-stretch: 1;
                     participant: call-data.participants[0];
                     video-frame: remote-video-frames.length > 0 ? remote-video-frames[0] : local-video-frame;
+                    clicked => { root.maximized-index = 0; }
                 }
 
                 ParticipantTile {
@@ -244,10 +312,11 @@ export component ActiveCallView inherits Rectangle {
                     participant: call-data.participants.length > 1 ? call-data.participants[1] : call-data.participants[0];
                     video-frame: local-video-frame;
                     is-local: true;
+                    clicked => { root.maximized-index = 1; }
                 }
             }
 
-            if call-data.participant-count >= 3 && call-data.participant-count <= 4: VerticalLayout {
+            if maximized-index < 0 && call-data.participant-count >= 3 && call-data.participant-count <= 4: VerticalLayout {
                 padding: Spacing.sm;
                 padding-bottom: 56px;
                 spacing: Spacing.sm;
@@ -259,11 +328,13 @@ export component ActiveCallView inherits Rectangle {
                         horizontal-stretch: 1;
                         participant: call-data.participants[0];
                         video-frame: remote-video-frames.length > 0 ? remote-video-frames[0] : local-video-frame;
+                        clicked => { root.maximized-index = 0; }
                     }
                     ParticipantTile {
                         horizontal-stretch: 1;
                         participant: call-data.participants.length > 1 ? call-data.participants[1] : call-data.participants[0];
                         video-frame: remote-video-frames.length > 1 ? remote-video-frames[1] : local-video-frame;
+                        clicked => { root.maximized-index = 1; }
                     }
                 }
 
@@ -274,6 +345,7 @@ export component ActiveCallView inherits Rectangle {
                         horizontal-stretch: 1;
                         participant: call-data.participants.length > 2 ? call-data.participants[2] : call-data.participants[0];
                         video-frame: remote-video-frames.length > 2 ? remote-video-frames[2] : local-video-frame;
+                        clicked => { root.maximized-index = 2; }
                     }
                     ParticipantTile {
                         horizontal-stretch: 1;
@@ -281,7 +353,124 @@ export component ActiveCallView inherits Rectangle {
                         video-frame: local-video-frame;
                         is-local: call-data.participant-count >= 4;
                         opacity: call-data.participant-count >= 4 ? 1.0 : 0.0;
+                        clicked => {
+                            if (call-data.participant-count >= 4) { root.maximized-index = 3; }
+                        }
                     }
+                }
+            }
+
+            // Maximized single tile — click the tile to restore the grid.
+            // Per-peer controls (mute/pause) are rendered as a small overlay
+            // bar above the tile when the maximized participant is remote.
+            // Fullscreen + maximized fills (cover) so ultrawide screen-share
+            // captures aren't squashed into a thin letterboxed band.
+            if maximized-index >= 0 && maximized-index < call-data.participant-count: ParticipantTile {
+                x: Spacing.sm;
+                y: Spacing.sm;
+                width: parent.width - 2 * Spacing.sm;
+                height: parent.height - 2 * Spacing.sm - 56px;
+                participant: call-data.participants[maximized-index];
+                video-frame: maximized-video-frame;
+                is-local: maximized-is-local;
+                fill-mode: fullscreen;
+                clicked => { root.maximized-index = -1; }
+            }
+
+            // Per-peer controls bar — top of the maximized tile, remote only.
+            if maximized-index >= 0 && !maximized-is-local
+               && maximized-index < call-data.participant-count: Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: Spacing.sm + Spacing.sm;
+                width: 96px;
+                height: 40px;
+                border-radius: 20px;
+                background: Colors.overlay-heavy;
+
+                HorizontalLayout {
+                    padding-left: Spacing.xs;
+                    padding-right: Spacing.xs;
+                    spacing: Spacing.xs;
+                    alignment: center;
+
+                    // Audio mute toggle for this peer.
+                    Rectangle {
+                        width: 36px;
+                        height: 36px;
+                        border-radius: 18px;
+                        background: call-data.participants[maximized-index].is-audio-muted-locally
+                            ? Colors.error.with-alpha(0.85)
+                            : Colors.surface-hover;
+
+                        mute-touch := TouchArea {
+                            clicked => {
+                                root.peer-audio-mute-toggle(
+                                    call-data.participants[maximized-index].user-id);
+                            }
+                        }
+
+                        Image {
+                            source: call-data.participants[maximized-index].is-audio-muted-locally
+                                ? Icons.mic-off : Icons.mic;
+                            width: 16px;
+                            height: 16px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            colorize: Colors.text-primary;
+                        }
+                    }
+
+                    // Video pause toggle for this peer.
+                    Rectangle {
+                        width: 36px;
+                        height: 36px;
+                        border-radius: 18px;
+                        background: call-data.participants[maximized-index].is-video-paused-locally
+                            ? Colors.error.with-alpha(0.85)
+                            : Colors.surface-hover;
+
+                        pause-touch := TouchArea {
+                            clicked => {
+                                root.peer-video-pause-toggle(
+                                    call-data.participants[maximized-index].user-id);
+                            }
+                        }
+
+                        Image {
+                            source: call-data.participants[maximized-index].is-video-paused-locally
+                                ? Icons.play : Icons.pause;
+                            width: 16px;
+                            height: 16px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            colorize: Colors.text-primary;
+                        }
+                    }
+                }
+            }
+
+            // Fullscreen toggle — top-right of the call dock. Visible in both
+            // grid and maximized modes. Asks the parent layout to expand the
+            // dock to cover the chat area.
+            Rectangle {
+                x: parent.width - self.width - Spacing.sm;
+                y: Spacing.sm;
+                width: 32px;
+                height: 32px;
+                border-radius: 16px;
+                background: Colors.overlay-heavy;
+
+                fullscreen-touch := TouchArea {
+                    clicked => { root.fullscreen-toggle(); }
+                }
+
+                Image {
+                    source: fullscreen ? Icons.minimize : Icons.maximize;
+                    width: 16px;
+                    height: 16px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: Colors.text-primary;
                 }
             }
 

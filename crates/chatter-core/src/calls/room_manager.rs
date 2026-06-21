@@ -5,9 +5,11 @@
 
 use livekit::prelude::*;
 use livekit::e2ee::{E2eeOptions, EncryptionType, key_provider::{KeyProvider, KeyProviderOptions}};
-use livekit::options::TrackPublishOptions;
+use livekit::options::{TrackPublishOptions, VideoCodec, VideoEncoding};
 use livekit::webrtc::audio_source::RtcAudioSource;
 use livekit::webrtc::video_source::RtcVideoSource;
+#[cfg(not(target_os = "android"))]
+use livekit::webrtc::video_source::{native::NativeVideoSource, VideoResolution};
 use tokio::sync::mpsc;
 use std::sync::Arc;
 use parking_lot::RwLock;
@@ -60,6 +62,8 @@ pub enum RoomEvent {
     TrackUnsubscribed {
         participant_identity: String,
         track_sid: String,
+        is_video: bool,
+        is_screen_share: bool,
     },
     /// E2EE state changed.
     EncryptionStateChanged {
@@ -100,8 +104,17 @@ pub struct RoomManager {
     /// Screen capture manager.
     #[cfg(not(target_os = "android"))]
     screen_capture: Arc<RwLock<ScreenCapture>>,
+    /// SID of the currently-published screen-share track. Cleared on stop
+    /// so we can call `local_participant.unpublish_track(sid)` and free
+    /// the slot — otherwise restart creates a second track while the
+    /// first stays published with no frames, and remote viewers stay
+    /// subscribed to the dead one.
+    #[cfg(not(target_os = "android"))]
+    screen_share_track_sid: Arc<RwLock<Option<TrackSid>>>,
     /// E2EE key state (provider + epoch).
     e2ee: Arc<RwLock<E2eeState>>,
+    /// Handle to the spawned event handler task so disconnect() can await it.
+    event_task: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl RoomManager {
@@ -139,7 +152,10 @@ impl RoomManager {
             video_playback: Arc::new(RwLock::new(video_playback)),
             #[cfg(not(target_os = "android"))]
             screen_capture: Arc::new(RwLock::new(ScreenCapture::new())),
+            #[cfg(not(target_os = "android"))]
+            screen_share_track_sid: Arc::new(RwLock::new(None)),
             e2ee: Arc::new(RwLock::new(E2eeState { provider: None, epoch: 0 })),
+            event_task: Arc::new(RwLock::new(None)),
         };
         (manager, event_rx)
     }
@@ -261,29 +277,126 @@ impl RoomManager {
             room.as_ref().ok_or(CallError::NotInCall)?.local_participant()
         };
 
-        // Start screen capture
-        let video_source = {
+        // Two-phase startup so the `NativeVideoSource` is sized to the
+        // real capture dims (e.g. 5120×1440). Previously we seeded at a
+        // fixed 7680×4320 — libwebrtc then upscaled every capture frame
+        // to that size before encode, and receivers decoded 33 MP frames
+        // (~150 ms libyuv convert per frame, starving the tokio worker
+        // and overflowing the audio relay queue).
+        // Capture the negotiated frame rate before `config` is moved into
+        // `begin`, so the LiveKit publish cap matches what the capturer
+        // actually produces (otherwise raising one without the other is a
+        // no-op — see the three coupled "60 fps" sites).
+        let target_fps = config
+            .as_ref()
+            .map(|c| c.fps)
+            .unwrap_or_else(|| ScreenCaptureConfig::default().fps);
+
+        let handshake = {
             let mut capture = self.screen_capture.write();
-            capture.start(source, config)?
+            capture.begin(source, config)?
         };
 
-        // Create and publish track
+        // Wait for the capture thread's probe frame to come back with
+        // real dims. Portal selection can take a while; the timeout is
+        // generous but bounded so a cancelled portal doesn't hang the
+        // call worker forever.
+        let dims_result = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            handshake.dims_rx,
+        )
+        .await;
+
+        let (width, height) = match dims_result {
+            Ok(Ok(d)) => d,
+            Ok(Err(_)) => {
+                self.screen_capture.write().stop();
+                return Err(CallError::TrackPublishFailed(
+                    "Screen capture thread exited before sending probe dims".to_string(),
+                ));
+            }
+            Err(_) => {
+                self.screen_capture.write().stop();
+                return Err(CallError::TrackPublishFailed(
+                    "Timed out waiting for screen capture probe frame (portal dialog cancelled?)".to_string(),
+                ));
+            }
+        };
+
+        let video_source = NativeVideoSource::new(
+            VideoResolution { width, height },
+            true, // is_screencast
+        );
+
+        // Hand the source to the capture thread so it can start pushing
+        // frames (including the buffered probe frame). If the channel is
+        // dropped the thread has already given up.
+        if handshake.source_tx.send(video_source.clone()).is_err() {
+            self.screen_capture.write().stop();
+            return Err(CallError::TrackPublishFailed(
+                "Screen capture thread exited before source handoff".to_string(),
+            ));
+        }
+
+        self.screen_capture.read().complete();
+
         let video_track = LocalVideoTrack::create_video_track(
             "screen",
             RtcVideoSource::Native(video_source),
         );
 
+        // Screen-share track tuned for high-res content (e.g. 5120×1440
+        // ultrawides). Defaults (VP8, simulcast=true, 1080p30 preset cap)
+        // throttle the encoder to 3 Mbps and run THREE parallel VP8
+        // encoders.
+        //
+        // Why H.265 specifically:
+        //   - H.264 NVENC advertises Baseline Level 3.1 in webrtc-sys
+        //     (`profile-level-id: 42e01f`), which maxes out at ~720p.
+        //     At 5120×1440 `nvEncInitializeEncoder` returns error 8
+        //     (invalid param) and the encoder is unusable.
+        //   - Even H.264 Level 5.2 caps at 4096×2304 — a 5120-wide frame
+        //     is physically out of spec.
+        //   - HEVC/H.265 supports up to 8K (8192×4320 at level 6.0),
+        //     which fits 5120×1440 cleanly, and the NVENC factory
+        //     already advertises it via the same encoder path.
+        //
+        // simulcast=false and an explicit `video_encoding` keep us off
+        // the SDK's hardcoded 1080p/30/3 Mbps screenshare preset.
+        //
+        // Optimise for fat links (1 Gbps+ LAN/fibre): 60 Mbps is the *ceiling*,
+        // not a floor. At 5120x1440 this is ~0.13 bpp @144 fps — visually
+        // lossless for desktop/text content (the 25 Mbps prior cap softened
+        // small text under motion; 8 Mbps blocked badly). 60 Mbps is ~7.5 MB/s,
+        // trivial on 1 Gbps (125 MB/s) yet leaves headroom for audio + the
+        // peer's own upstream. WebRTC's congestion controller adapts the
+        // *actual* send rate down on constrained links, so capping high costs
+        // nothing on slow networks while letting fast ones run near-lossless.
+        // Per-link capability negotiation (advertise downlink, pick the tier)
+        // is the follow-up milestone; this is the high-net default.
         let publish_options = TrackPublishOptions {
             source: TrackSource::Screenshare,
+            video_codec: VideoCodec::H265,
+            simulcast: false,
+            video_encoding: Some(VideoEncoding {
+                max_bitrate: 60_000_000,
+                max_framerate: target_fps as f64,
+            }),
             ..Default::default()
         };
 
-        local_participant
+        let publication = local_participant
             .publish_track(LocalTrack::Video(video_track), publish_options)
             .await
             .map_err(|e| CallError::TrackPublishFailed(e.to_string()))?;
 
-        tracing::info!("Published screen share track");
+        let sid = publication.sid();
+        *self.screen_share_track_sid.write() = Some(sid.clone());
+
+        tracing::info!(
+            "Published screen share track (H.265 NVENC, simulcast off, {} fps cap, 60 Mbps, {}x{}, sid={})",
+            target_fps, width, height, sid
+        );
         Ok(())
     }
 
@@ -301,11 +414,32 @@ impl RoomManager {
         capture.stop();
     }
 
-    /// Stop screen share capture and unpublish track.
+    /// Stop screen share capture AND unpublish the LiveKit track.
+    ///
+    /// Without the unpublish step the SFU keeps the track alive after the
+    /// local capture loop ends. Remote viewers stay subscribed to a
+    /// frozen stream; restarting screen share creates a second track on
+    /// top of the dead one and the receiver tile picks whichever
+    /// subscription it had first.
     #[cfg(not(target_os = "android"))]
-    pub fn stop_screen_share(&self) {
-        let mut capture = self.screen_capture.write();
-        capture.stop();
+    pub async fn stop_screen_share(&self) {
+        {
+            let mut capture = self.screen_capture.write();
+            capture.stop();
+        }
+        let sid = self.screen_share_track_sid.write().take();
+        let Some(sid) = sid else { return };
+        let local_participant = {
+            let room = self.room.read();
+            match room.as_ref() {
+                Some(r) => r.local_participant(),
+                None => return,
+            }
+        };
+        match local_participant.unpublish_track(&sid).await {
+            Ok(_) => tracing::info!("Unpublished screen share track sid={}", sid),
+            Err(e) => tracing::warn!("Failed to unpublish screen share track {}: {}", sid, e),
+        }
     }
 
     /// Toggle microphone mute.
@@ -354,6 +488,36 @@ impl RoomManager {
             .unwrap_or(1.0)
     }
 
+    /// Locally mute/unmute a specific remote participant's audio. Frames
+    /// keep decoding so the LiveKit stream stays healthy; muted frames are
+    /// dropped before mixing.
+    pub fn set_peer_audio_muted(&self, participant_id: &str, muted: bool) {
+        if let Some(playback) = self.audio_playback.read().as_ref() {
+            playback.set_peer_muted(participant_id, muted);
+        }
+    }
+
+    /// Whether a remote participant is locally audio-muted.
+    pub fn is_peer_audio_muted(&self, participant_id: &str) -> bool {
+        self.audio_playback
+            .read()
+            .as_ref()
+            .map(|p| p.is_peer_muted(participant_id))
+            .unwrap_or(false)
+    }
+
+    /// Locally pause/resume rendering of a remote participant's video. The
+    /// LiveKit subscription stays up; frames decode but are dropped before
+    /// storage. The UI tile falls back to the avatar while paused.
+    pub fn set_peer_video_paused(&self, participant_id: &str, paused: bool) {
+        self.video_playback.read().set_peer_paused(participant_id, paused);
+    }
+
+    /// Whether a remote participant's video is locally paused.
+    pub fn is_peer_video_paused(&self, participant_id: &str) -> bool {
+        self.video_playback.read().is_peer_paused(participant_id)
+    }
+
     /// Get the latest video frame for a participant as raw data.
     ///
     /// Returns None if no frame is available for the participant.
@@ -390,9 +554,16 @@ impl RoomManager {
     ) -> Result<(), CallError> {
         self.set_state(RoomState::Connecting);
 
-        // Create key provider with Signal-derived key
+        // Create key provider with Signal-derived key.
+        //
+        // `ratchet_window_size: 0` disables LiveKit's OWN key ratchet. We drive
+        // the key chain externally (CallKeyState, pushed via `set_shared_key`).
+        // With a non-zero window, a single transient decrypt failure makes
+        // LiveKit auto-ratchet its shared key using its PBKDF2 derivation —
+        // which diverges from our HKDF chain and never re-syncs, permanently
+        // killing media. We install the keys ourselves, so LiveKit must not.
         let key_provider = KeyProvider::with_shared_key(
-            KeyProviderOptions::default(),
+            KeyProviderOptions { ratchet_window_size: 0, ..KeyProviderOptions::default() },
             encryption_key,
         );
 
@@ -411,10 +582,14 @@ impl RoomManager {
             key_provider,
         });
 
-        // Connect to room
-        let (room, mut events) = Room::connect(url, token, room_options)
-            .await
-            .map_err(|e| CallError::ConnectionFailed(e.to_string()))?;
+        // Connect to room (timeout prevents indefinite hang on slow/dead servers)
+        let (room, mut events) = tokio::time::timeout(
+            tokio::time::Duration::from_secs(10),
+            Room::connect(url, token, room_options),
+        )
+        .await
+        .map_err(|_| CallError::ConnectionFailed("LiveKit connection timed out (10s)".to_string()))?
+        .map_err(|e| CallError::ConnectionFailed(e.to_string()))?;
 
         // Enable E2EE
         room.e2ee_manager().set_enabled(true);
@@ -505,7 +680,8 @@ impl RoomManager {
         // Must use spawn_local because:
         // 1. Call worker runs on a LocalSet with new_current_thread() runtime
         // 2. LiveKit Room/events are !Send and must stay on the same thread
-        tokio::task::spawn_local(async move {
+        let event_task_slot = self.event_task.clone();
+        let handle = tokio::task::spawn_local(async move {
             tracing::info!("Room event handler started");
             while let Some(event) = events.recv().await {
                 tracing::info!("LiveKit room event received: {:?}", event);
@@ -523,6 +699,7 @@ impl RoomManager {
             *state.write() = RoomState::Disconnected;
             let _ = event_tx.try_send(RoomEvent::StateChanged(RoomState::Disconnected));
         });
+        *event_task_slot.write() = Some(handle);
 
         Ok(())
     }
@@ -560,6 +737,9 @@ impl RoomManager {
         {
             let screen = self.screen_capture.read();
             screen.signal_stop();
+            // Track auto-unpublishes when the room closes; clear the cached
+            // sid so the next call doesn't inherit a stale handle.
+            self.screen_share_track_sid.write().take();
         }
 
         // Take the room handle
@@ -576,6 +756,19 @@ impl RoomManager {
             ).await {
                 Ok(_) => tracing::info!("Room closed successfully"),
                 Err(_) => tracing::warn!("Room close timed out, forcing disconnect"),
+            }
+        }
+
+        // Wait for event handler task to finish draining
+        let event_handle = self.event_task.write().take();
+        if let Some(handle) = event_handle {
+            match tokio::time::timeout(
+                tokio::time::Duration::from_secs(2),
+                handle,
+            ).await {
+                Ok(Ok(())) => tracing::debug!("Event handler task joined cleanly"),
+                Ok(Err(e)) => tracing::warn!("Event handler task panicked: {}", e),
+                Err(_) => tracing::warn!("Event handler join timed out (2s), proceeding"),
             }
         }
 
@@ -639,33 +832,72 @@ impl RoomManager {
     /// LiveKit's internal key derivation. Use this only when you need
     /// to sync keys from an external source (e.g., CallKeyState).
     pub fn set_encryption_key(&self, key: Vec<u8>) -> bool {
-        let room_guard = self.room.read();
-        let room = match room_guard.as_ref() {
-            Some(r) => r,
+        let mut e2ee = self.e2ee.write();
+        let provider = match e2ee.provider.clone() {
+            Some(p) => p,
             None => {
-                tracing::warn!("Cannot set key: not connected");
+                tracing::warn!("Cannot set key: no key provider");
                 return false;
             }
         };
-        let local_identity = room.local_participant().identity();
 
-        let mut e2ee = self.e2ee.write();
-        if e2ee.provider.is_none() {
-            tracing::warn!("Cannot set key: no key provider");
-            return false;
-        }
-
+        // The provider is in SHARED-key mode, so the frame cryptor reads the
+        // shared key ring — `set_shared_key`, NOT the per-participant
+        // `set_key` (which only feeds the non-shared path and never reached
+        // the cryptor, the root cause of media dying on the first ratchet).
         e2ee.epoch += 1;
         let new_epoch = e2ee.epoch;
-        let success = e2ee.provider.as_ref().unwrap()
-            .set_key(&local_identity, new_epoch as i32, key);
+        provider.set_shared_key(key, new_epoch as i32);
+        tracing::info!(epoch = new_epoch, "E2EE key updated externally");
+        true
+    }
 
-        if success {
-            tracing::info!(epoch = new_epoch, "E2EE key updated externally");
-        } else {
-            tracing::warn!(epoch = new_epoch, "Failed to set E2EE key");
-        }
-        success
+    /// Install an externally-ratcheted shared key for `epoch`, pre-installing
+    /// `epoch + 1` so a peer whose 30 s ratchet timer fires slightly ahead can
+    /// still decrypt immediately.
+    ///
+    /// Both sides advance the same deterministic [`CallKeyState`] chain at the
+    /// same 30 s cadence, so they reach the same epoch (= key index). The two
+    /// directions of small timing skew are absorbed without LiveKit's own
+    /// ratchet (which we disabled): a peer slightly *ahead* is covered by the
+    /// pre-installed `epoch + 1`; a peer slightly *behind* by the 16-slot key
+    /// ring still holding older epochs. `epoch` is installed LAST so it becomes
+    /// the `latest_key_index` we encrypt with.
+    pub fn set_ratcheted_shared_key(&self, epoch: u32, key_cur: Vec<u8>, key_next: Vec<u8>) -> bool {
+        let mut e2ee = self.e2ee.write();
+        let provider = match e2ee.provider.clone() {
+            Some(p) => p,
+            None => {
+                tracing::warn!("Cannot ratchet key: no key provider");
+                return false;
+            }
+        };
+        provider.set_shared_key(key_next, (epoch + 1) as i32);
+        provider.set_shared_key(key_cur, epoch as i32);
+        e2ee.epoch = epoch;
+        true
+    }
+
+    /// Install `key` as the shared key at index 0 and reset the epoch counter.
+    ///
+    /// Used on the DM caller side when the real ECDH-derived key arrives after
+    /// a placeholder connect: the callee connected *with* this same key at
+    /// index 0, so re-installing it at index 0 (and resetting the epoch) puts
+    /// both peers on the same key and the same epoch baseline, so the periodic
+    /// ratchet then advances them in lockstep.
+    pub fn reset_shared_key(&self, key: Vec<u8>) -> bool {
+        let mut e2ee = self.e2ee.write();
+        let provider = match e2ee.provider.clone() {
+            Some(p) => p,
+            None => {
+                tracing::warn!("Cannot reset key: no key provider");
+                return false;
+            }
+        };
+        provider.set_shared_key(key, 0);
+        e2ee.epoch = 0;
+        tracing::info!("E2EE key re-rooted at index 0 (real DM key)");
+        true
     }
 
     fn set_state(&self, state: RoomState) {
@@ -788,6 +1020,8 @@ impl RoomManager {
             }
             livekit::RoomEvent::TrackUnsubscribed { track, participant, .. } => {
                 let participant_id = participant.identity().to_string();
+                let is_video = matches!(track, RemoteTrack::Video(_));
+                let mut is_screen_share = false;
 
                 // Remove audio playback if it's an audio track
                 if matches!(track, RemoteTrack::Audio(_)) {
@@ -798,14 +1032,23 @@ impl RoomManager {
                 }
 
                 // Remove video playback if it's a video track
-                if matches!(track, RemoteTrack::Video(_)) {
+                if let RemoteTrack::Video(ref v) = track {
+                    is_screen_share = matches!(
+                        v.source(),
+                        TrackSource::Screenshare | TrackSource::ScreenshareAudio
+                    );
                     video_playback.read().remove_track(&participant_id);
-                    tracing::info!("RoomManager: Removed video track from playback for {}", participant_id);
+                    tracing::info!(
+                        "RoomManager: Removed video track from playback for {} (screen_share={})",
+                        participant_id, is_screen_share
+                    );
                 }
 
                 let _ = event_tx.try_send(RoomEvent::TrackUnsubscribed {
                     participant_identity: participant_id,
                     track_sid: track.sid().to_string(),
+                    is_video,
+                    is_screen_share,
                 });
             }
             livekit::RoomEvent::ConnectionQualityChanged { participant, quality } => {

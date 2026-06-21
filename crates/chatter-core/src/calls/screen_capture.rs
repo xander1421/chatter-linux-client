@@ -16,15 +16,65 @@ use std::sync::Arc;
 use livekit::webrtc::desktop_capturer::{
     DesktopCaptureSourceType, DesktopCapturer, DesktopCapturerOptions,
 };
-use livekit::webrtc::video_frame::{I420Buffer, VideoFrame, VideoRotation};
+use livekit::webrtc::video_frame::{I420Buffer, VideoBuffer, VideoFrame, VideoRotation};
 use livekit::webrtc::video_source::native::NativeVideoSource;
-use livekit::webrtc::video_source::VideoResolution;
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 
 use crate::error::CallError;
 
-/// Frame data: (RGBA buffer, width, height, stride)
-type FrameData = (Vec<u8>, i32, i32, u32);
+/// Reusable BGRA capture slot shared between the libwebrtc capture callback
+/// (producer) and the push loop (consumer).
+///
+/// The producer owns its own persistent BGRA scratch `Vec` (in the closure)
+/// and, once it has copied the borrowed `DesktopFrame` bytes into it, swaps
+/// that `Vec` into [`FrameSlot::buf`] under the lock. The consumer swaps in
+/// its own spare empty `Vec` to take the filled one out. Three `Vec`s
+/// ping-pong forever, so after warm-up no frame allocates or frees the ~30 MB
+/// BGRA buffer — the previous `frame.data().to_vec()` did exactly that every
+/// frame. The lock is only ever held for a pointer swap, never for the copy
+/// or the colour conversion.
+struct FrameSlot {
+    /// Most-recently captured BGRA bytes (length == stride * height).
+    buf: Vec<u8>,
+    width: i32,
+    height: i32,
+    stride: u32,
+    /// True once the producer has written a new frame the consumer hasn't taken.
+    ready: bool,
+}
+
+impl FrameSlot {
+    fn empty() -> Self {
+        Self { buf: Vec::new(), width: 0, height: 0, stride: 0, ready: false }
+    }
+}
+
+/// A captured BGRA frame handed to the consumer: the recycled buffer plus dims.
+struct CapturedFrame {
+    buf: Vec<u8>,
+    width: i32,
+    height: i32,
+    stride: u32,
+}
+
+/// Borrows an [`I420Buffer`] as the `buffer` of a [`VideoFrame`] without
+/// moving it, so the same pooled buffer can be reused across frames.
+///
+/// `NativeVideoSource::capture_frame` only reads `buffer.as_ref().sys_handle()`
+/// and the C++ side takes its own ref-counted hold on the underlying
+/// `VideoFrameBuffer`, so the `I420Buffer` is free to be reused (overwritten
+/// via `data_mut()`) on the next iteration once `capture_frame` returns.
+///
+/// `VideoFrame<T>` requires `T: AsRef<dyn VideoBuffer>`, and `&I420Buffer`
+/// does not implement that (std has no blanket impl for references), so this
+/// local newtype provides it. The orphan rule is satisfied: `RefBuf` is local.
+struct RefBuf<'a>(&'a I420Buffer);
+
+impl AsRef<dyn VideoBuffer> for RefBuf<'_> {
+    fn as_ref(&self) -> &(dyn VideoBuffer + 'static) {
+        <I420Buffer as AsRef<dyn VideoBuffer>>::as_ref(self.0)
+    }
+}
 
 /// Check if we're running on Wayland (Linux only, always false on other platforms).
 fn is_wayland() -> bool {
@@ -71,13 +121,31 @@ pub struct ScreenCaptureConfig {
     pub capture_cursor: bool,
 }
 
+// Target the high-refresh path: libyuv SIMD bgra→i420 (~2 ms at 5120×1440 in
+// release) and the receive/convert side both clear 240 fps, so 60 was an
+// artificial cap. The actual achieved rate is bounded by the portal pull
+// loop (see the `sleep` below) and the monitor refresh — the portal won't
+// hand us more unique frames than the panel produces, so a 60 Hz user is
+// naturally limited to ~60 without extra real work. Proper per-monitor /
+// capability negotiation of this value is a later milestone.
 impl Default for ScreenCaptureConfig {
     fn default() -> Self {
         Self {
-            fps: 30,
+            fps: 144,
             capture_cursor: true,
         }
     }
+}
+
+/// Handshake returned by [`ScreenCapture::begin`].
+///
+/// The capture thread spawns immediately and runs the portal/X11 picker;
+/// when the first real frame arrives, it sends those dims via `dims_rx`
+/// and blocks waiting for a `NativeVideoSource` (created by the caller
+/// at those exact dims) on `source_tx`.
+pub struct ScreenCaptureHandshake {
+    pub dims_rx: tokio::sync::oneshot::Receiver<(u32, u32)>,
+    pub source_tx: std::sync::mpsc::SyncSender<NativeVideoSource>,
 }
 
 /// Screen capture manager using LiveKit's desktop_capturer.
@@ -86,8 +154,6 @@ pub struct ScreenCapture {
     running: Arc<AtomicBool>,
     /// Current source.
     source: Option<ScreenSource>,
-    /// LiveKit video source for publishing.
-    video_source: Option<NativeVideoSource>,
     /// Capture configuration.
     config: ScreenCaptureConfig,
     /// Capture thread handle.
@@ -100,7 +166,6 @@ impl ScreenCapture {
         Self {
             running: Arc::new(AtomicBool::new(false)),
             source: None,
-            video_source: None,
             config: ScreenCaptureConfig::default(),
             capture_handle: None,
         }
@@ -215,14 +280,27 @@ impl ScreenCapture {
         })
     }
 
-    /// Start screen capture from the specified source.
+    /// Spawn the capture thread and return a handshake the caller drives
+    /// to negotiate the `NativeVideoSource` resolution.
     ///
-    /// Returns the NativeVideoSource that can be used to create a LiveKit track.
-    pub fn start(
+    /// The capture thread captures one probe frame, ships its real
+    /// dimensions back through `dims_rx`, then blocks waiting for a
+    /// `NativeVideoSource` (created at those exact dims by the caller)
+    /// on `source_tx`. Once it receives the source, it pushes the
+    /// buffered first frame and every subsequent frame into it.
+    ///
+    /// This avoids the previous "seed at 8K UHD" hack that forced
+    /// libwebrtc to upscale every capture frame to 7680×4320 before
+    /// encode — receivers then decoded 33-megapixel frames and starved
+    /// the audio relay on the runtime worker.
+    ///
+    /// After `dims_rx` resolves, call `complete()` with the created
+    /// source to record it on the manager.
+    pub fn begin(
         &mut self,
         source: ScreenSource,
         config: Option<ScreenCaptureConfig>,
-    ) -> Result<NativeVideoSource, CallError> {
+    ) -> Result<ScreenCaptureHandshake, CallError> {
         if self.running.load(Ordering::SeqCst) {
             return Err(CallError::TrackPublishFailed(
                 "Screen capture already running".to_string(),
@@ -241,7 +319,6 @@ impl ScreenCapture {
             config.fps
         );
 
-        // Create capturer options based on source type
         let source_type = match source.source_type {
             ScreenSourceType::Monitor => DesktopCaptureSourceType::Screen,
             ScreenSourceType::Window => DesktopCaptureSourceType::Window,
@@ -250,43 +327,49 @@ impl ScreenCapture {
         let mut options = DesktopCapturerOptions::new(source_type);
         options.set_include_cursor(config.capture_cursor);
 
-        // We'll create the video source with initial dimensions, then update on first frame
-        // Use reasonable defaults for screen sharing
-        let video_source = NativeVideoSource::new(
-            VideoResolution {
-                width: 1920,
-                height: 1080,
-            },
-            true, // is_screencast
-        );
+        let (dims_tx, dims_rx) = tokio::sync::oneshot::channel::<(u32, u32)>();
+        let (source_tx, source_rx) = std::sync::mpsc::sync_channel::<NativeVideoSource>(1);
 
-        let source_clone = video_source.clone();
         let running = self.running.clone();
         let fps = config.fps;
         let source_id = source.id;
 
         self.running.store(true, Ordering::SeqCst);
 
-        // Spawn capture thread
         let handle = std::thread::spawn(move || {
-            Self::capture_loop(source_id, source_type, options, source_clone, running, fps);
+            Self::capture_loop(
+                source_id, source_type, options, running, fps, dims_tx, source_rx,
+            );
         });
 
         self.capture_handle = Some(handle);
-        self.video_source = Some(video_source.clone());
 
+        Ok(ScreenCaptureHandshake { dims_rx, source_tx })
+    }
+
+    /// Mark the negotiated source live on the manager. Logs only — the
+    /// LocalVideoTrack owns the `NativeVideoSource`, so this manager
+    /// doesn't need to retain a handle.
+    pub fn complete(&self) {
         tracing::info!("Screen capture started successfully");
-        Ok(video_source)
     }
 
     /// Screen capture loop using LiveKit's desktop_capturer.
+    ///
+    /// Runs in two phases:
+    ///   1. Probe — capture frames until the first real frame arrives,
+    ///      send its dims via `dims_tx`, and block on `source_rx` for
+    ///      the caller-built `NativeVideoSource` (sized to those dims).
+    ///   2. Push — push the buffered first frame plus every subsequent
+    ///      frame into the now-known source.
     fn capture_loop(
         source_id: u64,
         _source_type: DesktopCaptureSourceType,
         options: DesktopCapturerOptions,
-        video_source: NativeVideoSource,
         running: Arc<AtomicBool>,
         fps: u32,
+        dims_tx: tokio::sync::oneshot::Sender<(u32, u32)>,
+        source_rx: std::sync::mpsc::Receiver<NativeVideoSource>,
     ) {
         use std::time::{Duration, Instant};
         use livekit::webrtc::desktop_capturer::CaptureError;
@@ -294,27 +377,26 @@ impl ScreenCapture {
         let frame_duration = Duration::from_secs_f64(1.0 / fps as f64);
         let use_portal = is_wayland() || source_id == 0;
 
-        // Create the desktop capturer
         let mut capturer = match DesktopCapturer::new(options) {
             Some(c) => c,
             None => {
                 tracing::error!("Failed to create desktop capturer");
+                running.store(false, Ordering::SeqCst);
                 return;
             }
         };
 
-        // On Wayland/portal mode, don't specify a source - let portal picker handle it
         let capture_source = if use_portal {
             tracing::info!("Starting capture via XDG Desktop Portal (system picker will appear)");
             tracing::info!("Note: 'Temporary' errors are expected until you select a screen in the portal dialog");
             None
         } else {
-            // On X11, find the source by ID
             let source_list = capturer.get_source_list();
             let source = source_list.into_iter().find(|s| s.id() == source_id);
 
             if source.is_none() {
                 tracing::error!("Source ID {} not found in capture source list", source_id);
+                running.store(false, Ordering::SeqCst);
                 return;
             }
 
@@ -326,9 +408,12 @@ impl ScreenCapture {
             source
         };
 
-        // Shared state for frame data and error tracking
-        let frame_data: Arc<Mutex<Option<FrameData>>> = Arc::new(Mutex::new(None));
+        let frame_data: Arc<Mutex<FrameSlot>> = Arc::new(Mutex::new(FrameSlot::empty()));
         let frame_data_clone = frame_data.clone();
+        // Signalled by the capture callback the instant a fresh frame lands, so
+        // the push loop reads it immediately instead of a fixed poll-sleep.
+        let frame_ready = Arc::new(Condvar::new());
+        let frame_ready_cb = frame_ready.clone();
         let temporary_error_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let temporary_error_count_clone = temporary_error_count.clone();
         let first_frame_received = Arc::new(AtomicBool::new(false));
@@ -340,16 +425,25 @@ impl ScreenCapture {
         let permanent_error_flagged_cb = permanent_error_flagged.clone();
         let running_cb = running.clone();
 
-        // Start capture with callback
+        // Persistent BGRA scratch owned by the capture callback. The borrowed
+        // `DesktopFrame` bytes are copied into this (recycled, grows only on a
+        // resolution change) and then swapped into the shared slot under the
+        // lock — no per-frame ~30 MB allocation, and the lock is held only for
+        // the swap, never the memcpy.
+        let mut scratch: Vec<u8> = Vec::new();
         capturer.start_capture(capture_source, move |result| {
             match result {
                 Ok(frame) => {
                     let width = frame.width();
                     let height = frame.height();
                     let stride = frame.stride();
-                    let data = frame.data().to_vec();
+                    let src = frame.data();
 
-                    // Log first frame received (portal selection completed)
+                    // Copy into the recycled scratch buffer (clear + extend
+                    // reuses the existing allocation when capacity suffices).
+                    scratch.clear();
+                    scratch.extend_from_slice(src);
+
                     if !first_frame_received_clone.swap(true, Ordering::SeqCst) {
                         tracing::info!(
                             "First frame received! Screen capture active ({}x{})",
@@ -357,64 +451,151 @@ impl ScreenCapture {
                         );
                     }
 
-                    // Store frame data for processing
-                    *frame_data_clone.lock() = Some((data, width, height, stride));
+                    // Swap the freshly filled scratch into the slot and take
+                    // back the slot's previous buffer to reuse next callback.
+                    let mut slot = frame_data_clone.lock();
+                    std::mem::swap(&mut slot.buf, &mut scratch);
+                    slot.width = width;
+                    slot.height = height;
+                    slot.stride = stride;
+                    slot.ready = true;
+                    drop(slot);
+                    frame_ready_cb.notify_one();
                 }
-                Err(e) => {
-                    match e {
-                        CaptureError::Temporary => {
-                            // Only log every 100th temporary error to avoid spam
-                            let count = temporary_error_count_clone.fetch_add(1, Ordering::Relaxed);
-                            if count == 0 {
-                                tracing::debug!("Capture: waiting for portal selection or frame...");
-                            } else if count % 100 == 0 {
-                                tracing::debug!(
-                                    "Capture: still waiting for frames ({} temporary errors)",
-                                    count
-                                );
-                            }
+                Err(e) => match e {
+                    CaptureError::Temporary => {
+                        let count = temporary_error_count_clone.fetch_add(1, Ordering::Relaxed);
+                        if count == 0 {
+                            tracing::debug!("Capture: waiting for portal selection or frame...");
+                        } else if count % 100 == 0 {
+                            tracing::debug!(
+                                "Capture: still waiting for frames ({} temporary errors)",
+                                count
+                            );
                         }
-                        CaptureError::Permanent => {
-                            // Latch + stop the main loop. Log only on the first
-                            // occurrence; subsequent callbacks (in-flight before
-                            // the loop reads the flag) stay silent.
-                            if !permanent_error_flagged_cb.swap(true, Ordering::SeqCst) {
-                                tracing::error!(
-                                    "Permanent capture error — stopping screen share (portal cancelled or source lost)"
-                                );
-                                running_cb.store(false, Ordering::SeqCst);
-                            }
+                    }
+                    CaptureError::Permanent => {
+                        if !permanent_error_flagged_cb.swap(true, Ordering::SeqCst) {
+                            tracing::error!(
+                                "Permanent capture error — stopping screen share (portal cancelled or source lost)"
+                            );
+                            running_cb.store(false, Ordering::SeqCst);
+                        }
+                    }
+                },
+            }
+        });
+
+        // Consumer-owned spare BGRA buffer. `take_frame` swaps this into the
+        // slot to extract the latest frame, so the two consumer-side buffers
+        // (this spare and whatever the producer last handed over) recycle
+        // forever without per-frame allocation.
+        let mut spare: Vec<u8> = Vec::new();
+
+        // ── Phase 1: probe for first frame, negotiate source dims ──
+        let probe_start = Instant::now();
+        let mut dims_tx = Some(dims_tx);
+        let (video_source, pending_first_frame): (NativeVideoSource, CapturedFrame) = 'probe: loop {
+            if !running.load(Ordering::SeqCst) || permanent_error_flagged.load(Ordering::SeqCst) {
+                tracing::info!("Screen capture stopped before first frame was processed");
+                return;
+            }
+
+            capturer.capture_frame();
+            std::thread::sleep(Duration::from_millis(5));
+
+            if let Some(captured) = Self::take_frame(&frame_data, &mut spare) {
+                let CapturedFrame { width, height, .. } = captured;
+                if width > 0 && height > 0 {
+                    if let Some(tx) = dims_tx.take() {
+                        let _ = tx.send((width as u32, height as u32));
+                    }
+                    // Wait for the caller to build the NativeVideoSource at
+                    // these dims and hand it back. Timeout guards against the
+                    // caller having died mid-handshake.
+                    match source_rx.recv_timeout(Duration::from_secs(10)) {
+                        Ok(src) => break 'probe (src, captured),
+                        Err(_) => {
+                            tracing::error!(
+                                "Screen capture: source handoff timed out — aborting"
+                            );
+                            running.store(false, Ordering::SeqCst);
+                            return;
                         }
                     }
                 }
             }
-        });
 
+            if use_portal && !first_frame_received.load(Ordering::SeqCst) {
+                let elapsed = probe_start.elapsed();
+                if elapsed > Duration::from_secs(30) && elapsed < Duration::from_secs(31) {
+                    tracing::warn!(
+                        "Screen sharing: No frames received after 30s. Portal dialog may have been cancelled."
+                    );
+                }
+            }
+        };
+
+        // ── Phase 2: push frames into the negotiated source ──
         let mut frame_count = 0u64;
-        let capture_start = Instant::now();
+        let mut window_frames: u32 = 0;
+        let mut window_wait = Duration::ZERO;      // capture_frame() request → frame_data arrival
+        let mut window_convert = Duration::ZERO;   // bgra_to_i420 (libyuv)
+        let mut window_push = Duration::ZERO;      // video_source.capture_frame(&frame)
+        let mut window_total = Duration::ZERO;     // start of tick → end of push
+        let mut window_start = Instant::now();
+
+        // First frame already in hand from probe phase; reuse it before the
+        // first `capture_frame()` request so we don't drop it.
+        let mut pending: Option<CapturedFrame> = Some(pending_first_frame);
+
+        // Pooled I420 output buffer, reused across frames; reallocated only on
+        // a resolution change. `capture_frame` borrows the buffer (via RefBuf)
+        // and the C++ side takes its own ref-counted hold, so the same buffer
+        // is safe to overwrite via `data_mut()` on the next iteration.
+        let mut i420_pool: Option<I420Buffer> = None;
+        let mut pool_dims: (u32, u32) = (0, 0);
 
         while running.load(Ordering::SeqCst) {
-            // Bail early if the callback has flagged a permanent error. The
-            // callback already set `running = false` but the current tick may
-            // still be mid-flight; double-check here so we don't call
-            // capture_frame one more time and re-trigger the callback.
             if permanent_error_flagged.load(Ordering::SeqCst) {
                 break;
             }
 
-            let start = Instant::now();
+            let tick_start = Instant::now();
 
-            // Request a frame
-            capturer.capture_frame();
+            let captured = if let Some(buffered) = pending.take() {
+                Some(buffered)
+            } else {
+                capturer.capture_frame();
+                // Block until the callback signals a fresh frame rather than a
+                // fixed poll-sleep, so we read it the instant it lands (saves
+                // the ~1 ms tax + avoids empty re-polls). Bounded wait so a
+                // teardown of `running` is still noticed promptly. A spurious
+                // wake just means `take_frame` finds `ready == false` and we
+                // loop to request again. The real ceiling fix for 144/240 Hz
+                // is an event-driven PipeWire stream (no poll) — tracked
+                // separately.
+                {
+                    let mut slot = frame_data.lock();
+                    if !slot.ready {
+                        frame_ready.wait_for(&mut slot, Duration::from_millis(16));
+                    }
+                }
+                Self::take_frame(&frame_data, &mut spare)
+            };
+            let wait_done = Instant::now();
 
-            // Small delay to allow callback to process
-            std::thread::sleep(Duration::from_millis(5));
-
-            // Check if we have a frame
-            if let Some((data, width, height, stride)) = frame_data.lock().take() {
+            if let Some(CapturedFrame { buf: data, width, height, stride }) = captured {
                 if width > 0 && height > 0 {
-                    // Convert BGRA to I420 and send to LiveKit
-                    let mut i420_buffer = I420Buffer::new(width as u32, height as u32);
+                    let conv_start = Instant::now();
+                    let dims = (width as u32, height as u32);
+                    // Reuse the pooled buffer; only allocate on first frame or
+                    // a resolution change.
+                    if i420_pool.is_none() || pool_dims != dims {
+                        i420_pool = Some(I420Buffer::new(dims.0, dims.1));
+                        pool_dims = dims;
+                    }
+                    let i420_buffer = i420_pool.as_mut().unwrap();
                     {
                         let (y_data, u_data, v_data) = i420_buffer.data_mut();
                         Self::bgra_to_i420(
@@ -427,31 +608,54 @@ impl ScreenCapture {
                             v_data,
                         );
                     }
+                    let conv_done = Instant::now();
 
                     let frame = VideoFrame {
                         rotation: VideoRotation::VideoRotation0,
                         timestamp_us: (frame_count * 1_000_000 / fps as u64) as i64,
                         frame_metadata: None,
-                        buffer: i420_buffer,
+                        buffer: RefBuf(i420_buffer),
                     };
 
+                    let push_start = Instant::now();
                     video_source.capture_frame(&frame);
+                    let push_done = Instant::now();
                     frame_count += 1;
+
+                    // Return the BGRA buffer to `spare` so the next
+                    // `take_frame` swap recycles it instead of allocating.
+                    spare = data;
+
+                    window_frames += 1;
+                    window_wait    += wait_done - tick_start;
+                    window_convert += conv_done - conv_start;
+                    window_push    += push_done - push_start;
+                    window_total   += push_done - tick_start;
+
+                    if window_start.elapsed() >= Duration::from_secs(1) && window_frames > 0 {
+                        let secs = window_start.elapsed().as_secs_f64();
+                        let f = window_frames as f64;
+                        tracing::info!(
+                            "[SCREEN_FPS] {}x{} {:.1} fps  avg/frame total={:.1}ms wait={:.1}ms convert={:.1}ms push={:.1}ms (target {} fps)",
+                            width, height,
+                            window_frames as f64 / secs,
+                            window_total.as_secs_f64() * 1000.0 / f,
+                            window_wait.as_secs_f64() * 1000.0 / f,
+                            window_convert.as_secs_f64() * 1000.0 / f,
+                            window_push.as_secs_f64() * 1000.0 / f,
+                            fps,
+                        );
+                        window_frames = 0;
+                        window_wait = Duration::ZERO;
+                        window_convert = Duration::ZERO;
+                        window_push = Duration::ZERO;
+                        window_total = Duration::ZERO;
+                        window_start = Instant::now();
+                    }
                 }
             }
 
-            // Warn if portal selection is taking too long (30+ seconds with no frames)
-            if use_portal && !first_frame_received.load(Ordering::SeqCst) {
-                let elapsed = capture_start.elapsed();
-                if elapsed > Duration::from_secs(30) && elapsed < Duration::from_secs(31) {
-                    tracing::warn!(
-                        "Screen sharing: No frames received after 30s. Portal dialog may have been cancelled."
-                    );
-                }
-            }
-
-            // Maintain frame rate
-            let elapsed = start.elapsed();
+            let elapsed = tick_start.elapsed();
             if elapsed < frame_duration {
                 std::thread::sleep(frame_duration - elapsed);
             }
@@ -467,7 +671,35 @@ impl ScreenCapture {
         );
     }
 
-    /// Convert BGRA to I420 (YUV 4:2:0).
+    /// Take the latest captured frame out of the shared slot, if a new one is
+    /// ready, recycling buffers instead of allocating.
+    ///
+    /// `spare` is a consumer-owned empty `Vec`; on success it is swapped into
+    /// the slot (so the producer fills it next time) and the slot's filled
+    /// buffer is returned in the [`CapturedFrame`]. Caller hands the buffer
+    /// back to `spare` after use to keep the recycling going. The lock is held
+    /// only for the swap, never for the colour conversion.
+    fn take_frame(
+        frame_data: &Arc<Mutex<FrameSlot>>,
+        spare: &mut Vec<u8>,
+    ) -> Option<CapturedFrame> {
+        let mut slot = frame_data.lock();
+        if !slot.ready {
+            return None;
+        }
+        slot.ready = false;
+        std::mem::swap(&mut slot.buf, spare);
+        // `spare` now holds the filled buffer; move it out and leave `spare`
+        // empty (the old slot buffer) for the next swap-in.
+        let buf = std::mem::take(spare);
+        Some(CapturedFrame { buf, width: slot.width, height: slot.height, stride: slot.stride })
+    }
+
+    /// Convert BGRA (memory byte order B, G, R, A) to I420 via libyuv.
+    ///
+    /// libyuv names destinations by little-endian 32-bit word value, so
+    /// "ARGB" word = 0xAARRGGBB → LE memory bytes B, G, R, A — exactly
+    /// what the desktop capturer emits. SIMD-accelerated (SSSE3/AVX2/NEON).
     fn bgra_to_i420(
         bgra: &[u8],
         width: usize,
@@ -477,36 +709,16 @@ impl ScreenCapture {
         u_plane: &mut [u8],
         v_plane: &mut [u8],
     ) {
-        for row in 0..height {
-            for col in 0..width {
-                let bgra_idx = row * stride + col * 4;
-                let y_idx = row * width + col;
-
-                if bgra_idx + 2 < bgra.len() && y_idx < y_plane.len() {
-                    let b = bgra[bgra_idx] as i32;
-                    let g = bgra[bgra_idx + 1] as i32;
-                    let r = bgra[bgra_idx + 2] as i32;
-
-                    // RGB to Y conversion
-                    let y = ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;
-                    y_plane[y_idx] = y.clamp(0, 255) as u8;
-
-                    // Subsample U and V (every 2x2 block)
-                    if row % 2 == 0 && col % 2 == 0 {
-                        let uv_row = row / 2;
-                        let uv_col = col / 2;
-                        let uv_idx = uv_row * (width / 2) + uv_col;
-
-                        if uv_idx < u_plane.len() {
-                            let u = ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
-                            let v = ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
-                            u_plane[uv_idx] = u.clamp(0, 255) as u8;
-                            v_plane[uv_idx] = v.clamp(0, 255) as u8;
-                        }
-                    }
-                }
-            }
-        }
+        let w = width as u32;
+        let h = height as u32;
+        let half_w = (width / 2) as u32;
+        livekit::webrtc::native::yuv_helper::argb_to_i420(
+            bgra, stride as u32,
+            y_plane, w,
+            u_plane, half_w,
+            v_plane, half_w,
+            w as i32, h as i32,
+        );
     }
 
     /// Signal screen capture to stop (non-blocking).
@@ -523,7 +735,6 @@ impl ScreenCapture {
         if let Some(handle) = self.capture_handle.take() {
             let _ = handle.join();
         }
-        self.video_source = None;
         self.source = None;
         tracing::info!("Screen capture stopped");
     }
@@ -609,7 +820,7 @@ mod tests {
     #[test]
     fn test_screen_capture_config_default() {
         let config = ScreenCaptureConfig::default();
-        assert_eq!(config.fps, 30);
+        assert_eq!(config.fps, 144);
         assert!(config.capture_cursor);
     }
 

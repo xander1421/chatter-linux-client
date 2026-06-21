@@ -129,6 +129,8 @@ fn render_calling_placeholder(
         is_video_enabled: setup.is_video,
         is_screen_sharing: false,
         is_speaking: false,
+        is_audio_muted_locally: false,
+        is_video_paused_locally: false,
     };
 
     // Pre-known verification emojis (channel group calls) — show them at dial

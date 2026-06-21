@@ -168,6 +168,13 @@ pub struct AnonCallConnectedInfo {
     pub verification_emojis: [String; 4],
     pub is_video: bool,
     pub peer_display_name: String,
+    /// Shared call-start anchor (ns since epoch) for the duration timer.
+    /// Sourced from the callee's answer envelope so both peers count from
+    /// the same reference point.
+    pub started_at_ns: u64,
+    /// Cached peer avatar bytes (from the local AnonDm row) for the active
+    /// call tile. None when the peer never sent a profile avatar.
+    pub peer_avatar: Option<Vec<u8>>,
 }
 
 /// Bookkeeping for a presented incoming call waiting for the user to decide.
@@ -322,6 +329,10 @@ enum CallCommand {
     IsCameraEnabled {
         response: oneshot::Sender<bool>,
     },
+    /// Locally mute/unmute a specific remote participant's audio.
+    SetPeerAudioMuted { participant_id: String, muted: bool },
+    /// Locally pause/resume a specific remote participant's video.
+    SetPeerVideoPaused { participant_id: String, paused: bool },
     /// Publish screen share (desktop only).
     #[cfg(not(target_os = "android"))]
     PublishScreenShare {
@@ -790,6 +801,16 @@ impl CallWorkerHandle {
         let _ = rx.await;
     }
 
+    /// Fire-and-forget variant of [`disconnect_local`] for use in sync
+    /// event handlers (e.g. `handle_domain_event`) that can't `.await`.
+    /// The worker will disconnect LiveKit, clear `active_call`, clear the
+    /// orchestrator slot, and emit `ActiveEnded` — same as the awaited
+    /// version, just without backpressure.
+    pub fn disconnect_local_nonblocking(&self) {
+        let (tx, _rx) = oneshot::channel();
+        let _ = self.cmd_tx.try_send(CallCommand::DisconnectLocal { response: tx });
+    }
+
     /// Get the currently active call.
     pub async fn active_call(&self) -> Option<Call> {
         let (tx, rx) = oneshot::channel();
@@ -908,6 +929,17 @@ impl CallWorkerHandle {
         let _ = self.cmd_tx.try_send(CallCommand::SetCameraEnabled { enabled });
     }
 
+    /// Locally mute/unmute a specific remote peer's audio. Fire-and-forget;
+    /// drops silently if the worker has shut down.
+    pub fn set_peer_audio_muted(&self, participant_id: String, muted: bool) {
+        let _ = self.cmd_tx.try_send(CallCommand::SetPeerAudioMuted { participant_id, muted });
+    }
+
+    /// Locally pause/resume a specific remote peer's video.
+    pub fn set_peer_video_paused(&self, participant_id: String, paused: bool) {
+        let _ = self.cmd_tx.try_send(CallCommand::SetPeerVideoPaused { participant_id, paused });
+    }
+
     /// Check if camera is enabled.
     pub async fn is_camera_enabled(&self) -> bool {
         let (tx, rx) = oneshot::channel();
@@ -1005,6 +1037,16 @@ impl CallWorkerHandle {
     /// Shutdown the worker.
     pub fn shutdown(&self) {
         let _ = self.cmd_tx.try_send(CallCommand::Shutdown);
+    }
+}
+
+/// Derive the orchestrator `CallHandle` from the active call state.
+/// Anonymous calls key by room_name; standard calls by call_id.
+fn derive_call_handle(state: &ActiveCallState) -> CallHandle {
+    if state.room_name.starts_with("anon-") {
+        CallHandle::from(state.room_name.clone())
+    } else {
+        CallHandle::from(state.call.id.to_string())
     }
 }
 
@@ -1168,7 +1210,24 @@ fn run_call_worker(
                     // Cancel key ratchet timer
                     stop_key_ratchet_timer(&ratchet_cancel);
 
+                    // Capture handle before leave clears active_call
+                    let handle = active_call.read().as_ref().map(derive_call_handle);
+
                     let result = leave_call_impl(&call_client, &room_manager, &active_call).await;
+
+                    // Atomic orchestrator cleanup (previously required
+                    // separate orch_mark_ended from callers)
+                    if let Some(h) = handle {
+                        if orchestrator.active.as_ref().map(|a| a.call == h).unwrap_or(false) {
+                            orchestrator.active = None;
+                        }
+                        orchestrator.outgoing.remove(&h);
+                        let _ = call_events_tx.send(CallOrchestratorEvent::ActiveEnded {
+                            call: h,
+                            reason: CallEndReason::LocalHangup,
+                        });
+                    }
+
                     let _ = response.send(result);
                 }
 
@@ -1176,9 +1235,23 @@ fn run_call_worker(
                     // Cancel key ratchet timer
                     stop_key_ratchet_timer(&ratchet_cancel);
 
+                    let handle = active_call.read().as_ref().map(derive_call_handle);
+
                     let result =
                         end_call_impl(&call_client, &room_manager, &active_call, reason.as_deref())
                             .await;
+
+                    if let Some(h) = handle {
+                        if orchestrator.active.as_ref().map(|a| a.call == h).unwrap_or(false) {
+                            orchestrator.active = None;
+                        }
+                        orchestrator.outgoing.remove(&h);
+                        let _ = call_events_tx.send(CallOrchestratorEvent::ActiveEnded {
+                            call: h,
+                            reason: CallEndReason::LocalHangup,
+                        });
+                    }
+
                     let _ = response.send(result);
                 }
 
@@ -1186,9 +1259,23 @@ fn run_call_worker(
                     // Cancel key ratchet timer
                     stop_key_ratchet_timer(&ratchet_cancel);
 
+                    let handle = active_call.read().as_ref().map(derive_call_handle);
+
                     room_manager.disconnect().await;
                     *active_call.write() = None;
                     tracing::info!("Disconnected locally from call");
+
+                    if let Some(h) = handle {
+                        if orchestrator.active.as_ref().map(|a| a.call == h).unwrap_or(false) {
+                            orchestrator.active = None;
+                        }
+                        orchestrator.outgoing.remove(&h);
+                        let _ = call_events_tx.send(CallOrchestratorEvent::ActiveEnded {
+                            call: h,
+                            reason: CallEndReason::LocalHangup,
+                        });
+                    }
+
                     let _ = response.send(());
                 }
 
@@ -1250,6 +1337,14 @@ fn run_call_worker(
                     let _ = response.send(room_manager.is_camera_enabled());
                 }
 
+                CallCommand::SetPeerAudioMuted { participant_id, muted } => {
+                    room_manager.set_peer_audio_muted(&participant_id, muted);
+                }
+
+                CallCommand::SetPeerVideoPaused { participant_id, paused } => {
+                    room_manager.set_peer_video_paused(&participant_id, paused);
+                }
+
                 #[cfg(not(target_os = "android"))]
                 CallCommand::PublishScreenShare { source, response } => {
                     let result = room_manager.publish_screen_share(source, None).await;
@@ -1258,7 +1353,7 @@ fn run_call_worker(
 
                 #[cfg(not(target_os = "android"))]
                 CallCommand::StopScreenShare => {
-                    room_manager.stop_screen_share();
+                    room_manager.stop_screen_share().await;
                 }
 
                 CallCommand::IsScreenSharing { response } => {
@@ -1291,7 +1386,31 @@ fn run_call_worker(
                 }
 
                 CallCommand::SetEncryptionKey { key, response } => {
-                    let success = room_manager.set_encryption_key(key);
+                    // DM caller path: the real ECDH-derived key has arrived
+                    // (the callee connected with this same key). Re-root the
+                    // ratchet chain on it and install it at LiveKit index 0 so
+                    // both peers share one key_state + epoch baseline. Without
+                    // re-rooting, the caller would keep ratcheting from the
+                    // transient placeholder and desync from the callee at the
+                    // first 30s ratchet.
+                    let success = match <[u8; 32]>::try_from(key.as_slice()) {
+                        Ok(arr) => {
+                            let mut guard = active_call.write();
+                            if let Some(state) = guard.as_mut() {
+                                let call_id = state.key_state.call_id().to_string();
+                                match CallKeyState::new(&arr, &call_id) {
+                                    Ok(ks) => state.key_state = ks,
+                                    Err(e) => tracing::error!("Re-root key_state failed: {}", e),
+                                }
+                            }
+                            drop(guard);
+                            room_manager.reset_shared_key(key)
+                        }
+                        Err(_) => {
+                            tracing::error!("Encryption key is not 32 bytes; ignoring");
+                            false
+                        }
+                    };
                     let _ = response.send(success);
                 }
 
@@ -1846,16 +1965,26 @@ fn start_key_ratchet_timer(
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    // Ratchet using our deterministic CallKeyState
-                    let new_key = {
+                    // Advance our deterministic CallKeyState and capture both
+                    // this epoch's key and the next one (for the forward
+                    // window). Both peers run the same chain at the same
+                    // cadence, so they reach the same epoch == key index.
+                    let ratcheted = {
                         let mut call_guard = active_call.write();
                         if let Some(ref mut state) = *call_guard {
                             match state.key_state.ratchet() {
                                 Ok(()) => {
                                     let epoch = state.key_state.epoch();
-                                    let key = state.key_state.current_key_vec();
+                                    let key_cur = state.key_state.current_key_vec();
+                                    let key_next = match state.key_state.peek_next_key() {
+                                        Ok(k) => k.to_vec(),
+                                        Err(e) => {
+                                            tracing::error!("Key peek failed: {}", e);
+                                            key_cur.clone()
+                                        }
+                                    };
                                     tracing::info!(epoch = epoch, "Coordinated key ratchet completed");
-                                    Some(key)
+                                    Some((epoch, key_cur, key_next))
                                 }
                                 Err(e) => {
                                     tracing::error!("Key ratchet failed: {}", e);
@@ -1868,9 +1997,9 @@ fn start_key_ratchet_timer(
                         }
                     };
 
-                    // Push the new key to LiveKit outside the lock
-                    if let Some(key) = new_key {
-                        if !room_manager.set_encryption_key(key) {
+                    // Push the keys to LiveKit outside the lock.
+                    if let Some((epoch, key_cur, key_next)) = ratcheted {
+                        if !room_manager.set_ratcheted_shared_key(epoch, key_cur, key_next) {
                             tracing::warn!("Failed to push ratcheted key to LiveKit");
                         }
                     }
@@ -2014,8 +2143,10 @@ fn handle_domain_event(
             );
         }
 
-        DomainEvent::CallHangupReceived { call_id, .. } => {
-            worker.orch_mark_ended(CallHandle::from(call_id), CallEndReason::RemoteHangup);
+        DomainEvent::CallHangupReceived { .. } => {
+            // Disconnect from LiveKit + clear active_call + orchestrator.
+            // Previously only cleared orchestrator, leaving the room connected.
+            worker.disconnect_local_nonblocking();
         }
 
         DomainEvent::AnonCallOfferReceived {
@@ -2049,6 +2180,7 @@ fn handle_domain_event(
             accepted,
             call_room_id,
             callee_display_name,
+            timestamp,
             ..
         } => {
             spawn_anon_call_answer_task(
@@ -2058,18 +2190,15 @@ fn handle_domain_event(
                 call_room_id,
                 accepted,
                 callee_display_name,
+                timestamp,
             );
         }
 
-        DomainEvent::AnonCallHangupReceived { conversation_id, .. } => {
-            // Room name is the orchestrator handle for anon calls, but the
-            // hangup event only carries the conversation id. Phase 2 will
-            // teach the worker to resolve conversation → handle; for now
-            // best-effort by convention using the conversation id string.
-            worker.orch_mark_ended(
-                CallHandle::from(conversation_id.to_string()),
-                CallEndReason::RemoteHangup,
-            );
+        DomainEvent::AnonCallHangupReceived { .. } => {
+            // Disconnect from LiveKit + clear active_call + orchestrator.
+            // Previously only cleared orchestrator, leaving the room connected
+            // and active_call set — causing "Already in a call" on retry.
+            worker.disconnect_local_nonblocking();
         }
 
         DomainEvent::AnonGroupCallOfferReceived {
@@ -2103,6 +2232,7 @@ fn handle_domain_event(
             accepted,
             call_room_id,
             callee_display_name,
+            timestamp,
             ..
         } => {
             spawn_anon_call_answer_task(
@@ -2112,14 +2242,12 @@ fn handle_domain_event(
                 call_room_id,
                 accepted,
                 callee_display_name,
+                timestamp,
             );
         }
 
-        DomainEvent::AnonGroupCallHangupReceived { group_id, .. } => {
-            worker.orch_mark_ended(
-                CallHandle::from(group_id.to_string()),
-                CallEndReason::RemoteHangup,
-            );
+        DomainEvent::AnonGroupCallHangupReceived { .. } => {
+            worker.disconnect_local_nonblocking();
         }
 
         DomainEvent::CallKeyAnswerReceived { .. }
@@ -2150,6 +2278,7 @@ fn spawn_anon_call_answer_task(
     call_room_id: Vec<u8>,
     accepted: bool,
     callee_display_name: String,
+    answer_timestamp_ns: u64,
 ) {
     tokio::spawn(async move {
         let room_handle = CallHandle::from(format!(
@@ -2160,7 +2289,13 @@ fn spawn_anon_call_answer_task(
         ));
 
         match signaling
-            .handle_anon_call_answer(&call_room_id, accepted, &callee_display_name, &worker)
+            .handle_anon_call_answer(
+                &call_room_id,
+                accepted,
+                &callee_display_name,
+                answer_timestamp_ns,
+                &worker,
+            )
             .await
         {
             Ok(crate::domain::call::AnonCallAnswerOutcome::Connected(setup)) => {
@@ -2170,6 +2305,8 @@ fn spawn_anon_call_answer_task(
                     verification_emojis: setup.verification_emojis.clone(),
                     is_video: setup.is_video,
                     peer_display_name: setup.peer_display_name.clone(),
+                    started_at_ns: setup.started_at_ns,
+                    peer_avatar: setup.peer_avatar.clone(),
                 };
                 let handle = CallHandle::from(setup.room_name.clone());
                 // Register as the active call so subsequent hangup / new-call

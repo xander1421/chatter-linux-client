@@ -9,6 +9,7 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::calls::LiveKitRoomEvent;
 use crate::bin_ui::converters::get_initials;
+use crate::bin_ui::features::calls::spawn_fetch_remote_avatar;
 use crate::{CallParticipantData, MainWindow};
 
 /// Wire room events to update UI (participant count, etc.).
@@ -50,6 +51,9 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 LiveKitRoomEvent::ParticipantJoined { identity, display_name } => {
                     tracing::info!("Participant joined: {} ({:?})", identity, display_name);
                     let display = display_name.clone().unwrap_or_else(|| identity.clone());
+                    if let Ok(uid) = identity.parse::<chatter_core::domain::ids::UserId>() {
+                        spawn_fetch_remote_avatar(weak.clone(), &ui_ctx, uid);
+                    }
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             let mut data = w.get_active_call_data();
@@ -96,6 +100,8 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 is_video_enabled: false,
                                 is_screen_sharing: false,
                                 is_speaking: false,
+                                is_audio_muted_locally: false,
+                                is_video_paused_locally: false,
                             };
 
                             let mut participants = existing;
@@ -174,13 +180,53 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         });
                     }
                 }
-                LiveKitRoomEvent::TrackUnsubscribed { participant_identity, track_sid } => {
+                LiveKitRoomEvent::TrackUnsubscribed {
+                    participant_identity, track_sid, is_video, is_screen_share,
+                } => {
                     tracing::info!(
-                        "Track unsubscribed: {} from {}",
-                        track_sid, participant_identity
+                        "Track unsubscribed: {} from {} (video={}, screen_share={})",
+                        track_sid, participant_identity, is_video, is_screen_share
                     );
-                    // Note: We don't know if this was video or audio track
-                    // A more robust solution would include track type in the event
+
+                    if !is_video {
+                        // Audio-only unsubscribe — UI tile state unchanged.
+                        continue;
+                    }
+
+                    let identity = participant_identity.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            let mut data = w.get_active_call_data();
+                            let participants: Vec<CallParticipantData> = (0..data.participants.row_count())
+                                .map(|i| {
+                                    let mut p = data.participants.row_data(i).unwrap_or_default();
+                                    if p.user_id.to_string() == identity {
+                                        if is_screen_share {
+                                            // Screen share stopped — drop screen flag, keep
+                                            // camera state (camera & screen share are separate
+                                            // tracks; we only got told about screen here).
+                                            p.is_screen_sharing = false;
+                                            // No camera track in this call → fall back to avatar.
+                                            // Safe to clear because the only video flag we set
+                                            // for screen-share is_video_enabled; clearing it
+                                            // restores the avatar tile.
+                                            p.is_video_enabled = false;
+                                        } else {
+                                            // Camera track unsubscribed — clear video flag.
+                                            p.is_video_enabled = false;
+                                        }
+                                    }
+                                    p
+                                })
+                                .collect();
+                            data.participants = ModelRc::new(VecModel::from(participants));
+                            w.set_active_call_data(data);
+                            tracing::debug!(
+                                "Cleared video state for {} (screen_share={})",
+                                identity, is_screen_share
+                            );
+                        }
+                    });
                 }
                 LiveKitRoomEvent::EncryptionStateChanged { participant_identity, is_encrypted } => {
                     tracing::debug!(

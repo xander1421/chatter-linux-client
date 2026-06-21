@@ -27,6 +27,50 @@ mod outgoing;
 mod room_events;
 pub mod timers;
 
+use slint::{Model, ModelRc, VecModel, Weak};
+
+use crate::bin_ui::converters::avatar_bytes_to_image;
+use crate::CallParticipantData;
+
+/// Patch the active call's participant row matching `user_id` with the given
+/// avatar bytes. Must be called on the UI thread. No-op if the bytes can't be
+/// decoded or no row matches.
+pub(super) fn apply_remote_avatar(w: &MainWindow, user_id: &str, bytes: &[u8]) {
+    let Some(img) = avatar_bytes_to_image(bytes) else { return };
+    let mut data = w.get_active_call_data();
+    let participants: Vec<CallParticipantData> = (0..data.participants.row_count())
+        .map(|i| {
+            let mut p = data.participants.row_data(i).unwrap_or_default();
+            if p.user_id.as_str() == user_id {
+                p.avatar_source = img.clone();
+            }
+            p
+        })
+        .collect();
+    data.participants = ModelRc::new(VecModel::from(participants));
+    w.set_active_call_data(data);
+}
+
+/// Background fetch of a remote user's avatar via the server profile URL,
+/// then patch the matching participant row. Used for non-anon paths (regular
+/// DM accept, LiveKit `ParticipantJoined`) where no avatar bytes are cached
+/// locally. No-op if the user has no `avatar_url` or the download fails.
+pub(super) fn spawn_fetch_remote_avatar(
+    weak: Weak<MainWindow>,
+    ui_ctx: &std::sync::Arc<chatter_core::client::ChatterClient>,
+    user_id: chatter_core::domain::ids::UserId,
+) {
+    let ui_ctx = ui_ctx.clone();
+    tokio::spawn(async move {
+        let Some(bytes) = ui_ctx.get_user_avatar_bytes(&user_id).await else { return };
+        let user_id_str = user_id.to_string();
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(w) = weak.upgrade() else { return };
+            apply_remote_avatar(&w, &user_id_str, &bytes);
+        });
+    });
+}
+
 /// Wire all call-related callbacks.
 ///
 /// Note: call_service is passed separately because it's initialized post-boot

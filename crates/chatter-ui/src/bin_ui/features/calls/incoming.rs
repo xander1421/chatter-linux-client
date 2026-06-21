@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::client::calls::AcceptedIncomingCall;
@@ -19,8 +19,9 @@ use chatter_core::services::call_worker::{
     CallEndReason, CallOrchestratorEvent, OrchestratedCallKind,
 };
 use crate::{ActiveCallData, CallParticipantData, MainWindow};
-use crate::bin_ui::converters::get_initials;
+use crate::bin_ui::converters::{avatar_bytes_to_image, get_initials};
 
+use super::spawn_fetch_remote_avatar;
 use super::timers::{start_call_timer, start_video_frame_timer};
 
 /// Wire incoming call accept/decline callbacks.
@@ -115,6 +116,7 @@ fn render_accepted_call(
             peer_name,
             is_video,
         } => {
+            spawn_fetch_remote_avatar(weak.clone(), ui_ctx, peer_id);
             let weak = weak.clone();
             let frames = shared_frames.clone();
             let _ = slint::invoke_from_event_loop(move || {
@@ -131,6 +133,8 @@ fn render_accepted_call(
                     is_video_enabled: is_video,
                     is_screen_sharing: false,
                     is_speaking: false,
+                    is_audio_muted_locally: false,
+                    is_video_paused_locally: false,
                 };
                 let remote_participant = CallParticipantData {
                     user_id: peer_id.to_string().into(),
@@ -142,6 +146,8 @@ fn render_accepted_call(
                     is_video_enabled: is_video,
                     is_screen_sharing: false,
                     is_speaking: false,
+                    is_audio_muted_locally: false,
+                    is_video_paused_locally: false,
                 };
                 let call_data = ActiveCallData {
                     call_id: setup.call_id.to_string().into(),
@@ -184,6 +190,8 @@ fn render_accepted_call(
                 setup.peer_display_name,
                 setup.is_video,
                 setup.verification_emojis,
+                setup.started_at_ns,
+                setup.peer_avatar,
             );
         }
     }
@@ -205,11 +213,31 @@ fn render_active_anon_call(
     peer_display_name: String,
     is_video: bool,
     verification_emojis: [String; 4],
+    started_at_ns: u64,
+    peer_avatar: Option<Vec<u8>>,
 ) {
     let weak = weak.clone();
     let frames = shared_frames.clone();
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
+        // If `LiveKitRoomEvent::ParticipantJoined` already landed on the UI
+        // thread (it races AnonCallConnected via two independent
+        // `invoke_from_event_loop` dispatches), the remote slot already
+        // carries the server-assigned identity (e.g. "anon-c1954f…").
+        // Re-stamping a literal "Anonymous" placeholder here clobbers it,
+        // and subsequent `TrackSubscribed` events can't match the
+        // identity back to a participant — the screen-share tile then
+        // stays in is_video_enabled=false until the user does pause+
+        // unpause to force a flag flip.
+        let existing = w.get_active_call_data().participants;
+        let preserved_remote_user_id: Option<slint::SharedString> = (0..existing.row_count())
+            .filter_map(|i| existing.row_data(i))
+            .find(|p| {
+                let uid = p.user_id.as_str();
+                !uid.is_empty() && uid != "You" && uid != "Anonymous"
+            })
+            .map(|p| p.user_id);
+
         let local_participant = CallParticipantData {
             user_id: "You".into(),
             display_name: "You".into(),
@@ -220,18 +248,26 @@ fn render_active_anon_call(
             is_video_enabled: is_video,
             is_screen_sharing: false,
             is_speaking: false,
+            is_audio_muted_locally: false,
+            is_video_paused_locally: false,
         };
         let remote_initials = get_initials(&peer_display_name);
+        let remote_avatar_source = peer_avatar
+            .as_deref()
+            .and_then(avatar_bytes_to_image)
+            .unwrap_or_default();
         let remote_participant = CallParticipantData {
-            user_id: "Anonymous".into(),
+            user_id: preserved_remote_user_id.unwrap_or_else(|| "Anonymous".into()),
             display_name: peer_display_name.into(),
             initials: remote_initials.into(),
             avatar_url: "".into(),
-            avatar_source: slint::Image::default(),
+            avatar_source: remote_avatar_source,
             is_muted: false,
             is_video_enabled: is_video,
             is_screen_sharing: false,
             is_speaking: false,
+            is_audio_muted_locally: false,
+            is_video_paused_locally: false,
         };
         let call_data = ActiveCallData {
             call_id: room_name.into(),
@@ -259,7 +295,7 @@ fn render_active_anon_call(
         w.set_call_is_screen_sharing(false);
         w.set_active_call_visible(true);
         super::super::auth::initial_data::hide_incoming_call(&w);
-        start_call_timer(&w, None);
+        start_call_timer(&w, Some(started_at_ns));
         start_video_frame_timer(&w, frames);
     });
     // Media is auto-published by the call worker after connect — no UI-side
@@ -408,6 +444,8 @@ fn handle_orchestrator_event(
                 info.peer_display_name,
                 info.is_video,
                 info.verification_emojis,
+                info.started_at_ns,
+                info.peer_avatar,
             );
         }
     }

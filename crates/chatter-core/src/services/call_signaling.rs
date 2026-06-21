@@ -281,11 +281,22 @@ impl CallSignalingService {
 
         tracing::info!("Created call on server: {:?}, waiting for peer's ephemeral key", call.id);
 
-        // Send offer via sealed sender DM
+        // Send offer via sealed sender DM. `initiate_call` already connected
+        // the LiveKit room and set the worker's active_call; if the offer
+        // fails to send (e.g. first-contact DM bootstrap, or a network error)
+        // we must roll that back. Otherwise the worker stays "in a call" with
+        // a room nobody else joins, and every retry fails with
+        // `AlreadyInCall` until the process restarts.
         let call_id_str = call.id.to_string();
         let channel_id_str = channel_id.to_string();
-        self.send_call_offer(peer_id, &call_id_str, ephemeral_public, call_type_str, &channel_id_str)
-            .await?;
+        if let Err(e) = self
+            .send_call_offer(peer_id, &call_id_str, ephemeral_public, call_type_str, &channel_id_str)
+            .await
+        {
+            tracing::error!(error = %e, call_id = %call.id, "Call offer send failed — rolling back call");
+            call_worker.disconnect_local().await;
+            return Err(e);
+        }
 
         tracing::info!(
             peer_id = %peer_id,
@@ -340,6 +351,9 @@ impl CallSignalingService {
             "Received call answer, deriving call key"
         );
 
+        // Capture call view-data before `pending` is dropped (zeroizes the key).
+        let is_video = pending.is_video;
+
         // Delegate all crypto to the Signal service (ECDH + identity lookup + HKDF)
         let priv_key = pending.ephemeral_key.private_key_bytes();
         let call_key = signal_service.actor
@@ -367,6 +381,20 @@ impl CallSignalingService {
             .set_encryption_key(call_key.to_vec())
             .await;
 
+        // Register the now-connected call as the orchestrator's active slot.
+        // Without this the caller's "End call" has nothing to tear down:
+        // `end_active_call` dispatches on `orch_active_kind()`, which stays
+        // `None` until a call is marked connected, so the room (and audio)
+        // would otherwise linger until process shutdown. The callee registers
+        // its slot via `accept_presented_incoming_call`; this is the caller's
+        // equivalent.
+        call_worker.orch_mark_connected(
+            crate::services::call_worker::CallHandle::from(call_id),
+            crate::services::call_worker::OrchestratedCallKind::DmStandard,
+            *peer_id,
+            is_video,
+        );
+
         // Derive verification emojis
         let verification = CallVerification::derive_verification_emojis(&call_key, call_id);
         let (e1, e2, e3, e4) = CallVerification::to_slint_tuple(&verification);
@@ -378,7 +406,7 @@ impl CallSignalingService {
             call_id: call_id_parsed,
             channel_id: ChannelId::new(), // channel_id was consumed with pending
             verification_emojis: [e1, e2, e3, e4],
-            is_video: false, // caller knows this from the pending state
+            is_video,
         })
     }
 
@@ -620,8 +648,10 @@ impl CallSignalingService {
             .get_conversation(&pending.conversation_id)
             .ok().flatten().is_none();
 
-        // Send accept answer
-        if is_group_call {
+        // Send accept answer. The returned ns timestamp is wired into the
+        // peer's `AnonCallAnswer` envelope and becomes the shared call-start
+        // anchor for the duration timer on both sides.
+        let answer_timestamp_ns = if is_group_call {
             let group_id = AnonGroupId::try_from_slice(
                 pending.conversation_id.as_bytes()
             ).ok_or_else(|| CallSignalingError::AnonCall("Invalid group ID".into()))?;
@@ -629,7 +659,7 @@ impl CallSignalingService {
             self.anon_group_service
                 .send_call_answer(&group_id, &pending.call_room_id, true, Some(&token), Some(&my_display_name))
                 .await
-                .map_err(|e| CallSignalingError::AnonCall(format!("Failed to send group accept: {}", e)))?;
+                .map_err(|e| CallSignalingError::AnonCall(format!("Failed to send group accept: {}", e)))?
         } else {
             self.anon_dm_service
                 .send_call_answer(
@@ -641,8 +671,8 @@ impl CallSignalingService {
                     Some(&my_display_name),
                 )
                 .await
-                .map_err(|e| CallSignalingError::AnonCall(format!("Failed to send accept: {}", e)))?;
-        }
+                .map_err(|e| CallSignalingError::AnonCall(format!("Failed to send accept: {}", e)))?
+        };
 
         tracing::info!(room_name = %room_name, "Anonymous call accept sent, joining LiveKit room");
 
@@ -673,6 +703,13 @@ impl CallSignalingService {
 
         let verification_emojis = Self::anon_verification_emojis(&pending.encryption_key, room_name);
 
+        let peer_avatar = self
+            .anon_dm_service
+            .get_conversation(&pending.conversation_id)
+            .ok()
+            .flatten()
+            .and_then(|c| c.peer_avatar);
+
         let result = AnonCallSetupResult {
             room_name: room_name.to_string(),
             channel_id,
@@ -680,6 +717,8 @@ impl CallSignalingService {
             verification_emojis,
             is_video: pending.is_video_call,
             peer_display_name: pending.display_name.clone(),
+            started_at_ns: answer_timestamp_ns,
+            peer_avatar,
         };
 
         // Re-store pending call so end_anon_call can find it for hangup/history
@@ -701,6 +740,7 @@ impl CallSignalingService {
         call_room_id: &[u8],
         accepted: bool,
         callee_display_name: &str,
+        answer_timestamp_ns: u64,
         call_worker: &CallWorkerHandle,
     ) -> Result<AnonCallAnswerOutcome, CallSignalingError> {
         // Skip if already in a call — this handles the callee's own echo coming
@@ -811,6 +851,13 @@ impl CallSignalingService {
 
         let verification_emojis = Self::anon_verification_emojis(&pending.encryption_key, &pending.room_name);
 
+        let peer_avatar = self
+            .anon_dm_service
+            .get_conversation(&pending.conversation_id)
+            .ok()
+            .flatten()
+            .and_then(|c| c.peer_avatar);
+
         let result = AnonCallSetupResult {
             room_name: pending.room_name.clone(),
             channel_id,
@@ -818,6 +865,8 @@ impl CallSignalingService {
             verification_emojis,
             is_video: pending.is_video_call,
             peer_display_name: callee_display_name.to_string(),
+            started_at_ns: answer_timestamp_ns,
+            peer_avatar,
         };
 
         // Re-store pending call so end_anon_call can find it for hangup/history
@@ -977,9 +1026,43 @@ impl CallSignalingService {
             is_outgoing, duration_secs, false,
         );
 
-        // Leave the call
+        // Leave the call (orchestrator cleanup is now atomic inside the worker)
         if let Err(e) = call_worker.leave_call().await {
             tracing::error!(error = %e, "Failed to leave call");
+        }
+
+        Ok(())
+    }
+
+    /// End an active group/channel call: store history, then leave the room.
+    ///
+    /// No DM hangup is sent — a channel call has many members, not a single
+    /// peer. Departure is signalled by the LiveKit `ParticipantDisconnected`
+    /// event when we leave the room; the initiator rekeys for the remaining
+    /// members via the participant-departed path.
+    #[cfg(feature = "media")]
+    pub async fn end_group_call(
+        &self,
+        call_worker: &CallWorkerHandle,
+        duration_secs: i64,
+    ) -> Result<(), CallSignalingError> {
+        let call = call_worker.active_call().await
+            .ok_or(CallSignalingError::NoPendingCall)?;
+
+        let current_user = self.channel_service.current_user_id()
+            .unwrap_or_else(|_| UserId::from_uuid(uuid::Uuid::nil()));
+        let is_outgoing = call.initiator_id == current_user;
+
+        self.store_dm_call_history(
+            &call.channel_id, &call.id.to_string(),
+            &call.initiator_id, &call.initiator_id.to_string(),
+            is_outgoing, duration_secs, false,
+        );
+
+        // Leave the room — this is what tears down media + audio. Done last so
+        // history is recorded even if the worker shut down early.
+        if let Err(e) = call_worker.leave_call().await {
+            tracing::error!(error = %e, "Failed to leave group call");
         }
 
         Ok(())
@@ -1051,8 +1134,59 @@ impl CallSignalingService {
             let user_id = self.channel_service.current_user_id()
                 .unwrap_or_else(|_| UserId::from_uuid(uuid::Uuid::nil()));
 
-            if let Err(e) = self.anon_dm_service.store_text_message(&conversation_id, &user_id, &text, sent_at) {
-                tracing::error!(error = %e, "Failed to store anon call history on hangup");
+            match self.anon_dm_service.store_text_message(&conversation_id, &user_id, &text, sent_at) {
+                Ok(msg_id) => {
+                    // Tell the UI in real time so the call-history bubble
+                    // shows without waiting for the user to re-enter the
+                    // conversation. The send path optimistically inserts
+                    // via `send_message.rs` and skips this emit; here the
+                    // message originates inside the signaling actor with
+                    // no UI optimism, so we have to drive the model
+                    // update ourselves.
+                    use crate::domain::message::{ConversationType, Message, MessageContent};
+                    use crate::domain::ids::{ChannelId, MessageId};
+                    use crate::inbox::handlers::DomainEvent;
+                    let channel_id: ChannelId = conversation_id.into();
+                    let msg_uuid = msg_id.as_str().parse::<uuid::Uuid>()
+                        .map(MessageId::from_uuid)
+                        .unwrap_or_else(|_| MessageId::new());
+                    let now = chrono::Utc::now();
+                    let domain_msg = Message {
+                        id: msg_uuid,
+                        conversation_id: channel_id,
+                        conversation_type: ConversationType::AnonDm,
+                        sender_id: Some(user_id),
+                        device_id: None,
+                        content: MessageContent::Text(text),
+                        encrypted_content: None,
+                        thread_id: None,
+                        reply_to: None,
+                        reply_to_author_id: None,
+                        reply_to_text: None,
+                        reply_to_thumbnail: None,
+                        reply_to_thumbnail_mime: None,
+                        attachments: vec![],
+                        is_pinned: false,
+                        is_edited: false,
+                        is_deleted: false,
+                        is_read: true,
+                        sent_at,
+                        created_at: now,
+                        updated_at: now,
+                        edited_at: None,
+                        reaction_counts: vec![],
+                        current_user_reactions: vec![],
+                        mentioned_integrations: vec![],
+                        targets_ai_bot: false,
+                        delivery_status: String::new(),
+                    };
+                    self.message_service.event_bus.emit_domain(
+                        DomainEvent::MessageReceived { message: domain_msg },
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to store anon call history on hangup");
+                }
             }
 
             Some(conversation_id)
@@ -1061,7 +1195,7 @@ impl CallSignalingService {
             None
         };
 
-        // Always leave/disconnect from the LiveKit room
+        // Leave the call (orchestrator cleanup is now atomic inside the worker)
         if let Err(e) = call_worker.leave_call().await {
             tracing::debug!(error = %e, "leave_call after anon hangup");
         }
