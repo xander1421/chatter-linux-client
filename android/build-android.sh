@@ -72,6 +72,10 @@ if [ "${1:-}" = "install" ]; then
     # so it must be tunnelled to the host too or attachment sends fail.
     "$ADB" reverse tcp:50051 tcp:50051 || true
     "$ADB" reverse tcp:9000 tcp:9000 || true
+    # 7880 = LiveKit signaling (WS), 7881 = LiveKit ICE/TCP media fallback.
+    # (UDP media won't tunnel over adb; for real calls use the host LAN IP.)
+    "$ADB" reverse tcp:7880 tcp:7880 || true
+    "$ADB" reverse tcp:7881 tcp:7881 || true
     "$ADB" install -r -d "$APK"
     "$ADB" shell monkey -p com.chatter.client -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || true
     echo ">> launched com.chatter.client"
