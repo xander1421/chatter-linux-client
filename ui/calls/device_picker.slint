@@ -3,6 +3,7 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
 import { AudioDeviceData, ScreenSourceData } from "types.slint";
 
 component DeviceItem inherits Rectangle {
@@ -129,12 +130,13 @@ export component DevicePicker inherits Rectangle {
                     border-radius: 16px;
                     background: close-touch.has-hover ? Colors.surface-hover : transparent;
 
-                    Text {
-                        text: "✕";
-                        font-size: Typography.base;
-                        color: Colors.text-secondary;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                    Image {
+                        source: Icons.x;
+                        colorize: Colors.text-secondary;
+                        width: 16px;
+                        height: 16px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
                     }
 
                     close-touch := TouchArea {

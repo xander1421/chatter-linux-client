@@ -5,6 +5,7 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
 import { Skeleton } from "../components/skeleton.slint";
 import { MessageItemData } from "message_list.slint";
 import { MessageItem } from "message_item.slint";
@@ -140,12 +141,13 @@ export component ThreadPanel inherits Rectangle {
                         border-radius: Spacing.radius-sm;
                         background: close-area.has-hover ? Colors.surface-hover : transparent;
 
-                        Text {
-                            text: "✕";
-                            color: Colors.text-secondary;
-                            font-size: Typography.sm;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
+                        Image {
+                            source: Icons.x;
+                            colorize: Colors.text-secondary;
+                            width: 14px;
+                            height: 14px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
                         }
                     }
 
