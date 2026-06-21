@@ -77,12 +77,11 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     // belong at startup; mic/camera ideally move to on-demand (before a call),
     // but requesting here surfaces the grant dialogs so the features work at
     // all. Fire-and-forget — outcomes are logged via the JNI result callback.
+    // Only notifications at startup; mic/camera are requested on-demand when a
+    // call starts (see features/calls/outgoing.rs) so we don't prompt for
+    // hardware the user may never use.
     use crate::platform::android::permissions;
-    permissions::request(&[
-        permissions::POST_NOTIFICATIONS,
-        permissions::RECORD_AUDIO,
-        permissions::CAMERA,
-    ]);
+    permissions::request(&[permissions::POST_NOTIFICATIONS]);
 
     // Register CameraX as chatter-core's video capture backend so calls can
     // publish camera video (chatter-core drives capture, this feeds it frames).
@@ -388,7 +387,12 @@ pub async fn app_init() -> AppState {
         // (was "123456" pre round-1 / round-5 PIN refactor; rejected now).
         let pin = "12345678";
         let server_url = if cfg!(target_os = "android") {
-            "http://192.168.0.7:50051"
+            // Android dev defaults to localhost via `adb reverse` tunnels
+            // (50051 gRPC, 9000 RustFS, 7880/7881 LiveKit). For tunnel-free LAN
+            // testing (needed for WebRTC UDP media), build with
+            // CHATTER_ANDROID_SERVER=http://<host-lan-ip>:50051 and point the
+            // server's LIVEKIT_URL + S3 endpoint at the same LAN IP.
+            option_env!("CHATTER_ANDROID_SERVER").unwrap_or("http://localhost:50051")
         } else {
             "http://localhost:50051"
         };

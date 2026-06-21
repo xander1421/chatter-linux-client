@@ -107,7 +107,7 @@ class MainActivity : GameActivity() {
 
     /** Called from Rust (JNI) when a call starts publishing video. */
     @Suppress("unused", "UNUSED_PARAMETER")
-    fun startCamera(width: Int, height: Int, fps: Int) {
+    fun startCamera(width: Int, height: Int, fps: Int, front: Boolean) {
         runOnUiThread {
             val future = ProcessCameraProvider.getInstance(this)
             future.addListener({
@@ -138,9 +138,14 @@ class MainActivity : GameActivity() {
                         image.close()
                     }
                 }
+                val selector = if (front) {
+                    CameraSelector.DEFAULT_FRONT_CAMERA
+                } else {
+                    CameraSelector.DEFAULT_BACK_CAMERA
+                }
                 try {
                     provider.unbindAll()
-                    provider.bindToLifecycle(this, CameraSelector.DEFAULT_FRONT_CAMERA, analysis)
+                    provider.bindToLifecycle(this, selector, analysis)
                 } catch (e: Exception) {
                     Log.e(TAG, "bindToLifecycle failed", e)
                 }

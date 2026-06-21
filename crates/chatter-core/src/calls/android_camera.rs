@@ -20,7 +20,8 @@ use livekit::webrtc::video_source::native::NativeVideoSource;
 
 /// Implemented by the platform layer (chatter-ui) to start/stop CameraX.
 pub trait PlatformCamera: Send + Sync {
-    fn start(&self, width: u32, height: u32, fps: u32);
+    /// `front` selects the front (selfie) vs back lens.
+    fn start(&self, width: u32, height: u32, fps: u32, front: bool);
     fn stop(&self);
 }
 
@@ -42,13 +43,16 @@ pub fn run_capture(
     width: u32,
     height: u32,
     fps: u32,
+    device_id: &str,
 ) -> bool {
     let Some(cam) = PLATFORM_CAMERA.get() else {
         return false;
     };
+    // device_id comes from list_devices() ("front"/"back"); default to front.
+    let front = device_id != "back";
     *ACTIVE_SINK.lock().unwrap() = Some(sink);
-    tracing::info!("Android camera: starting CameraX {width}x{height}@{fps}");
-    cam.start(width, height, fps);
+    tracing::info!("Android camera: starting CameraX {width}x{height}@{fps} front={front}");
+    cam.start(width, height, fps, front);
 
     while running.load(Ordering::SeqCst) {
         std::thread::sleep(Duration::from_millis(100));

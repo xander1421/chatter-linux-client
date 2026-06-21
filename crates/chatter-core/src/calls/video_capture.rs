@@ -88,7 +88,28 @@ impl VideoCapture {
             Self::list_devices_windows()
         }
 
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(target_os = "android")]
+        {
+            // CameraX selects by lens facing rather than device node; surface
+            // the two standard cameras so the UI has something to pick. The id
+            // ("front"/"back") is what the CameraX bridge maps to a CameraSelector.
+            Ok(vec![
+                VideoDevice {
+                    name: "Front Camera".to_string(),
+                    path: "front".to_string(),
+                    is_default: true,
+                    resolutions: vec![(640, 480), (1280, 720)],
+                },
+                VideoDevice {
+                    name: "Back Camera".to_string(),
+                    path: "back".to_string(),
+                    is_default: false,
+                    resolutions: vec![(640, 480), (1280, 720), (1920, 1080)],
+                },
+            ])
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "android")))]
         {
             tracing::warn!("Video device enumeration not supported on this platform");
             Ok(Vec::new())
@@ -266,6 +287,7 @@ impl VideoCapture {
                     width,
                     height,
                     fps,
+                    &device_path,
                 ) {
                     tracing::info!("Video capture loop ended");
                     return;

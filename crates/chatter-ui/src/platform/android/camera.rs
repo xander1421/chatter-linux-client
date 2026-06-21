@@ -16,14 +16,15 @@ use super::activity;
 struct CameraX;
 
 impl PlatformCamera for CameraX {
-    fn start(&self, width: u32, height: u32, fps: u32) {
+    fn start(&self, width: u32, height: u32, fps: u32, front: bool) {
         if let Err(e) = call_void(
             "startCamera",
-            "(III)V",
+            "(IIIZ)V",
             &[
                 JValue::Int(width as jint),
                 JValue::Int(height as jint),
                 JValue::Int(fps as jint),
+                JValue::Bool(front as u8),
             ],
         ) {
             tracing::error!("Android camera: startCamera failed: {e}");

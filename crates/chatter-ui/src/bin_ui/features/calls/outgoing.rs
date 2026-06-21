@@ -73,6 +73,18 @@ async fn start_call_impl(
     conversation: ActiveConversation,
     ui_ctx: Arc<ChatterClient>,
 ) {
+    // Request mic (+ camera for video) on-demand, here at call start, rather
+    // than up front. Already-granted permissions are filtered out (no re-prompt).
+    #[cfg(target_os = "android")]
+    {
+        use crate::platform::android::permissions;
+        let mut perms = vec![permissions::RECORD_AUDIO];
+        if matches!(call_type, CallType::Video) {
+            perms.push(permissions::CAMERA);
+        }
+        permissions::request(&perms);
+    }
+
     let user_id = match ui_ctx.session_current_user_id() {
         Some(id) => id,
         None => {
