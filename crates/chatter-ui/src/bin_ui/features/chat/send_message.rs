@@ -153,12 +153,17 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 std::time::Duration::from_secs(10 + 30 * pending_attachments.len() as u64)
             };
 
+            tracing::info!(?conversation, text_len = text.len(), "[UI_SEND] entering send_message_ui");
             let ui_result = match tokio::time::timeout(
                 send_timeout,
                 ui_ctx.send_message_ui(conversation, &text, &pending_attachments, quote, None),
             ).await {
-                Ok(Ok(r)) => r,
+                Ok(Ok(r)) => {
+                    tracing::info!(msg_id = %r.message_id_effective, sent_at = r.sent_at, "[UI_SEND] send_message_ui returned Ok");
+                    r
+                }
                 Ok(Err(e)) => {
+                    tracing::error!(error = %e, "[UI_SEND] send_message_ui returned Err");
                     ui_ctx.format_send_error(&e, "send");
                     return;
                 }
@@ -189,8 +194,13 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let bootstrap_initiated = ui_result.bootstrap_initiated;
             let sent_at = ui_result.sent_at;
 
+            tracing::info!(msg_id = %msg_id, "[UI_SEND] scheduling invoke_from_event_loop for append");
             let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
+                let Some(w) = weak.upgrade() else {
+                    tracing::error!("[UI_SEND] weak.upgrade() returned None; own bubble dropped");
+                    return;
+                };
+                {
                     let slint_attachments: Vec<_> = attachment_display.iter().map(|a| a.to_slint()).collect();
                     let (reply_thumbnail, reply_has_thumbnail) = reply_thumbnail_bytes
                         .as_ref()
@@ -211,7 +221,22 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         reply_thumbnail, reply_has_thumbnail,
                         delivery_status,
                     );
+                    {
+                        use slint::Model;
+                        tracing::info!(
+                            msg_id = %msg_id,
+                            existing = w.get_messages().row_count(),
+                            "[UI_SEND] calling append_message_to_ui"
+                        );
+                    }
                     super::helpers::append_message_to_ui(&w, msg_item);
+                    {
+                        use slint::Model;
+                        tracing::info!(
+                            after = w.get_messages().row_count(),
+                            "[UI_SEND] append_message_to_ui done"
+                        );
+                    }
 
                     if bootstrap_initiated {
                         w.set_composer_placeholder("Setting up secure channel...".into());

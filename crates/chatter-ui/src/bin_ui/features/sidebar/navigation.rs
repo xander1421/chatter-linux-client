@@ -46,6 +46,13 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
             }
         };
 
+        // Commit active-conversation state SYNCHRONOUSLY on the UI thread
+        // (same race fix as dm.rs — see comment there).
+        if let Ok(parsed) = channel_id_str.parse::<ChannelId>() {
+            chat_state.set_active_channel(parsed);
+            chat_state.set_active_conversation(chatter_core::state::ActiveConversation::Channel(parsed));
+        }
+
         let _ = channel_id_str.clone();
         run_ui!(weak, |w| {
             w.set_loading_messages(true);
@@ -74,9 +81,7 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
                 }
             };
 
-            // Update chat state with active channel
-            chat_state.set_active_channel(channel_id);
-            chat_state.set_active_conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
+            // Active conversation already committed pre-spawn.
             let ui_ctx_for_sel = ui_ctx.clone();
             run_ui!(weak, |w| super::refresh_selection(&w, &ui_ctx_for_sel));
 

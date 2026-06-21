@@ -173,6 +173,12 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
         stop_audio_playback();
         crate::bin_ui::gif_state::clear_inline_gifs();
 
+        // Commit active-conversation state SYNCHRONOUSLY on the UI thread
+        // (same race fix as dm.rs — see comment there).
+        if let Ok(parsed) = group_id_str.parse::<AnonGroupId>() {
+            ui_ctx.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::AnonGroup(parsed));
+        }
+
         tokio::spawn(async move {
             // Parse group ID
             let group_id: AnonGroupId = match group_id_str.parse() {
@@ -183,8 +189,7 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
                 }
             };
 
-            // Set typed active conversation
-            ui_ctx.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::AnonGroup(group_id));
+            // Active conversation already committed pre-spawn.
             let ui_ctx_for_sel = ui_ctx.clone();
             run_ui!(weak, |w| super::refresh_selection(&w, &ui_ctx_for_sel));
 

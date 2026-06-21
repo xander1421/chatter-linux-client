@@ -95,6 +95,7 @@ export component FriendsModal inherits Rectangle {
     callback generate-code(bool);  // bool = private mode
     callback generate-qr(bool);    // bool = private mode
     callback copy-code();
+    callback paste-code();                   // System clipboard → code-input
     callback connect-via-code(string);       // Server-managed friend request
     callback connect-private(string);        // Private anon DM (no server involvement)
     callback switch-tab(string);
@@ -510,6 +511,20 @@ export component FriendsModal inherits Rectangle {
                                         } else {
                                             root.connect-via-code(code);
                                         }
+                                    }
+                                }
+
+                                // Paste from clipboard — Slint's Ctrl+V on Wayland
+                                // can't see clipboards written via wl-copy /
+                                // wayland-data-control (different protocol),
+                                // so this button routes through arboard in
+                                // chatter-ui and writes straight into
+                                // `code-input`.
+                                Button {
+                                    text: "Paste";
+                                    variant: "ghost";
+                                    clicked => {
+                                        root.paste-code();
                                     }
                                 }
 

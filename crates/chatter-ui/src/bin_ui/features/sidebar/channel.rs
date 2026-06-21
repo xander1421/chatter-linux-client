@@ -29,6 +29,13 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         // Clear inline GIF animations to free memory
         crate::bin_ui::gif_state::clear_inline_gifs();
 
+        // Commit active-conversation state SYNCHRONOUSLY on the UI thread
+        // (same race fix as dm.rs — see comment there).
+        if let Ok(parsed) = channel_id_str.parse::<ChannelId>() {
+            ui_ctx.chat_state().set_active_channel(parsed);
+            ui_ctx.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::Channel(parsed));
+        }
+
         let channel_id_str_for_ui = channel_id_str.clone();
         let ui_ctx_for_ui = ui_ctx.clone();
         run_ui!(weak, |w| {
@@ -64,9 +71,7 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
-            // Update chat state
-            ui_ctx.chat_state().set_active_channel(channel_id);
-            ui_ctx.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
+            // Active conversation already committed pre-spawn.
             let ui_ctx_for_sel = ui_ctx.clone();
             run_ui!(weak, |w| super::refresh_selection(&w, &ui_ctx_for_sel));
 

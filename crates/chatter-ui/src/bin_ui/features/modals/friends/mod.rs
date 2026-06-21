@@ -13,6 +13,8 @@ mod friends_list;
 mod private_requests;
 mod requests;
 
+pub(crate) use private_requests::refresh_blocked_users;
+
 use std::sync::Arc;
 
 use chatter_core::client::ChatterClient;

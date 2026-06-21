@@ -12,7 +12,7 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::ChannelType;
 use chatter_core::domain::ids::ChannelId;
 
-use crate::bin_ui::converters::channel_to_slint;
+use crate::bin_ui::converters::{avatar_bytes_to_image, channel_to_slint};
 use crate::bin_ui::features::sidebar::load_channel_into_ui;
 use crate::{ChannelListItemData, MainWindow, SearchResultChannel};
 
@@ -87,18 +87,36 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         return;
                     }
 
-                    let results: Vec<SearchResultChannel> = channels
+                    // Ship raw data (Send) to the UI thread — slint::Image is !Send,
+                    // so build SearchResultChannel inside the event-loop closure.
+                    let raw: Vec<(String, String, String, Option<Vec<u8>>)> = channels
                         .into_iter()
-                        .map(|ch| SearchResultChannel {
-                            id: ch.id.to_string().into(),
-                            name: ch.name.into(),
-                            description: ch.description.unwrap_or_default().into(),
-                            member_count: 0, // Would need additional API call
-                        })
+                        .map(|ch| (
+                            ch.id.to_string(),
+                            ch.name,
+                            ch.description.unwrap_or_default(),
+                            ch.icon,
+                        ))
                         .collect();
 
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
+                            let results: Vec<SearchResultChannel> = raw
+                                .into_iter()
+                                .map(|(id, name, description, icon_bytes)| {
+                                    let icon_img = icon_bytes
+                                        .as_deref()
+                                        .and_then(avatar_bytes_to_image);
+                                    SearchResultChannel {
+                                        id: id.into(),
+                                        name: name.into(),
+                                        description: description.into(),
+                                        member_count: 0,
+                                        has_icon: icon_img.is_some(),
+                                        icon: icon_img.unwrap_or_default(),
+                                    }
+                                })
+                                .collect();
                             w.set_join_channel_results(ModelRc::new(VecModel::from(results)));
                             w.set_join_channel_searching(false);
                         }

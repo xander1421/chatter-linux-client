@@ -575,6 +575,9 @@ export component App inherits Rectangle {
     /// if accepted — driven by the call orchestrator.
     in-out property <bool> incoming-call-replaces-active: false;
     in-out property <bool> active-call-visible: false;
+    // True when the call dock has been expanded to fill the chat column.
+    // Bound to ActiveCallView.fullscreen. Hides the ChatLayout sibling.
+    in-out property <bool> active-call-fullscreen: false;
     in property <ActiveCallData> active-call-data;
     in-out property <bool> call-is-muted: false;
     in-out property <bool> call-is-video-enabled: true;
@@ -749,6 +752,13 @@ export component App inherits Rectangle {
     callback friends-generate-code(bool);   // bool = private mode
     callback friends-generate-qr(bool);     // bool = private mode
     callback friends-copy-code();
+    // Paste the system clipboard into the friend-code input. Slint's
+    // built-in `Ctrl+V` reads via copypasta (winit), which uses a
+    // different Wayland selection protocol than `wl-copy` / arboard's
+    // `wayland-data-control` — so paste from another app silently
+    // returns empty on most Wayland compositors. This callback routes
+    // through chatter-ui's arboard handle to bypass the mismatch.
+    callback friends-paste-code();
     callback friends-connect-via-code(string);
     callback friends-connect-private(string);  // Private anon DM (no server)
     callback friends-accept-private-request(string);   // Accept anon DM request
@@ -767,6 +777,7 @@ export component App inherits Rectangle {
     // Sessions
     callback revoke-session(int);
     callback revoke-all-sessions();
+
 
     // Settings
     callback settings-edit-profile();
@@ -812,6 +823,8 @@ export component App inherits Rectangle {
     callback call-toggle-video();
     callback call-toggle-screen-share();
     callback call-end();
+    callback call-peer-audio-mute-toggle(string);
+    callback call-peer-video-pause-toggle(string);
     callback show-audio-device-picker();
     callback show-audio-output-picker();
     callback show-screen-source-picker();
@@ -1179,7 +1192,7 @@ export component App inherits Rectangle {
                     VerticalLayout {
                         horizontal-stretch: 1;
                         vertical-stretch: 1;
-                        visible: !(root.is-small-screen && (root.members-panel-visible || root.thread-panel-visible));
+                        visible: !(root.is-small-screen && root.thread-panel-visible);
 
                         UnifiedSearchBar {
                             visible: !root.active-call-fullscreen;
@@ -1192,8 +1205,12 @@ export component App inherits Rectangle {
                         }
 
                         ActiveCallView {
-                            vertical-stretch: 0;
+                            // Take the chat column's full vertical slot when
+                            // fullscreen, otherwise stay as a fixed dock (the
+                            // child component caps its own height to 280px).
+                            vertical-stretch: root.active-call-fullscreen ? 1 : 0;
                             show: root.active-call-visible;
+                            fullscreen: root.active-call-fullscreen;
                             call-data: root.active-call-data;
                             is-muted: root.call-is-muted;
                             is-video-enabled: root.call-is-video-enabled;
@@ -1210,13 +1227,19 @@ export component App inherits Rectangle {
                                     root.show-screen-source-picker();
                                 }
                             }
-                            end-call => { root.call-end(); }
+                            end-call => { root.call-end(); root.active-call-fullscreen = false; }
                             show-audio-settings => { root.show-audio-device-picker(); }
+                            peer-audio-mute-toggle(uid) => { root.call-peer-audio-mute-toggle(uid); }
+                            peer-video-pause-toggle(uid) => { root.call-peer-video-pause-toggle(uid); }
+                            fullscreen-toggle => {
+                                root.active-call-fullscreen = !root.active-call-fullscreen;
+                            }
                         }
 
                     ChatLayout {
-                    vertical-stretch: 1;
-                    visible: !(root.is-small-screen && (root.members-panel-visible || root.thread-panel-visible));
+                    vertical-stretch: root.active-call-fullscreen ? 0 : 1;
+                    visible: !root.active-call-fullscreen
+                        && !(root.is-small-screen && root.thread-panel-visible);
                     hide-header: false;
                     show-back-button: false;
                     back-clicked => { }
@@ -1267,12 +1290,7 @@ export component App inherits Rectangle {
                     voice-call-clicked => { root.start-voice-call(); }
                     video-call-clicked => { root.start-video-call(); }
                     invite-clicked => { root.invite-member(); }
-                    members-clicked => {
-                        root.members-panel-visible = !root.members-panel-visible;
-                        if root.members-panel-visible {
-                            root.members-panel-toggle();
-                        }
-                    }
+                    members-clicked => { root.members-panel-toggle(); }
 
                     // Pinned bar (Telegram-style)
                     has-pinned-messages: root.has-pinned-messages;
@@ -1336,8 +1354,7 @@ export component App inherits Rectangle {
                 // fills the right column on narrow screens (where ChatLayout
                 // yields via `visible: false` above).
                 if root.members-panel-visible: MembersPanel {
-                    horizontal-stretch: root.is-small-screen ? 1 : 0;
-                    width: root.is-small-screen ? 0px : 280px;
+                    width: 280px;
                     height: 100%;
                     members: root.members-panel-members;
                     channel-name: root.channel-name;
@@ -1736,6 +1753,9 @@ export component App inherits Rectangle {
         }
         copy-code => {
             root.friends-copy-code();
+        }
+        paste-code => {
+            root.friends-paste-code();
         }
         connect-via-code(code) => {
             root.friends-connect-via-code(code);

@@ -58,6 +58,67 @@ pub(crate) fn wire_generate_friend_code(window: &MainWindow, ui_ctx: &Arc<Chatte
 
     // Wire copy to clipboard
     wire_copy_friend_code(window, ui_ctx);
+
+    // Wire paste-from-clipboard (Slint's Ctrl+V is unreliable on Wayland
+    // because it reads via a different selection protocol than what
+    // wl-copy and arboard-with-wayland-data-control write to).
+    wire_paste_friend_code(window, ui_ctx);
+}
+
+/// Read the system clipboard via arboard and push the contents into the
+/// friend-code input. Hops onto a worker thread so the arboard read
+/// doesn't block the UI; result is dispatched back via
+/// `invoke_from_event_loop`.
+fn wire_paste_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
+    let weak_window = window.as_weak();
+    window.on_friends_paste_code(move || {
+        let weak = weak_window.clone();
+        std::thread::spawn(move || {
+            // Prefer wl-paste for Wayland (matches the wl-copy used in
+            // `wire_copy_friend_code`). Fall back to xclip on X11, then
+            // arboard as a final attempt.
+            let text = std::process::Command::new("wl-paste")
+                .arg("--no-newline")
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                .or_else(|| {
+                    std::process::Command::new("xclip")
+                        .args(["-selection", "clipboard", "-o"])
+                        .output()
+                        .ok()
+                        .filter(|o| o.status.success())
+                        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                })
+                .or_else(|| {
+                    #[cfg(feature = "desktop")]
+                    {
+                        arboard::Clipboard::new().ok().and_then(|mut c| c.get_text().ok())
+                    }
+                    #[cfg(not(feature = "desktop"))]
+                    {
+                        None::<String>
+                    }
+                });
+
+            let Some(text) = text else {
+                tracing::warn!("Paste: no clipboard tool succeeded");
+                return;
+            };
+            let trimmed = text.trim().to_string();
+            if trimmed.is_empty() {
+                tracing::warn!("Paste: clipboard empty");
+                return;
+            }
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.set_friends_code_input(trimmed.into());
+                    w.set_friends_code_status("Pasted from clipboard".into());
+                }
+            });
+        });
+    });
 }
 
 /// Wire callback to generate QR code image for the friend code.

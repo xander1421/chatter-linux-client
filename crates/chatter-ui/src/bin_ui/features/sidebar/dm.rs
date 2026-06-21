@@ -55,6 +55,40 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             })
             .unwrap_or((false, None));
 
+        // Commit active-conversation state SYNCHRONOUSLY on the UI thread,
+        // before spawning the async loader. Sends + incoming-message gates
+        // both read `active_channel_id`; if they fire before the async task
+        // sets it, send_message.rs:86 early-returns and
+        // handle_message_received drops the bubble (`is_active=false`).
+        let active_pre_spawn: Option<chatter_core::state::ActiveConversation> = if is_anon_dm {
+            match dm_id_str.parse::<AnonDmId>() {
+                Ok(id) => Some(chatter_core::state::ActiveConversation::AnonDm(id)),
+                Err(e) => {
+                    tracing::error!("Invalid anon DM ID: {}", e);
+                    None
+                }
+            }
+        } else if let Some(ref peer) = peer_id_for_dm {
+            let channel_id: ChannelId = dm_id_str.parse().unwrap_or_else(|_| ChannelId::new());
+            let conv_type = ui_ctx
+                .get_channel_local(&channel_id)
+                .map(|c| c.conversation_type())
+                .unwrap_or(chatter_core::domain::message::ConversationType::MailboxDm);
+            Some(if conv_type == chatter_core::domain::message::ConversationType::ServerDm {
+                chatter_core::state::ActiveConversation::ServerDm { peer_id: peer.clone(), channel_id }
+            } else {
+                chatter_core::state::ActiveConversation::MailboxDm { peer_id: peer.clone(), channel_id }
+            })
+        } else {
+            None
+        };
+        if let Some(active) = active_pre_spawn.clone() {
+            tracing::info!(?active, dm_id = %dm_id_str, is_anon = is_anon_dm, "[UI_OPEN_DM] committing active conversation pre-spawn");
+            ui_ctx.chat_state().set_active_conversation(active);
+        } else {
+            tracing::warn!(dm_id = %dm_id_str, is_anon = is_anon_dm, "[UI_OPEN_DM] no active conversation computed; sends will silently drop");
+        }
+
         let dm_id_str_for_ui = dm_id_str.clone();
         let ui_ctx_for_ui = ui_ctx.clone();
         run_ui!(weak, |w| {
@@ -74,7 +108,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             w.set_composer_reply_thumbnail(slint::Image::default());
             w.set_composer_is_editing(false);
             w.set_composer_edit_message_id("".into());
-            
+
             // Clear pins
             w.set_has_pinned_messages(false);
             w.set_pinned_message_preview("".into());
@@ -82,8 +116,6 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         });
 
         tokio::spawn(async move {
-            let chat_state = ui_ctx.chat_state().clone();
-
             // 1. Handle Anon DM selection
             if is_anon_dm {
                 let anon_dm_id: AnonDmId = match dm_id_str.parse() {
@@ -95,7 +127,6 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                 };
 
-                chat_state.set_active_conversation(chatter_core::state::ActiveConversation::AnonDm(anon_dm_id));
                 let ui_ctx_for_sel = ui_ctx.clone();
                 run_ui!(weak, |w| super::refresh_selection(&w, &ui_ctx_for_sel));
 
@@ -112,7 +143,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     (ids, preview)
                 };
                 let channel_id = anon_dm_id.to_string().parse().unwrap_or_else(|_| ChannelId::new());
-                super::apply_pinned_ui(&weak, &chat_state, channel_id, msg_ids, preview);
+                super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), channel_id, msg_ids, preview);
 
                 // Load messages
                 let messages = match ui_ctx.get_anon_dm_messages_asc(&anon_dm_id, None, 50) {
@@ -139,9 +170,14 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     None => ("Private Chat".to_string(), "NDSS'21 Protocol".to_string()),
                 };
 
+                let initial_count = display_messages.len();
+                tracing::info!(dm_id = %anon_dm_id, count = initial_count, "[UI_OPEN_DM] anon DM spawn run_ui firing");
                 run_ui!(weak, |w| {
+                    use slint::Model;
+                    let before = w.get_messages().row_count();
                     let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
                     let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
+                    tracing::info!(before_count = before, replacing_with = slint_messages.len(), "[UI_OPEN_DM] anon DM run_ui replacing messages");
                     w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
                     w.set_loading_messages(false);
                     w.set_channel_type("anon-dm".into());
@@ -181,18 +217,6 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 .map(|c| c.conversation_type())
                 .unwrap_or(chatter_core::domain::message::ConversationType::MailboxDm);
 
-            let active = if conv_type == chatter_core::domain::message::ConversationType::ServerDm {
-                chatter_core::state::ActiveConversation::ServerDm {
-                    peer_id: peer_id.clone(),
-                    channel_id,
-                }
-            } else {
-                chatter_core::state::ActiveConversation::MailboxDm {
-                    peer_id: peer_id.clone(),
-                    channel_id,
-                }
-            };
-            chat_state.set_active_conversation(active);
             let ui_ctx_for_sel = ui_ctx.clone();
             run_ui!(weak, |w| super::refresh_selection(&w, &ui_ctx_for_sel));
 
@@ -205,7 +229,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
                 _ => (vec![], String::new()),
             };
-            super::apply_pinned_ui(&weak, &chat_state, channel_id, msg_ids, preview);
+            super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), channel_id, msg_ids, preview);
 
             // Load messages
             let messages = match ui_ctx.get_messages_local_asc(&channel_id, &conv_type, None, 50) {

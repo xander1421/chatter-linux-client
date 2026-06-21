@@ -102,7 +102,7 @@ pub fn open_user_profile(
 
         let user_data = user_state.get();
         let is_friend = user_data.friends.contains(user_id);
-        let is_blocked = user_state.is_blocked(user_id);
+        let is_blocked = ui_ctx.map(|ctx| ctx.is_profile_user_blocked(user_id)).unwrap_or(false);
 
         w.set_profile_display_name(display_name.into());
         w.set_profile_username(username.into());
@@ -298,11 +298,14 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
-            match tokio::time::timeout(
-                crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
-                ui_ctx.block_user(&user_id),
-            ).await {
-                Ok(Ok(())) => {
+            match ui_ctx.block_profile_user(&user_id).await {
+                Ok(()) => {
+                    crate::bin_ui::features::auth::initial_data::refresh_friends_list(
+                        weak.clone(), ui_ctx.clone(),
+                    );
+                    crate::bin_ui::features::modals::friends::refresh_blocked_users(
+                        weak.clone(), &ui_ctx,
+                    );
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_profile_loading(false);
@@ -312,16 +315,8 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         }
                     });
                 }
-                Ok(Err(e)) => {
+                Err(e) => {
                     tracing::error!("Failed to block user: {}", e);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_profile_loading(false);
-                        }
-                    });
-                }
-                Err(_) => {
-                    tracing::error!("Block user timed out");
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_profile_loading(false);
@@ -370,11 +365,14 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
-            match tokio::time::timeout(
-                crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
-                ui_ctx.unblock_user(&user_id),
-            ).await {
-                Ok(Ok(())) => {
+            match ui_ctx.unblock_profile_user(&user_id).await {
+                Ok(()) => {
+                    crate::bin_ui::features::auth::initial_data::refresh_friends_list(
+                        weak.clone(), ui_ctx.clone(),
+                    );
+                    crate::bin_ui::features::modals::friends::refresh_blocked_users(
+                        weak.clone(), &ui_ctx,
+                    );
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_profile_loading(false);
@@ -383,16 +381,8 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         }
                     });
                 }
-                Ok(Err(e)) => {
+                Err(e) => {
                     tracing::error!("Failed to unblock user: {}", e);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_profile_loading(false);
-                        }
-                    });
-                }
-                Err(_) => {
-                    tracing::error!("Unblock user timed out");
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_profile_loading(false);

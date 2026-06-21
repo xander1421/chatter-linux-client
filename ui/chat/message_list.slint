@@ -183,6 +183,19 @@ export component MessageList inherits Rectangle {
                 root.is-at-bottom = (self.viewport-height + self.viewport-y) <= (self.height + 50px);
             }
 
+            // Auto-snap to bottom when content grows AND user is currently at bottom.
+            // Slint 1.16 does not clamp programmatic viewport-y writes, so the prior
+            // approach (Rust setting scroll-position = -99999 sentinel) parked the
+            // viewport offscreen and content only re-appeared after a manual drag.
+            // Reacting to viewport-height changes lets Slint own the math inside
+            // Flickable scope, where `self.height` and `self.viewport-height` are
+            // both concrete.
+            changed viewport-height => {
+                if (root.should-auto-scroll && root.is-at-bottom) {
+                    self.viewport-y = min(0px, self.height - self.viewport-height);
+                }
+            }
+
             messages-layout := VerticalLayout {
             // Explicit width from parent for proper text wrapping
             width: parent.width;

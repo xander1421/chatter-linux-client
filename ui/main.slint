@@ -661,6 +661,7 @@ export component MainWindow inherits Window {
     callback friends-generate-code <=> app.friends-generate-code;
     callback friends-generate-qr <=> app.friends-generate-qr;
     callback friends-copy-code <=> app.friends-copy-code;
+    callback friends-paste-code <=> app.friends-paste-code;
     callback friends-connect-via-code <=> app.friends-connect-via-code;
     callback friends-connect-private <=> app.friends-connect-private;
     callback friends-accept-private-request <=> app.friends-accept-private-request;
@@ -720,6 +721,8 @@ export component MainWindow inherits Window {
     callback call-toggle-video <=> app.call-toggle-video;
     callback call-toggle-screen-share <=> app.call-toggle-screen-share;
     callback call-end <=> app.call-end;
+    callback call-peer-audio-mute-toggle <=> app.call-peer-audio-mute-toggle;
+    callback call-peer-video-pause-toggle <=> app.call-peer-video-pause-toggle;
     callback show-audio-device-picker <=> app.show-audio-device-picker;
     callback show-audio-output-picker <=> app.show-audio-output-picker;
     callback show-screen-source-picker <=> app.show-screen-source-picker;

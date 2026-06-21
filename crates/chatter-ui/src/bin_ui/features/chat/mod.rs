@@ -21,6 +21,7 @@ use chatter_core::client::ChatterClient;
 use crate::MainWindow;
 
 pub use helpers::get_dm_channel_from_peer;
+pub(crate) use helpers::update_reaction_in_ui;
 
 /// Wire chat callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {

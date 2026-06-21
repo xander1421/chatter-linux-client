@@ -65,8 +65,8 @@ pub fn add_jarvis_thinking_placeholder(window: &MainWindow) -> String {
         .filter_map(|i| model.row_data(i))
         .collect();
     messages.push(msg_item);
+    window.set_is_at_bottom(true);
     window.set_messages(ModelRc::new(VecModel::from(messages)));
-    window.set_message_scroll_position(-99999.0);
 
     msg_id
 }
@@ -133,7 +133,6 @@ pub fn replace_thinking_with_response(
     };
 
     messages.push(msg_item);
-    window.set_messages(ModelRc::new(VecModel::from(messages)));
-    window.set_message_scroll_position(-99999.0);
     window.set_is_at_bottom(true);
+    window.set_messages(ModelRc::new(VecModel::from(messages)));
 }

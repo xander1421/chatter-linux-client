@@ -462,6 +462,15 @@ fn wire_members_panel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.on_members_panel_toggle(move || {
         let weak = weak.clone();
         let ui_ctx = ui_ctx.clone();
+
+        // Close if already open — Rust owns visibility (mirrors ThreadPanel).
+        if let Some(w) = weak.upgrade() {
+            if w.get_members_panel_visible() {
+                w.set_members_panel_visible(false);
+                return;
+            }
+        }
+
         let conversation = ui_ctx.chat_state().active_conversation();
 
         tokio::spawn(async move {
@@ -513,6 +522,7 @@ fn wire_members_panel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     w.set_members_panel_members(
                         ModelRc::new(VecModel::from(members))
                     );
+                    w.set_members_panel_visible(true);
                 }
             });
         });

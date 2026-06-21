@@ -153,28 +153,21 @@ pub(crate) fn wire_unblock_user(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
                 }
             };
 
-            match tokio::time::timeout(
-                crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
-                ui_ctx.unblock_user(&blocked_user_id),
-            ).await {
-                Ok(Ok(_)) => {
+            match ui_ctx.unblock_profile_user(&blocked_user_id).await {
+                Ok(()) => {
                     tracing::info!("Unblocked user {}", user_id_str);
+                    crate::bin_ui::features::auth::initial_data::refresh_friends_list(
+                        weak.clone(), ui_ctx.clone(),
+                    );
+                    super::refresh_blocked_users(weak.clone(), &ui_ctx);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_friends_loading(false);
                         }
                     });
                 }
-                Ok(Err(e)) => {
+                Err(e) => {
                     tracing::error!("Failed to unblock user: {}", e);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_friends_loading(false);
-                        }
-                    });
-                }
-                Err(_) => {
-                    tracing::error!("Unblock user timed out");
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_friends_loading(false);

@@ -74,7 +74,8 @@ pub fn wire_reply_clicked(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
                         let att_model = m.attachments;
                         let att_count = att_model.row_count();
                         let mut image_count = 0;
-                        let mut file_names: Vec<String> = Vec::new();
+                        // (emoji, filename) so audio/document/code/archive keep their own icon
+                        let mut file_entries: Vec<(&'static str, String)> = Vec::new();
 
                         for j in 0..att_count {
                             if let Some(att) = att_model.row_data(j) {
@@ -86,7 +87,15 @@ pub fn wire_reply_clicked(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
                                         reply_has_thumbnail = true;
                                     }
                                 } else {
-                                    file_names.push(att.filename.to_string());
+                                    let emoji = match att.category.as_str() {
+                                        "audio" => "\u{1F3B5}",
+                                        "video" => "\u{1F3AC}",
+                                        "document" => "\u{1F4C4}",
+                                        "code" => "\u{1F4DD}",
+                                        "archive" => "\u{1F4E6}",
+                                        _ => "\u{1F4CE}",
+                                    };
+                                    file_entries.push((emoji, att.filename.to_string()));
                                 }
                             }
                         }
@@ -98,10 +107,11 @@ pub fn wire_reply_clicked(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
                         } else if image_count > 1 {
                             parts.push(format!("\u{1F4F7} {} Photos", image_count));
                         }
-                        if file_names.len() == 1 {
-                            parts.push(format!("\u{1F4CE} {}", file_names[0]));
-                        } else if file_names.len() > 1 {
-                            parts.push(format!("\u{1F4CE} {} files", file_names.len()));
+                        if file_entries.len() == 1 {
+                            let (emoji, name) = &file_entries[0];
+                            parts.push(format!("{} {}", emoji, name));
+                        } else if file_entries.len() > 1 {
+                            parts.push(format!("\u{1F4CE} {} files", file_entries.len()));
                         }
                         attachment_label = parts.join(", ");
                     }
