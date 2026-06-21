@@ -18,7 +18,7 @@ export struct SearchResultChannel {
 }
 
 // Individual search result item
-component SearchResultItem inherits Rectangle {
+export component SearchResultItem inherits Rectangle {
     in property <string> channel-id;
     in property <string> name;
     in property <string> description;

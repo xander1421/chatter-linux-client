@@ -285,7 +285,9 @@ fn add_anon_dm_to_sidebar(
         avatar_decoded: None,
         initials: get_initials(peer_name),
         presence_status: "online".to_string(),
-        last_message: String::new(),
+        // Placeholder until the first message — matches the requester side
+        // (anon_dm_request.rs) so a freshly-accepted DM isn't blank.
+        last_message: "Conversation started".to_string(),
         timestamp: dm.updated_at
             .with_timezone(&chrono::Local)
             .format("%H:%M")

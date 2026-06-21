@@ -334,7 +334,12 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                             .to_string();
                         (preview, ts)
                     }
-                    _ => (String::new(), String::new()),
+                    // Message-less anon DM (e.g. just accepted) — show a
+                    // placeholder so it isn't blank on either side after reload.
+                    _ => (
+                        "Conversation started".to_string(),
+                        dm.updated_at.with_timezone(&chrono::Local).format("%H:%M").to_string(),
+                    ),
                 };
 
                 // Anon DMs share the DM model with regular DMs — the

@@ -32,12 +32,12 @@ import { FriendRequestsModal, FriendRequest } from "modals/friend_requests.slint
 import { FriendsModal, FriendData, UserSearchResult, FriendRequestData, BlockedUserData } from "modals/friends.slint";
 import { ForwardMessageModal, ForwardTarget } from "modals/forward_message.slint";
 import { SessionsModal, SessionInfo } from "modals/sessions.slint";
-import { JoinChannelModal, SearchResultChannel } from "modals/join_channel.slint";
+import { SearchResultChannel } from "modals/join_channel.slint";
 import { ChannelSettingsModal, ChannelMemberData } from "modals/channel_settings.slint";
 import { InvitePrivateGroupModal } from "modals/invite_private_group.slint";
 import { InviteMemberModal, InviteUser } from "modals/invite_member.slint";
 import { CreateSectionModal } from "modals/create_section.slint";
-import { UnifiedSearch, UnifiedSearchBar, QuickSwitcherItem, SearchResult } from "components/unified_search.slint";
+import { UnifiedSearch, QuickSwitcherItem, SearchResult } from "components/unified_search.slint";
 
 // Import settings
 import { SettingsScreen } from "settings/settings_screen.slint";
@@ -437,6 +437,9 @@ export component App inherits Rectangle {
     in-out property <string> create-section-emoji: "📁";
     in-out property <string> create-section-id: "";  // set for rename
     in property <bool> create-section-loading: false;
+
+    // Create-channel modal: which tab to open on (0 = Create, 1 = Join)
+    in-out property <int> create-channel-initial-tab: 0;
 
     // Join channel modal properties
     in-out property <string> join-channel-search-query: "";
@@ -1084,6 +1087,12 @@ export component App inherits Rectangle {
                 private-group-selected(id) => {
                     root.private-group-selected(id);
                 }
+                search-clicked => {
+                    root.unified-search-query = "";
+                    root.unified-search-selected-index = 0;
+                    root.unified-search-open = true;
+                    root.unified-search-opened();
+                }
                 saved-messages-clicked => {
                     root.saved-messages-clicked();
                 }
@@ -1108,11 +1117,13 @@ export component App inherits Rectangle {
                     root.profile-clicked();
                 }
                 create-channel-clicked => {
+                    root.create-channel-initial-tab = 0;
                     root.active-modal = "create-channel";
                     root.open-create-channel();
                 }
                 join-channel-clicked => {
-                    root.active-modal = "join-channel";
+                    root.create-channel-initial-tab = 1;
+                    root.active-modal = "create-channel";
                     root.open-join-channel();
                 }
                 toggle-collapsed => {
@@ -1193,16 +1204,6 @@ export component App inherits Rectangle {
                         horizontal-stretch: 1;
                         vertical-stretch: 1;
                         visible: !(root.is-small-screen && root.thread-panel-visible);
-
-                        UnifiedSearchBar {
-                            visible: !root.active-call-fullscreen;
-                            open => {
-                                root.unified-search-query = "";
-                                root.unified-search-selected-index = 0;
-                                root.unified-search-open = true;
-                                root.unified-search-opened();
-                            }
-                        }
 
                         ActiveCallView {
                             // Take the chat column's full vertical slot when
@@ -1468,8 +1469,23 @@ export component App inherits Rectangle {
         icon-preview <=> root.create-channel-icon-preview;
         has-icon-preview <=> root.create-channel-has-icon-preview;
 
+        // Join tab state
+        active-tab: root.create-channel-initial-tab;
+        join-search-query <=> root.join-channel-search-query;
+        join-results: root.join-channel-results;
+        join-searching: root.join-channel-searching;
+        join-error: root.join-channel-error;
+        join-selected-id <=> root.join-channel-selected-id;
+        join-joining: root.join-channel-joining;
+
         close => {
             root.active-modal = "none";
+        }
+        join-search(q) => {
+            root.search-channels(q);
+        }
+        join-channel(id) => {
+            root.join-channel(id);
         }
         create(name, desc, template, config, ai-provider, ai-model) => {
             root.create-channel(name, desc, template, config, ai-provider, ai-model);
@@ -1534,27 +1550,6 @@ export component App inherits Rectangle {
         }
         search-changed(q) => {
             root.invite-member-search-changed(q);
-        }
-    }
-
-    // Join Channel Modal
-    if root.active-modal == "join-channel": JoinChannelModal {
-        show-modal: true;
-        search-query <=> root.join-channel-search-query;
-        search-results: root.join-channel-results;
-        searching: root.join-channel-searching;
-        error-message: root.join-channel-error;
-        selected-channel-id <=> root.join-channel-selected-id;
-        joining: root.join-channel-joining;
-
-        close => {
-            root.active-modal = "none";
-        }
-        search(query) => {
-            root.search-channels(query);
-        }
-        join-channel(id) => {
-            root.join-channel(id);
         }
     }
 

@@ -1,11 +1,10 @@
-// Unified search — Slack-style top bar + full-window overlay palette.
+// Unified search — full-window overlay palette.
 // Replaces QuickSwitcher (Ctrl+K) and SearchModal (Ctrl+F).
 //
-// Two exported pieces sharing window state:
-//   - UnifiedSearchBar : the inline resting pill (top of the chat column).
-//   - UnifiedSearch    : the App-root overlay palette (boolean-driven `if`),
-//                        same pattern as every other modal here — which makes
-//                        the global shortcut + click-outside + Escape reliable.
+// Opened from the sidebar "Search" row (top, above Saved Messages) or the
+// Ctrl+K / Ctrl+F shortcut. `UnifiedSearch` is an App-root overlay driven by a
+// boolean `if` — same pattern as every other modal here — which makes the
+// shortcut + click-outside + Escape reliable.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -179,47 +178,6 @@ component PersonRow inherits Rectangle {
                 color: Colors.text-muted;
                 font-size: Typography.xs;
             }
-        }
-    }
-}
-
-// Inline resting bar (top of chat column). Click opens the overlay.
-export component UnifiedSearchBar inherits Rectangle {
-    callback open();
-    height: 44px;
-
-    bar := Rectangle {
-        width: min(640px, parent.width - Spacing.lg * 2);
-        height: 36px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        border-radius: Spacing.radius-md;
-        background: Colors.neo-inset-bg;
-        border-width: 1px;
-        border-color: touch.has-hover ? Colors.neo-highlight-strong : Colors.neo-inset-shadow;
-
-        HorizontalLayout {
-            padding-left: Spacing.md;
-            padding-right: Spacing.md;
-            spacing: Spacing.sm;
-            Image {
-                source: Icons.search;
-                width: 16px; height: 16px;
-                colorize: Colors.text-muted;
-                y: (parent.height - self.height) / 2;
-            }
-            Text {
-                text: "Search…";
-                color: Colors.text-muted;
-                font-size: Typography.sm;
-                vertical-alignment: center;
-                horizontal-stretch: 1;
-            }
-        }
-
-        touch := TouchArea {
-            mouse-cursor: pointer;
-            clicked => { root.open(); }
         }
     }
 }
