@@ -13,8 +13,6 @@
 //! - Combined pipeline: ~1.2 GB/s (with rayon parallelization)
 
 use openssl::hash::{Hasher, MessageDigest};
-use openssl::pkey::PKey;
-use openssl::sign::Signer;
 use openssl::symm::{Cipher, Crypter, Mode};
 use subtle::ConstantTimeEq;
 
@@ -61,9 +59,7 @@ pub fn decrypt_single_pass(
     // Single-pass: compute digest AND HMAC simultaneously using OpenSSL
     let mut digest_hasher = Hasher::new(MessageDigest::sha256())
         .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256 init: {}", e)))?;
-    let pkey = PKey::hmac(mac_key)
-        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC key: {}", e)))?;
-    let mut hmac = Signer::new(MessageDigest::sha256(), &pkey)
+    let mut hmac = crate::crypto::hmac_compat::hmac_init(mac_key)
         .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC init: {}", e)))?;
 
     // Process IV - both need it
@@ -88,7 +84,7 @@ pub fn decrypt_single_pass(
     // Finalize both
     let actual_digest = digest_hasher.finish()
         .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256 finalize: {}", e)))?;
-    let computed_hmac = hmac.sign_to_vec()
+    let computed_hmac = hmac.finalize()
         .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC finalize: {}", e)))?;
 
     // Verify digest (constant-time)
@@ -171,9 +167,7 @@ pub fn decrypt_single_pass_into(
     // Single-pass verification using OpenSSL
     let mut digest_hasher = Hasher::new(MessageDigest::sha256())
         .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256 init: {}", e)))?;
-    let pkey = PKey::hmac(mac_key)
-        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC key: {}", e)))?;
-    let mut hmac = Signer::new(MessageDigest::sha256(), &pkey)
+    let mut hmac = crate::crypto::hmac_compat::hmac_init(mac_key)
         .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC init: {}", e)))?;
 
     digest_hasher.update(iv)
@@ -194,7 +188,7 @@ pub fn decrypt_single_pass_into(
 
     let actual_digest = digest_hasher.finish()
         .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256 finalize: {}", e)))?;
-    let computed_hmac = hmac.sign_to_vec()
+    let computed_hmac = hmac.finalize()
         .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC finalize: {}", e)))?;
 
     if actual_digest.as_ref().ct_eq(expected_digest).unwrap_u8() != 1 {
@@ -230,9 +224,8 @@ fn verify_sequential(
 ) -> ([u8; 32], [u8; 32]) {
     let mut digest_hasher = Hasher::new(MessageDigest::sha256())
         .expect("SHA256 init failed");
-    let pkey = PKey::hmac(mac_key).expect("HMAC key creation");
-    let mut hmac = Signer::new(MessageDigest::sha256(), &pkey)
-        .expect("HMAC signer creation");
+    let mut hmac = crate::crypto::hmac_compat::hmac_init(mac_key)
+        .expect("HMAC init");
 
     // Process IV
     digest_hasher.update(&ciphertext[..iv_end]).expect("SHA256 update");
@@ -249,7 +242,7 @@ fn verify_sequential(
     digest_hasher.update(&ciphertext[hmac_start..]).expect("SHA256 update");
 
     let digest_result = digest_hasher.finish().expect("SHA256 finalize");
-    let hmac_result = hmac.sign_to_vec().expect("HMAC finalize");
+    let hmac_result = hmac.finalize().expect("HMAC finalize");
 
     let mut actual_digest = [0u8; 32];
     actual_digest.copy_from_slice(&digest_result);
@@ -366,11 +359,10 @@ pub fn decrypt_zero_copy(
                 },
                 || {
                     // HMAC: hash IV + encrypted only
-                    let pkey = PKey::hmac(&mac_key_owned).expect("HMAC key");
-                    let mut signer = Signer::new(MessageDigest::sha256(), &pkey)
-                        .expect("HMAC signer");
+                    let mut signer = crate::crypto::hmac_compat::hmac_init(&mac_key_owned)
+                        .expect("HMAC init");
                     signer.update(&ciphertext_ref[..hmac_start]).expect("HMAC"); // IV + encrypted
-                    let result = signer.sign_to_vec().expect("HMAC finalize");
+                    let result = signer.finalize().expect("HMAC finalize");
                     let mut arr = [0u8; 32];
                     arr.copy_from_slice(&result);
                     arr

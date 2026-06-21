@@ -9,6 +9,7 @@
 pub mod attachment_crypto;
 pub mod attachment_crypto_fast;
 pub mod attachment_crypto_portable;
+pub(crate) mod hmac_compat;
 pub mod auth_crypto;
 pub mod call_key_provider;
 pub mod device_credentials;

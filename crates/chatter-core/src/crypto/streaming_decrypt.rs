@@ -22,8 +22,6 @@
 use std::io::{Read, Seek, SeekFrom};
 
 use openssl::hash::{Hasher, MessageDigest};
-use openssl::pkey::PKey;
-use openssl::sign::Signer;
 use openssl::symm::{Cipher, Crypter, Mode};
 use subtle::ConstantTimeEq;
 
@@ -109,9 +107,7 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
         // Initialize hashers using OpenSSL (hardware accelerated)
         let mut digest_hasher = Hasher::new(MessageDigest::sha256())
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256 init: {}", e)))?;
-        let pkey = PKey::hmac(&self.mac_key)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC key: {}", e)))?;
-        let mut hmac = Signer::new(MessageDigest::sha256(), &pkey)
+        let mut hmac = crate::crypto::hmac_compat::hmac_init(&self.mac_key)
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC init: {}", e)))?;
 
         // Read and hash in chunks
@@ -150,7 +146,7 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
         // Finalize
         let actual_digest = digest_hasher.finish()
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256 finalize: {}", e)))?;
-        let computed_hmac = hmac.sign_to_vec()
+        let computed_hmac = hmac.finalize()
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC finalize: {}", e)))?;
 
         // Verify digest (constant-time)
@@ -301,9 +297,7 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
         // Initialize all processors using OpenSSL (hardware accelerated)
         let mut digest_hasher = Hasher::new(MessageDigest::sha256())
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256 init: {}", e)))?;
-        let pkey = PKey::hmac(&self.mac_key)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC key: {}", e)))?;
-        let mut hmac = Signer::new(MessageDigest::sha256(), &pkey)
+        let mut hmac = crate::crypto::hmac_compat::hmac_init(&self.mac_key)
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC init: {}", e)))?;
 
         let cipher = Cipher::aes_256_cbc();
@@ -380,7 +374,7 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256: {}", e)))?;
 
         // Verify HMAC (constant-time)
-        let computed_hmac = hmac.sign_to_vec()
+        let computed_hmac = hmac.finalize()
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC finalize: {}", e)))?;
         if computed_hmac.ct_eq(&expected_hmac).unwrap_u8() != 1 {
             return Err(CryptoError::AttachmentMacMismatch);
@@ -517,13 +511,11 @@ impl IncrementalMacVerifier {
             });
         }
 
-        let pkey = PKey::hmac(&self.mac_key)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC key: {}", e)))?;
-        let mut signer = Signer::new(MessageDigest::sha256(), &pkey)
+        let mut signer = crate::crypto::hmac_compat::hmac_init(&self.mac_key)
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC init: {}", e)))?;
         signer.update(chunk)
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC update: {}", e)))?;
-        let computed = signer.sign_to_vec()
+        let computed = signer.finalize()
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC finalize: {}", e)))?;
 
         // Constant-time comparison

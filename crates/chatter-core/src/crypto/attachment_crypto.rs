@@ -27,8 +27,6 @@
 //! - Full pipeline: ~1 GB/s
 
 use openssl::hash::{Hasher, MessageDigest};
-use openssl::pkey::PKey;
-use openssl::sign::Signer;
 use openssl::symm::{Cipher, Crypter, Mode};
 use subtle::ConstantTimeEq;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
@@ -259,11 +257,10 @@ impl AttachmentCrypto {
     /// Compute HMAC-SHA256 over data using OpenSSL (hardware accelerated).
     #[inline]
     pub(crate) fn compute_hmac(mac_key: &[u8], data: &[u8]) -> [u8; 32] {
-        let pkey = PKey::hmac(mac_key).expect("HMAC key creation failed");
-        let mut signer = Signer::new(MessageDigest::sha256(), &pkey)
-            .expect("HMAC signer creation failed");
+        let mut signer = crate::crypto::hmac_compat::hmac_init(mac_key)
+            .expect("HMAC init failed");
         signer.update(data).expect("HMAC update failed");
-        let result = signer.sign_to_vec().expect("HMAC finalize failed");
+        let result = signer.finalize().expect("HMAC finalize failed");
         let mut arr = [0u8; 32];
         arr.copy_from_slice(&result);
         arr
@@ -332,16 +329,14 @@ impl AttachmentCrypto {
         let encrypted = &ciphertext[IV_LENGTH..ciphertext.len() - HMAC_LENGTH];
         let expected_hmac = &ciphertext[ciphertext.len() - HMAC_LENGTH..];
 
-        // Verify HMAC (constant-time comparison) using OpenSSL (hardware accelerated)
-        let pkey = PKey::hmac(mac_key)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC key: {}", e)))?;
-        let mut signer = Signer::new(MessageDigest::sha256(), &pkey)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC signer: {}", e)))?;
+        // Verify HMAC (constant-time comparison) using BoringSSL (hardware accelerated)
+        let mut signer = crate::crypto::hmac_compat::hmac_init(mac_key)
+            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC init: {}", e)))?;
         signer.update(iv)
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC update: {}", e)))?;
         signer.update(encrypted)
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC update: {}", e)))?;
-        let computed_hmac = signer.sign_to_vec()
+        let computed_hmac = signer.finalize()
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC finalize: {}", e)))?;
 
         if computed_hmac.ct_eq(expected_hmac).unwrap_u8() != 1 {
@@ -521,9 +516,7 @@ impl AttachmentCrypto {
             .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("init crypter: {}", e)))?;
         crypter.pad(false); // We handle padding ourselves
 
-        let pkey = PKey::hmac(mac_key)
-            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("init hmac key: {}", e)))?;
-        let mut hmac_signer = Signer::new(MessageDigest::sha256(), &pkey)
+        let mut hmac_signer = crate::crypto::hmac_compat::hmac_init(mac_key)
             .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("init hmac: {}", e)))?;
 
         let mut digest_hasher = Hasher::new(MessageDigest::sha256())
@@ -638,7 +631,7 @@ impl AttachmentCrypto {
         }
 
         // Finalize HMAC and write it
-        let hmac_result = hmac_signer.sign_to_vec()
+        let hmac_result = hmac_signer.finalize()
             .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("hmac finalize: {}", e)))?;
         output.write_all(&hmac_result)
             .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("write hmac: {}", e)))?;
