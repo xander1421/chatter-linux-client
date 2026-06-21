@@ -65,6 +65,32 @@ impl ChatterClient {
         self.anon_dms().get_my_avatar()
     }
 
+    /// Best-effort fetch of a user's avatar bytes for UI display.
+    ///
+    /// Reads `avatar_url` from the server profile and downloads it via HTTP.
+    /// Returns `None` if the user has no avatar URL or any step fails — the
+    /// UI should fall back to initials in that case.
+    pub async fn get_user_avatar_bytes(
+        &self,
+        user_id: &crate::domain::ids::UserId,
+    ) -> Option<Vec<u8>> {
+        let profile = self.users().get_user_profile(user_id).await.ok()?;
+        let url = profile.avatar_url?;
+        if url.is_empty() {
+            return None;
+        }
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .ok()?;
+        let resp = client.get(&url).send().await.ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let bytes = resp.bytes().await.ok()?.to_vec();
+        if bytes.is_empty() { None } else { Some(bytes) }
+    }
+
     pub async fn list_friends(
         &self,
         limit: u32,
@@ -208,6 +234,150 @@ impl ChatterClient {
         reason: Option<&str>,
     ) -> Result<(), crate::services::anon_dm::AnonDmError> {
         self.anon_dms().block_user(user_id, reason)
+    }
+
+    /// Check if a user ID belongs to an anonymous DM peer. Returns the
+    /// conversation ID if found.
+    pub fn find_anon_dm_by_peer(
+        &self,
+        user_id: &crate::domain::ids::UserId,
+    ) -> Option<crate::domain::anon_dm::AnonDmId> {
+        self.anon_dms()
+            .get_conversation_by_peer(user_id)
+            .ok()
+            .flatten()
+            .map(|dm| dm.id)
+    }
+
+    pub fn unblock_anon_dm_conversation(
+        &self,
+        conversation_id: &crate::domain::anon_dm::AnonDmId,
+    ) -> Result<(), crate::services::anon_dm::AnonDmError> {
+        self.anon_dms().unblock_conversation(conversation_id)
+    }
+
+    pub fn unblock_anon_dm_user(
+        &self,
+        user_id: &crate::domain::ids::UserId,
+    ) -> Result<(), crate::services::anon_dm::AnonDmError> {
+        self.anon_dms().unblock_user(user_id)
+    }
+
+    /// Try to interpret a UserId as an AnonDmId (conversation ID).
+    /// Returns Some if a conversation with that ID exists.
+    pub fn try_as_anon_dm_conversation_id(
+        &self,
+        maybe_conv_id: &crate::domain::ids::UserId,
+    ) -> Option<crate::domain::anon_dm::AnonDmId> {
+        let conv_id = crate::domain::anon_dm::AnonDmId::from_uuid(maybe_conv_id.0);
+        self.anon_dms()
+            .get_conversation(&conv_id)
+            .ok()
+            .flatten()
+            .map(|_| conv_id)
+    }
+
+    /// Get the peer user ID for an anon DM conversation.
+    pub fn get_anon_dm_peer_id(
+        &self,
+        conversation_id: &crate::domain::anon_dm::AnonDmId,
+    ) -> Option<crate::domain::ids::UserId> {
+        self.anon_dms()
+            .get_conversation(conversation_id)
+            .ok()
+            .flatten()
+            .map(|dm| dm.peer_id)
+    }
+
+    /// Check if an anon DM conversation is blocked.
+    pub fn is_anon_dm_conversation_blocked(
+        &self,
+        conversation_id: &crate::domain::anon_dm::AnonDmId,
+    ) -> Option<bool> {
+        self.anon_dms()
+            .is_conversation_blocked(conversation_id)
+            .ok()
+    }
+
+    // ── Unified block/unblock (routes anon vs server) ────────────────
+
+    /// Resolve a profile identifier (may be a UserId or an AnonDmId
+    /// stored as a UUID) into the correct blocking path and execute it.
+    pub async fn block_profile_user(
+        &self,
+        id: &crate::domain::ids::UserId,
+    ) -> Result<(), super::ClientError> {
+        // 1. Check if id is a peer in an anon DM
+        if let Some(conv_id) = self.find_anon_dm_by_peer(id) {
+            self.anon_dms().block_conversation(&conv_id)
+                .map_err(|e| super::ClientError::Inbox(e.to_string()))?;
+            self.anon_dms().block_user(id, Some("Blocked from profile"))
+                .map_err(|e| super::ClientError::Inbox(e.to_string()))?;
+            return Ok(());
+        }
+        // 2. Check if id is actually a conversation ID (Friends tab uses dm.id)
+        let conv_id = crate::domain::anon_dm::AnonDmId::from_uuid(id.0);
+        if let Ok(Some(dm)) = self.anon_dms().get_conversation(&conv_id) {
+            self.anon_dms().block_conversation(&conv_id)
+                .map_err(|e| super::ClientError::Inbox(e.to_string()))?;
+            self.anon_dms().block_user(&dm.peer_id, Some("Blocked from profile"))
+                .map_err(|e| super::ClientError::Inbox(e.to_string()))?;
+            return Ok(());
+        }
+        // 3. Server-side friendship block
+        self.users().block_user(id).await
+            .map_err(|e| super::ClientError::Inbox(e.to_string()))
+    }
+
+    /// Reverse of [`block_profile_user`]. Re-creates the ephemeral
+    /// mailbox so polling resumes for the unblocked conversation.
+    pub async fn unblock_profile_user(
+        &self,
+        id: &crate::domain::ids::UserId,
+    ) -> Result<(), super::ClientError> {
+        let conv_id = if let Some(cid) = self.find_anon_dm_by_peer(id) {
+            self.anon_dms().unblock_user(id)
+                .map_err(|e| super::ClientError::Inbox(e.to_string()))?;
+            Some(cid)
+        } else {
+            let cid = crate::domain::anon_dm::AnonDmId::from_uuid(id.0);
+            if let Ok(Some(dm)) = self.anon_dms().get_conversation(&cid) {
+                self.anon_dms().unblock_user(&dm.peer_id)
+                    .map_err(|e| super::ClientError::Inbox(e.to_string()))?;
+                Some(cid)
+            } else {
+                None
+            }
+        };
+
+        if let Some(cid) = conv_id {
+            self.anon_dms().unblock_conversation(&cid)
+                .map_err(|e| super::ClientError::Inbox(e.to_string()))?;
+            // The local mailbox keys were preserved during block (only
+            // polling was suspended). Setting status back to Active is
+            // enough — the poller picks up the existing keys. If the
+            // server-side mailbox expired during the block period, the
+            // poll will fail and the next renewal cycle handles it.
+            return Ok(());
+        }
+
+        self.users().unblock_user(id).await
+            .map_err(|e| super::ClientError::Inbox(e.to_string()))
+    }
+
+    /// Check if a profile identifier is blocked (anon or server-side).
+    pub fn is_profile_user_blocked(&self, id: &crate::domain::ids::UserId) -> bool {
+        // Anon: check by peer ID
+        if self.get_anon_dm_blocked_users().contains(id) {
+            return true;
+        }
+        // Anon: check by conversation ID
+        let conv_id = crate::domain::anon_dm::AnonDmId::from_uuid(id.0);
+        if self.anon_dms().is_conversation_blocked(&conv_id).unwrap_or(false) {
+            return true;
+        }
+        // Server-side
+        self.ui.user_state.is_blocked(id)
     }
 
     pub async fn send_anon_dm_presence_update(

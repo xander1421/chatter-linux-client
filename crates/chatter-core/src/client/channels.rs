@@ -432,17 +432,7 @@ impl ChatterClient {
     ) -> Result<Channel, crate::services::channel::ChannelError> {
         let icon_bytes: Option<Vec<u8>> = match icon_path {
             Some(path) => match tokio::fs::read(path).await {
-                Ok(bytes) => {
-                    if bytes.len() > 65_536 {
-                        return Err(crate::services::channel::ChannelError::InvalidInput(
-                            format!(
-                                "icon too large: {} bytes (max 65536)",
-                                bytes.len()
-                            ),
-                        ));
-                    }
-                    Some(bytes)
-                }
+                Ok(bytes) => Some(Self::fit_icon_bytes(&bytes)?),
                 Err(e) => {
                     return Err(crate::services::channel::ChannelError::InvalidInput(format!(
                         "icon read failed: {}",
@@ -595,6 +585,46 @@ impl ChatterClient {
         self.channels().search_channels(query, limit, 0, vec![ChannelType::Public]).await
     }
 
+    const MAX_ICON_BYTES: usize = 65_536;
+
+    fn fit_icon_bytes(raw: &[u8]) -> Result<Vec<u8>, crate::services::channel::ChannelError> {
+        if raw.len() <= Self::MAX_ICON_BYTES {
+            return Ok(raw.to_vec());
+        }
+
+        let img = image::load_from_memory(raw).map_err(|e| {
+            crate::services::channel::ChannelError::InvalidInput(format!(
+                "icon decode failed: {e}"
+            ))
+        })?;
+
+        let mut img = img;
+        for max_dim in [256u32, 192, 128, 96, 64] {
+            if img.width() > max_dim || img.height() > max_dim {
+                img = img.resize(max_dim, max_dim, image::imageops::FilterType::Lanczos3);
+            }
+            let mut buf = std::io::Cursor::new(Vec::new());
+            img.write_to(&mut buf, image::ImageFormat::WebP).map_err(|e| {
+                crate::services::channel::ChannelError::InvalidInput(format!(
+                    "icon encode failed: {e}"
+                ))
+            })?;
+            let encoded = buf.into_inner();
+            if encoded.len() <= Self::MAX_ICON_BYTES {
+                tracing::info!(
+                    original_bytes = raw.len(),
+                    final_bytes = encoded.len(),
+                    final_dim = max_dim,
+                    "auto-converted icon to WebP"
+                );
+                return Ok(encoded);
+            }
+        }
+
+        Err(crate::services::channel::ChannelError::InvalidInput(
+            "icon still too large after conversion to 64×64 WebP".into(),
+        ))
+    }
 }
 
 /// Fluent builder for `ChatterClient::new_channel(...)`.
@@ -679,13 +709,17 @@ impl ChannelBuilder {
                 )
                 .await
         } else {
+            let fitted = self.icon
+                .as_deref()
+                .map(ChatterClient::fit_icon_bytes)
+                .transpose()?;
             self.client
                 .create_channel(
                     &self.name,
                     self.channel_type,
                     self.config,
                     self.description.as_deref(),
-                    self.icon.as_deref(),
+                    fitted.as_deref(),
                     self.password.as_deref(),
                     self.initial_members,
                 )

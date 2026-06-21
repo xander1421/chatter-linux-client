@@ -953,6 +953,21 @@ impl InboxEventProcessor {
                             channel_id: ch_id,
                         });
 
+                        // Establish the DM Signal session in the background now
+                        // that we're friends, so the first call offer / message
+                        // doesn't pay the first-contact Sesame bootstrap on the
+                        // call path. No-op on the higher-UUID side (Sesame).
+                        let ms = self.message_service.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = ms.prewarm_dm_session(&friend_id).await {
+                                tracing::warn!(
+                                    peer_id = %friend_id,
+                                    error = %e,
+                                    "FriendAccepted: prewarm DM session failed"
+                                );
+                            }
+                        });
+
                         // Spawn a ServerDm stream listener now that the
                         // channel row should be present locally.
                         if let Some(current_user_id) =

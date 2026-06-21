@@ -50,6 +50,7 @@ pub async fn process_anon_dm_results(
     event_tx: &mpsc::Sender<InboxEvent>,
     deduplicator: &MessageDeduplicator,
     current_user_id: Option<&UserId>,
+    is_blocked: &(dyn Fn(&UserId, &AnonDmId) -> bool + Send + Sync),
 ) -> ProcessedAnonDmMessages {
     let mut processed: ProcessedAnonDmMessages = HashMap::new();
 
@@ -111,6 +112,19 @@ pub async fn process_anon_dm_results(
                     conversation_id = %conversation_id,
                     message_id = %message_id,
                     "Skipping own message echoed back from anon DM mailbox poll"
+                );
+                processed.entry(conversation_id).or_default().push(message_id);
+                continue;
+            }
+
+            // Drop all content from blocked users/conversations — messages,
+            // calls, typing, presence, profile updates. Acknowledge to prevent
+            // re-delivery but don't process.
+            if is_blocked(&sender_id, &conversation_id) {
+                tracing::debug!(
+                    conversation_id = %conversation_id,
+                    sender_id = %sender_id,
+                    "Dropping message from blocked sender/conversation"
                 );
                 processed.entry(conversation_id).or_default().push(message_id);
                 continue;

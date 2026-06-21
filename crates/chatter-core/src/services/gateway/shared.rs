@@ -48,7 +48,22 @@ pub fn message_reply_preview(msg: &Message, attachments: &[Attachment]) -> Strin
     }
 
     if attachments.len() == 1 {
-        let (emoji, label) = match attachments[0].metadata.category() {
+        let att = &attachments[0];
+        let cat = att.metadata.category();
+        let name = att.metadata.name.trim();
+        // Files with a real filename keep the filename in the preview.
+        // True voice recordings (no filename) fall back to the generic label.
+        if !name.is_empty() && cat != FileCategory::Image && cat != FileCategory::Video {
+            let emoji = match cat {
+                FileCategory::Audio => "🎵",
+                FileCategory::Document => "📄",
+                FileCategory::Code => "📝",
+                FileCategory::Archive => "📦",
+                _ => "📎",
+            };
+            return format!("{} {}", emoji, name);
+        }
+        let (emoji, label) = match cat {
             FileCategory::Image => ("📷", "Photo"),
             FileCategory::Video => ("🎬", "Video"),
             FileCategory::Audio => ("🎵", "Voice message"),

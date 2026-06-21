@@ -129,6 +129,18 @@ impl AnonDmService {
         let mut calls = PENDING_ANON_CALLS.lock().unwrap();
         calls.remove(room_name);
     }
+
+    /// Find the room name of an active anonymous call by its conversation id.
+    ///
+    /// `AnonCallHangupReceived` carries only the conversation id, but the
+    /// orchestrator keys active calls by `room_name`. This lookup bridges
+    /// the two so the orchestrator can mark the right call ended.
+    pub fn find_anon_room_for_conversation(&self, conversation_id: &AnonDmId) -> Option<String> {
+        let calls = PENDING_ANON_CALLS.lock().unwrap();
+        calls.iter()
+            .find(|(_, call)| call.conversation_id == *conversation_id)
+            .map(|(room_name, _)| room_name.clone())
+    }
     
     /// Mark an anonymous call as started (sets the start time).
     pub fn mark_anon_call_started(&self, room_name: &str) {

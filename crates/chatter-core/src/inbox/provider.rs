@@ -574,8 +574,21 @@ impl DeviceInboxProvider {
                         if !results.is_empty() {
                             // Create mpsc channel for events (process_anon_dm_results expects mpsc)
                             let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+                            // Blocking check closure — uses the DB directly to
+                            // avoid threading AnonDmService through the polling layer.
+                            let anon_repo = crate::storage::repositories::AnonDmRepository::new(database.clone());
+                            let is_blocked = |sender: &crate::domain::UserId, conv: &crate::domain::anon_dm::AnonDmId| -> bool {
+                                if anon_repo.is_user_blocked(sender).unwrap_or(false) {
+                                    return true;
+                                }
+                                anon_repo.get_conversation(conv)
+                                    .ok()
+                                    .flatten()
+                                    .map(|dm| dm.status == crate::domain::anon_dm::AnonDmStatus::Blocked)
+                                    .unwrap_or(false)
+                            };
                             // Use deduplicator to prevent re-decryption when ack fails
-                            let processed = process_anon_dm_results(results, pairwise, &tx, &dm_deduplicator, current_user_id.as_ref()).await;
+                            let processed = process_anon_dm_results(results, pairwise, &tx, &dm_deduplicator, current_user_id.as_ref(), &is_blocked).await;
                             drop(tx); // Close sender so receiver knows when done
 
                             // Forward events to broadcast channel

@@ -84,9 +84,15 @@ pub(super) fn handle_message_received(
     let timestamp_str = super::super::utils::format_timestamp(timestamp);
 
     // Determine if this conversation is currently active
-    let is_active = ui_ctx.chat_state().get().active_channel_id
-        .map(|id| id == conversation_id)
-        .unwrap_or(false);
+    let active_id = ui_ctx.chat_state().get().active_channel_id;
+    let is_active = active_id.map(|id| id == conversation_id).unwrap_or(false);
+    tracing::info!(
+        msg_conv = %conversation_id,
+        active_channel_id = ?active_id,
+        is_active,
+        ?conv_type,
+        "[UI_RECV] handle_message_received"
+    );
 
     // If the user is looking at this conversation, flip the incoming message
     // (and any previously-stored unreads) to read so the sidebar badge doesn't
@@ -153,6 +159,7 @@ pub(super) fn handle_message_received(
                 }).unwrap_or(false)
             });
 
+            tracing::info!(already_exists, existing = current_model.row_count(), "[UI_RECV] dedup check");
             if !already_exists {
                 // Find sorted insert position (by timestamp, tiebreak by sender_id)
                 let new_ts = ts_str.parse::<u64>().unwrap_or(0);
@@ -171,9 +178,11 @@ pub(super) fn handle_message_received(
 
                 if let Some(vec_model) = current_model.as_any().downcast_ref::<VecModel<MessageItemData>>() {
                     vec_model.insert(insert_pos, new_msg);
+                    tracing::info!(insert_pos, "[UI_RECV] inserted via VecModel.insert");
                 } else {
                     messages.insert(insert_pos, new_msg);
                     w.set_messages(ModelRc::new(VecModel::from(messages)));
+                    tracing::warn!(insert_pos, "[UI_RECV] downcast failed; replaced model");
                 }
 
                 crate::bin_ui::gif_state::auto_register_gifs_from_messages(
@@ -183,7 +192,6 @@ pub(super) fn handle_message_received(
             }
 
             if was_at_bottom {
-                w.set_message_scroll_position(-99999.0);
                 w.set_is_at_bottom(true);
             }
         }
@@ -331,27 +339,9 @@ pub(super) fn handle_reaction_update(
 
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
-        let messages = w.get_messages();
-
-        for i in 0..messages.row_count() {
-            if let Some(msg) = messages.row_data(i) {
-                if msg.sender_id.as_str() == sender_id && msg.timestamp_ns.as_str() == sent_at_ns_str {
-                    use chatter_core::domain::message::ReactionCount;
-                    use crate::bin_ui::converters::{reaction_counts_to_entries, reactions_model_to_counts};
-
-                    let mut updated = msg.clone();
-                    let mut counts = reactions_model_to_counts(&msg.reactions);
-                    ReactionCount::apply(&mut counts, &emoji, remove);
-                    updated.has_reactions = !counts.is_empty();
-                    updated.reaction_summary = ReactionCount::summary_string(&counts).into();
-                    updated.reactions = ModelRc::new(VecModel::from(reaction_counts_to_entries(&counts)));
-                    if let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() {
-                        model.set_row_data(i, updated);
-                    }
-                    return;
-                }
-            }
-        }
+        crate::bin_ui::features::chat::update_reaction_in_ui(
+            &w, &sender_id, &sent_at_ns_str, &emoji, remove,
+        );
     });
 }
 

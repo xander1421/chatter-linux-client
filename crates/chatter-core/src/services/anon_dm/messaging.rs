@@ -178,6 +178,13 @@ impl AnonDmService {
             delivery_status: String::new(),
         };
         self.message_repo.insert(&message)?;
+        tracing::info!(
+            conversation_id = %conversation_id,
+            message_id = %message_id,
+            sent_at,
+            text_len = text.len(),
+            "[ANON_DM_SEND] inserted own outgoing message into local DB"
+        );
 
         // NOTE: Do NOT emit AnonDmMessageReceived here.
         // The UI send handler (send_message.rs) already appends the message to

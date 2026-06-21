@@ -22,6 +22,18 @@ pub fn generate_preview_from_ui_message(msg: &crate::MessageItemData) -> String 
         if count == 1 {
             if let Some(att) = att_model.row_data(0) {
                 let cat = att.category.to_string();
+                let filename = att.filename.to_string();
+                let fname = filename.trim();
+                if !fname.is_empty() && cat != "image" && cat != "video" {
+                    let emoji = match cat.as_str() {
+                        "audio" => "\u{1f3b5}",
+                        "document" => "\u{1f4c4}",
+                        "code" => "\u{1f4dd}",
+                        "archive" => "\u{1f4e6}",
+                        _ => "\u{1f4ce}",
+                    };
+                    return format!("{} {}", emoji, fname);
+                }
                 let (emoji, name) = match cat.as_str() {
                     "image" => ("\u{1f4f7}", "Photo"),
                     "video" => ("\u{1f3ac}", "Video"),
