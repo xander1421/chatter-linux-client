@@ -1,0 +1,17 @@
+# Gradle / AGP build output
+.gradle/
+build/
+app/build/
+
+# Local machine config
+local.properties
+
+# Prebuilt native libs — produced by build-android.sh (cargo-ndk), not source.
+# The debug cdylib is ~300 MB; never commit it.
+app/src/main/jniLibs/
+
+# Misc
+*.iml
+.idea/
+.cxx/
+captures/

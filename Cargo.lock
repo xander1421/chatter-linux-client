@@ -286,6 +286,7 @@ dependencies = [
  "ndk-context",
  "ndk-sys 0.6.0+11769913",
  "num_enum",
+ "simd_cesu8",
  "thiserror 2.0.18",
 ]
 
@@ -1677,6 +1678,7 @@ dependencies = [
  "gstreamer-gl-egl",
  "gstreamer-video",
  "i-slint-backend-android-activity",
+ "i-slint-backend-selector",
  "i-slint-backend-winit",
  "image",
  "jni 0.21.1",
@@ -11130,7 +11132,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d46bc502cc6b113bfd1a7e9a0876532a9454ff4ee905afe09784eaa2ec3f3f33"
 dependencies = [
  "const-field-offset",
- "i-slint-backend-android-activity",
  "i-slint-backend-selector",
  "i-slint-common",
  "i-slint-core",

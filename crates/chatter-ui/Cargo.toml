@@ -78,8 +78,15 @@ glutin_egl_sys = { version = "0.7", optional = true }
 # Platform-specific: Android
 # ============================================================================
 [target.'cfg(target_os = "android")'.dependencies]
-i-slint-backend-android-activity = { version = "1.15.1", default-features = false, features = ["aa-06"], optional = true }
-android-activity = { version = "0.6", features = ["native-activity"], optional = true }
+i-slint-backend-android-activity = { version = "1.15.1", default-features = false, features = ["aa-06", "game-activity"], optional = true }
+android-activity = { version = "0.6", features = ["game-activity"], optional = true }
+# Slint's backend-selector unconditionally references i_slint_backend_android_activity
+# on android (api.rs uses `cfg!(...)`, which still compiles the reference). The only
+# slint umbrella feature that links it (`backend-android-activity-06`) also force-enables
+# `native-activity`, conflicting with game-activity. So we enable the selector's
+# `backend-android-activity` feature directly here — it pulls the backend crate with
+# default-features=false, letting our game-activity selection above stand alone.
+i-slint-backend-selector = { version = "1.15.1", default-features = false, optional = true }
 # JNI bindings for Android system APIs (notifications, window insets).
 # These live in chatter-ui (platform layer), not chatter-core (platform-neutral).
 jni = "0.21"
@@ -118,7 +125,12 @@ desktop-media-no-livekit = [
 ]
 local-ai = ["chatter-core/local-ai"]
 jarvis = ["chatter-core/jarvis"]
-mobile = ["dep:i-slint-backend-android-activity", "dep:android-activity", "slint/backend-android-activity-06", "slint/std"]
+# NOTE: deliberately NOT pulling `slint/backend-android-activity-06` — that
+# umbrella feature hard-enables `i-slint-backend-android-activity/native-activity`,
+# which is mutually exclusive with `game-activity`. We select the backend +
+# game-activity directly on the dep above, and `android_main` sets the platform
+# manually via `AndroidPlatform::new(app)` (no slint backend-selector needed).
+mobile = ["dep:i-slint-backend-android-activity", "dep:android-activity", "i-slint-backend-selector/backend-android-activity", "slint/std"]
 
 # =============================================================================
 # Android Metadata (for cargo-apk)
