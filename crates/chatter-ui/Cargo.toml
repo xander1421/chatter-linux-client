@@ -23,6 +23,11 @@ name = "test_thumbnail"
 path = "src/bin/test_thumbnail.rs"
 required-features = ["desktop-media"]
 
+[[example]]
+name = "video_present_bench"
+path = "examples/video_present_bench.rs"
+required-features = ["desktop"]
+
 [dependencies]
 chatter-core = { path = "../chatter-core", default-features = false }
 

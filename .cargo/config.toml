@@ -43,11 +43,16 @@ jobs = 8
 [env]
 # Reduce debug info for faster builds (set to 2 for full debugging)
 CARGO_PROFILE_DEV_DEBUG = "0"
-# webrtc-sys 0.3.24 auto-compiles a VA-API H.264 encoder shim when
-# `libva.pc` is detected. The shim `#include`s internal webrtc headers
-# (`rtc_base/logging.h`, `rtc_base/checks.h`) that the prebuilt doesn't ship,
-# breaking the build. Route `pkg-config` through a wrapper that reports
-# `libva` as missing so webrtc-sys takes the non-VAAPI path. `LIBVA_NO_PKG_CONFIG`
-# alone doesn't help here because webrtc-sys uses `pkg_config::get_variable`
-# (which doesn't honor the `_NO_PKG_CONFIG` guards).
-PKG_CONFIG = { value = "tools/pkg-config-nolibva", relative = true }
+# webrtc-sys 0.3.24 auto-compiled a broken VA-API H.264 encoder shim when
+# libva.pc was detected — the shim #include'd internal webrtc headers that
+# the prebuilt didn't ship. 0.3.29 handles this correctly; we leave the
+# wrapper-free path on so VAAPI compiles in for AMD/Intel boxes. If the
+# build breaks again, restore the shim:
+#   PKG_CONFIG = { value = "tools/pkg-config-nolibva", relative = true }
+#
+# Arch installs the CUDA toolkit at `/opt/cuda`. webrtc-sys defaults
+# `CUDA_HOME` to `/usr/local/cuda`, which doesn't exist here, so without
+# this hint the NVENC encoder path silently never gets built and screen
+# share falls back to OpenH264 software (60+ fps on a beefy NVIDIA box
+# would otherwise be impossible — encoder is the bottleneck at high res).
+CUDA_HOME = "/opt/cuda"
