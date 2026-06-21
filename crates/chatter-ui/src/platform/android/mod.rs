@@ -5,6 +5,7 @@
 //! `Window.safe-area-insets` + `virtual-keyboard-size` out properties. The
 //! .slint code binds those directly — no Rust polling required.
 
+pub mod file_picker;
 pub mod notifications;
 
 pub use notifications::AndroidNotifications;

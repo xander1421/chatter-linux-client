@@ -143,7 +143,27 @@ pub(crate) fn wire_attachment_clicked(window: &MainWindow, chat_state: ChatState
             });
         }
         #[cfg(target_os = "android")]
-        tracing::warn!("File picker not yet supported on Android");
+        {
+            tokio::spawn(async move {
+                // Storage Access Framework (no permission needed). "*/*" lets the
+                // user pick any file; images/videos/audio/docs all qualify.
+                let selected_files =
+                    crate::platform::android::file_picker::pick_files(&["*/*"]).await;
+
+                if selected_files.is_empty() {
+                    tracing::debug!("File picker cancelled or no files selected");
+                    return;
+                }
+
+                tracing::info!("Selected {} file(s) for attachment", selected_files.len());
+
+                for file_path in selected_files {
+                    if let Err(e) = process_and_add_file(file_path, &chat_state, &weak).await {
+                        tracing::error!("{}", e);
+                    }
+                }
+            });
+        }
     });
 }
 
