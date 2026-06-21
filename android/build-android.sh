@@ -66,8 +66,12 @@ echo "------------------------------------------------------------"
 # ── 4. Optional: install + tunnel ───────────────────────────────────────────
 if [ "${1:-}" = "install" ]; then
     ADB="$ANDROID_HOME/platform-tools/adb"
-    echo ">> installing + setting 50051 reverse tunnel…"
+    echo ">> installing + setting reverse tunnels (50051 gRPC, 9000 RustFS storage)…"
+    # 50051 = ConnectRPC server. 9000 = RustFS/S3 — attachment uploads hit a
+    # presigned URL at 127.0.0.1:9000, which on-device is the phone's localhost,
+    # so it must be tunnelled to the host too or attachment sends fail.
     "$ADB" reverse tcp:50051 tcp:50051 || true
+    "$ADB" reverse tcp:9000 tcp:9000 || true
     "$ADB" install -r -d "$APK"
     "$ADB" shell monkey -p com.chatter.client -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || true
     echo ">> launched com.chatter.client"
