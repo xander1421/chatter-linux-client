@@ -18,6 +18,8 @@ use jni::sys::jsize;
 use jni::JNIEnv;
 use tokio::sync::oneshot;
 
+use super::activity;
+
 /// Single in-flight picker request. A new pick replaces (and thereby cancels)
 /// any prior pending one — the UI only ever opens one chooser at a time.
 static PENDING: Mutex<Option<oneshot::Sender<Vec<PathBuf>>>> = Mutex::new(None);
@@ -43,12 +45,8 @@ pub async fn pick_files(mime_types: &[&str]) -> Vec<PathBuf> {
 
 /// JNI: invoke `MainActivity.launchFilePicker(String[] mimeTypes)`.
 fn launch(mime_types: &[&str]) -> Result<(), String> {
-    let ctx = unsafe { ndk_context::android_context() };
-    let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| e.to_string())?;
-    let mut env = vm
-        .attach_current_thread_permanently()
-        .map_err(|e| e.to_string())?;
-    let activity = unsafe { JObject::from_raw(ctx.context().cast()) };
+    let mut env = activity::jni_env()?;
+    let act = activity::activity()?;
 
     let string_class = env.find_class("java/lang/String").map_err(|e| e.to_string())?;
     let arr = env
@@ -61,13 +59,16 @@ fn launch(mime_types: &[&str]) -> Result<(), String> {
     }
 
     let arr_obj: JObject = arr.into();
-    env.call_method(
-        &activity,
+    let res = env.call_method(
+        act,
         "launchFilePicker",
         "([Ljava/lang/String;)V",
         &[JValue::Object(&arr_obj)],
-    )
-    .map_err(|e| e.to_string())?;
+    );
+    if res.is_err() {
+        activity::clear_exception(&mut env);
+    }
+    res.map_err(|e| e.to_string())?;
     Ok(())
 }
 

@@ -1,9 +1,12 @@
 package com.chatter.client
 
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Bundle
 import android.provider.OpenableColumns
 import android.util.Log
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import com.google.androidgamesdk.GameActivity
 import java.io.File
 
@@ -18,6 +21,19 @@ import java.io.File
  * `native…` methods declared here.
  */
 class MainActivity : GameActivity() {
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // Hand the Activity to Rust. ndk-context only exposes the Application,
+        // which lacks our Activity methods (launchFilePicker, requestPermissions),
+        // so Rust holds a GlobalRef to `this` for JNI callbacks. super.onCreate
+        // has loaded libchatter_ui by now (android.app.lib_name), so the native
+        // symbol resolves.
+        nativeRegisterActivity()
+    }
+
+    /** Implemented in Rust. Stores a GlobalRef to this Activity. */
+    private external fun nativeRegisterActivity()
 
     // --- File picker (Storage Access Framework) --------------------------------
     // Registered at construction (before onStart), per the ComponentActivity
@@ -57,6 +73,28 @@ class MainActivity : GameActivity() {
 
     /** Implemented in Rust (libchatter_ui.so). Delivers picked file paths. */
     private external fun nativeOnFilesPicked(paths: Array<String>)
+
+    // --- Runtime permissions ---------------------------------------------------
+    private val permissionRequest =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+            val granted = result.filterValues { it }.keys.toTypedArray()
+            val denied = result.filterValues { !it }.keys.toTypedArray()
+            nativeOnPermissionsResult(granted, denied)
+        }
+
+    /** Called from Rust (JNI). True if [permission] is already granted. */
+    @Suppress("unused")
+    fun hasPermission(permission: String): Boolean =
+        ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+
+    /** Called from Rust (JNI). Shows the system grant dialog for [permissions]. */
+    @Suppress("unused")
+    fun requestPermissions(permissions: Array<String>) {
+        runOnUiThread { permissionRequest.launch(permissions) }
+    }
+
+    /** Implemented in Rust (libchatter_ui.so). Delivers grant results. */
+    private external fun nativeOnPermissionsResult(granted: Array<String>, denied: Array<String>)
 
     private companion object {
         const val TAG = "ChatterFilePicker"

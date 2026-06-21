@@ -73,6 +73,17 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     // `virtual-keyboard-size` out properties — Slint's Android backend feeds
     // them via `WindowInsetsCompat`, so no manual JNI polling is needed.
 
+    // Request runtime permissions now the activity is resumed. Notifications
+    // belong at startup; mic/camera ideally move to on-demand (before a call),
+    // but requesting here surfaces the grant dialogs so the features work at
+    // all. Fire-and-forget — outcomes are logged via the JNI result callback.
+    use crate::platform::android::permissions;
+    permissions::request(&[
+        permissions::POST_NOTIFICATIONS,
+        permissions::RECORD_AUDIO,
+        permissions::CAMERA,
+    ]);
+
     app_run(app_state);
 }
 
