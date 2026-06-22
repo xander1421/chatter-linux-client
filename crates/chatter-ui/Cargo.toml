@@ -117,8 +117,14 @@ windows-cross = [
 ]
 desktop-media = [
     "dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video", "dep:gstreamer-gl",
-    "dep:livekit", "dep:livekit-api", "dep:gstreamer-gl-egl", "dep:glutin_egl_sys"
+    "dep:livekit", "dep:livekit-api", "dep:gstreamer-gl-egl", "dep:glutin_egl_sys",
+    "call-ui"
 ]
+# Call UI wiring (features/calls, call event routing, video-frame→image). Enabled
+# by both desktop (desktop-media) and mobile so the call screens are actually
+# driven on both. The Slint call screens themselves compile unconditionally; this
+# only gates the Rust glue. gstreamer-init stays desktop-media-only (lib.rs).
+call-ui = []
 desktop-media-no-livekit = [
     "dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video", "dep:gstreamer-gl",
     "dep:gstreamer-gl-egl", "dep:glutin_egl_sys"
@@ -130,7 +136,7 @@ jarvis = ["chatter-core/jarvis"]
 # which is mutually exclusive with `game-activity`. We select the backend +
 # game-activity directly on the dep above, and `android_main` sets the platform
 # manually via `AndroidPlatform::new(app)` (no slint backend-selector needed).
-mobile = ["dep:i-slint-backend-android-activity", "dep:android-activity", "i-slint-backend-selector/backend-android-activity", "slint/std", "chatter-core/media"]
+mobile = ["dep:i-slint-backend-android-activity", "dep:android-activity", "i-slint-backend-selector/backend-android-activity", "slint/std", "chatter-core/media", "call-ui"]
 
 # =============================================================================
 # Android Metadata (for cargo-apk)

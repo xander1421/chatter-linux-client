@@ -12,7 +12,7 @@
 //! Services encapsulate all repository access - UI code never touches repos directly.
 
 pub mod auth;
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "call-ui")]
 pub mod calls;
 pub mod chat;
 pub mod connection;
@@ -47,7 +47,7 @@ pub fn wire_all(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     composer::wire(window, ui_ctx);
     modals::wire(window, ui_ctx);
     thread::wire(window, ui_ctx);
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "call-ui")]
     calls::wire(window, ui_ctx);
     #[cfg(feature = "jarvis")]
     jarvis::wire_jarvis_panel(window, ui_ctx);

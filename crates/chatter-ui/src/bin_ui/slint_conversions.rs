@@ -3,7 +3,7 @@
 //! Converts raw pixel data from core types into Slint Image for UI display.
 //! These functions were extracted from core to keep it Slint-free.
 
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "call-ui")]
 use chatter_core::calls::shared_frames::VideoFrameData;
 use chatter_core::error::MediaError;
 use chatter_core::media::gif::GifFrame;
@@ -44,7 +44,7 @@ pub fn gif_frame_to_slint_image(frame: &GifFrame) -> slint::Image {
 }
 
 /// Convert a VideoFrameData to a Slint Image.
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "call-ui")]
 pub fn video_frame_to_slint_image(frame: &VideoFrameData) -> slint::Image {
     rgba_to_slint_image(&frame.rgba_data, frame.width, frame.height)
 }

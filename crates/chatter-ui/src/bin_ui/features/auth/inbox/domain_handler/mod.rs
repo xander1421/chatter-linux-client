@@ -9,9 +9,9 @@
 //! ```
 
 mod anon;
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "call-ui")]
 mod anon_calls;
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "call-ui")]
 mod calls;
 mod helpers;
 pub(crate) use helpers::{recompute_total_unread, update_unread_count};
@@ -77,7 +77,7 @@ pub async fn handle_domain_event(
         // =========================================================================
         // Call Key Offer (Incoming Call)
         // =========================================================================
-        #[cfg(feature = "desktop-media")]
+        #[cfg(feature = "call-ui")]
         DomainEvent::CallKeyOfferReceived {
             call_id,
             peer_id,
@@ -95,7 +95,7 @@ pub async fn handle_domain_event(
                 caller_name, timestamp,
             );
         }
-        #[cfg(not(feature = "desktop-media"))]
+        #[cfg(not(feature = "call-ui"))]
         DomainEvent::CallKeyOfferReceived { .. } => {
             tracing::debug!("Ignoring CallKeyOfferReceived (desktop-media disabled)");
         }
@@ -111,11 +111,11 @@ pub async fn handle_domain_event(
         // =========================================================================
         // Call Hangup
         // =========================================================================
-        #[cfg(feature = "desktop-media")]
+        #[cfg(feature = "call-ui")]
         DomainEvent::CallHangupReceived { call_id, peer_id, reason } => {
             calls::handle_call_hangup(window, ui_ctx, call_id, peer_id, reason);
         }
-        #[cfg(not(feature = "desktop-media"))]
+        #[cfg(not(feature = "call-ui"))]
         DomainEvent::CallHangupReceived { .. } => {
             tracing::debug!("Ignoring CallHangupReceived (desktop-media disabled)");
         }
@@ -292,7 +292,7 @@ pub async fn handle_domain_event(
         // =========================================================================
         // Anonymous Call Events
         // =========================================================================
-        #[cfg(feature = "desktop-media")]
+        #[cfg(feature = "call-ui")]
         DomainEvent::AnonCallOfferReceived {
             conversation_id,
             sender_id,
@@ -308,7 +308,7 @@ pub async fn handle_domain_event(
                 room_name, call_type, caller_display_name, call_encryption_key,
             );
         }
-        #[cfg(not(feature = "desktop-media"))]
+        #[cfg(not(feature = "call-ui"))]
         DomainEvent::AnonCallOfferReceived { .. } => {
             tracing::debug!("Ignoring AnonCallOfferReceived (desktop-media disabled)");
         }
@@ -319,11 +319,11 @@ pub async fn handle_domain_event(
             // AnonCallConnected / ActiveEnded orchestrator events.
         }
 
-        #[cfg(feature = "desktop-media")]
+        #[cfg(feature = "call-ui")]
         DomainEvent::AnonCallHangupReceived { conversation_id, .. } => {
             anon_calls::handle_anon_call_hangup(window, conversation_id);
         }
-        #[cfg(not(feature = "desktop-media"))]
+        #[cfg(not(feature = "call-ui"))]
         DomainEvent::AnonCallHangupReceived { .. } => {
             tracing::debug!("Ignoring AnonCallHangupReceived (desktop-media disabled)");
         }
@@ -331,7 +331,7 @@ pub async fn handle_domain_event(
         // =========================================================================
         // Anonymous Group Call Events
         // =========================================================================
-        #[cfg(feature = "desktop-media")]
+        #[cfg(feature = "call-ui")]
         DomainEvent::AnonGroupCallOfferReceived {
             group_id,
             sender_id,
@@ -347,7 +347,7 @@ pub async fn handle_domain_event(
                 room_name, call_type, caller_display_name, call_encryption_key,
             );
         }
-        #[cfg(not(feature = "desktop-media"))]
+        #[cfg(not(feature = "call-ui"))]
         DomainEvent::AnonGroupCallOfferReceived { .. } => {
             tracing::debug!("Ignoring AnonGroupCallOfferReceived (desktop-media disabled)");
         }
@@ -357,11 +357,11 @@ pub async fn handle_domain_event(
             // AnonCallAnswerReceived).
         }
 
-        #[cfg(feature = "desktop-media")]
+        #[cfg(feature = "call-ui")]
         DomainEvent::AnonGroupCallHangupReceived { group_id, .. } => {
             anon_calls::handle_anon_group_call_hangup(window, group_id);
         }
-        #[cfg(not(feature = "desktop-media"))]
+        #[cfg(not(feature = "call-ui"))]
         DomainEvent::AnonGroupCallHangupReceived { .. } => {
             tracing::debug!("Ignoring AnonGroupCallHangupReceived (desktop-media disabled)");
         }
