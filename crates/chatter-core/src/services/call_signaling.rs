@@ -520,6 +520,20 @@ impl CallSignalingService {
         [e1, e2, e3, e4]
     }
 
+    /// Resolve the display name *we* locally know for an anon-DM peer, from the
+    /// conversation's profile exchange. Preferred over the caller-supplied
+    /// `caller_display_name` in an incoming offer: it's reliable (synced via the
+    /// anon-DM handshake) and spoof-resistant — a caller can't pick the name
+    /// shown on the callee's incoming-call screen. Returns `None` if unknown.
+    pub fn anon_dm_peer_name(&self, conversation_id: &AnonDmId) -> Option<String> {
+        self.anon_dm_service
+            .get_conversation(conversation_id)
+            .ok()
+            .flatten()
+            .and_then(|c| c.peer_display_name)
+            .filter(|n| !n.is_empty())
+    }
+
     /// Start an anonymous DM call: acquire token, send offer, store pending state.
     ///
     /// Returns an `AnonCallSetupResult` with the room name for UI display.

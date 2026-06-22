@@ -2158,11 +2158,14 @@ fn handle_domain_event(
             ..
         } => {
             let is_video = call_type == 2;
-            let peer_name = if caller_display_name.is_empty() {
-                "Anonymous".to_string()
-            } else {
-                caller_display_name
-            };
+            // Prefer the name WE locally know for this peer (synced via the
+            // anon-DM profile exchange) over the caller's self-reported name in
+            // the offer — reliable and spoof-resistant. Fall back to the offer's
+            // name, then "Anonymous".
+            let peer_name = signaling
+                .anon_dm_peer_name(&conversation_id)
+                .or_else(|| (!caller_display_name.is_empty()).then_some(caller_display_name))
+                .unwrap_or_else(|| "Anonymous".to_string());
             worker.orch_present_incoming(
                 CallHandle::from(room_name),
                 OrchestratedCallKind::AnonDm,
