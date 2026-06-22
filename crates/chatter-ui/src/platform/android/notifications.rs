@@ -226,13 +226,16 @@ impl AndroidNotifications {
         env.call_method(&builder, "setAutoCancel", "(Z)Landroid/app/Notification$Builder;", &[JValue::Bool(1)]).map_err(nerr)?;
         env.call_method(&builder, "setTimeoutAfter", "(J)Landroid/app/Notification$Builder;", &[JValue::Long(45_000)]).map_err(nerr)?;
 
-        // Full-screen + content intent → open the in-app call screen.
-        let fs_pi = build_activity_intent(&mut env, &context, call_id, id)?;
+        // Full-screen + content intent → open the in-app ring screen (no auto-accept).
+        let fs_pi = build_activity_intent(&mut env, &context, call_id, id, false)?;
         env.call_method(&builder, "setFullScreenIntent", "(Landroid/app/PendingIntent;Z)Landroid/app/Notification$Builder;", &[JValue::Object(&fs_pi), JValue::Bool(1)]).map_err(nerr)?;
         env.call_method(&builder, "setContentIntent", "(Landroid/app/PendingIntent;)Landroid/app/Notification$Builder;", &[JValue::Object(&fs_pi)]).map_err(nerr)?;
 
-        // Accept / Decline action buttons.
-        let accept = build_action(&mut env, &context, "com.chatter.client.CALL_ACCEPT", "Accept", call_id, IC_CALL, id * 2)?;
+        // Accept = activity intent: foregrounds the app (a broadcast receiver
+        // can't reliably start an activity on Android 14+) and auto-accepts.
+        // Decline = headless broadcast.
+        let accept_pi = build_activity_intent(&mut env, &context, call_id, id * 2, true)?;
+        let accept = make_action(&mut env, IC_CALL, "Accept", &accept_pi)?;
         let decline = build_action(&mut env, &context, "com.chatter.client.CALL_DECLINE", "Decline", call_id, IC_CLOSE, id * 2 + 1)?;
         env.call_method(&builder, "addAction", "(Landroid/app/Notification$Action;)Landroid/app/Notification$Builder;", &[JValue::Object(&accept)]).map_err(nerr)?;
         env.call_method(&builder, "addAction", "(Landroid/app/Notification$Action;)Landroid/app/Notification$Builder;", &[JValue::Object(&decline)]).map_err(nerr)?;
@@ -454,29 +457,42 @@ fn build_action<'a>(
         .l()
         .map_err(nerr)?;
 
+    make_action(env, icon, label, &pi)
+}
+
+/// Build a `Notification.Action` from an already-constructed PendingIntent.
+fn make_action<'a>(
+    env: &mut JNIEnv<'a>,
+    icon: i32,
+    label: &str,
+    pi: &JObject<'a>,
+) -> Result<JObject<'a>, SystemError> {
     let j_label = env.new_string(label).map_err(nerr)?;
     let action_builder = env
         .new_object(
             "android/app/Notification$Action$Builder",
             "(ILjava/lang/CharSequence;Landroid/app/PendingIntent;)V",
-            &[JValue::Int(icon), JValue::Object(&j_label), JValue::Object(&pi)],
+            &[JValue::Int(icon), JValue::Object(&j_label), JValue::Object(pi)],
         )
         .map_err(nerr)?;
-    let action_obj = env
-        .call_method(&action_builder, "build", "()Landroid/app/Notification$Action;", &[])
+    env.call_method(&action_builder, "build", "()Landroid/app/Notification$Action;", &[])
         .map_err(nerr)?
         .l()
-        .map_err(nerr)?;
-    Ok(action_obj)
+        .map_err(nerr)
 }
 
-/// Build a PendingIntent that launches `MainActivity` (the in-app call screen)
-/// for the full-screen / content intent, carrying the incoming call_id.
+/// Build a PendingIntent that launches `MainActivity` (the in-app call screen),
+/// carrying the incoming call_id. When `auto_accept` is set, MainActivity
+/// accepts the call on arrival (the Accept button); otherwise it just opens the
+/// ring screen (full-screen / content intent). Launched via an activity
+/// PendingIntent so the notification can foreground the app — a broadcast
+/// receiver can't reliably start an activity on Android 14+.
 fn build_activity_intent<'a>(
     env: &mut JNIEnv<'a>,
     context: &JObject<'a>,
     call_id: &str,
     request_code: i32,
+    auto_accept: bool,
 ) -> Result<JObject<'a>, SystemError> {
     // setClassName (string) instead of find_class — see build_action.
     let intent = env
@@ -495,6 +511,10 @@ fn build_activity_intent<'a>(
     let k = env.new_string("incoming_call_id").map_err(nerr)?;
     let v = env.new_string(call_id).map_err(nerr)?;
     env.call_method(&intent, "putExtra", "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;", &[JValue::Object(&k), JValue::Object(&v)]).map_err(nerr)?;
+    if auto_accept {
+        let ak = env.new_string("auto_accept").map_err(nerr)?;
+        env.call_method(&intent, "putExtra", "(Ljava/lang/String;Z)Landroid/content/Intent;", &[JValue::Object(&ak), JValue::Bool(1)]).map_err(nerr)?;
+    }
 
     let pi = env
         .call_static_method(

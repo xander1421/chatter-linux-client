@@ -230,6 +230,10 @@ pub async fn app_init() -> AppState {
     #[cfg(target_os = "android")]
     window.set_is_mobile_platform(true);
 
+    // Let the notification "Accept" activity-intent drive the in-app accept flow.
+    #[cfg(target_os = "android")]
+    crate::platform::android::call_actions::register_main_window(window.as_weak());
+
     // Jarvis feature gate: flip the Slint global so jarvis surfaces render.
     // Slint can't `cfg`-gate, so we use a runtime bool driven by the Cargo feature.
     #[cfg(feature = "jarvis")]

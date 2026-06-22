@@ -1,5 +1,6 @@
 package com.chatter.client
 
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
@@ -37,8 +38,31 @@ class MainActivity : GameActivity() {
         nativeRegisterActivity()
     }
 
+    /**
+     * The incoming-call notification's Accept button is an activity PendingIntent
+     * (a broadcast receiver can't reliably foreground on Android 14+). When it
+     * fires while we're already running, onNewIntent delivers it here; route the
+     * accept into Rust, which runs the in-app accept flow. Cold-start (process
+     * was killed) lands in onCreate before the native window exists — there the
+     * full-screen intent just shows the ring screen for an in-app accept.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra("auto_accept", false)) {
+            val callId = intent.getStringExtra("incoming_call_id")
+            if (!callId.isNullOrEmpty()) {
+                Log.i(TAG, "accept-from-notification call_id=$callId")
+                nativeAcceptIncomingCall(callId)
+            }
+        }
+    }
+
     /** Implemented in Rust. Stores a GlobalRef to this Activity. */
     private external fun nativeRegisterActivity()
+
+    /** Implemented in Rust. Runs the in-app accept flow for an incoming call. */
+    private external fun nativeAcceptIncomingCall(callId: String)
 
     // --- File picker (Storage Access Framework) --------------------------------
     // Registered at construction (before onStart), per the ComponentActivity

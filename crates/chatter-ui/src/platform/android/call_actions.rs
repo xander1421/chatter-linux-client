@@ -20,9 +20,48 @@ use jni::JNIEnv;
 /// Set once at startup so notification-action callbacks can reach the client.
 static CALL_CLIENT: OnceLock<Arc<ChatterClient>> = OnceLock::new();
 
+/// Window handle for routing a notification "Accept" through the in-app accept
+/// flow (connect + render the active-call screen) once MainActivity foregrounds.
+static MAIN_WINDOW: OnceLock<slint::Weak<crate::MainWindow>> = OnceLock::new();
+
 /// Register the client used to accept/decline calls from notification actions.
 pub fn register_call_client(client: Arc<ChatterClient>) {
     let _ = CALL_CLIENT.set(client);
+}
+
+/// Register the main window so the Accept activity-intent can drive the in-app
+/// accept handler.
+pub fn register_main_window(window: slint::Weak<crate::MainWindow>) {
+    let _ = MAIN_WINDOW.set(window);
+}
+
+/// JNI entry point: MainActivity received an Accept activity-intent (the app is
+/// now foreground). Run the in-app accept flow for `call_id` — it connects the
+/// call and paints the active-call screen, same as the in-app Accept button.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_chatter_client_MainActivity_nativeAcceptIncomingCall(
+    mut env: JNIEnv,
+    _class: JClass,
+    call_id: JString,
+) {
+    let call_id: String = match env.get_string(&call_id) {
+        Ok(s) => s.into(),
+        Err(e) => {
+            tracing::warn!(error = %e, "nativeAcceptIncomingCall: bad call_id");
+            return;
+        }
+    };
+    super::notifications::cancel_call_notification(&call_id);
+
+    let Some(weak) = MAIN_WINDOW.get().cloned() else {
+        tracing::warn!("nativeAcceptIncomingCall: window not registered");
+        return;
+    };
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak.upgrade() {
+            w.invoke_accept_incoming_call(call_id.into());
+        }
+    });
 }
 
 /// JNI entry point: `CallActionReceiver` calls this with the call_id and whether
