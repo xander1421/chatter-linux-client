@@ -21,6 +21,27 @@ pub trait NotificationSink: Send + Sync {
         self.show(&notification.title, &notification.body, NotificationPriority::Normal)
     }
 
+    /// Show an incoming-call notification with Accept/Decline actions.
+    ///
+    /// Platforms that support actionable call notifications (Android) override
+    /// this to post a full-screen, ringing notification with buttons that
+    /// accept/decline `call_id` without opening the app. The default falls back
+    /// to a plain urgent notification (desktop relies on the in-app ring UI).
+    fn show_incoming_call(
+        &self,
+        _call_id: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<(), SystemError> {
+        self.show(title, body, NotificationPriority::Urgent)
+    }
+
+    /// Dismiss a previously shown incoming-call notification (call was
+    /// accepted, declined, withdrawn, or ended). No-op by default.
+    fn cancel_incoming_call(&self, _call_id: &str) -> Result<(), SystemError> {
+        Ok(())
+    }
+
     fn init(&self) -> Result<(), SystemError> {
         Ok(())
     }

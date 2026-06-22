@@ -151,6 +151,24 @@ impl NotificationService {
         self.show_platform_notification(title, body, priority)
     }
 
+    /// Show an actionable incoming-call notification (Accept/Decline) for
+    /// `call_id`. On Android this is a full-screen ringing notification with
+    /// buttons; elsewhere it falls back to a plain urgent toast.
+    pub fn show_incoming_call(
+        &self,
+        call_id: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<(), SystemError> {
+        self.sink.show_incoming_call(call_id, title, body)
+    }
+
+    /// Dismiss the incoming-call notification for `call_id` (accepted,
+    /// declined, withdrawn, or ended).
+    pub fn cancel_incoming_call(&self, call_id: &str) -> Result<(), SystemError> {
+        self.sink.cancel_incoming_call(call_id)
+    }
+
     /// Platform-neutral notification display via the injected sink.
     fn show_platform_notification(
         &self,
@@ -260,13 +278,9 @@ pub fn spawn_notification_listener(
                     tracing::info!(
                         call_id = %call_id,
                         is_video = *is_video,
-                        "IncomingCall notification → urgent toast"
+                        "IncomingCall notification → ringing call notification"
                     );
-                    let _ = notification_service.show_message(
-                        title,
-                        &body,
-                        NotificationPriority::Urgent,
-                    );
+                    let _ = notification_service.show_incoming_call(call_id, title, &body);
                 }
 
                 DomainEvent::DeviceLinked { device_id, device_name, device_info, approved_by_self } => {

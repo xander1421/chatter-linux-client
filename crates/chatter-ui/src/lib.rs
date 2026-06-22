@@ -194,6 +194,10 @@ pub async fn app_init() -> AppState {
     };
     let ui_ctx = client.clone();
 
+    // Let incoming-call notification actions (Accept/Decline) reach the client.
+    #[cfg(target_os = "android")]
+    crate::platform::android::call_actions::register_call_client(client.clone());
+
     // Async variant so an OIDC session that's near-expiry gets refreshed
     // before the first RPC runs. Falls back to identical behaviour for
     // password/device-auth sessions.
