@@ -54,3 +54,25 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeRegisterActivi
         Err(e) => tracing::error!("Android: failed to hold MainActivity ref: {e}"),
     }
 }
+
+/// JNI: `MainActivity.onCreate` calls this to wire the JavaVM into libwebrtc.
+///
+/// Must run on the Java main thread (this is invoked from onCreate), NOT the
+/// native `android_main` thread: libwebrtc's `InitAndroid` does `FindClass` for
+/// the bundled `livekit.org.webrtc` / `jni_zero` classes, which only resolves
+/// via the app classloader — a native thread sees only the system classloader
+/// and aborts. Required before any `Room::connect`, or calls segfault on join.
+#[cfg(feature = "call-ui")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_chatter_client_MainActivity_nativeInitWebrtc(
+    env: JNIEnv,
+    _this: JObject,
+) {
+    match env.get_java_vm() {
+        Ok(vm) => {
+            livekit::webrtc::android::initialize_android(&vm);
+            tracing::info!("LiveKit webrtc android runtime initialized");
+        }
+        Err(e) => tracing::error!("webrtc init: get_java_vm failed: {e}"),
+    }
+}

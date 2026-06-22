@@ -54,6 +54,10 @@ mkdir -p "$JNI_DIR"
 cp "$PROJECT_ROOT/target/aarch64-linux-android/debug/libchatter_ui.so" "$JNI_DIR/"
 echo ">> staged $(du -h "$JNI_DIR/libchatter_ui.so" | cut -f1) cdylib"
 
+# Note: LiveKit's webrtc Java classes (livekit.org.webrtc / jni_zero) are pulled
+# straight from the webrtc-sys download under target/ by app/build.gradle.kts
+# (fileTree) — produced by the cargo-ndk step above, so no copy step is needed.
+
 # ── 3. Assemble the APK ─────────────────────────────────────────────────────
 echo ">> gradle: assembleDebug…"
 JAVA_HOME="${JAVA_HOME:-/opt/android-studio/jbr}" ./gradlew :app:assembleDebug --no-daemon

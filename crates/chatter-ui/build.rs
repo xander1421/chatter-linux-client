@@ -5,6 +5,22 @@ fn main() {
         return;
     }
 
+    // Calls: keep + export libwebrtc's Java_livekit_org_webrtc_* JNI symbols on
+    // the FINAL cdylib link so the bundled webrtc Java classes resolve their
+    // native methods. webrtc-sys's own build script emits these link args too,
+    // but a dependency's rustc-link-arg does NOT reach the final cdylib — only
+    // the crate being linked (this one) can. Without it the linker dead-strips
+    // the symbols and the app aborts with UnsatisfiedLinkError on call join.
+    match webrtc_sys_build::configure_jni_symbols() {
+        Ok(()) => println!("cargo:warning=webrtc JNI symbols configured for export"),
+        Err(e) => println!("cargo:warning=webrtc JNI symbol config failed: {e}"),
+    }
+    // configure_jni_symbols emits --undefined (prevents GC) + a version-script,
+    // but rust's own cdylib version-script (`local: *;`) hides the symbols from
+    // the dynamic table anyway. Force them in with an explicit export glob
+    // (lld honours this over the wildcard local rule).
+    println!("cargo:rustc-link-arg=-Wl,--export-dynamic-symbol=Java_livekit_org_webrtc_*");
+
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let ndk = std::env::var("ANDROID_NDK_HOME").unwrap_or_default();
     let gst_root = std::env::var("GSTREAMER_ROOT_ANDROID").unwrap_or_default();

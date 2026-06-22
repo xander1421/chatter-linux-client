@@ -105,6 +105,11 @@ pub struct AppState {
 pub async fn app_init() -> AppState {
     let _ = RT_HANDLE.set(tokio::runtime::Handle::current());
 
+    // NB: LiveKit/webrtc's android init (initialize_android) runs from
+    // MainActivity.onCreate via nativeInitWebrtc — it must execute on the Java
+    // main thread so libwebrtc can resolve its bundled Java classes through the
+    // app classloader. See platform::android::activity.
+
     let shutdown_token = CancellationToken::new();
 
     tracing_subscriber::fmt()

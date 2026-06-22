@@ -36,7 +36,14 @@ class MainActivity : GameActivity() {
         // has loaded libchatter_ui by now (android.app.lib_name), so the native
         // symbol resolves.
         nativeRegisterActivity()
+        // Wire the JavaVM into libwebrtc from the Java main thread so its
+        // FindClass for the bundled livekit.org.webrtc classes resolves via the
+        // app classloader. Doing this from Rust's native thread fails.
+        nativeInitWebrtc()
     }
+
+    /** Implemented in Rust. Initializes libwebrtc with the app's JavaVM. */
+    private external fun nativeInitWebrtc()
 
     /**
      * The incoming-call notification's Accept button is an activity PendingIntent

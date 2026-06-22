@@ -97,6 +97,11 @@ tempfile = "3"
 
 [build-dependencies]
 slint-build = "1.15.1"
+# Android calls: force-keep + export the libwebrtc Java_* JNI symbols so the
+# bundled livekit.org.webrtc Java classes resolve their native methods (else the
+# linker dead-strips them and calls abort with UnsatisfiedLinkError on join).
+# Version must match the webrtc-sys that livekit pulls (see Cargo.lock).
+webrtc-sys-build = "0.3.16"
 
 [features]
 default = ["desktop"]
@@ -136,7 +141,9 @@ jarvis = ["chatter-core/jarvis"]
 # which is mutually exclusive with `game-activity`. We select the backend +
 # game-activity directly on the dep above, and `android_main` sets the platform
 # manually via `AndroidPlatform::new(app)` (no slint backend-selector needed).
-mobile = ["dep:i-slint-backend-android-activity", "dep:android-activity", "i-slint-backend-selector/backend-android-activity", "slint/std", "chatter-core/media", "call-ui"]
+# dep:livekit so android_main can call livekit::webrtc::android::initialize_android
+# (webrtc needs the JavaVM wired before Room::connect, or it segfaults on join).
+mobile = ["dep:i-slint-backend-android-activity", "dep:android-activity", "i-slint-backend-selector/backend-android-activity", "slint/std", "chatter-core/media", "call-ui", "dep:livekit"]
 
 # =============================================================================
 # Android Metadata (for cargo-apk)

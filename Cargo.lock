@@ -1700,6 +1700,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid 1.23.1",
+ "webrtc-sys-build",
  "winit",
  "zeroize",
 ]
