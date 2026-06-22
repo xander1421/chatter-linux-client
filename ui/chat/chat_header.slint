@@ -122,6 +122,10 @@ export component ChatHeader inherits Rectangle {
     drop-shadow-color: Colors.neo-shadow;
 
     HorizontalLayout {
+        // Constrain to the header width so the name elides instead of growing
+        // the whole chat column past the screen (which clipped the composer's
+        // Send button in channels/groups, where the header has more icons).
+        width: 100%;
         padding-left: Spacing.sm;
         padding-right: Spacing.sm;
         spacing: Spacing.sm;
@@ -230,7 +234,9 @@ export component ChatHeader inherits Rectangle {
                 }
             }
 
-            // Channel/conversation name (stretches to fill, then elides)
+            // Channel/conversation name (stretches to fill, then elides).
+            // min-width: 0 so a long name shrinks/elides instead of forcing the
+            // header — and the whole chat column — wider than the screen.
             Text {
                 text: root.channel-name;
                 color: Colors.text-primary;
@@ -239,12 +245,16 @@ export component ChatHeader inherits Rectangle {
                 vertical-alignment: center;
                 overflow: elide;
                 horizontal-stretch: 1;
+                min-width: 0px;
             }
 
-            // Member count
+            // Member count. min-width: 0 + elide so it yields on narrow screens
+            // (the members icon in the right section already covers this) instead
+            // of forcing the header — and the chat column — past the screen.
             if root.show-member-count: HorizontalLayout {
                 spacing: Spacing.xs;
                 alignment: center;
+                min-width: 0px;
                 Rectangle {
                     width: 1px;
                     height: 16px;
@@ -256,6 +266,8 @@ export component ChatHeader inherits Rectangle {
                     color: Colors.text-muted;
                     font-size: Typography.sm;
                     vertical-alignment: center;
+                    overflow: elide;
+                    min-width: 0px;
                 }
             }
         }

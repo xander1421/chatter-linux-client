@@ -615,9 +615,13 @@ export component MessageComposer inherits Rectangle {
             spacing: Spacing.sm;
             alignment: stretch;
 
-            // Text input area — Neo inset (concave, pressed into surface)
+            // Text input area — Neo inset (concave, pressed into surface).
+            // min-width: 0 lets it shrink below its content's preferred width so
+            // the fixed-size emoji/attach/send buttons always stay on-screen
+            // (otherwise a long word / placeholder pushes Send past the edge).
             Rectangle {
                 horizontal-stretch: 1;
+                min-width: 0px;
                 height: root.content-height;
                 background: Colors.neo-inset-bg;
                 border-radius: Spacing.radius-lg;
