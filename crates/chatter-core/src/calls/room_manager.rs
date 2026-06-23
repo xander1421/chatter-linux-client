@@ -99,6 +99,13 @@ pub struct RoomManager {
     audio_playback: Arc<RwLock<Option<AudioPlayback>>>,
     /// Video capture manager.
     video_capture: Arc<RwLock<VideoCapture>>,
+    /// Whether the camera track has been published to the room this call.
+    /// Lets `publish_camera` be idempotent: the first enable publishes the
+    /// track + starts capture; later toggles just pause/resume capture
+    /// (`set_camera_enabled`) instead of publishing a second track. Reset on
+    /// disconnect. Enables voice→video escalation (start as a voice call, then
+    /// turn the camera on with the video button).
+    camera_published: Arc<std::sync::atomic::AtomicBool>,
     /// Video playback manager for remote participants.
     video_playback: Arc<RwLock<VideoPlayback>>,
     /// Screen capture manager.
@@ -149,6 +156,7 @@ impl RoomManager {
             audio_capture: Arc::new(RwLock::new(AudioCapture::new())),
             audio_playback: Arc::new(RwLock::new(audio_playback)),
             video_capture: Arc::new(RwLock::new(VideoCapture::new())),
+            camera_published: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             video_playback: Arc::new(RwLock::new(video_playback)),
             #[cfg(not(target_os = "android"))]
             screen_capture: Arc::new(RwLock::new(ScreenCapture::new())),
@@ -230,6 +238,17 @@ impl RoomManager {
         device_path: Option<&str>,
         config: Option<VideoCaptureConfig>,
     ) -> Result<(), CallError> {
+        use std::sync::atomic::Ordering;
+
+        // Idempotent: if the camera track is already published (e.g. the user
+        // toggled video off then on again), just resume capture instead of
+        // publishing a second track / spawning a second capture thread.
+        if self.camera_published.load(Ordering::SeqCst) {
+            self.video_capture.write().set_enabled(true);
+            tracing::info!("Camera already published — resumed capture");
+            return Ok(());
+        }
+
         let local_participant = {
             let room = self.room.read();
             room.as_ref().ok_or(CallError::NotInCall)?.local_participant()
@@ -257,6 +276,7 @@ impl RoomManager {
             .await
             .map_err(|e| CallError::TrackPublishFailed(e.to_string()))?;
 
+        self.camera_published.store(true, Ordering::SeqCst);
         tracing::info!("Published camera track");
         Ok(())
     }
@@ -412,6 +432,8 @@ impl RoomManager {
     pub fn stop_camera(&self) {
         let mut capture = self.video_capture.write();
         capture.stop();
+        self.camera_published
+            .store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Stop screen share capture AND unpublish the LiveKit track.
@@ -732,6 +754,10 @@ impl RoomManager {
         {
             let video = self.video_capture.read();
             video.signal_stop();
+            // Track auto-unpublishes when the room closes; clear the flag so the
+            // next call re-publishes instead of trying to resume a dead track.
+            self.camera_published
+                .store(false, std::sync::atomic::Ordering::SeqCst);
         }
         #[cfg(not(target_os = "android"))]
         {

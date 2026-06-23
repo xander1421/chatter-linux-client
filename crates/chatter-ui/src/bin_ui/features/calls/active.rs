@@ -84,7 +84,10 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
     });
 
-    // Toggle video
+    // Toggle video. Works for any call — including a call that started as
+    // voice — so the user can escalate to video mid-call. Turning the camera on
+    // the first time publishes the camera track (needs the connected room, like
+    // screen share); after that, toggling just pauses/resumes capture.
     window.on_call_toggle_video({
         let ui_ctx = ui_ctx.clone();
         let weak = window.as_weak();
@@ -93,10 +96,43 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let weak = weak.clone();
             slint::spawn_local(async move {
                 let new_state = !ui_ctx.call_is_camera_enabled().await;
-                ui_ctx.call_set_camera_enabled(new_state);
-                tracing::info!("Camera enabled: {}", new_state);
+                if new_state {
+                    // Camera publish needs the connected room — during the
+                    // outgoing "Calling…" state there's no room yet.
+                    if !ui_ctx.call_is_connected().await {
+                        tracing::info!("Video unavailable — call not connected yet");
+                        return;
+                    }
+                    // Android: a call that started as voice never requested the
+                    // CAMERA permission. Request on demand; if not yet granted,
+                    // bail so CameraX doesn't fail silently — the user grants via
+                    // the system dialog and taps the video button again.
+                    #[cfg(target_os = "android")]
+                    {
+                        use crate::platform::android::permissions;
+                        if !permissions::has(permissions::CAMERA) {
+                            permissions::request(&[permissions::CAMERA]);
+                            tracing::info!("Requested CAMERA permission — tap video again once granted");
+                            return;
+                        }
+                    }
+                    // Idempotent in core: publishes the track the first time,
+                    // resumes capture on later enables.
+                    if let Err(e) = ui_ctx.call_publish_camera(None).await {
+                        tracing::error!("Failed to enable camera: {}", e);
+                        return;
+                    }
+                    tracing::info!("Camera enabled");
+                } else {
+                    ui_ctx.call_set_camera_enabled(false);
+                    tracing::info!("Camera disabled");
+                }
+                let local_id = ui_ctx.session_current_user_id().map(|u| u.to_string());
                 if let Some(w) = weak.upgrade() {
                     w.set_call_is_video_enabled(new_state);
+                    if let Some(id) = local_id {
+                        update_participant(&w, &id, |p| p.is_video_enabled = new_state);
+                    }
                 }
             })
             .unwrap();

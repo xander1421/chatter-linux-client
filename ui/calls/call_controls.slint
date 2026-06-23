@@ -108,8 +108,9 @@ export component CallControls inherits Rectangle {
             clicked => { toggle-mute(); }
         }
 
-        // Video toggle (only for video calls)
-        if is-video-call: ControlButton {
+        // Video toggle — always available so the user can turn the camera on
+        // mid-call, even on a call that started as voice-only.
+        ControlButton {
             icon: Icons.video;
             icon-active: Icons.video-off;
             active: !is-video-enabled;
