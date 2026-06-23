@@ -49,7 +49,7 @@ impl UnifiedConversationRepository {
                 END as conv_type,
                 c.name,
                 c.description,
-                c.image_url as avatar,
+                NULL as avatar, -- channels.image_url dropped in v54; icon is a BLOB served via the channel-icon pixel path
                 c.owner_id,
                 '' as my_role, -- Not needed for sidebar view of channels
                 CASE WHEN c.archived = 1 THEN 2 ELSE 1 END as status,
@@ -139,7 +139,7 @@ impl UnifiedConversationRepository {
                     END as conv_type,
                     c.name,
                     c.description,
-                    c.image_url as avatar,
+                    NULL as avatar, -- channels.image_url dropped in v54; icon is a BLOB served via the channel-icon pixel path
                     c.owner_id,
                     '' as my_role,
                     CASE WHEN c.archived = 1 THEN 2 ELSE 1 END as status,
@@ -239,4 +239,50 @@ fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(s)
         .ok()
         .map(|dt| dt.with_timezone(&Utc))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    // Schema mirrors the live channels table post-v54: `icon BLOB`, no
+    // `image_url`. Guards against re-introducing a `c.image_url` reference,
+    // which errors the channel query and silently blanks names in the UI.
+    fn repo_with_channel() -> (UnifiedConversationRepository, tempfile::TempDir) {
+        let dir = tempdir().unwrap();
+        let db = Database::open(&dir.path().join("t.db"), "pw").unwrap();
+        db.connection()
+            .unwrap()
+            .execute_batch(
+                r#"
+                CREATE TABLE channels (
+                    id TEXT PRIMARY KEY, channel_type INTEGER NOT NULL DEFAULT 0,
+                    name TEXT NOT NULL, description TEXT, icon BLOB, owner_id TEXT NOT NULL,
+                    archived INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE messages (
+                    id TEXT PRIMARY KEY, conversation_type TEXT NOT NULL,
+                    conversation_id TEXT NOT NULL, is_read INTEGER NOT NULL DEFAULT 0,
+                    is_deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+                );
+                INSERT INTO channels (id, channel_type, name, owner_id, created_at, updated_at)
+                VALUES ('ch1', 0, 'My Channel', 'owner', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+                "#,
+            )
+            .unwrap();
+        (UnifiedConversationRepository::new(Arc::new(db)), dir)
+    }
+
+    #[test]
+    fn get_conversation_returns_channel_name() {
+        let (repo, _dir) = repo_with_channel();
+        let conv = repo
+            .get_conversation("ch1", &ConversationType::Channel)
+            .expect("query must not error on the post-v54 channels schema")
+            .expect("channel row should be found");
+        assert_eq!(conv.name, "My Channel");
+        assert_eq!(conv.avatar_url, None);
+    }
 }
