@@ -82,7 +82,6 @@ export component ChatHeader inherits Rectangle {
     // Callbacks
     callback settings-clicked();
     callback pin-clicked();
-    callback members-clicked();
     callback voice-call-clicked();
     callback video-call-clicked();
     callback invite-clicked();
@@ -352,10 +351,6 @@ export component ChatHeader inherits Rectangle {
                 if root.show-invite: IconButton {
                     icon: Icons.user-plus;
                     clicked => { root.invite-clicked(); }
-                }
-                if root.show-member-count: IconButton {
-                    icon: Icons.users;
-                    clicked => { root.members-clicked(); }
                 }
                 if has-channel && root.has-any-pinned: IconButton {
                     icon: Icons.pin;

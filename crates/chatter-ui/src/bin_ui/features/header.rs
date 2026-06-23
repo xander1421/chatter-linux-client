@@ -17,7 +17,6 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_pinned_navigation(window, ui_ctx);
     wire_chat_settings_clicked(window, ui_ctx);
     wire_invite_member(window, ui_ctx);
-    wire_members_panel(window, ui_ctx);
     wire_load_more(window, ui_ctx);
     wire_scroll_to_bottom(window);
 }
@@ -454,77 +453,3 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 }
 
-/// Wire members panel toggle — loads members when panel opens.
-fn wire_members_panel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let weak = window.as_weak();
-    let ui_ctx = ui_ctx.clone();
-
-    window.on_members_panel_toggle(move || {
-        let weak = weak.clone();
-        let ui_ctx = ui_ctx.clone();
-
-        // Close if already open — Rust owns visibility (mirrors ThreadPanel).
-        if let Some(w) = weak.upgrade() {
-            if w.get_members_panel_visible() {
-                w.set_members_panel_visible(false);
-                return;
-            }
-        }
-
-        let conversation = ui_ctx.chat_state().active_conversation();
-
-        tokio::spawn(async move {
-            let members = match conversation {
-                ActiveConversation::Channel(channel_id) => {
-                    match ui_ctx.get_channel_members(&channel_id, 200, 0).await {
-                        Ok(memberships) => {
-                            memberships.into_iter().map(|m| {
-                                let role = format!("{:?}", m.role).to_lowercase();
-                                let display_name = ui_ctx.display_name(&m.user_id);
-                                let username = ui_ctx.get_user_local(&m.user_id)
-                                    .map(|u| u.username.clone())
-                                    .unwrap_or_default();
-                                crate::ChannelMemberData {
-                                    user_id: m.user_id.to_string().into(),
-                                    display_name: display_name.into(),
-                                    username: username.into(),
-                                    role: role.into(),
-                                    joined_at: "".into(),
-                                }
-                            }).collect::<Vec<_>>()
-                        }
-                        Err(e) => {
-                            tracing::warn!(error = %e, "Failed to load channel members");
-                            Vec::new()
-                        }
-                    }
-                }
-                ActiveConversation::AnonGroup(group_id) => {
-                    ui_ctx.get_anon_group_members(&group_id).into_iter().map(|m| {
-                        let display_name = m.display_name.clone()
-                            .filter(|n| !n.is_empty())
-                            .unwrap_or_else(|| format!("User {}", &m.user_id.to_string()[..8]));
-                        let role = format!("{:?}", m.role).to_lowercase();
-                        crate::ChannelMemberData {
-                            user_id: m.user_id.to_string().into(),
-                            display_name: display_name.into(),
-                            username: "".into(),
-                            role: role.into(),
-                            joined_at: "".into(),
-                        }
-                    }).collect::<Vec<_>>()
-                }
-                _ => Vec::new(),
-            };
-
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    w.set_members_panel_members(
-                        ModelRc::new(VecModel::from(members))
-                    );
-                    w.set_members_panel_visible(true);
-                }
-            });
-        });
-    });
-}

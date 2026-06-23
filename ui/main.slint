@@ -280,12 +280,6 @@ export component MainWindow inherits Window {
     callback pinned-show-clicked <=> app.pinned-show-clicked;
     callback pinned-go-to-message <=> app.pinned-go-to-message;
 
-    // ========== Members panel state ==========
-    in-out property <bool> members-panel-visible <=> app.members-panel-visible;
-    in property <[ChannelMemberData]> members-panel-members <=> app.members-panel-members;
-    callback members-panel-toggle <=> app.members-panel-toggle;
-    callback member-clicked <=> app.member-clicked;
-
     // ========== Thread panel state ==========
     in property <bool> thread-panel-visible <=> app.thread-panel-visible;
     in property <string> thread-root-message-id <=> app.thread-root-message-id;

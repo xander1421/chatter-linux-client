@@ -18,7 +18,6 @@ import { WelcomePage } from "pages/welcome.slint";
 import { Sidebar, ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, CustomSectionData, SectionConversationData } from "sidebar/sidebar.slint";
 import { ChatLayout, MessageItemData, MessageAttachmentData, PendingAttachmentData, ReactionEntry } from "chat/chat_layout.slint";
 import { ThreadPanel } from "chat/thread_panel.slint";
-import { MembersPanel } from "chat/members_panel.slint";
 import { ReactionPicker } from "chat/reaction_picker.slint";
 import { MessageContextMenu } from "chat/message_context_menu.slint";
 import { EmojiPicker, EmojiData } from "components/emoji_picker.slint";
@@ -372,10 +371,6 @@ export component App inherits Rectangle {
     callback pinned-show-clicked();
     callback pinned-go-to-message();
 
-    // ========== Members panel state ==========
-    in-out property <bool> members-panel-visible: false;
-    in property <[ChannelMemberData]> members-panel-members: [];
-
     // ========== Thread panel state ==========
     in property <bool> thread-panel-visible: false;
     in property <string> thread-root-message-id: "";
@@ -673,8 +668,6 @@ export component App inherits Rectangle {
     // ========== Chat callbacks ==========
     callback chat-settings-clicked();
     callback invite-member();
-    callback members-panel-toggle();
-    callback member-clicked(string);  // user-id
     callback message-clicked(string);
     callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
     callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
@@ -1291,8 +1284,6 @@ export component App inherits Rectangle {
                     voice-call-clicked => { root.start-voice-call(); }
                     video-call-clicked => { root.start-video-call(); }
                     invite-clicked => { root.invite-member(); }
-                    members-clicked => { root.members-panel-toggle(); }
-
                     // Pinned bar (Telegram-style)
                     has-pinned-messages: root.has-pinned-messages;
                     pinned-message-preview: root.pinned-message-preview;
@@ -1350,23 +1341,6 @@ export component App inherits Rectangle {
                     scroll-to-bottom-clicked => { root.scroll-to-bottom-clicked(); }
                 }
                     } // end VerticalLayout (call dock + ChatLayout)
-
-                // Members panel — fixed 280px side panel on wide screens,
-                // fills the right column on narrow screens (where ChatLayout
-                // yields via `visible: false` above).
-                if root.members-panel-visible: MembersPanel {
-                    width: 280px;
-                    height: 100%;
-                    members: root.members-panel-members;
-                    channel-name: root.channel-name;
-
-                    close-clicked => {
-                        root.members-panel-visible = false;
-                    }
-                    member-clicked(uid) => {
-                        root.member-clicked(uid);
-                    }
-                }
 
                 // Thread panel (side panel on desktop, full-screen overlay on mobile)
                 if root.thread-panel-visible: ThreadPanel {
