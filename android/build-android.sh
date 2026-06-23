@@ -23,15 +23,44 @@ export ANDROID_API_LEVEL=34
 # i-slint-backend-android-activity build.rs probes for android.jar via android-build.
 export ANDROID_JAR="$ANDROID_HOME/platforms/android-34/android.jar"
 
-# GStreamer (statically linked into the cdylib) + OpenSSL for SQLCipher.
+# GStreamer helper libs (pcre2/gmodule/ffi/orc/iconv/z) still link on mobile.
 export GSTREAMER_ROOT_ANDROID="${GSTREAMER_ROOT_ANDROID:-$HOME/gst-android}"
 export PKG_CONFIG_ALLOW_CROSS=1
 export PKG_CONFIG_LIBDIR="$GSTREAMER_ROOT_ANDROID/arm64/lib/pkgconfig"
 export PKG_CONFIG_PATH="$GSTREAMER_ROOT_ANDROID/arm64/lib/pkgconfig"
-export OPENSSL_DIR="$GSTREAMER_ROOT_ANDROID/arm64"
-export OPENSSL_INCLUDE_DIR="$GSTREAMER_ROOT_ANDROID/arm64/include"
-export OPENSSL_LIB_DIR="$GSTREAMER_ROOT_ANDROID/arm64/lib"
-export OPENSSL_STATIC=1
+
+# SQLCipher crypto provider = webrtc's bundled BoringSSL.
+#
+# SQLCipher (rusqlite `bundled-sqlcipher`) needs an OpenSSL-API libcrypto. We
+# point it at the BoringSSL baked into LiveKit's libwebrtc.a instead of a
+# separate OpenSSL — so the whole cdylib has exactly ONE libcrypto (BoringSSL).
+# A separate OpenSSL would collide with webrtc's BoringSSL on the same symbol
+# names (different ABI) and corrupt the heap in webrtc's network thread on calls.
+# SQLCipher 4.5.7 is BoringSSL-compatible (uses EVP_CIPHER_nid + OBJ_nid2sn, not
+# the BoringSSL-removed EVP_CIPHER_name). libwebrtc.a exports every symbol it
+# needs (EVP_*, HMAC, PKCS5_PBKDF2_HMAC, RAND_bytes — verified).
+setup_boringssl_for_sqlcipher() {
+    local webrtc_a webrtc_inc stage
+    webrtc_a="$(find "$PROJECT_ROOT/target" -name libwebrtc.a -path '*android-arm64-release*' 2>/dev/null | head -1)"
+    webrtc_inc="$(find "$PROJECT_ROOT/target" -type d -path '*android-arm64-release*/third_party/boringssl/src/include' 2>/dev/null | head -1)"
+    if [ -z "$webrtc_a" ] || [ -z "$webrtc_inc" ]; then
+        echo "ERROR: webrtc BoringSSL artifacts not found under target/."
+        echo "       Run a normal cargo-ndk build once so webrtc-sys downloads libwebrtc.a, then re-run."
+        echo "       (looked for libwebrtc.a + third_party/boringssl/src/include)"
+        exit 1
+    fi
+    stage="$PROJECT_ROOT/target/boringssl-sqlcipher"
+    mkdir -p "$stage/lib"
+    # -lcrypto resolves to webrtc's BoringSSL. Duplicate of the main libwebrtc.a
+    # link is collapsed by -Wl,--allow-multiple-definition (set in build.rs).
+    cp -f "$webrtc_a" "$stage/lib/libcrypto.a"
+    export OPENSSL_DIR="$stage"
+    export OPENSSL_LIB_DIR="$stage/lib"
+    export OPENSSL_INCLUDE_DIR="$webrtc_inc"
+    export OPENSSL_STATIC=1
+    echo ">> SQLCipher → BoringSSL: -lcrypto=$stage/lib/libcrypto.a  headers=$webrtc_inc"
+}
+setup_boringssl_for_sqlcipher
 
 # NDK r28 ships only llvm-* tools; openssl-sys (vendored) wants the gnu-named ones.
 NDK_BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"

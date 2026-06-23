@@ -21,13 +21,18 @@
 
 use std::io::{Read, Seek, SeekFrom};
 
-use openssl::hash::{Hasher, MessageDigest};
-use openssl::symm::{Cipher, Crypter, Mode};
+use aes::cipher::generic_array::GenericArray;
+use aes::cipher::{BlockDecryptMut, KeyIvInit};
 use subtle::ConstantTimeEq;
 
 use crate::crypto::attachment_crypto::KEY_SET_LENGTH;
+use crate::crypto::hmac_compat::Sha256Stream;
 use crate::error::CryptoError;
 
+type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+
+/// AES block size (bytes).
+const AES_BLOCK: usize = 16;
 const IV_LENGTH: usize = 16;
 const AES_KEY_LENGTH: usize = 32;
 const HMAC_LENGTH: usize = 32;
@@ -46,7 +51,10 @@ pub struct StreamingDecryptor<R: Read + Seek> {
     total_size: usize,
     verified: bool,
     decryption_position: usize,
-    crypter: Option<Crypter>,
+    decryptor: Option<Aes256CbcDec>,
+    /// Partial-block remainder (CBC works per 16-byte block; reads may not be
+    /// block-aligned). Carried between `read_decrypted` calls.
+    carry: Vec<u8>,
 }
 
 impl<R: Read + Seek> StreamingDecryptor<R> {
@@ -80,7 +88,8 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
             total_size,
             verified: false,
             decryption_position: 0,
-            crypter: None,
+            decryptor: None,
+            carry: Vec::new(),
         }
     }
 
@@ -105,7 +114,7 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
         let hmac_start = self.total_size - HMAC_LENGTH;
 
         // Initialize hashers using OpenSSL (hardware accelerated)
-        let mut digest_hasher = Hasher::new(MessageDigest::sha256())
+        let mut digest_hasher = Sha256Stream::new()
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256 init: {}", e)))?;
         let mut hmac = crate::crypto::hmac_compat::hmac_init(&self.mac_key)
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC init: {}", e)))?;
@@ -150,7 +159,7 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC finalize: {}", e)))?;
 
         // Verify digest (constant-time)
-        if actual_digest.as_ref().ct_eq(&self.expected_digest).unwrap_u8() != 1 {
+        if actual_digest.as_slice().ct_eq(&self.expected_digest).unwrap_u8() != 1 {
             return Err(CryptoError::AttachmentDigestMismatch);
         }
 
@@ -189,13 +198,12 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
             .read_exact(&mut iv)
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("read iv: {}", e)))?;
 
-        // Create AES-CBC decryptor
-        let cipher = Cipher::aes_256_cbc();
-        let mut crypter = Crypter::new(cipher, Mode::Decrypt, &self.aes_key, Some(&iv))
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("OpenSSL init: {}", e)))?;
-        crypter.pad(false); // No PKCS7 padding
+        // Create AES-CBC decryptor (raw, no block padding)
+        let decryptor = Aes256CbcDec::new_from_slices(&self.aes_key, &iv)
+            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("AES init: {e}")))?;
 
-        self.crypter = Some(crypter);
+        self.decryptor = Some(decryptor);
+        self.carry.clear();
         self.decryption_position = 0;
 
         Ok(())
@@ -210,9 +218,11 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
     ///
     /// * `output` - Buffer to write decrypted data (should be at least CHUNK_SIZE + 16)
     pub fn read_decrypted(&mut self, output: &mut [u8]) -> Result<usize, CryptoError> {
-        let crypter = self.crypter.as_mut().ok_or_else(|| {
-            CryptoError::AttachmentDecryptionFailed("decryption not initialized".into())
-        })?;
+        if self.decryptor.is_none() {
+            return Err(CryptoError::AttachmentDecryptionFailed(
+                "decryption not initialized".into(),
+            ));
+        }
 
         // Calculate how much ciphertext remains
         let encrypted_start = IV_LENGTH;
@@ -235,17 +245,23 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
         if n == 0 {
             return Ok(0);
         }
-
-        // Decrypt
-        let decrypted_len = crypter
-            .update(&ciphertext[..n], output)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("decrypt: {}", e)))?;
-
         self.decryption_position += n;
+
+        // Decrypt the whole-block prefix of (carry + new bytes) into `output`,
+        // keeping any partial-block remainder for the next call.
+        self.carry.extend_from_slice(&ciphertext[..n]);
+        let full = self.carry.len() - (self.carry.len() % AES_BLOCK);
+        let decryptor = self.decryptor.as_mut().unwrap();
+        for blk in self.carry[..full].chunks_exact_mut(AES_BLOCK) {
+            decryptor.decrypt_block_mut(GenericArray::from_mut_slice(blk));
+        }
+        output[..full].copy_from_slice(&self.carry[..full]);
+        self.carry.drain(..full);
+        let decrypted_len = full;
 
         // Truncate to plaintext size if we're at the end
         if self.decryption_position >= encrypted_len {
-            // This is the last chunk - may include padding
+            // This is the last chunk - may include zero padding
             let padding = encrypted_len - self.plaintext_size;
             let actual_len = decrypted_len.saturating_sub(padding);
             return Ok(actual_len);
@@ -255,16 +271,16 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
     }
 
     /// Finalize decryption and return any remaining data.
-    pub fn finalize(&mut self, output: &mut [u8]) -> Result<usize, CryptoError> {
-        let crypter = self.crypter.as_mut().ok_or_else(|| {
-            CryptoError::AttachmentDecryptionFailed("decryption not initialized".into())
-        })?;
-
-        let len = crypter
-            .finalize(output)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("finalize: {}", e)))?;
-
-        Ok(len)
+    pub fn finalize(&mut self, _output: &mut [u8]) -> Result<usize, CryptoError> {
+        if self.decryptor.is_none() {
+            return Err(CryptoError::AttachmentDecryptionFailed(
+                "decryption not initialized".into(),
+            ));
+        }
+        // Raw CBC, no padding: every block is emitted by read_decrypted and the
+        // ciphertext is block-aligned, so nothing remains buffered.
+        debug_assert!(self.carry.is_empty(), "CBC carry not block-aligned at finalize");
+        Ok(0)
     }
 
     /// Decrypt the entire ciphertext in a single pass.
@@ -295,15 +311,15 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("read iv: {}", e)))?;
 
         // Initialize all processors using OpenSSL (hardware accelerated)
-        let mut digest_hasher = Hasher::new(MessageDigest::sha256())
+        let mut digest_hasher = Sha256Stream::new()
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256 init: {}", e)))?;
         let mut hmac = crate::crypto::hmac_compat::hmac_init(&self.mac_key)
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC init: {}", e)))?;
 
-        let cipher = Cipher::aes_256_cbc();
-        let mut crypter = Crypter::new(cipher, Mode::Decrypt, &self.aes_key, Some(&iv))
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("AES init: {}", e)))?;
-        crypter.pad(false);
+        let mut decryptor = Aes256CbcDec::new_from_slices(&self.aes_key, &iv)
+            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("AES init: {e}")))?;
+        // Partial-block remainder between reads (raw CBC, no padding).
+        let mut carry: Vec<u8> = Vec::new();
 
         // IV is included in both digest and HMAC
         digest_hasher.update(&iv)
@@ -319,7 +335,6 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
         // Pre-allocate output
         let mut plaintext = Vec::with_capacity(self.plaintext_size);
         let mut ciphertext_chunk = vec![0u8; CHUNK_SIZE];
-        let mut decrypt_buf = vec![0u8; CHUNK_SIZE + 16]; // Extra for block padding
         let mut bytes_read = 0;
 
         // Single pass: read ciphertext, update hashes, decrypt
@@ -346,22 +361,22 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
                 .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC: {}", e)))?;
             hash_time += hash_start.elapsed();
 
-            // Time the AES decryption
+            // Time the AES decryption: decrypt whole blocks, keep the remainder.
             let decrypt_start = Instant::now();
-            let decrypted_len = crypter
-                .update(&ciphertext_chunk[..n], &mut decrypt_buf)
-                .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("decrypt: {}", e)))?;
+            carry.extend_from_slice(&ciphertext_chunk[..n]);
+            let full = carry.len() - (carry.len() % AES_BLOCK);
+            for blk in carry[..full].chunks_exact_mut(AES_BLOCK) {
+                decryptor.decrypt_block_mut(GenericArray::from_mut_slice(blk));
+            }
+            plaintext.extend_from_slice(&carry[..full]);
+            carry.drain(..full);
             decrypt_time += decrypt_start.elapsed();
 
-            plaintext.extend_from_slice(&decrypt_buf[..decrypted_len]);
             bytes_read += n;
         }
 
-        // Finalize decryption
-        let final_len = crypter
-            .finalize(&mut decrypt_buf)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("finalize: {}", e)))?;
-        plaintext.extend_from_slice(&decrypt_buf[..final_len]);
+        // Raw CBC, no padding: ciphertext is block-aligned, nothing buffered.
+        debug_assert!(carry.is_empty(), "CBC carry not block-aligned");
 
         // Read and verify HMAC
         let mut expected_hmac = [0u8; HMAC_LENGTH];
@@ -383,7 +398,7 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
         // Verify digest (constant-time)
         let actual_digest = digest_hasher.finish()
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256 finalize: {}", e)))?;
-        if actual_digest.as_ref().ct_eq(&self.expected_digest).unwrap_u8() != 1 {
+        if actual_digest.as_slice().ct_eq(&self.expected_digest).unwrap_u8() != 1 {
             return Err(CryptoError::AttachmentDigestMismatch);
         }
 

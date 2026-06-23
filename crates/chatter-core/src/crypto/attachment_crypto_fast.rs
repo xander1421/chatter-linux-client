@@ -12,9 +12,13 @@
 //! - SHA-256: ~2.1 GB/s (SHA-NI)
 //! - Combined pipeline: ~1.2 GB/s (with rayon parallelization)
 
-use openssl::hash::{Hasher, MessageDigest};
-use openssl::symm::{Cipher, Crypter, Mode};
+use aes::cipher::block_padding::NoPadding;
+use aes::cipher::{BlockDecryptMut, KeyIvInit};
 use subtle::ConstantTimeEq;
+
+use crate::crypto::hmac_compat::Sha256Stream;
+
+type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 
 use crate::crypto::secure_buffer::SecureBuffer;
 use crate::error::CryptoError;
@@ -57,7 +61,7 @@ pub fn decrypt_single_pass(
     let expected_hmac = &ciphertext[ciphertext.len() - HMAC_LENGTH..];
 
     // Single-pass: compute digest AND HMAC simultaneously using OpenSSL
-    let mut digest_hasher = Hasher::new(MessageDigest::sha256())
+    let mut digest_hasher = Sha256Stream::new()
         .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256 init: {}", e)))?;
     let mut hmac = crate::crypto::hmac_compat::hmac_init(mac_key)
         .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC init: {}", e)))?;
@@ -88,7 +92,7 @@ pub fn decrypt_single_pass(
         .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC finalize: {}", e)))?;
 
     // Verify digest (constant-time)
-    if actual_digest.as_ref().ct_eq(expected_digest).unwrap_u8() != 1 {
+    if actual_digest.as_slice().ct_eq(expected_digest).unwrap_u8() != 1 {
         return Err(CryptoError::AttachmentDigestMismatch);
     }
 
@@ -115,26 +119,13 @@ pub fn decrypt_single_pass(
 ///
 /// Uses AES-NI instructions on x86_64 for ~100x faster decryption.
 fn decrypt_aes_cbc_openssl(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
-    let cipher = Cipher::aes_256_cbc();
-
-    // Create decryptor with no padding (we handle padding ourselves)
-    let mut crypter = Crypter::new(cipher, Mode::Decrypt, key, Some(iv))
-        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("OpenSSL init: {}", e)))?;
-    crypter.pad(false); // No PKCS7 padding - we use zero padding
-
-    // Allocate output buffer
-    let mut plaintext = vec![0u8; ciphertext.len() + cipher.block_size()];
-
-    let mut count = crypter
-        .update(ciphertext, &mut plaintext)
-        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("OpenSSL decrypt: {}", e)))?;
-
-    count += crypter
-        .finalize(&mut plaintext[count..])
-        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("OpenSSL finalize: {}", e)))?;
-
-    plaintext.truncate(count);
-    Ok(plaintext)
+    // Raw AES-256-CBC, no block padding (caller pads). Block-aligned → in place.
+    let mut buf = ciphertext.to_vec();
+    Aes256CbcDec::new_from_slices(key, iv)
+        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("AES init: {e}")))?
+        .decrypt_padded_mut::<NoPadding>(&mut buf)
+        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("AES decrypt: {e}")))?;
+    Ok(buf)
 }
 
 /// Streaming single-pass decryption with pre-allocated output.
@@ -165,7 +156,7 @@ pub fn decrypt_single_pass_into(
     let expected_hmac = &ciphertext[ciphertext.len() - HMAC_LENGTH..];
 
     // Single-pass verification using OpenSSL
-    let mut digest_hasher = Hasher::new(MessageDigest::sha256())
+    let mut digest_hasher = Sha256Stream::new()
         .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256 init: {}", e)))?;
     let mut hmac = crate::crypto::hmac_compat::hmac_init(mac_key)
         .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC init: {}", e)))?;
@@ -191,7 +182,7 @@ pub fn decrypt_single_pass_into(
     let computed_hmac = hmac.finalize()
         .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC finalize: {}", e)))?;
 
-    if actual_digest.as_ref().ct_eq(expected_digest).unwrap_u8() != 1 {
+    if actual_digest.as_slice().ct_eq(expected_digest).unwrap_u8() != 1 {
         return Err(CryptoError::AttachmentDigestMismatch);
     }
 
@@ -222,7 +213,7 @@ fn verify_sequential(
     iv_end: usize,
     hmac_start: usize,
 ) -> ([u8; 32], [u8; 32]) {
-    let mut digest_hasher = Hasher::new(MessageDigest::sha256())
+    let mut digest_hasher = Sha256Stream::new()
         .expect("SHA256 init failed");
     let mut hmac = crate::crypto::hmac_compat::hmac_init(mac_key)
         .expect("HMAC init");
@@ -348,7 +339,7 @@ pub fn decrypt_zero_copy(
             rayon::join(
                 || {
                     // SHA256: hash IV + encrypted + HMAC bytes
-                    let mut hasher = Hasher::new(MessageDigest::sha256())
+                    let mut hasher = Sha256Stream::new()
                         .expect("SHA256 init");
                     hasher.update(&ciphertext_ref[..hmac_start]).expect("SHA256"); // IV + encrypted
                     hasher.update(&ciphertext_ref[hmac_start..]).expect("SHA256"); // HMAC bytes

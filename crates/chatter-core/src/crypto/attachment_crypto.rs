@@ -26,8 +26,16 @@
 //! - SHA-256: ~2.2 GB/s (SHA-NI)
 //! - Full pipeline: ~1 GB/s
 
-use openssl::hash::{Hasher, MessageDigest};
-use openssl::symm::{Cipher, Crypter, Mode};
+use aes::cipher::block_padding::NoPadding;
+use aes::cipher::generic_array::GenericArray;
+use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use sha2::{Digest, Sha256};
+
+use crate::crypto::hmac_compat::Sha256Stream;
+
+type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
+type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+const AES_BLOCK_SIZE: usize = 16;
 use subtle::ConstantTimeEq;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
@@ -206,52 +214,28 @@ impl AttachmentCrypto {
     ///
     /// Uses AES-NI instructions on x86_64 for ~100x faster encryption.
     fn encrypt_aes_cbc_openssl(key: &[u8], iv: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        let cipher = Cipher::aes_256_cbc();
-
-        // Create encryptor with no padding (we handle padding ourselves)
-        let mut crypter = Crypter::new(cipher, Mode::Encrypt, key, Some(iv))
-            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("OpenSSL init: {}", e)))?;
-        crypter.pad(false); // No PKCS7 padding - we use zero padding
-
-        // Allocate output buffer (same size as input for no-padding mode)
-        let mut ciphertext = vec![0u8; plaintext.len() + cipher.block_size()];
-
-        let mut count = crypter
-            .update(plaintext, &mut ciphertext)
-            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("OpenSSL encrypt: {}", e)))?;
-
-        count += crypter
-            .finalize(&mut ciphertext[count..])
-            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("OpenSSL finalize: {}", e)))?;
-
-        ciphertext.truncate(count);
-        Ok(ciphertext)
+        // Raw AES-256-CBC, no block padding (caller zero-pads to the block size).
+        // Input is block-aligned → encrypt in place.
+        let mut buf = plaintext.to_vec();
+        let len = buf.len();
+        Aes256CbcEnc::new_from_slices(key, iv)
+            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("AES init: {e}")))?
+            .encrypt_padded_mut::<NoPadding>(&mut buf, len)
+            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("AES encrypt: {e}")))?;
+        Ok(buf)
     }
 
     /// Hardware-accelerated AES-256-CBC decryption using OpenSSL.
     ///
     /// Uses AES-NI instructions on x86_64 for ~100x faster decryption.
     fn decrypt_aes_cbc_openssl(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        let cipher = Cipher::aes_256_cbc();
-
-        // Create decryptor with no padding (we handle padding ourselves)
-        let mut crypter = Crypter::new(cipher, Mode::Decrypt, key, Some(iv))
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("OpenSSL init: {}", e)))?;
-        crypter.pad(false); // No PKCS7 padding - we use zero padding
-
-        // Allocate output buffer
-        let mut plaintext = vec![0u8; ciphertext.len() + cipher.block_size()];
-
-        let mut count = crypter
-            .update(ciphertext, &mut plaintext)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("OpenSSL decrypt: {}", e)))?;
-
-        count += crypter
-            .finalize(&mut plaintext[count..])
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("OpenSSL finalize: {}", e)))?;
-
-        plaintext.truncate(count);
-        Ok(plaintext)
+        // Raw AES-256-CBC, no block padding. Block-aligned input → decrypt in place.
+        let mut buf = ciphertext.to_vec();
+        Aes256CbcDec::new_from_slices(key, iv)
+            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("AES init: {e}")))?
+            .decrypt_padded_mut::<NoPadding>(&mut buf)
+            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("AES decrypt: {e}")))?;
+        Ok(buf)
     }
 
     /// Compute HMAC-SHA256 over data using OpenSSL (hardware accelerated).
@@ -422,13 +406,9 @@ impl AttachmentCrypto {
     /// before decryption to detect corruption or tampering.
     #[must_use]
     pub fn compute_digest(ciphertext: &[u8]) -> [u8; 32] {
-        let mut hasher = Hasher::new(MessageDigest::sha256())
-            .expect("SHA-256 hasher creation failed");
-        hasher.update(ciphertext).expect("SHA-256 update failed");
-        let result = hasher.finish().expect("SHA-256 finalize failed");
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(&result);
-        arr
+        let mut hasher = Sha256::new();
+        hasher.update(ciphertext);
+        hasher.finalize().into()
     }
 
     /// Compute padded size using Signal's log-bucketing algorithm.
@@ -511,15 +491,15 @@ impl AttachmentCrypto {
         );
 
         // Init crypto processors
-        let cipher = Cipher::aes_256_cbc();
-        let mut crypter = Crypter::new(cipher, Mode::Encrypt, aes_key, Some(&iv))
-            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("init crypter: {}", e)))?;
-        crypter.pad(false); // We handle padding ourselves
+        let mut encryptor = Aes256CbcEnc::new_from_slices(aes_key, &iv)
+            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("init cipher: {e}")))?;
+        // Partial-block remainder; raw CBC encrypts whole 16-byte blocks only.
+        let mut carry: Vec<u8> = Vec::new();
 
         let mut hmac_signer = crate::crypto::hmac_compat::hmac_init(mac_key)
             .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("init hmac: {}", e)))?;
 
-        let mut digest_hasher = Hasher::new(MessageDigest::sha256())
+        let mut digest_hasher = Sha256Stream::new()
             .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("init digest: {}", e)))?;
 
         // Incremental MAC state: compute per-chunk HMAC-SHA256 for files > threshold
@@ -540,10 +520,35 @@ impl AttachmentCrypto {
             inc_mac_accumulator.extend_from_slice(&iv);
         }
 
-        // Encrypt buffer: chunk + one AES block headroom
-        let mut encrypt_buf = vec![0u8; CHUNK_SIZE + cipher.block_size()];
         let mut read_buf = vec![0u8; CHUNK_SIZE];
-        let mut bytes_fed: usize = 0; // total plaintext bytes fed to crypter (including padding)
+        let mut bytes_fed: usize = 0; // total plaintext bytes fed (including padding)
+
+        // Encrypt the whole-block prefix of (carry + new bytes), writing +
+        // MAC-ing + digesting the ciphertext, and retain the partial-block tail.
+        macro_rules! feed {
+            ($data:expr) => {{
+                carry.extend_from_slice($data);
+                let full = carry.len() - (carry.len() % AES_BLOCK_SIZE);
+                if full > 0 {
+                    for blk in carry[..full].chunks_exact_mut(AES_BLOCK_SIZE) {
+                        encryptor.encrypt_block_mut(GenericArray::from_mut_slice(blk));
+                    }
+                    output.write_all(&carry[..full])
+                        .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("write: {}", e)))?;
+                    hmac_signer.update(&carry[..full])
+                        .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("hmac: {}", e)))?;
+                    digest_hasher.update(&carry[..full])
+                        .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("digest: {}", e)))?;
+                    if use_incremental_mac {
+                        Self::accumulate_incremental_mac(
+                            mac_key, &carry[..full],
+                            &mut inc_mac_accumulator, &mut incremental_mac_digests,
+                        );
+                    }
+                    carry.drain(..full);
+                }
+            }};
+        }
 
         // Read and encrypt file content in chunks
         loop {
@@ -552,27 +557,7 @@ impl AttachmentCrypto {
             if n == 0 {
                 break;
             }
-
-            let count = crypter.update(&read_buf[..n], &mut encrypt_buf)
-                .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("encrypt: {}", e)))?;
-
-            if count > 0 {
-                output.write_all(&encrypt_buf[..count])
-                    .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("write: {}", e)))?;
-                hmac_signer.update(&encrypt_buf[..count])
-                    .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("hmac: {}", e)))?;
-                digest_hasher.update(&encrypt_buf[..count])
-                    .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("digest: {}", e)))?;
-
-                // Accumulate ciphertext for incremental MAC
-                if use_incremental_mac {
-                    Self::accumulate_incremental_mac(
-                        mac_key, &encrypt_buf[..count],
-                        &mut inc_mac_accumulator, &mut incremental_mac_digests,
-                    );
-                }
-            }
-
+            feed!(&read_buf[..n]);
             bytes_fed += n;
         }
 
@@ -583,45 +568,13 @@ impl AttachmentCrypto {
             let zero_chunk = vec![0u8; CHUNK_SIZE.min(padding_remaining)];
             while padding_remaining > 0 {
                 let chunk_len = CHUNK_SIZE.min(padding_remaining);
-                let count = crypter.update(&zero_chunk[..chunk_len], &mut encrypt_buf)
-                    .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("encrypt pad: {}", e)))?;
-                if count > 0 {
-                    output.write_all(&encrypt_buf[..count])
-                        .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("write pad: {}", e)))?;
-                    hmac_signer.update(&encrypt_buf[..count])
-                        .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("hmac pad: {}", e)))?;
-                    digest_hasher.update(&encrypt_buf[..count])
-                        .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("digest pad: {}", e)))?;
-
-                    if use_incremental_mac {
-                        Self::accumulate_incremental_mac(
-                            mac_key, &encrypt_buf[..count],
-                            &mut inc_mac_accumulator, &mut incremental_mac_digests,
-                        );
-                    }
-                }
+                feed!(&zero_chunk[..chunk_len]);
                 padding_remaining -= chunk_len;
             }
         }
 
-        // Finalize AES
-        let final_count = crypter.finalize(&mut encrypt_buf)
-            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("finalize: {}", e)))?;
-        if final_count > 0 {
-            output.write_all(&encrypt_buf[..final_count])
-                .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("write final: {}", e)))?;
-            hmac_signer.update(&encrypt_buf[..final_count])
-                .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("hmac final: {}", e)))?;
-            digest_hasher.update(&encrypt_buf[..final_count])
-                .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("digest final: {}", e)))?;
-
-            if use_incremental_mac {
-                Self::accumulate_incremental_mac(
-                    mac_key, &encrypt_buf[..final_count],
-                    &mut inc_mac_accumulator, &mut incremental_mac_digests,
-                );
-            }
-        }
+        // Raw CBC, no padding: total input is block-aligned, nothing buffered.
+        debug_assert!(carry.is_empty(), "CBC carry not block-aligned");
 
         // Flush any remaining partial chunk for incremental MAC
         if use_incremental_mac && !inc_mac_accumulator.is_empty() {
