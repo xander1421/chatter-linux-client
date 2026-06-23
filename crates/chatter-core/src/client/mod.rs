@@ -168,6 +168,7 @@ impl ClientBuilder {
             #[cfg(not(target_os = "android"))]
             oidc_service: std::sync::OnceLock::new(),
             anon_mode: AtomicBool::new(false),
+            authed_notif_started: AtomicBool::new(false),
         }))
     }
 }
@@ -259,6 +260,11 @@ pub struct ChatterClient {
     /// false on every client construction (not persisted by design — auto
     /// revert on restart is the privacy property).
     anon_mode: AtomicBool,
+    /// Guards the auth-gated notification streams (gRPC message stream + call
+    /// → notification bridge) so they spawn exactly once, after login. They
+    /// can't start at boot like the consumer because there's no authenticated
+    /// user / call service yet — see `start_authed_notification_streams`.
+    authed_notif_started: AtomicBool,
 }
 
 impl ChatterClient {

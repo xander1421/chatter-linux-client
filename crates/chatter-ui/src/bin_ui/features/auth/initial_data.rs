@@ -92,6 +92,12 @@ pub fn refresh_friends_list(window_weak: Weak<MainWindow>, ui_ctx: Arc<ChatterCl
 pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
     tracing::info!("Loading initial data...");
 
+    // Now that we're authenticated, start the auth-gated notification streams
+    // (gRPC message stream + call → ring-notification bridge). The boot-time
+    // wiring only started the consumer; these need a logged-in user / call
+    // service, which a fresh user doesn't have at boot. Idempotent.
+    ui_ctx.start_authed_notification_streams();
+
     // Sync channels from server first (fetches and upserts to local storage)
     match ui_ctx.list_channels_paged(100, 0, None).await {
         Ok(synced_channels) => {
