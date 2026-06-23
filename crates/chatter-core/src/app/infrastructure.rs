@@ -243,9 +243,14 @@ impl InfrastructureContainer {
         }
         let sesame_manager = Arc::new(SesameManager::new(sesame_store));
 
-        // 9. Create network pool
+        // 9. Create network pool.
+        // No request timeout: this one pool serves long-lived server-streams
+        // (notifications, channel events, DM/user events) alongside unary RPCs.
+        // A channel-wide 30s timeout cancels those streams with "Timeout
+        // expired"; HTTP/2 keepalive (30s/10s, while-idle) covers dead-peer
+        // detection. Add a per-call `Request::set_timeout` if a unary ever hangs.
         let server_url = env::var(SERVER_URL_ENV).unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string());
-        let grpc_pool = Arc::new(GrpcClientPool::new(&server_url)?);
+        let grpc_pool = Arc::new(GrpcClientPool::new_for_streaming(&server_url)?);
         let auth_interceptor = grpc_pool.auth_clone();
 
         // 10. Create group mailbox infrastructure
