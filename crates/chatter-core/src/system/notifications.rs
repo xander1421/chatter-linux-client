@@ -28,8 +28,6 @@ impl DesktopNotifications {
 
     /// Show a notification from the domain model.
     pub fn show(&self, notification: &Notification) -> Result<(), SystemError> {
-        let priority = self.type_to_priority(&notification.notification_type);
-
         let mut notif = DesktopNotif::new();
         notif
             .appname(APP_DISPLAY_NAME)
@@ -38,6 +36,7 @@ impl DesktopNotifications {
 
         #[cfg(target_os = "linux")]
         {
+            let priority = self.type_to_priority(&notification.notification_type);
             let icon = self.type_to_icon(&notification.notification_type);
             notif.icon(icon);
             notif.urgency(self.priority_to_urgency(priority));

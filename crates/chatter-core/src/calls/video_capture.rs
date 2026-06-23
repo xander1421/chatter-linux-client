@@ -182,7 +182,8 @@ impl VideoCapture {
         Ok(devices)
     }
 
-    /// Get device name from path.
+    /// Get device name from path. Only used by the Linux V4L2 enumerator.
+    #[cfg(target_os = "linux")]
     fn get_device_name(path: &str) -> Option<String> {
         let path = Path::new(path);
         path.file_name()
@@ -434,7 +435,6 @@ impl VideoCapture {
         height: u32,
         fps: u32,
     ) {
-        use std::sync::Mutex;
         use std::time::{Duration, Instant};
         use gstreamer as gst;
         use gstreamer::prelude::*;

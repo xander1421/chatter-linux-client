@@ -135,7 +135,6 @@ fn check_windows_debugger() -> DebuggerStatus {
     use windows::Win32::System::Diagnostics::Debug::{
         CheckRemoteDebuggerPresent, IsDebuggerPresent,
     };
-    use windows::Win32::Foundation::GetLastError;
 
     // Method 1: IsDebuggerPresent - checks for user-mode debugger
     // SAFETY: No arguments, just queries system state
