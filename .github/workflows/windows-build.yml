@@ -24,7 +24,15 @@ jobs:
         with:
           key: crt-static-v1
 
+      - name: Cache GStreamer install
+        id: cache-gstreamer
+        uses: actions/cache@v4
+        with:
+          path: C:\gstreamer
+          key: gstreamer-${{ env.GSTREAMER_VERSION }}-msvc-x86_64-v1
+
       - name: Install GStreamer
+        if: steps.cache-gstreamer.outputs.cache-hit != 'true'
         uses: blinemedical/setup-gstreamer@v1
         with:
           version: ${{ env.GSTREAMER_VERSION }}
@@ -66,6 +74,14 @@ jobs:
         with:
           version: "25.x"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache vcpkg OpenSSL
+        uses: actions/cache@v4
+        with:
+          # Restoring the built static libs turns the `vcpkg install` below into
+          # a near-instant no-op instead of an OpenSSL-from-source rebuild.
+          path: C:\vcpkg\installed
+          key: vcpkg-openssl-x64-windows-static-v1
 
       - name: Install OpenSSL (vcpkg)
         shell: pwsh
@@ -115,11 +131,21 @@ jobs:
             "gstrtp-1.0-0.dll", "gstrtsp-1.0-0.dll", "gsttag-1.0-0.dll",
             "gstnet-1.0-0.dll", "gstcontroller-1.0-0.dll",
             "glib-2.0-0.dll", "gobject-2.0-0.dll", "gmodule-2.0-0.dll",
-            "gio-2.0-0.dll", "intl-8.dll", "ffi-8.dll", "z-1.dll",
-            "pcre2-8-0.dll", "orc-0.4-0.dll"
+            "gio-2.0-0.dll"
           )
           foreach ($dll in $coreDlls) {
             if (Test-Path "$gstBin\$dll") { cp "$gstBin\$dll" artifact/ }
+          }
+
+          # Version-suffixed support libs — the soname drifts across GStreamer
+          # releases (ffi-7 vs ffi-8, etc.). Glob so a bump doesn't silently
+          # drop them like ffi-8 did (exe died: "ffi-7.dll was not found").
+          foreach ($pat in @("ffi-*.dll", "intl-*.dll", "z-*.dll", "pcre2-*.dll", "orc-*.dll")) {
+            Get-ChildItem "$gstBin\$pat" -ErrorAction SilentlyContinue | Copy-Item -Destination artifact/
+          }
+          # Fail loud rather than ship a bundle missing the libffi runtime.
+          if (-not (Get-ChildItem "artifact\ffi-*.dll" -ErrorAction SilentlyContinue)) {
+            Write-Error "ffi runtime DLL missing from bundle"; exit 1
           }
 
           mkdir artifact/lib/gstreamer-1.0 -Force | Out-Null
