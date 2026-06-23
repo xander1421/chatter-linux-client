@@ -537,6 +537,7 @@ impl VideoCapture {
                                         rotation: VideoRotation::VideoRotation0,
                                         timestamp_us: (frame_count * 1_000_000 / fps as u64) as i64,
                                         buffer: i420_buffer,
+                                        frame_metadata: None,
                                     };
 
                                     video_source.capture_frame(&frame);
