@@ -94,8 +94,10 @@ impl UserBuilder {
         )
         .expect("Display name encryption should succeed");
 
+        let full_username = format!("{}.42", username);
         TestUser {
             username,
+            full_username,
             display_name,
             encrypted_display_name, // Vec<u8>
             password,
