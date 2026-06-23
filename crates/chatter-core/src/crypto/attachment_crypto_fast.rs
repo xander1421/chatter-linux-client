@@ -20,7 +20,6 @@ use crate::crypto::hmac_compat::Sha256Stream;
 
 type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 
-use crate::crypto::secure_buffer::SecureBuffer;
 use crate::error::CryptoError;
 
 use super::attachment_crypto::KEY_SET_LENGTH;
@@ -33,87 +32,6 @@ const MIN_CIPHERTEXT_LENGTH: usize = IV_LENGTH + 16 + HMAC_LENGTH;
 /// Threshold for parallel verification (1MB)
 /// Below this, sequential is faster due to thread overhead
 const PARALLEL_THRESHOLD: usize = 1024 * 1024;
-
-/// Optimized single-pass decryption with OpenSSL hardware acceleration.
-///
-/// Computes digest and HMAC in a single pass over the data, then decrypts.
-/// Uses SHA-NI and AES-NI for maximum throughput.
-pub fn decrypt_single_pass(
-    ciphertext: &[u8],
-    key: &[u8; KEY_SET_LENGTH],
-    expected_digest: &[u8; 32],
-    plaintext_size: usize,
-) -> Result<Vec<u8>, CryptoError> {
-    // Verify minimum length
-    if ciphertext.len() < MIN_CIPHERTEXT_LENGTH {
-        return Err(CryptoError::AttachmentDecryptionFailed(
-            "ciphertext too short".to_string(),
-        ));
-    }
-
-    // Split key into AES and MAC portions
-    let aes_key = &key[..AES_KEY_LENGTH];
-    let mac_key = &key[AES_KEY_LENGTH..];
-
-    // Split ciphertext into components
-    let iv = &ciphertext[..IV_LENGTH];
-    let encrypted = &ciphertext[IV_LENGTH..ciphertext.len() - HMAC_LENGTH];
-    let expected_hmac = &ciphertext[ciphertext.len() - HMAC_LENGTH..];
-
-    // Single-pass: compute digest AND HMAC simultaneously using OpenSSL
-    let mut digest_hasher = Sha256Stream::new()
-        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256 init: {}", e)))?;
-    let mut hmac = crate::crypto::hmac_compat::hmac_init(mac_key)
-        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC init: {}", e)))?;
-
-    // Process IV - both need it
-    digest_hasher.update(iv)
-        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256: {}", e)))?;
-    hmac.update(iv)
-        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC: {}", e)))?;
-
-    // Process encrypted data in chunks to stay cache-friendly
-    const CHUNK_SIZE: usize = 64 * 1024; // 64KB chunks
-    for chunk in encrypted.chunks(CHUNK_SIZE) {
-        digest_hasher.update(chunk)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256: {}", e)))?;
-        hmac.update(chunk)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC: {}", e)))?;
-    }
-
-    // Process HMAC bytes (only digest needs them)
-    digest_hasher.update(expected_hmac)
-        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256: {}", e)))?;
-
-    // Finalize both
-    let actual_digest = digest_hasher.finish()
-        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256 finalize: {}", e)))?;
-    let computed_hmac = hmac.finalize()
-        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC finalize: {}", e)))?;
-
-    // Verify digest (constant-time)
-    if actual_digest.as_slice().ct_eq(expected_digest).unwrap_u8() != 1 {
-        return Err(CryptoError::AttachmentDigestMismatch);
-    }
-
-    // Verify HMAC (constant-time)
-    if computed_hmac.ct_eq(expected_hmac).unwrap_u8() != 1 {
-        return Err(CryptoError::AttachmentMacMismatch);
-    }
-
-    // Decrypt with hardware-accelerated AES-256-CBC via OpenSSL
-    let mut decrypted = decrypt_aes_cbc_openssl(aes_key, iv, encrypted)?;
-
-    // Truncate to original plaintext size
-    if plaintext_size > decrypted.len() {
-        return Err(CryptoError::AttachmentDecryptionFailed(
-            "plaintext_size exceeds decrypted data".to_string(),
-        ));
-    }
-    decrypted.truncate(plaintext_size);
-
-    Ok(decrypted)
-}
 
 /// Hardware-accelerated AES-256-CBC decryption using OpenSSL.
 ///
@@ -128,84 +46,6 @@ fn decrypt_aes_cbc_openssl(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<V
     Ok(buf)
 }
 
-/// Streaming single-pass decryption with pre-allocated output.
-///
-/// Same as `decrypt_single_pass` but avoids an extra allocation by
-/// decrypting directly into a pre-allocated buffer.
-pub fn decrypt_single_pass_into(
-    ciphertext: &[u8],
-    key: &[u8; KEY_SET_LENGTH],
-    expected_digest: &[u8; 32],
-    plaintext_size: usize,
-    output: &mut Vec<u8>,
-) -> Result<(), CryptoError> {
-    // Verify minimum length
-    if ciphertext.len() < MIN_CIPHERTEXT_LENGTH {
-        return Err(CryptoError::AttachmentDecryptionFailed(
-            "ciphertext too short".to_string(),
-        ));
-    }
-
-    // Split key
-    let aes_key = &key[..AES_KEY_LENGTH];
-    let mac_key = &key[AES_KEY_LENGTH..];
-
-    // Split ciphertext
-    let iv = &ciphertext[..IV_LENGTH];
-    let encrypted = &ciphertext[IV_LENGTH..ciphertext.len() - HMAC_LENGTH];
-    let expected_hmac = &ciphertext[ciphertext.len() - HMAC_LENGTH..];
-
-    // Single-pass verification using OpenSSL
-    let mut digest_hasher = Sha256Stream::new()
-        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256 init: {}", e)))?;
-    let mut hmac = crate::crypto::hmac_compat::hmac_init(mac_key)
-        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC init: {}", e)))?;
-
-    digest_hasher.update(iv)
-        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256: {}", e)))?;
-    hmac.update(iv)
-        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC: {}", e)))?;
-
-    const CHUNK_SIZE: usize = 64 * 1024;
-    for chunk in encrypted.chunks(CHUNK_SIZE) {
-        digest_hasher.update(chunk)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256: {}", e)))?;
-        hmac.update(chunk)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC: {}", e)))?;
-    }
-
-    digest_hasher.update(expected_hmac)
-        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256: {}", e)))?;
-
-    let actual_digest = digest_hasher.finish()
-        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256 finalize: {}", e)))?;
-    let computed_hmac = hmac.finalize()
-        .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC finalize: {}", e)))?;
-
-    if actual_digest.as_slice().ct_eq(expected_digest).unwrap_u8() != 1 {
-        return Err(CryptoError::AttachmentDigestMismatch);
-    }
-
-    if computed_hmac.ct_eq(expected_hmac).unwrap_u8() != 1 {
-        return Err(CryptoError::AttachmentMacMismatch);
-    }
-
-    // Decrypt with hardware-accelerated AES-256-CBC via OpenSSL
-    let decrypted = decrypt_aes_cbc_openssl(aes_key, iv, encrypted)?;
-
-    // Copy to output buffer and truncate to plaintext size
-    output.clear();
-    if plaintext_size > decrypted.len() {
-        return Err(CryptoError::AttachmentDecryptionFailed(
-            "plaintext_size exceeds decrypted data".to_string(),
-        ));
-    }
-    output.extend_from_slice(&decrypted[..plaintext_size]);
-
-    Ok(())
-}
-
-/// Sequential verification using OpenSSL (for small files or fallback).
 #[inline]
 fn verify_sequential(
     ciphertext: &[u8],
@@ -391,126 +231,10 @@ pub fn decrypt_zero_copy(
     Ok(decrypted)
 }
 
-/// Secure single-pass decryption that returns a SecureBuffer.
-///
-/// This is the recommended method for security-sensitive applications.
-/// The returned `SecureBuffer` automatically zeroizes its contents when dropped,
-/// preventing decrypted plaintext from persisting in memory.
-///
-/// # Example
-///
-/// ```ignore
-/// let secure_data = decrypt_single_pass_secure(&ciphertext, &key, &digest, size)?;
-/// player.load(secure_data.as_slice())?;
-/// // secure_data dropped → memory automatically zeroized
-/// ```
-pub fn decrypt_single_pass_secure(
-    ciphertext: &[u8],
-    key: &[u8; KEY_SET_LENGTH],
-    expected_digest: &[u8; 32],
-    plaintext_size: usize,
-) -> Result<SecureBuffer, CryptoError> {
-    let decrypted = decrypt_single_pass(ciphertext, key, expected_digest, plaintext_size)?;
-    Ok(SecureBuffer::new(decrypted))
-}
-
-/// Secure zero-copy decryption that returns a SecureBuffer.
-///
-/// Combines the memory efficiency of zero-copy decryption with automatic
-/// zeroization of the decrypted data when the buffer is dropped.
-///
-/// # Example
-///
-/// ```ignore
-/// let secure_data = decrypt_zero_copy_secure(ciphertext, &key, &digest, size)?;
-/// video_player.load(secure_data.as_slice())?;
-/// // secure_data dropped → memory automatically zeroized
-/// ```
-pub fn decrypt_zero_copy_secure(
-    ciphertext: Vec<u8>,
-    key: &[u8; KEY_SET_LENGTH],
-    expected_digest: &[u8; 32],
-    plaintext_size: usize,
-) -> Result<SecureBuffer, CryptoError> {
-    let decrypted = decrypt_zero_copy(ciphertext, key, expected_digest, plaintext_size)?;
-    Ok(SecureBuffer::new(decrypted))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::crypto::attachment_crypto::AttachmentCrypto;
-
-    #[test]
-    fn test_single_pass_matches_original() {
-        let plaintext = b"Hello, this is a test message for single-pass decryption!";
-
-        // Encrypt with original
-        let encrypted = AttachmentCrypto::encrypt(plaintext).unwrap();
-
-        // Decrypt with single-pass
-        let decrypted = decrypt_single_pass(
-            &encrypted.ciphertext,
-            &encrypted.key,
-            &encrypted.digest,
-            encrypted.plaintext_size,
-        ).unwrap();
-
-        assert_eq!(decrypted.as_slice(), plaintext);
-    }
-
-    #[test]
-    fn test_single_pass_large_file() {
-        // 1MB test
-        let plaintext: Vec<u8> = (0..1024 * 1024).map(|i| (i % 256) as u8).collect();
-
-        let encrypted = AttachmentCrypto::encrypt(&plaintext).unwrap();
-
-        let decrypted = decrypt_single_pass(
-            &encrypted.ciphertext,
-            &encrypted.key,
-            &encrypted.digest,
-            encrypted.plaintext_size,
-        ).unwrap();
-
-        assert_eq!(decrypted, plaintext);
-    }
-
-    #[test]
-    fn test_single_pass_digest_mismatch() {
-        let plaintext = b"test";
-        let encrypted = AttachmentCrypto::encrypt(plaintext).unwrap();
-
-        let mut bad_digest = encrypted.digest;
-        bad_digest[0] ^= 0xFF;
-
-        let result = decrypt_single_pass(
-            &encrypted.ciphertext,
-            &encrypted.key,
-            &bad_digest,
-            encrypted.plaintext_size,
-        );
-
-        assert!(matches!(result, Err(CryptoError::AttachmentDigestMismatch)));
-    }
-
-    #[test]
-    fn test_single_pass_into() {
-        let plaintext = b"Test message for into variant";
-
-        let encrypted = AttachmentCrypto::encrypt(plaintext).unwrap();
-
-        let mut output = Vec::with_capacity(plaintext.len());
-        decrypt_single_pass_into(
-            &encrypted.ciphertext,
-            &encrypted.key,
-            &encrypted.digest,
-            encrypted.plaintext_size,
-            &mut output,
-        ).unwrap();
-
-        assert_eq!(output.as_slice(), plaintext);
-    }
 
     #[test]
     fn test_zero_copy_matches_original() {

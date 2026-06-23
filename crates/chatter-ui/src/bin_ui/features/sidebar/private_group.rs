@@ -95,11 +95,11 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                 .filter_map(|att_id| ui_ctx.get_attachment(att_id))
                 .collect();
 
-            let mut display_data = crate::bin_ui::converters::anon_group_message_to_display_data(
+            let mut display_data = crate::bin_ui::converters::message_to_display_data(
                 msg,
                 &sender_name,
-                sender_avatar,
                 &resolved_attachments,
+                sender_avatar,
             );
 
             // Resolve reply-to sender name (UserService handles fallback).
@@ -274,11 +274,11 @@ async fn load_private_group_messages_internal(
             .filter_map(|att_id| ui_ctx.get_attachment(att_id))
             .collect();
 
-        let mut display_data = crate::bin_ui::converters::anon_group_message_to_display_data(
+        let mut display_data = crate::bin_ui::converters::message_to_display_data(
             msg,
             &sender_name,
-            sender_avatar,
             &resolved_attachments,
+            sender_avatar,
         );
 
         if display_data.is_reply {

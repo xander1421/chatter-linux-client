@@ -8,10 +8,7 @@
 //! - Cross-platform: deterministic test vectors
 
 use chatter_core::crypto::attachment_crypto::{AttachmentCrypto, KEY_SET_LENGTH};
-use chatter_core::crypto::attachment_crypto_fast::{
-    decrypt_single_pass, decrypt_single_pass_into, decrypt_single_pass_secure,
-    decrypt_zero_copy, decrypt_zero_copy_secure,
-};
+use chatter_core::crypto::attachment_crypto_fast::decrypt_zero_copy;
 use chatter_core::error::CryptoError;
 
 // =============================================================================
@@ -453,56 +450,6 @@ fn test_padded_size_log_bucketing() {
 // =============================================================================
 
 #[test]
-fn test_fast_decrypt_single_pass() {
-    let plaintext = b"Hello, fast decryption!";
-    let encrypted = AttachmentCrypto::encrypt(plaintext).unwrap();
-
-    let decrypted = decrypt_single_pass(
-        &encrypted.ciphertext,
-        &encrypted.key,
-        &encrypted.digest,
-        encrypted.plaintext_size,
-    )
-    .unwrap();
-
-    assert_eq!(decrypted, plaintext);
-}
-
-#[test]
-fn test_fast_decrypt_single_pass_large() {
-    let plaintext: Vec<u8> = (0..2 * 1024 * 1024).map(|i| (i % 256) as u8).collect();
-    let encrypted = AttachmentCrypto::encrypt(&plaintext).unwrap();
-
-    let decrypted = decrypt_single_pass(
-        &encrypted.ciphertext,
-        &encrypted.key,
-        &encrypted.digest,
-        encrypted.plaintext_size,
-    )
-    .unwrap();
-
-    assert_eq!(decrypted, plaintext);
-}
-
-#[test]
-fn test_fast_decrypt_single_pass_into() {
-    let plaintext = b"Hello, into decryption!";
-    let encrypted = AttachmentCrypto::encrypt(plaintext).unwrap();
-
-    let mut output = Vec::new();
-    decrypt_single_pass_into(
-        &encrypted.ciphertext,
-        &encrypted.key,
-        &encrypted.digest,
-        encrypted.plaintext_size,
-        &mut output,
-    )
-    .unwrap();
-
-    assert_eq!(output, plaintext);
-}
-
-#[test]
 fn test_fast_decrypt_zero_copy() {
     let plaintext = b"Hello, zero-copy decryption!";
     let encrypted = AttachmentCrypto::encrypt(plaintext).unwrap();
@@ -549,15 +496,6 @@ fn test_fast_paths_match_standard() {
     )
     .unwrap();
 
-    // Fast single-pass
-    let fast_single = decrypt_single_pass(
-        &encrypted.ciphertext,
-        &encrypted.key,
-        &encrypted.digest,
-        encrypted.plaintext_size,
-    )
-    .unwrap();
-
     // Fast zero-copy
     let fast_zero = decrypt_zero_copy(
         encrypted.ciphertext.clone(),
@@ -568,26 +506,7 @@ fn test_fast_paths_match_standard() {
     .unwrap();
 
     assert_eq!(standard, plaintext);
-    assert_eq!(fast_single, plaintext);
     assert_eq!(fast_zero, plaintext);
-}
-
-#[test]
-fn test_fast_decrypt_digest_mismatch() {
-    let plaintext = b"test";
-    let encrypted = AttachmentCrypto::encrypt(plaintext).unwrap();
-
-    let mut bad_digest = encrypted.digest;
-    bad_digest[0] ^= 0xFF;
-
-    let result = decrypt_single_pass(
-        &encrypted.ciphertext,
-        &encrypted.key,
-        &bad_digest,
-        encrypted.plaintext_size,
-    );
-
-    assert!(matches!(result, Err(CryptoError::AttachmentDigestMismatch)));
 }
 
 #[test]
@@ -600,8 +519,8 @@ fn test_fast_decrypt_hmac_mismatch() {
     bad_ciphertext[20] ^= 0xFF;
     let bad_digest = AttachmentCrypto::compute_digest(&bad_ciphertext);
 
-    let result = decrypt_single_pass(
-        &bad_ciphertext,
+    let result = decrypt_zero_copy(
+        bad_ciphertext,
         &encrypted.key,
         &bad_digest,
         encrypted.plaintext_size,
@@ -716,43 +635,10 @@ fn test_decrypt_secure_returns_secure_buffer() {
 }
 
 #[test]
-fn test_decrypt_single_pass_secure() {
-    let plaintext = b"Fast secure decryption!";
-    let encrypted = AttachmentCrypto::encrypt(plaintext).unwrap();
-
-    let secure_data = decrypt_single_pass_secure(
-        &encrypted.ciphertext,
-        &encrypted.key,
-        &encrypted.digest,
-        encrypted.plaintext_size,
-    )
-    .unwrap();
-
-    assert_eq!(secure_data.as_slice(), plaintext);
-}
-
-#[test]
-fn test_decrypt_zero_copy_secure() {
-    let plaintext = b"Zero-copy secure decryption!";
-    let encrypted = AttachmentCrypto::encrypt(plaintext).unwrap();
-
-    let secure_data = decrypt_zero_copy_secure(
-        encrypted.ciphertext.clone(),
-        &encrypted.key,
-        &encrypted.digest,
-        encrypted.plaintext_size,
-    )
-    .unwrap();
-
-    assert_eq!(secure_data.as_slice(), plaintext);
-}
-
-#[test]
 fn test_secure_methods_large_file() {
     let plaintext: Vec<u8> = (0..2 * 1024 * 1024).map(|i| (i % 256) as u8).collect();
     let encrypted = AttachmentCrypto::encrypt(&plaintext).unwrap();
 
-    // Test all secure methods with large file
     let secure1 = AttachmentCrypto::decrypt_secure(
         &encrypted.ciphertext,
         &encrypted.key,
@@ -761,25 +647,7 @@ fn test_secure_methods_large_file() {
     )
     .unwrap();
 
-    let secure2 = decrypt_single_pass_secure(
-        &encrypted.ciphertext,
-        &encrypted.key,
-        &encrypted.digest,
-        encrypted.plaintext_size,
-    )
-    .unwrap();
-
-    let secure3 = decrypt_zero_copy_secure(
-        encrypted.ciphertext.clone(),
-        &encrypted.key,
-        &encrypted.digest,
-        encrypted.plaintext_size,
-    )
-    .unwrap();
-
     assert_eq!(secure1.as_slice(), plaintext.as_slice());
-    assert_eq!(secure2.as_slice(), plaintext.as_slice());
-    assert_eq!(secure3.as_slice(), plaintext.as_slice());
 }
 
 #[test]
@@ -789,7 +657,7 @@ fn test_secure_buffer_into_cursor() {
     let plaintext = b"Test cursor conversion";
     let encrypted = AttachmentCrypto::encrypt(plaintext).unwrap();
 
-    let secure_data = decrypt_single_pass_secure(
+    let secure_data = AttachmentCrypto::decrypt_secure(
         &encrypted.ciphertext,
         &encrypted.key,
         &encrypted.digest,

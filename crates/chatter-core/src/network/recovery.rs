@@ -206,26 +206,6 @@ impl Default for ConnectionRecovery {
     }
 }
 
-/// Recovery configuration.
-pub struct RecoveryConfig {
-    /// Use extended timeouts for prolonged offline.
-    pub use_extended_timeouts: bool,
-    /// Maximum retry attempts (None for unlimited).
-    pub max_attempts: Option<usize>,
-    /// Custom jitter duration.
-    pub jitter: Duration,
-}
-
-impl Default for RecoveryConfig {
-    fn default() -> Self {
-        Self {
-            use_extended_timeouts: false,
-            max_attempts: None,
-            jitter: FibonacciBackoff::DEFAULT_JITTER,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

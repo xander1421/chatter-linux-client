@@ -8,7 +8,6 @@ pub mod grpc;
 pub mod offline_queue;
 pub mod reconnect_config;
 pub mod recovery;
-pub mod retry;
 pub mod streaming;
 pub mod validation;
 
@@ -17,4 +16,3 @@ pub use connection_manager::{ConnectionConfig, ConnectionManager, ReplayResult};
 pub use offline_queue::{OfflineQueue, OperationType, QueueError, QueueEvent, QueuedOperation, QueueStats};
 pub use reconnect_config::ReconnectConfig;
 pub use recovery::{ConnectionRecovery, FibonacciBackoff};
-pub use retry::{RetryExecutor, RetryPolicy};

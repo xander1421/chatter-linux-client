@@ -432,16 +432,6 @@ pub fn anon_message_to_display_data(
     }
 }
 
-/// Convert a unified Message (used for anon group) to MessageDisplayData.
-pub fn anon_group_message_to_display_data(
-    msg: &Message,
-    sender_name: &str,
-    sender_avatar: Option<Vec<u8>>,
-    resolved_attachments: &[Attachment],
-) -> MessageDisplayData {
-    message_to_display_data(msg, sender_name, resolved_attachments, sender_avatar)
-}
-
 /// Convert a batch of domain Messages to display data, resolving sender names,
 /// attachments, reply-to context, and pre-decoding thumbnails.
 ///
@@ -494,13 +484,4 @@ pub fn messages_to_display_batch(
     display_messages
 }
 
-/// Convert a unified Message (used for anon DM) to MessageDisplayData.
-pub fn anon_dm_message_to_display_data(
-    msg: &Message,
-    sender_name: &str,
-    sender_avatar: Option<Vec<u8>>,
-    resolved_attachments: &[Attachment],
-) -> MessageDisplayData {
-    message_to_display_data(msg, sender_name, resolved_attachments, sender_avatar)
-}
 
