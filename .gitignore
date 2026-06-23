@@ -20,3 +20,7 @@ Chatter_Pitch_Deck*.pdf
 /PLAN.md
 /audit_backend_implementation.md
 /audit_signal_implementation.md
+
+# Windows build artifacts (CI-produced, not source)
+win-build/
+chatter-windows-x64.zip
