@@ -68,7 +68,14 @@ component SectionConversationItem inherits Rectangle {
             width: 20px;
             height: parent.height;
 
-            if root.conversation-type == "channel": Image {
+            if root.conversation-type == "channel" && root.has-avatar: Image {
+                source: root.avatar-source;
+                width: 18px;
+                height: 18px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+            if root.conversation-type == "channel" && !root.has-avatar: Image {
                 source: Icons.hash;
                 width: 14px;
                 height: 14px;
@@ -134,7 +141,14 @@ component SectionConversationItem inherits Rectangle {
         tooltip-enabled: true;
         placement: "right";
 
-        if root.conversation-type == "channel": Image {
+        if root.conversation-type == "channel" && root.has-avatar: Image {
+            source: root.avatar-source;
+            width: 20px;
+            height: 20px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+        }
+        if root.conversation-type == "channel" && !root.has-avatar: Image {
             source: Icons.hash;
             width: 16px;
             height: 16px;

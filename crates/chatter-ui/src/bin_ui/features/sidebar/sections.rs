@@ -309,6 +309,14 @@ fn build_section_data(
     let mut section_models = Vec::with_capacity(sections.len());
     let mut conversation_models = Vec::new();
 
+    // Channel icons are raw bytes on the Channel record (BLOB since v54), not
+    // a CDN URL — fetch them once, keyed by id, for enrich to decode per row.
+    let channel_icons: std::collections::HashMap<String, Vec<u8>> = ui_ctx
+        .get_channels_mru()
+        .into_iter()
+        .filter_map(|c| c.icon.filter(|b| !b.is_empty()).map(|b| (c.id.to_string(), b)))
+        .collect();
+
     for section in sections {
         section_models.push(CustomSectionData {
             section_id: section.id.to_string().into(),
@@ -324,6 +332,7 @@ fn build_section_data(
                 &conv.conversation_type,
                 &section.id,
                 ui_ctx,
+                &channel_icons,
             ));
         }
     }
@@ -336,6 +345,7 @@ fn enrich_conversation_send(
     conversation_type: &ConversationType,
     section_id: &SectionId,
     ui_ctx: &Arc<ChatterClient>,
+    channel_icons: &std::collections::HashMap<String, Vec<u8>>,
 ) -> SectionConvSendData {
     let mut data = SectionConvSendData {
         conversation_id: conversation_id.to_string(),
@@ -358,6 +368,18 @@ fn enrich_conversation_send(
             .as_deref()
             .filter(|u| !u.is_empty())
             .and_then(|url| ui_ctx.get_channel_icon_pixels(url));
+    }
+
+    // Channels carry their icon as raw bytes on the Channel record, not a URL.
+    if matches!(conversation_type, ConversationType::Channel) {
+        data.avatar_decoded = channel_icons
+            .get(conversation_id)
+            .and_then(|bytes| image::load_from_memory(bytes).ok())
+            .map(|img| {
+                let rgba = img.to_rgba8();
+                let (w, h) = rgba.dimensions();
+                DecodedImagePixels { width: w, height: h, rgba: rgba.into_raw() }
+            });
     }
 
     data
