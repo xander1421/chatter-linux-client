@@ -124,25 +124,13 @@ jobs:
           $gstBin = "$env:GST_ROOT\bin"
           $gstPlugins = "$env:GST_ROOT\lib\gstreamer-1.0"
 
-          $coreDlls = @(
-            "gstreamer-1.0-0.dll", "gstvideo-1.0-0.dll", "gstaudio-1.0-0.dll",
-            "gstapp-1.0-0.dll", "gstgl-1.0-0.dll", "gstpbutils-1.0-0.dll",
-            "gstplay-1.0-0.dll", "gstbase-1.0-0.dll", "gstsdp-1.0-0.dll",
-            "gstrtp-1.0-0.dll", "gstrtsp-1.0-0.dll", "gsttag-1.0-0.dll",
-            "gstnet-1.0-0.dll", "gstcontroller-1.0-0.dll",
-            "glib-2.0-0.dll", "gobject-2.0-0.dll", "gmodule-2.0-0.dll",
-            "gio-2.0-0.dll"
-          )
-          foreach ($dll in $coreDlls) {
-            if (Test-Path "$gstBin\$dll") { cp "$gstBin\$dll" artifact/ }
-          }
-
-          # Version-suffixed support libs — the soname drifts across GStreamer
-          # releases (ffi-7 vs ffi-8, etc.). Glob so a bump doesn't silently
-          # drop them like ffi-8 did (exe died: "ffi-7.dll was not found").
-          foreach ($pat in @("ffi-*.dll", "intl-*.dll", "z-*.dll", "pcre2-*.dll", "orc-*.dll")) {
-            Get-ChildItem "$gstBin\$pat" -ErrorAction SilentlyContinue | Copy-Item -Destination artifact/
-          }
+          # Copy EVERY runtime DLL from the GStreamer bin dir. Hand-listing
+          # core DLLs was whack-a-mole: ffi-8 missing crashed the exe, then
+          # gstriff / avcodec / avformat etc. (deps of the isomp4, matroska,
+          # libav, d3d11/12 plugins) were missing and those plugins failed to
+          # load. The bin dir holds all gst libs + their support deps; copy the
+          # lot so any bundled plugin resolves its dependencies.
+          Copy-Item "$gstBin\*.dll" artifact/
           # Fail loud rather than ship a bundle missing the libffi runtime.
           if (-not (Get-ChildItem "artifact\ffi-*.dll" -ErrorAction SilentlyContinue)) {
             Write-Error "ffi runtime DLL missing from bundle"; exit 1
