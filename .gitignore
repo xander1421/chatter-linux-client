@@ -24,3 +24,6 @@ Chatter_Pitch_Deck*.pdf
 # Windows build artifacts (CI-produced, not source)
 win-build/
 chatter-windows-x64.zip
+
+# Stray Windows installers/tools — no .exe belongs in source
+*.exe
