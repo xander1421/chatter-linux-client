@@ -399,15 +399,21 @@ pub async fn app_init() -> AppState {
         // PIN must satisfy `crypto::svr::validate_pin`: 8-64 ASCII printable
         // (was "123456" pre round-1 / round-5 PIN refactor; rejected now).
         let pin = "12345678";
-        let server_url = if cfg!(target_os = "android") {
+        let server_url: String = if cfg!(target_os = "android") {
             // Android dev defaults to localhost via `adb reverse` tunnels
             // (50051 gRPC, 9000 RustFS, 7880/7881 LiveKit). For tunnel-free LAN
             // testing (needed for WebRTC UDP media), build with
             // CHATTER_ANDROID_SERVER=http://<host-lan-ip>:50051 and point the
             // server's LIVEKIT_URL + S3 endpoint at the same LAN IP.
-            option_env!("CHATTER_ANDROID_SERVER").unwrap_or("http://localhost:50051")
+            option_env!("CHATTER_ANDROID_SERVER")
+                .unwrap_or("http://localhost:50051")
+                .to_string()
         } else {
-            "http://localhost:50051"
+            // Desktop dev: override the gRPC server at runtime with CHATTER_SERVER
+            // (e.g. http://192.168.122.1:50051 to reach the host from a VM guest),
+            // otherwise default to localhost.
+            std::env::var("CHATTER_SERVER")
+                .unwrap_or_else(|_| "http://localhost:50051".to_string())
         };
 
         window.set_register_username(username.clone().into());
@@ -415,9 +421,9 @@ pub async fn app_init() -> AppState {
         window.set_register_password(password.into());
         window.set_register_confirm_password(password.into());
         window.set_register_pin(pin.into());
-        window.set_register_server_url(server_url.into());
+        window.set_register_server_url(server_url.clone().into());
 
-        tracing::info!("DEV MODE: Auto-registering as {} ({})", username, display_name);
+        tracing::info!("DEV MODE: Auto-registering as {} ({}) against {}", username, display_name, server_url);
         window.invoke_register(
             username.into(), password.into(), display_name.into(),
             pin.into(), server_url.into(),
