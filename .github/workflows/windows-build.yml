@@ -75,23 +75,51 @@ jobs:
           version: "25.x"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Cache vcpkg OpenSSL
-        uses: actions/cache@v4
-        with:
-          # Restoring the built static libs turns the `vcpkg install` below into
-          # a near-instant no-op instead of an OpenSSL-from-source rebuild.
-          path: C:\vcpkg\installed
-          key: vcpkg-openssl-x64-windows-static-v1
+      # SQLCipher (rusqlite bundled-sqlcipher) needs a libcrypto. We deliberately
+      # do NOT install vcpkg OpenSSL: webrtc-sys (via livekit) statically bundles
+      # BoringSSL, and two different libcryptos exporting the same symbols
+      # (EVP_*, HMAC, PKCS5_PBKDF2_HMAC, ...) collide. /FORCE:MULTIPLE keeps one,
+      # so SQLCipher built against OpenSSL ends up calling BoringSSL's ABI ->
+      # heap corruption -> crash on the first PRAGMA key opening the DB. Instead
+      # we point SQLCipher at webrtc's BoringSSL so the binary has exactly ONE
+      # libcrypto. Mirrors android/build-android.sh + build-windows.ps1.
+      - name: Fetch webrtc.lib (downloads BoringSSL)
+        shell: pwsh
+        env:
+          RUSTC_WRAPPER: ""
+        run: |
+          # webrtc-sys's build.rs downloads its prebuilt libwebrtc (BoringSSL
+          # baked in) while building. Build just that crate first so webrtc.lib
+          # exists before we point SQLCipher at it. webrtc-sys does NOT pull
+          # rusqlite, so SQLCipher is not compiled here — it compiles in the main
+          # build below, against BoringSSL.
+          cargo build --release -p webrtc-sys
 
-      - name: Install OpenSSL (vcpkg)
+      - name: Point SQLCipher at webrtc's BoringSSL
         shell: pwsh
         run: |
-          vcpkg install openssl:x64-windows-static
-          $opensslDir = "C:\vcpkg\installed\x64-windows-static"
-          echo "OPENSSL_DIR=$opensslDir" >> $env:GITHUB_ENV
-          echo "OPENSSL_LIB_DIR=$opensslDir\lib" >> $env:GITHUB_ENV
-          echo "OPENSSL_INCLUDE_DIR=$opensslDir\include" >> $env:GITHUB_ENV
+          $target = "$PWD\target"
+          $webrtcLib = Get-ChildItem -Path $target -Recurse -Filter webrtc.lib -ErrorAction SilentlyContinue |
+            Where-Object FullName -match 'win-x64-release' | Select-Object -First 1
+          $bsslInc = Get-ChildItem -Path $target -Recurse -Directory -ErrorAction SilentlyContinue |
+            Where-Object FullName -match 'boringssl[\\/]src[\\/]include$' | Select-Object -First 1
+          if (-not $webrtcLib -or -not $bsslInc) {
+            Write-Error "webrtc.lib or BoringSSL include not found under target/ - did 'cargo build -p webrtc-sys' run?"
+            exit 1
+          }
+          $stage = "$target\boringssl-sqlcipher"
+          New-Item -ItemType Directory -Force -Path "$stage\lib" | Out-Null
+          Copy-Item $webrtcLib.FullName "$stage\lib\libcrypto.lib" -Force   # -lcrypto -> BoringSSL
+          echo "OPENSSL_DIR=$stage" >> $env:GITHUB_ENV
+          echo "OPENSSL_LIB_DIR=$stage\lib" >> $env:GITHUB_ENV
+          echo "OPENSSL_INCLUDE_DIR=$($bsslInc.FullName)" >> $env:GITHUB_ENV
           echo "OPENSSL_STATIC=1" >> $env:GITHUB_ENV
+          # sqlite3.c includes <windows.h> -> <wincrypt.h>, whose X509_NAME etc.
+          # macros collide with BoringSSL's typedefs (C2059). OpenSSL headers
+          # #undef them; BoringSSL doesn't. NOCRYPT drops wincrypt.h (SQLCipher
+          # uses BoringSSL's API, not Windows CryptoAPI).
+          echo "LIBSQLITE3_FLAGS=-DNOCRYPT" >> $env:GITHUB_ENV
+          Write-Host "SQLCipher -> BoringSSL: $stage\lib\libcrypto.lib  inc=$($bsslInc.FullName)"
 
       - name: Build (no local-ai)
         env:
