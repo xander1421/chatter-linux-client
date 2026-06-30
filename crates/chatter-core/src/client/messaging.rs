@@ -304,6 +304,78 @@ impl ChatterClient {
         self.channels().invite_user(channel_id, invitee_id, message).await
     }
 
+    /// Build the list of people the user can invite to `channel_id`: their DM
+    /// contacts (regular server DMs + anon DMs — the same set shown in the
+    /// sidebar), deduped, with `already_member` flagged for current members.
+    pub async fn list_channel_invite_candidates(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+    ) -> Result<Vec<InviteCandidate>, crate::services::channel::ChannelError> {
+        use std::collections::HashSet;
+        use crate::domain::ids::UserId;
+
+        let members: HashSet<UserId> = self
+            .get_channel_members(channel_id, 100, 0)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|m| m.user_id)
+            .collect();
+
+        let mut seen: HashSet<UserId> = HashSet::new();
+        let mut out: Vec<InviteCandidate> = Vec::new();
+
+        let push = |out: &mut Vec<InviteCandidate>,
+                        seen: &mut HashSet<UserId>,
+                        user_id: UserId,
+                        display_name: String| {
+            if !seen.insert(user_id) {
+                return;
+            }
+            let username = self.get_user_local(&user_id).map(|u| u.username).unwrap_or_default();
+            out.push(InviteCandidate {
+                already_member: members.contains(&user_id),
+                user_id,
+                display_name,
+                username,
+            });
+        };
+
+        // Regular server DM peers. Skip in anon mode — they carry a server
+        // identity link the sidebar also suppresses there.
+        if !self.anon_mode_enabled() {
+            if let Ok(channels) = self.list_channels() {
+                for channel in channels {
+                    if channel.channel_type != ChannelType::DirectMessage {
+                        continue;
+                    }
+                    let preview =
+                        self.get_dm_sidebar_preview(&channel.id, &ConversationType::ServerDm);
+                    let peer_id: UserId = if preview.peer_user_id.is_empty() {
+                        channel.owner_id
+                    } else {
+                        match preview.peer_user_id.parse() {
+                            Ok(id) => id,
+                            Err(_) => continue,
+                        }
+                    };
+                    push(&mut out, &mut seen, peer_id, channel.name.clone());
+                }
+            }
+        }
+
+        // Anon DM peers.
+        for dm in self.list_anon_dm_conversations() {
+            let display = dm
+                .peer_display_name
+                .clone()
+                .unwrap_or_else(|| dm.peer_id.to_string());
+            push(&mut out, &mut seen, dm.peer_id, display);
+        }
+
+        Ok(out)
+    }
+
     pub async fn get_channel_with_memberships(
         &self,
         channel_id: &crate::domain::ids::ChannelId,
@@ -380,6 +452,17 @@ pub struct DmSidebarPreview {
     pub last_message: String,
     /// Timestamp in local-time `HH:MM` format, or empty if no messages.
     pub timestamp_display: String,
+}
+
+/// A person the user can invite to a channel, shaped by
+/// [`ChatterClient::list_channel_invite_candidates`]. UI maps this straight to
+/// its row struct — no sourcing or dedupe logic in the UI layer.
+#[derive(Debug, Clone)]
+pub struct InviteCandidate {
+    pub user_id: crate::domain::ids::UserId,
+    pub display_name: String,
+    pub username: String,
+    pub already_member: bool,
 }
 
 /// UI-facing send result returned by [`ChatterClient::send_message_ui`].

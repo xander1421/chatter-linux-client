@@ -23,6 +23,7 @@ pub mod events;
 mod jarvis;
 mod link_device;
 mod messaging;
+pub use messaging::InviteCandidate;
 mod notification;
 mod pin;
 mod profile;

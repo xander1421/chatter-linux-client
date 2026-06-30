@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-use chatter_core::client::ChatterClient;
+use chatter_core::client::{ChatterClient, InviteCandidate};
 use chatter_core::domain::anon_group::AnonGroupId;
 use chatter_core::domain::ids::{ChannelId, UserId};
 use chatter_core::domain::ChannelType;
@@ -466,15 +466,13 @@ pub fn open_invite_member_modal(weak: slint::Weak<MainWindow>, ui_ctx: Arc<Chatt
             .map(|c| c.name.clone())
             .unwrap_or_default();
 
-        let existing_members: HashSet<UserId> = ui_ctx
-            .get_channel_members(&channel_id, 100, 0)
+        let user_data: Vec<InviteUser> = ui_ctx
+            .list_channel_invite_candidates(&channel_id)
             .await
             .unwrap_or_default()
             .into_iter()
-            .map(|m| m.user_id)
+            .map(candidate_to_invite_user)
             .collect();
-
-        let user_data = load_friends_as_invite_users(&ui_ctx, &existing_members).await;
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
@@ -488,42 +486,15 @@ pub fn open_invite_member_modal(weak: slint::Weak<MainWindow>, ui_ctx: Arc<Chatt
     });
 }
 
-async fn load_friends_as_invite_users(
-    ui_ctx: &Arc<ChatterClient>,
-    existing_members: &HashSet<UserId>,
-) -> Vec<InviteUser> {
-    let mut user_data: Vec<InviteUser> = Vec::new();
-    let mut seen_user_ids: HashSet<UserId> = HashSet::new();
-
-    let friends = ui_ctx.list_friends(100, 0).await.unwrap_or_default();
-    for friendship in &friends {
-        if !seen_user_ids.insert(friendship.addressee_id) {
-            continue;
-        }
-
-        let is_member = existing_members.contains(&friendship.addressee_id);
-        let profile = ui_ctx.get_profile_local(&friendship.addressee_id);
-        let user = ui_ctx.get_user_local(&friendship.addressee_id);
-
-        let display_name = profile
-            .as_ref()
-            .map(|p| p.display_name.clone())
-            .unwrap_or_else(|| friendship.addressee_id.to_string());
-        let username = user
-            .as_ref()
-            .map(|u| u.username.clone())
-            .unwrap_or_default();
-
-        user_data.push(InviteUser {
-            id: friendship.addressee_id.to_string().into(),
-            display_name: display_name.into(),
-            username: username.into(),
-            already_member: is_member,
-            selected: false,
-        });
+/// Thin presentation mapping: core candidate → UI row.
+fn candidate_to_invite_user(c: InviteCandidate) -> InviteUser {
+    InviteUser {
+        id: c.user_id.to_string().into(),
+        display_name: c.display_name.into(),
+        username: c.username.into(),
+        already_member: c.already_member,
+        selected: false,
     }
-
-    user_data
 }
 
 fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -664,9 +635,9 @@ fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
     });
 }
 
-/// On every search keystroke, rebuild the candidate list: friends first (as a
-/// substring filter when a query is present), then server search results for
-/// anyone else matching. Dedupe by user id and mark already-members.
+/// On every search keystroke, rebuild the candidate list: DM contacts from core
+/// (substring-filtered when a query is present), then an exact-username server
+/// lookup for anyone else matching. Dedupe by user id.
 fn wire_invite_member_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx_search = ui_ctx.clone();
@@ -676,11 +647,12 @@ fn wire_invite_member_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let ui_ctx = ui_ctx_search.clone();
         let query = query.to_string();
 
+        let channel_id_str = weak
+            .upgrade()
+            .map(|w| w.get_invite_member_channel_id().to_string())
+            .unwrap_or_default();
+
         tokio::spawn(async move {
-            let channel_id_str = weak
-                .upgrade()
-                .map(|w| w.get_invite_member_channel_id().to_string())
-                .unwrap_or_default();
             if channel_id_str.is_empty() {
                 return;
             }
@@ -689,15 +661,13 @@ fn wire_invite_member_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Err(_) => return,
             };
 
-            let existing_members: HashSet<UserId> = ui_ctx
-                .get_channel_members(&channel_id, 100, 0)
+            let mut friends: Vec<InviteUser> = ui_ctx
+                .list_channel_invite_candidates(&channel_id)
                 .await
                 .unwrap_or_default()
                 .into_iter()
-                .map(|m| m.user_id)
+                .map(candidate_to_invite_user)
                 .collect();
-
-            let mut friends = load_friends_as_invite_users(&ui_ctx, &existing_members).await;
             let trimmed = query.trim();
 
             if !trimmed.is_empty() {
@@ -718,7 +688,6 @@ fn wire_invite_member_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     Ok(Some(user_id)) => {
                         let id_str = user_id.to_string();
                         if seen.insert(id_str.clone()) {
-                            let is_member = existing_members.contains(&user_id);
                             match ui_ctx.get_user_profile(&user_id).await {
                                 Ok(profile) => {
                                     let username = ui_ctx
@@ -729,7 +698,9 @@ fn wire_invite_member_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                         id: id_str.into(),
                                         display_name: profile.display_name.into(),
                                         username: username.into(),
-                                        already_member: is_member,
+                                        // ponytail: non-contact found by exact username; if already a
+                                        // member the invite RPC rejects it server-side.
+                                        already_member: false,
                                         selected: false,
                                     });
                                 }
