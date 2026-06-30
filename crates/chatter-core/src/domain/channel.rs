@@ -199,7 +199,6 @@ pub struct Membership {
 pub struct MemberWithProfile {
     pub membership: Membership,
     pub display_name: String,
-    pub avatar_url: Option<String>,
 }
 
 /// Notification preference for a channel.

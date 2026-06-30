@@ -484,11 +484,6 @@ impl AuthService {
         let profile = Profile {
             user_id,
             display_name: display_name.clone(),
-            avatar_url: if user_profile.avatar_url.is_empty() {
-                None
-            } else {
-                Some(user_profile.avatar_url.clone())
-            },
             status_message: None,
             presence: PresenceStatus::Online,
         };
@@ -797,18 +792,10 @@ impl AuthService {
         // PRIVACY: For registration, use the provided plaintext display_name.
         // Server returns encrypted version which we don't need to decrypt since we have the original.
         let server_display_name = display_name.to_string();
-        let avatar_url = result.user_profile.as_ref().and_then(|p| {
-            if p.avatar_url.is_empty() {
-                None
-            } else {
-                Some(p.avatar_url.clone())
-            }
-        });
 
         let profile = Profile {
             user_id,
             display_name: server_display_name.clone(),
-            avatar_url,
             status_message: None,
             presence: PresenceStatus::Online,
         };

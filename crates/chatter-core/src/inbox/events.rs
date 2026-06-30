@@ -567,8 +567,6 @@ pub struct FriendRequestInfo {
     pub display_name: String,
     /// Username.
     pub username: String,
-    /// Avatar URL.
-    pub avatar_url: String,
 }
 
 #[cfg(test)]

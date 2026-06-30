@@ -239,7 +239,6 @@ impl UserService {
     pub async fn update_user_profile(
         &self,
         display_name: Option<String>,
-        avatar_url: Option<String>,
         status_message: Option<StatusMessage>,
     ) -> Result<Profile, UserError> {
         use base64::Engine;
@@ -272,10 +271,6 @@ impl UserService {
             user_id: current_user.to_string(),
             display_name: encrypted_display_name
                 .unwrap_or_else(|| existing.display_name.clone()),
-            avatar_url: avatar_url
-                .clone()
-                .or_else(|| existing.avatar_url.clone())
-                .unwrap_or_default(),
             status_message: status_message
                 .as_ref()
                 .map(|s| s.text.clone())
@@ -290,9 +285,6 @@ impl UserService {
         let mut paths = Vec::new();
         if display_name.is_some() {
             paths.push("display_name".to_string());
-        }
-        if avatar_url.is_some() {
-            paths.push("avatar_url".to_string());
         }
         if status_message.is_some() {
             paths.push("status_message".to_string());

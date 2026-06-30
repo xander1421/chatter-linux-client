@@ -261,7 +261,7 @@ impl ChatterClient {
                     id: user_id_str,
                     display: format!("@{}", display_name),
                     kind: MentionSuggestionKind::User,
-                    has_avatar: profile.avatar_url.is_some(),
+                    has_avatar: false,
                 });
             }
         }

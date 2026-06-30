@@ -21,7 +21,6 @@ use chatter_core::services::call_worker::{
 use crate::{ActiveCallData, CallParticipantData, MainWindow};
 use crate::bin_ui::converters::{avatar_bytes_to_image, get_initials};
 
-use super::spawn_fetch_remote_avatar;
 use super::timers::{start_call_timer, start_video_frame_timer};
 
 /// Wire incoming call accept/decline callbacks.
@@ -116,7 +115,6 @@ fn render_accepted_call(
             peer_name,
             is_video,
         } => {
-            spawn_fetch_remote_avatar(weak.clone(), ui_ctx, peer_id);
             let weak = weak.clone();
             let frames = shared_frames.clone();
             let _ = slint::invoke_from_event_loop(move || {
@@ -127,7 +125,6 @@ fn render_accepted_call(
                     user_id: current_user_id.clone().into(),
                     display_name: my_display_name.clone().into(),
                     initials: local_initials.into(),
-                    avatar_url: "".into(),
                     avatar_source: w.get_user_avatar_source(),
                     is_muted: false,
                     is_video_enabled: is_video,
@@ -140,7 +137,6 @@ fn render_accepted_call(
                     user_id: peer_id.to_string().into(),
                     display_name: peer_name.clone().into(),
                     initials: remote_initials.into(),
-                    avatar_url: "".into(),
                     avatar_source: slint::Image::default(),
                     is_muted: false,
                     is_video_enabled: is_video,
@@ -242,7 +238,6 @@ fn render_active_anon_call(
             user_id: "You".into(),
             display_name: "You".into(),
             initials: "Y".into(),
-            avatar_url: "".into(),
             avatar_source: w.get_user_avatar_source(),
             is_muted: false,
             is_video_enabled: is_video,
@@ -260,7 +255,6 @@ fn render_active_anon_call(
             user_id: preserved_remote_user_id.unwrap_or_else(|| "Anonymous".into()),
             display_name: peer_display_name.into(),
             initials: remote_initials.into(),
-            avatar_url: "".into(),
             avatar_source: remote_avatar_source,
             is_muted: false,
             is_video_enabled: is_video,

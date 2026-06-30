@@ -19,8 +19,6 @@ pub struct UnifiedConversation {
     pub name: String,
     /// Optional description.
     pub description: Option<String>,
-    /// Optional avatar image URL or binary blob.
-    pub avatar_url: Option<String>,
     /// Owner of the conversation (if applicable).
     pub owner_id: Option<UserId>,
     /// Our role in the conversation (if applicable).

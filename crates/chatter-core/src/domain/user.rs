@@ -135,7 +135,6 @@ impl StatusMessage {
 pub struct Profile {
     pub user_id: UserId,
     pub display_name: String,
-    pub avatar_url: Option<String>,
     pub status_message: Option<StatusMessage>,
     pub presence: PresenceStatus,
 }
@@ -147,7 +146,6 @@ impl Profile {
         Self {
             user_id,
             display_name,
-            avatar_url: None,
             status_message: None,
             presence: PresenceStatus::default(),
         }

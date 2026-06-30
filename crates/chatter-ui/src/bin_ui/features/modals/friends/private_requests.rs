@@ -245,7 +245,6 @@ async fn refresh_private_requests(
             user_id: conv_id_str,
             display_name: peer_name,
             username: "Private".to_string(),
-            avatar_url: String::new(),
             avatar_bytes: dm.peer_avatar.clone(),
             avatar_decoded: None,
             sent_at: dm.created_at
@@ -280,7 +279,6 @@ fn add_anon_dm_to_sidebar(
         channel_id: dm.id.to_string(),
         user_id: dm.peer_id.to_string(),
         display_name: peer_name.to_string(),
-        avatar_url: String::new(),
         avatar_bytes: dm.peer_avatar.clone(),
         avatar_decoded: None,
         initials: get_initials(peer_name),
@@ -356,7 +354,6 @@ pub(crate) fn refresh_blocked_users(
             user_id: user_id.to_string().into(),
             display_name: format!("User {}", &user_id.to_string()[..8]).into(),
             username: "Private".into(),
-            avatar_url: SharedString::default(),
             blocked_at: String::new().into(),
         })
         .collect();

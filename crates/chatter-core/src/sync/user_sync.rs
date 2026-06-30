@@ -130,12 +130,6 @@ impl UserSync {
                     user_id.to_string()
                 };
 
-                let avatar_url = if friend_profile.avatar_url.is_empty() {
-                    existing_profile.as_ref().and_then(|p| p.avatar_url.clone())
-                } else {
-                    Some(friend_profile.avatar_url.clone())
-                };
-
                 let status_message = if friend_profile.status_message.is_empty() {
                     existing_profile.as_ref().and_then(|p| p.status_message.clone())
                 } else {
@@ -147,7 +141,6 @@ impl UserSync {
                 let profile = Profile {
                     user_id,
                     display_name,
-                    avatar_url,
                     status_message,
                     presence,
                 };

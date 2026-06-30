@@ -49,7 +49,6 @@ impl UnifiedConversationRepository {
                 END as conv_type,
                 c.name,
                 c.description,
-                NULL as avatar, -- channels.image_url dropped in v54; icon is a BLOB served via the channel-icon pixel path
                 c.owner_id,
                 '' as my_role, -- Not needed for sidebar view of channels
                 CASE WHEN c.archived = 1 THEN 2 ELSE 1 END as status,
@@ -69,7 +68,6 @@ impl UnifiedConversationRepository {
                 'anon_dm' as conv_type,
                 COALESCE(a.peer_display_name, 'Anonymous Peer') as name,
                 NULL as description,
-                NULL as avatar, -- Avatars are binary blobs in anon_dm, handled separately
                 NULL as owner_id,
                 '' as my_role,
                 a.status,
@@ -89,9 +87,8 @@ impl UnifiedConversationRepository {
                 'anon_group' as conv_type,
                 g.name,
                 NULL as description,
-                NULL as avatar,
                 g.owner_id,
-                CASE g.my_role 
+                CASE g.my_role
                     WHEN 0 THEN 'member'
                     WHEN 1 THEN 'admin'
                     WHEN 2 THEN 'owner'
@@ -139,7 +136,6 @@ impl UnifiedConversationRepository {
                     END as conv_type,
                     c.name,
                     c.description,
-                    NULL as avatar, -- channels.image_url dropped in v54; icon is a BLOB served via the channel-icon pixel path
                     c.owner_id,
                     '' as my_role,
                     CASE WHEN c.archived = 1 THEN 2 ELSE 1 END as status,
@@ -158,7 +154,6 @@ impl UnifiedConversationRepository {
                     'anon_dm' as conv_type,
                     COALESCE(a.peer_display_name, 'Anonymous Peer') as name,
                     NULL as description,
-                    NULL as avatar,
                     NULL as owner_id,
                     '' as my_role,
                     a.status,
@@ -177,7 +172,6 @@ impl UnifiedConversationRepository {
                     'anon_group' as conv_type,
                     g.name,
                     NULL as description,
-                    NULL as avatar,
                     g.owner_id,
                     CASE g.my_role 
                         WHEN 0 THEN 'member'
@@ -213,23 +207,22 @@ fn row_to_unified(row: &Row) -> rusqlite::Result<UnifiedConversation> {
     let conv_type = ConversationType::from_str_value(&conv_type_str)
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
 
-    let last_message_at_str: Option<String> = row.get(9)?;
-    let created_at_str: String = row.get(11)?;
-    let updated_at_str: String = row.get(12)?;
+    let last_message_at_str: Option<String> = row.get(8)?;
+    let created_at_str: String = row.get(10)?;
+    let updated_at_str: String = row.get(11)?;
 
     Ok(UnifiedConversation {
         id: row.get(0)?,
         conversation_type: conv_type,
         name: row.get(2)?,
         description: row.get(3)?,
-        avatar_url: row.get(4)?,
-        owner_id: row.get::<_, Option<String>>(5)?
+        owner_id: row.get::<_, Option<String>>(4)?
             .and_then(|s| s.parse().ok()),
-        my_role: row.get(6)?,
-        status: row.get(7)?,
-        archived: row.get::<_, i32>(8)? != 0,
+        my_role: row.get(5)?,
+        status: row.get(6)?,
+        archived: row.get::<_, i32>(7)? != 0,
         last_message_at: last_message_at_str.and_then(|s| parse_datetime(&s)),
-        unread_count: row.get(10)?,
+        unread_count: row.get(9)?,
         created_at: parse_datetime(&created_at_str).unwrap_or_else(|| Utc::now()),
         updated_at: parse_datetime(&updated_at_str).unwrap_or_else(|| Utc::now()),
     })
@@ -283,6 +276,5 @@ mod tests {
             .expect("query must not error on the post-v54 channels schema")
             .expect("channel row should be found");
         assert_eq!(conv.name, "My Channel");
-        assert_eq!(conv.avatar_url, None);
     }
 }

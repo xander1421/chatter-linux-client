@@ -201,7 +201,6 @@ pub trait UserServiceTrait: Send + Sync {
     fn update_profile(
         &self,
         display_name: Option<String>,
-        avatar_url: Option<String>,
     ) -> impl std::future::Future<Output = MockResult<TestUser>> + Send;
 
     /// Send friend request.

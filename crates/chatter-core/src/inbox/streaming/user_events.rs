@@ -159,7 +159,6 @@ async fn handle_user_event(
                 let _ = tx.send(DomainEvent::UserProfileUpdated {
                     user_id: profile.user_id,
                     display_name: profile.display_name.clone(),
-                    avatar_url: profile.avatar_url.clone(),
                     status_message: profile.status_message.as_ref().map(|s| s.text.clone()),
                     timestamp: chrono::Utc::now().timestamp_millis() as u64,
                 });
@@ -219,7 +218,6 @@ async fn refresh_friend_requests(
                 user_id: r.user_id,
                 display_name: r.display_name,
                 username: r.username,
-                avatar_url: r.avatar_url,
             })
             .collect(),
         Err(e) => {
@@ -240,7 +238,6 @@ async fn refresh_friend_requests(
                 user_id: r.user_id,
                 display_name: r.display_name,
                 username: r.username,
-                avatar_url: r.avatar_url,
             })
             .collect(),
         Err(e) => {

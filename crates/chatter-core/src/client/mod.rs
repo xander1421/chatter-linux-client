@@ -1761,7 +1761,6 @@ impl ChatterClient {
                     user_id: r.user_id,
                     display_name: r.display_name,
                     username: r.username,
-                    avatar_url: r.avatar_url,
                 })
                 .collect::<Vec<_>>(),
             Err(e) => {
@@ -1780,7 +1779,6 @@ impl ChatterClient {
                     user_id: r.user_id,
                     display_name: r.display_name,
                     username: r.username,
-                    avatar_url: r.avatar_url,
                 })
                 .collect::<Vec<_>>(),
             Err(e) => {
@@ -1866,10 +1864,9 @@ impl ChatterClient {
     pub async fn update_profile(
         &self,
         display_name: Option<String>,
-        avatar_url: Option<String>,
         status: Option<crate::domain::user::StatusMessage>,
     ) -> Result<crate::domain::Profile, crate::services::user::UserError> {
-        self.users().update_user_profile(display_name, avatar_url, status).await
+        self.users().update_user_profile(display_name, status).await
     }
 
     /// Decode + crop + resize + WebP-encode raw image bytes into a normalised

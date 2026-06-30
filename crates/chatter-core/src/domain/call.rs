@@ -675,8 +675,6 @@ pub struct CallHistoryEntry {
     pub peer_type: CallHistoryPeerType,
     /// Peer display name at call time. Empty string when unknown.
     pub peer_name: String,
-    /// Peer avatar URL at call time (nullable).
-    pub peer_avatar_url: Option<String>,
     /// When the call started (our clock).
     pub started_at: DateTime<Utc>,
     /// When the call ended, or None if still in-progress.

@@ -212,7 +212,6 @@ async fn add_dm_to_sidebar(
                         channel_id: channel_id_owned.into(),
                         user_id: other_user_id_owned.clone().into(),
                         display_name: other_user_name.clone().into(),
-                        avatar_url: SharedString::default(),
                         avatar_source: slint::Image::default(),
                         has_avatar: false,
                         initials: initials.into(),

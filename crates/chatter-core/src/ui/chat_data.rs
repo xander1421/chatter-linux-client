@@ -226,8 +226,6 @@ pub struct MessageItemData {
     pub sender_name: String,
     /// Sender initials for avatar fallback.
     pub sender_initials: String,
-    /// Sender avatar URL (empty if none).
-    pub sender_avatar_url: String,
     /// Plain text content to display.
     pub content: String,
     /// Formatted timestamp (e.g., "2:34 PM", "Yesterday").
@@ -284,13 +282,6 @@ impl MessageItemData {
         self.sender_id = sender_id.into();
         self.sender_name = sender_name.into();
         self.sender_initials = sender_initials.into();
-        self
-    }
-
-    /// Set sender avatar URL.
-    #[must_use]
-    pub fn with_sender_avatar(mut self, url: impl Into<String>) -> Self {
-        self.sender_avatar_url = url.into();
         self
     }
 
@@ -501,7 +492,6 @@ pub fn extract_content_text(content: &MessageContent) -> String {
 /// * `current_user_id` - The current user's ID (for is_own flag)
 /// * `sender_name` - The sender's display name (must be provided externally)
 /// * `sender_initials` - The sender's initials (must be provided externally)
-/// * `sender_avatar_url` - The sender's avatar URL (must be provided externally)
 /// * `reply_count` - Number of thread replies (must be provided externally)
 /// * `show_sender` - Whether to show sender info
 #[must_use]
@@ -510,7 +500,6 @@ pub fn message_to_item_data(
     current_user_id: Option<&str>,
     sender_name: &str,
     sender_initials: &str,
-    sender_avatar_url: &str,
     reply_count: u32,
     show_sender: bool,
 ) -> MessageItemData {
@@ -529,7 +518,6 @@ pub fn message_to_item_data(
 
     MessageItemData::new(message.id.to_string())
         .with_sender(sender_id, sender_name, sender_initials)
-        .with_sender_avatar(sender_avatar_url)
         .with_content(extract_content_text(&message.content))
         .with_timestamp(format_timestamp(message.created_at))
         .with_timestamp_ns(message.sent_at)

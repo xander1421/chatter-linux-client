@@ -452,12 +452,11 @@ pub async fn handle_domain_event(
         DomainEvent::UserProfileUpdated {
             user_id,
             display_name,
-            avatar_url,
             status_message,
             timestamp,
         } => {
             social::handle_user_profile_updated(
-                window, user_id, display_name, avatar_url, status_message, timestamp,
+                window, user_id, display_name, status_message, timestamp,
             );
             crate::bin_ui::features::auth::initial_data::refresh_friends_list(
                 window.clone(),

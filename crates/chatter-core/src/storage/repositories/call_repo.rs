@@ -43,14 +43,13 @@ impl CallHistoryRepository {
         let conn = self.db.connection()?;
         conn.execute(
             "INSERT INTO call_history (
-                id, peer_id, peer_type, peer_name, peer_avatar_url,
+                id, peer_id, peer_type, peer_name,
                 started_at, ended_at, direction, result, duration_secs, has_video
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(id) DO UPDATE SET
                  peer_id = excluded.peer_id,
                  peer_type = excluded.peer_type,
                  peer_name = excluded.peer_name,
-                 peer_avatar_url = excluded.peer_avatar_url,
                  started_at = excluded.started_at,
                  ended_at = excluded.ended_at,
                  direction = excluded.direction,
@@ -62,7 +61,6 @@ impl CallHistoryRepository {
                 entry.peer_id,
                 entry.peer_type.as_str(),
                 entry.peer_name,
-                entry.peer_avatar_url,
                 entry.started_at.to_rfc3339(),
                 entry.ended_at.map(|dt| dt.to_rfc3339()),
                 entry.direction.as_str(),
@@ -138,7 +136,7 @@ impl CallHistoryRepository {
     ) -> Result<Vec<CallHistoryEntry>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut sql = String::from(
-            "SELECT id, peer_id, peer_type, peer_name, peer_avatar_url,
+            "SELECT id, peer_id, peer_type, peer_name,
                     started_at, ended_at, direction, result, duration_secs, has_video
              FROM call_history
              WHERE 1=1",
@@ -216,13 +214,12 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> Result<CallHistoryEntry, StorageErro
     let peer_id: String = row.get(1)?;
     let peer_type_str: String = row.get(2)?;
     let peer_name: String = row.get(3)?;
-    let peer_avatar_url: Option<String> = row.get(4)?;
-    let started_at_str: String = row.get(5)?;
-    let ended_at_str: Option<String> = row.get(6)?;
-    let direction_str: String = row.get(7)?;
-    let result_str: String = row.get(8)?;
-    let duration_secs: Option<i64> = row.get(9)?;
-    let has_video_i: i64 = row.get(10)?;
+    let started_at_str: String = row.get(4)?;
+    let ended_at_str: Option<String> = row.get(5)?;
+    let direction_str: String = row.get(6)?;
+    let result_str: String = row.get(7)?;
+    let duration_secs: Option<i64> = row.get(8)?;
+    let has_video_i: i64 = row.get(9)?;
 
     let peer_type = CallHistoryPeerType::from_str(&peer_type_str).ok_or_else(|| {
         StorageError::InvalidData(format!("Invalid peer_type '{}'", peer_type_str))
@@ -244,7 +241,6 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> Result<CallHistoryEntry, StorageErro
         peer_id,
         peer_type,
         peer_name,
-        peer_avatar_url,
         started_at,
         ended_at,
         direction,
@@ -282,7 +278,6 @@ mod tests {
             peer_id: "peer-1".to_string(),
             peer_type: CallHistoryPeerType::User,
             peer_name: "Alice".to_string(),
-            peer_avatar_url: None,
             started_at,
             ended_at: None,
             direction: CallDirection::Outgoing,
@@ -484,7 +479,6 @@ mod tests {
             peer_id: "peer-bob".to_string(),
             peer_type: CallHistoryPeerType::User,
             peer_name: "Bob".to_string(),
-            peer_avatar_url: Some("https://x/avatar.png".into()),
             started_at: t,
             ended_at: Some(t + chrono::Duration::seconds(30)),
             direction: CallDirection::Incoming,
@@ -501,7 +495,6 @@ mod tests {
         assert_eq!(rows[0].result, CallResult::Missed);
         assert_eq!(rows[0].duration_secs, None);
         assert!(rows[0].has_video);
-        assert_eq!(rows[0].peer_avatar_url.as_deref(), Some("https://x/avatar.png"));
     }
 
 }

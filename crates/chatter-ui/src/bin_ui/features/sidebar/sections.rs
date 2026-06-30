@@ -363,11 +363,6 @@ fn enrich_conversation_send(
         data.display_name = meta.name.clone();
         data.initials = get_initials(&meta.name);
         data.unread_count = meta.unread_count as i32;
-        data.avatar_decoded = meta
-            .avatar_url
-            .as_deref()
-            .filter(|u| !u.is_empty())
-            .and_then(|url| ui_ctx.get_channel_icon_pixels(url));
     }
 
     // Channels carry their icon as raw bytes on the Channel record, not a URL.

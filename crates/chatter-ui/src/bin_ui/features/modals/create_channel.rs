@@ -360,7 +360,6 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     user_id: friendship.addressee_id.to_string().into(),
                     display_name: display_name.into(),
                     username: "".into(),
-                    avatar_url: "".into(),
                     selected: false,
                     role: "member".into(),
                 });
@@ -379,7 +378,6 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         user_id: dm.peer_id.to_string().into(),
                         display_name: display_name.into(),
                         username: "(anonymous)".into(),
-                        avatar_url: "".into(),
                         selected: false,
                         role: "member".into(),
                     });

@@ -4748,8 +4748,6 @@ pub mod user_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        /** Channel Pinning
-*/
         pub async fn pin_channel(
             &mut self,
             request: impl tonic::IntoRequest<super::PinChannelRequest>,

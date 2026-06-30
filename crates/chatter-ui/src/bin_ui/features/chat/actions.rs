@@ -116,7 +116,6 @@ pub fn wire_forward_message_action(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                         targets.push(ForwardTarget {
                             id: dm.channel_id.clone(),
                             name: dm.display_name.clone(),
-                            avatar_url: dm.avatar_url.clone(),
                             target_type: "dm".into(),
                         });
                     }
@@ -129,7 +128,6 @@ pub fn wire_forward_message_action(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                         targets.push(ForwardTarget {
                             id: ch.channel_id.clone(),
                             name: ch.name.clone(),
-                            avatar_url: "".into(),
                             target_type: "channel".into(),
                         });
                     }
@@ -142,7 +140,6 @@ pub fn wire_forward_message_action(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                         targets.push(ForwardTarget {
                             id: g.group_id.clone(),
                             name: g.name.clone(),
-                            avatar_url: "".into(),
                             target_type: "channel".into(),
                         });
                     }

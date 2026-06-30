@@ -1,6 +1,6 @@
 //! Message converters.
 
-use slint::{ModelRc, SharedString, VecModel};
+use slint::{ModelRc, VecModel};
 
 use chatter_core::domain::anon_dm::AnonDmMessage;
 use chatter_core::domain::anon_group::AnonGroupMessage;
@@ -185,7 +185,6 @@ impl MessageDisplayData {
         sender_id: self.sender_id.clone().into(),
         sender_name: self.sender_name.clone().into(),
         sender_initials: self.sender_initials.clone().into(),
-        sender_avatar_url: SharedString::default(),
         sender_avatar_source,
         has_avatar,
         content: insert_word_breaks(&clean_content).into(),

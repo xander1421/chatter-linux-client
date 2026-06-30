@@ -370,7 +370,6 @@ pub(crate) fn wire_connect_private(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                                     channel_id: dm_id.to_string().into(),
                                     user_id: peer_id.to_string().into(),
                                     display_name: "Private (pending)".into(),
-                                    avatar_url: "".into(),
                                     avatar_source: slint::Image::default(),
                                     has_avatar: false,
                                     initials: "?".into(), // Unknown until they accept

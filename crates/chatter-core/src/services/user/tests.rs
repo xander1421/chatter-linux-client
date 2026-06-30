@@ -69,7 +69,6 @@ mod tests {
         let proto = UserProfile {
             user_id: "00000000-0000-0000-0000-000000000001".to_string(),
             display_name: "Test User".to_string(),
-            avatar_url: "https://example.com/avatar.png".to_string(),
             status_message: "Hello world".to_string(),
             presence: 2,
             encrypted_name: Vec::new(),
@@ -79,10 +78,6 @@ mod tests {
 
         let profile = proto_to_domain_profile(&proto).unwrap();
         assert_eq!(profile.display_name, "Test User");
-        assert_eq!(
-            profile.avatar_url,
-            Some("https://example.com/avatar.png".to_string())
-        );
         assert_eq!(
             profile.status_message.as_ref().map(|s| s.text.as_str()),
             Some("Hello world")
@@ -95,7 +90,6 @@ mod tests {
         let proto = UserProfile {
             user_id: "00000000-0000-0000-0000-000000000001".to_string(),
             display_name: "Test User".to_string(),
-            avatar_url: "".to_string(),
             status_message: "".to_string(),
             presence: 1,
             encrypted_name: Vec::new(),
@@ -104,7 +98,6 @@ mod tests {
         };
 
         let profile = proto_to_domain_profile(&proto).unwrap();
-        assert_eq!(profile.avatar_url, None);
         assert_eq!(profile.status_message, None);
         assert_eq!(profile.presence, PresenceStatus::Offline);
     }

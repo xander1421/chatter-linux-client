@@ -234,7 +234,6 @@ pub(crate) fn wire_message_requests_clicked(window: &MainWindow, ui_ctx: &Arc<Ch
                             user_id: dm.id.to_string().into(),
                             display_name: peer_name.into(),
                             username: "Private".into(),
-                            avatar_url: "".into(),
                             avatar_source: slint::Image::default(),
                             has_avatar: false,
                             sent_at: dm.created_at
@@ -278,7 +277,6 @@ pub(crate) fn load_pending_message_requests_count(window: &MainWindow, ui_ctx: &
                         user_id: dm.id.to_string().into(),
                         display_name: peer_name.into(),
                         username: "Private".into(),
-                        avatar_url: "".into(),
                         avatar_source: slint::Image::default(),
                         has_avatar: false,
                         sent_at: dm.created_at

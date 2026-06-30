@@ -488,8 +488,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         user_id: profile_id_for_ui.clone(),
                         display_name: peer_name.clone(),
                         initials,
-                        avatar_url: String::new(),
-                        avatar_bytes: None, // Regular DMs fetch avatar from server
+                        avatar_bytes: None,
                         avatar_decoded: None,
                         presence_status: "offline".to_string(),
                         last_message: String::new(),
@@ -571,9 +570,6 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let display_name = display_name.to_string();
         let bio = bio.to_string();
 
-        // Check for pending avatar path
-        let pending_avatar = PENDING_AVATAR_PATH.with(|p| p.borrow().clone());
-
         tokio::spawn(async move {
             // Set loading state
             let weak_loading = weak.clone();
@@ -584,59 +580,27 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             });
 
-            // 1. Upload avatar if needed
-            let mut avatar_url = None;
-            if let Some(path) = pending_avatar {
-                match ui_ctx.upload_attachment_to_cdn_encrypted(&path).await {
-                    Ok(result) => {
-                        avatar_url = Some(result.cdn_key);
-                        tracing::info!("Uploaded new avatar to CDN: {}", avatar_url.as_ref().unwrap());
-                    }
-                    Err(e) => {
-                        let error_msg = format!("Failed to upload avatar: {}", e);
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                w.set_edit_profile_loading(false);
-                                w.set_edit_profile_error(error_msg.into());
-                            }
-                        });
-                        return;
-                    }
-                }
-            } else {
-                // No new avatar, but we should get the existing avatar_url if any
-                // Get current profile to preserve avatar_url
-                if let Some(current_user_id) = ui_ctx.session_current_user_id() {
-                    if let Some(current_profile) = ui_ctx.get_profile_local(&current_user_id) {
-                        avatar_url = current_profile.avatar_url;
-                        if avatar_url.is_some() {
-                            tracing::debug!("Using existing avatar_url: {:?}", avatar_url);
-                        }
-                    }
-                }
-            }
-
-            // 2. Map bio to status message
+            // Map bio to status message
             let status_msg = if !bio.is_empty() {
                 Some(chatter_core::domain::user::StatusMessage::new(bio))
             } else {
                 None
             };
 
-            // 3. Update profile
+            // Update profile
             tracing::info!(
-                "Updating user profile - display_name: {}, avatar_url: {:?}, bio: {:?}",
-                display_name, avatar_url, status_msg.as_ref().map(|m| &m.text)
+                "Updating user profile - display_name: {}, bio: {:?}",
+                display_name, status_msg.as_ref().map(|m| &m.text)
             );
-            
+
             match ui_ctx
-                .update_user_profile(Some(display_name.clone()), avatar_url.clone(), status_msg.clone())
+                .update_user_profile(Some(display_name.clone()), status_msg.clone())
                 .await
             {
                 Ok(profile) => {
                     tracing::info!(
-                        "Profile updated - display_name: {}, avatar_url: {:?}, bio: {:?}",
-                        profile.display_name, profile.avatar_url, profile.status_message.as_ref().map(|m| &m.text)
+                        "Profile updated - display_name: {}, bio: {:?}",
+                        profile.display_name, profile.status_message.as_ref().map(|m| &m.text)
                     );
                     
                     // Broadcast profile update to all anon DM conversations
@@ -822,12 +786,14 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// Broadcast profile update to all anon DM conversations and anon groups
 async fn broadcast_profile_update(ui_ctx: &Arc<ChatterClient>, profile: &chatter_core::domain::user::Profile) {
     let display_name = Some(profile.display_name.clone());
-    let avatar_url = profile.avatar_url.clone();
+    // The server profile no longer carries a plaintext avatar URL; the avatar
+    // travels as encrypted bytes inside send_anon_dm_profile_update itself.
+    let avatar_url: Option<String> = None;
     let bio = profile.status_message.as_ref().map(|m| m.text.clone());
-    
+
     tracing::info!(
-        "Broadcasting profile update - display_name: {:?}, avatar_url: {:?}, bio: {:?}",
-        display_name, avatar_url, bio
+        "Broadcasting profile update - display_name: {:?}, bio: {:?}",
+        display_name, bio
     );
     
     // Broadcast to all anon DM conversations

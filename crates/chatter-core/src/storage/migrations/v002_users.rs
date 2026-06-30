@@ -38,7 +38,6 @@ impl Migration for V002Users {
         CREATE TABLE profiles (
             user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
             display_name TEXT NOT NULL,
-            avatar_url TEXT,
             status_text TEXT,
             status_emoji TEXT,
             status_expires_at TEXT,

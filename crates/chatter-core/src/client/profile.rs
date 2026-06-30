@@ -64,32 +64,6 @@ impl ChatterClient {
         self.anon_dms().get_my_avatar()
     }
 
-    /// Best-effort fetch of a user's avatar bytes for UI display.
-    ///
-    /// Reads `avatar_url` from the server profile and downloads it via HTTP.
-    /// Returns `None` if the user has no avatar URL or any step fails — the
-    /// UI should fall back to initials in that case.
-    pub async fn get_user_avatar_bytes(
-        &self,
-        user_id: &crate::domain::ids::UserId,
-    ) -> Option<Vec<u8>> {
-        let profile = self.users().get_user_profile(user_id).await.ok()?;
-        let url = profile.avatar_url?;
-        if url.is_empty() {
-            return None;
-        }
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(15))
-            .build()
-            .ok()?;
-        let resp = client.get(&url).send().await.ok()?;
-        if !resp.status().is_success() {
-            return None;
-        }
-        let bytes = resp.bytes().await.ok()?.to_vec();
-        if bytes.is_empty() { None } else { Some(bytes) }
-    }
-
     pub async fn list_friends(
         &self,
         limit: u32,
@@ -178,10 +152,9 @@ impl ChatterClient {
     pub async fn update_user_profile(
         &self,
         display_name: Option<String>,
-        avatar_url: Option<String>,
         status_message: Option<crate::domain::user::StatusMessage>,
     ) -> Result<crate::domain::user::Profile, crate::services::UserError> {
-        self.users().update_user_profile(display_name, avatar_url, status_message).await
+        self.users().update_user_profile(display_name, status_message).await
     }
 
     pub fn list_anon_dm_conversations(&self) -> Vec<crate::domain::anon_dm::AnonDm> {

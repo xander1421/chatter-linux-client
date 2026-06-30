@@ -853,7 +853,6 @@ impl EventHandlers {
             DomainEvent::UserProfileUpdated {
                 user_id,
                 display_name,
-                avatar_url,
                 status_message,
                 timestamp,
             } => {
@@ -862,7 +861,6 @@ impl EventHandlers {
                 trace!(
                     ?user_id,
                     ?display_name,
-                    ?avatar_url,
                     ?status_message,
                     ?timestamp,
                     "Server-managed user profile updated"

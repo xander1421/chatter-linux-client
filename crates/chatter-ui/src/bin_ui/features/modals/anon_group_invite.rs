@@ -87,7 +87,6 @@ fn refresh_group_invites_ui(weak: &Weak<MainWindow>) {
                     user_id: d.group_id.into(),
                     display_name: d.group_name.into(),
                     username: d.inviter_name.into(),
-                    avatar_url: SharedString::default(),
                     avatar_source: slint::Image::default(),
                     has_avatar: false,
                     sent_at: SharedString::default(),

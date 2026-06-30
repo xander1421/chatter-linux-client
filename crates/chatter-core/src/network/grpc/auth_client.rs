@@ -207,7 +207,6 @@ impl AuthClient {
             password_hash: password_hash.to_vec(),
             svr_public_key: svr_public_key.to_vec(),
             display_name: encoded_display_name,
-            avatar_url: String::new(),
             device_info: device_info.to_string(),
             request_id: uuid::Uuid::new_v4().to_string(),
             device_auth_token: device_auth_token.to_vec(),

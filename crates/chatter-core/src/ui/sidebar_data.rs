@@ -121,8 +121,6 @@ pub struct DMListItemData {
     pub user_id: String,
     /// Display name of the user.
     pub display_name: String,
-    /// Avatar URL (empty if none).
-    pub avatar_url: String,
     /// Initials for avatar fallback.
     pub initials: String,
     /// Presence status: "online", "away", "dnd", "offline".
@@ -151,20 +149,12 @@ impl DMListItemData {
             user_id: user_id.into(),
             display_name: display_name.into(),
             initials: initials.into(),
-            avatar_url: String::new(),
             presence_status: "offline".to_string(),
             last_message: String::new(),
             timestamp: String::new(),
             unread_count: 0,
             is_typing: false,
         }
-    }
-
-    /// Set avatar URL.
-    #[must_use]
-    pub fn with_avatar(mut self, url: impl Into<String>) -> Self {
-        self.avatar_url = url.into();
-        self
     }
 
     /// Set presence status.
@@ -212,7 +202,6 @@ pub struct DMListItemSendData {
     pub channel_id: String,
     pub user_id: String,
     pub display_name: String,
-    pub avatar_url: String,
     /// Raw avatar bytes.
     pub avatar_bytes: Option<Vec<u8>>,
     /// Pre-decoded RGBA pixels (width, height, data).
@@ -249,7 +238,6 @@ pub struct FriendRequestSendData {
     pub user_id: String,
     pub display_name: String,
     pub username: String,
-    pub avatar_url: String,
     pub avatar_bytes: Option<Vec<u8>>,
     /// Pre-decoded RGBA pixels (width, height, data).
     pub avatar_decoded: Option<(u32, u32, Vec<u8>)>,
@@ -282,7 +270,6 @@ pub struct FriendDataSendData {
     pub user_id: String,
     pub display_name: String,
     pub username: String,
-    pub avatar_url: String,
     pub avatar_bytes: Option<Vec<u8>>,
     pub avatar_decoded: Option<(u32, u32, Vec<u8>)>,
     pub presence_status: String,
@@ -329,8 +316,6 @@ pub fn presence_color(status: &str) -> &'static str {
 pub struct UserProfileBarData {
     /// Display name.
     pub display_name: String,
-    /// Avatar URL (empty if none).
-    pub avatar_url: String,
     /// Initials for avatar fallback.
     pub initials: String,
     /// Presence status: "online", "away", "dnd", "offline".
@@ -346,17 +331,9 @@ impl UserProfileBarData {
         Self {
             display_name: display_name.into(),
             initials: initials.into(),
-            avatar_url: String::new(),
             presence_status: "online".to_string(),
             custom_status: String::new(),
         }
-    }
-
-    /// Set avatar URL.
-    #[must_use]
-    pub fn with_avatar(mut self, url: impl Into<String>) -> Self {
-        self.avatar_url = url.into();
-        self
     }
 
     /// Set presence status.

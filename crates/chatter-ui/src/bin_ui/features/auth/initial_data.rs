@@ -39,7 +39,6 @@ pub fn refresh_friends_list(window_weak: Weak<MainWindow>, ui_ctx: Arc<ChatterCl
                     user_id: friendship.addressee_id.to_string(),
                     display_name: profile.display_name.clone(),
                     username: String::new(),
-                    avatar_url: profile.avatar_url.clone().unwrap_or_default(),
                     avatar_bytes: None,
                     avatar_decoded: None,
                     presence_status: match profile.presence {
@@ -66,7 +65,6 @@ pub fn refresh_friends_list(window_weak: Weak<MainWindow>, ui_ctx: Arc<ChatterCl
                     user_id: dm.id.to_string(),
                     display_name: peer_name,
                     username: String::new(),
-                    avatar_url: String::new(),
                     avatar_bytes: dm.peer_avatar.clone(),
                     avatar_decoded: None,
                     presence_status: "online".to_string(),
@@ -251,7 +249,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         let friend_id_str = friend_id.to_string();
 
         // Try to fetch profile from server
-        let (display_name, username, avatar_url) =
+        let (display_name, username) =
             match ui_ctx.get_user_profile(&friend_id).await {
                 Ok(profile) => {
                     let name = if profile.display_name.is_empty() {
@@ -259,18 +257,16 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                     } else {
                         profile.display_name
                     };
-                    let avatar = profile.avatar_url.unwrap_or_default();
-                    (name.clone(), name, avatar)
+                    (name.clone(), name)
                 }
-                Err(_) => (friend_id_str.clone(), friend_id_str.clone(), String::new()),
+                Err(_) => (friend_id_str.clone(), friend_id_str.clone()),
             };
 
         received_ui.push(FriendRequestSendData {
             user_id: friend_id_str,
             display_name,
             username,
-            avatar_url,
-            avatar_bytes: None, // Regular friends use avatar_url from server
+            avatar_bytes: None,
             avatar_decoded: None,
             sent_at: String::new(),
         });
@@ -282,7 +278,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         let friend_id_str = friend_id.to_string();
 
         // Try to fetch profile from server
-        let (display_name, username, avatar_url) =
+        let (display_name, username) =
             match ui_ctx.get_user_profile(&friend_id).await {
                 Ok(profile) => {
                     let name = if profile.display_name.is_empty() {
@@ -290,18 +286,16 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                     } else {
                         profile.display_name
                     };
-                    let avatar = profile.avatar_url.unwrap_or_default();
-                    (name.clone(), name, avatar)
+                    (name.clone(), name)
                 }
-                Err(_) => (friend_id_str.clone(), friend_id_str.clone(), String::new()),
+                Err(_) => (friend_id_str.clone(), friend_id_str.clone()),
             };
 
         sent_ui.push(FriendRequestSendData {
             user_id: friend_id_str,
             display_name,
             username,
-            avatar_url,
-            avatar_bytes: None, // Regular friends use avatar_url from server
+            avatar_bytes: None,
             avatar_decoded: None,
             sent_at: String::new(),
         });
@@ -354,7 +348,6 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                     channel_id: dm.id.to_string(),
                     user_id: peer_id_str.clone(),
                     display_name: peer_name.clone(),
-                    avatar_url: String::new(),
                     avatar_bytes: dm.peer_avatar.clone(),
                     avatar_decoded: None,
                     initials: get_initials(&peer_name),
@@ -398,7 +391,6 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                     channel_id: dm.id.to_string(),
                     user_id: peer_id_str.clone(),
                     display_name: format!("\u{1F4E9} {}", peer_name), // Envelope emoji for pending
-                    avatar_url: String::new(),
                     avatar_bytes: dm.peer_avatar.clone(),
                     avatar_decoded: None,
                     initials: get_initials(&peer_name),
@@ -419,7 +411,6 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                     user_id: dm.id.to_string(),
                     display_name: peer_name,
                     username: "Private".to_string(),
-                    avatar_url: String::new(),
                     avatar_bytes: dm.peer_avatar.clone(),
                     avatar_decoded: None,
                     sent_at: last_message,
@@ -459,7 +450,6 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                     channel_id: dm.id.to_string(),
                     user_id: peer_id_str.clone(),
                     display_name: format!("\u{1F4EE} {} (pending)", peer_name), // Postbox emoji
-                    avatar_url: String::new(),
                     avatar_bytes: dm.peer_avatar.clone(),
                     avatar_decoded: None,
                     initials: get_initials(&peer_name),
@@ -546,14 +536,13 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     match ui_ctx.list_friends_with_profiles().await {
         Ok(pairs) => {
             for (friendship, profile) in pairs {
-                // Profile carries display_name + avatar_url; username is
+                // Profile carries display_name; username is
                 // on the User entity. We don't need it here — the modal
                 // only shows display_name prominently.
                 friends_data.push(FriendDataSendData {
                     user_id: friendship.addressee_id.to_string(),
                     display_name: profile.display_name.clone(),
                     username: String::new(),
-                    avatar_url: profile.avatar_url.clone().unwrap_or_default(),
                     avatar_bytes: None,
                     avatar_decoded: None,
                     presence_status: match profile.presence {
@@ -584,7 +573,6 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                 user_id: dm.id.to_string(),
                 display_name: peer_name,
                 username: String::new(),
-                avatar_url: String::new(),
                 avatar_bytes: dm.peer_avatar.clone(),
                 avatar_decoded: None,
                 presence_status: "online".to_string(),
@@ -657,7 +645,6 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                     user_id: user_id.into(),
                     display_name: display_name.into(),
                     username: "Private".into(),
-                    avatar_url: SharedString::default(),
                     blocked_at: SharedString::default(),
                 })
                 .collect();
@@ -838,7 +825,6 @@ pub fn refresh_dm_list(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     channel_id: channel.id.to_string(),
                     user_id: other_user_id.clone(),
                     display_name: other_user_name.clone(),
-                    avatar_url: String::new(),
                     avatar_bytes: Some(Vec::new()),
                     avatar_decoded: None,
                     initials: get_initials(&other_user_name),
@@ -943,8 +929,7 @@ pub fn refresh_anon_dms(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             channel_id: dm.id.to_string(),
                             user_id: peer_id_str.clone(),
                             display_name: peer_name.clone(),
-                            avatar_url: String::new(),
-                            avatar_bytes: dm.peer_avatar.clone(),
+                                    avatar_bytes: dm.peer_avatar.clone(),
                             avatar_decoded: None,
                             initials: get_initials(&peer_name),
                             presence_status: if dm.status == chatter_core::domain::anon_dm::AnonDmStatus::Active {
@@ -982,8 +967,7 @@ pub fn refresh_anon_dms(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         channel_id: dm.id.to_string(),
                         user_id: peer_id_str.clone(),
                         display_name: format!("\u{1F4E9} {}", peer_name), // Envelope emoji for pending
-                        avatar_url: String::new(),
-                        avatar_bytes: dm.peer_avatar.clone(),
+                            avatar_bytes: dm.peer_avatar.clone(),
                         avatar_decoded: None,
                         initials: get_initials(&peer_name),
                         presence_status: "pending".to_string(),

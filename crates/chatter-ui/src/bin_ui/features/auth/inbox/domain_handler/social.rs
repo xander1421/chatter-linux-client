@@ -27,7 +27,6 @@ pub(super) fn handle_friend_requests_updated(
                     user_id: r.user_id.into(),
                     display_name: r.display_name.into(),
                     username: r.username.into(),
-                    avatar_url: r.avatar_url.into(),
                     avatar_source: slint::Image::default(),
                     has_avatar: false,
                     sent_at: "".into(),
@@ -40,7 +39,6 @@ pub(super) fn handle_friend_requests_updated(
                     user_id: r.user_id.into(),
                     display_name: r.display_name.into(),
                     username: r.username.into(),
-                    avatar_url: r.avatar_url.into(),
                     avatar_source: slint::Image::default(),
                     has_avatar: false,
                     sent_at: "".into(),
@@ -299,14 +297,12 @@ pub(super) fn handle_user_profile_updated(
     window: &Weak<MainWindow>,
     user_id: UserId,
     display_name: String,
-    avatar_url: Option<String>,
     status_message: Option<String>,
     timestamp: u64,
 ) {
     tracing::info!(
         user_id = %user_id,
         %display_name,
-        ?avatar_url,
         ?status_message,
         timestamp,
         "Server-managed user profile updated"

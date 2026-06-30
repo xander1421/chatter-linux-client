@@ -36,8 +36,6 @@ impl Migration for V053CallHistory {
             -- Peer display name (snapshot at call time; may be empty for
             -- anonymous callers who never shared a name).
             peer_name TEXT NOT NULL DEFAULT '',
-            -- Peer avatar URL at call time (nullable — avatars are optional).
-            peer_avatar_url TEXT,
             -- When the call started ringing (our clock, RFC3339).
             started_at TEXT NOT NULL,
             -- When the call ended, or NULL while still in-progress.

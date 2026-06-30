@@ -14,7 +14,6 @@ export struct FriendData {
     user-id: string,
     display-name: string,
     username: string,
-    avatar-url: string,
     presence-status: string,  // "online", "away", "dnd", "offline"
     custom-status: string,
     // Anonymous contact flag. When true, `user-id` is the anon_dm_id and
@@ -32,7 +31,6 @@ export struct UserSearchResult {
     user-id: string,
     display-name: string,
     username: string,
-    avatar-url: string,
     is-friend: bool,
     request-pending: bool,  // true if we already sent a request
 }
@@ -42,7 +40,6 @@ export struct FriendRequestData {
     user-id: string,
     display-name: string,
     username: string,
-    avatar-url: string,
     avatar-source: image,   // For avatar bytes converted to image
     has-avatar: bool,       // Whether avatar-source is valid
     sent-at: string,
@@ -53,7 +50,6 @@ export struct BlockedUserData {
     user-id: string,
     display-name: string,
     username: string,
-    avatar-url: string,
     blocked-at: string,
 }
 

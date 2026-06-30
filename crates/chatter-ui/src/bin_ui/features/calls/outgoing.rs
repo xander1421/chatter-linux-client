@@ -135,7 +135,6 @@ fn render_calling_placeholder(
         user_id: user_id.to_string().into(),
         display_name: display_name.into(),
         initials: local_initials.into(),
-        avatar_url: "".into(),
         avatar_source: w.get_user_avatar_source(),
         is_muted: false,
         is_video_enabled: setup.is_video,

@@ -86,8 +86,6 @@ pub struct MentionSuggestionData {
     pub name: String,
     /// Mention type as string: "user", "channel", "here", "all".
     pub mention_type: String,
-    /// Avatar URL for users (empty string if not available).
-    pub avatar_url: String,
 }
 
 impl MentionSuggestionData {
@@ -98,22 +96,6 @@ impl MentionSuggestionData {
             id: id.into(),
             name: name.into(),
             mention_type: "user".to_string(),
-            avatar_url: String::new(),
-        }
-    }
-
-    /// Create a user mention suggestion with avatar.
-    #[must_use]
-    pub fn user_with_avatar(
-        id: impl Into<String>,
-        name: impl Into<String>,
-        avatar_url: impl Into<String>,
-    ) -> Self {
-        Self {
-            id: id.into(),
-            name: name.into(),
-            mention_type: "user".to_string(),
-            avatar_url: avatar_url.into(),
         }
     }
 
@@ -124,7 +106,6 @@ impl MentionSuggestionData {
             id: id.into(),
             name: name.into(),
             mention_type: "channel".to_string(),
-            avatar_url: String::new(),
         }
     }
 
@@ -135,7 +116,6 @@ impl MentionSuggestionData {
             id: "here".to_string(),
             name: "here".to_string(),
             mention_type: "here".to_string(),
-            avatar_url: String::new(),
         }
     }
 
@@ -146,7 +126,6 @@ impl MentionSuggestionData {
             id: "all".to_string(),
             name: "all".to_string(),
             mention_type: "all".to_string(),
-            avatar_url: String::new(),
         }
     }
 
@@ -185,7 +164,6 @@ impl From<&crate::domain::mention::MentionSuggestion> for MentionSuggestionData 
             id: suggestion.id.clone(),
             name: suggestion.display_name.clone(),
             mention_type: mention_type.to_string(),
-            avatar_url: suggestion.avatar_url.clone().unwrap_or_default(),
         }
     }
 }
@@ -247,11 +225,4 @@ mod tests {
         assert_eq!(all.as_mention_type(), Some(MentionType::All));
     }
 
-    #[test]
-    fn test_mention_suggestion_with_avatar() {
-        let suggestion =
-            MentionSuggestionData::user_with_avatar("user123", "bob", "https://example.com/avatar.png");
-
-        assert_eq!(suggestion.avatar_url, "https://example.com/avatar.png");
-    }
 }

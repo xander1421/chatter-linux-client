@@ -401,7 +401,6 @@ fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     user_id: friendship.addressee_id.to_string().into(),
                     display_name: display_name.into(),
                     username: "".into(),
-                    avatar_url: "".into(),
                     selected: false,
                     role: "member".into(),
                 });
@@ -433,7 +432,6 @@ fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         user_id: dm.peer_id.to_string().into(),
                         display_name: display_name.into(),
                         username: "".into(),
-                        avatar_url: "".into(),
                         selected: false,
                         role: "member".into(),
                     });
@@ -520,7 +518,6 @@ async fn load_friends_as_invite_users(
             id: friendship.addressee_id.to_string().into(),
             display_name: display_name.into(),
             username: username.into(),
-            avatar_url: "".into(),
             already_member: is_member,
             selected: false,
         });
@@ -732,7 +729,6 @@ fn wire_invite_member_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                         id: id_str.into(),
                                         display_name: profile.display_name.into(),
                                         username: username.into(),
-                                        avatar_url: "".into(),
                                         already_member: is_member,
                                         selected: false,
                                     });

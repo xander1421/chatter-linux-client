@@ -517,7 +517,6 @@ mod tests {
         let profile = UserProfile {
             user_id: "user-123".to_string(),
             display_name: "Test User".to_string(),
-            avatar_url: "https://example.com/avatar.png".to_string(),
             status_message: "Hello!".to_string(),
             presence: UserPresence::Online as i32,
             encrypted_name: Vec::new(),

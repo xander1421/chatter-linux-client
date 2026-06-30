@@ -219,11 +219,9 @@ impl ChannelService {
             let display_name = profile.as_ref()
                 .map(|p| p.display_name.clone())
                 .unwrap_or_else(|| format!("User {}", &membership.user_id.to_string()[..8]));
-            let avatar_url = profile.and_then(|p| p.avatar_url);
             result.push(crate::domain::channel::MemberWithProfile {
                 membership,
                 display_name,
-                avatar_url,
             });
         }
         Ok(result)

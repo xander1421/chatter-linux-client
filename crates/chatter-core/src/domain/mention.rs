@@ -165,8 +165,6 @@ pub struct MentionSuggestion {
     pub id: String,
     /// Display name shown in autocomplete.
     pub display_name: String,
-    /// Avatar URL for visual context.
-    pub avatar_url: Option<String>,
     /// Online status (for user suggestions).
     pub is_online: Option<bool>,
 }
@@ -179,7 +177,6 @@ impl MentionSuggestion {
             suggestion_type: MentionType::User,
             id: id.to_string(),
             display_name,
-            avatar_url: None,
             is_online: None,
         }
     }
@@ -191,16 +188,8 @@ impl MentionSuggestion {
             suggestion_type: MentionType::Channel,
             id: id.to_string(),
             display_name,
-            avatar_url: None,
             is_online: None,
         }
-    }
-
-    /// Set the avatar URL.
-    #[must_use]
-    pub fn with_avatar(mut self, url: String) -> Self {
-        self.avatar_url = Some(url);
-        self
     }
 
     /// Set the online status.
@@ -451,12 +440,10 @@ mod tests {
     fn test_mention_suggestion_user() {
         let user_id = UserId::new();
         let suggestion = MentionSuggestion::user(user_id, "alice".to_string())
-            .with_avatar("https://example.com/avatar.png".to_string())
             .with_online_status(true);
 
         assert_eq!(suggestion.suggestion_type, MentionType::User);
         assert_eq!(suggestion.display_name, "alice");
-        assert!(suggestion.avatar_url.is_some());
         assert_eq!(suggestion.is_online, Some(true));
         assert_eq!(suggestion.mention_text(), "@alice");
     }

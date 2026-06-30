@@ -70,7 +70,6 @@ pub fn build_own_message_item(
         sender_id: sender_id.into(),
         sender_name: sender_name.into(),
         sender_initials: crate::bin_ui::converters::get_initials(sender_name).into(),
-        sender_avatar_url: "".into(),
         sender_avatar_source: slint::Image::default(),
         has_avatar: false,
         content: text.into(),

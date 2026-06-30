@@ -134,7 +134,6 @@ fn spawn_request_stream(
                                 user_id: conv_id_str.clone().into(), // conversation_id
                                 display_name: peer_name.clone().into(),
                                 username: "Private".into(),
-                                avatar_url: "".into(),
                                 avatar_source,
                                 has_avatar,
                                 sent_at: if intro.is_empty() {
@@ -244,7 +243,6 @@ fn spawn_request_stream(
                                 channel_id: channel_id_str.into(),
                                 user_id: peer_id.to_string().into(),
                                 display_name: peer_name_for_ui.clone().into(),
-                                avatar_url: "".into(),
                                 avatar_source,
                                 has_avatar,
                                 initials: get_initials(&peer_name_for_ui).into(),
@@ -347,7 +345,6 @@ fn spawn_request_stream(
                                 user_id: conv_id_str.clone().into(), // conversation_id
                                 display_name: peer_name.clone().into(),
                                 username: "Private".into(),
-                                avatar_url: "".into(),
                                 avatar_source,
                                 has_avatar,
                                 sent_at: intro.into(),

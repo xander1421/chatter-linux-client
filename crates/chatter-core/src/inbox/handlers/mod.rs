@@ -353,7 +353,6 @@ pub enum DomainEvent {
     UserProfileUpdated {
         user_id: UserId,
         display_name: String,
-        avatar_url: Option<String>,
         status_message: Option<String>,
         timestamp: u64,
     },

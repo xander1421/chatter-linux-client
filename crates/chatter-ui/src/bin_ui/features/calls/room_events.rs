@@ -9,7 +9,6 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::calls::LiveKitRoomEvent;
 use crate::bin_ui::converters::get_initials;
-use crate::bin_ui::features::calls::spawn_fetch_remote_avatar;
 use crate::{CallParticipantData, MainWindow};
 
 /// Wire room events to update UI (participant count, etc.).
@@ -51,9 +50,6 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 LiveKitRoomEvent::ParticipantJoined { identity, display_name } => {
                     tracing::info!("Participant joined: {} ({:?})", identity, display_name);
                     let display = display_name.clone().unwrap_or_else(|| identity.clone());
-                    if let Ok(uid) = identity.parse::<chatter_core::domain::ids::UserId>() {
-                        spawn_fetch_remote_avatar(weak.clone(), &ui_ctx, uid);
-                    }
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             let mut data = w.get_active_call_data();
@@ -94,7 +90,6 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 user_id: identity.into(),
                                 display_name: display.into(),
                                 initials: new_initials.into(),
-                                avatar_url: "".into(),
                                 avatar_source: slint::Image::default(),
                                 is_muted: false,
                                 is_video_enabled: false,

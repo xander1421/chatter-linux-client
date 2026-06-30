@@ -24,17 +24,9 @@ pub fn proto_to_domain_profile(proto: &UserProfile) -> Result<Profile, UserError
         Some(StatusMessage::new(proto.status_message.clone()))
     };
 
-    // avatar_url (empty string -> None)
-    let avatar_url = if proto.avatar_url.is_empty() {
-        None
-    } else {
-        Some(proto.avatar_url.clone())
-    };
-
     Ok(Profile {
         user_id,
         display_name: proto.display_name.clone(),
-        avatar_url,
         status_message,
         presence,
     })
