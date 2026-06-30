@@ -78,6 +78,7 @@ export component MessageItem inherits Rectangle {
 
     // Quote / reply-to context
     in property <bool> is-reply: false;
+    in property <bool> reply-to-not-found: false;  // Quoted parent missing/deleted
     in property <string> reply-to-sender-name: "";
     in property <string> reply-to-preview: "";
     in property <bool> reply-to-has-thumbnail: false;
@@ -400,6 +401,16 @@ export component MessageItem inherits Rectangle {
                                             height: parent.height;
                                             image-fit: cover;
                                         }
+                                    }
+
+                                    // Signal-Desktop parity: the quoted snapshot stays
+                                    // above, but warn when the original is gone.
+                                    if root.reply-to-not-found: Text {
+                                        text: "Original message not found";
+                                        color: Colors.warning;
+                                        font-size: Typography.xs;
+                                        font-italic: true;
+                                        overflow: elide;
                                     }
                                 }
                             }

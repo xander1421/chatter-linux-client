@@ -321,6 +321,21 @@ impl MessageService {
         self.message_repo.get(message_id).map_err(MessageError::from)
     }
 
+    /// Whether the parent message a reply quotes is missing or deleted.
+    ///
+    /// Signal-Desktop parity: a reply keeps its quoted snapshot even after the
+    /// original is gone, but renders an "Original message not found" warning.
+    /// Returns `true` when the parent row is absent from local storage or is a
+    /// soft-delete tombstone (`is_deleted == true`). On a storage error we fall
+    /// back to `false` so transient failures never produce a spurious warning.
+    pub fn reply_parent_missing(&self, parent: &crate::domain::ids::MessageId) -> bool {
+        match self.message_repo.get(parent) {
+            Ok(Some(msg)) => msg.is_deleted,
+            Ok(None) => true,
+            Err(_) => false,
+        }
+    }
+
     /// Search messages using full-text search index.
     ///
     /// Returns search results with message IDs and channel IDs.

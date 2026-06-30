@@ -159,6 +159,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     &messages,
                     |uid| ui_ctx.display_name(uid),
                     |att_id| ui_ctx.get_attachment(att_id),
+                    |pid| ui_ctx.reply_parent_missing(pid),
                 );
 
                 // Get conversation info for the header
@@ -259,6 +260,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 &messages,
                 |uid| ui_ctx.display_name(uid),
                 |att_id| ui_ctx.get_attachment(att_id),
+                |pid| ui_ctx.reply_parent_missing(pid),
             );
 
             run_ui!(weak, |w| {

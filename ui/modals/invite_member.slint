@@ -13,6 +13,8 @@ export struct InviteUser {
     id: string,
     display-name: string,
     username: string,
+    avatar-source: image,
+    has-avatar: bool,
     already-member: bool,
     selected: bool,
 }
@@ -95,6 +97,7 @@ export component InviteMemberModal inherits Rectangle {
                                 // Avatar
                                 Avatar {
                                     size: 36px;
+                                    source: user.has-avatar ? user.avatar-source : @image-url("");
                                     fallback-text: user.display-name;
                                 }
 
@@ -112,7 +115,7 @@ export component InviteMemberModal inherits Rectangle {
                                         overflow: elide;
                                     }
 
-                                    Text {
+                                    if user.username != "": Text {
                                         text: "@" + user.username;
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;

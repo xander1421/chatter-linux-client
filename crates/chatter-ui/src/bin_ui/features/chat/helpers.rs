@@ -91,6 +91,8 @@ pub fn build_own_message_item(
         reply_count_text: "".into(),
         is_thread_reply: false,
         is_reply,
+        // Own outgoing reply: the parent existed at send time.
+        reply_to_not_found: false,
         reply_to_sender_name: reply_to_sender_name.into(),
         reply_to_preview: reply_to_preview.into(),
         reply_to_has_thumbnail,

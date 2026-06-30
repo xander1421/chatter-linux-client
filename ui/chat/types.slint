@@ -83,6 +83,7 @@ export struct MessageItemData {
     is-thread-reply: bool,
     // Quote / reply-to context
     is-reply: bool,                  // Whether this message is a reply to another
+    reply-to-not-found: bool,        // Quoted parent is missing/deleted ("Original message not found")
     reply-to-sender-name: string,    // Display name of quoted message author
     reply-to-preview: string,        // Preview text of the quoted message
     reply-to-has-thumbnail: bool,    // Whether the quoted message has a media thumbnail

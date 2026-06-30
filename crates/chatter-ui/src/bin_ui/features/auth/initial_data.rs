@@ -720,6 +720,7 @@ async fn load_channel_into_ui_from_services(
         &messages,
         |uid| ui_ctx.display_name(uid),
         |att_id| ui_ctx.get_attachment_metadata(att_id),
+        |pid| ui_ctx.reply_parent_missing(pid),
     );
 
     // Get current user ID for is_own calculation in to_slint_with_user

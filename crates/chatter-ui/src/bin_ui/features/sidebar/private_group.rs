@@ -107,6 +107,10 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                 if let Some(ref author_id) = msg.reply_to_author_id {
                     display_data.reply_to_sender_name = ui_ctx.display_name(author_id);
                 }
+                // Signal-Desktop parity: flag when the quoted parent is gone.
+                if let Some(ref parent_id) = msg.reply_to {
+                    display_data.reply_to_not_found = ui_ctx.reply_parent_missing(parent_id);
+                }
             }
 
             display_messages.push(display_data);
@@ -284,6 +288,10 @@ async fn load_private_group_messages_internal(
         if display_data.is_reply {
             if let Some(ref author_id) = msg.reply_to_author_id {
                 display_data.reply_to_sender_name = ui_ctx.display_name(author_id);
+            }
+            // Signal-Desktop parity: flag when the quoted parent is gone.
+            if let Some(ref parent_id) = msg.reply_to {
+                display_data.reply_to_not_found = ui_ctx.reply_parent_missing(parent_id);
             }
         }
         display_messages.push(display_data);

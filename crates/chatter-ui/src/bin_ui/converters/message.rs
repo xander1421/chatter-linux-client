@@ -41,6 +41,10 @@ pub struct MessageDisplayData {
     pub is_thread_reply: bool,
     // Quote / reply-to context
     pub is_reply: bool,
+    /// Signal-Desktop parity: the quoted parent message is missing or deleted.
+    /// When true the snapshot still renders but with an "Original message not
+    /// found" warning, and tap-to-scroll-to-original is suppressed.
+    pub reply_to_not_found: bool,
     pub reply_to_sender_name: String,
     pub reply_to_preview: String,
     /// Raw thumbnail bytes of the quoted media (image/jpeg, image/png).
@@ -206,6 +210,7 @@ impl MessageDisplayData {
         reply_count_text: self.reply_count_text.clone().into(),
         is_thread_reply: self.is_thread_reply,
         is_reply: self.is_reply,
+        reply_to_not_found: self.reply_to_not_found,
         reply_to_sender_name: self.reply_to_sender_name.clone().into(),
         reply_to_preview: self.reply_to_preview.clone().into(),
         reply_to_has_thumbnail,
@@ -314,6 +319,7 @@ pub fn message_to_display_data_with_replies(
         reply_count_text,
         is_thread_reply: msg.is_thread_reply(),
         is_reply: msg.reply_to.is_some(),
+        reply_to_not_found: false,  // Resolved by build sites via core (needs repo access)
         reply_to_sender_name: String::new(),  // Resolved by UI handler after conversion
         reply_to_preview: msg.reply_to_text.clone().unwrap_or_default(),
         reply_to_thumbnail_bytes: msg.reply_to_thumbnail.clone(),
@@ -416,6 +422,9 @@ pub fn anon_message_to_display_data(
         reply_count_text: String::new(),
         is_thread_reply: false,
         is_reply: quote_data.is_some(),
+        // Anon replies embed the quote in content_json with no parent MessageId
+        // reference, so there is no parent row to look up — never "not found".
+        reply_to_not_found: false,
         reply_to_sender_name: quote_data.as_ref().map(|q| q.0.clone()).unwrap_or_default(),
         reply_to_preview: quote_data.as_ref().map(|q| q.1.clone()).unwrap_or_default(),
         reply_to_thumbnail_bytes: None,
@@ -442,10 +451,14 @@ pub fn anon_message_to_display_data(
 /// - `get_display_name`: resolves a `UserId` to a display name string
 /// - `resolve_attachment`: resolves an `AttachmentId` to an `Option<Attachment>`
 ///   (callers should handle the `Result` → `Option` conversion themselves)
+/// - `reply_parent_missing`: returns whether a reply's quoted parent is missing
+///   or deleted (Signal-Desktop "Original message not found"). The repo lookup
+///   lives in chatter-core; callers forward `ChatterClient::reply_parent_missing`.
 pub fn messages_to_display_batch(
     messages: &[Message],
     get_display_name: impl Fn(&chatter_core::domain::UserId) -> String,
     resolve_attachment: impl Fn(&chatter_core::domain::AttachmentId) -> Option<Attachment>,
+    reply_parent_missing: impl Fn(&chatter_core::domain::MessageId) -> bool,
 ) -> Vec<MessageDisplayData> {
     let mut display_messages = Vec::with_capacity(messages.len());
 
@@ -469,6 +482,10 @@ pub fn messages_to_display_batch(
         if display_data.is_reply {
             if let Some(ref author_id) = msg.reply_to_author_id {
                 display_data.reply_to_sender_name = get_display_name(author_id);
+            }
+            // Signal-Desktop parity: flag when the quoted parent is gone.
+            if let Some(ref parent_id) = msg.reply_to {
+                display_data.reply_to_not_found = reply_parent_missing(parent_id);
             }
         }
 

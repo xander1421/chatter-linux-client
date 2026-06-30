@@ -119,6 +119,14 @@ impl ChatterClient {
         self.messages().get_message_local(message_id).ok().flatten()
     }
 
+    /// Whether the parent message a reply quotes is missing or deleted.
+    ///
+    /// Signal-Desktop parity: drives the "Original message not found" warning
+    /// under a reply's quoted snapshot. See `MessageService::reply_parent_missing`.
+    pub fn reply_parent_missing(&self, parent: &crate::domain::ids::MessageId) -> bool {
+        self.messages().reply_parent_missing(parent)
+    }
+
     pub fn get_channel_local(
         &self,
         channel_id: &crate::domain::ids::ChannelId,
@@ -333,11 +341,16 @@ impl ChatterClient {
                 return;
             }
             let username = self.get_user_local(&user_id).map(|u| u.username).unwrap_or_default();
+            let avatar_bytes = self
+                .get_profile_local(&user_id)
+                .and_then(|p| p.avatar_bytes)
+                .unwrap_or_default();
             out.push(InviteCandidate {
                 already_member: members.contains(&user_id),
                 user_id,
                 display_name,
                 username,
+                avatar_bytes,
             });
         };
 
@@ -462,6 +475,8 @@ pub struct InviteCandidate {
     pub user_id: crate::domain::ids::UserId,
     pub display_name: String,
     pub username: String,
+    /// Peer avatar bytes (decrypted profile image), empty when none cached.
+    pub avatar_bytes: Vec<u8>,
     pub already_member: bool,
 }
 

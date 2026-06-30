@@ -72,6 +72,10 @@ pub(super) fn handle_message_received(
         if let Some(ref author_id) = message.reply_to_author_id {
             display_data.reply_to_sender_name = ui_ctx.display_name(author_id);
         }
+        // Signal-Desktop parity: flag when the quoted parent is missing/deleted.
+        if let Some(ref parent_id) = message.reply_to {
+            display_data.reply_to_not_found = ui_ctx.reply_parent_missing(parent_id);
+        }
     }
 
     let current_user_id = ui_ctx.auth_state().get().current_user_id

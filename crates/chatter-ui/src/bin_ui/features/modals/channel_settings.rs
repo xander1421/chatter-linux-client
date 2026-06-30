@@ -466,16 +466,17 @@ pub fn open_invite_member_modal(weak: slint::Weak<MainWindow>, ui_ctx: Arc<Chatt
             .map(|c| c.name.clone())
             .unwrap_or_default();
 
-        let user_data: Vec<InviteUser> = ui_ctx
+        // Carry Send `InviteCandidate`s across the thread boundary; build the
+        // UI rows (which hold non-Send `image`s) inside the event loop.
+        let candidates = ui_ctx
             .list_channel_invite_candidates(&channel_id)
             .await
-            .unwrap_or_default()
-            .into_iter()
-            .map(candidate_to_invite_user)
-            .collect();
+            .unwrap_or_default();
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
+                let user_data: Vec<InviteUser> =
+                    candidates.into_iter().map(candidate_to_invite_user).collect();
                 w.set_invite_member_channel_id(channel_id_str.into());
                 w.set_invite_member_channel_name(channel_name.into());
                 w.set_invite_member_users(ModelRc::new(VecModel::from(user_data)));
@@ -488,10 +489,13 @@ pub fn open_invite_member_modal(weak: slint::Weak<MainWindow>, ui_ctx: Arc<Chatt
 
 /// Thin presentation mapping: core candidate → UI row.
 fn candidate_to_invite_user(c: InviteCandidate) -> InviteUser {
+    let avatar = crate::bin_ui::converters::avatar_bytes_to_image(&c.avatar_bytes);
     InviteUser {
         id: c.user_id.to_string().into(),
         display_name: c.display_name.into(),
         username: c.username.into(),
+        has_avatar: avatar.is_some(),
+        avatar_source: avatar.unwrap_or_default(),
         already_member: c.already_member,
         selected: false,
     }
@@ -572,7 +576,13 @@ fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                 (channel_id, selected_vec)
             };
 
+            tracing::info!(
+                channel_id = %channel_id_str,
+                selected = ?selected_user_ids,
+                "invite confirm: resolving selection"
+            );
             if channel_id_str.is_empty() || selected_user_ids.is_empty() {
+                tracing::warn!("invite confirm: nothing to invite (empty channel or selection)");
                 return;
             }
 
@@ -661,24 +671,23 @@ fn wire_invite_member_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Err(_) => return,
             };
 
-            let mut friends: Vec<InviteUser> = ui_ctx
+            // Work on Send `InviteCandidate`s; convert to UI rows (non-Send
+            // images) inside the event loop below.
+            let mut cands: Vec<InviteCandidate> = ui_ctx
                 .list_channel_invite_candidates(&channel_id)
                 .await
-                .unwrap_or_default()
-                .into_iter()
-                .map(candidate_to_invite_user)
-                .collect();
+                .unwrap_or_default();
             let trimmed = query.trim();
 
             if !trimmed.is_empty() {
                 let needle = trimmed.to_lowercase();
-                friends.retain(|u| {
-                    u.display_name.to_lowercase().contains(&needle)
-                        || u.username.to_lowercase().contains(&needle)
+                cands.retain(|c| {
+                    c.display_name.to_lowercase().contains(&needle)
+                        || c.username.to_lowercase().contains(&needle)
                 });
             }
 
-            let mut seen: HashSet<String> = friends.iter().map(|u| u.id.to_string()).collect();
+            let mut seen: HashSet<UserId> = cands.iter().map(|c| c.user_id).collect();
 
             // Signal-style exact-username lookup: display names are
             // profile-key-encrypted on the server, so only exact username
@@ -686,26 +695,25 @@ fn wire_invite_member_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             if !trimmed.is_empty() {
                 match ui_ctx.lookup_by_username(trimmed).await {
                     Ok(Some(user_id)) => {
-                        let id_str = user_id.to_string();
-                        if seen.insert(id_str.clone()) {
+                        if seen.insert(user_id) {
                             match ui_ctx.get_user_profile(&user_id).await {
                                 Ok(profile) => {
                                     let username = ui_ctx
                                         .get_user_local(&user_id)
                                         .map(|u| u.username)
                                         .unwrap_or_else(|| trimmed.to_string());
-                                    friends.push(InviteUser {
-                                        id: id_str.into(),
-                                        display_name: profile.display_name.into(),
-                                        username: username.into(),
+                                    cands.push(InviteCandidate {
+                                        user_id,
+                                        display_name: profile.display_name,
+                                        username,
+                                        avatar_bytes: profile.avatar_bytes.unwrap_or_default(),
                                         // ponytail: non-contact found by exact username; if already a
                                         // member the invite RPC rejects it server-side.
                                         already_member: false,
-                                        selected: false,
                                     });
                                 }
                                 Err(e) => {
-                                    tracing::warn!(error = %e, %id_str, "lookup hit but profile fetch failed");
+                                    tracing::warn!(error = %e, %user_id, "lookup hit but profile fetch failed");
                                 }
                             }
                         }
@@ -719,6 +727,8 @@ fn wire_invite_member_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
+                    let friends: Vec<InviteUser> =
+                        cands.into_iter().map(candidate_to_invite_user).collect();
                     w.set_invite_member_users(ModelRc::new(VecModel::from(friends)));
                     w.set_invite_member_selected_count(0);
                 }

@@ -412,6 +412,7 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 &older_messages,
                 |uid| ui_ctx.display_name(uid),
                 |att_id| ui_ctx.get_attachment(att_id),
+                |pid| ui_ctx.reply_parent_missing(pid),
             );
 
             let msg_count = older_messages.len();
