@@ -207,9 +207,7 @@ impl TwoWayAnonymity {
                 .get_mailbox_challenge(public_key.to_vec())
                 .await
             {
-                Ok(resp) => resp,
-                Err(crate::error::NetworkError::NotFound(_)) => return Err(MailboxError::MailboxNotFound),
-                Err(e) => return Err(MailboxError::Network(e.to_string())),
+                Ok(resp) => resp,                Err(e) => return Err(MailboxError::Network(e.to_string())),
             };
 
             let signature = signing_key.sign(&challenge_response.challenge);
@@ -225,9 +223,7 @@ impl TwoWayAnonymity {
                 )
                 .await
             {
-                Ok(resp) => resp,
-                Err(crate::error::NetworkError::NotFound(_)) => return Err(MailboxError::MailboxNotFound),
-                Err(e) => return Err(MailboxError::Network(e.to_string())),
+                Ok(resp) => resp,                Err(e) => return Err(MailboxError::Network(e.to_string())),
             };
 
             let page_count = poll_response.messages.len();
