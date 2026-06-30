@@ -96,7 +96,7 @@ impl MessageService {
             content,
             is_dm,
             require_encryption,
-        ).await;
+        ).await?;
 
         // If a new sender key was created, distribute SKDM to channel members
         if let Some(skdm) = skdm_opt {
@@ -960,7 +960,7 @@ impl MessageService {
             content,
             is_dm,
             require_encryption,
-        ).await;
+        ).await?;
 
         // If a new sender key was created, distribute SKDM to channel members
         if let Some(skdm) = skdm_opt {
@@ -1033,7 +1033,7 @@ impl MessageService {
         original_content: chat_v1::message::Content,
         is_dm: bool,
         require_encryption: bool,
-    ) -> (chat_v1::message::Content, Option<crate::proto::content_v1::SenderKeyDistribution>) {
+    ) -> Result<(chat_v1::message::Content, Option<crate::proto::content_v1::SenderKeyDistribution>), MessageError> {
         // DM: Use sealed sender (pairwise encryption)
         // Multi-device: encrypt for ALL recipient devices, send primary ciphertext
         // Server handles device routing via channel subscription
@@ -1067,17 +1067,24 @@ impl MessageService {
                                     }
                                 )),
                             };
-                            return (encrypted_content, None);
+                            return Ok((encrypted_content, None));
                         }
-                        // No ciphertexts available - fall through to cleartext
-                        tracing::warn!("DM encryption produced no ciphertexts");
+                        // Fail closed: never downgrade a DM to cleartext.
+                        return Err(MessageError::EncryptionFailed(
+                            "DM encryption produced no ciphertexts".into(),
+                        ));
                     },
                     Err(e) => {
-                        tracing::warn!("DM encryption failed: {}, sending cleartext", e);
+                        return Err(MessageError::EncryptionFailed(format!(
+                            "DM encryption failed: {}", e
+                        )));
                     }
                 }
             }
-            return (original_content, None);
+            // DM target channel_id was not a valid recipient UUID — fail closed.
+            return Err(MessageError::EncryptionFailed(
+                "DM recipient could not be resolved for encryption".into(),
+            ));
         }
 
         // Encrypted channel: Use sender keys (group encryption)
@@ -1103,21 +1110,20 @@ impl MessageService {
                             }
                         )),
                     };
-                    return (encrypted_content, skdm_opt);
+                    return Ok((encrypted_content, skdm_opt));
                 },
                 Err(e) => {
-                    tracing::warn!(
-                        channel_id = %channel_id,
-                        error = %e,
-                        "Group encryption failed, sending cleartext"
-                    );
-                    return (original_content, None);
+                    // Fail closed: an encryption-required channel must never
+                    // downgrade to cleartext.
+                    return Err(MessageError::EncryptionFailed(format!(
+                        "Group encryption failed for channel {}: {}", channel_id, e
+                    )));
                 }
             }
         }
 
-        // Regular channel: No encryption
-        (original_content, None)
+        // Regular (non-encrypted) channel: content intentionally sent as-is.
+        Ok((original_content, None))
     }
 }
 

@@ -208,9 +208,6 @@ pub async fn app_init() -> AppState {
     // password/device-auth sessions.
     ui_ctx.restore_session_async().await;
 
-    let _typing_cleanup = ui_ctx.start_typing_cleanup();
-    tracing::info!("Typing indicator cleanup task started");
-
     // Connect to server (reactor is active here inside block_on)
     let connected = match client.connect().await {
         Ok(()) => {

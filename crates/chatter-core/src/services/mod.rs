@@ -36,16 +36,11 @@ pub mod moderation_service;
 pub mod ai_service;
 #[cfg(feature = "local-ai")]
 pub mod local_ai_service;
-pub mod memory_service;
 pub mod ai_summarize;
 pub mod draft_service;
 pub mod pin_service;
 pub mod thread_service;
-pub mod reaction_service;
-pub mod typing_service;
 pub mod outgoing_typing;
-pub mod typing_cleanup;
-pub mod read_receipt_service;
 pub mod presence_service;
 pub mod ephemeral_message;
 pub mod ephemeral_service;
@@ -82,20 +77,8 @@ pub use channel_event_service::{ChannelEventError, ChannelEventService};
 // Re-exports for current user provider
 pub use current_user::{CurrentUserError, CurrentUserProvider};
 
-// Re-exports for typing service
-pub use typing_service::{TypingError, TypingService};
-
-// Re-exports for read receipt service
-pub use read_receipt_service::{ReadReceiptError, ReadReceiptService};
-
-// Re-exports for reaction service
-pub use reaction_service::{ReactionError, ReactionService};
-
 // Re-exports for call verification
 pub use call_verification::{CallVerification, CallVerificationData, VERIFICATION_EMOJI_COUNT};
-
-// Re-export ReadState from aggregator for convenience
-pub use crate::network::streaming::read_receipt_stream::ReadState;
 
 // Re-export ReactionEvent from aggregator for convenience
 pub use crate::network::streaming::reaction_stream::ReactionEvent;
@@ -108,9 +91,6 @@ pub use moderation_service::{ModerationError, ModerationService, proto_moderatio
 
 // Re-exports for AI service
 pub use ai_service::{AIError, AIService};
-
-// Re-exports for memory service
-pub use memory_service::{MemoryError, MemoryService};
 
 // Re-exports for AI summarization service
 pub use ai_summarize::{AISummarizeService, SummarizeError};

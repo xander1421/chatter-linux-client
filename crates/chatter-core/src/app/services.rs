@@ -9,7 +9,6 @@ use crate::services::ai::{LocalAIActorHandle, LocalAIService};
 #[cfg(feature = "jarvis")]
 use crate::services::jarvis::JarvisService;
 use crate::services::ai_service::AIService;
-use crate::services::memory_service::MemoryService;
 #[cfg(feature = "local-ai")]
 use crate::services::local_ai_service::HttpLocalAIService;
 #[cfg(feature = "local-ai")]
@@ -30,10 +29,8 @@ use crate::services::message::MessageService;
 use crate::services::message_gateway::MessageGateway;
 use crate::services::pairwise::PairwiseService;
 use crate::services::pin_service::PinService;
-use crate::services::reaction_service::ReactionService;
 use crate::services::session_service::SessionService;
 use crate::services::signal_service::SignalService;
-use crate::services::typing_service::TypingService;
 use crate::services::section_service::SectionService;
 use crate::services::device_service::DeviceService;
 use crate::services::organization_service::OrganizationService;
@@ -80,14 +77,10 @@ pub struct ServiceContainer {
     pub channel_event_service: Arc<ChannelEventService>,
     /// AI service for AI integrations.
     pub ai_service: Arc<AIService>,
-    /// Reaction service for message reactions.
-    pub reaction_service: Arc<ReactionService>,
     /// Draft service for message drafts.
     pub draft_service: Arc<DraftService>,
     /// Pin service for pinned messages.
     pub pin_service: Arc<PinService>,
-    /// Typing service for typing indicators.
-    pub typing_service: Arc<TypingService>,
     /// Channel bootstrap service for pending message flush.
     pub channel_bootstrap_service: Arc<ChannelBootstrapService>,
     /// Pairwise encryption service (reusable Signal Protocol).
@@ -105,8 +98,6 @@ pub struct ServiceContainer {
     pub jarvis_service: Arc<JarvisService>,
     /// Section service for custom sidebar sections.
     pub section_service: Arc<SectionService>,
-    /// Memory service for AI memory operations (server + client-side extraction).
-    pub memory_service: Arc<MemoryService>,
     /// HTTP-backed local AI service (Ollama/vLLM chat, models, semantic search).
     #[cfg(feature = "local-ai")]
     pub http_local_ai_service: Arc<HttpLocalAIService>,
@@ -232,13 +223,6 @@ impl ServiceContainer {
             infra.grpc_pool.clone(),
         ));
 
-        // 13. Reaction service for message reactions
-        let reaction_service = Arc::new(ReactionService::new(
-            infra.settings_repo.clone(),
-            infra.reaction_repo.clone(),
-            infra.reaction_aggregator.clone(),
-        ));
-
         // 14. Draft service for message drafts
         let draft_service = Arc::new(DraftService::new(
             infra.settings_repo.clone(),
@@ -292,12 +276,6 @@ impl ServiceContainer {
             infra.settings_repo.clone(),
         ));
 
-        // 19b. Memory service (server memory RPCs + client-side E2E extraction)
-        let memory_service = Arc::new(MemoryService::new(
-            infra.grpc_pool.clone(),
-            local_ai.clone(),
-        ));
-
         // 19c. HTTP local AI service (Ollama backend + semantic search)
         #[cfg(feature = "local-ai")]
         let http_local_ai_service = Arc::new(HttpLocalAIService::new(
@@ -328,12 +306,6 @@ impl ServiceContainer {
             infra.jarvis_graph_repo.clone(),
             local_ai.clone(),
             infra.event_bus.clone(),
-        ));
-
-        // 21. Typing service for typing indicators
-        let typing_service = Arc::new(TypingService::new(
-            infra.settings_repo.clone(),
-            infra.typing_aggregator.clone(),
         ));
 
         // 22. Channel bootstrap service for pending message flush
@@ -381,7 +353,6 @@ impl ServiceContainer {
             attachment_service,
             channel_event_service,
             ai_service,
-            reaction_service,
             draft_service,
             pin_service,
             pairwise_service,
@@ -391,10 +362,8 @@ impl ServiceContainer {
             local_ai_service,
             #[cfg(feature = "jarvis")]
             jarvis_service,
-            typing_service,
             channel_bootstrap_service,
             section_service,
-            memory_service,
             #[cfg(feature = "local-ai")]
             http_local_ai_service,
             #[cfg(feature = "local-ai")]

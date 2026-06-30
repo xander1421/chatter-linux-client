@@ -6,8 +6,7 @@
 use tokio::sync::broadcast;
 
 use crate::proto::chat_v1::{
-    message_event::Event as MessageEventType, Message, MessageEvent, ReactionUpdate, ReadReceipt,
-    TypingIndicator,
+    message_event::Event as MessageEventType, Message, MessageEvent, ReactionUpdate,
 };
 
 /// Capacity for event broadcast channels.
@@ -25,7 +24,7 @@ const CHANNEL_CAPACITY: usize = 256;
 ///
 /// // Subscribe to specific events
 /// let mut messages_rx = router.on_message_sent();
-/// let mut typing_rx = router.on_typing_indicator();
+/// let mut reaction_rx = router.on_reaction_added();
 ///
 /// // Process incoming events
 /// router.route(message_event);
@@ -46,10 +45,6 @@ pub struct MessageEventRouter {
     reaction_added: broadcast::Sender<ReactionUpdate>,
     /// Reaction removed from a message.
     reaction_removed: broadcast::Sender<ReactionUpdate>,
-    /// Read receipt received.
-    read_receipt: broadcast::Sender<ReadReceipt>,
-    /// Typing indicator received.
-    typing_indicator: broadcast::Sender<TypingIndicator>,
 }
 
 /// Message deletion event with context.
@@ -72,8 +67,6 @@ impl MessageEventRouter {
             message_deleted: broadcast::channel(CHANNEL_CAPACITY).0,
             reaction_added: broadcast::channel(CHANNEL_CAPACITY).0,
             reaction_removed: broadcast::channel(CHANNEL_CAPACITY).0,
-            read_receipt: broadcast::channel(CHANNEL_CAPACITY).0,
-            typing_indicator: broadcast::channel(CHANNEL_CAPACITY).0,
         }
     }
 
@@ -102,16 +95,6 @@ impl MessageEventRouter {
         self.reaction_removed.subscribe()
     }
 
-    /// Subscribe to read receipt events.
-    pub fn on_read_receipt(&self) -> broadcast::Receiver<ReadReceipt> {
-        self.read_receipt.subscribe()
-    }
-
-    /// Subscribe to typing indicator events.
-    pub fn on_typing_indicator(&self) -> broadcast::Receiver<TypingIndicator> {
-        self.typing_indicator.subscribe()
-    }
-
     /// Route a raw MessageEvent to the appropriate typed channel.
     ///
     /// Returns true if the event was successfully routed, false if no
@@ -137,10 +120,6 @@ impl MessageEventRouter {
             Some(MessageEventType::ReactionRemoved(reaction)) => {
                 self.reaction_removed.send(reaction).is_ok()
             }
-            Some(MessageEventType::ReadReceipt(receipt)) => self.read_receipt.send(receipt).is_ok(),
-            Some(MessageEventType::TypingIndicator(typing)) => {
-                self.typing_indicator.send(typing).is_ok()
-            }
             None => {
                 tracing::warn!("Empty MessageEvent received");
                 false
@@ -158,8 +137,6 @@ impl MessageEventRouter {
             message_deleted: self.message_deleted.receiver_count(),
             reaction_added: self.reaction_added.receiver_count(),
             reaction_removed: self.reaction_removed.receiver_count(),
-            read_receipt: self.read_receipt.receiver_count(),
-            typing_indicator: self.typing_indicator.receiver_count(),
         }
     }
 }
@@ -172,8 +149,6 @@ pub struct SubscriberCounts {
     pub message_deleted: usize,
     pub reaction_added: usize,
     pub reaction_removed: usize,
-    pub read_receipt: usize,
-    pub typing_indicator: usize,
 }
 
 impl Default for MessageEventRouter {
@@ -228,7 +203,7 @@ mod tests {
 
         // No subscribers initially
         assert_eq!(counts.message_sent, 0);
-        assert_eq!(counts.typing_indicator, 0);
+        assert_eq!(counts.reaction_added, 0);
     }
 
     #[test]
@@ -271,25 +246,6 @@ mod tests {
         let received = rx.try_recv().unwrap();
         assert_eq!(received.message_id, "msg-999");
         assert_eq!(received.channel_id, "channel-456");
-    }
-
-    #[tokio::test]
-    async fn test_route_typing_indicator() {
-        let router = MessageEventRouter::new();
-        let mut rx = router.on_typing_indicator();
-
-        let typing = TypingIndicator {
-            user_id: "user-123".to_string(),
-            channel_id: "channel-456".to_string(),
-            is_typing: true,
-        };
-        let event = make_message_event(MessageEventType::TypingIndicator(typing), "channel-456");
-
-        assert!(router.route(event));
-
-        let received = rx.try_recv().unwrap();
-        assert_eq!(received.user_id, "user-123");
-        assert!(received.is_typing);
     }
 
     #[test]
@@ -350,26 +306,6 @@ mod tests {
         let received = rx.try_recv().unwrap();
         assert_eq!(received.target_author_aci, "550e8400-e29b-41d4-a716-446655440000");
         assert_eq!(received.emoji, "👍");
-    }
-
-    #[tokio::test]
-    async fn test_route_read_receipt() {
-        let router = MessageEventRouter::new();
-        let mut rx = router.on_read_receipt();
-
-        let receipt = ReadReceipt {
-            user_id: "user-123".to_string(),
-            channel_id: "channel-456".to_string(),
-            last_read_id: "msg-456".to_string(),
-            timestamp: 1234567890000,
-        };
-        let event = make_message_event(MessageEventType::ReadReceipt(receipt), "channel-456");
-
-        assert!(router.route(event));
-
-        let received = rx.try_recv().unwrap();
-        assert_eq!(received.user_id, "user-123");
-        assert_eq!(received.last_read_id, "msg-456");
     }
 
     #[test]

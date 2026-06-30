@@ -15,7 +15,6 @@ use crate::mailbox::group::{GroupCoordinator, GroupMailboxManager};
 use crate::mailbox::token_manager::TokenManager;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::interceptors::AuthInterceptor;
-use crate::network::streaming::{ReactionAggregator, TypingAggregator};
 use crate::storage::repositories::{
     AnonDmRepository, AnonGroupRepository, SectionRepository, UnifiedConversationRepository,
     VectorRepository,
@@ -24,7 +23,7 @@ use crate::storage::repositories::{
 use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
 use crate::storage::{
     AttachmentRepository, ChannelRepository, Database, DraftRepository, KeyStore,
-    MessageRepository, ReactionRepository, SearchIndex, SettingsRepository, UserRepository,
+    MessageRepository, SearchIndex, SettingsRepository, UserRepository,
 };
 use crate::system::{Directories, Keyring};
 
@@ -69,8 +68,6 @@ pub struct InfrastructureContainer {
     pub(crate) settings_repo: Arc<SettingsRepository>,
     /// File attachment metadata repository.
     pub(crate) attachment_repo: Arc<AttachmentRepository>,
-    /// Message reactions repository.
-    pub(crate) reaction_repo: Arc<ReactionRepository>,
     /// Message draft repository.
     pub(crate) draft_repo: Arc<DraftRepository>,
     /// Full-text search index for messages.
@@ -101,12 +98,6 @@ pub struct InfrastructureContainer {
     pub(crate) prekey_manager: Arc<PreKeyManager>,
     /// Sesame session management with message queueing.
     pub(crate) sesame_manager: Arc<SesameManager<SqliteSesameStore>>,
-
-    // Streaming aggregators
-    /// Reaction event aggregator for real-time reaction updates.
-    pub(crate) reaction_aggregator: Arc<ReactionAggregator>,
-    /// Typing indicator aggregator for real-time typing state.
-    pub(crate) typing_aggregator: Arc<TypingAggregator>,
 
     // Network - pub for post-boot initialization
     /// gRPC connection pool.
@@ -218,7 +209,6 @@ impl InfrastructureContainer {
         let message_repo = Arc::new(MessageRepository::new(database.clone()));
         let settings_repo = Arc::new(SettingsRepository::new(database.clone()));
         let attachment_repo = Arc::new(AttachmentRepository::new(database.clone()));
-        let reaction_repo = Arc::new(ReactionRepository::new(database.clone()));
         let draft_repo = Arc::new(DraftRepository::new(database.clone()));
         let search_index = Arc::new(SearchIndex::new(database.clone()));
         let anon_group_repo = Arc::new(AnonGroupRepository::new(database.clone()));
@@ -260,10 +250,6 @@ impl InfrastructureContainer {
             group_mailbox_manager.clone(),
         ));
 
-        // 11. Create streaming aggregators
-        let reaction_aggregator = Arc::new(ReactionAggregator::new());
-        let typing_aggregator = Arc::new(TypingAggregator::new());
-
         // 12. Create token manager for anonymous mailbox and call room credentials
         let token_manager = Arc::new(TokenManager::new(database.clone()));
 
@@ -279,14 +265,11 @@ impl InfrastructureContainer {
             message_repo,
             settings_repo,
             attachment_repo,
-            reaction_repo,
             draft_repo,
             search_index,
             identity_manager,
             prekey_manager,
             sesame_manager,
-            reaction_aggregator,
-            typing_aggregator,
             grpc_pool,
             auth_interceptor,
             group_mailbox_manager,

@@ -25,8 +25,8 @@ use crate::proto::chat_v1::{
     InvalidateSessionRequest, ListDevicesRequest, ListDevicesResponse, LoginRequest, LogoutRequest,
     RefreshPreKeysRequest, RegenerateRecoveryCodesRequest, RegisterRequest, RegistrationResult,
     RenameDeviceRequest, RequestSenderCertificateRequest, RequestSenderCertificateResponse,
-    ResendVerificationEmailRequest, RevokeDeviceRequest, SignalPreKeyBundle,
-    UploadPreKeyBundleRequest, UseRecoveryCodeRequest, VerifyEmailRequest,
+    RevokeDeviceRequest, SignalPreKeyBundle,
+    UploadPreKeyBundleRequest, UseRecoveryCodeRequest,
 };
 // NOTE: ServerTrustRootResponse removed - trust root is hardcoded in config.rs per Signal's security model
 
@@ -119,41 +119,6 @@ impl AuthClient {
             .get_my_identity(request)
             .await
             .map(|r| r.into_inner())
-            .map_err(|s| NetworkError::from_status(&s))
-    }
-
-    /// Verify email with verification token.
-    pub async fn verify_email(&mut self, verification_token: &str) -> Result<(), NetworkError> {
-        let request = VerifyEmailRequest {
-            verification_token: verification_token.to_string(),
-            request_id: uuid::Uuid::new_v4().to_string(),
-        };
-
-        self.inner
-            .verify_email(request)
-            .await
-            .map(|_| ())
-            .map_err(|s| NetworkError::from_status(&s))
-    }
-
-    /// Resend verification email.
-    ///
-    /// # Arguments
-    ///
-    /// * `email_or_username` - Email address or username to identify account
-    pub async fn resend_verification_email(
-        &mut self,
-        email_or_username: &str,
-    ) -> Result<(), NetworkError> {
-        let request = ResendVerificationEmailRequest {
-            email_or_username: email_or_username.to_string(),
-            request_id: uuid::Uuid::new_v4().to_string(),
-        };
-
-        self.inner
-            .resend_verification_email(request)
-            .await
-            .map(|_| ())
             .map_err(|s| NetworkError::from_status(&s))
     }
 

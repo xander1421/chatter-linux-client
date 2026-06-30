@@ -217,6 +217,8 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "ChangePassword"));
             self.inner.unary(req, path, codec).await
         }
+        /** Account Recovery (recovery codes for password-loss scenario)
+*/
         pub async fn use_recovery_code(
             &mut self,
             request: impl tonic::IntoRequest<super::UseRecoveryCodeRequest>,
@@ -1478,6 +1480,7 @@ pub mod channel_service_client {
                 .insert(GrpcMethod::new("chat.v1.ChannelService", "BanUser"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn unban_user(
             &mut self,
             request: impl tonic::IntoRequest<super::UnbanUserRequest>,
@@ -3346,156 +3349,6 @@ pub mod message_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        /** Reactions
-*/
-        pub async fn add_reaction(
-            &mut self,
-            request: impl tonic::IntoRequest<super::ReactionRequest>,
-        ) -> std::result::Result<tonic::Response<super::Message>, tonic::Status> {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.MessageService/AddReaction",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.MessageService", "AddReaction"));
-            self.inner.unary(req, path, codec).await
-        }
-        ///
-        pub async fn remove_reaction(
-            &mut self,
-            request: impl tonic::IntoRequest<super::ReactionRequest>,
-        ) -> std::result::Result<tonic::Response<super::Message>, tonic::Status> {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.MessageService/RemoveReaction",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.MessageService", "RemoveReaction"));
-            self.inner.unary(req, path, codec).await
-        }
-        ///
-        pub async fn get_message_reactions(
-            &mut self,
-            request: impl tonic::IntoRequest<super::GetMessageReactionsRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::GetMessageReactionsResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.MessageService/GetMessageReactions",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(
-                    GrpcMethod::new("chat.v1.MessageService", "GetMessageReactions"),
-                );
-            self.inner.unary(req, path, codec).await
-        }
-        /** Read Receipts & Typing Indicators
-*/
-        pub async fn send_read_receipt(
-            &mut self,
-            request: impl tonic::IntoRequest<super::SendReadReceiptRequest>,
-        ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.MessageService/SendReadReceipt",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.MessageService", "SendReadReceipt"));
-            self.inner.unary(req, path, codec).await
-        }
-        ///
-        pub async fn get_read_receipts(
-            &mut self,
-            request: impl tonic::IntoRequest<super::GetReadReceiptsRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::GetReadReceiptsResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.MessageService/GetReadReceipts",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.MessageService", "GetReadReceipts"));
-            self.inner.unary(req, path, codec).await
-        }
-        ///
-        pub async fn send_typing_indicator(
-            &mut self,
-            request: impl tonic::IntoRequest<super::SendTypingIndicatorRequest>,
-        ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.MessageService/SendTypingIndicator",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(
-                    GrpcMethod::new("chat.v1.MessageService", "SendTypingIndicator"),
-                );
-            self.inner.unary(req, path, codec).await
-        }
         /** Pin/Unpin Messages
 */
         pub async fn pin_message(
@@ -3520,7 +3373,6 @@ pub mod message_service_client {
                 .insert(GrpcMethod::new("chat.v1.MessageService", "PinMessage"));
             self.inner.unary(req, path, codec).await
         }
-        ///
         pub async fn unpin_message(
             &mut self,
             request: impl tonic::IntoRequest<super::MessageUpdate>,
@@ -3543,7 +3395,6 @@ pub mod message_service_client {
                 .insert(GrpcMethod::new("chat.v1.MessageService", "UnpinMessage"));
             self.inner.unary(req, path, codec).await
         }
-        ///
         pub async fn list_pinned_messages(
             &mut self,
             request: impl tonic::IntoRequest<super::GetMessagesRequest>,
@@ -3569,8 +3420,6 @@ pub mod message_service_client {
                 .insert(GrpcMethod::new("chat.v1.MessageService", "ListPinnedMessages"));
             self.inner.unary(req, path, codec).await
         }
-        /** Search Messages
-*/
         pub async fn search(
             &mut self,
             request: impl tonic::IntoRequest<super::MessageSearchRequest>,
@@ -3596,8 +3445,6 @@ pub mod message_service_client {
                 .insert(GrpcMethod::new("chat.v1.MessageService", "Search"));
             self.inner.unary(req, path, codec).await
         }
-        /** Event streaming (for real-time updates like new messages, edits, deletions, reactions)
-*/
         pub async fn stream_message_events(
             &mut self,
             request: impl tonic::IntoRequest<super::StreamMessageEventsRequest>,
@@ -3625,7 +3472,6 @@ pub mod message_service_client {
                 );
             self.inner.server_streaming(req, path, codec).await
         }
-        ///
         pub async fn stream_global_events(
             &mut self,
             request: impl tonic::IntoRequest<super::StreamGlobalEventsRequest>,

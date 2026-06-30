@@ -66,7 +66,6 @@ use crate::services::pin_service::PinService;
 use crate::services::session_service::{SessionError, SessionService};
 use crate::services::signal_service::SignalService;
 use crate::services::section_service::SectionService;
-use crate::services::typing_service::TypingService;
 use crate::services::user::UserService;
 use crate::services::conversation::ConversationHandle;
 use crate::state::{
@@ -285,7 +284,6 @@ impl ChatterClient {
     crate::service_accessor!(channels, ChannelService, channel_service);
     crate::service_accessor!(users, UserService, user_service);
     crate::service_accessor!(attachments, AttachmentService, attachment_service);
-    crate::service_accessor!(typing, TypingService, typing_service);
     crate::service_accessor!(pins, PinService, pin_service);
     crate::service_accessor!(sessions, SessionService, session_service);
     crate::service_accessor!(anon_dms, AnonDmService, anon_dm_service);
@@ -625,11 +623,6 @@ impl ChatterClient {
             }
         });
         rx
-    }
-
-    /// Spawn the typing-indicator cleanup task (expires stale "typing..." state).
-    pub fn start_typing_cleanup(&self) -> tokio::task::JoinHandle<()> {
-        self.typing().start_cleanup_task()
     }
 
     /// Record a keystroke in `conversation`. The core state machine decides

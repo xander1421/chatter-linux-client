@@ -39,7 +39,6 @@ use crate::services::pin_service::PinService;
 use crate::services::session_service::{SessionError, SessionService};
 use crate::services::signal_service::SignalService;
 use crate::services::section_service::SectionService;
-use crate::services::typing_service::TypingService;
 use crate::services::user::UserService;
 use crate::services::conversation::ConversationHandle;
 use crate::state::{

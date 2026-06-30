@@ -32,12 +32,10 @@ use crate::services::mailbox_manager::MailboxManager;
 use crate::services::message::MessageService;
 use crate::services::message_gateway::MessageGateway;
 use crate::services::pin_service::PinService;
-use crate::services::reaction_service::ReactionService;
 use crate::services::session_service::SessionService;
 use crate::services::signal_service::SignalService;
 use crate::services::section_service::SectionService;
 use crate::services::user::UserService;
-use crate::services::typing_service::TypingService;
 use crate::state::{
     AuthState, ChatState, MessageState, OfflineState, OrgState, PrivacyState, UserState,
 };
@@ -73,8 +71,6 @@ pub struct CoreServices {
     pub signal_service: Arc<SignalService>,
     pub channel_event_service: Arc<ChannelEventService>,
     pub ai_service: Arc<AIService>,
-    pub reaction_service: Arc<ReactionService>,
-    pub typing_service: Arc<TypingService>,
     pub draft_service: Arc<DraftService>,
     pub pin_service: Arc<PinService>,
     pub anon_group_service: Arc<AnonGroupService>,
@@ -157,8 +153,6 @@ impl CoreServices {
             signal_service: services.signal_service.clone(),
             channel_event_service: services.channel_event_service.clone(),
             ai_service: services.ai_service.clone(),
-            reaction_service: services.reaction_service.clone(),
-            typing_service: services.typing_service.clone(),
             draft_service: services.draft_service.clone(),
             pin_service: services.pin_service.clone(),
             anon_group_service: services.anon_group_service.clone(),

@@ -339,11 +339,6 @@ impl GrpcClientPool {
         super::IntegrationClient::new(self.channel(), self.auth_clone())
     }
 
-    /// Create an authenticated MemoryClient for AI memory service.
-    pub fn memory_client(&self) -> super::MemoryClient {
-        super::MemoryClient::new(self.channel(), self.auth_clone())
-    }
-
     /// Create an authenticated SvrClient for backup operations.
     pub fn svr_client(&self) -> super::SvrClient {
         super::SvrClient::new(self.channel(), self.auth_clone())

@@ -89,7 +89,7 @@ impl MessageService {
             content,
             is_dm,
             require_encryption,
-        ).await;
+        ).await?;
 
         // If a new sender key was created, distribute SKDM to channel members
         if let Some(skdm) = skdm_opt {
