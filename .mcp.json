@@ -10,28 +10,6 @@
         "PUPPETEER_EXECUTABLE_PATH": "/usr/bin/chromium"
       }
     },
-    "codegraph": {
-      "type": "stdio",
-      "command": "/home/alex/Documents/chatter/tools/codegraph-rust/target/release/codegraph",
-      "args": [
-        "start",
-        "stdio"
-      ],
-      "env": {
-        "CODEGRAPH_SURREALDB_URL": "ws://localhost:3004",
-        "CODEGRAPH_SURREALDB_NAMESPACE": "main",
-        "CODEGRAPH_SURREALDB_DATABASE": "codegraph",
-        "CODEGRAPH_SURREALDB_USERNAME": "root",
-        "CODEGRAPH_SURREALDB_PASSWORD": "root",
-        "CODEGRAPH_EMBEDDING_PROVIDER": "ollama",
-        "CODEGRAPH_EMBEDDING_MODEL": "qwen3-embedding:8b",
-        "CODEGRAPH_EMBEDDING_DIMENSION": "4096",
-        "CODEGRAPH_OLLAMA_URL": "http://localhost:11434",
-        "CODEGRAPH_LLM_PROVIDER": "ollama",
-        "CODEGRAPH_LLM_ENABLED": "true",
-        "CODEGRAPH_LLM_MODEL": "qwen2.5-coder:14b"
-      }
-    },
     "pal": {
       "type": "stdio",
       "command": "bash",

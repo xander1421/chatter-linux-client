@@ -193,55 +193,6 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "Logout"));
             self.inner.unary(req, path, codec).await
         }
-        /** Note: RefreshToken RPC removed - Signal auth uses long-lived device sessions
-*/
-        pub async fn verify_email(
-            &mut self,
-            request: impl tonic::IntoRequest<super::VerifyEmailRequest>,
-        ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.AuthService/VerifyEmail",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.AuthService", "VerifyEmail"));
-            self.inner.unary(req, path, codec).await
-        }
-        ///
-        pub async fn resend_verification_email(
-            &mut self,
-            request: impl tonic::IntoRequest<super::ResendVerificationEmailRequest>,
-        ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.AuthService/ResendVerificationEmail",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(
-                    GrpcMethod::new("chat.v1.AuthService", "ResendVerificationEmail"),
-                );
-            self.inner.unary(req, path, codec).await
-        }
         /** Password Management
 */
         pub async fn change_password(
@@ -266,8 +217,6 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "ChangePassword"));
             self.inner.unary(req, path, codec).await
         }
-        /** Account Recovery (recovery codes for password-loss scenario)
-*/
         pub async fn use_recovery_code(
             &mut self,
             request: impl tonic::IntoRequest<super::UseRecoveryCodeRequest>,
@@ -293,8 +242,6 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "UseRecoveryCode"));
             self.inner.unary(req, path, codec).await
         }
-        /** Regenerate recovery codes (requires authentication + password confirmation)
-*/
         pub async fn regenerate_recovery_codes(
             &mut self,
             request: impl tonic::IntoRequest<super::RegenerateRecoveryCodesRequest>,
@@ -322,8 +269,6 @@ pub mod auth_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        /** Account Management
-*/
         pub async fn delete_account(
             &mut self,
             request: impl tonic::IntoRequest<super::DeleteAccountRequest>,
@@ -349,8 +294,6 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "DeleteAccount"));
             self.inner.server_streaming(req, path, codec).await
         }
-        /** Session Management
-*/
         pub async fn list_sessions(
             &mut self,
             request: impl tonic::IntoRequest<super::GetActiveSessionsRequest>,
@@ -376,7 +319,6 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "ListSessions"));
             self.inner.unary(req, path, codec).await
         }
-        ///
         pub async fn revoke_session(
             &mut self,
             request: impl tonic::IntoRequest<super::InvalidateSessionRequest>,
@@ -399,7 +341,6 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "RevokeSession"));
             self.inner.unary(req, path, codec).await
         }
-        ///
         pub async fn revoke_all_sessions(
             &mut self,
             request: impl tonic::IntoRequest<super::InvalidateAllSessionsRequest>,
@@ -422,8 +363,6 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "RevokeAllSessions"));
             self.inner.unary(req, path, codec).await
         }
-        /** Device Management (multi-device Signal Protocol support)
-*/
         pub async fn list_devices(
             &mut self,
             request: impl tonic::IntoRequest<super::ListDevicesRequest>,
@@ -449,7 +388,6 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "ListDevices"));
             self.inner.unary(req, path, codec).await
         }
-        ///
         pub async fn rename_device(
             &mut self,
             request: impl tonic::IntoRequest<super::RenameDeviceRequest>,
@@ -472,7 +410,6 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "RenameDevice"));
             self.inner.unary(req, path, codec).await
         }
-        ///
         pub async fn revoke_device(
             &mut self,
             request: impl tonic::IntoRequest<super::RevokeDeviceRequest>,
@@ -495,8 +432,6 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "RevokeDevice"));
             self.inner.unary(req, path, codec).await
         }
-        /** Identity (for OIDC clients that need to discover their Chatter user_id)
-*/
         pub async fn get_my_identity(
             &mut self,
             request: impl tonic::IntoRequest<super::GetMyIdentityRequest>,
@@ -522,8 +457,6 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "GetMyIdentity"));
             self.inner.unary(req, path, codec).await
         }
-        /** Username Availability
-*/
         pub async fn check_username(
             &mut self,
             request: impl tonic::IntoRequest<super::CheckUsernameRequest>,
@@ -549,8 +482,6 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "CheckUsername"));
             self.inner.unary(req, path, codec).await
         }
-        /** Signal Protocol Key Management
-*/
         pub async fn upload_pre_key_bundle(
             &mut self,
             request: impl tonic::IntoRequest<super::UploadPreKeyBundleRequest>,
@@ -573,9 +504,6 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "UploadPreKeyBundle"));
             self.inner.unary(req, path, codec).await
         }
-        /** Sealed Sender Certificate Management (metadata privacy)
- NOTE: No GetServerTrustRoot - trust root is hardcoded in clients per Signal's security model
-*/
         pub async fn request_sender_certificate(
             &mut self,
             request: impl tonic::IntoRequest<super::RequestSenderCertificateRequest>,
@@ -603,7 +531,6 @@ pub mod auth_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        ///
         pub async fn get_pre_key_bundle(
             &mut self,
             request: impl tonic::IntoRequest<super::GetPreKeyBundleRequest>,
@@ -629,7 +556,6 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "GetPreKeyBundle"));
             self.inner.unary(req, path, codec).await
         }
-        ///
         pub async fn refresh_pre_keys(
             &mut self,
             request: impl tonic::IntoRequest<super::RefreshPreKeysRequest>,
@@ -652,7 +578,6 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "RefreshPreKeys"));
             self.inner.unary(req, path, codec).await
         }
-        ///
         pub async fn get_pre_key_stats(
             &mut self,
             request: impl tonic::IntoRequest<super::GetPreKeyStatsRequest>,
@@ -678,12 +603,6 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "GetPreKeyStats"));
             self.inner.unary(req, path, codec).await
         }
-        /** ResetSession forcibly invalidates Signal session state between the
- calling device and a named peer. The server emits a device-targeted
- notification to the requester's own device(s) telling the local
- Signal client to drop its session(s) with the peer; the next send
- will rebuild via X3DH from a fresh prekey bundle.
-*/
         pub async fn reset_session(
             &mut self,
             request: impl tonic::IntoRequest<super::ResetSessionRequest>,
@@ -3095,422 +3014,6 @@ pub mod integration_service_client {
                 .insert(
                     GrpcMethod::new("chat.v1.IntegrationService", "ListAvailableModels"),
                 );
-            self.inner.unary(req, path, codec).await
-        }
-    }
-}
-/// Generated client implementations.
-pub mod memory_service_client {
-    #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
-    use tonic::codegen::*;
-    use tonic::codegen::http::Uri;
-    ///
-    #[derive(Debug, Clone)]
-    pub struct MemoryServiceClient<T> {
-        inner: tonic::client::Grpc<T>,
-    }
-    impl MemoryServiceClient<tonic::transport::Channel> {
-        /// Attempt to create a new client by connecting to a given endpoint.
-        pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
-        where
-            D: TryInto<tonic::transport::Endpoint>,
-            D::Error: Into<StdError>,
-        {
-            let conn = tonic::transport::Endpoint::new(dst)?.connect().await?;
-            Ok(Self::new(conn))
-        }
-    }
-    impl<T> MemoryServiceClient<T>
-    where
-        T: tonic::client::GrpcService<tonic::body::BoxBody>,
-        T::Error: Into<StdError>,
-        T::ResponseBody: Body<Data = Bytes> + Send + 'static,
-        <T::ResponseBody as Body>::Error: Into<StdError> + Send,
-    {
-        pub fn new(inner: T) -> Self {
-            let inner = tonic::client::Grpc::new(inner);
-            Self { inner }
-        }
-        pub fn with_origin(inner: T, origin: Uri) -> Self {
-            let inner = tonic::client::Grpc::with_origin(inner, origin);
-            Self { inner }
-        }
-        pub fn with_interceptor<F>(
-            inner: T,
-            interceptor: F,
-        ) -> MemoryServiceClient<InterceptedService<T, F>>
-        where
-            F: tonic::service::Interceptor,
-            T::ResponseBody: Default,
-            T: tonic::codegen::Service<
-                http::Request<tonic::body::BoxBody>,
-                Response = http::Response<
-                    <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
-                >,
-            >,
-            <T as tonic::codegen::Service<
-                http::Request<tonic::body::BoxBody>,
-            >>::Error: Into<StdError> + Send + Sync,
-        {
-            MemoryServiceClient::new(InterceptedService::new(inner, interceptor))
-        }
-        /// Compress requests with the given encoding.
-        ///
-        /// This requires the server to support it otherwise it might respond with an
-        /// error.
-        #[must_use]
-        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
-            self.inner = self.inner.send_compressed(encoding);
-            self
-        }
-        /// Enable decompressing responses.
-        #[must_use]
-        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
-            self.inner = self.inner.accept_compressed(encoding);
-            self
-        }
-        /// Limits the maximum size of a decoded message.
-        ///
-        /// Default: `4MB`
-        #[must_use]
-        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
-            self.inner = self.inner.max_decoding_message_size(limit);
-            self
-        }
-        /// Limits the maximum size of an encoded message.
-        ///
-        /// Default: `usize::MAX`
-        #[must_use]
-        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
-            self.inner = self.inner.max_encoding_message_size(limit);
-            self
-        }
-        /** Store a memory (explicit user request or client-side extraction result).
-*/
-        pub async fn remember(
-            &mut self,
-            request: impl tonic::IntoRequest<super::RememberRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::RememberResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.MemoryService/Remember",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.MemoryService", "Remember"));
-            self.inner.unary(req, path, codec).await
-        }
-        /** Store multiple memories at once (client-side batch extraction).
-*/
-        pub async fn batch_remember(
-            &mut self,
-            request: impl tonic::IntoRequest<super::BatchRememberRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::BatchRememberResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.MemoryService/BatchRemember",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.MemoryService", "BatchRemember"));
-            self.inner.unary(req, path, codec).await
-        }
-        /** Delete a specific memory.
-*/
-        pub async fn forget(
-            &mut self,
-            request: impl tonic::IntoRequest<super::ForgetRequest>,
-        ) -> std::result::Result<tonic::Response<super::ForgetResponse>, tonic::Status> {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.MemoryService/Forget",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.MemoryService", "Forget"));
-            self.inner.unary(req, path, codec).await
-        }
-        /** Semantic search over memories with optional entity/relationship inclusion.
-*/
-        pub async fn search(
-            &mut self,
-            request: impl tonic::IntoRequest<super::SearchRequest>,
-        ) -> std::result::Result<tonic::Response<super::SearchResponse>, tonic::Status> {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.MemoryService/Search",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.MemoryService", "Search"));
-            self.inner.unary(req, path, codec).await
-        }
-        /** Build a formatted context string for LLM prompts within a token budget.
-*/
-        pub async fn build_context(
-            &mut self,
-            request: impl tonic::IntoRequest<super::BuildContextRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::BuildContextResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.MemoryService/BuildContext",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.MemoryService", "BuildContext"));
-            self.inner.unary(req, path, codec).await
-        }
-        /** Extract entities, relationships, and memories from a conversation exchange.
- SECURITY: Must NOT be called with E2E encrypted content.
- Handler MUST verify channel is not E2E encrypted before processing.
- Return PERMISSION_DENIED if channel uses E2E encryption.
-*/
-        pub async fn process_episode(
-            &mut self,
-            request: impl tonic::IntoRequest<super::ProcessEpisodeRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::ProcessEpisodeResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.MemoryService/ProcessEpisode",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.MemoryService", "ProcessEpisode"));
-            self.inner.unary(req, path, codec).await
-        }
-        /** Get a specific entity from the knowledge graph.
-*/
-        pub async fn get_entity(
-            &mut self,
-            request: impl tonic::IntoRequest<super::GetEntityRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::GetEntityResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.MemoryService/GetEntity",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.MemoryService", "GetEntity"));
-            self.inner.unary(req, path, codec).await
-        }
-        /** Get entities related to a given entity via graph traversal.
-*/
-        pub async fn get_related_entities(
-            &mut self,
-            request: impl tonic::IntoRequest<super::GetRelatedEntitiesRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::GetRelatedEntitiesResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.MemoryService/GetRelatedEntities",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.MemoryService", "GetRelatedEntities"));
-            self.inner.unary(req, path, codec).await
-        }
-        /** Get the AI's aggregated understanding of the authenticated user.
-*/
-        pub async fn get_user_memory_profile(
-            &mut self,
-            request: impl tonic::IntoRequest<super::GetUserMemoryProfileRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::GetUserMemoryProfileResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.MemoryService/GetUserMemoryProfile",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(
-                    GrpcMethod::new("chat.v1.MemoryService", "GetUserMemoryProfile"),
-                );
-            self.inner.unary(req, path, codec).await
-        }
-        /** Summarize a set of conversation episodes.
- SECURITY: Same E2E restriction as ProcessEpisode — server processes plaintext.
- Handler MUST verify channel is not E2E encrypted before processing.
- Return PERMISSION_DENIED if channel uses E2E encryption.
-*/
-        pub async fn summarize_conversation(
-            &mut self,
-            request: impl tonic::IntoRequest<super::SummarizeConversationRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::SummarizeConversationResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.MemoryService/SummarizeConversation",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(
-                    GrpcMethod::new("chat.v1.MemoryService", "SummarizeConversation"),
-                );
-            self.inner.unary(req, path, codec).await
-        }
-        /** Trigger time-based memory decay for the authenticated user.
-*/
-        pub async fn decay_memories(
-            &mut self,
-            request: impl tonic::IntoRequest<super::DecayMemoriesRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::DecayMemoriesResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.MemoryService/DecayMemories",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.MemoryService", "DecayMemories"));
-            self.inner.unary(req, path, codec).await
-        }
-        /** Get memory statistics for the authenticated user.
-*/
-        pub async fn get_memory_stats(
-            &mut self,
-            request: impl tonic::IntoRequest<super::GetMemoryStatsRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::GetMemoryStatsResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.MemoryService/GetMemoryStats",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.MemoryService", "GetMemoryStats"));
             self.inner.unary(req, path, codec).await
         }
     }
