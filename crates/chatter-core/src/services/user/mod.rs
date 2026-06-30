@@ -186,10 +186,41 @@ impl UserService {
             }
         });
 
+        // Decrypt the avatar with the friend's profile key (if we have it).
+        profile.avatar_bytes = self.try_decrypt_avatar(
+            &current_user,
+            user_id,
+            &proto_profile.encrypted_avatar,
+        );
+
         self.user_repo.ensure_user_exists(user_id)?;
         self.user_repo.upsert_profile(&profile)?;
 
         Ok(profile)
+    }
+
+    /// Try to decrypt a friend's avatar using their profile key.
+    ///
+    /// Returns Some(avatar_bytes) if we have their profile key and decryption
+    /// succeeds; None if no key, empty blob, or decryption fails. Mirrors
+    /// [`Self::try_decrypt_display_name`] but the avatar travels as raw bytes
+    /// (no base64) in the proto's `encrypted_avatar` field.
+    fn try_decrypt_avatar(
+        &self,
+        current_user_id: &UserId,
+        friend_id: &UserId,
+        encrypted_avatar: &[u8],
+    ) -> Option<Vec<u8>> {
+        if encrypted_avatar.is_empty() {
+            return None;
+        }
+
+        let profile_key = self.user_repo
+            .get_friend_profile_key(current_user_id, friend_id)
+            .ok()
+            .flatten()?;
+
+        crate::crypto::profile_crypto::decrypt_avatar(&profile_key, encrypted_avatar).ok()
     }
 
     /// Try to decrypt a friend's display_name using their profile key.
@@ -250,22 +281,57 @@ impl UserService {
             .get_profile(&current_user)?
             .ok_or_else(|| UserError::UserNotFound(current_user))?;
 
-        // SECURITY: Encrypt display_name with profile_key if being updated
-        // Server never sees plaintext profile data - only the encrypted blob
-        let encrypted_display_name = if let Some(ref name) = display_name {
-            let profile_key_bytes = self
-                .settings_repo
-                .get_bytes(keys::PROFILE_KEY)?
-                .ok_or(UserError::NotLoggedIn)?;
-            let profile_key: [u8; 32] = profile_key_bytes
-                .try_into()
-                .map_err(|_| UserError::InvalidInput("corrupt profile_key".to_string()))?;
+        // Load our profile_key once — needed to encrypt both display_name and
+        // avatar. Server never sees plaintext profile data, only opaque blobs.
+        let profile_key: Option<[u8; 32]> = match self.settings_repo.get_bytes(keys::PROFILE_KEY)? {
+            Some(bytes) => bytes.try_into().ok(),
+            None => None,
+        };
 
+        // SECURITY: Encrypt display_name with profile_key if being updated
+        let encrypted_display_name = if let Some(ref name) = display_name {
+            let profile_key = profile_key.ok_or(UserError::NotLoggedIn)?;
             let encrypted = crate::crypto::profile_crypto::encrypt_display_name(&profile_key, name)?;
             Some(base64::engine::general_purpose::STANDARD.encode(encrypted))
         } else {
             None
         };
+
+        // Encrypt our avatar (from the local AVATAR settings key) for E2E
+        // delivery to friends — same profile-key crypto the anon path uses, but
+        // carried in the server UserProfile's `encrypted_avatar` blob. Normalize
+        // (downscale/re-encode to WebP via the canonical avatar normalizer) when
+        // it exceeds the ~64 KB target, then encrypt. If the encrypted blob would
+        // still exceed the wire cap, skip it so the rest of the update succeeds.
+        let (encrypted_avatar, own_avatar_bytes): (Vec<u8>, Option<Vec<u8>>) =
+            match (profile_key, self.settings_repo.get_bytes(keys::AVATAR)?) {
+                (Some(pk), Some(avatar)) if !avatar.is_empty() => {
+                    const AVATAR_TARGET_BYTES: usize = 64 * 1024;
+                    const ENCRYPTED_AVATAR_CAP: usize = 96_000;
+                    let normalized = if avatar.len() > AVATAR_TARGET_BYTES {
+                        crate::media::ImageProcessor::process_avatar_from_memory(&avatar)
+                            .unwrap_or(avatar)
+                    } else {
+                        avatar
+                    };
+                    match crate::crypto::profile_crypto::encrypt_avatar(&pk, &normalized) {
+                        Ok(enc) if enc.len() <= ENCRYPTED_AVATAR_CAP => (enc, Some(normalized)),
+                        Ok(enc) => {
+                            tracing::warn!(
+                                encrypted_len = enc.len(),
+                                cap = ENCRYPTED_AVATAR_CAP,
+                                "Encrypted avatar exceeds wire cap; omitting from profile update"
+                            );
+                            (Vec::new(), Some(normalized))
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Failed to encrypt avatar; omitting from profile update");
+                            (Vec::new(), None)
+                        }
+                    }
+                }
+                _ => (Vec::new(), None),
+            };
 
         let proto_profile = UserProfile {
             user_id: current_user.to_string(),
@@ -279,6 +345,7 @@ impl UserService {
             presence: domain_presence_to_proto(existing.presence),
             encrypted_name: Vec::new(),
             encrypted_about: Vec::new(),
+            encrypted_avatar: encrypted_avatar.clone(),
             profile_key_version: String::new(),
         };
 
@@ -288,6 +355,9 @@ impl UserService {
         }
         if status_message.is_some() {
             paths.push("status_message".to_string());
+        }
+        if !encrypted_avatar.is_empty() {
+            paths.push("encrypted_avatar".to_string());
         }
 
         let update_mask = if paths.is_empty() {
@@ -318,6 +388,13 @@ impl UserService {
         // The server returns the encrypted version, but we want plaintext in local storage
         if let Some(plaintext_name) = display_name {
             profile.display_name = plaintext_name;
+        }
+
+        // Store our own (normalized) avatar bytes locally — the returned event
+        // only carries the encrypted blob, which we can't decrypt for ourselves
+        // via the friend-key path.
+        if own_avatar_bytes.is_some() {
+            profile.avatar_bytes = own_avatar_bytes;
         }
 
         self.user_repo.upsert_profile(&profile)?;
@@ -515,6 +592,11 @@ impl UserService {
                     friend.display_name.clone()
                 }
             });
+            profile.avatar_bytes = self.try_decrypt_avatar(
+                &current_user,
+                &friend_id,
+                &friend.encrypted_avatar,
+            );
 
             self.user_repo.ensure_user_exists(&friend_id).ok();
             self.user_repo.upsert_profile(&profile).ok();

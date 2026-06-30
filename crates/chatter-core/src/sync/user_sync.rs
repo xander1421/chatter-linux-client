@@ -141,6 +141,7 @@ impl UserSync {
                 let profile = Profile {
                     user_id,
                     display_name,
+                    avatar_bytes: None,
                     status_message,
                     presence,
                 };

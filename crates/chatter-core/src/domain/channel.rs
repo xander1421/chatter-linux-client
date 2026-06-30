@@ -199,6 +199,8 @@ pub struct Membership {
 pub struct MemberWithProfile {
     pub membership: Membership,
     pub display_name: String,
+    /// Decrypted avatar bytes from the member's server profile, if known.
+    pub avatar_bytes: Option<Vec<u8>>,
 }
 
 /// Notification preference for a channel.

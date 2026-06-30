@@ -27,6 +27,9 @@ pub fn proto_to_domain_profile(proto: &UserProfile) -> Result<Profile, UserError
     Ok(Profile {
         user_id,
         display_name: proto.display_name.clone(),
+        // Decryption needs the friend's profile key + user id, which this
+        // stateless helper lacks; get_user_profile fills it via try_decrypt_avatar.
+        avatar_bytes: None,
         status_message,
         presence,
     })

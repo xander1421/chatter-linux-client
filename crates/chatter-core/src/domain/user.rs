@@ -135,6 +135,10 @@ impl StatusMessage {
 pub struct Profile {
     pub user_id: UserId,
     pub display_name: String,
+    /// Decrypted avatar image bytes (normalized WebP). `None` when we don't
+    /// have the owner's profile key or they have no avatar set. Sourced from
+    /// the server profile's E2E `encrypted_avatar` blob, decrypted locally.
+    pub avatar_bytes: Option<Vec<u8>>,
     pub status_message: Option<StatusMessage>,
     pub presence: PresenceStatus,
 }
@@ -146,6 +150,7 @@ impl Profile {
         Self {
             user_id,
             display_name,
+            avatar_bytes: None,
             status_message: None,
             presence: PresenceStatus::default(),
         }

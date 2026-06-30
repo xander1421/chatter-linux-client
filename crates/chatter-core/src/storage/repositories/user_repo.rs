@@ -165,14 +165,14 @@ impl UserRepository {
     pub fn get_profile(&self, user_id: &UserId) -> Result<Option<Profile>, StorageError> {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
-            "SELECT user_id, display_name, status_text, status_emoji, status_expires_at, presence
+            "SELECT user_id, display_name, avatar_bytes, status_text, status_emoji, status_expires_at, presence
              FROM profiles WHERE user_id = ?1",
         )?;
 
         let result = stmt.query_row(params![user_id.to_string()], |row| {
-            let status_text: Option<String> = row.get(2)?;
-            let status_emoji: Option<String> = row.get(3)?;
-            let status_expires_at: Option<String> = row.get(4)?;
+            let status_text: Option<String> = row.get(3)?;
+            let status_emoji: Option<String> = row.get(4)?;
+            let status_expires_at: Option<String> = row.get(5)?;
 
             let status_message = status_text.map(|text| StatusMessage {
                 text,
@@ -185,8 +185,9 @@ impl UserRepository {
                     rusqlite::Error::InvalidParameterName("Invalid UUID".into())
                 })?,
                 display_name: row.get(1)?,
+                avatar_bytes: row.get(2)?,
                 status_message,
-                presence: presence_from_i32(row.get(5)?),
+                presence: presence_from_i32(row.get(6)?),
             })
         });
 
@@ -210,10 +211,13 @@ impl UserRepository {
         };
 
         conn.execute(
-            "INSERT INTO profiles (user_id, display_name, status_text, status_emoji, status_expires_at, presence)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO profiles (user_id, display_name, avatar_bytes, status_text, status_emoji, status_expires_at, presence)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(user_id) DO UPDATE SET
                 display_name = excluded.display_name,
+                -- Preserve an existing decrypted avatar when this upsert carries
+                -- none (e.g. sync/stream paths that don't decrypt the avatar).
+                avatar_bytes = COALESCE(excluded.avatar_bytes, profiles.avatar_bytes),
                 status_text = excluded.status_text,
                 status_emoji = excluded.status_emoji,
                 status_expires_at = excluded.status_expires_at,
@@ -221,6 +225,7 @@ impl UserRepository {
             params![
                 profile.user_id.to_string(),
                 profile.display_name,
+                profile.avatar_bytes,
                 status_text,
                 status_emoji,
                 status_expires_at,

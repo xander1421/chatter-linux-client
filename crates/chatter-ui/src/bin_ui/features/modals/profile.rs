@@ -107,7 +107,15 @@ pub fn open_user_profile(
         w.set_profile_display_name(display_name.into());
         w.set_profile_username(username.into());
         w.set_profile_initials(initials.into());
-        w.set_profile_avatar_source(slint::Image::default());
+        // Render the peer's avatar from their decrypted server-profile bytes
+        // (no URL); falls back to initials when we have none.
+        let avatar_source = ui_ctx
+            .and_then(|ctx| ctx.get_profile_local(user_id))
+            .and_then(|p| p.avatar_bytes)
+            .as_deref()
+            .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
+            .unwrap_or_default();
+        w.set_profile_avatar_source(avatar_source);
         w.set_profile_presence(presence.into());
         w.set_profile_bio(bio.into());
         // Check verification state

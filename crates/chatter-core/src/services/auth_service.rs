@@ -484,6 +484,7 @@ impl AuthService {
         let profile = Profile {
             user_id,
             display_name: display_name.clone(),
+            avatar_bytes: None,
             status_message: None,
             presence: PresenceStatus::Online,
         };
@@ -796,6 +797,7 @@ impl AuthService {
         let profile = Profile {
             user_id,
             display_name: server_display_name.clone(),
+            avatar_bytes: None,
             status_message: None,
             presence: PresenceStatus::Online,
         };

@@ -110,7 +110,8 @@ pub fn domain_config_to_proto(config: &ChannelConfig) -> chat_v1::channel::Confi
             seconds: s as i64,
             nanos: 0,
         }),
-        max_members: config.max_members.unwrap_or(0),
+        // Proto requires 0 < max_members <= 10000; None means "no user-set limit" → cap at max.
+        max_members: config.max_members.unwrap_or(10000),
         encrypted: config.require_encryption,
         password_hash: String::new(),
         friends_only: false,

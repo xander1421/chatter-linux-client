@@ -39,7 +39,7 @@ pub fn refresh_friends_list(window_weak: Weak<MainWindow>, ui_ctx: Arc<ChatterCl
                     user_id: friendship.addressee_id.to_string(),
                     display_name: profile.display_name.clone(),
                     username: String::new(),
-                    avatar_bytes: None,
+                    avatar_bytes: profile.avatar_bytes.clone(),
                     avatar_decoded: None,
                     presence_status: match profile.presence {
                         chatter_core::domain::user::PresenceStatus::Online => "online",
@@ -162,6 +162,13 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                 let other_user_name = channel.name.clone();
 
                 let mut dm_item = dm_to_send_data(channel, &other_user_name, &other_user_id);
+                // Regular server DMs render the peer's avatar from their decrypted
+                // server-profile bytes (no URL). Falls back to initials when absent.
+                if let Ok(peer_uid) = other_user_id.parse() {
+                    if let Some(peer_profile) = ui_ctx.get_profile_local(&peer_uid) {
+                        dm_item.avatar_bytes = peer_profile.avatar_bytes;
+                    }
+                }
                 dm_item.last_message = preview.last_message;
                 dm_item.timestamp = preview.timestamp_display;
                 dm_list.push(dm_item);
@@ -249,24 +256,24 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         let friend_id_str = friend_id.to_string();
 
         // Try to fetch profile from server
-        let (display_name, username) =
+        let (display_name, username, avatar_bytes) =
             match ui_ctx.get_user_profile(&friend_id).await {
                 Ok(profile) => {
                     let name = if profile.display_name.is_empty() {
                         friend_id_str.clone()
                     } else {
-                        profile.display_name
+                        profile.display_name.clone()
                     };
-                    (name.clone(), name)
+                    (name.clone(), name, profile.avatar_bytes)
                 }
-                Err(_) => (friend_id_str.clone(), friend_id_str.clone()),
+                Err(_) => (friend_id_str.clone(), friend_id_str.clone(), None),
             };
 
         received_ui.push(FriendRequestSendData {
             user_id: friend_id_str,
             display_name,
             username,
-            avatar_bytes: None,
+            avatar_bytes,
             avatar_decoded: None,
             sent_at: String::new(),
         });
@@ -278,24 +285,24 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         let friend_id_str = friend_id.to_string();
 
         // Try to fetch profile from server
-        let (display_name, username) =
+        let (display_name, username, avatar_bytes) =
             match ui_ctx.get_user_profile(&friend_id).await {
                 Ok(profile) => {
                     let name = if profile.display_name.is_empty() {
                         friend_id_str.clone()
                     } else {
-                        profile.display_name
+                        profile.display_name.clone()
                     };
-                    (name.clone(), name)
+                    (name.clone(), name, profile.avatar_bytes)
                 }
-                Err(_) => (friend_id_str.clone(), friend_id_str.clone()),
+                Err(_) => (friend_id_str.clone(), friend_id_str.clone(), None),
             };
 
         sent_ui.push(FriendRequestSendData {
             user_id: friend_id_str,
             display_name,
             username,
-            avatar_bytes: None,
+            avatar_bytes,
             avatar_decoded: None,
             sent_at: String::new(),
         });
@@ -543,7 +550,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                     user_id: friendship.addressee_id.to_string(),
                     display_name: profile.display_name.clone(),
                     username: String::new(),
-                    avatar_bytes: None,
+                    avatar_bytes: profile.avatar_bytes.clone(),
                     avatar_decoded: None,
                     presence_status: match profile.presence {
                         chatter_core::domain::user::PresenceStatus::Online => "online",

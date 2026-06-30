@@ -38,6 +38,9 @@ impl Migration for V002Users {
         CREATE TABLE profiles (
             user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
             display_name TEXT NOT NULL,
+            -- Decrypted avatar image bytes (normalized WebP), from the server
+            -- profile's E2E encrypted_avatar blob. NULL when unknown.
+            avatar_bytes BLOB,
             status_text TEXT,
             status_emoji TEXT,
             status_expires_at TEXT,
