@@ -8,6 +8,10 @@ export component ModalContainer inherits Rectangle {
     in property <bool> show: false;
     in property <length> modal-width: 480px;
     in property <length> max-modal-height: 600px;
+    // When true the card fills the available height (capped at max-modal-height /
+    // viewport) instead of hugging its content's preferred height. Use for
+    // modals whose body should expand (e.g. settings with a scrollable panel).
+    in property <bool> fill-height: false;
 
     callback close();
 
@@ -50,9 +54,12 @@ export component ModalContainer inherits Rectangle {
         // Responsive width: cap at viewport width minus padding
         width: min(root.modal-width, parent.width - 32px);
         
-        // Height: sized to content, but capped at max-modal-height or viewport
-        // Use preferred-height of the children (usually a VerticalLayout)
-        height: min(self.preferred-height, min(root.max-modal-height, parent.height - 48px));
+        // Height: by default sized to content (preferred-height of the children),
+        // capped at max-modal-height or viewport. When fill-height is set, expand
+        // straight to that cap so the body uses the available vertical space.
+        height: root.fill-height
+            ? min(root.max-modal-height, parent.height - 48px)
+            : min(self.preferred-height, min(root.max-modal-height, parent.height - 48px));
         
         // Centering — round to nearest pixel to avoid sub-pixel text rendering
         x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;

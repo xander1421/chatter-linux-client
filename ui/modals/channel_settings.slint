@@ -99,6 +99,9 @@ export component ChannelSettingsModal inherits Rectangle {
         title: "Channel Settings";
         modal-width: 800px;
         max-modal-height: 820px;
+        // Expand the card to the available height (capped at max-modal-height)
+        // instead of hugging content — the right panel scrolls.
+        fill-height: true;
 
         close => {
             root.close();
@@ -106,11 +109,6 @@ export component ChannelSettingsModal inherits Rectangle {
 
         HorizontalLayout {
             spacing: 0;
-            // Drive a consistent tall body. The modal card sizes to its
-            // content's *preferred* height (modal_container reads
-            // self.preferred-height), so min-height does nothing here —
-            // preferred-height is the knob.
-            preferred-height: 560px;
 
             // Left sidebar - section navigation — Neo inset panel
             Rectangle {
