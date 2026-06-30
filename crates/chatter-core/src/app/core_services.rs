@@ -26,7 +26,6 @@ use crate::services::channel::ChannelService;
 use crate::services::channel_event_service::ChannelEventService;
 use crate::services::dm_bootstrap_service::DmBootstrapService;
 use crate::services::device_service::DeviceService;
-use crate::services::organization_service::OrganizationService;
 use crate::services::draft_service::DraftService;
 use crate::services::mailbox_manager::MailboxManager;
 use crate::services::message::MessageService;
@@ -37,7 +36,7 @@ use crate::services::signal_service::SignalService;
 use crate::services::section_service::SectionService;
 use crate::services::user::UserService;
 use crate::state::{
-    AuthState, ChatState, MessageState, OfflineState, OrgState, PrivacyState, UserState,
+    AuthState, ChatState, MessageState, OfflineState, PrivacyState, UserState,
 };
 #[cfg(feature = "jarvis")]
 use crate::state::JarvisState;
@@ -81,7 +80,6 @@ pub struct CoreServices {
     pub notification_service: Arc<NotificationService>,
     pub section_service: Arc<SectionService>,
     pub device_service: Arc<DeviceService>,
-    pub organization_service: Arc<OrganizationService>,
     /// Unified conversation repository.
     pub conversation_repo: Arc<crate::storage::repositories::UnifiedConversationRepository>,
 
@@ -92,7 +90,6 @@ pub struct CoreServices {
     pub user_state: UserState,
     pub privacy_state: PrivacyState,
     pub offline_state: OfflineState,
-    pub org_state: OrgState,
     #[cfg(feature = "jarvis")]
     pub jarvis_state: JarvisState,
 
@@ -174,7 +171,6 @@ impl CoreServices {
             },
             section_service: services.section_service.clone(),
             device_service: services.device_service.clone(),
-            organization_service: services.organization_service.clone(),
             conversation_repo: services.conversation_repo.clone(),
 
             // State stores
@@ -184,7 +180,6 @@ impl CoreServices {
             user_state: UserState::new(),
             privacy_state: PrivacyState::new(),
             offline_state: OfflineState::new(),
-            org_state: services.org_state.clone(),
             #[cfg(feature = "jarvis")]
             jarvis_state: JarvisState::new(),
             event_bus: infra.event_bus.clone(),

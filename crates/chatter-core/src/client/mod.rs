@@ -70,7 +70,7 @@ use crate::services::user::UserService;
 use crate::services::conversation::ConversationHandle;
 use crate::state::{
     ActiveConversation, AuthState, ChatState, MessageState, OfflineState,
-    OrgState, PrivacyState, UserState,
+    PrivacyState, UserState,
 };
 #[cfg(feature = "jarvis")]
 use crate::state::JarvisState;
@@ -1109,20 +1109,11 @@ impl ChatterClient {
     pub fn privacy_state(&self) -> &PrivacyState { &self.ui.privacy_state }
     #[cfg(feature = "jarvis")]
     pub fn jarvis_state(&self) -> &JarvisState { &self.ui.jarvis_state }
-    pub fn org_state(&self) -> &OrgState { &self.ui.org_state }
 
     // ── Infrastructure ──────────────────────────────────────────────────
 
     pub fn runtime_handle(&self) -> &tokio::runtime::Handle { &self.ui.runtime_handle }
     pub fn directories(&self) -> &Directories { &self.ui.directories }
-
-    /// Create an organization client for making gRPC calls.
-    /// Returns None if not connected to server.
-    pub fn try_org_client(&self) -> Option<crate::network::grpc::OrganizationClient> {
-        self.ui.grpc_pool.try_channel().map(|channel| {
-            crate::network::grpc::OrganizationClient::new(channel, self.ui.grpc_pool.auth_clone())
-        })
-    }
 
     /// Post-boot call service handle (OnceLock).
     #[cfg(feature = "media")]
@@ -2065,33 +2056,6 @@ impl ChatterClient {
             .forward_message(&mut msg_client, &mut auth_client, &mut ch_client, source_message_id, target_channel_id, comment)
             .await
             .map_err(|e| ClientError::Inbox(e.to_string()))
-    }
-
-    // ── Organization management ────────────────────────────────────
-
-    /// List all organizations the current user belongs to.
-    pub async fn list_user_organizations(&self) -> Result<Vec<crate::proto::organization_v1::Organization>, ClientError> {
-        let mut client = self.try_org_client()
-            .ok_or_else(|| ClientError::NotConnected)?;
-        client.list_user_organizations().await
-            .map_err(|e| ClientError::Inbox(e.to_string()))
-    }
-
-    /// Get organization details by ID.
-    pub async fn get_organization(&self, org_id: &str) -> Result<crate::proto::organization_v1::Organization, ClientError> {
-        let mut client = self.try_org_client()
-            .ok_or_else(|| ClientError::NotConnected)?;
-        client.get_organization(org_id).await
-            .map_err(|e| ClientError::Inbox(e.to_string()))
-    }
-
-    /// List members of an organization.
-    pub async fn list_org_members(&self, org_id: &str) -> Result<Vec<crate::proto::organization_v1::OrgMember>, ClientError> {
-        let mut client = self.try_org_client()
-            .ok_or_else(|| ClientError::NotConnected)?;
-        let response = client.list_members(org_id).await
-            .map_err(|e| ClientError::Inbox(e.to_string()))?;
-        Ok(response.members)
     }
 
     // ── Device management ─────────────────────────────────────────

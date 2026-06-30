@@ -1,13 +1,13 @@
 // Chatter Linux Client - Main UI
 // Root component for the application
 
-import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, OrgMemberData, OrgDashboardData, CustomSectionData, SectionConversationData, QuickSwitcherItem } from "app.slint";
+import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem } from "app.slint";
 import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 import { AnonMode } from "anon_mode/anon_mode_global.slint";
 import { Typography } from "theme/typography.slint";
 
 // Re-export all types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, OrgMemberData, OrgDashboardData, CustomSectionData, SectionConversationData, QuickSwitcherItem }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem }
 export { JarvisGlobal }
 export { AnonMode }
 
@@ -99,29 +99,6 @@ export component MainWindow inherits Window {
     // ========== Custom sections properties ==========
     in property <[CustomSectionData]> custom-sections <=> app.custom-sections;
     in property <[SectionConversationData]> section-conversations <=> app.section-conversations;
-
-    // ========== Organization properties ==========
-    in property <string> current-org-id <=> app.current-org-id;
-    in property <string> current-org-name <=> app.current-org-name;
-    in property <string> current-org-initial <=> app.current-org-initial;
-    in property <string> current-org-slug <=> app.current-org-slug;
-    in property <string> current-org-viewer-role <=> app.current-org-viewer-role;
-    in property <[OrgListItemData]> organizations <=> app.organizations;
-    in property <bool> org-loading <=> app.org-loading;
-
-    // Org management data
-    in property <[OrgMemberData]> org-members <=> app.org-members;
-    in property <bool> org-members-loading <=> app.org-members-loading;
-    in property <int> org-max-members <=> app.org-max-members;
-    in property <int> org-retention-days <=> app.org-retention-days;
-    in property <bool> org-require-2fa <=> app.org-require-2fa;
-    in property <bool> org-allow-guest-access <=> app.org-allow-guest-access;
-    in property <[string]> org-allowed-email-domains <=> app.org-allowed-email-domains;
-    in property <OrgDashboardData> org-dashboard <=> app.org-dashboard;
-    in-out property <string> org-invite-email <=> app.org-invite-email;
-    in property <bool> org-invite-loading <=> app.org-invite-loading;
-    in property <string> org-invite-error <=> app.org-invite-error;
-    in property <string> org-invite-success <=> app.org-invite-success;
 
     // ========== Chat properties ==========
     in property <string> channel-id <=> app.channel-id;
@@ -563,8 +540,6 @@ export component MainWindow inherits Window {
     callback open-create-channel <=> app.open-create-channel;
     callback open-join-channel <=> app.open-join-channel;
     callback toggle-sidebar <=> app.toggle-sidebar;
-    callback org-selected <=> app.org-selected;
-    callback manage-org-clicked <=> app.manage-org-clicked;
 
     // ========== Custom sections callbacks ==========
     in-out property <string> create-section-name <=> app.create-section-name;
@@ -578,13 +553,6 @@ export component MainWindow inherits Window {
     callback rename-section-clicked <=> app.rename-section-clicked;
     callback move-to-section <=> app.move-to-section;
     callback remove-from-section <=> app.remove-from-section;
-
-    callback org-load-members <=> app.org-load-members;
-    callback org-load-settings <=> app.org-load-settings;
-    callback org-load-dashboard <=> app.org-load-dashboard;
-    callback org-invite-member <=> app.org-invite-member;
-    callback org-remove-member <=> app.org-remove-member;
-    callback org-update-member-role <=> app.org-update-member-role;
 
     // ========== Chat callbacks ==========
     callback chat-settings-clicked <=> app.chat-settings-clicked;

@@ -359,11 +359,6 @@ impl GrpcClientPool {
         super::AnonymousMessageClient::new(self.channel())
     }
 
-    /// Create an organization client.
-    pub fn organization_client(&self) -> super::OrganizationClient {
-        super::OrganizationClient::new(self.channel(), self.auth_clone())
-    }
-
     /// Create an anonymous auth client (no auth headers).
     pub fn anonymous_auth_client(&self) -> super::AnonymousAuthClient {
         super::AnonymousAuthClient::new(self.channel())

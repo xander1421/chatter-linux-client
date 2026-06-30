@@ -32,7 +32,6 @@ pub mod auth_state;
 pub mod chat_state;
 pub mod message_state;
 pub mod offline_state;
-pub mod org_state;
 pub mod privacy_state;
 pub mod store;
 pub mod user_state;
@@ -49,9 +48,6 @@ pub use message_state::{MessageState, MessageStateData, PaginationCursor};
 pub use privacy_state::{ConversationPrivacySettings, PrivacyState, PrivacyStateData};
 pub use store::{StateSnapshot, Store};
 pub use user_state::{UserState, UserStateData};
-
-// Organization state re-exports
-pub use org_state::{OrgState, OrgStateData, OrgSummary};
 
 // Offline state re-exports
 pub use offline_state::{OfflineState, OfflineStateData};

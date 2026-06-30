@@ -33,10 +33,7 @@ use crate::services::session_service::SessionService;
 use crate::services::signal_service::SignalService;
 use crate::services::section_service::SectionService;
 use crate::services::device_service::DeviceService;
-use crate::services::organization_service::OrganizationService;
 use crate::services::user::UserService;
-
-use crate::state::OrgState;
 
 use super::infrastructure::InfrastructureContainer;
 use super::ContextError;
@@ -106,12 +103,8 @@ pub struct ServiceContainer {
     pub semantic_search_service: Arc<SemanticSearchService>,
     /// Device service for multi-device management.
     pub device_service: Arc<DeviceService>,
-    /// Organization service for org management and membership.
-    pub organization_service: Arc<OrganizationService>,
     /// Unified conversation repository (available to services).
     pub(crate) conversation_repo: Arc<crate::storage::repositories::UnifiedConversationRepository>,
-    /// Organization state (shared with AuthService for org context).
-    pub org_state: OrgState,
 }
 
 impl ServiceContainer {
@@ -165,8 +158,7 @@ impl ServiceContainer {
             infra.database.clone(),
         ));
 
-        // 6. Auth service (with org state for post-login org context)
-        let org_state = OrgState::new();
+        // 6. Auth service
         let auth_service = Arc::new(AuthService::new(
             infra.grpc_pool.clone(),
             infra.identity_manager.clone(),
@@ -175,7 +167,6 @@ impl ServiceContainer {
             infra.settings_repo.clone(),
             infra.key_store.clone(),
             infra.auth_interceptor.clone(),
-            org_state.clone(),
         ));
 
         // 7. User service
@@ -329,13 +320,7 @@ impl ServiceContainer {
             signal_service.clone(),
         ));
 
-        // 25. Organization service
-        let organization_service = Arc::new(OrganizationService::new(
-            infra.grpc_pool.clone(),
-            infra.settings_repo.clone(),
-        ));
-
-        // 26. Unified conversation repository
+        // 25. Unified conversation repository
         let conversation_repo = infra.unified_conversation_repo.clone();
 
         tracing::info!("Services initialized");
@@ -369,9 +354,7 @@ impl ServiceContainer {
             #[cfg(feature = "local-ai")]
             semantic_search_service,
             device_service,
-            organization_service,
             conversation_repo,
-            org_state,
         })
     }
 }

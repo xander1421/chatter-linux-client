@@ -1,10 +1,9 @@
 // Sidebar — Neo 2.0
 //
 // Layout (top to bottom):
-//   1. Org switcher — neo button row
-//   2. Search bar — inset surface
-//   3. Scrollable content with flat/inset list items
-//   4. Bottom bar — glass surface
+//   1. Search bar — inset surface
+//   2. Scrollable content with flat/inset list items
+//   3. Bottom bar — glass surface
 //
 // Neo depth separation: sidebar surface is raised from background,
 // with right-edge highlight border. Internal elements use
@@ -17,7 +16,6 @@ import { Typography } from "../theme/typography.slint";
 import { ChannelList, ChannelListItemData } from "channel_list.slint";
 import { DMList, DMListItemData } from "dm_list.slint";
 import { PrivateGroupList, PrivateGroupListItemData } from "private_group_list.slint";
-import { OrgSwitcher, OrgListItemData } from "org_switcher.slint";
 import { CustomSectionList, CustomSectionData, SectionConversationData } from "custom_section_list.slint";
 import { SectionContextMenu, SectionHeaderContextMenu } from "section_context_menu.slint";
 import { Avatar } from "../components/avatar.slint";
@@ -25,7 +23,7 @@ import { TooltipArea } from "../components/tooltip.slint";
 import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, CustomSectionData, SectionConversationData }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, CustomSectionData, SectionConversationData }
 
 export component Sidebar inherits Rectangle {
     // ── Properties: Data ──
@@ -41,12 +39,6 @@ export component Sidebar inherits Rectangle {
     in property <string> user-initials: "";
     in property <string> user-presence-status: "online";
     in property <string> user-custom-status: "";
-
-    // ── Properties: Organization ──
-    in property <string> current-org-name: "";
-    in property <string> current-org-initial: "";
-    in property <[OrgListItemData]> organizations: [];
-    in property <bool> org-loading: false;
 
     // ── Properties: State ──
     in-out property <bool> collapsed: false;
@@ -69,8 +61,6 @@ export component Sidebar inherits Rectangle {
     callback join-channel-clicked();
     callback friends-clicked();
     callback profile-clicked();
-    callback org-selected(/* org_id */ string);
-    callback manage-org-clicked();
     callback message-requests-clicked();
     callback group-invites-clicked();
     callback toggle-collapsed();
@@ -123,19 +113,6 @@ export component Sidebar inherits Rectangle {
 
     VerticalLayout {
         padding-top: Spacing.sm;
-        // ════════════════════════════════════════
-        // 1. ORG SWITCHER (button row at top)
-        // ════════════════════════════════════════
-        OrgSwitcher {
-            current-org-name: root.current-org-name;
-            current-org-initial: root.current-org-initial;
-            organizations: root.organizations;
-            collapsed: root.collapsed;
-            is-loading: root.org-loading;
-            org-selected(id) => { root.org-selected(id); }
-            manage-org-clicked => { root.manage-org-clicked(); }
-        }
-
         // ════════════════════════════════════════
         // SCROLLABLE CENTRAL CONTENT
         // ════════════════════════════════════════

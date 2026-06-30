@@ -46,11 +46,5 @@ pub mod provisioning_v1 {
     include!("chat.v1.provisioning.rs");
 }
 
-/// Organization types and services (org CRUD, membership, settings)
-/// Note: chat.v1.organization.rs already includes chat.v1.organization.tonic.rs via include!
-pub mod organization_v1 {
-    include!("chat.v1.organization.rs");
-}
-
 // Re-export commonly used types at the proto level
 pub use chat_v1::*;

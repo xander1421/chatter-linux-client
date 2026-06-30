@@ -20,7 +20,7 @@ use crate::{MainWindow, run_ui};
 pub use channel::load_channel_into_ui;
 pub use private_group::add_private_group_to_sidebar;
 
-/// Wire sidebar callbacks (channel/DM selection, settings, profile, org switcher).
+/// Wire sidebar callbacks (channel/DM selection, settings, profile).
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     channel::wire_channel_selected(window, ui_ctx);
     dm::wire_dm_selected(window, ui_ctx);
@@ -35,11 +35,6 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     navigation::load_pending_message_requests_count(window, ui_ctx);
     navigation::wire_group_invites_clicked(window, ui_ctx);
     navigation::load_pending_group_invites_count(window, ui_ctx);
-    navigation::wire_org_selected(window, ui_ctx);
-    navigation::wire_manage_org_clicked(window, ui_ctx);
-    navigation::wire_org_management_callbacks(window, ui_ctx);
-    navigation::load_org_state(window, ui_ctx);
-    navigation::subscribe_org_state(window, ui_ctx);
     sections::wire_section_callbacks(window, ui_ctx);
     sections::load_sections(window, ui_ctx);
     anon_mode::wire(window, ui_ctx);

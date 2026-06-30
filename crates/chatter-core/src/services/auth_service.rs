@@ -27,8 +27,6 @@ use crate::error::{CryptoError, NetworkError, StorageError};
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::interceptors::AuthInterceptor;
-use crate::network::grpc::organization_client::OrganizationClient;
-use crate::state::org_state::{OrgState, OrgSummary};
 use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
 use crate::storage::repositories::user_repo::UserRepository;
 use crate::storage::KeyStore;
@@ -104,7 +102,6 @@ pub struct AuthService {
     #[allow(dead_code)] // Reserved for future key management operations
     key_store: Arc<KeyStore>,
     pub(crate) auth_interceptor: AuthInterceptor,
-    org_state: OrgState,
 }
 
 impl AuthService {
@@ -117,7 +114,6 @@ impl AuthService {
         settings_repo: Arc<SettingsRepository>,
         key_store: Arc<KeyStore>,
         auth_interceptor: AuthInterceptor,
-        org_state: OrgState,
     ) -> Self {
         Self {
             grpc_pool,
@@ -127,7 +123,6 @@ impl AuthService {
             settings_repo,
             key_store,
             auth_interceptor,
-            org_state,
         }
     }
 
@@ -166,67 +161,6 @@ impl AuthService {
         self.grpc_pool.try_channel().map(|channel| {
             AuthClient::new(channel, self.grpc_pool.auth_clone())
         })
-    }
-
-    /// Create an organization client for making gRPC calls.
-    /// Returns None if not connected to server.
-    fn try_org_client(&self) -> Option<OrganizationClient> {
-        self.grpc_pool.try_channel().map(|channel| {
-            OrganizationClient::new(channel, self.grpc_pool.auth_clone())
-        })
-    }
-
-    /// Fetch user organizations and set default org context.
-    ///
-    /// Called after login/register/session-restore to populate org state
-    /// and configure the interceptor's `X-Org-Id` header.
-    pub async fn fetch_and_set_default_org(&self) {
-        let Some(mut org_client) = self.try_org_client() else {
-            tracing::warn!("Cannot fetch orgs: not connected to server");
-            return;
-        };
-
-        self.org_state.set_loading(true);
-
-        match org_client.list_user_organizations().await {
-            Ok(orgs) => {
-                let summaries: Vec<OrgSummary> = orgs
-                    .iter()
-                    .map(|o| OrgSummary {
-                        id: o.id.clone(),
-                        name: o.name.clone(),
-                        slug: o.slug.clone(),
-                        viewer_role: o.viewer_role,
-                        member_count: o.member_count,
-                    })
-                    .collect();
-
-                // Restore previously selected org from settings, or pick first
-                let saved_org_id = self
-                    .settings_repo
-                    .get_string(keys::CURRENT_ORG_ID)
-                    .ok()
-                    .flatten();
-
-                let default_org = saved_org_id
-                    .as_deref()
-                    .and_then(|saved| summaries.iter().find(|o| o.id == saved))
-                    .or_else(|| summaries.first());
-
-                if let Some(org) = default_org {
-                    self.auth_interceptor.set_org_id(org.id.clone());
-                    self.org_state.set_current_org(&org.id, &org.name);
-                    let _ = self.settings_repo.set_string(keys::CURRENT_ORG_ID, &org.id);
-                    tracing::info!(org_id = %org.id, org_name = %org.name, "Set default org context");
-                }
-
-                self.org_state.set_organizations(summaries);
-            }
-            Err(e) => {
-                tracing::warn!("Failed to fetch user organizations: {}", e);
-                self.org_state.set_loading(false);
-            }
-        }
     }
 
     /// Check if a user is currently logged in.
@@ -920,16 +854,13 @@ impl AuthService {
         // Notify server of logout (ignore errors - we logout locally regardless)
         let _ = auth_client.logout(device_id).await;
 
-        // Clear auth and org interceptor state
+        // Clear auth interceptor state
         self.auth_interceptor.clear();
-        self.auth_interceptor.clear_org_id();
-        self.org_state.clear();
 
         // Clear auth state from settings (but keep identity keys)
         self.settings_repo.delete(keys::CURRENT_USER_ID)?;
         self.settings_repo.delete(keys::CURRENT_DEVICE_ID)?;
         self.settings_repo.delete(keys::DEVICE_AUTH_TOKEN)?;
-        let _ = self.settings_repo.delete(keys::CURRENT_ORG_ID);
 
         // Clear any stored OIDC tokens so the next cold-start doesn't try to
         // restore a bearer session we're explicitly leaving.
