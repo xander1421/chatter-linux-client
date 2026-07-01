@@ -208,7 +208,7 @@ pub(super) fn handle_message_received(
         // Create DM sidebar entry if new peer (non-anon only)
         if conv_type == ConversationType::ServerDm || conv_type == ConversationType::MailboxDm {
             if let Some(peer_id) = peer_id_opt {
-                if !crate::bin_ui::features::sidebar::sidebar_has_dm(&ui_ctx_ui, &peer_id) {
+                if !crate::bin_ui::features::sidebar::sidebar_has_dm(&w, &peer_id) {
                     crate::bin_ui::features::sidebar::create_dm_sidebar_entry(
                         &w, &ui_ctx_ui, &peer_id, &sender_name, &preview, &timestamp_str,
                     );

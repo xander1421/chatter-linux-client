@@ -257,16 +257,4 @@ impl ChannelService {
         Ok(None)
     }
 
-    /// Find the DM channel with a specific peer (local query).
-    ///
-    /// Looks up the DM channel where both the current user and the peer are members.
-    pub fn get_dm_channel_for_peer(
-        &self,
-        peer_id: &crate::domain::ids::UserId,
-    ) -> Result<Option<crate::domain::channel::Channel>, ChannelError> {
-        let current_user_id = self.settings_repo.current_user_id()?;
-        self.channel_repo
-            .get_dm_channel_by_peer(&current_user_id, peer_id)
-            .map_err(ChannelError::from)
-    }
 }

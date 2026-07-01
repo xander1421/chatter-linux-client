@@ -43,16 +43,17 @@ pub(crate) fn wire_start_dm(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
 
     window.on_friends_start_dm(move |user_id: SharedString| {
+        let _ = &ui_ctx;
         let weak = weak_window.clone();
         let user_id_str = user_id.to_string();
-        let dm_id = crate::bin_ui::features::chat::get_dm_channel_from_peer(&ui_ctx, &user_id_str)
-            .unwrap_or_else(|| user_id_str.clone());
+        // DMs are channel-free — the conversation key is the peer's user_id.
+        let dm_id = user_id_str.clone();
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 w.set_active_modal("none".into());
                 w.invoke_dm_selected(dm_id.clone().into());
-                tracing::debug!("Starting DM with user {} (channel {})", user_id_str, dm_id);
+                tracing::debug!("Starting DM with user {}", user_id_str);
             }
         });
     });

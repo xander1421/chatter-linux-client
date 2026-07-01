@@ -6,7 +6,7 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::Channel;
 use chatter_core::ui::sidebar_data::{DMListItemSendData, FriendRequestSendData};
 
-use super::utils::{avatar_bytes_to_image, channel_type_to_string, get_initials};
+use super::utils::{avatar_bytes_to_image, channel_type_to_string};
 
 /// Convert a domain Channel to Slint ChannelListItemData.
 ///
@@ -72,42 +72,6 @@ impl DMListItemExt for DMListItemSendData {
     }
 }
 
-/// Convert a domain Channel (DM) to Send-safe DMListItemSendData.
-pub fn dm_to_send_data(channel: &Channel, other_user_name: &str, other_user_id: &str) -> DMListItemSendData {
-    DMListItemSendData {
-        channel_id: channel.id.to_string(),
-        user_id: other_user_id.to_string(),
-        display_name: other_user_name.to_string(),
-        avatar_bytes: None,
-        avatar_decoded: None,
-        initials: get_initials(other_user_name),
-        presence_status: "offline".to_string(),
-        last_message: String::new(),
-        timestamp: String::new(),
-        unread_count: channel.unread_count,
-        is_typing: false,
-        is_anon: false,
-    }
-}
-
-/// Convert a domain Channel (DM) to Slint DMListItemData.
-pub fn dm_to_slint(channel: &Channel, other_user_name: &str, other_user_id: &str) -> crate::DMListItemData {
-    crate::DMListItemData {
-        channel_id: channel.id.to_string().into(),
-        user_id: other_user_id.to_string().into(),
-        display_name: other_user_name.to_string().into(),
-        avatar_source: slint::Image::default(),
-        has_avatar: false,
-        initials: get_initials(other_user_name).into(),
-        presence_status: "offline".into(),
-        last_message: SharedString::default(),
-        timestamp: SharedString::default(),
-        unread_count: channel.unread_count as i32,
-        is_typing: false,
-        is_anon: false,
-        is_selected: false,
-    }
-}
 
 pub trait FriendDataExt {
     fn to_slint(self) -> crate::FriendData;

@@ -1,21 +1,8 @@
 //! Helper functions for chat UI operations.
 
-use std::str::FromStr;
-use std::sync::Arc;
-
 use slint::Model;
-use chatter_core::client::ChatterClient;
 use chatter_core::domain::UserId;
 use crate::MainWindow;
-
-/// Look up the DM channel_id for a peer via the core channel service.
-///
-/// Replaces an old implementation that iterated the Slint sidebar model.
-/// The authoritative source is the local channel database.
-pub fn get_dm_channel_from_peer(ui_ctx: &Arc<ChatterClient>, peer_id: &str) -> Option<String> {
-    let peer: UserId = UserId::from_str(peer_id).ok()?;
-    ui_ctx.get_dm_channel_for_peer(&peer).map(|c| c.id.to_string())
-}
 
 /// Parsed reply context from UI strings.
 pub struct ReplyContext {

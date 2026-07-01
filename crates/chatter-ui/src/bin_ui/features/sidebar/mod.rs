@@ -321,21 +321,27 @@ pub(crate) fn update_sidebar_preview(
     }
 }
 
-/// Check if a DM conversation for a peer exists (in the local channel DB).
+/// Check if a DM row for a peer is already in the sidebar model.
 ///
-/// Authoritative source — does not depend on whether the Slint sidebar model
-/// has been populated yet.
+/// DMs are channel-free (keyed by peer user_id), so this checks the Slint
+/// DM model directly rather than a local channel row.
 pub(crate) fn sidebar_has_dm(
-    ui_ctx: &Arc<ChatterClient>,
+    window: &MainWindow,
     peer_id: &chatter_core::domain::UserId,
 ) -> bool {
-    ui_ctx.get_dm_channel_for_peer(peer_id).is_some()
+    use slint::Model;
+    let peer_id_str = peer_id.to_string();
+    let model = window.get_dm_conversations();
+    (0..model.row_count())
+        .filter_map(|i| model.row_data(i))
+        .any(|dm| dm.user_id == peer_id_str)
 }
 
 /// Create a new DM sidebar entry for a peer not yet in the list.
 ///
-/// Used when receiving the first message from a new peer. The entry is
-/// inserted at position 0 (MRU) with unread_count = 1.
+/// Used when receiving the first message from a new peer. Channel-free —
+/// the row is keyed by the peer's user_id. Inserted at position 0 (MRU)
+/// with unread_count = 1.
 pub(crate) fn create_dm_sidebar_entry(
     window: &MainWindow,
     ui_ctx: &std::sync::Arc<chatter_core::client::ChatterClient>,
@@ -354,36 +360,39 @@ pub(crate) fn create_dm_sidebar_entry(
     }
 
     let peer_id_str = peer_id.to_string();
+    let avatar = ui_ctx
+        .get_profile_local(peer_id)
+        .and_then(|p| p.avatar_bytes)
+        .and_then(|bytes| crate::bin_ui::converters::avatar_bytes_to_image(&bytes));
 
-    match ui_ctx.get_dm_channel_for_peer(peer_id) {
-        Some(channel) => {
-            let mut new_dm = crate::bin_ui::converters::dm_to_slint(&channel, sender_name, &peer_id_str);
-            new_dm.last_message = preview.into();
-            new_dm.timestamp = timestamp.into();
-            new_dm.unread_count = 1;
+    let new_dm = crate::DMListItemData {
+        channel_id: peer_id_str.clone().into(), // peer_id is the conversation key
+        user_id: peer_id_str.clone().into(),
+        display_name: sender_name.into(),
+        avatar_source: avatar.clone().unwrap_or_default(),
+        has_avatar: avatar.is_some(),
+        initials: crate::bin_ui::converters::get_initials(sender_name).into(),
+        presence_status: "offline".into(),
+        last_message: preview.into(),
+        timestamp: timestamp.into(),
+        unread_count: 1,
+        is_typing: false,
+        is_anon: false,
+        is_selected: false,
+    };
 
-            let model = window.get_dm_conversations();
-            let mut items: Vec<_> = (0..model.row_count())
-                .filter_map(|i| model.row_data(i))
-                .collect();
-            items.insert(0, new_dm);
-            window.set_dm_conversations(slint::ModelRc::new(slint::VecModel::from(items)));
-            crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(window, ui_ctx);
+    let model = window.get_dm_conversations();
+    let mut items: Vec<_> = (0..model.row_count())
+        .filter_map(|i| model.row_data(i))
+        .collect();
+    items.insert(0, new_dm);
+    window.set_dm_conversations(slint::ModelRc::new(slint::VecModel::from(items)));
+    crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(window, ui_ctx);
 
-            tracing::info!(
-                peer_id = %peer_id_str,
-                channel_id = %channel.id,
-                "Added missing DM conversation to sidebar"
-            );
-        }
-        _ => {
-            tracing::warn!(
-                peer_id = %peer_id_str,
-                sender_name = %sender_name,
-                "DM conversation not in sidebar and channel not found"
-            );
-        }
-    }
+    tracing::info!(
+        peer_id = %peer_id_str,
+        "Added missing DM conversation to sidebar (channel-free)"
+    );
 }
 
 /// Stop any currently playing audio and clear state.

@@ -480,17 +480,12 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         Err(_) => peer_id.to_string(),
                     };
 
-                    // Find the DM channel for this peer
-                    let dm_channel = ui_ctx.get_dm_channel_for_peer(&peer_id);
-
-                    let channel_id_for_ui = dm_channel
-                        .as_ref()
-                        .map(|c| c.id.to_string())
-                        .unwrap_or_else(|| profile_id_for_ui.clone());
+                    // DMs are channel-free — the conversation key is the
+                    // peer's user_id.
+                    let channel_id_for_ui = profile_id_for_ui.clone();
 
                     // Create Send-safe DM sidebar item data
                     let initials = get_initials(&peer_name);
-                    let unread = dm_channel.as_ref().map(|c| c.unread_count as i32).unwrap_or(0);
                     let dm_send_data = DMListItemSendData {
                         channel_id: channel_id_for_ui.clone(),
                         user_id: profile_id_for_ui.clone(),
@@ -501,7 +496,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         presence_status: "offline".to_string(),
                         last_message: String::new(),
                         timestamp: String::new(),
-                        unread_count: unread as u32,
+                        unread_count: 0,
                         is_typing: false,
                         is_anon: false,
                     };

@@ -8,12 +8,11 @@ use slint::{ComponentHandle, Image, ModelRc, SharedString, VecModel, Weak, Model
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::ChannelType;
-use chatter_core::domain::message::ConversationType;
 use chatter_core::domain::ids::ChannelId;
 use chatter_core::services::user::FriendRequestFilter;
 
 use crate::bin_ui::converters::{
-    channel_to_slint, dm_to_send_data, get_initials, messages_to_display_batch,
+    channel_to_slint, get_initials, messages_to_display_batch,
     DMListItemExt, DMListItemSendData, FriendDataExt, FriendDataSendData,
     FriendRequestExt, FriendRequestSendData,
 };
@@ -145,33 +144,17 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     // and anon groups stay because they have no server-side identity link.
     let anon_mode = ui_ctx.anon_mode_enabled();
 
+    // Regular DMs are channel-free (Signal-style) — sourced from friends in
+    // core, keyed by peer user_id. The UI no longer scans channels for DMs.
+    if !anon_mode {
+        dm_list.extend(ui_ctx.list_regular_dm_sidebar());
+    }
+
     for channel in &channels {
         match channel.channel_type {
             ChannelType::DirectMessage => {
-                if anon_mode { continue; }
-                // Core handles peer-id detection, last-message fetch, "You: "
-                // prefixing, preview truncation, and local-time formatting —
-                // we just render the returned struct.
-                let preview =
-                    ui_ctx.get_dm_sidebar_preview(&channel.id, &ConversationType::ServerDm);
-                let other_user_id = if preview.peer_user_id.is_empty() {
-                    channel.owner_id.to_string()
-                } else {
-                    preview.peer_user_id
-                };
-                let other_user_name = channel.name.clone();
-
-                let mut dm_item = dm_to_send_data(channel, &other_user_name, &other_user_id);
-                // Regular server DMs render the peer's avatar from their decrypted
-                // server-profile bytes (no URL). Falls back to initials when absent.
-                if let Ok(peer_uid) = other_user_id.parse() {
-                    if let Some(peer_profile) = ui_ctx.get_profile_local(&peer_uid) {
-                        dm_item.avatar_bytes = peer_profile.avatar_bytes;
-                    }
-                }
-                dm_item.last_message = preview.last_message;
-                dm_item.timestamp = preview.timestamp_display;
-                dm_list.push(dm_item);
+                // DMs are no longer channels; a DirectMessage channel row
+                // should never exist. Ignore defensively if one lingers.
             }
             ChannelType::Public | ChannelType::Private => {
                 if anon_mode { continue; }

@@ -583,19 +583,19 @@ impl MessageService {
     /// the typed `ActiveConversation` variant it represents.
     ///
     /// - AnonDm/AnonGroup `ConversationType`s map straight to their variants.
-    /// - ChannelId + DirectMessage channel_type + known peer → MailboxDm.
-    /// - Otherwise → Channel (fallback when channel type is unknown or
-    ///   the channel is not a DM).
+    /// - ServerDm → channel-free `ServerDm { peer_id }` (the peer is the
+    ///   passed `peer_id`, or the `channel_id`'s UUID which equals it).
+    /// - MailboxDm + known peer → `MailboxDm` (still channel-scoped).
+    /// - Otherwise → `Channel`.
     ///
-    /// Lives here because the decision reads the channel DB. UI callers
-    /// used to inline this across multiple feature handlers.
+    /// Lives here because UI callers used to inline this across multiple
+    /// feature handlers.
     pub fn classify_active_conversation(
         &self,
         channel_id: &crate::domain::ids::ChannelId,
         conversation_type: &crate::domain::message::ConversationType,
         peer_id: Option<crate::domain::ids::UserId>,
     ) -> crate::state::ActiveConversation {
-        use crate::domain::channel::ChannelType;
         use crate::domain::message::ConversationType;
         use crate::state::ActiveConversation;
 
@@ -606,16 +606,19 @@ impl MessageService {
             ConversationType::AnonGroup => {
                 ActiveConversation::AnonGroup(crate::domain::anon_group::AnonGroupId::from_uuid(*channel_id.as_uuid()))
             }
-            _ => {
-                let is_dm = matches!(
-                    self.channel_repo.get(channel_id),
-                    Ok(Some(ref channel)) if channel.channel_type == ChannelType::DirectMessage
-                );
-                match (is_dm, peer_id) {
-                    (true, Some(p)) => ActiveConversation::MailboxDm { channel_id: *channel_id, peer_id: p },
-                    _ => ActiveConversation::Channel(*channel_id),
-                }
+            ConversationType::ServerDm => {
+                // Channel-free DM: keyed by peer. conversation_id == peer
+                // user_id, so recover the peer from either source.
+                let peer = peer_id.unwrap_or_else(|| {
+                    crate::domain::ids::UserId::from_uuid(*channel_id.as_uuid())
+                });
+                ActiveConversation::ServerDm { peer_id: peer }
             }
+            ConversationType::MailboxDm => match peer_id {
+                Some(p) => ActiveConversation::MailboxDm { channel_id: *channel_id, peer_id: p },
+                None => ActiveConversation::Channel(*channel_id),
+            },
+            _ => ActiveConversation::Channel(*channel_id),
         }
     }
 

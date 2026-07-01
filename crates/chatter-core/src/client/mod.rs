@@ -777,14 +777,6 @@ impl ChatterClient {
             .await
     }
 
-    /// Local lookup of the DM channel between current user and a peer.
-    pub fn get_dm_channel_for_peer(
-        &self,
-        peer_id: &crate::domain::ids::UserId,
-    ) -> Option<crate::domain::channel::Channel> {
-        self.channels().get_dm_channel_for_peer(peer_id).ok().flatten()
-    }
-
     /// Flush any pending UI messages for a peer after DM bootstrap completes.
     pub async fn flush_pending_dm_messages(&self, peer_id: &crate::domain::ids::UserId) {
         self.dm_bootstrap().flush_pending_ui_messages(peer_id).await;

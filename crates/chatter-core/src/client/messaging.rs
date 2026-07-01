@@ -161,97 +161,116 @@ impl ChatterClient {
         self.channels().get_channel(channel_id).await
     }
 
-    /// Build a sidebar entry for a DM channel. Wraps peer-id detection,
-    /// last-message lookup, "You: " prefixing, preview truncation, and
-    /// local-time timestamp formatting — all of which used to live in the
-    /// UI crate.
-    pub fn get_dm_sidebar_preview(
-        &self,
-        channel_id: &crate::domain::ids::ChannelId,
-        conversation_type: &crate::domain::message::ConversationType,
-    ) -> DmSidebarPreview {
-        let peer_user_id = self
-            .get_dm_peer_local(channel_id)
-            .map(|id| id.to_string())
-            .unwrap_or_default();
+    /// Build the complete DM sidebar list — regular server DMs plus anon DMs
+    /// (active conversations first, then incoming requests) — as one ordered,
+    /// fully-shaped vector the UI renders directly. Regular DMs are dropped when
+    /// anon mode is on. This is the single source of truth for the sidebar; the
+    /// UI must not merge two separate lists (that races and drops fresh DMs).
+    /// Build the regular (non-anon) DM sidebar rows — one per accepted
+    /// friend, keyed by the peer's `user_id` (channel-free, Signal-style).
+    /// A friend with no messages yet still shows (empty preview), so a
+    /// freshly-accepted friend appears immediately. Returns empty in anon
+    /// mode (regular DMs carry a server identity link the sidebar hides).
+    ///
+    /// This is the single source of truth for regular DM rows — both
+    /// `list_dm_sidebar` and the initial-load sidebar builder use it, so
+    /// the UI never iterates channels to find DMs.
+    pub fn list_regular_dm_sidebar(&self) -> Vec<crate::ui::sidebar_data::DMListItemSendData> {
+        use crate::domain::message::{truncate_preview_text, ConversationType};
+        use crate::domain::user::FriendshipStatus;
+        use crate::ui::chat_data::initials_from_name;
+        use crate::ui::sidebar_data::DMListItemSendData;
 
-        let current_user_id = self.auth_state().get().current_user_id;
-
-        let mut out = DmSidebarPreview {
-            peer_user_id,
-            ..Default::default()
+        if self.anon_mode_enabled() {
+            return Vec::new();
+        }
+        let Some(current_user_id) = self.auth_state().get().current_user_id else {
+            return Vec::new();
         };
-        if let Ok(messages) = self.get_messages_local(channel_id, conversation_type, None, 1) {
-            if let Some(msg) = messages.first() {
-                let is_own = current_user_id
-                    .map(|id| msg.sender_id == Some(id))
-                    .unwrap_or(false);
-                if let Some(text) = msg.as_text() {
-                    let trimmed = crate::domain::message::truncate_preview_text(text, 50);
-                    out.last_message = if is_own {
-                        format!("You: {}", trimmed)
-                    } else {
-                        trimmed
-                    };
-                }
-                out.timestamp_display = msg
-                    .created_at
-                    .with_timezone(&chrono::Local)
-                    .format("%H:%M")
-                    .to_string();
+
+        let mut out: Vec<DMListItemSendData> = Vec::new();
+        let friends = self.users().get_friends_local().unwrap_or_default();
+        for friendship in friends {
+            if friendship.status != FriendshipStatus::Accepted {
+                continue;
             }
+            // The peer is whichever party isn't us.
+            let peer_id = if friendship.requester_id == current_user_id {
+                friendship.addressee_id
+            } else {
+                friendship.requester_id
+            };
+            // Local storage key for a channel-free DM = the peer's user_id
+            // wrapped as a ChannelId (same UUID).
+            let conversation_id: crate::domain::ids::ChannelId = peer_id.into();
+
+            let display_name = self.display_name(&peer_id);
+            let avatar_bytes = self.get_profile_local(&peer_id).and_then(|p| p.avatar_bytes);
+
+            // Preview + timestamp from local DM history (empty if none).
+            let (last_message, timestamp) = self
+                .get_messages_local(&conversation_id, &ConversationType::ServerDm, None, 1)
+                .ok()
+                .and_then(|msgs| msgs.into_iter().next())
+                .map(|msg| {
+                    let is_own = msg.sender_id == Some(current_user_id);
+                    let text = msg
+                        .as_text()
+                        .map(|t| {
+                            let trimmed = truncate_preview_text(t, 50);
+                            if is_own {
+                                format!("You: {}", trimmed)
+                            } else {
+                                trimmed
+                            }
+                        })
+                        .unwrap_or_default();
+                    let ts = msg
+                        .created_at
+                        .with_timezone(&chrono::Local)
+                        .format("%H:%M")
+                        .to_string();
+                    (text, ts)
+                })
+                .unwrap_or_default();
+
+            let unread_count = self
+                .messages()
+                .message_repo
+                .get_unread_count(&conversation_id, &ConversationType::ServerDm)
+                .unwrap_or(0) as u32;
+
+            out.push(DMListItemSendData {
+                channel_id: peer_id.to_string(),
+                user_id: peer_id.to_string(),
+                initials: initials_from_name(&display_name),
+                display_name,
+                avatar_bytes,
+                avatar_decoded: None,
+                presence_status: "offline".to_string(),
+                last_message,
+                timestamp,
+                unread_count,
+                is_typing: false,
+                is_anon: false,
+            });
         }
         out
     }
 
-    /// Build the complete DM sidebar list — regular server DMs plus anon DMs
+    /// Build the complete DM sidebar list — regular DMs plus anon DMs
     /// (active conversations first, then incoming requests) — as one ordered,
     /// fully-shaped vector the UI renders directly. Regular DMs are dropped when
     /// anon mode is on. This is the single source of truth for the sidebar; the
     /// UI must not merge two separate lists (that races and drops fresh DMs).
     pub fn list_dm_sidebar(&self) -> Vec<crate::ui::sidebar_data::DMListItemSendData> {
         use crate::domain::anon_dm::AnonDmStatus;
-        use crate::domain::channel::ChannelType;
-        use crate::domain::message::{truncate_preview_text, ConversationType};
+        use crate::domain::message::truncate_preview_text;
         use crate::ui::chat_data::initials_from_name;
         use crate::ui::sidebar_data::DMListItemSendData;
 
-        let mut out: Vec<DMListItemSendData> = Vec::new();
-        let anon_mode = self.anon_mode_enabled();
-
-        // Regular server DMs (suppressed entirely in anon mode).
-        if !anon_mode {
-            for channel in self.get_channels_mru() {
-                if channel.channel_type != ChannelType::DirectMessage {
-                    continue;
-                }
-                let preview = self.get_dm_sidebar_preview(&channel.id, &ConversationType::ServerDm);
-                let peer_user_id = if preview.peer_user_id.is_empty() {
-                    channel.owner_id.to_string()
-                } else {
-                    preview.peer_user_id
-                };
-                let avatar_bytes = peer_user_id
-                    .parse()
-                    .ok()
-                    .and_then(|uid| self.get_profile_local(&uid))
-                    .and_then(|p| p.avatar_bytes);
-                out.push(DMListItemSendData {
-                    channel_id: channel.id.to_string(),
-                    user_id: peer_user_id,
-                    initials: initials_from_name(&channel.name),
-                    display_name: channel.name.clone(),
-                    avatar_bytes,
-                    avatar_decoded: None,
-                    presence_status: "offline".to_string(),
-                    last_message: preview.last_message,
-                    timestamp: preview.timestamp_display,
-                    unread_count: channel.unread_count,
-                    is_typing: false,
-                    is_anon: false,
-                });
-            }
-        }
+        // Regular DMs first (friend-keyed, channel-free).
+        let mut out: Vec<DMListItemSendData> = self.list_regular_dm_sidebar();
 
         // Anon DMs — active conversations.
         for dm in self.list_anon_dm_conversations() {
@@ -483,25 +502,23 @@ impl ChatterClient {
             });
         };
 
-        // Regular server DM peers. Skip in anon mode — they carry a server
-        // identity link the sidebar also suppresses there.
+        // Regular DM peers = accepted friends (channel-free, keyed by
+        // peer user_id). Skip in anon mode — they carry a server identity
+        // link the sidebar also suppresses there.
         if !self.anon_mode_enabled() {
-            if let Ok(channels) = self.list_channels() {
-                for channel in channels {
-                    if channel.channel_type != ChannelType::DirectMessage {
+            if let Some(current_user_id) = self.auth_state().get().current_user_id {
+                let friends = self.users().get_friends_local().unwrap_or_default();
+                for friendship in friends {
+                    if friendship.status != crate::domain::user::FriendshipStatus::Accepted {
                         continue;
                     }
-                    let preview =
-                        self.get_dm_sidebar_preview(&channel.id, &ConversationType::ServerDm);
-                    let peer_id: UserId = if preview.peer_user_id.is_empty() {
-                        channel.owner_id
+                    let peer_id = if friendship.requester_id == current_user_id {
+                        friendship.addressee_id
                     } else {
-                        match preview.peer_user_id.parse() {
-                            Ok(id) => id,
-                            Err(_) => continue,
-                        }
+                        friendship.requester_id
                     };
-                    push(&mut out, &mut seen, peer_id, channel.name.clone());
+                    let display_name = self.display_name(&peer_id);
+                    push(&mut out, &mut seen, peer_id, display_name);
                 }
             }
         }
@@ -579,21 +596,6 @@ impl ChatterClient {
             )
             .await
     }
-}
-
-/// Pre-shaped sidebar entry for a DM channel.
-///
-/// UI should read this instead of duplicating peer-id detection + preview
-/// formatting logic. Produced by [`ChatterClient::get_dm_sidebar_preview`].
-#[derive(Debug, Clone, Default)]
-pub struct DmSidebarPreview {
-    /// User ID of the other participant (not us). Empty if can't resolve.
-    pub peer_user_id: String,
-    /// Last-message preview text. Already includes the "You: " prefix when
-    /// we authored the latest message, and is truncated to sidebar width.
-    pub last_message: String,
-    /// Timestamp in local-time `HH:MM` format, or empty if no messages.
-    pub timestamp_display: String,
 }
 
 /// A person the user can invite to a channel, shaped by
