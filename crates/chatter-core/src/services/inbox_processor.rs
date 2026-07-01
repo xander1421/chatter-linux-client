@@ -945,8 +945,17 @@ impl InboxEventProcessor {
                     Ok(friend_id) => {
                         // DMs are channel-free (Signal-style): there is no
                         // server DM channel to fetch. The sidebar is built
-                        // from the friends list (Task 3.6), so the DM
-                        // appears as soon as the friendship row exists.
+                        // from the friends list (Task 3.6), so the DM only
+                        // appears once the friendship row exists. The accepter
+                        // wrote it inline; we (the original requester) learn of
+                        // acceptance here, so we must persist it ourselves.
+                        if let Err(e) = self.user_service.record_accepted_friend_local(&friend_id) {
+                            tracing::warn!(
+                                peer_id = %friend_id,
+                                error = %e,
+                                "FriendAccepted: failed to persist friendship locally — DM will not appear"
+                            );
+                        }
                         self.event_bus.emit_domain(DomainEvent::FriendAccepted { friend_id });
 
                         // Establish the DM Signal session in the background now

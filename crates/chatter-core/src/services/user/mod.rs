@@ -644,6 +644,29 @@ impl UserService {
             .map_err(UserError::Storage)
     }
 
+    /// Persist an accepted friendship locally with us as the requester.
+    ///
+    /// The accepter records the friendship inline in `respond_friend_request`,
+    /// but the ORIGINAL requester only learns of acceptance asynchronously via
+    /// the `FriendAccepted` user-event. Since the channel-free DM sidebar is
+    /// built from the local friends list, the requester must write this row or
+    /// the peer never appears. Idempotent (update-then-insert).
+    pub fn record_accepted_friend_local(&self, friend_id: &UserId) -> Result<(), UserError> {
+        let current_user = self.settings_repo.current_user_id()?;
+        let friendship = Friendship {
+            requester_id: current_user,
+            addressee_id: *friend_id,
+            status: FriendshipStatus::Accepted,
+            created_at: Utc::now(),
+        };
+        if self.user_repo.update_friendship(&friendship).is_err() {
+            self.user_repo
+                .insert_friendship(&friendship)
+                .map_err(UserError::Storage)?;
+        }
+        Ok(())
+    }
+
     /// Remove a friend.
     pub async fn remove_friend(&self, friend_id: &UserId) -> Result<(), UserError> {
         let current_user = self.settings_repo.current_user_id()?;
