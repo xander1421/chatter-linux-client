@@ -1662,12 +1662,6 @@ impl ChatterClient {
         self.channels().list_members_with_profiles(channel_id)
     }
 
-    /// List all DM channels.
-    pub fn list_dms(&self) -> Result<Vec<Channel>, crate::services::channel::ChannelError> {
-        let all = self.channels().get_channels_for_user()?;
-        Ok(all.into_iter().filter(|c| c.channel_type == ChannelType::DirectMessage).collect())
-    }
-
     /// List all anonymous DM conversations.
     pub fn list_anon_dms(&self) -> Result<Vec<crate::domain::anon_dm::AnonDm>, crate::services::anon_dm::AnonDmError> {
         self.anon_dms().list_conversations()
