@@ -116,20 +116,20 @@ async fn handle_user_event(
             tracing::debug!(
                 user_id = %status.user_id,
                 status = ?status.status,
-                channel_id = %status.channel_id,
                 "Friend status changed event received"
             );
 
-            // If friend was accepted AND we got a channel_id, emit FriendAccepted event
-            if status.status == FriendStatus::Accepted as i32 && !status.channel_id.is_empty() {
+            // If friend was accepted, emit FriendAccepted event. DMs are
+            // channel-free (Signal-style) — there is no server DM channel
+            // to wait for; the peer-keyed local conversation is created
+            // client-side by the domain event handler.
+            if status.status == FriendStatus::Accepted as i32 {
                 tracing::info!(
                     friend_user_id = %status.user_id,
-                    channel_id = %status.channel_id,
-                    "Friend accepted with DM channel - emitting FriendAccepted event"
+                    "Friend accepted - emitting FriendAccepted event"
                 );
                 let _ = event_tx.send(InboxEvent::FriendAccepted {
                     friend_user_id: status.user_id.clone(),
-                    channel_id: status.channel_id.clone(),
                 });
             }
 

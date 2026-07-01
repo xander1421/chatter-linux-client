@@ -7,12 +7,11 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, SharedString};
 
 use chatter_core::client::ChatterClient;
 
-use crate::bin_ui::converters::get_initials;
-use crate::{DMListItemData, MainWindow};
+use crate::MainWindow;
 
 pub(crate) fn wire_send_request(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
@@ -80,13 +79,17 @@ pub(crate) fn wire_accept_request(window: &MainWindow, ui_ctx: &Arc<ChatterClien
             };
 
             match ui_ctx.respond_friend_request(&friend_id, true).await {
-                Ok(result) => {
+                Ok(_) => {
                     tracing::info!("Accepted friend request from {}", user_id_str);
-                    if let Some(ref channel_id) = result.dm_channel_id {
-                        add_dm_to_sidebar(weak.clone(), ui_ctx.clone(), channel_id, &user_id_str).await;
-                    } else {
-                        tracing::warn!("No channel_id received in friend accept response");
-                    }
+                    // DMs are channel-free — the sidebar is built from the
+                    // friends list, so a plain refresh picks up the new DM.
+                    let weak_refresh = weak.clone();
+                    let ui_ctx_refresh = ui_ctx.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak_refresh.upgrade() {
+                            crate::bin_ui::features::auth::initial_data::refresh_dm_list(&w, &ui_ctx_refresh);
+                        }
+                    });
                 }
                 Err(e) => {
                     tracing::error!("Failed to accept friend request: {}", e);
@@ -166,74 +169,3 @@ fn set_loading(weak: &slint::Weak<MainWindow>, loading: bool) {
     });
 }
 
-/// Add a DM channel to the sidebar after friend request acceptance.
-async fn add_dm_to_sidebar(
-    weak_window: slint::Weak<MainWindow>,
-    ui_ctx: Arc<ChatterClient>,
-    channel_id: &str,
-    other_user_id: &str,
-) {
-    let channel_id_parsed: chatter_core::domain::ids::ChannelId = match channel_id.parse() {
-        Ok(id) => id,
-        Err(e) => {
-            tracing::error!("Invalid channel ID {}: {}", channel_id, e);
-            return;
-        }
-    };
-    let other_user_id_parsed: chatter_core::domain::UserId = match other_user_id.parse() {
-        Ok(id) => id,
-        Err(e) => {
-            tracing::error!("Invalid user ID {}: {}", other_user_id, e);
-            return;
-        }
-    };
-
-    match ui_ctx.get_channel_with_memberships(&channel_id_parsed).await {
-        Ok(_channel) => {
-            let other_user_name = match ui_ctx.get_user_profile(&other_user_id_parsed).await {
-                Ok(profile) if !profile.display_name.is_empty() => profile.display_name,
-                _ => other_user_id.to_string(),
-            };
-
-            let other_user_id_owned = other_user_id.to_string();
-            let channel_id_owned = channel_id.to_string();
-            let initials = get_initials(&other_user_name);
-
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_window.upgrade() {
-                    let current_dms = w.get_dm_conversations();
-                    let mut dm_vec: Vec<DMListItemData> = Vec::new();
-                    for i in 0..current_dms.row_count() {
-                        if let Some(dm) = current_dms.row_data(i) {
-                            dm_vec.push(dm);
-                        }
-                    }
-                    let dm_item = DMListItemData {
-                        channel_id: channel_id_owned.into(),
-                        user_id: other_user_id_owned.clone().into(),
-                        display_name: other_user_name.clone().into(),
-                        avatar_source: slint::Image::default(),
-                        has_avatar: false,
-                        initials: initials.into(),
-                        presence_status: "online".into(),
-                        last_message: SharedString::default(),
-                        timestamp: SharedString::default(),
-                        unread_count: 0,
-                        is_typing: false,
-                        is_anon: false,
-                        is_selected: false,
-                    };
-                    dm_vec.push(dm_item);
-                    w.set_dm_conversations(ModelRc::new(VecModel::from(dm_vec)));
-                    tracing::info!(
-                        "Added DM to sidebar for user {} ({})",
-                        other_user_name, other_user_id_owned
-                    );
-                }
-            });
-        }
-        Err(e) => {
-            tracing::error!("Failed to fetch DM channel {}: {}", channel_id, e);
-        }
-    }
-}

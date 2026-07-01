@@ -59,41 +59,28 @@ pub(super) fn handle_friend_requests_updated(
 
 /// Handle friend accepted event.
 ///
-/// On the receiver side, the server-side DirectMessage channel was just
-/// created but isn't in our local channel_repo yet. We fetch + persist it
-/// before refreshing the sidebar so `refresh_dm_list` (which reads only
-/// from local storage) actually sees the new DM.
+/// DMs are channel-free (Signal-style): there is no server DM channel to
+/// fetch. The sidebar is built directly from the friends list (see
+/// `list_dm_sidebar`), so a newly-accepted friend appears as soon as we
+/// refresh it — no local conversation row needs to be created first.
 pub(super) fn handle_friend_accepted(
     window: &Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
     friend_id: UserId,
-    channel_id: chatter_core::domain::ids::ChannelId,
 ) {
     let weak = window.clone();
     let ui_ctx = ui_ctx.clone();
 
-    tokio::spawn(async move {
-        if let Err(e) = ui_ctx.get_channel_with_memberships(&channel_id).await {
-            tracing::warn!(
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak.upgrade() {
+            // Single source of truth: refresh_dm_list rebuilds regular + anon
+            // DMs from core in one pass.
+            super::super::super::initial_data::refresh_dm_list(&w, &ui_ctx);
+            tracing::info!(
                 friend_id = %friend_id,
-                channel_id = %channel_id,
-                error = %e,
-                "Friend accepted - failed to fetch DM channel; sidebar will be stale until next sync"
+                "Friend accepted - refreshed DM sidebar"
             );
         }
-
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                // Single source of truth: refresh_dm_list rebuilds regular + anon
-                // DMs from core in one pass.
-                super::super::super::initial_data::refresh_dm_list(&w, &ui_ctx);
-                tracing::info!(
-                    friend_id = %friend_id,
-                    channel_id = %channel_id,
-                    "Friend accepted - refreshed DM sidebar"
-                );
-            }
-        });
     });
 }
 

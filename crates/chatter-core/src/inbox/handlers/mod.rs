@@ -469,10 +469,10 @@ pub enum DomainEvent {
         sent: Vec<FriendRequestInfo>,
     },
 
-    /// Friend request accepted — a new DM channel is created for the friendship.
+    /// Friend request accepted. DMs are channel-free (Signal-style) — the
+    /// local DM conversation is keyed by `friend_id` directly.
     FriendAccepted {
         friend_id: UserId,
-        channel_id: ChannelId,
     },
 
     /// Anonymous group metadata updated (name, description, roles).
@@ -620,7 +620,7 @@ impl DomainEvent {
             DomainEvent::DmBootstrapCompleted { .. } => None,
             DomainEvent::UnreadCountUpdated { channel_id, .. } => Some(*channel_id),
             DomainEvent::FriendRequestsUpdated { .. } => None,
-            DomainEvent::FriendAccepted { channel_id, .. } => Some(*channel_id),
+            DomainEvent::FriendAccepted { .. } => None,
             DomainEvent::AnonGroupUpdated { .. } => None,
             DomainEvent::MessageSent { channel_id, .. } => Some(*channel_id),
             DomainEvent::MessageSendFailed { channel_id, .. } => Some(*channel_id),

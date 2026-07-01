@@ -926,32 +926,14 @@ impl InboxEventProcessor {
                 false
             }
 
-            InboxEvent::FriendAccepted { friend_user_id, channel_id } => {
-                match (
-                    friend_user_id.parse::<UserId>(),
-                    channel_id.parse::<crate::domain::ids::ChannelId>(),
-                ) {
-                    (Ok(friend_id), Ok(ch_id)) => {
-                        // Fetch + persist the freshly-created DirectMessage
-                        // channel before anything else. The receiver side
-                        // gets the channel_id from the friend-status event
-                        // but doesn't have the channel row locally yet, so
-                        // both the sidebar refresh (reads local DB) and the
-                        // ServerDm stream listener spawn would no-op.
-                        if let Err(e) =
-                            self.channel_service.get_channel_with_memberships(&ch_id).await
-                        {
-                            tracing::warn!(
-                                channel_id = %ch_id,
-                                error = %e,
-                                "FriendAccepted: failed to fetch DM channel — sidebar / listener will be deferred to next sync"
-                            );
-                        }
-
-                        self.event_bus.emit_domain(DomainEvent::FriendAccepted {
-                            friend_id,
-                            channel_id: ch_id,
-                        });
+            InboxEvent::FriendAccepted { friend_user_id } => {
+                match friend_user_id.parse::<UserId>() {
+                    Ok(friend_id) => {
+                        // DMs are channel-free (Signal-style): there is no
+                        // server DM channel to fetch. The sidebar is built
+                        // from the friends list (Task 3.6), so the DM
+                        // appears as soon as the friendship row exists.
+                        self.event_bus.emit_domain(DomainEvent::FriendAccepted { friend_id });
 
                         // Establish the DM Signal session in the background now
                         // that we're friends, so the first call offer / message
@@ -967,52 +949,11 @@ impl InboxEventProcessor {
                                 );
                             }
                         });
-
-                        // Spawn a ServerDm stream listener now that the
-                        // channel row should be present locally.
-                        if let Some(current_user_id) =
-                            self.client.auth_state().get().current_user_id
-                        {
-                            match self.channel_service.get_channel_local(&ch_id) {
-                                Ok(Some(_)) => {
-                                    let _ = crate::inbox::streaming::spawn_server_dm_listener(
-                                        ch_id,
-                                        self.channel_service.grpc_pool.clone(),
-                                        self.event_bus.clone(),
-                                        self.message_service.message_repo.clone(),
-                                        current_user_id,
-                                    );
-                                    tracing::info!(
-                                        channel_id = %ch_id,
-                                        "FriendAccepted: spawned ServerDm stream listener"
-                                    );
-                                }
-                                Ok(None) => {
-                                    tracing::debug!(
-                                        channel_id = %ch_id,
-                                        "FriendAccepted: channel still missing after fetch — deferring listener spawn"
-                                    );
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        channel_id = %ch_id,
-                                        error = %e,
-                                        "FriendAccepted: channel lookup failed — skipping listener spawn"
-                                    );
-                                }
-                            }
-                        } else {
-                            tracing::debug!(
-                                channel_id = %ch_id,
-                                "FriendAccepted: no current user — skipping listener spawn"
-                            );
-                        }
                     }
-                    _ => {
+                    Err(_) => {
                         tracing::warn!(
                             friend_user_id,
-                            channel_id,
-                            "FriendAccepted: failed to parse IDs — UI will not refresh"
+                            "FriendAccepted: failed to parse friend user ID — UI will not refresh"
                         );
                     }
                 }

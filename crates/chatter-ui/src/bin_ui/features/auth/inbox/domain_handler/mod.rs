@@ -65,8 +65,8 @@ pub async fn handle_domain_event(
         // =========================================================================
         // Friend Accepted
         // =========================================================================
-        DomainEvent::FriendAccepted { friend_id, channel_id } => {
-            social::handle_friend_accepted(window, ui_ctx, friend_id, channel_id);
+        DomainEvent::FriendAccepted { friend_id } => {
+            social::handle_friend_accepted(window, ui_ctx, friend_id);
             // Friend just became mutual → Friends-tab list grows.
             crate::bin_ui::features::auth::initial_data::refresh_friends_list(
                 window.clone(),

@@ -757,9 +757,9 @@ impl EventHandlers {
                 trace!(received_count = received.len(), sent_count = sent.len(), "FriendRequestsUpdated: handled by UI thread");
             }
 
-            DomainEvent::FriendAccepted { friend_id, channel_id } => {
+            DomainEvent::FriendAccepted { friend_id } => {
                 // Friend accepted - handled by UI thread to add DM to sidebar.
-                trace!(?friend_id, ?channel_id, "FriendAccepted: handled by UI thread");
+                trace!(?friend_id, "FriendAccepted: handled by UI thread");
             }
 
             DomainEvent::AnonGroupUpdated { group_id, updated_by, .. } => {

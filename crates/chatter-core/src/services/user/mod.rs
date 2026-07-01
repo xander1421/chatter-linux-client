@@ -47,12 +47,14 @@ pub enum FriendRequestFilter {
 }
 
 /// Result of responding to a friend request.
+///
+/// DMs are channel-free (Signal-style) — there is no server DM channel ID
+/// to return. The DM conversation is keyed by the friend's `UserId`, which
+/// callers already have.
 #[derive(Clone, Debug)]
 pub struct FriendResponseResult {
     /// The friendship if accepted, None if declined.
     pub friendship: Option<Friendship>,
-    /// The DM channel ID created when accepting a friend request.
-    pub dm_channel_id: Option<String>,
 }
 
 impl FriendRequestFilter {
@@ -460,25 +462,14 @@ impl UserService {
             .respond_friend_request(&friend_id_str, status, None)
             .await?;
 
-        let mut dm_channel_id = None;
+        // DMs are channel-free (Signal-style) — the server no longer
+        // returns a DM channel_id here, just the terminal friend status.
         while let Some(event_result) = stream.next().await {
             let event = event_result?;
             if let Some(user_event::Event::FriendStatusChanged(ref status_response)) = event.event
             {
                 let status = status_response.status();
-                tracing::debug!(
-                    "Friend response event: status={:?}, channel_id={}",
-                    status,
-                    status_response.channel_id
-                );
-
-                if !status_response.channel_id.is_empty() {
-                    dm_channel_id = Some(status_response.channel_id.clone());
-                    tracing::info!(
-                        "Friend response returned DM channel ID: {}",
-                        status_response.channel_id
-                    );
-                }
+                tracing::debug!("Friend response event: status={:?}", status);
 
                 if status != FriendStatus::Pending {
                     tracing::info!("Friend response final status: {:?}", status);
@@ -501,14 +492,10 @@ impl UserService {
 
             Ok(FriendResponseResult {
                 friendship: Some(friendship),
-                dm_channel_id,
             })
         } else {
             let _ = self.user_repo.delete_friendship(&current_user, friend_id);
-            Ok(FriendResponseResult {
-                friendship: None,
-                dm_channel_id: None,
-            })
+            Ok(FriendResponseResult { friendship: None })
         }
     }
 

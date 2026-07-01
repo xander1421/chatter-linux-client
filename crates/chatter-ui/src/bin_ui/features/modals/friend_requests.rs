@@ -4,13 +4,12 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, SharedString};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
 
-use crate::bin_ui::converters::get_initials;
-use crate::{DMListItemData, MainWindow};
+use crate::MainWindow;
 
 pub fn wire_friend_requests(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Switch tab
@@ -58,19 +57,18 @@ pub fn wire_friend_requests(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
 
             match ui_ctx.respond_friend_request(&friend_id, true).await {
-                Ok(result) => {
+                Ok(_) => {
                     tracing::info!("Accepted friend request from {}", friend_id);
 
-                    // If we got a DM channel ID, add it to the sidebar
-                    if let Some(channel_id) = result.dm_channel_id {
-                        add_dm_to_sidebar_on_accept(
-                            weak.clone(),
-                            ui_ctx.clone(),
-                            &channel_id,
-                            &user_id_str,
-                        )
-                        .await;
-                    }
+                    // DMs are channel-free — the sidebar is built from the
+                    // friends list, so a plain refresh picks up the new DM.
+                    let weak_refresh = weak.clone();
+                    let ui_ctx_refresh = ui_ctx.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak_refresh.upgrade() {
+                            crate::bin_ui::features::auth::initial_data::refresh_dm_list(&w, &ui_ctx_refresh);
+                        }
+                    });
 
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -211,101 +209,3 @@ pub fn wire_friend_requests(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 }
 
-/// Add a DM channel to the sidebar after friend request acceptance.
-async fn add_dm_to_sidebar_on_accept(
-    weak_window: slint::Weak<MainWindow>,
-    ui_ctx: Arc<ChatterClient>,
-    channel_id: &str,
-    other_user_id: &str,
-) {
-    // Parse channel ID
-    let channel_id_parsed: chatter_core::domain::ids::ChannelId = match channel_id.parse() {
-        Ok(id) => id,
-        Err(e) => {
-            tracing::error!("Invalid channel ID {}: {}", channel_id, e);
-            return;
-        }
-    };
-
-    // Parse other user ID
-    let other_user_id_parsed: chatter_core::domain::UserId = match other_user_id.parse() {
-        Ok(id) => id,
-        Err(e) => {
-            tracing::error!("Invalid user ID {}: {}", other_user_id, e);
-            return;
-        }
-    };
-
-    // Fetch channel and sync memberships
-    match ui_ctx
-        .get_channel_with_memberships(&channel_id_parsed)
-        .await
-    {
-        Ok(_channel) => {
-            // Fetch the OTHER user's profile to get their display name
-            let other_user_name = match ui_ctx.get_user_profile(&other_user_id_parsed).await {
-                Ok(profile) => {
-                    if profile.display_name.is_empty() {
-                        other_user_id.to_string()
-                    } else {
-                        profile.display_name.clone()
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to fetch user profile for {}: {}", other_user_id, e);
-                    // Fallback to user ID if we can't get the profile
-                    other_user_id.to_string()
-                }
-            };
-
-            // Create DMListItemData inside event loop (slint::Image is not Send)
-            let other_user_id_owned = other_user_id.to_string();
-            let channel_id_owned = channel_id.to_string();
-            let initials = get_initials(&other_user_name);
-
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_window.upgrade() {
-                    // Get existing DM list and append new DM
-                    let current_dms = w.get_dm_conversations();
-                    let mut dm_vec: Vec<DMListItemData> = Vec::new();
-
-                    // Copy existing DMs
-                    for i in 0..current_dms.row_count() {
-                        if let Some(dm) = current_dms.row_data(i) {
-                            dm_vec.push(dm);
-                        }
-                    }
-
-                    // Add new DM
-                    let dm_item = DMListItemData {
-                        channel_id: channel_id_owned.into(),
-                        user_id: other_user_id_owned.clone().into(),
-                        display_name: other_user_name.clone().into(),
-                        avatar_source: slint::Image::default(),
-                        has_avatar: false,
-                        initials: initials.into(),
-                        presence_status: "online".into(),
-                        last_message: SharedString::default(),
-                        timestamp: SharedString::default(),
-                        unread_count: 0,
-                        is_typing: false,
-                        is_anon: false,
-                        is_selected: false,
-                    };
-                    dm_vec.push(dm_item);
-
-                    // Update UI
-                    w.set_dm_conversations(ModelRc::new(VecModel::from(dm_vec)));
-                    tracing::info!(
-                        "Added DM to sidebar for user {} ({})",
-                        other_user_name,
-                        other_user_id_owned
-                    );
-                }
-            });
-        }
-        Err(e) => {
-            tracing::error!("Failed to fetch DM channel {}: {}", channel_id, e);
-        }
-    }
-}

@@ -322,12 +322,12 @@ pub enum InboxEvent {
         /// Sent friend requests.
         sent: Vec<FriendRequestInfo>,
     },
-    /// Friend request was accepted and DM channel was created.
+    /// Friend request was accepted. DMs are channel-free (Signal-style):
+    /// the local DM conversation is keyed by the friend's user_id, not a
+    /// server-issued channel_id.
     FriendAccepted {
         /// User ID of the friend (who accepted our request).
         friend_user_id: String,
-        /// DM channel ID created for this friendship.
-        channel_id: String,
     },
     // =========================================================================
     // DM Bootstrap Events
