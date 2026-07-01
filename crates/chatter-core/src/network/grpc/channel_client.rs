@@ -599,11 +599,13 @@ mod tests {
 
     #[test]
     fn test_channel_type_values() {
-        // Verify ChannelType enum is accessible and has expected values
+        // Verify ChannelType enum is accessible and has expected values.
+        // DIRECT_MESSAGE (3) was removed from the wire enum — DMs are
+        // channel-free (Signal-style).
         assert_eq!(ChannelType::Unspecified as i32, 0);
         assert_eq!(ChannelType::ChannelPublic as i32, 1);
         assert_eq!(ChannelType::ChannelPrivate as i32, 2);
-        assert_eq!(ChannelType::DirectMessage as i32, 3);
+        assert_eq!(ChannelType::SavedMessages as i32, 4);
     }
 
     #[test]

@@ -191,11 +191,11 @@ async fn t2_friend_request() {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // User A accepts the friend request
-    let response = client_a
+    client_a
         .respond_friend_request(&uid_b, true)
         .await
         .expect("respond_friend_request failed");
-    println!("  A accepted B's request, dm_channel: {:?}", response.dm_channel_id);
+    println!("  A accepted B's request (channel-free DM)");
 
     // Verify: both users see each other as friends
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -238,37 +238,23 @@ async fn t3_direct_message() {
         .expect("friend request failed");
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // B accepts A's friend request → creates DM channel
-    let response = client_b
+    // B accepts A's friend request. DMs are channel-free (Signal-style) —
+    // no DM channel is created; the conversation is keyed by peer user_id.
+    client_b
         .respond_friend_request(&uid_a, true)
         .await
         .expect("accept friend request failed");
-    let dm_channel_str = response
-        .dm_channel_id
-        .expect("DM channel should be created on accept");
-    println!("  DM channel: {}", dm_channel_str);
-
-    let dm_channel_id: ChannelId = dm_channel_str.parse().unwrap();
 
     // Wait for DM bootstrap (Signal session establishment, mailbox setup)
     tokio::time::sleep(Duration::from_secs(3)).await;
 
-    // Ensure A has the DM channel in its local DB (it was created on B's side)
-    client_a.channels().get_channel_with_memberships(&dm_channel_id).await
-        .expect("Failed to sync DM channel to client A");
-
-    // Subscribe to the DM channel's message stream so both clients receive
-    // messages published to the channel-specific Redis stream.
-    client_a.subscribe_channel_messages(&dm_channel_id);
-    client_b.subscribe_channel_messages(&dm_channel_id);
-
     // Subscribe to events BEFORE sending
     let mut events_b = client_b.subscribe_events();
 
-    // User A sends a text message to User B
+    // User A sends a text message to User B, keyed by B's user_id.
     let test_message = "Hello from T3 — E2E test message!";
     let send_result = client_a
-        .send_text(ActiveConversation::Channel(dm_channel_id.clone()), test_message)
+        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, test_message)
         .await
         .expect("send_text failed");
     println!(
@@ -276,9 +262,11 @@ async fn t3_direct_message() {
         send_result.message_id_string()
     );
 
-    // Verify: User B receives the message
+    // Verify: User B receives the message. On B's side the DM is bucketed by
+    // the SENDER's user_id (A), so conversation_id == ChannelId::from(uid_a).
+    let expected_conv_id = ChannelId::from(uid_a);
     let received = wait_for_event(&mut events_b, EVENT_TIMEOUT, |event| {
-        matches!(event, DomainEvent::MessageReceived { message } if message.conversation_id == dm_channel_id)
+        matches!(event, DomainEvent::MessageReceived { message } if message.conversation_id == expected_conv_id)
     })
     .await;
 
@@ -528,26 +516,14 @@ async fn t7_file_transfer() {
         .expect("friend request failed");
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    let response = client_b
+    // Channel-free DM: no DM channel is created on accept.
+    client_b
         .respond_friend_request(&uid_a, true)
         .await
         .expect("accept friend request failed");
-    let dm_channel_id: ChannelId = response
-        .dm_channel_id
-        .expect("DM channel should exist")
-        .parse()
-        .unwrap();
 
     // Wait for DM bootstrap
     tokio::time::sleep(Duration::from_secs(3)).await;
-
-    // Ensure A has the DM channel in its local DB
-    client_a.channels().get_channel_with_memberships(&dm_channel_id).await
-        .expect("Failed to sync DM channel to client A");
-
-    // Subscribe to the DM channel's message stream for delivery
-    client_a.subscribe_channel_messages(&dm_channel_id);
-    client_b.subscribe_channel_messages(&dm_channel_id);
 
     // Create a test file to upload
     let test_file_path = dir_a.path().join("test_attachment.txt");
@@ -566,10 +542,10 @@ async fn t7_file_transfer() {
     // Subscribe to events BEFORE sending
     let mut events_b = client_b.subscribe_events();
 
-    // Send the attachment as a message
+    // Send the attachment as a message, keyed by B's user_id.
     let send_result = client_a
         .send_message(
-            ActiveConversation::Channel(dm_channel_id.clone()),
+            ActiveConversation::ServerDm { peer_id: uid_b },
             "Here's a file for you!",
             &[pending],
             None,
@@ -582,9 +558,11 @@ async fn t7_file_transfer() {
         send_result.message_id_string()
     );
 
-    // Verify: User B receives the message with attachment
+    // Verify: User B receives the message with attachment. On B's side the
+    // DM is bucketed by the sender's user_id (A).
+    let expected_conv_id = ChannelId::from(uid_a);
     let received = wait_for_event(&mut events_b, EVENT_TIMEOUT, |event| {
-        matches!(event, DomainEvent::MessageReceived { message } if message.conversation_id == dm_channel_id)
+        matches!(event, DomainEvent::MessageReceived { message } if message.conversation_id == expected_conv_id)
     })
     .await;
 
@@ -725,17 +703,15 @@ async fn t3_inner() {
     let uid_b = register_and_start(&client_b, &unique_user("t3b"), "Bob").await;
     client_a.send_friend_request(&uid_b, None).await.unwrap();
     tokio::time::sleep(Duration::from_secs(2)).await;
-    let resp = client_b.respond_friend_request(&uid_a, true).await.unwrap();
-    let dm_cid: ChannelId = resp.dm_channel_id.unwrap().parse().unwrap();
+    client_b.respond_friend_request(&uid_a, true).await.unwrap();
     tokio::time::sleep(Duration::from_secs(3)).await;
-    client_a.channels().get_channel_with_memberships(&dm_cid).await.unwrap();
-    client_a.subscribe_channel_messages(&dm_cid);
-    client_b.subscribe_channel_messages(&dm_cid);
     let mut events_b = client_b.subscribe_events();
     let msg = "T3 test message";
-    client_a.send_text(ActiveConversation::Channel(dm_cid.clone()), msg).await.unwrap();
+    client_a.send_text(ActiveConversation::ServerDm { peer_id: uid_b }, msg).await.unwrap();
+    // On B's side the DM buckets by the sender's user_id (A).
+    let expected_conv_id = ChannelId::from(uid_a);
     let ev = wait_for_event(&mut events_b, EVENT_TIMEOUT, |e| {
-        matches!(e, DomainEvent::MessageReceived { message } if message.conversation_id == dm_cid)
+        matches!(e, DomainEvent::MessageReceived { message } if message.conversation_id == expected_conv_id)
     }).await;
     assert!(ev.is_some(), "B should receive message");
     if let Some(DomainEvent::MessageReceived { message }) = &ev {
@@ -819,12 +795,8 @@ async fn t7_inner() {
     let uid_b = register_and_start(&client_b, &unique_user("t7b"), "Bob").await;
     client_a.send_friend_request(&uid_b, None).await.unwrap();
     tokio::time::sleep(Duration::from_secs(2)).await;
-    let resp = client_b.respond_friend_request(&uid_a, true).await.unwrap();
-    let dm_cid: ChannelId = resp.dm_channel_id.unwrap().parse().unwrap();
+    client_b.respond_friend_request(&uid_a, true).await.unwrap();
     tokio::time::sleep(Duration::from_secs(3)).await;
-    client_a.channels().get_channel_with_memberships(&dm_cid).await.unwrap();
-    client_a.subscribe_channel_messages(&dm_cid);
-    client_b.subscribe_channel_messages(&dm_cid);
     let test_file = dir_a.path().join("test.txt");
     std::fs::write(&test_file, "E2E file transfer content").unwrap();
     let pending = PendingAttachment::new(
@@ -836,14 +808,15 @@ async fn t7_inner() {
     );
     let mut events_b = client_b.subscribe_events();
     client_a.send_message(
-        ActiveConversation::Channel(dm_cid.clone()),
+        ActiveConversation::ServerDm { peer_id: uid_b },
         "File attached",
         &[pending],
         None,
         None,
     ).await.unwrap();
+    let expected_conv_id = ChannelId::from(uid_a);
     let ev = wait_for_event(&mut events_b, EVENT_TIMEOUT, |e| {
-        matches!(e, DomainEvent::MessageReceived { message } if message.conversation_id == dm_cid)
+        matches!(e, DomainEvent::MessageReceived { message } if message.conversation_id == expected_conv_id)
     }).await;
     assert!(ev.is_some(), "B should receive message with attachment");
     client_a.shutdown().await;

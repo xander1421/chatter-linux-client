@@ -121,43 +121,25 @@ async fn register_and_start(
 }
 
 /// Drive A→B server-friend setup: A sends `send_friend_request`, B accepts
-/// via `respond_friend_request`. Returns the dm_channel_id that B got back
-/// from the accept response.
-async fn server_friend_and_get_dm(
+/// via `respond_friend_request`. DMs are channel-free (Signal-style), so
+/// there is no DM channel to return — the conversation is keyed by peer
+/// user_id (`ChannelId::from(peer)`).
+async fn server_friend(
     client_a: &Arc<ChatterClient>,
-    uid_a: &UserId,
-    client_b: &Arc<ChatterClient>,
     uid_b: &UserId,
-) -> ChannelId {
+    client_b: &Arc<ChatterClient>,
+    uid_a: &UserId,
+) {
     client_a
         .send_friend_request(uid_b, Some("Let's chat!"))
         .await
         .expect("send_friend_request failed");
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    let resp = client_b
+    client_b
         .respond_friend_request(uid_a, true)
         .await
         .expect("respond_friend_request failed");
-    resp.dm_channel_id
-        .expect("DM channel id should be set on accept")
-        .parse()
-        .expect("dm_channel_id should parse as ChannelId")
-}
-
-async fn wait_for_local_channel(
-    client: &Arc<ChatterClient>,
-    channel_id: &ChannelId,
-    timeout: Duration,
-) -> Option<chatter_core::domain::channel::Channel> {
-    let start = Instant::now();
-    while start.elapsed() < timeout {
-        if let Some(ch) = client.channels().get_channel_local(channel_id).ok().flatten() {
-            return Some(ch);
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-    None
 }
 
 // ============================================================================
@@ -312,22 +294,13 @@ async fn t18_anon_mode_does_not_affect_message_delivery() {
     let uid_a = register_and_start(&client_a, &unique_user("t18a"), "Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("t18b"), "Bob").await;
 
-    let dm_channel_id =
-        server_friend_and_get_dm(&client_a, &uid_a, &client_b, &uid_b).await;
-    println!("  dm_channel_id: {}", dm_channel_id);
+    server_friend(&client_a, &uid_b, &client_b, &uid_a).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
-    // A (requester) — auto-sync via FriendAccepted inbox event.
-    wait_for_local_channel(&client_a, &dm_channel_id, Duration::from_secs(10))
-        .await
-        .expect("A should auto-sync DM channel after FriendAccepted");
-
-    // B (accepter) — explicit fetch since respond_friend_request returns
-    // the id but does not persist the channel locally.
-    client_b
-        .channels()
-        .get_channel_with_memberships(&dm_channel_id)
-        .await
-        .expect("B: get_channel_with_memberships failed");
+    // Channel-free DM conversation keys: A stores under the recipient
+    // (B), B stores under the sender (A).
+    let a_conv_id = ChannelId::from(uid_b);
+    let b_conv_id = ChannelId::from(uid_a);
 
     // ── Anon mode flip on A — the test point ───────────────────────────
     client_a.set_anon_mode_enabled(true);
@@ -341,26 +314,23 @@ async fn t18_anon_mode_does_not_affect_message_delivery() {
     );
     println!("  A enabled anon mode; B remains in normal mode");
 
-    // Subscribe both message streams and event bus on B before sending.
-    client_a.subscribe_channel_messages(&dm_channel_id);
-    client_b.subscribe_channel_messages(&dm_channel_id);
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    // Subscribe the event bus on B before sending.
     let mut events_b = client_b.subscribe_events();
 
     let test_message = "T18 — sender in anon mode, receiver normal";
     client_a
-        .send_text(ActiveConversation::Channel(dm_channel_id.clone()), test_message)
+        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, test_message)
         .await
         .expect("A: send_text failed (anon mode must NOT block sends)");
     println!("  A sent: {:?}", test_message);
 
     // B must still receive — anon mode is a UI filter, not a transport
-    // concern.
+    // concern. B buckets by the sender's user_id (A).
     let received = wait_for_event(&mut events_b, EVENT_TIMEOUT, |event| {
         matches!(
             event,
             DomainEvent::MessageReceived { message }
-                if message.conversation_id == dm_channel_id
+                if message.conversation_id == b_conv_id
         )
     })
     .await;
@@ -378,7 +348,7 @@ async fn t18_anon_mode_does_not_affect_message_delivery() {
     //    mode does NOT drop persistence; it's UI-side only. ─────────────
     let a_stored = client_a
         .messages()
-        .get_messages_local_asc(&dm_channel_id, &ConversationType::ServerDm, None, 50)
+        .get_messages_local_asc(&a_conv_id, &ConversationType::ServerDm, None, 50)
         .expect("A: query ServerDm bucket");
     assert_eq!(
         a_stored.len(),
@@ -396,7 +366,7 @@ async fn t18_anon_mode_does_not_affect_message_delivery() {
     // ── Receiver storage: B in normal mode also stores ────────────────
     let b_stored = client_b
         .messages()
-        .get_messages_local_asc(&dm_channel_id, &ConversationType::ServerDm, None, 50)
+        .get_messages_local_asc(&b_conv_id, &ConversationType::ServerDm, None, 50)
         .expect("B: query ServerDm bucket");
     assert_eq!(
         b_stored.len(),

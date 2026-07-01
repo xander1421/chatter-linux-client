@@ -189,11 +189,10 @@ async fn test_friend_accept_triggers_stream_event() {
     pool2.disconnect();
 
     match result {
-        Ok(Some(status)) => {
+        Ok(Some(_status)) => {
             println!("SUCCESS: User1 received acceptance notification via stream!");
-            if !status.channel_id.is_empty() {
-                println!("DM channel created: {}", status.channel_id);
-            }
+            // DMs are channel-free (Signal-style) — no DM channel_id on the
+            // friend-status event anymore.
         }
         Ok(None) => {
             panic!("Stream ended without receiving acceptance event");

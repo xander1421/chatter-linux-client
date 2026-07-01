@@ -5,8 +5,8 @@
 mod common;
 
 use base64::Engine;
-use chatter_core::network::grpc::{ChannelClient, UserClient};
-use chatter_core::proto::chat_v1::{friend_requests_filter, ChannelType, FriendStatus};
+use chatter_core::network::grpc::UserClient;
+use chatter_core::proto::chat_v1::{friend_requests_filter, FriendStatus};
 use tokio_stream::StreamExt;
 
 use common::*;
@@ -171,96 +171,6 @@ async fn test_friend_request_decline() {
 // ============================================================================
 // Friend Chat Flow Tests
 // ============================================================================
-
-#[tokio::test]
-async fn test_friends_can_create_dm_channel() {
-    skip_if_no_server!();
-
-    let pool = assert_ok(create_test_pool().await);
-    let user1 = assert_ok(setup_authenticated_test(&pool).await);
-
-    pool.auth().clear();
-    let user2 = assert_ok(register_test_user(&pool).await);
-
-    // Make them friends
-    pool.auth().set_basic(
-        format!("{}.{}", user1.user_id, user1.device_id),
-        base64::engine::general_purpose::STANDARD.encode(&user1.device_auth_token),
-    );
-
-    let mut user1_client = UserClient::new(pool.channel(), pool.auth_clone());
-    let stream = assert_ok(
-        user1_client
-            .send_friend_request(&user2.user_id, None)
-            .await,
-    );
-    tokio::pin!(stream);
-    while let Some(_) = stream.next().await {}
-
-    pool.auth().set_basic(
-        format!("{}.{}", user2.user_id, user2.device_id),
-        base64::engine::general_purpose::STANDARD.encode(&user2.device_auth_token),
-    );
-
-    let mut user2_client = UserClient::new(pool.channel(), pool.auth_clone());
-    let accept_stream = assert_ok(
-        user2_client
-            .respond_friend_request(&user1.user_id, FriendStatus::Accepted, None)
-            .await,
-    );
-    tokio::pin!(accept_stream);
-    while let Some(_) = accept_stream.next().await {}
-
-    // Now user1 creates DM channel
-    pool.auth().set_basic(
-        format!("{}.{}", user1.user_id, user1.device_id),
-        base64::engine::general_purpose::STANDARD.encode(&user1.device_auth_token),
-    );
-
-    let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
-    let dm_name = format!("dm_{}_{}", user1.user_id, user2.user_id);
-    let dm_result = channel_client
-        .create_channel(
-            &dm_name,
-            ChannelType::DirectMessage,
-            None,
-            vec![user2.user_id.clone()],
-            None,
-            None,
-            None,
-        )
-        .await;
-
-    match dm_result {
-        Ok(stream) => {
-            tokio::pin!(stream);
-            let mut channel_id = String::new();
-            while let Some(result) = stream.next().await {
-                let event = result.expect("Stream error");
-                // Server populates the top-level `channel_id` field on every
-                // ChannelEvent (see channels.go::pbEvent.ChannelId = event.ChannelID).
-                // The inner `Event::ChannelCreated` carries the full Channel
-                // payload, but for DMs the server may resolve to an existing
-                // channel and emit only operation-status events, in which
-                // case the only id available is the top-level one.
-                if !event.channel_id.is_empty() && channel_id.is_empty() {
-                    channel_id = event.channel_id.clone();
-                }
-                if let Some(payload) = event.event {
-                    use chatter_core::proto::chat_v1::channel_event::Event;
-                    if let Event::ChannelCreated(ch) = payload {
-                        channel_id = ch.id;
-                    }
-                }
-            }
-            assert!(!channel_id.is_empty(), "DM channel should be created");
-        }
-        Err(e) => {
-            // DM creation might fail if channel already exists - that's okay
-            eprintln!("DM channel creation: {:?}", e);
-        }
-    }
-}
 
 // ============================================================================
 // Remove Friend Tests
