@@ -1956,8 +1956,9 @@ impl ChatterClient {
                 );
                 self.messages().get_messages_local(id, &conv_type, None, limit)
             }
-            ActiveConversation::ServerDm { channel_id: id, .. } => {
-                self.messages().get_messages_local(id, &ConversationType::ServerDm, None, limit)
+            ActiveConversation::ServerDm { peer_id } => {
+                let id: crate::domain::ids::ChannelId = (*peer_id).into();
+                self.messages().get_messages_local(&id, &ConversationType::ServerDm, None, limit)
             }
             ActiveConversation::MailboxDm { channel_id: id, .. } => {
                 self.messages().get_messages_local(id, &ConversationType::MailboxDm, None, limit)
@@ -2532,12 +2533,8 @@ fn build_intent(
             peer_id, dm_channel_id: channel_id, text: text.to_string(),
             attachment_pointers, file_paths: vec![], quote,
         }),
-        ActiveConversation::ServerDm { channel_id, .. } => Ok(OutgoingIntent::Channel {
-            channel_id, text: text.to_string(), attachment_pointers,
-            file_paths: vec![], thread_id: options.thread_id,
-            mentioned_integrations: options.mentioned_integrations.clone(),
-            targets_ai_bot: options.targets_ai_bot,
-            quote,
+        ActiveConversation::ServerDm { peer_id } => Ok(OutgoingIntent::ServerDm {
+            peer_id, text: text.to_string(), attachment_pointers, quote,
         }),
         ActiveConversation::Channel(id) => {
             let is_saved = channel_service.get_channel_local(&id).ok().flatten()

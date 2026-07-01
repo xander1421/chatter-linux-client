@@ -150,12 +150,11 @@ impl ConversationHandle {
                 );
                 Ok(())
             }
-            ActiveConversation::ServerDm { channel_id, .. } => {
-                let content = crate::services::build_reaction_content_with_channel(
+            ActiveConversation::ServerDm { peer_id } => {
+                let content = crate::services::build_reaction_content(
                     emoji, remove, &target_author_str, target_sent_timestamp,
-                    Some(&channel_id.to_string()),
                 );
-                self.send_channel_content(content, channel_id).await?;
+                self.send_server_dm_content(content, peer_id).await?;
                 let _ = self.client.messages().update_reaction_by_sender(
                     target_author, target_sent_timestamp, emoji, !remove,
                 );
@@ -191,11 +190,9 @@ impl ConversationHandle {
                 let content = crate::services::build_typing_content(started);
                 self.send_dm_content(content, peer_id).await
             }
-            ActiveConversation::ServerDm { channel_id, .. } => {
-                let content = crate::services::build_typing_content_with_channel(
-                    started, Some(&channel_id.to_string()),
-                );
-                self.send_channel_content(content, channel_id).await
+            ActiveConversation::ServerDm { peer_id } => {
+                let content = crate::services::build_typing_content(started);
+                self.send_server_dm_content(content, peer_id).await
             }
             ActiveConversation::Channel(channel_id) => {
                 let content = crate::services::build_typing_content_with_channel(
@@ -250,14 +247,13 @@ impl ConversationHandle {
                 let _ = self.client.messages().set_message_pinned(&msg.id, new_pinned);
                 Ok(())
             }
-            ActiveConversation::ServerDm { channel_id, .. } => {
+            ActiveConversation::ServerDm { peer_id } => {
                 let msg = self.lookup_message(target_author, target_sent_timestamp)?;
                 let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
-                let content = crate::services::build_pin_content_with_channel(
+                let content = crate::services::build_pin_content(
                     &author_aci, target_sent_timestamp, unpin,
-                    Some(&channel_id.to_string()),
                 );
-                self.send_channel_content(content, channel_id).await?;
+                self.send_server_dm_content(content, peer_id).await?;
                 let _ = self.client.messages().set_message_pinned(&msg.id, new_pinned);
                 Ok(())
             }
@@ -308,7 +304,7 @@ impl ConversationHandle {
                 (cid, CT::AnonGroup)
             }
             ActiveConversation::MailboxDm { channel_id, .. } => (*channel_id, CT::MailboxDm),
-            ActiveConversation::ServerDm { channel_id, .. } => (*channel_id, CT::ServerDm),
+            ActiveConversation::ServerDm { peer_id } => (ChannelId::from(*peer_id), CT::ServerDm),
             ActiveConversation::Channel(channel_id) => (*channel_id, CT::Channel),
             ActiveConversation::None => return,
         };
@@ -351,11 +347,11 @@ impl ConversationHandle {
                 self.persist_edit(target_sent_timestamp, new_text);
                 Ok(())
             }
-            ActiveConversation::ServerDm { channel_id, .. } => {
-                let content = crate::services::gateway::builders::build_edit_content_with_channel(
-                    target_sent_timestamp, new_text, Some(&channel_id.to_string()),
+            ActiveConversation::ServerDm { peer_id } => {
+                let content = crate::services::gateway::builders::build_edit_content(
+                    target_sent_timestamp, new_text,
                 );
-                self.send_channel_content(content, channel_id).await?;
+                self.send_server_dm_content(content, peer_id).await?;
                 self.persist_edit(target_sent_timestamp, new_text);
                 Ok(())
             }
@@ -403,11 +399,11 @@ impl ConversationHandle {
                 self.delete_local_by_timestamp(target_sent_timestamp);
                 Ok(())
             }
-            ActiveConversation::ServerDm { channel_id, .. } => {
-                let content = crate::services::build_delete_for_everyone_content_with_channel(
-                    target_sent_timestamp, Some(&channel_id.to_string()),
+            ActiveConversation::ServerDm { peer_id } => {
+                let content = crate::services::build_delete_for_everyone_content(
+                    target_sent_timestamp,
                 );
-                self.send_channel_content(content, channel_id).await?;
+                self.send_server_dm_content(content, peer_id).await?;
                 self.delete_local_by_timestamp(target_sent_timestamp);
                 Ok(())
             }
@@ -452,13 +448,13 @@ impl ConversationHandle {
                 self.client.messages().delete_message_local(&msg.id)
                     .map_err(ConversationError::Message)
             }
-            ActiveConversation::ServerDm { channel_id, .. } => {
+            ActiveConversation::ServerDm { peer_id } => {
                 let msg = self.lookup_message(target_author, target_sent_timestamp)?;
                 let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
                 let content = crate::services::build_delete_for_me_content(
-                    &channel_id.to_string(), &author_aci, target_sent_timestamp,
+                    &peer_id.to_string(), &author_aci, target_sent_timestamp,
                 );
-                self.send_channel_content(content, channel_id).await?;
+                self.send_server_dm_content(content, peer_id).await?;
                 self.client.messages().delete_message_local(&msg.id)
                     .map_err(ConversationError::Message)
             }
@@ -589,11 +585,9 @@ impl ConversationHandle {
                 let content = crate::services::gateway::build_read_receipt_content(timestamps.to_vec());
                 self.send_dm_content(content, peer_id).await
             }
-            ActiveConversation::ServerDm { channel_id, .. } => {
-                let content = crate::services::gateway::build_read_receipt_content_with_channel(
-                    timestamps.to_vec(), Some(&channel_id.to_string()),
-                );
-                self.send_channel_content(content, channel_id).await
+            ActiveConversation::ServerDm { peer_id } => {
+                let content = crate::services::gateway::build_read_receipt_content(timestamps.to_vec());
+                self.send_server_dm_content(content, peer_id).await
             }
             ActiveConversation::Channel(channel_id) => {
                 let content = crate::services::gateway::build_read_receipt_content_with_channel(
@@ -620,11 +614,9 @@ impl ConversationHandle {
                 let content = crate::services::gateway::build_delivery_receipt_content(timestamps.to_vec());
                 self.send_dm_content(content, peer_id).await
             }
-            ActiveConversation::ServerDm { channel_id, .. } => {
-                let content = crate::services::gateway::build_delivery_receipt_content_with_channel(
-                    timestamps.to_vec(), Some(&channel_id.to_string()),
-                );
-                self.send_channel_content(content, channel_id).await
+            ActiveConversation::ServerDm { peer_id } => {
+                let content = crate::services::gateway::build_delivery_receipt_content(timestamps.to_vec());
+                self.send_server_dm_content(content, peer_id).await
             }
             ActiveConversation::Channel(channel_id) => {
                 let content = crate::services::gateway::build_delivery_receipt_content_with_channel(
@@ -677,9 +669,10 @@ impl ConversationHandle {
                 }
                 Ok(())
             }
-            ActiveConversation::ServerDm { channel_id, .. } => {
+            ActiveConversation::ServerDm { peer_id } => {
                 let my_user_id = self.client.auth_state().get().current_user_id;
-                if let Ok(messages) = self.client.messages().get_messages_local(channel_id, &ConversationType::ServerDm, None, 50) {
+                let channel_id: ChannelId = (*peer_id).into();
+                if let Ok(messages) = self.client.messages().get_messages_local(&channel_id, &ConversationType::ServerDm, None, 50) {
                     let timestamps: Vec<u64> = messages.iter()
                         .filter(|m| m.sender_id.as_ref() != my_user_id.as_ref())
                         .map(|m| m.sent_at)
@@ -741,8 +734,15 @@ impl ConversationHandle {
                 }
                 Ok(())
             }
+            ActiveConversation::ServerDm { peer_id } => {
+                // Channel-free DM: no membership row to flip. Mirrors the
+                // AnonDm pattern — a per-peer settings key.
+                let key = format!("conv.muted.server_dm.{}", peer_id);
+                self.client.channels().settings_repo
+                    .set(&key, &muted)
+                    .map_err(|e| ConversationError::Other(e.to_string()))
+            }
             ActiveConversation::MailboxDm { channel_id, .. }
-            | ActiveConversation::ServerDm { channel_id, .. }
             | ActiveConversation::Channel(channel_id) => {
                 let user_id = self.client.auth_state().get().current_user_id
                     .ok_or_else(|| ConversationError::Other("Not logged in".into()))?;
@@ -770,8 +770,19 @@ impl ConversationHandle {
                     .delete_group(id)
                     .map_err(|e| ConversationError::Other(e.to_string()))
             }
+            ActiveConversation::ServerDm { peer_id } => {
+                // Channel-free DM: no channel/membership row to cascade —
+                // delete the local message history directly.
+                let channel_id: ChannelId = (*peer_id).into();
+                let messages = self.client.messages()
+                    .get_messages_local(&channel_id, &ConversationType::ServerDm, None, u32::MAX)
+                    .map_err(ConversationError::Message)?;
+                for msg in messages {
+                    let _ = self.client.messages().delete_message_local(&msg.id);
+                }
+                Ok(())
+            }
             ActiveConversation::MailboxDm { channel_id, .. }
-            | ActiveConversation::ServerDm { channel_id, .. }
             | ActiveConversation::Channel(channel_id) => {
                 self.client.channels().channel_repo
                     .delete_channel_cascade(channel_id)
@@ -783,9 +794,9 @@ impl ConversationHandle {
 
     /// Set the disappearing message timer for this conversation.
     ///
-    /// `seconds` of 0 disables the timer. For channels and DMs this updates
-    /// the channel's `default_ttl_seconds`. For anon types it is stored in
-    /// the settings repo.
+    /// `seconds` of 0 disables the timer. For channels and mailbox DMs
+    /// this updates the channel's `default_ttl_seconds`. For anon types
+    /// and channel-free server DMs it is stored in the settings repo.
     pub fn set_disappearing_timer(&self, seconds: u32) -> ConversationResult {
         let ttl = if seconds == 0 { None } else { Some(seconds) };
         match &self.conversation {
@@ -801,8 +812,13 @@ impl ConversationHandle {
                     .set(&key, &ttl)
                     .map_err(|e| ConversationError::Other(e.to_string()))
             }
+            ActiveConversation::ServerDm { peer_id } => {
+                let key = format!("conv.disappearing.server_dm.{}", peer_id);
+                self.client.channels().settings_repo
+                    .set(&key, &ttl)
+                    .map_err(|e| ConversationError::Other(e.to_string()))
+            }
             ActiveConversation::MailboxDm { channel_id, .. }
-            | ActiveConversation::ServerDm { channel_id, .. }
             | ActiveConversation::Channel(channel_id) => {
                 self.client.channels().channel_repo
                     .set_default_ttl(channel_id, ttl)
@@ -855,6 +871,19 @@ impl ConversationHandle {
     ) -> ConversationResult {
         self.client.messages()
             .send_dm(peer_id, content, &**self.client.mailbox_manager())
+            .await
+            .map_err(ConversationError::Message)
+    }
+
+    /// Send content via the channel-free server DM path (per-device sealed
+    /// sender, no channel).
+    async fn send_server_dm_content(
+        &self,
+        content: crate::proto::content_v1::Content,
+        peer_id: &UserId,
+    ) -> ConversationResult {
+        self.client.messages()
+            .send_sealed_dm_content(peer_id, content)
             .await
             .map_err(ConversationError::Message)
     }

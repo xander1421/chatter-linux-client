@@ -1,64 +1,48 @@
-//! Server-managed DM operations.
+//! Server DM operations — sealed-sender, per-device, channel-free.
 //!
-//! For DMs with server-known friends (`ChannelType::DirectMessage` channels
-//! created by the server's friend-accept Temporal workflow), we send via
-//! `MessageService::SendMessage` gRPC and persist locally with
-//! `ConversationType::ServerDm`. Plaintext on the wire is acceptable here:
-//! the server already saw the friendship gRPC, so sealed-sender mailbox
-//! transport buys no privacy.
+//! Chatter's DM model mirrors Signal's 1:1 messaging: there is no
+//! server-side DM channel. A message is Signal-Protocol-encrypted once per
+//! recipient device and deposited directly into that device's inbox via
+//! `SendSealedMessage` (UAK-authorized when the recipient's prekey bundle
+//! carries one) — the same primitive `fanout_control_to_device_inboxes`
+//! uses for channel control messages, just without a channel to read
+//! membership from. The server never creates or reads a DM channel row;
+//! the local conversation is keyed by the peer's `UserId`
+//! (`ConversationHandle`/`ActiveConversation::ServerDm { peer_id }`, local
+//! storage key `ChannelId::from(peer_id)`).
 //!
-//! Private-friend DMs (mailbox-only, no server channel) continue to use
-//! the `dm.rs` mailbox path and persist as `ConversationType::MailboxDm`.
+//! This intentionally does NOT reuse the `dm.rs` mailbox path: that path
+//! is the NDSS'21 ephemeral-mailbox transport (two encryption layers,
+//! rotating mailbox addresses, bootstrap handshake) used for
+//! `ConversationType::MailboxDm` — a stronger, slower-to-establish privacy
+//! model for peers without a server-visible friendship. `ServerDm` is for
+//! server-known friends: standard Signal 1:1 sealed sender, no bootstrap.
+
+use std::collections::HashMap;
+
+use prost::Message as ProstMessage;
 
 use crate::domain::ids::{AttachmentId, ChannelId, UserId};
 use crate::domain::message::{ConversationType, Message, MessageContent, MixedContent};
-use crate::proto::chat_v1;
+use crate::network::grpc::auth_client::AuthClient;
+use crate::network::grpc::message_client::MessageClient;
+use crate::proto::chat_v1::{self, SealedSenderMessage};
 use crate::proto::content_v1::AttachmentPointer;
 use crate::services::current_user::CurrentUserProvider;
 
 use super::{DmSendResult, MessageError, MessageService};
 
 impl MessageService {
-    /// Send a server-managed DM via gRPC `MessageService::SendMessage`.
-    ///
-    /// Used for friend DMs where the server already knows the friendship
-    /// (and therefore created the DM channel). The wire payload is plaintext
-    /// text in `chat_v1::message::content::Type::Text`, mirroring the
-    /// non-encrypted channel send path.
-    ///
-    /// Locally the message is persisted with `ConversationType::ServerDm`.
-    ///
-    /// # Arguments
-    /// * `channel_id` - DM channel id (server-assigned, present in the local
-    ///   channel repo via the friend-accept event).
-    /// * `peer_id` - Peer user id (kept for parity with the mailbox path
-    ///   and future use; not currently sent on the wire — server resolves
-    ///   the recipient from `channel_id`).
-    /// * `text` - Message body.
-    /// * `attachment_pointers` - Pre-uploaded attachment pointers. Their
-    ///   CDN keys derive `AttachmentId`s for local storage and the matching
-    ///   `mentioned_file_ids` field on the request.
-    /// * `sent_at` - Caller-generated timestamp (nanoseconds) so UI and
-    ///   storage agree.
+    /// Send a DataMessage (text + optional attachments) to a friend over
+    /// the channel-free sealed-sender path, and persist it locally as
+    /// `ConversationType::ServerDm` keyed by `ChannelId::from(peer_id)`.
     pub async fn send_server_dm(
         &self,
-        channel_id: &ChannelId,
         peer_id: &UserId,
         text: &str,
         attachment_pointers: Vec<AttachmentPointer>,
         sent_at: u64,
     ) -> Result<DmSendResult, MessageError> {
-        let _ = peer_id; // Server resolves the recipient from channel_id.
-
-        tracing::info!(
-            channel_id = %channel_id,
-            peer_id = %peer_id,
-            text_len = text.len(),
-            attachment_count = attachment_pointers.len(),
-            sent_at,
-            "MessageService: send_server_dm called"
-        );
-
         let trimmed = text.trim();
         if trimmed.is_empty() && attachment_pointers.is_empty() {
             return Err(MessageError::InvalidContent(
@@ -66,67 +50,39 @@ impl MessageService {
             ));
         }
 
-        let current_user_id = self.settings_repo.current_user_id()?;
+        tracing::info!(
+            peer_id = %peer_id,
+            text_len = trimmed.len(),
+            attachment_count = attachment_pointers.len(),
+            sent_at,
+            "MessageService: send_server_dm called"
+        );
 
-        // Wire payload: plaintext text. Mirrors the channel send path's
-        // `Content::Text` shape — server doesn't encrypt anyway, and
-        // we don't carry per-attachment keys on the wire (attachments
-        // ride via mentioned_file_ids; the server-side blob layer
-        // owns delivery).
-        let content = chat_v1::message::Content {
-            r#type: Some(chat_v1::message::content::Type::Text(trimmed.to_string())),
-        };
-
-        // Derive AttachmentIds + mentioned_file_ids from pointers.
         let attachment_ids: Vec<AttachmentId> = attachment_pointers
             .iter()
             .map(|p| AttachmentId::from_cdn_key(&p.cdn_key))
             .collect();
-        let mentioned_file_ids: Vec<String> = attachment_ids.iter().map(|id| id.to_string()).collect();
 
-        // Send via gRPC MessageService::SendMessage.
-        let mut message_client = self.message_client();
-        let proto_message = message_client
-            .send_message(
-                &channel_id.to_string(),
-                content,
-                None,  // parent_id (no threads in DMs)
-                false, // ephemeral
-                None,  // ephemeral_ttl
-                None,  // crypto_options (plaintext)
-                vec![], // mentioned_integrations
-                false,  // targets_ai_bot
-                mentioned_file_ids,
-            )
-            .await?;
-
-        tracing::info!(
-            channel_id = %channel_id,
-            message_id = %proto_message.id,
-            "[SEND_SERVER_DM] gRPC SendMessage success"
+        let content = crate::services::build_data_message_content(
+            trimmed,
+            attachment_pointers,
+            sent_at,
         );
 
-        // Build the locally-stored message with ConversationType::ServerDm.
-        // Use caller-supplied `sent_at` so the UI optimistic row matches
-        // the persisted row. Use the server's message id when parseable
-        // (so receipts/edits/deletes referencing the server id resolve);
-        // otherwise fall back to a fresh local id.
+        self.send_sealed_dm_content(peer_id, content).await?;
+
+        let current_user_id = self.settings_repo.current_user_id()?;
+        let conversation_id: ChannelId = (*peer_id).into();
         let mut message = Message::new_text(
-            *channel_id,
+            conversation_id,
             ConversationType::ServerDm,
             Some(current_user_id),
             trimmed.to_string(),
             sent_at,
         );
 
-        if let Ok(server_id) = proto_message.id.parse::<crate::domain::ids::MessageId>() {
-            message.id = server_id;
-        }
-
         if !attachment_ids.is_empty() {
             message.attachments = attachment_ids.clone();
-            // Reflect attachments in the stored content shape so message
-            // rendering picks them up the same way the channel path does.
             message.content = if trimmed.is_empty() {
                 MessageContent::Mixed(MixedContent::attachments_only(attachment_ids.clone()))
             } else {
@@ -136,7 +92,7 @@ impl MessageService {
 
         if let Err(e) = self.message_repo.insert(&message) {
             tracing::warn!(
-                channel_id = %channel_id,
+                peer_id = %peer_id,
                 error = %e,
                 "Failed to store sent ServerDm locally"
             );
@@ -150,4 +106,189 @@ impl MessageService {
             bootstrap_initiated: false,
         })
     }
+
+    /// Send an arbitrary `Content` proto (reactions, typing, pin, edit,
+    /// delete, receipts, or a DataMessage) to every device of `peer_id`,
+    /// sealed-sender + UAK-authorized, with no server-side channel. Also
+    /// fans the same content out to our own other devices (Signal-style
+    /// multi-device sync).
+    ///
+    /// Callers that need local storage (e.g. `send_server_dm`) do it
+    /// themselves after this returns — this method only handles delivery.
+    pub async fn send_sealed_dm_content(
+        &self,
+        peer_id: &UserId,
+        content: crate::proto::content_v1::Content,
+    ) -> Result<(), MessageError> {
+        let plaintext = content.encode_to_vec();
+        let mut auth_client = self.auth_client();
+        let mut message_client = self.message_client();
+
+        let our_user_id = self.settings_repo.current_user_id()?;
+        let our_device_id = self
+            .settings_repo
+            .get::<u32>(crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID)
+            .map_err(MessageError::Storage)?
+            .ok_or(MessageError::NotLoggedIn)?;
+
+        let peer_id_str = peer_id.to_string();
+
+        // Recipient: every device. Chatter's analog of Signal's 409/410 —
+        // if we reach zero devices (stale/mismatched session state),
+        // refetch the peer's device list/prekeys and retry once.
+        let mut delivered = self
+            .deposit_sealed_to_all_devices(&mut auth_client, &mut message_client, &peer_id_str, &plaintext, None)
+            .await;
+
+        if delivered == 0 {
+            tracing::warn!(
+                peer_id = %peer_id,
+                "Sealed DM send reached zero peer devices, refetching prekeys and retrying once"
+            );
+            delivered = self
+                .deposit_sealed_to_all_devices(&mut auth_client, &mut message_client, &peer_id_str, &plaintext, None)
+                .await;
+        }
+
+        if delivered == 0 {
+            return Err(MessageError::DmError(format!(
+                "Failed to deliver sealed DM to any device of {peer_id}"
+            )));
+        }
+
+        // Self-sync: every one of our own devices except this one.
+        let self_delivered = self
+            .deposit_sealed_to_all_devices(
+                &mut auth_client,
+                &mut message_client,
+                &our_user_id.to_string(),
+                &plaintext,
+                Some(our_device_id),
+            )
+            .await;
+        tracing::debug!(
+            peer_id = %peer_id,
+            peer_devices_delivered = delivered,
+            self_devices_delivered = self_delivered,
+            "Sealed DM delivery complete"
+        );
+
+        Ok(())
+    }
+
+    /// Encrypt `plaintext` for every device of `recipient_id` and deposit
+    /// each ciphertext via `SendSealedMessage`, UAK-authorized when the
+    /// recipient's prekey bundle carries one. `skip_device_id` excludes a
+    /// single device (used for self-sync to skip the sending device).
+    ///
+    /// Returns the number of devices successfully delivered to. Every
+    /// per-device failure is logged — dropped devices are never silently
+    /// capped or swallowed.
+    async fn deposit_sealed_to_all_devices(
+        &self,
+        auth_client: &mut AuthClient,
+        message_client: &mut MessageClient,
+        recipient_id: &str,
+        plaintext: &[u8],
+        skip_device_id: Option<u32>,
+    ) -> usize {
+        let ciphertexts = match self
+            .signal_service
+            .encrypt_message_all_devices(auth_client, recipient_id, plaintext)
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    recipient = recipient_id,
+                    error = %e,
+                    "Sealed DM: failed to encrypt for recipient's devices"
+                );
+                return 0;
+            }
+        };
+
+        let uaks = fetch_recipient_uaks(auth_client, recipient_id).await;
+        let timestamp = crate::util::time::TimestampNanos::now().as_u64();
+        let server_key_id = self.signal_service.get_server_key_id();
+
+        let mut delivered = 0;
+        for (device_id, sealed_bytes) in ciphertexts {
+            if skip_device_id == Some(device_id) {
+                continue;
+            }
+
+            let sealed_message = SealedSenderMessage {
+                sealed_body: sealed_bytes,
+                server_key_id,
+                timestamp,
+            };
+
+            let result = match uaks.get(&device_id) {
+                Some(uak) if !uak.is_empty() => {
+                    message_client
+                        .send_sealed_message_anonymous(recipient_id, device_id, sealed_message, uak)
+                        .await
+                }
+                _ => {
+                    tracing::debug!(
+                        recipient = recipient_id,
+                        device_id,
+                        "No UAK for device, sending without UAK header"
+                    );
+                    message_client
+                        .send_sealed_message(recipient_id, device_id, sealed_message)
+                        .await
+                }
+            };
+
+            match result {
+                Ok(_) => delivered += 1,
+                Err(e) => {
+                    tracing::warn!(
+                        recipient = recipient_id,
+                        device_id,
+                        error = %e,
+                        "Sealed DM: dropped device — failed to deposit to inbox"
+                    );
+                }
+            }
+        }
+
+        delivered
+    }
+}
+
+/// Fetch the UAK (Unidentified Access Key) for every device of `user_id`
+/// from their prekey bundles. Devices without a UAK (or bundles that
+/// fail to fetch) are simply absent from the map — callers fall back to
+/// unauthenticated `SendSealedMessage` for those devices.
+async fn fetch_recipient_uaks(auth_client: &mut AuthClient, user_id: &str) -> HashMap<u32, Vec<u8>> {
+    use chat_v1::get_pre_key_bundle_response;
+
+    let response = match auth_client.get_pre_key_bundles_all_devices(user_id).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(user_id, error = %e, "Failed to fetch prekey bundles for UAK lookup");
+            return HashMap::new();
+        }
+    };
+
+    let mut uaks = HashMap::new();
+    match response.result {
+        Some(get_pre_key_bundle_response::Result::Devices(device_list)) => {
+            for bundle in device_list.bundles {
+                if let Some(uak) = bundle.unidentified_access_key {
+                    uaks.insert(bundle.device_id, uak);
+                }
+            }
+        }
+        Some(get_pre_key_bundle_response::Result::Bundle(bundle)) => {
+            if let Some(uak) = bundle.unidentified_access_key {
+                uaks.insert(bundle.device_id, uak);
+            }
+        }
+        None => {}
+    }
+    uaks
 }

@@ -69,16 +69,11 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             }
         } else if let Some(ref peer) = peer_id_for_dm {
-            let channel_id: ChannelId = dm_id_str.parse().unwrap_or_else(|_| ChannelId::new());
-            let conv_type = ui_ctx
-                .get_channel_local(&channel_id)
-                .map(|c| c.conversation_type())
-                .unwrap_or(chatter_core::domain::message::ConversationType::MailboxDm);
-            Some(if conv_type == chatter_core::domain::message::ConversationType::ServerDm {
-                chatter_core::state::ActiveConversation::ServerDm { peer_id: peer.clone(), channel_id }
-            } else {
-                chatter_core::state::ActiveConversation::MailboxDm { peer_id: peer.clone(), channel_id }
-            })
+            // Regular (non-anon) DM sidebar rows are built entirely from the
+            // friends list (`list_dm_sidebar`) and keyed by peer_id — there
+            // is no server DM channel anymore, so this is unconditionally
+            // a ServerDm keyed by the peer.
+            Some(chatter_core::state::ActiveConversation::ServerDm { peer_id: peer.clone() })
         } else {
             None
         };
@@ -203,20 +198,18 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
+            // The sidebar's `channel_id` field for a regular DM is the
+            // peer's user_id (same UUID, wrapped as ChannelId — see
+            // `ChannelId::from(UserId)`), so parsing it directly gives the
+            // exact local storage key `send_server_dm` stores under.
             let channel_id: ChannelId = match dm_id_str.parse() {
                 Ok(id) => id,
                 Err(_) => ChannelId::new(),
             };
 
-            // Branch on the channel's actual conversation_type. Server-managed
-            // DMs (DirectMessage rows) live under `ConversationType::ServerDm`;
-            // mailbox DMs (private friends, no server channel row) fall back to
-            // `MailboxDm`. `get_channel_local` returning None correctly maps to
-            // the MailboxDm branch — those conversations have no channel row.
-            let conv_type = ui_ctx
-                .get_channel_local(&channel_id)
-                .map(|c| c.conversation_type())
-                .unwrap_or(chatter_core::domain::message::ConversationType::MailboxDm);
+            // Regular (non-anon) DM sidebar rows are channel-free ServerDm
+            // conversations — no channel row to probe.
+            let conv_type = chatter_core::domain::message::ConversationType::ServerDm;
 
             let ui_ctx_for_sel = ui_ctx.clone();
             run_ui!(weak, |w| super::refresh_selection(&w, &ui_ctx_for_sel));

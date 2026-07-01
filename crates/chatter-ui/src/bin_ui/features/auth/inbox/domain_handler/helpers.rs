@@ -83,13 +83,13 @@ pub(super) fn handle_pin_ui_update(
         // Check if the pin is for the currently active conversation using the
         // typed `matches_*` predicates in `chatter-core`.
         let active = ui_ctx_active.active_conversation();
+        let is_dm_match = matches!(
+            active,
+            chatter_core::state::ActiveConversation::ServerDm { .. }
+                | chatter_core::state::ActiveConversation::MailboxDm { .. }
+        ) && active.channel_id() == Some(channel_id);
         let is_active = active.matches_channel(&channel_id)
-            || matches!(
-                active,
-                chatter_core::state::ActiveConversation::ServerDm { channel_id: cid, .. }
-                    | chatter_core::state::ActiveConversation::MailboxDm { channel_id: cid, .. }
-                        if cid == channel_id
-            )
+            || is_dm_match
             || channel_id_str
                 .parse()
                 .map(|id| active.matches_anon_dm(&id))

@@ -150,8 +150,24 @@ impl ChatterClient {
                 })
             }
 
-            AC::ServerDm { channel_id, peer_id }
-            | AC::MailboxDm { channel_id, peer_id } => {
+            AC::ServerDm { peer_id } => {
+                // Channel-free DM: the call's local scoping id is derived
+                // from the peer, same as the message conversation_id.
+                let channel_id: crate::domain::ids::ChannelId = peer_id.into();
+                let call_id = self
+                    .start_dm_call(&peer_id, channel_id, call_type, user_id)
+                    .await?;
+                Ok(OutgoingCallStart {
+                    call_id: call_id.to_string(),
+                    channel_id: channel_id.to_string(),
+                    is_video,
+                    is_anonymous: false,
+                    verification_emojis: None,
+                    title: "Calling...".into(),
+                })
+            }
+
+            AC::MailboxDm { channel_id, peer_id } => {
                 let call_id = self
                     .start_dm_call(&peer_id, channel_id, call_type, user_id)
                     .await?;

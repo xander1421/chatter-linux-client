@@ -31,10 +31,11 @@ pub enum ActiveConversation {
     None,
     /// A server-managed channel (public/private).
     Channel(ChannelId),
-    /// A server-routed DM (gRPC transport, Signal Protocol E2EE).
-    /// Server sees who talks to whom but not message content.
+    /// A DM to a friend (sealed-sender, per-device mailbox delivery,
+    /// Signal Protocol E2EE). Channel-free — there is no server-side DM
+    /// channel. Keyed entirely by the peer's `UserId`; the local
+    /// `conversation_id` (`ChannelId`) is derived via `ChannelId::from(peer_id)`.
     ServerDm {
-        channel_id: ChannelId,
         peer_id: UserId,
     },
     /// A mailbox-routed DM (NDSS'21 ephemeral mailbox, Signal Protocol E2EE).
@@ -64,7 +65,8 @@ impl ActiveConversation {
     pub fn channel_id(&self) -> Option<ChannelId> {
         match self {
             Self::Channel(id) => Some(*id),
-            Self::ServerDm { channel_id, .. } | Self::MailboxDm { channel_id, .. } => Some(*channel_id),
+            Self::ServerDm { peer_id } => Some(ChannelId::from(*peer_id)),
+            Self::MailboxDm { channel_id, .. } => Some(*channel_id),
             Self::AnonDm(id) => Some((*id).into()),
             Self::AnonGroup(id) => Some((*id).into()),
             Self::None => None,
@@ -131,8 +133,10 @@ impl ActiveConversation {
     /// `channel_id` and the header by `peer_id`.
     pub fn matches_dm(&self, channel_id: &ChannelId, peer_id: &UserId) -> bool {
         match self {
-            Self::ServerDm { channel_id: cid, peer_id: pid }
-            | Self::MailboxDm { channel_id: cid, peer_id: pid } => {
+            Self::ServerDm { peer_id: pid } => {
+                ChannelId::from(*pid) == *channel_id || pid == peer_id
+            }
+            Self::MailboxDm { channel_id: cid, peer_id: pid } => {
                 cid == channel_id || pid == peer_id
             }
             _ => false,
@@ -143,7 +147,7 @@ impl ActiveConversation {
     pub fn matches_dm_peer(&self, peer_id: &UserId) -> bool {
         matches!(
             self,
-            Self::ServerDm { peer_id: pid, .. } | Self::MailboxDm { peer_id: pid, .. }
+            Self::ServerDm { peer_id: pid } | Self::MailboxDm { peer_id: pid, .. }
                 if pid == peer_id
         )
     }
