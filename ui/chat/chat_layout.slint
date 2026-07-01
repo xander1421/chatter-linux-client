@@ -116,6 +116,7 @@ export component ChatLayout inherits Rectangle {
     callback cancel-edit();
     callback cancel-reply();
     callback attachment-clicked();
+    callback paste-image();
     callback emoji-clicked();
     callback gif-clicked();
     callback mention-triggered(string);
@@ -440,6 +441,9 @@ export component ChatLayout inherits Rectangle {
             }
             attachment-clicked => {
                 root.attachment-clicked();
+            }
+            paste-image => {
+                root.paste-image();
             }
             emoji-clicked => {
                 root.emoji-picker-visible = !root.emoji-picker-visible;

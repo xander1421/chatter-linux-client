@@ -214,8 +214,6 @@ impl MessageService {
         use crate::proto::chat_v1::SealedSenderMessage;
         use crate::storage::repositories::settings_repo::keys;
 
-        const PRIMARY_DEVICE_ID: u32 = 1;
-
         let our_user_id = self.settings_repo
             .get_string(keys::CURRENT_USER_ID)
             .map_err(MessageError::Storage)?
@@ -235,7 +233,11 @@ impl MessageService {
         let timestamp = crate::util::time::TimestampNanos::now().as_u64();
         let server_key_id = self.signal_service.get_server_key_id();
 
-        // Recipient fanout: every device EXCEPT primary (primary handled by channel send).
+        // Recipient fanout: EVERY device, including primary. The channel
+        // SendMessage stores the sealed copy server-side (history) but delivers
+        // it only over the ServerDm stream, which can't decrypt sealed sender —
+        // so live delivery for the recipient's primary device must go through
+        // the device-inbox path here (the gateway decrypts + stores locally).
         if let Some(rid) = recipient_id {
             match self.signal_service
                 .encrypt_message_all_devices(auth_client, &rid, plaintext)
@@ -243,9 +245,6 @@ impl MessageService {
             {
                 Ok(ciphertexts) => {
                     for (device_id, sealed_bytes) in ciphertexts {
-                        if device_id == PRIMARY_DEVICE_ID {
-                            continue;
-                        }
                         let sealed_message = SealedSenderMessage {
                             sealed_body: sealed_bytes,
                             server_key_id,
@@ -1038,7 +1037,19 @@ impl MessageService {
         // Multi-device: encrypt for ALL recipient devices, send primary ciphertext
         // Server handles device routing via channel subscription
         if is_dm {
-            if let Ok(recipient_id) = channel_id.to_string().parse::<uuid::Uuid>() {
+            // Resolve the peer from channel membership. A ServerDm channel_id is
+            // a deterministic v5 UUID, NOT the peer's user_id — encrypting to the
+            // channel_id fetches a prekey bundle for a non-user and fails. The
+            // recipient is the sole member that isn't us.
+            let our_user_id = self.settings_repo.current_user_id()?;
+            let recipient_id = self
+                .channel_repo
+                .list_members(channel_id)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|m| m.user_id)
+                .find(|uid| *uid != our_user_id);
+            if let Some(recipient_id) = recipient_id {
                 // Encrypt for ALL recipient devices (Signal multi-device)
                 match self.signal_service.encrypt_message_all_devices(
                     auth_client,
@@ -1063,7 +1074,8 @@ impl MessageService {
                                 r#type: Some(chat_v1::message::content::Type::SealedSender(
                                     chat_v1::SealedSenderMessage {
                                         sealed_body: ciphertext,
-                                        ..Default::default()
+                                        server_key_id: self.signal_service.get_server_key_id(),
+                                        timestamp: crate::util::time::TimestampNanos::now().as_u64(),
                                     }
                                 )),
                             };
@@ -1081,7 +1093,8 @@ impl MessageService {
                     }
                 }
             }
-            // DM target channel_id was not a valid recipient UUID — fail closed.
+            // No peer membership synced for this DM — fail closed rather than
+            // encrypt to the wrong identity.
             return Err(MessageError::EncryptionFailed(
                 "DM recipient could not be resolved for encryption".into(),
             ));
@@ -1102,11 +1115,6 @@ impl MessageService {
                                 ciphertext: group_bytes,
                                 // Mark as sender key message in associated_data
                                 associated_data: b"sender_key".to_vec(),
-                                // Other fields empty for sender key
-                                nonce: vec![],
-                                auth_tag: vec![],
-                                signature: vec![],
-                                device_id: String::new(),
                             }
                         )),
                     };

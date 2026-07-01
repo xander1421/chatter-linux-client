@@ -640,7 +640,6 @@ mod tests {
             Some(&sender_id.to_string()),
             "Bob",
             "B",
-            "",
             0,
             true,
         );

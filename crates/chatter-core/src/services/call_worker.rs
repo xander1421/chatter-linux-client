@@ -323,8 +323,6 @@ enum CallCommand {
     IsMicrophoneMuted {
         response: oneshot::Sender<bool>,
     },
-    /// Set camera enabled.
-    SetCameraEnabled { enabled: bool },
     /// Get camera enabled state.
     IsCameraEnabled {
         response: oneshot::Sender<bool>,
@@ -924,11 +922,6 @@ impl CallWorkerHandle {
         rx.await.unwrap_or(false)
     }
 
-    /// Set camera enabled.
-    pub fn set_camera_enabled(&self, enabled: bool) {
-        let _ = self.cmd_tx.try_send(CallCommand::SetCameraEnabled { enabled });
-    }
-
     /// Locally mute/unmute a specific remote peer's audio. Fire-and-forget;
     /// drops silently if the worker has shut down.
     pub fn set_peer_audio_muted(&self, participant_id: String, muted: bool) {
@@ -1318,7 +1311,7 @@ fn run_call_worker(
                 }
 
                 CallCommand::StopCamera => {
-                    room_manager.stop_camera();
+                    room_manager.stop_camera().await;
                 }
 
                 CallCommand::SetMicrophoneMuted { muted } => {
@@ -1327,10 +1320,6 @@ fn run_call_worker(
 
                 CallCommand::IsMicrophoneMuted { response } => {
                     let _ = response.send(room_manager.is_microphone_muted());
-                }
-
-                CallCommand::SetCameraEnabled { enabled } => {
-                    room_manager.set_camera_enabled(enabled);
                 }
 
                 CallCommand::IsCameraEnabled { response } => {

@@ -167,6 +167,67 @@ pub(crate) fn wire_attachment_clicked(window: &MainWindow, chat_state: ChatState
     });
 }
 
+/// Wire the paste-image callback: on Ctrl/Cmd+V, attach an image from the
+/// clipboard (if any) as a pending attachment. Text paste is handled by the
+/// TextInput itself; this only fires the image path.
+#[cfg(not(target_os = "android"))]
+pub(crate) fn wire_paste_image(window: &MainWindow, chat_state: ChatState) {
+    let weak_window = window.as_weak();
+
+    window.on_paste_image(move || {
+        let weak = weak_window.clone();
+        let chat_state = chat_state.clone();
+
+        // No point reading the clipboard if there's nowhere to attach.
+        if matches!(chat_state.active_conversation(), ActiveConversation::None) {
+            return;
+        }
+
+        tokio::spawn(async move {
+            // arboard is blocking — keep it off the async runtime threads.
+            let path = match tokio::task::spawn_blocking(read_clipboard_image).await {
+                Ok(Ok(path)) => path,
+                Ok(Err(e)) => {
+                    // Common, benign case: clipboard holds text, not an image.
+                    tracing::debug!("Clipboard paste: no image to attach ({e})");
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!("Clipboard read task failed: {e}");
+                    return;
+                }
+            };
+
+            match process_and_add_file(path, &chat_state, &weak).await {
+                Ok(()) => tracing::info!("Attached image pasted from clipboard"),
+                Err(e) => tracing::error!("{e}"),
+            }
+        });
+    });
+}
+
+/// Read an image off the clipboard and write it to a temp PNG, returning its
+/// path so it can flow through the normal attachment pipeline. Errors (incl.
+/// "no image on clipboard") are returned as strings for the caller to log.
+#[cfg(not(target_os = "android"))]
+fn read_clipboard_image() -> Result<PathBuf, String> {
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    let img = clipboard.get_image().map_err(|e| e.to_string())?;
+
+    let width = img.width as u32;
+    let height = img.height as u32;
+    // arboard yields raw RGBA8; rebuild an image buffer to re-encode as PNG.
+    let buffer = image::RgbaImage::from_raw(width, height, img.bytes.into_owned())
+        .ok_or_else(|| "clipboard image dimensions don't match buffer".to_string())?;
+
+    let path = std::env::temp_dir().join(format!("chatter-paste-{}.png", AttachmentId::new()));
+    buffer
+        .save_with_format(&path, image::ImageFormat::Png)
+        .map_err(|e| format!("failed to encode pasted image: {e}"))?;
+
+    Ok(path)
+}
+
 /// Wire up the remove-attachment callback.
 pub(crate) fn wire_remove_attachment(window: &MainWindow, chat_state: ChatState) {
     let weak_window = window.as_weak();

@@ -56,7 +56,6 @@ async fn test_appcontext_three_tier_initialization() {
             // Tier 2: All services are constructed (16+ services)
             let _ = client.auth();
             let _ = client.messages();
-            let _ = client.message_gateway();
             let _ = client.channels();
             let _ = client.users();
             let _ = client.attachments();
@@ -107,7 +106,6 @@ async fn test_chatter_client_builder() {
             // Client exposes all services
             let _ = client.auth();
             let _ = client.messages();
-            let _ = client.message_gateway();
             let _ = client.channels();
             let _ = client.users();
             let _ = client.attachments();

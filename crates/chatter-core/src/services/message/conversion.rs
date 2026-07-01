@@ -331,11 +331,7 @@ mod tests {
             r#type: Some(Type::Encrypted(chat_v1::EncryptedData {
                 version: 1,
                 ciphertext: vec![1, 2, 3],
-                nonce: vec![],
-                auth_tag: vec![],
-                signature: vec![],
-                associated_data: vec![],
-                device_id: String::new(),
+                associated_data: b"sender_key".to_vec(),
             })),
         };
 

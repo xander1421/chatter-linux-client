@@ -11,6 +11,26 @@ use chatter_core::calls::LiveKitRoomEvent;
 use crate::bin_ui::converters::get_initials;
 use crate::{CallParticipantData, MainWindow};
 
+/// The local participant is pinned to the LAST tile (the layout treats the last
+/// row as "You" and feeds it `local-video-frame`). Split it off before touching
+/// the remote rows. Callers must re-attach it via [`order_participants`].
+fn split_local(mut participants: Vec<CallParticipantData>) -> (Vec<CallParticipantData>, Option<CallParticipantData>) {
+    let local = if participants.is_empty() { None } else { Some(participants.remove(participants.len() - 1)) };
+    (participants, local)
+}
+
+/// Rebuild the participant list: remotes ascending by user_id, local pinned last.
+/// The GL frame list is published in ascending participant-id order and matched
+/// to tiles positionally (see `gl_call.rs`), so the remote rows must be sorted
+/// the same way or a peer's frame lands on the wrong tile.
+fn order_participants(mut remotes: Vec<CallParticipantData>, local: Option<CallParticipantData>) -> Vec<CallParticipantData> {
+    remotes.sort_by(|a, b| a.user_id.as_str().cmp(b.user_id.as_str()));
+    if let Some(l) = local {
+        remotes.push(l);
+    }
+    remotes
+}
+
 /// Wire room events to update UI (participant count, etc.).
 pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
@@ -144,36 +164,63 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         track_sid, participant_identity, is_video, is_screen_share
                     );
 
-                    // Update participant's video/screen share state
-                    if is_video {
-                        let identity = participant_identity.clone();
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                let mut data = w.get_active_call_data();
-                                let participants: Vec<CallParticipantData> =
-                                    (0..data.participants.row_count())
-                                        .map(|i| {
-                                            let mut p = data.participants.row_data(i).unwrap_or_default();
-                                            if p.user_id.to_string() == identity {
-                                                // Always set is_video_enabled for any video track
-                                                // (camera or screen share) so the tile shows video
-                                                p.is_video_enabled = true;
-                                                if is_screen_share {
-                                                    p.is_screen_sharing = true;
-                                                }
-                                            }
-                                            p
-                                        })
-                                        .collect();
-                                data.participants = ModelRc::new(VecModel::from(participants));
-                                w.set_active_call_data(data);
-                                tracing::debug!(
-                                    "Updated participant {} video_enabled=true screen_sharing={}",
-                                    identity, is_screen_share
-                                );
-                            }
-                        });
+                    if !is_video {
+                        continue;
                     }
+                    let identity = participant_identity.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        let Some(w) = weak.upgrade() else { return };
+                        let mut data = w.get_active_call_data();
+                        let all: Vec<CallParticipantData> =
+                            (0..data.participants.row_count())
+                                .map(|i| data.participants.row_data(i).unwrap_or_default())
+                                .collect();
+                        // Separate local BEFORE reordering remotes, else the sort
+                        // would shuffle "You" in among the peers and misalign every
+                        // frame slot.
+                        let (mut remotes, local) = split_local(all);
+
+                        if is_screen_share {
+                            // Screen share is its OWN tile (camera + screen are
+                            // separate tracks from the same peer — one tile would
+                            // flash between them). Add a pseudo-participant keyed by
+                            // the same synthetic id the frame store uses.
+                            let screen_id =
+                                chatter_core::calls::screen_share_frame_id(&identity, true);
+                            if remotes.iter().any(|p| p.user_id.to_string() == screen_id) {
+                                return;
+                            }
+                            let (name, initials) = remotes
+                                .iter()
+                                .find(|p| p.user_id.to_string() == identity)
+                                .map(|p| (p.display_name.to_string(), p.initials.to_string()))
+                                .unwrap_or_else(|| (identity.clone(), get_initials(&identity)));
+                            remotes.push(CallParticipantData {
+                                user_id: screen_id.into(),
+                                display_name: format!("{name} (screen)").into(),
+                                initials: initials.into(),
+                                avatar_source: slint::Image::default(),
+                                is_muted: false,
+                                is_video_enabled: true,
+                                is_screen_sharing: true,
+                                is_speaking: false,
+                                is_audio_muted_locally: false,
+                                is_video_paused_locally: false,
+                            });
+                        } else {
+                            // Camera track — light up the real participant's tile.
+                            for p in &mut remotes {
+                                if p.user_id.to_string() == identity {
+                                    p.is_video_enabled = true;
+                                }
+                            }
+                        }
+
+                        let participants = order_participants(remotes, local);
+                        data.participant_count = participants.len() as i32;
+                        data.participants = ModelRc::new(VecModel::from(participants));
+                        w.set_active_call_data(data);
+                    });
                 }
                 LiveKitRoomEvent::TrackUnsubscribed {
                     participant_identity, track_sid, is_video, is_screen_share,
@@ -190,37 +237,36 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                     let identity = participant_identity.clone();
                     let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            let mut data = w.get_active_call_data();
-                            let participants: Vec<CallParticipantData> = (0..data.participants.row_count())
-                                .map(|i| {
-                                    let mut p = data.participants.row_data(i).unwrap_or_default();
-                                    if p.user_id.to_string() == identity {
-                                        if is_screen_share {
-                                            // Screen share stopped — drop screen flag, keep
-                                            // camera state (camera & screen share are separate
-                                            // tracks; we only got told about screen here).
-                                            p.is_screen_sharing = false;
-                                            // No camera track in this call → fall back to avatar.
-                                            // Safe to clear because the only video flag we set
-                                            // for screen-share is_video_enabled; clearing it
-                                            // restores the avatar tile.
-                                            p.is_video_enabled = false;
-                                        } else {
-                                            // Camera track unsubscribed — clear video flag.
-                                            p.is_video_enabled = false;
-                                        }
-                                    }
-                                    p
-                                })
+                        let Some(w) = weak.upgrade() else { return };
+                        let mut data = w.get_active_call_data();
+                        let all: Vec<CallParticipantData> =
+                            (0..data.participants.row_count())
+                                .map(|i| data.participants.row_data(i).unwrap_or_default())
                                 .collect();
-                            data.participants = ModelRc::new(VecModel::from(participants));
-                            w.set_active_call_data(data);
-                            tracing::debug!(
-                                "Cleared video state for {} (screen_share={})",
-                                identity, is_screen_share
-                            );
+                        let (mut remotes, local) = split_local(all);
+
+                        if is_screen_share {
+                            // Screen share stopped — drop its whole pseudo-tile.
+                            let screen_id =
+                                chatter_core::calls::screen_share_frame_id(&identity, true);
+                            remotes.retain(|p| p.user_id.to_string() != screen_id);
+                        } else {
+                            // Camera track unsubscribed — clear the real tile's video flag.
+                            for p in &mut remotes {
+                                if p.user_id.to_string() == identity {
+                                    p.is_video_enabled = false;
+                                }
+                            }
                         }
+
+                        let participants = order_participants(remotes, local);
+                        data.participant_count = participants.len() as i32;
+                        data.participants = ModelRc::new(VecModel::from(participants));
+                        w.set_active_call_data(data);
+                        tracing::debug!(
+                            "Cleared video state for {} (screen_share={})",
+                            identity, is_screen_share
+                        );
                     });
                 }
                 LiveKitRoomEvent::EncryptionStateChanged { participant_identity, is_encrypted } => {

@@ -221,6 +221,20 @@ impl ChatterClient {
             .map(|dm| dm.id)
     }
 
+    /// Decrypted avatar bytes for an anonymous DM peer (the user directory has
+    /// no profile for anon peers — their avatar lives on the anon DM row, same
+    /// source the sidebar uses).
+    pub fn anon_dm_peer_avatar(
+        &self,
+        user_id: &crate::domain::ids::UserId,
+    ) -> Option<Vec<u8>> {
+        self.anon_dms()
+            .get_conversation_by_peer(user_id)
+            .ok()
+            .flatten()
+            .and_then(|dm| dm.peer_avatar)
+    }
+
     pub fn unblock_anon_dm_conversation(
         &self,
         conversation_id: &crate::domain::anon_dm::AnonDmId,

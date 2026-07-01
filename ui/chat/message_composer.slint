@@ -76,6 +76,9 @@ export component MessageComposer inherits Rectangle {
     callback cancel-edit();
     callback cancel-reply();
     callback attachment-clicked();
+    // Fired on Ctrl/Cmd+V so the host can attach an image from the clipboard.
+    // Text paste is handled by TextInput itself (this doesn't consume the key).
+    callback paste-image();
     callback emoji-clicked();
     callback gif-clicked();
     callback mention-triggered(string);
@@ -675,6 +678,12 @@ export component MessageComposer inherits Rectangle {
                         if (event.text == Key.Tab && root.ghost-writing-enabled && root.ghost-text != "") {
                             root.accept-ghost-text();
                             return accept;
+                        }
+                        if (event.text == "v" && (event.modifiers.control || event.modifiers.meta)) {
+                            // Attach clipboard image if present; TextInput still
+                            // handles text paste (we don't consume the event).
+                            root.paste-image();
+                            return reject;
                         }
                         return reject;
                     }

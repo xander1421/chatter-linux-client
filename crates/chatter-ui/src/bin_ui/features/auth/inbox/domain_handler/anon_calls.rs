@@ -93,6 +93,7 @@ pub(super) fn handle_anon_group_call_offer(
                 true,
                 "",
                 true,
+                None, // anonymous caller — no avatar, show initials
             );
 
             tracing::info!(

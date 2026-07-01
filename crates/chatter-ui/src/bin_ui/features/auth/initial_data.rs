@@ -754,108 +754,33 @@ async fn load_channel_into_ui_from_services(
     });
 }
 
-/// Refresh the DM list in the UI with latest data from storage.
+/// Refresh the DM list in the UI from core.
+///
+/// Core's `list_dm_sidebar` is the single source of truth — it builds regular
+/// DMs *and* anon DMs, applies the anon-mode filter, and orders them. The UI
+/// just renders. Do not pair this with a second list-writer on the same event;
+/// two writers race and one clobbers a freshly-accepted DM.
 pub fn refresh_dm_list(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let window_weak = window.as_weak();
 
     tokio::spawn(async move {
-        // Get current user ID for DM peer detection
-        let current_user_id = ui_ctx.auth_state().get().current_user_id;
+        // DB work off the UI thread.
+        let dm_list = ui_ctx.list_dm_sidebar();
 
-        // Get channels from local storage
-        let channels = ui_ctx.get_channels_mru();
-
-        let mut dm_list: Vec<DMListItemSendData> = Vec::new();
-
-        // Anon Mode: drop server DMs from the rebuilt list — anon DM
-        // entries are merged in by `refresh_anon_dms` separately.
-        let anon_mode = ui_ctx.anon_mode_enabled();
-
-        // Process regular DMs
-        for channel in &channels {
-            if anon_mode { break; }
-            if channel.channel_type == ChannelType::DirectMessage {
-                // Find the OTHER user (not ourselves)
-                let other_user_id = if let Some(current_id) = current_user_id {
-                    let members = ui_ctx.list_channel_members_local(&channel.id);
-                    members
-                        .iter()
-                        .find(|m| m.user_id != current_id)
-                        .map(|m| m.user_id.to_string())
-                        .unwrap_or_else(|| channel.owner_id.to_string())
-                } else {
-                    channel.owner_id.to_string()
-                };
-                
-                let other_user_name = channel.name.clone();
-                
-                // Get the most recent message
-                let (last_message, timestamp) = 
-                    match ui_ctx.get_messages_local(&channel.id, &ConversationType::ServerDm, None, 1) {
-                        Ok(messages) if !messages.is_empty() => {
-                            let msg = &messages[0];
-                            let is_own = current_user_id.map(|id| msg.sender_id == Some(id)).unwrap_or(false);
-                            
-                            let preview = msg.as_text()
-                                .map(|text| {
-                                    let display_text = truncate_sidebar_preview(text);
-                                    if is_own {
-                                        format!("You: {}", display_text)
-                                    } else {
-                                        display_text
-                                    }
-                                })
-                                .unwrap_or_else(|| {
-                                    if msg.has_attachments() {
-                                        if is_own {
-                                            "You: [Attachment]".to_string()
-                                        } else {
-                                            "[Attachment]".to_string()
-                                        }
-                                    } else {
-                                        String::new()
-                                    }
-                                });
-                            
-                            let ts = msg.created_at
-                                .with_timezone(&chrono::Local)
-                                .format("%H:%M")
-                                .to_string();
-                            
-                            (preview, ts)
-                        }
-                        _ => (String::new(), String::new()),
-                    };
-                
-                // Create DM item manually since dm_to_send_data signature changed
-                let dm_item = DMListItemSendData {
-                    channel_id: channel.id.to_string(),
-                    user_id: other_user_id.clone(),
-                    display_name: other_user_name.clone(),
-                    avatar_bytes: Some(Vec::new()),
-                    avatar_decoded: None,
-                    initials: get_initials(&other_user_name),
-                    presence_status: "online".to_string(),
-                    last_message,
-                    timestamp,
-                    unread_count: channel.unread_count,
-                    is_typing: false,
-                    is_anon: false,
-                };
-                dm_list.push(dm_item);
+        // Marshal the model mutation back onto the UI thread. Slint models must
+        // only be mutated from the event loop; an off-thread `set_*` is silently
+        // dropped, which is why a refreshed DM never rendered. `to_slint`
+        // (builds a non-Send `Image`) also has to run inside the closure.
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = window_weak.upgrade() {
+                let dm_list_slint: Vec<DMListItemData> = dm_list.into_iter()
+                    .map(|d| d.to_slint())
+                    .collect();
+                w.set_dm_conversations(ModelRc::new(VecModel::from(dm_list_slint)));
+                crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);
             }
-        }
-        
-        // Update UI on the main thread
-        if let Some(w) = window_weak.upgrade() {
-            // Convert Send-safe DM data to Slint types
-            let dm_list_slint: Vec<DMListItemData> = dm_list.into_iter()
-                .map(|d| d.to_slint())
-                .collect();
-            w.set_dm_conversations(ModelRc::new(VecModel::from(dm_list_slint)));
-            crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);
-        }
+        });
     });
 }
 
@@ -898,133 +823,6 @@ pub fn refresh_anon_groups(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 }
 
-/// Refresh the anonymous DMs list in the UI.
-pub fn refresh_anon_dms(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let ui_ctx = ui_ctx.clone();
-    let window_weak = window.as_weak();
-    
-    tokio::spawn(async move {
-        let mut dm_list: Vec<DMListItemSendData> = Vec::new();
-        
-        // Load active anon DM conversations
-        {
-            let dms = ui_ctx.list_anon_dm_conversations();
-            {
-                for dm in dms {
-                    if dm.status != chatter_core::domain::anon_dm::AnonDmStatus::Pending {
-                        let peer_name = dm.peer_display_name.clone()
-                            .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
-                        let peer_id_str = dm.peer_id.to_string();
-                        
-                        // Get latest message for preview
-                        let (last_message, timestamp) = match ui_ctx.get_latest_anon_dm_message(&dm.id) {
-                            Some(msg) => {
-                                let preview = msg.as_text()
-                                    .map(|text| truncate_sidebar_preview(text))
-                                    .unwrap_or_else(|| "[Attachment]".to_string());
-
-                                let ts = msg.created_at
-                                    .with_timezone(&chrono::Local)
-                                    .format("%H:%M")
-                                    .to_string();
-
-                                (preview, ts)
-                            }
-                            None => (String::new(), String::new()),
-                        };
-                        
-                        let dm_item = DMListItemSendData {
-                            channel_id: dm.id.to_string(),
-                            user_id: peer_id_str.clone(),
-                            display_name: peer_name.clone(),
-                                    avatar_bytes: dm.peer_avatar.clone(),
-                            avatar_decoded: None,
-                            initials: get_initials(&peer_name),
-                            presence_status: if dm.status == chatter_core::domain::anon_dm::AnonDmStatus::Active {
-                                "online".to_string()
-                            } else {
-                                "offline".to_string()
-                            },
-                            last_message,
-                            timestamp,
-                            unread_count: dm.unread_count,
-                            is_typing: false,
-                            is_anon: true,
-                        };
-                        dm_list.push(dm_item);
-                    }
-                }
-            }
-        }
-
-        // Also load pending anon DM requests
-        {
-            let requests = ui_ctx.list_anon_dm_message_requests();
-            {
-                for dm in requests {
-                    let peer_name = dm.peer_display_name.clone()
-                        .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
-                    let peer_id_str = dm.peer_id.to_string();
-                    
-                    let last_message = match ui_ctx.get_latest_anon_dm_message(&dm.id) {
-                        Some(msg) => msg.as_text().unwrap_or_default().to_string(),
-                        None => "Message request".to_string(),
-                    };
-
-                    let dm_item = DMListItemSendData {
-                        channel_id: dm.id.to_string(),
-                        user_id: peer_id_str.clone(),
-                        display_name: format!("\u{1F4E9} {}", peer_name), // Envelope emoji for pending
-                            avatar_bytes: dm.peer_avatar.clone(),
-                        avatar_decoded: None,
-                        initials: get_initials(&peer_name),
-                        presence_status: "pending".to_string(),
-                        last_message: last_message.clone(),
-                        timestamp: dm.created_at
-                            .with_timezone(&chrono::Local)
-                            .format("%H:%M")
-                            .to_string(),
-                        unread_count: 1,
-                        is_typing: false,
-                        is_anon: true,
-                    };
-                    dm_list.push(dm_item);
-                }
-            }
-        }
-
-        // Get existing DM list and merge with anon DMs.
-        // Anon Mode: drop existing non-anon rows entirely (they were already
-        // suppressed by `refresh_dm_list`'s anon_mode short-circuit, but
-        // any racing inserts that snuck in get cleaned here).
-        let anon_mode = ui_ctx.anon_mode_enabled();
-        if let Some(w) = window_weak.upgrade() {
-            let existing_dms = w.get_dm_conversations();
-            let mut all_dms = Vec::new();
-
-            // Add existing regular DMs (non-anon) — the is_anon flag is the
-            // only discriminator now.
-            let existing_count = existing_dms.iter().count();
-            for i in 0..existing_count {
-                if let Some(dm) = existing_dms.iter().nth(i) {
-                    if !dm.is_anon && !anon_mode {
-                        all_dms.push(dm);
-                    }
-                }
-            }
-
-            // Add the anon DMs
-            for dm in dm_list {
-                all_dms.push(dm.to_slint());
-            }
-
-            let dm_model = VecModel::from(all_dms);
-            w.set_dm_conversations(ModelRc::new(dm_model));
-            crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);
-        }
-    });
-}
-
 /// Update typing indicator for a specific user in a DM.
 pub fn update_dm_typing_indicator(window: &MainWindow, user_id: &str, is_typing: bool) {
     let dm_list = window.get_dm_conversations();
@@ -1061,8 +859,15 @@ pub fn show_incoming_call(
     is_identity_verified: bool,
     identity_warning: &str,
     is_anonymous: bool,
+    caller_avatar: Option<&[u8]>,
 ) {
     use crate::IncomingCallData;
+
+    // Decode the caller's avatar bytes to an image; falls back to initials when
+    // absent or undecodable.
+    let caller_avatar_source = caller_avatar
+        .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
+        .unwrap_or_default();
 
     // Create incoming call data structure
     let call_data = IncomingCallData {
@@ -1071,7 +876,7 @@ pub fn show_incoming_call(
         caller_name: caller_name.into(),
         caller_initials: crate::bin_ui::converters::get_initials(caller_name).into(),
         caller_avatar: String::new().into(),
-        caller_avatar_source: slint::Image::default(),
+        caller_avatar_source,
         channel_name: String::new().into(),
         is_video_call: call_type == "video",
         is_anonymous_call: is_anonymous,

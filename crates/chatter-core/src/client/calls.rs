@@ -532,13 +532,6 @@ impl ChatterClient {
         }
     }
 
-    #[cfg(feature = "media")]
-    pub fn call_set_camera_enabled(&self, enabled: bool) {
-        if let Some(worker) = self.call_service().get() {
-            worker.set_camera_enabled(enabled);
-        }
-    }
-
     /// Locally mute/unmute a remote participant's audio. The LiveKit
     /// stream stays subscribed; muted frames are dropped before mixing.
     #[cfg(feature = "media")]

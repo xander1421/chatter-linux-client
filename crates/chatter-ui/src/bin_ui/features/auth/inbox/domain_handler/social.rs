@@ -84,14 +84,13 @@ pub(super) fn handle_friend_accepted(
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
-                // Refresh regular DM list (replaces entire list)
+                // Single source of truth: refresh_dm_list rebuilds regular + anon
+                // DMs from core in one pass.
                 super::super::super::initial_data::refresh_dm_list(&w, &ui_ctx);
-                // Re-add anon DMs that were dropped by the full replace
-                super::super::super::initial_data::refresh_anon_dms(&w, &ui_ctx);
                 tracing::info!(
                     friend_id = %friend_id,
                     channel_id = %channel_id,
-                    "Friend accepted - refreshed DM sidebar with anon DMs preserved"
+                    "Friend accepted - refreshed DM sidebar"
                 );
             }
         });

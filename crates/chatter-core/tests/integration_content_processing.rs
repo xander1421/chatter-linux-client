@@ -43,19 +43,15 @@ fn test_proto_content_encrypted_detection() {
     let content = Content {
         r#type: Some(ContentType::Encrypted(EncryptedData {
             version: 1,
-            nonce: vec![5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
             ciphertext: vec![1, 2, 3, 4],
-            auth_tag: vec![17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32],
-            associated_data: vec![],
-            signature: vec![],
-            device_id: String::new(),
+            associated_data: b"sender_key".to_vec(),
         })),
     };
 
     match &content.r#type {
         Some(ContentType::Encrypted(enc)) => {
             assert_eq!(enc.ciphertext, vec![1, 2, 3, 4]);
-            assert_eq!(enc.nonce, vec![5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+            assert_eq!(enc.associated_data, b"sender_key");
             assert_eq!(enc.version, 1);
         }
         _ => panic!("Expected Encrypted content type"),
@@ -107,47 +103,30 @@ fn test_encrypted_message_identifiable() {
 
     let encrypted_content = EncryptedData {
         version: 1,
-        nonce: vec![0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0, 0x11, 0x22, 0x33, 0x44],
         ciphertext: vec![0xDE, 0xAD, 0xBE, 0xEF],
-        auth_tag: vec![0; 16],
-        associated_data: vec![],
-        signature: vec![],
-        device_id: String::new(),
+        associated_data: b"sender_key".to_vec(),
     };
 
     // The ciphertext should be non-empty
     assert!(!encrypted_content.ciphertext.is_empty());
 
-    // Nonce should be present for decryption
-    assert!(!encrypted_content.nonce.is_empty());
+    // associated_data tags the sender-key format
+    assert_eq!(encrypted_content.associated_data, b"sender_key");
 
     // Version should indicate crypto format
     assert_eq!(encrypted_content.version, 1);
 }
 
-/// Test that encrypted content has required fields for AES-GCM decryption.
+/// Test that the sender-key envelope carries version + ciphertext + tag.
 #[test]
 fn test_encryption_content_structure() {
-    // All encrypted content uses AES-GCM format with:
-    // - 12-byte nonce
-    // - variable-length ciphertext
-    // - 16-byte auth tag
-
+    // EncryptedData is the sender-key group envelope: ciphertext holds a
+    // serialized GroupEncrypted proto, associated_data tags the format.
     let encrypted_content = EncryptedData {
         version: 1,
-        nonce: vec![0x00; 12],  // 12-byte nonce for AES-GCM
         ciphertext: vec![0x00, 0x01, 0x02, 0x03],
-        auth_tag: vec![0x00; 16], // 16-byte authentication tag
-        associated_data: vec![],
-        signature: vec![],
-        device_id: String::new(),
+        associated_data: b"sender_key".to_vec(),
     };
-
-    // Standard AES-GCM nonce length
-    assert_eq!(encrypted_content.nonce.len(), 12);
-
-    // Standard AES-GCM auth tag length
-    assert_eq!(encrypted_content.auth_tag.len(), 16);
 
     // Ciphertext should be non-empty for real messages
     assert!(!encrypted_content.ciphertext.is_empty());

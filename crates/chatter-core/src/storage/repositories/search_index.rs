@@ -162,7 +162,6 @@ mod tests {
     use crate::domain::ids::UserId;
     use crate::domain::message::{Message, ConversationType};
     use crate::storage::repositories::MessageRepository;
-    use std::path::Path;
 
     fn setup_db() -> Arc<Database> {
         let temp_dir = tempfile::tempdir().unwrap();

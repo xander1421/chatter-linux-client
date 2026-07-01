@@ -93,12 +93,10 @@ fn wire_submit_pin(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
 /// Rebuild sidebar models so the anon-mode filter takes effect.
 ///
-/// `refresh_dm_list` clears the DM model and `refresh_anon_dms` then
-/// re-merges anon entries — both helpers read `anon_mode_enabled()`
-/// internally and apply the filter.
+/// `refresh_dm_list` rebuilds the full DM model from core, which applies the
+/// `anon_mode_enabled()` filter internally.
 fn refresh_sidebar(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     crate::bin_ui::features::auth::initial_data::refresh_dm_list(window, ui_ctx);
-    crate::bin_ui::features::auth::initial_data::refresh_anon_dms(window, ui_ctx);
 
     // Channels: rebuild from local cache. When anon mode is on, we want
     // an empty list. When it flips back off, we want the cached server

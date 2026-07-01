@@ -89,18 +89,25 @@ impl VideoPlayback {
     /// Add a remote video track for playback.
     pub fn add_track(&self, participant_id: String, track: RemoteVideoTrack, is_screen_share: bool) {
         let track_sid = track.sid().to_string();
+        // Camera and screen share are separate tracks from the SAME peer. Store
+        // them under distinct frame keys so they don't overwrite each other (one
+        // tile would otherwise flash between the two feeds). The screen key sorts
+        // right after the camera key, which keeps the id-sorted frame list aligned
+        // with its id-sorted participant tiles.
+        let frame_key = screen_share_frame_id(&participant_id, is_screen_share);
         tracing::info!(
-            "Adding video track from participant: {} (sid: {}, screen_share: {})",
+            "Adding video track from participant: {} (sid: {}, screen_share: {}, frame_key: {})",
             participant_id,
             track_sid,
-            is_screen_share
+            is_screen_share,
+            frame_key,
         );
 
         let stop_signal = Arc::new(AtomicBool::new(false));
         let stop_signal_clone = stop_signal.clone();
         let shared_frames = self.shared_frames.clone();
         let paused_peers = self.paused_peers.clone();
-        let participant_id_clone = participant_id.clone();
+        let participant_id_clone = frame_key.clone();
 
         // Create native video stream from the track
         let rtc_track = track.rtc_track();
@@ -294,10 +301,11 @@ impl VideoPlayback {
                 });
             });
 
-        // Store the active stream
+        // Store the active stream under the same key the frames use, so
+        // remove_track targets the right one (camera vs screen share).
         let mut streams = self.streams.write();
         streams.insert(
-            participant_id,
+            frame_key,
             ActiveVideoStream {
                 track_sid,
                 stop_signal,
@@ -306,23 +314,25 @@ impl VideoPlayback {
         );
     }
 
-    /// Remove a participant's video track.
-    pub fn remove_track(&self, participant_id: &str) {
-        tracing::info!("Removing video track from participant: {}", participant_id);
+    /// Remove a participant's video track. `is_screen_share` selects which of the
+    /// peer's two possible tracks (camera or screen) to drop.
+    pub fn remove_track(&self, participant_id: &str, is_screen_share: bool) {
+        let frame_key = screen_share_frame_id(participant_id, is_screen_share);
+        tracing::info!("Removing video track: {}", frame_key);
 
         // Stop the stream receiver
         let mut streams = self.streams.write();
-        if let Some(stream) = streams.remove(participant_id) {
+        if let Some(stream) = streams.remove(&frame_key) {
             stream.stop_signal.store(true, Ordering::Relaxed);
         }
 
         // Remove stored frame
         let mut frames = self.frames.write();
-        frames.remove(participant_id);
+        frames.remove(&frame_key);
 
         // Remove from shared frames
         if let Some(ref shared) = self.shared_frames {
-            shared.remove_frame(participant_id);
+            shared.remove_frame(&frame_key);
         }
     }
 
@@ -490,6 +500,20 @@ impl Drop for VideoPlayback {
 impl Default for VideoPlayback {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Frame-store / participant-tile key for a peer's video track. A screen share
+/// gets a synthetic id (`{peer}\u{1}screen`) so it coexists with the peer's
+/// camera as a separate tile instead of overwriting it. The `\u{1}` suffix sorts
+/// immediately after the bare peer id, keeping the id-sorted frame list aligned
+/// with the id-sorted participant tiles. The UI builds the matching pseudo-
+/// participant with the same id (see `room_events.rs`).
+pub fn screen_share_frame_id(participant_id: &str, is_screen_share: bool) -> String {
+    if is_screen_share {
+        format!("{participant_id}\u{1}screen")
+    } else {
+        participant_id.to_string()
     }
 }
 

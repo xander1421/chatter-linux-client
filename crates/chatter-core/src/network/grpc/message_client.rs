@@ -754,12 +754,8 @@ mod tests {
         let encrypted_content = crate::proto::chat_v1::message::Content {
             r#type: Some(Type::Encrypted(crate::proto::chat_v1::EncryptedData {
                 version: crate::proto::chat_v1::CryptoVersion::SignalProtocol as i32,
-                nonce: vec![0u8; 12],
                 ciphertext: vec![1, 2, 3, 4],
-                auth_tag: vec![0u8; 16],
-                associated_data: vec![],
-                signature: vec![0u8; 64],
-                device_id: "device-123".to_string(),
+                associated_data: b"sender_key".to_vec(),
             })),
         };
 
@@ -777,18 +773,18 @@ mod tests {
     #[test]
     fn test_reaction_construction() {
         // Verify Reaction struct can be constructed
-        use crate::proto::chat_v1::Reaction;
+        use crate::proto::content_v1::Reaction;
 
         let reaction = Reaction {
-            user_id: "user-123".to_string(),
             emoji: "👍".to_string(),
-            timestamp: 1234567890000,
+            remove: false,
             target_author_aci: "550e8400-e29b-41d4-a716-446655440000".to_string(),
             target_sent_timestamp: 1704067200_000_000_000,
+            timestamp: 1234567890000,
         };
 
-        assert_eq!(reaction.user_id, "user-123");
         assert_eq!(reaction.emoji, "👍");
+        assert!(!reaction.remove);
         assert_eq!(reaction.timestamp, 1234567890000);
     }
 

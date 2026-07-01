@@ -99,13 +99,18 @@ pub struct RoomManager {
     audio_playback: Arc<RwLock<Option<AudioPlayback>>>,
     /// Video capture manager.
     video_capture: Arc<RwLock<VideoCapture>>,
-    /// Whether the camera track has been published to the room this call.
-    /// Lets `publish_camera` be idempotent: the first enable publishes the
-    /// track + starts capture; later toggles just pause/resume capture
-    /// (`set_camera_enabled`) instead of publishing a second track. Reset on
-    /// disconnect. Enables voice→video escalation (start as a voice call, then
-    /// turn the camera on with the video button).
+    /// Whether the camera track is currently published to the room. Turning
+    /// video off fully stops capture and unpublishes the track (like screen
+    /// share); turning it on publishes a fresh track. Guards against double
+    /// publish on rapid toggles, and doubles as the "is camera on" flag. Reset
+    /// on disconnect. Enables voice→video escalation (start as a voice call,
+    /// then turn the camera on with the video button).
     camera_published: Arc<std::sync::atomic::AtomicBool>,
+    /// SID of the currently-published camera track. Cleared on stop so we can
+    /// `unpublish_track(sid)` — otherwise the track stays published with no
+    /// frames and remote viewers freeze on the last frame instead of showing
+    /// the avatar (mirrors `screen_share_track_sid`).
+    camera_track_sid: Arc<RwLock<Option<TrackSid>>>,
     /// Video playback manager for remote participants.
     video_playback: Arc<RwLock<VideoPlayback>>,
     /// Screen capture manager.
@@ -157,6 +162,7 @@ impl RoomManager {
             audio_playback: Arc::new(RwLock::new(audio_playback)),
             video_capture: Arc::new(RwLock::new(VideoCapture::new())),
             camera_published: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            camera_track_sid: Arc::new(RwLock::new(None)),
             video_playback: Arc::new(RwLock::new(video_playback)),
             #[cfg(not(target_os = "android"))]
             screen_capture: Arc::new(RwLock::new(ScreenCapture::new())),
@@ -240,12 +246,9 @@ impl RoomManager {
     ) -> Result<(), CallError> {
         use std::sync::atomic::Ordering;
 
-        // Idempotent: if the camera track is already published (e.g. the user
-        // toggled video off then on again), just resume capture instead of
-        // publishing a second track / spawning a second capture thread.
+        // Already on — guard against double-publish from a rapid re-toggle.
         if self.camera_published.load(Ordering::SeqCst) {
-            self.video_capture.write().set_enabled(true);
-            tracing::info!("Camera already published — resumed capture");
+            tracing::info!("Camera already published — ignoring publish");
             return Ok(());
         }
 
@@ -271,11 +274,12 @@ impl RoomManager {
             ..Default::default()
         };
 
-        local_participant
+        let publication = local_participant
             .publish_track(LocalTrack::Video(video_track), publish_options)
             .await
             .map_err(|e| CallError::TrackPublishFailed(e.to_string()))?;
 
+        *self.camera_track_sid.write() = Some(publication.sid());
         self.camera_published.store(true, Ordering::SeqCst);
         tracing::info!("Published camera track");
         Ok(())
@@ -428,12 +432,31 @@ impl RoomManager {
         // For explicit unpublish, we'd need to track the publication
     }
 
-    /// Stop camera capture and unpublish track.
-    pub fn stop_camera(&self) {
-        let mut capture = self.video_capture.write();
-        capture.stop();
+    /// Stop camera capture AND unpublish the LiveKit track.
+    ///
+    /// Without the unpublish step the SFU keeps the track alive after the local
+    /// capture loop ends, so remote viewers freeze on the last frame instead of
+    /// showing the avatar. Mirrors `stop_screen_share`.
+    pub async fn stop_camera(&self) {
+        {
+            let mut capture = self.video_capture.write();
+            capture.stop();
+        }
         self.camera_published
             .store(false, std::sync::atomic::Ordering::SeqCst);
+        let sid = self.camera_track_sid.write().take();
+        let Some(sid) = sid else { return };
+        let local_participant = {
+            let room = self.room.read();
+            match room.as_ref() {
+                Some(r) => r.local_participant(),
+                None => return,
+            }
+        };
+        match local_participant.unpublish_track(&sid).await {
+            Ok(_) => tracing::info!("Unpublished camera track sid={}", sid),
+            Err(e) => tracing::warn!("Failed to unpublish camera track {}: {}", sid, e),
+        }
     }
 
     /// Stop screen share capture AND unpublish the LiveKit track.
@@ -475,15 +498,10 @@ impl RoomManager {
         self.audio_capture.read().is_muted()
     }
 
-    /// Toggle camera enabled.
-    pub fn set_camera_enabled(&self, enabled: bool) {
-        let mut capture = self.video_capture.write();
-        capture.set_enabled(enabled);
-    }
-
-    /// Check if camera is enabled.
+    /// Check if the camera is currently on (track published).
     pub fn is_camera_enabled(&self) -> bool {
-        self.video_capture.read().is_enabled()
+        self.camera_published
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Check if screen sharing is active.
@@ -754,10 +772,11 @@ impl RoomManager {
         {
             let video = self.video_capture.read();
             video.signal_stop();
-            // Track auto-unpublishes when the room closes; clear the flag so the
-            // next call re-publishes instead of trying to resume a dead track.
+            // Track auto-unpublishes when the room closes; clear the flag + sid
+            // so the next call re-publishes instead of inheriting a dead handle.
             self.camera_published
                 .store(false, std::sync::atomic::Ordering::SeqCst);
+            self.camera_track_sid.write().take();
         }
         #[cfg(not(target_os = "android"))]
         {
@@ -985,8 +1004,13 @@ impl RoomManager {
                     playback.remove_track(&participant_id);
                 }
 
-                // Remove video playback for this participant
-                video_playback.read().remove_track(&participant_id);
+                // Remove video playback for this participant — both their camera
+                // and screen-share tracks (the peer is gone entirely).
+                {
+                    let vp = video_playback.read();
+                    vp.remove_track(&participant_id, false);
+                    vp.remove_track(&participant_id, true);
+                }
 
                 let _ = event_tx.try_send(RoomEvent::ParticipantLeft {
                     identity: participant_id,
@@ -1063,7 +1087,7 @@ impl RoomManager {
                         v.source(),
                         TrackSource::Screenshare | TrackSource::ScreenshareAudio
                     );
-                    video_playback.read().remove_track(&participant_id);
+                    video_playback.read().remove_track(&participant_id, is_screen_share);
                     tracing::info!(
                         "RoomManager: Removed video track from playback for {} (screen_share={})",
                         participant_id, is_screen_share

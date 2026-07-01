@@ -42,10 +42,12 @@ pub struct VideoCaptureConfig {
 
 impl Default for VideoCaptureConfig {
     fn default() -> Self {
+        // 720p60 over MJPG (compressed) fits USB bandwidth; raw YUYV 720p does not
+        // (~16-19 fps ceiling on USB 2.0). For 1080p30 instead, set 1920x1080 @ 30.
         Self {
             width: 1280,
             height: 720,
-            fps: 30,
+            fps: 60,
         }
     }
 }
@@ -338,14 +340,16 @@ impl VideoCapture {
             }
         };
 
+        // Prefer MJPG (compressed): raw YUYV at 720p saturates USB bandwidth and
+        // delivers only ~11-19 fps. MJPG fits the link, enabling real 30/60 fps.
         format.width = width;
         format.height = height;
-        format.fourcc = FourCC::new(b"YUYV");
+        format.fourcc = FourCC::new(b"MJPG");
 
         let format = match dev.set_format(&format) {
-            Ok(f) => f,
-            Err(_) => {
-                format.fourcc = FourCC::new(b"MJPG");
+            Ok(f) if f.fourcc == FourCC::new(b"MJPG") => f,
+            _ => {
+                format.fourcc = FourCC::new(b"YUYV");
                 match dev.set_format(&format) {
                     Ok(f) => f,
                     Err(e) => {
@@ -356,6 +360,13 @@ impl VideoCapture {
                 }
             }
         };
+
+        // Ask the device for the target frame interval; without this V4L2 runs at
+        // its own default and config.fps is ignored.
+        match Capture::set_params(&dev, &v4l::video::capture::Parameters::with_fps(fps)) {
+            Ok(p) => tracing::info!("Video capture: requested {} fps, device interval {:?}", fps, p.interval),
+            Err(e) => tracing::warn!("Video capture: failed to set {} fps: {}", fps, e),
+        }
 
         let actual_width = format.width;
         let actual_height = format.height;
@@ -375,16 +386,31 @@ impl VideoCapture {
             }
         };
 
-        let mut frame_count = 0u64;
         let is_yuyv = fourcc == FourCC::new(b"YUYV");
+
+        // Stamp frames with REAL capture time, not frame_count/fps. The camera's actual
+        // delivery rate (e.g. 30 on USB 2.0) often differs from the requested fps (60); a
+        // synthetic clock then runs at the wrong speed and the receiver's jitter buffer
+        // starves -> stutter. Real elapsed microseconds encode true cadence + jitter.
+        let capture_base = Instant::now();
+
+        // Per-second timing aggregation (mirrors screen_capture's [SCREEN_FPS] log) so we
+        // can see where the per-frame budget goes: camera wait vs decode/convert vs push.
+        let mut win_start = Instant::now();
+        let mut win_frames = 0u64;
+        let (mut sum_wait, mut sum_conv, mut sum_push) =
+            (Duration::ZERO, Duration::ZERO, Duration::ZERO);
 
         while running.load(Ordering::SeqCst) {
             let start = Instant::now();
 
             match stream.next() {
                 Ok((buf, _meta)) => {
+                    let t_wait = start.elapsed();
+
+                    let t0 = Instant::now();
                     let mut i420_buffer = I420Buffer::new(actual_width, actual_height);
-                    {
+                    let decoded = {
                         let (y_data, u_data, v_data) = i420_buffer.data_mut();
 
                         if is_yuyv {
@@ -396,22 +422,56 @@ impl VideoCapture {
                                 u_data,
                                 v_data,
                             );
+                            true
                         } else {
-                            y_data.fill(128);
-                            u_data.fill(128);
-                            v_data.fill(128);
+                            // MJPG: JPEG-decode then convert to I420.
+                            Self::mjpeg_to_i420(
+                                buf,
+                                actual_width as usize,
+                                actual_height as usize,
+                                y_data,
+                                u_data,
+                                v_data,
+                            )
                         }
+                    };
+                    let t_conv = t0.elapsed();
+
+                    if !decoded {
+                        // Bad/partial JPEG — skip rather than publish garbage.
+                        continue;
                     }
 
                     let frame = VideoFrame {
                         rotation: VideoRotation::VideoRotation0,
-                        timestamp_us: (frame_count * 1_000_000 / fps as u64) as i64,
+                        timestamp_us: capture_base.elapsed().as_micros() as i64,
                         frame_metadata: None,
                         buffer: i420_buffer,
                     };
 
+                    let t1 = Instant::now();
                     video_source.capture_frame(&frame);
-                    frame_count += 1;
+                    let t_push = t1.elapsed();
+
+                    win_frames += 1;
+                    sum_wait += t_wait;
+                    sum_conv += t_conv;
+                    sum_push += t_push;
+                    let win_elapsed = win_start.elapsed();
+                    if win_elapsed >= Duration::from_secs(1) && win_frames > 0 {
+                        let n = win_frames as u32;
+                        tracing::info!(
+                            "[CAMERA_FPS] {}x{} {:.1} fps — avg/frame wait={:?} convert={:?} push={:?} (target {} fps)",
+                            actual_width, actual_height,
+                            win_frames as f64 / win_elapsed.as_secs_f64(),
+                            sum_wait / n, sum_conv / n, sum_push / n, fps,
+                        );
+                        win_start = Instant::now();
+                        win_frames = 0;
+                        sum_wait = Duration::ZERO;
+                        sum_conv = Duration::ZERO;
+                        sum_push = Duration::ZERO;
+                    }
                 }
                 Err(e) => {
                     tracing::warn!("Video capture error: {}", e);
@@ -605,6 +665,57 @@ impl VideoCapture {
         }
     }
 
+    /// Decode an MJPG (JPEG) frame and convert RGB -> I420 (YUV 4:2:0, BT.601 limited range).
+    /// Returns false if decode fails or dimensions mismatch, so the caller can skip the frame.
+    /// ponytail: per-frame JPEG decode + scalar RGB->YUV. CPU is proven free here (screen
+    /// capture converts 5120x1440 in ~3ms); switch to libyuv/SIMD only if a profiler says so.
+    #[cfg(target_os = "linux")]
+    fn mjpeg_to_i420(
+        jpeg: &[u8],
+        width: usize,
+        height: usize,
+        y_plane: &mut [u8],
+        u_plane: &mut [u8],
+        v_plane: &mut [u8],
+    ) -> bool {
+        let rgb = match image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg) {
+            Ok(img) => img.into_rgb8(),
+            Err(e) => {
+                tracing::warn!("MJPEG decode failed: {}", e);
+                return false;
+            }
+        };
+        if rgb.width() as usize != width || rgb.height() as usize != height {
+            tracing::warn!(
+                "MJPEG size mismatch: got {}x{}, expected {}x{}",
+                rgb.width(), rgb.height(), width, height
+            );
+            return false;
+        }
+        let px = rgb.as_raw(); // tightly packed RGB8, len == width*height*3
+
+        for row in 0..height {
+            for col in 0..width {
+                let i = (row * width + col) * 3;
+                let (r, g, b) = (px[i] as i32, px[i + 1] as i32, px[i + 2] as i32);
+
+                y_plane[row * width + col] =
+                    (((66 * r + 129 * g + 25 * b + 128) >> 8) + 16) as u8;
+
+                // 4:2:0 chroma: sample one pixel per 2x2 block (even row + even col).
+                if row % 2 == 0 && col % 2 == 0 {
+                    let uv_col = col / 2;
+                    let uv_idx = (row / 2) * (width / 2) + uv_col;
+                    u_plane[uv_idx] =
+                        (((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128) as u8;
+                    v_plane[uv_idx] =
+                        (((112 * r - 94 * g - 18 * b + 128) >> 8) + 128) as u8;
+                }
+            }
+        }
+        true
+    }
+
     /// Fallback capture loop using test pattern.
     fn fallback_capture_loop(
         video_source: NativeVideoSource,
@@ -686,20 +797,6 @@ impl VideoCapture {
     pub fn device_path(&self) -> &str {
         &self.device_path
     }
-
-    /// Enable/disable video (pause capture without releasing device).
-    pub fn set_enabled(&mut self, enabled: bool) {
-        if enabled && self.capture_handle.is_some() {
-            self.running.store(true, Ordering::SeqCst);
-        } else {
-            self.running.store(false, Ordering::SeqCst);
-        }
-    }
-
-    /// Check if video is enabled.
-    pub fn is_enabled(&self) -> bool {
-        self.running.load(Ordering::SeqCst)
-    }
 }
 
 impl Drop for VideoCapture {
@@ -711,5 +808,42 @@ impl Drop for VideoCapture {
 impl Default for VideoCapture {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    /// Round-trip a solid-color image through JPEG -> mjpeg_to_i420 and check the
+    /// I420 output is the expected color. Solid colors survive JPEG with low loss,
+    /// so a tight-ish tolerance still catches a broken RGB->YUV path.
+    #[test]
+    fn mjpeg_to_i420_solid_red() {
+        let (w, h) = (16usize, 16usize);
+        let img = image::RgbImage::from_pixel(w as u32, h as u32, image::Rgb([255, 0, 0]));
+        let mut jpeg = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut jpeg, image::ImageFormat::Jpeg).unwrap();
+
+        let mut y = vec![0u8; w * h];
+        let mut u = vec![0u8; (w / 2) * (h / 2)];
+        let mut v = vec![0u8; (w / 2) * (h / 2)];
+        assert!(VideoCapture::mjpeg_to_i420(jpeg.get_ref(), w, h, &mut y, &mut u, &mut v));
+
+        // Pure red BT.601 limited: Y~81, U~90, V~240.
+        let near = |got: u8, want: u8| (got as i32 - want as i32).abs() <= 8;
+        assert!(near(y[0], 81), "Y={}", y[0]);
+        assert!(near(u[0], 90), "U={}", u[0]);
+        assert!(near(v[0], 240), "V={}", v[0]);
+    }
+
+    /// Garbage bytes must be rejected (so the capture loop skips, not publishes noise).
+    #[test]
+    fn mjpeg_to_i420_rejects_garbage() {
+        let (w, h) = (16usize, 16usize);
+        let mut y = vec![0u8; w * h];
+        let mut u = vec![0u8; (w / 2) * (h / 2)];
+        let mut v = vec![0u8; (w / 2) * (h / 2)];
+        assert!(!VideoCapture::mjpeg_to_i420(&[0, 1, 2, 3, 4], w, h, &mut y, &mut u, &mut v));
     }
 }

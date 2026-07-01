@@ -486,30 +486,41 @@ pub fn on_before_rendering(window: &crate::MainWindow) {
             }
         }
 
-        // Build the image list in stable participant-id order so the Slint
-        // side's positional indexing pins each participant to a tile.
-        let mut ids: Vec<&String> = textures.keys().collect();
-        ids.sort();
-        let images: Vec<slint::Image> = ids
-            .iter()
-            .filter_map(|id| {
-                let tex = textures.get(*id)?;
-                if tex.width == 0 || tex.height == 0 {
-                    return None;
+        // Build the image list to MIRROR the participant tiles: one slot per
+        // remote tile, in the SAME order the tiles render, looked up by the
+        // tile's user_id — blank where that participant has no texture yet.
+        // Positional indexing then always maps remote-video-frames[i] to
+        // participants[i], even when a peer's stream count changes (e.g. camera
+        // off while still screen-sharing) or a tile is a video-off avatar.
+        // The local participant is pinned last and draws local-video-frame, so
+        // it is excluded here.
+        let participants = window.get_active_call_data().participants;
+        let remote_count = participants.row_count().saturating_sub(1);
+        let images: Vec<slint::Image> = (0..remote_count)
+            .map(|i| {
+                let pid = participants
+                    .row_data(i)
+                    .map(|p| p.user_id.to_string())
+                    .unwrap_or_default();
+                match textures.get(&pid) {
+                    Some(tex) if tex.width != 0 && tex.height != 0 => {
+                        // SAFETY: `tex.id` is a live, non-zero GL 2D RGBA texture
+                        // kept alive in `state.textures` across presents; Slint
+                        // reads it later in the same frame's draw. Never deleted
+                        // mid-frame (drops happen above, teardown in on_teardown).
+                        unsafe {
+                            slint::BorrowedOpenGLTextureBuilder::new_gl_2d_rgba_texture(
+                                tex.id,
+                                [tex.width, tex.height].into(),
+                            )
+                            .build()
+                        }
+                    }
+                    // No texture (stream absent / avatar tile) → blank slot keeps
+                    // positions aligned; the tile's is-video-enabled guard shows
+                    // the avatar instead.
+                    _ => slint::Image::default(),
                 }
-                // SAFETY: `tex.id` is a live, non-zero GL 2D RGBA texture that
-                // we keep alive in `state.textures` across presents. Slint
-                // reads it during its own draw (which happens after
-                // BeforeRendering, in the same frame). We never delete it
-                // mid-frame: drops above happen before this build, and
-                // teardown happens in `on_teardown`.
-                Some(unsafe {
-                    slint::BorrowedOpenGLTextureBuilder::new_gl_2d_rgba_texture(
-                        tex.id,
-                        [tex.width, tex.height].into(),
-                    )
-                    .build()
-                })
             })
             .collect();
 

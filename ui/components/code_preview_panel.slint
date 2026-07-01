@@ -198,45 +198,23 @@ export component CodePreviewPanel inherits Rectangle {
             }
         }
 
-        // Code view with rendered image
+        // Code view: plain text, monospace, scrollable both axes.
         Flickable {
             vertical-stretch: 1;
-            viewport-height: code-img.height;
-            viewport-width: max(code-img.width, self.width);
+            viewport-height: code-text.preferred-height + Spacing.md * 2;
+            viewport-width: max(code-text.preferred-width + Spacing.md * 2, self.width);
 
-            code-img := Image {
-                source: root.code-image;
-                image-fit: contain;
-            }
-
-            // Touch area for text/line selection
-            code-touch := TouchArea {
-                width: 100%;
-                height: 100%;
-                mouse-cursor: text;
-
-                clicked => {
-                    // Single click handling
-                }
-
-                pointer-event(event) => {
-                    if event.kind == PointerEventKind.down {
-                        root.pointer-down(
-                            self.mouse-x,
-                            self.mouse-y,
-                            event.modifiers.shift,
-                            event.modifiers.control
-                        );
-                    } else if event.kind == PointerEventKind.up {
-                        root.pointer-up(self.mouse-x, self.mouse-y);
-                    }
-                }
-
-                moved => {
-                    if self.pressed {
-                        root.pointer-move(self.mouse-x, self.mouse-y);
-                    }
-                }
+            // Read-only TextInput → drag-select + Ctrl+C copy, monospace.
+            code-text := TextInput {
+                x: Spacing.md;
+                y: Spacing.sm;
+                text: root.plain-text;
+                read-only: true;
+                single-line: false;
+                color: Colors.text-primary;
+                font-family: "monospace";
+                font-size: Typography.sm;
+                wrap: no-wrap;
             }
         }
     }

@@ -204,6 +204,135 @@ impl ChatterClient {
         out
     }
 
+    /// Build the complete DM sidebar list — regular server DMs plus anon DMs
+    /// (active conversations first, then incoming requests) — as one ordered,
+    /// fully-shaped vector the UI renders directly. Regular DMs are dropped when
+    /// anon mode is on. This is the single source of truth for the sidebar; the
+    /// UI must not merge two separate lists (that races and drops fresh DMs).
+    pub fn list_dm_sidebar(&self) -> Vec<crate::ui::sidebar_data::DMListItemSendData> {
+        use crate::domain::anon_dm::AnonDmStatus;
+        use crate::domain::channel::ChannelType;
+        use crate::domain::message::{truncate_preview_text, ConversationType};
+        use crate::ui::chat_data::initials_from_name;
+        use crate::ui::sidebar_data::DMListItemSendData;
+
+        let mut out: Vec<DMListItemSendData> = Vec::new();
+        let anon_mode = self.anon_mode_enabled();
+
+        // Regular server DMs (suppressed entirely in anon mode).
+        if !anon_mode {
+            for channel in self.get_channels_mru() {
+                if channel.channel_type != ChannelType::DirectMessage {
+                    continue;
+                }
+                let preview = self.get_dm_sidebar_preview(&channel.id, &ConversationType::ServerDm);
+                let peer_user_id = if preview.peer_user_id.is_empty() {
+                    channel.owner_id.to_string()
+                } else {
+                    preview.peer_user_id
+                };
+                let avatar_bytes = peer_user_id
+                    .parse()
+                    .ok()
+                    .and_then(|uid| self.get_profile_local(&uid))
+                    .and_then(|p| p.avatar_bytes);
+                out.push(DMListItemSendData {
+                    channel_id: channel.id.to_string(),
+                    user_id: peer_user_id,
+                    initials: initials_from_name(&channel.name),
+                    display_name: channel.name.clone(),
+                    avatar_bytes,
+                    avatar_decoded: None,
+                    presence_status: "offline".to_string(),
+                    last_message: preview.last_message,
+                    timestamp: preview.timestamp_display,
+                    unread_count: channel.unread_count,
+                    is_typing: false,
+                    is_anon: false,
+                });
+            }
+        }
+
+        // Anon DMs — active conversations.
+        for dm in self.list_anon_dm_conversations() {
+            if dm.status == AnonDmStatus::Pending {
+                continue;
+            }
+            let display_name = dm
+                .peer_display_name
+                .clone()
+                .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
+            let (last_message, timestamp) = match self.get_latest_anon_dm_message(&dm.id) {
+                Some(msg) => {
+                    let preview = msg
+                        .as_text()
+                        .map(|t| truncate_preview_text(t, 50))
+                        .unwrap_or_else(|| "[Attachment]".to_string());
+                    (
+                        preview,
+                        msg.created_at
+                            .with_timezone(&chrono::Local)
+                            .format("%H:%M")
+                            .to_string(),
+                    )
+                }
+                None => (String::new(), String::new()),
+            };
+            out.push(DMListItemSendData {
+                channel_id: dm.id.to_string(),
+                user_id: dm.peer_id.to_string(),
+                initials: initials_from_name(&display_name),
+                display_name,
+                avatar_bytes: dm.peer_avatar.clone(),
+                avatar_decoded: None,
+                presence_status: if dm.status == AnonDmStatus::Active {
+                    "online".to_string()
+                } else {
+                    "offline".to_string()
+                },
+                last_message,
+                timestamp,
+                unread_count: dm.unread_count,
+                is_typing: false,
+                is_anon: true,
+            });
+        }
+
+        // Anon DMs — incoming message requests awaiting acceptance.
+        for dm in self.list_anon_dm_message_requests() {
+            let peer_name = dm
+                .peer_display_name
+                .clone()
+                .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
+            let last_message = match self.get_latest_anon_dm_message(&dm.id) {
+                Some(msg) => msg.as_text().unwrap_or_default().to_string(),
+                None => "Message request".to_string(),
+            };
+            out.push(DMListItemSendData {
+                channel_id: dm.id.to_string(),
+                user_id: dm.peer_id.to_string(),
+                initials: initials_from_name(&peer_name),
+                // Envelope marker distinguishes a pending request from an
+                // active conversation in the sidebar.
+                display_name: format!("\u{1F4E9} {}", peer_name),
+                avatar_bytes: dm.peer_avatar.clone(),
+                avatar_decoded: None,
+                presence_status: "pending".to_string(),
+                last_message,
+                timestamp: dm
+                    .created_at
+                    .with_timezone(&chrono::Local)
+                    .format("%H:%M")
+                    .to_string(),
+                unread_count: 1,
+                is_typing: false,
+                is_anon: true,
+            });
+        }
+
+        out
+    }
+
     /// Enriched mention suggestion — everything the composer autocomplete
     /// needs without having to N+1 fetch profiles from the UI layer.
     pub async fn search_mention_suggestions(

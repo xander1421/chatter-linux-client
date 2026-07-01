@@ -551,12 +551,8 @@ mod tests {
         let proto_content = Content {
             r#type: Some(Type::Encrypted(chat_v1::EncryptedData {
                 version: 1,
-                nonce: vec![],
                 ciphertext: vec![1, 2, 3],
-                auth_tag: vec![],
-                associated_data: vec![],
-                signature: vec![],
-                device_id: String::new(),
+                associated_data: b"sender_key".to_vec(),
             })),
         };
 

@@ -116,15 +116,16 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             return;
                         }
                     }
-                    // Idempotent in core: publishes the track the first time,
-                    // resumes capture on later enables.
+                    // Publishes a fresh camera track + starts capture.
                     if let Err(e) = ui_ctx.call_publish_camera(None).await {
                         tracing::error!("Failed to enable camera: {}", e);
                         return;
                     }
                     tracing::info!("Camera enabled");
                 } else {
-                    ui_ctx.call_set_camera_enabled(false);
+                    // Stop capture AND unpublish the track so remote peers drop
+                    // the frozen last frame and fall back to the avatar.
+                    ui_ctx.call_stop_camera();
                     tracing::info!("Camera disabled");
                 }
                 let local_id = ui_ctx.session_current_user_id().map(|u| u.to_string());

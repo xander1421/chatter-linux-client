@@ -642,6 +642,7 @@ export component App inherits Rectangle {
     callback cancel-edit();
     callback cancel-reply();
     callback attachment-clicked();
+    callback paste-image();
     callback emoji-clicked();
     callback gif-clicked();
     callback mention-triggered(string);
@@ -1265,6 +1266,7 @@ export component App inherits Rectangle {
                     cancel-edit => { root.cancel-edit(); }
                     cancel-reply => { root.cancel-reply(); }
                     attachment-clicked => { root.attachment-clicked(); }
+                    paste-image => { root.paste-image(); }
                     emoji-clicked => { root.emoji-clicked(); }
                     gif-clicked => { root.gif-clicked(); }
                     
