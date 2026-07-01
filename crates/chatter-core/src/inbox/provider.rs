@@ -27,7 +27,7 @@ use super::events::InboxEvent;
 use super::poller::InboxPoller;
 use super::polling::{poll_dm_mailboxes, poll_group_mailboxes, process_anon_dm_results, process_device_message};
 use super::state::{InboxState, InboxStats};
-use super::streaming::{spawn_server_dm_listener, spawn_user_events_stream};
+use super::streaming::spawn_user_events_stream;
 
 /// Event channel capacity for inbox events.
 /// Increased from 64 to 256 to handle message bursts without lagging.
@@ -408,45 +408,11 @@ impl DeviceInboxProvider {
             .flatten()
             .and_then(|s| s.parse().ok());
 
-        // Spawn one MessageService::StreamMessages listener per server-managed
-        // DM channel. These channels are auto-created on friend accept and
-        // hold the canonical message log for that conversation; without this
-        // listener, messages only show up via the (slower, polling-based)
-        // mailbox path or after the user manually pulls history. Stream-driven
-        // server DMs need both an event bus (to publish DomainEvent) and a
-        // known current user (to drop self-echoes); when either is missing
-        // we skip and let the dispatcher fall back to its previous behaviour.
-        if let (Some(bus), Some(user_id)) = (event_bus.as_ref(), current_user_id) {
-            match channel_repo.list_by_type(crate::domain::channel::ChannelType::DirectMessage) {
-                Ok(dm_channels) => {
-                    tracing::info!(
-                        count = dm_channels.len(),
-                        "Spawning ServerDm stream listeners for DirectMessage channels"
-                    );
-                    for ch in dm_channels {
-                        spawn_server_dm_listener(
-                            ch.id,
-                            grpc_pool.clone(),
-                            bus.clone(),
-                            message_repo.clone(),
-                            user_id,
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "Failed to list DirectMessage channels for ServerDm stream spawn"
-                    );
-                }
-            }
-        } else {
-            tracing::debug!(
-                has_event_bus = event_bus.is_some(),
-                has_user_id = current_user_id.is_some(),
-                "Skipping ServerDm stream spawn (missing event bus or user id)"
-            );
-        }
+        // DMs are channel-free (Signal-style): there is no server DM channel
+        // to open a StreamMessages listener on. Incoming DMs arrive as
+        // per-device sealed-sender envelopes through the device-inbox poll
+        // (see services/gateway/mod.rs store_data_message), so no per-channel
+        // stream spawn is needed here.
 
         // Get domain event sender if event_bus is available
         let domain_tx = event_bus.as_ref().map(|bus| bus.domain_sender());
