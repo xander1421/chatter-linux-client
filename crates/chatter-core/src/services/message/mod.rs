@@ -661,7 +661,11 @@ impl MessageService {
             .get_channel(&channel_id.to_string())
             .await?;
 
-        let is_dm = proto_channel.r#type == crate::proto::chat_v1::ChannelType::DirectMessage as i32;
+        // Server channels are never DMs anymore (DMs are channel-free,
+        // Signal-style — the DIRECT_MESSAGE channel type no longer exists
+        // on the wire). A server-fetched channel row is always a real
+        // group/public/saved-messages channel.
+        let is_dm = false;
         let require_encryption = proto_channel
             .config
             .map(|c| c.encrypted)

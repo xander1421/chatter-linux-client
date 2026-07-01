@@ -62,22 +62,28 @@ pub fn proto_to_domain_channel(proto: &chat_v1::Channel) -> Result<Channel, Chan
 }
 
 /// Convert proto ChannelType (i32) to domain ChannelType.
+///
+/// The server no longer has a DIRECT_MESSAGE channel type (DMs are
+/// channel-free, Signal-style). Value `3` is unused/reserved on the wire.
 pub fn proto_channel_type_to_domain(proto_type: i32) -> ChannelType {
     match proto_type {
         1 => ChannelType::Public,
         2 => ChannelType::Private,
-        3 => ChannelType::DirectMessage,
         4 => ChannelType::SavedMessages,
         _ => ChannelType::Public, // Default for unspecified
     }
 }
 
 /// Convert domain ChannelType to proto ChannelType.
+///
+/// `ChannelType::DirectMessage` has no server-side channel type anymore
+/// (DMs are channel-free); this arm is unreachable in practice since no
+/// client code path creates/updates a DM channel. Mapped to `ChannelPrivate`
+/// defensively rather than panicking.
 pub fn domain_channel_type_to_proto(channel_type: ChannelType) -> chat_v1::ChannelType {
     match channel_type {
         ChannelType::Public => chat_v1::ChannelType::ChannelPublic,
-        ChannelType::Private => chat_v1::ChannelType::ChannelPrivate,
-        ChannelType::DirectMessage => chat_v1::ChannelType::DirectMessage,
+        ChannelType::Private | ChannelType::DirectMessage => chat_v1::ChannelType::ChannelPrivate,
         ChannelType::SavedMessages => chat_v1::ChannelType::SavedMessages,
     }
 }
@@ -192,9 +198,9 @@ mod tests {
     fn test_proto_channel_type_conversion() {
         assert_eq!(proto_channel_type_to_domain(1), ChannelType::Public);
         assert_eq!(proto_channel_type_to_domain(2), ChannelType::Private);
-        assert_eq!(proto_channel_type_to_domain(3), ChannelType::DirectMessage);
         assert_eq!(proto_channel_type_to_domain(4), ChannelType::SavedMessages);
         assert_eq!(proto_channel_type_to_domain(0), ChannelType::Public); // Unspecified
+        assert_eq!(proto_channel_type_to_domain(3), ChannelType::Public); // Unused/reserved
     }
 
     #[test]
@@ -209,7 +215,7 @@ mod tests {
         );
         assert_eq!(
             domain_channel_type_to_proto(ChannelType::DirectMessage),
-            chat_v1::ChannelType::DirectMessage
+            chat_v1::ChannelType::ChannelPrivate
         );
     }
 
@@ -256,11 +262,10 @@ mod tests {
 
     #[test]
     fn test_channel_type_roundtrip() {
-        for ct in [
-            ChannelType::Public,
-            ChannelType::Private,
-            ChannelType::DirectMessage,
-        ] {
+        // DirectMessage is intentionally excluded: it has no server-side
+        // proto counterpart anymore (DMs are channel-free), so it does not
+        // round-trip.
+        for ct in [ChannelType::Public, ChannelType::Private] {
             let proto = domain_channel_type_to_proto(ct);
             let back = proto_channel_type_to_domain(proto as i32);
             assert_eq!(back, ct);
