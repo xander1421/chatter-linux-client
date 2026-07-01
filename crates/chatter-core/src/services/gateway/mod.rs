@@ -136,15 +136,25 @@ impl MessageGateway {
     ) -> Result<SealedSenderResult, crate::error::ServiceError> {
         use crate::error::ServiceError;
 
-        // Parse channel ID (required for group messages)
-        let channel_id: ChannelId = if data_message.channel_id.is_empty() {
-            // For DMs, derive channel from sender (would need conversation lookup)
-            return Err(ServiceError::Validation("Missing channel_id in DataMessage".into()));
-        } else {
-            data_message.channel_id.parse().map_err(|e| {
-                ServiceError::Validation(format!("Invalid channel_id: {}", e))
-            })?
-        };
+        // An empty channel_id means this is a channel-free DM (Signal-style
+        // — no server DM channel). Bucket it by the sender's user_id so the
+        // receiver's local conversation_id matches "the other party", same
+        // as the sender's own outgoing row (keyed by the recipient peer_id).
+        // A non-empty channel_id is a group/sender-key message.
+        let (channel_id, conversation_type): (ChannelId, ConversationType) =
+            if data_message.channel_id.is_empty() {
+                let sid = sender_id.ok_or_else(|| {
+                    ServiceError::Validation(
+                        "DM DataMessage has no sender_id — cannot bucket a channel-free DM".into(),
+                    )
+                })?;
+                (ChannelId::from(sid), ConversationType::ServerDm)
+            } else {
+                let cid: ChannelId = data_message.channel_id.parse().map_err(|e| {
+                    ServiceError::Validation(format!("Invalid channel_id: {}", e))
+                })?;
+                (cid, ConversationType::AnonGroup)
+            };
 
         // Generate message ID from timestamp (Signal's approach: timestamp + author = unique)
         let message_id = MessageId::new();
@@ -196,7 +206,7 @@ impl MessageGateway {
         let message = Message {
             id: message_id,
             conversation_id: channel_id,
-            conversation_type: ConversationType::AnonGroup,
+            conversation_type,
             sender_id,
             device_id: None,
             content,

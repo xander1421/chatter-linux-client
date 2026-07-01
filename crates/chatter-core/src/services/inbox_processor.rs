@@ -662,23 +662,37 @@ impl InboxEventProcessor {
                     });
                 }
 
-                // Send delivery receipt
-                let handle = ConversationHandle::new(
-                    ActiveConversation::Channel(*channel_id),
-                    self.client.clone(),
+                // Read the message store_data_message already persisted. Its
+                // conversation_type tells us how to address the delivery
+                // receipt: a channel-free DM (ServerDm, keyed by the sender)
+                // must receipt back to the peer via the sealed per-device
+                // path, NOT a non-existent channel.
+                let stored = message_id
+                    .parse::<crate::domain::ids::MessageId>()
+                    .ok()
+                    .and_then(|mid| self.message_service.get_message_local(&mid).ok().flatten());
+
+                let is_dm = matches!(
+                    stored.as_ref().map(|m| &m.conversation_type),
+                    Some(crate::domain::message::ConversationType::ServerDm)
                 );
+                let receipt_conversation = if is_dm {
+                    ActiveConversation::ServerDm { peer_id: *sender_id }
+                } else {
+                    ActiveConversation::Channel(*channel_id)
+                };
+
+                let handle = ConversationHandle::new(receipt_conversation, self.client.clone());
                 let ts = *timestamp;
                 tokio::spawn(async move {
                     if let Err(e) = handle.send_delivery_receipt(&[ts]).await {
-                        tracing::warn!("Failed to send channel delivery receipt: {}", e);
+                        tracing::warn!("Failed to send delivery receipt: {}", e);
                     }
                 });
 
-                // Emit DomainEvent so domain_handler can display the message
-                if let Ok(mid) = message_id.parse::<crate::domain::ids::MessageId>() {
-                    if let Ok(Some(message)) = self.message_service.get_message_local(&mid) {
-                        self.event_bus.emit_domain(DomainEvent::MessageReceived { message });
-                    }
+                // Emit DomainEvent so domain_handler can display the message.
+                if let Some(message) = stored {
+                    self.event_bus.emit_domain(DomainEvent::MessageReceived { message });
                 }
                 true
             }
