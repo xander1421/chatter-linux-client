@@ -765,7 +765,12 @@ pub fn refresh_dm_list(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = window_weak.upgrade() {
                 let dm_list_slint: Vec<DMListItemData> = dm_list.into_iter()
-                    .map(|d| d.to_slint())
+                    .map(|mut d| {
+                        // Decode avatar bytes → RGBA so to_slint builds an
+                        // Image; without this the sidebar shows initials only.
+                        d.pre_decode_avatar();
+                        d.to_slint()
+                    })
                     .collect();
                 w.set_dm_conversations(ModelRc::new(VecModel::from(dm_list_slint)));
                 crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);

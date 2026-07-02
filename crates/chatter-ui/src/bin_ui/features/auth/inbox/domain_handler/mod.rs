@@ -145,7 +145,22 @@ pub async fn handle_domain_event(
         // Message Events (handled by EventHandlers state store)
         // =========================================================================
         DomainEvent::MessageReceived { ref message } => {
+            let is_server_dm = matches!(
+                message.conversation_type,
+                chatter_core::domain::message::ConversationType::ServerDm
+            );
             messaging::handle_message_received(window, ui_ctx, message.clone());
+            // A DM carries the sender's profile key (Signal-style); the gateway
+            // just stored it. Re-sync the sidebar so list_friends_with_profiles
+            // decrypts + persists the peer's real display name + avatar and the
+            // row re-renders (fallback "User <id>" → real name, initials →
+            // avatar). ponytail: refreshes on every DM receive; fine for
+            // low-volume friend DMs, revisit if it shows up in profiling.
+            if is_server_dm {
+                if let Some(w) = window.upgrade() {
+                    crate::bin_ui::features::auth::initial_data::refresh_dm_list(&w, ui_ctx);
+                }
+            }
         }
 
         // Receipt events: update checkmarks (✓✓) in the Slint message model.
