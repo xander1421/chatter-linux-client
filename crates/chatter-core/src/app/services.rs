@@ -146,6 +146,8 @@ impl ServiceContainer {
             (*signal_service).clone(),
             infra.message_repo.clone(),
             infra.channel_repo.clone(),
+            infra.user_repo.clone(),
+            infra.settings_repo.clone(),
             infra.sesame_manager.clone(),
         ));
 

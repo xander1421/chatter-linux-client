@@ -16,6 +16,7 @@ use crate::crypto::signal::sesame::{SesameManager, SqliteSesameStore};
 use crate::domain::ids::{ChannelId, MessageId, UserId};
 use crate::domain::message::{ConversationType, Message, MessageContent};
 use crate::proto::content_v1::DataMessage;
+use crate::services::current_user::CurrentUserProvider;
 use crate::services::SignalService;
 use crate::storage::repositories::MessageRepository;
 
@@ -95,6 +96,11 @@ pub struct MessageGateway {
     pub(crate) signal_service: SignalService,
     pub(crate) message_repo: Arc<MessageRepository>,
     pub(crate) channel_repo: Arc<crate::storage::repositories::channel_repo::ChannelRepository>,
+    /// For storing a friend's profile key piggybacked on an incoming DM
+    /// DataMessage (Signal-style), so their encrypted name/avatar can be
+    /// decrypted later.
+    pub(crate) user_repo: Arc<crate::storage::repositories::UserRepository>,
+    pub(crate) settings_repo: Arc<crate::storage::repositories::settings_repo::SettingsRepository>,
     pub(crate) sesame_manager: Option<Arc<SesameManager<SqliteSesameStore>>>,
 }
 
@@ -104,11 +110,15 @@ impl MessageGateway {
         signal_service: SignalService,
         message_repo: Arc<MessageRepository>,
         channel_repo: Arc<crate::storage::repositories::channel_repo::ChannelRepository>,
+        user_repo: Arc<crate::storage::repositories::UserRepository>,
+        settings_repo: Arc<crate::storage::repositories::settings_repo::SettingsRepository>,
     ) -> Self {
         Self {
             signal_service,
             message_repo,
             channel_repo,
+            user_repo,
+            settings_repo,
             sesame_manager: None,
         }
     }
@@ -118,11 +128,15 @@ impl MessageGateway {
         signal_service: SignalService,
         message_repo: Arc<MessageRepository>,
         channel_repo: Arc<crate::storage::repositories::channel_repo::ChannelRepository>,
+        user_repo: Arc<crate::storage::repositories::UserRepository>,
+        settings_repo: Arc<crate::storage::repositories::settings_repo::SettingsRepository>,
         sesame_manager: Arc<SesameManager<SqliteSesameStore>>,
     ) -> Self {
         Self {
             signal_service,
             message_repo,
+            user_repo,
+            settings_repo,
             channel_repo,
             sesame_manager: Some(sesame_manager),
         }
@@ -148,6 +162,22 @@ impl MessageGateway {
                         "DM DataMessage has no sender_id — cannot bucket a channel-free DM".into(),
                     )
                 })?;
+                // Signal-style: the sender piggybacks their profile key on the
+                // DataMessage. Persist it so their encrypted display name +
+                // avatar can be decrypted (list_friends_with_profiles). Without
+                // this the peer only ever renders the "User <id>" fallback.
+                if let Some(key) = data_message.profile_key.as_ref() {
+                    if key.len() == 32 {
+                        if let Ok(current_user) = self.settings_repo.current_user_id() {
+                            let key_array: [u8; 32] = key.as_slice().try_into().expect("len checked == 32");
+                            if let Err(e) =
+                                self.user_repo.set_friend_profile_key(&current_user, &sid, &key_array)
+                            {
+                                tracing::debug!(sender_id = %sid, error = %e, "DM: failed to store sender profile key");
+                            }
+                        }
+                    }
+                }
                 (ChannelId::from(sid), ConversationType::ServerDm)
             } else {
                 let cid: ChannelId = data_message.channel_id.parse().map_err(|e| {

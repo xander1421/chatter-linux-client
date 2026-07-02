@@ -889,7 +889,7 @@ impl MessageService {
     /// If this is a DM to a friend, auto-enables profile sharing on first message
     /// and injects our profile key into any DataMessage or EditMessage
     /// so the recipient can decrypt our display_name.
-    fn inject_profile_key_if_sharing(
+    pub(crate) fn inject_profile_key_if_sharing(
         &self,
         peer_id: &UserId,
         mut content: crate::proto::content_v1::Content,

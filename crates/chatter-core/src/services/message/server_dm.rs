@@ -81,6 +81,12 @@ impl MessageService {
             sent_at,
         );
 
+        // Signal-style profile-key exchange: piggyback OUR profile key on the
+        // DataMessage so the friend can decrypt our encrypted display name +
+        // avatar. Auto-enables profile sharing with an accepted friend on first
+        // send. Without this the peer only ever sees the "User <id>" fallback.
+        let content = self.inject_profile_key_if_sharing(peer_id, content)?;
+
         self.send_sealed_dm_content(peer_id, content).await?;
 
         let current_user_id = self.settings_repo.current_user_id()?;
