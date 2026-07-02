@@ -81,6 +81,23 @@ pub(crate) fn wire_accept_request(window: &MainWindow, ui_ctx: &Arc<ChatterClien
             match ui_ctx.respond_friend_request(&friend_id, true).await {
                 Ok(_) => {
                     tracing::info!("Accepted friend request from {}", user_id_str);
+
+                    // Signal-style handshake: send OUR profile key now so the
+                    // requester learns it without waiting for a first real
+                    // message. They send their half from `FriendAccepted` in
+                    // core's inbox_processor — together both sides learn each
+                    // other's key with zero visible messages.
+                    let ui_ctx_handshake = ui_ctx.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = ui_ctx_handshake.send_profile_key_handshake(&friend_id).await {
+                            tracing::warn!(
+                                peer_id = %friend_id,
+                                error = %e,
+                                "Accept-request: profile-key handshake send failed"
+                            );
+                        }
+                    });
+
                     // DMs are channel-free — the sidebar is built from the local
                     // friends list (refresh_dm_list). The Friends modal is
                     // server-backed, so re-fetch it too or the accepter's modal

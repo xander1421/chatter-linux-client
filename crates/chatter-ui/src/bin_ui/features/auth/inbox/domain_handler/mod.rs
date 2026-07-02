@@ -477,6 +477,14 @@ pub async fn handle_domain_event(
                 window.clone(),
                 ui_ctx.clone(),
             );
+            // Rebuild the DM sidebar from core so the friend's decoded avatar
+            // (not just display_name/initials, which handle_user_profile_updated
+            // already patches in-place) renders too — covers the profile-key
+            // handshake path where this is the very first event either side
+            // sees about the other's real profile.
+            if let Some(w) = window.upgrade() {
+                crate::bin_ui::features::auth::initial_data::refresh_dm_list(&w, ui_ctx);
+            }
         }
         // Incoming calls are surfaced via a dedicated IncomingCallData
         // channel + IncomingCallModal — handled outside this inbox
