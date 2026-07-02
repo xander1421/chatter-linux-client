@@ -972,6 +972,22 @@ impl InboxEventProcessor {
                                 );
                             }
                         });
+
+                        // Signal-style handshake: send OUR profile key now so
+                        // the friend learns it without waiting for a first
+                        // real message. The accepter sends their half from
+                        // the UI's accept-request handler; together both
+                        // sides learn each other's key with zero messages.
+                        let ms = self.message_service.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = ms.send_profile_key_handshake(&friend_id).await {
+                                tracing::warn!(
+                                    peer_id = %friend_id,
+                                    error = %e,
+                                    "FriendAccepted: profile-key handshake send failed"
+                                );
+                            }
+                        });
                     }
                     Err(_) => {
                         tracing::warn!(
@@ -981,6 +997,39 @@ impl InboxEventProcessor {
                     }
                 }
                 false
+            }
+
+            // Pure profile-key handshake (see `store_data_message` /
+            // `send_profile_key_handshake`): the gateway already persisted
+            // the sender's profile key and created no message row. Fetch +
+            // decrypt their profile now — `get_user_profile` upserts it
+            // locally — and translate it into the same DomainEvent the
+            // server-managed profile stream emits, so the existing UI
+            // handler (sidebar / header / friends list refresh) just works.
+            InboxEvent::ProfileKeyReceived { sender_id } => {
+                let sender_id = *sender_id;
+                let user_service = self.user_service.clone();
+                let event_bus = self.event_bus.clone();
+                tokio::spawn(async move {
+                    match user_service.get_user_profile(&sender_id).await {
+                        Ok(profile) => {
+                            event_bus.emit_domain(DomainEvent::UserProfileUpdated {
+                                user_id: sender_id,
+                                display_name: profile.display_name,
+                                status_message: profile.status_message.as_ref().map(|s| s.text.clone()),
+                                timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                            });
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                peer_id = %sender_id,
+                                error = %e,
+                                "ProfileKeyReceived: failed to fetch/decrypt peer profile"
+                            );
+                        }
+                    }
+                });
+                true
             }
 
             // =================================================================

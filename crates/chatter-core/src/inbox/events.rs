@@ -329,6 +329,16 @@ pub enum InboxEvent {
         /// User ID of the friend (who accepted our request).
         friend_user_id: String,
     },
+    /// A Signal-style profile-key handshake was received: an empty-body,
+    /// no-attachment DataMessage sent at friend-accept time
+    /// (`MessageService::send_profile_key_handshake`) whose only job was to
+    /// carry the sender's profile key. The gateway already persisted the
+    /// key and created no message row — the processor should fetch +
+    /// decrypt the sender's profile and refresh the UI.
+    ProfileKeyReceived {
+        /// User ID of the sender whose profile key we just received.
+        sender_id: UserId,
+    },
     // =========================================================================
     // DM Bootstrap Events
     // =========================================================================

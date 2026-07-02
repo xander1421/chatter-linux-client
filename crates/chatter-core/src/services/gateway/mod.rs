@@ -178,6 +178,21 @@ impl MessageGateway {
                         }
                     }
                 }
+
+                // Pure profile-key handshake carrier (`send_profile_key_handshake`,
+                // fired at friend-accept time): no text, no attachments, and
+                // not a delete-for-everyone (which also rides an empty-body
+                // DataMessage — `data_message.delete` — on the ServerDm path).
+                // The profile key above was the whole point. Don't create a
+                // message row or surface a bubble; the caller refreshes the
+                // sender's profile instead.
+                if data_message.body.is_empty()
+                    && data_message.attachments.is_empty()
+                    && data_message.delete.is_none()
+                {
+                    return Ok(SealedSenderResult::ProfileKeyReceived { sender_id: sid });
+                }
+
                 (ChannelId::from(sid), ConversationType::ServerDm)
             } else {
                 let cid: ChannelId = data_message.channel_id.parse().map_err(|e| {

@@ -659,6 +659,21 @@ async fn process_identified_sender_message(
             s.messages_received += 1;
             s.messages_processed += 1;
         }
+        Ok(SealedSenderResult::ProfileKeyReceived { sender_id }) => {
+            // Handshake is always sent sealed-sender (`send_sealed_dm_content`),
+            // so this path is unexpected, but handle it the same way for
+            // exhaustiveness/robustness — the gateway already stored the key.
+            tracing::info!(
+                message_id = %msg.message_guid,
+                sender_id = %sender_id,
+                "[INBOX] Profile-key handshake received via identified sender (no message)"
+            );
+            let _ = event_tx.send(InboxEvent::ProfileKeyReceived { sender_id });
+            let _ = event_tx.send(InboxEvent::MessageProcessed {
+                message_id: msg.message_guid.clone(),
+            });
+            stats.write().messages_processed += 1;
+        }
         Ok(SealedSenderResult::SenderKeyRequested { requester_id, channel_id }) => {
             // SenderKeyRequest via identified sender (unusual but handled)
             tracing::info!(
@@ -1041,6 +1056,21 @@ async fn process_sealed_sender_message(
             let mut s = stats.write();
             s.messages_received += 1;
             s.messages_processed += 1;
+        }
+        Ok(SealedSenderResult::ProfileKeyReceived { sender_id }) => {
+            tracing::info!(
+                message_id = %msg.message_guid,
+                sender_id = %sender_id,
+                "[INBOX] Profile-key handshake received via sealed sender (no message)"
+            );
+            // No bubble to render — gateway already stored the profile key.
+            // Hand off to InboxEventProcessor to fetch + decrypt the sender's
+            // profile and refresh the UI.
+            let _ = event_tx.send(InboxEvent::ProfileKeyReceived { sender_id });
+            let _ = event_tx.send(InboxEvent::MessageProcessed {
+                message_id: msg.message_guid.clone(),
+            });
+            stats.write().messages_processed += 1;
         }
         Ok(SealedSenderResult::MessageStored) => {
             let envelope_type = EnvelopeType::SealedSender;

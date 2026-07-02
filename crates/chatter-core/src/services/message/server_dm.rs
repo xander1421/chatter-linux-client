@@ -125,6 +125,31 @@ impl MessageService {
         })
     }
 
+    /// Send a Signal-style profile-key handshake to a friend: an empty-body,
+    /// no-attachment DataMessage whose only job is to carry our profile key.
+    ///
+    /// Fired once on BOTH sides right after friend-accept (see
+    /// `inbox_processor`'s `FriendAccepted` handler and the UI's accept-request
+    /// wiring) so each peer's real display name + avatar appear immediately —
+    /// mirroring how the anon-DM init/accept messages piggyback the same
+    /// key+encrypted-profile pair, instead of waiting for a first real
+    /// message to carry it (`send_server_dm`'s `inject_profile_key_if_sharing`).
+    /// The gateway recognizes the empty body and stores the key without
+    /// creating a visible message (`store_data_message`).
+    pub async fn send_profile_key_handshake(&self, peer_id: &UserId) -> Result<(), MessageError> {
+        let content = crate::services::build_data_message_content(
+            "",
+            vec![],
+            crate::util::time::TimestampNanos::now().as_u64(),
+        );
+
+        // Auto-enables profile sharing with an accepted friend and sets
+        // `profile_key` on the DataMessage.
+        let content = self.inject_profile_key_if_sharing(peer_id, content)?;
+
+        self.send_sealed_dm_content(peer_id, content).await
+    }
+
     /// Send an arbitrary `Content` proto (reactions, typing, pin, edit,
     /// delete, receipts, or a DataMessage) to every device of `peer_id`,
     /// sealed-sender + UAK-authorized, with no server-side channel. Also

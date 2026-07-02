@@ -604,6 +604,17 @@ impl ChatterClient {
             )
             .await
     }
+
+    /// Signal-style profile-key handshake, fired once on both sides right
+    /// after friend-accept so each peer's real display name + avatar appear
+    /// immediately, with zero visible messages. See
+    /// `MessageService::send_profile_key_handshake`.
+    pub async fn send_profile_key_handshake(
+        &self,
+        peer_id: &crate::domain::ids::UserId,
+    ) -> Result<(), crate::services::message::MessageError> {
+        self.messages().send_profile_key_handshake(peer_id).await
+    }
 }
 
 /// A person the user can invite to a channel, shaped by

@@ -306,6 +306,11 @@ async fn process_sealed_sender_group_message(
             // ControlContent rides the device inbox, not the group mailbox.
             // Drop if it lands here — match must stay exhaustive.
         }
+        Ok(SealedSenderResult::ProfileKeyReceived { .. }) => {
+            // Friend-DM profile-key handshake rides the device inbox, not
+            // the group mailbox. Drop if it lands here — match must stay
+            // exhaustive.
+        }
         Err(e) => {
             tracing::error!(
                 group_id = %group_id,

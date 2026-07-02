@@ -285,6 +285,15 @@ pub enum SealedSenderResult {
         timestamp: u64,
         attachments: Vec<AttachmentPointer>,
     },
+    /// Pure profile-key handshake received: an empty-body, no-attachment
+    /// DataMessage sent at friend-accept time (see
+    /// `MessageService::send_profile_key_handshake`) whose only job is to
+    /// carry the sender's profile key. The gateway already persisted the
+    /// key (`store_data_message`) — no message row was created. Caller
+    /// should trigger a profile refresh (fetch + decrypt) for `sender_id`.
+    ProfileKeyReceived {
+        sender_id: UserId,
+    },
     /// Key exchange message received — needs bootstrap handling.
     KeyExchange {
         sender_id: UserId,
