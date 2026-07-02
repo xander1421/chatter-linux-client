@@ -748,6 +748,13 @@ pub fn refresh_dm_list(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let window_weak = window.as_weak();
 
     tokio::spawn(async move {
+        // The channel-free DM sidebar is built from the LOCAL friends table.
+        // Sync friends from the server first — `list_friends_with_profiles`
+        // persists each accepted friend into local storage — so the sidebar
+        // reflects server truth even when a friendship was just accepted on the
+        // other device (whose local row we'd otherwise never have written).
+        let _ = ui_ctx.list_friends_with_profiles().await;
+
         // DB work off the UI thread.
         let dm_list = ui_ctx.list_dm_sidebar();
 

@@ -410,9 +410,13 @@ impl UserRepository {
     /// List all friendships for a user.
     pub fn list_friends(&self, user_id: &UserId) -> Result<Vec<Friendship>, StorageError> {
         let conn = self.db.connection()?;
+        // Match either direction: a friendship row may be stored as
+        // (user_id=us, friend_id=peer) or (user_id=peer, friend_id=us)
+        // depending on who initiated. The channel-free DM sidebar resolves the
+        // peer as whichever party isn't us, so returning either row is correct.
         let mut stmt = conn.prepare(
             "SELECT user_id, friend_id, status, created_at
-             FROM friendships WHERE user_id = ?1 ORDER BY created_at",
+             FROM friendships WHERE user_id = ?1 OR friend_id = ?1 ORDER BY created_at",
         )?;
 
         let mut rows = stmt.query(params![user_id.to_string()])?;

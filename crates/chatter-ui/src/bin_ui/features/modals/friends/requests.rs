@@ -81,8 +81,14 @@ pub(crate) fn wire_accept_request(window: &MainWindow, ui_ctx: &Arc<ChatterClien
             match ui_ctx.respond_friend_request(&friend_id, true).await {
                 Ok(_) => {
                     tracing::info!("Accepted friend request from {}", user_id_str);
-                    // DMs are channel-free — the sidebar is built from the
-                    // friends list, so a plain refresh picks up the new DM.
+                    // DMs are channel-free — the sidebar is built from the local
+                    // friends list (refresh_dm_list). The Friends modal is
+                    // server-backed, so re-fetch it too or the accepter's modal
+                    // stays stale until reload.
+                    crate::bin_ui::features::auth::initial_data::refresh_friends_list(
+                        weak.clone(),
+                        ui_ctx.clone(),
+                    );
                     let weak_refresh = weak.clone();
                     let ui_ctx_refresh = ui_ctx.clone();
                     let _ = slint::invoke_from_event_loop(move || {

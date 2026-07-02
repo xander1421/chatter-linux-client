@@ -63,6 +63,19 @@ impl MessageService {
             .map(|p| AttachmentId::from_cdn_key(&p.cdn_key))
             .collect();
 
+        // Strip inline thumbnails before sealing. A DM rides the device-inbox
+        // envelope, which is capped at 8192 bytes; an embedded image/video
+        // thumbnail (tens–hundreds of KB) blows past that ("sealed message too
+        // large"). The full blob is already on the CDN — the recipient fetches
+        // it (and derives its own thumbnail) from the pointer's cdn_key.
+        let attachment_pointers: Vec<AttachmentPointer> = attachment_pointers
+            .into_iter()
+            .map(|mut p| {
+                p.thumbnail.clear();
+                p
+            })
+            .collect();
+
         let content = crate::services::build_data_message_content(
             trimmed,
             attachment_pointers,
@@ -224,23 +237,20 @@ impl MessageService {
                 timestamp,
             };
 
-            let result = match uaks.get(&device_id) {
-                Some(uak) if !uak.is_empty() => {
-                    message_client
-                        .send_sealed_message_anonymous(recipient_id, device_id, sealed_message, uak)
-                        .await
-                }
-                _ => {
-                    tracing::debug!(
-                        recipient = recipient_id,
-                        device_id,
-                        "No UAK for device, sending without UAK header"
-                    );
-                    message_client
-                        .send_sealed_message(recipient_id, device_id, sealed_message)
-                        .await
-                }
-            };
+            // Deposit with Basic auth only. The recipient UAK would enable
+            // fully anonymous (server-can't-see-sender) delivery, but adding the
+            // UAK header on top of the client pool's default Basic-auth
+            // interceptor makes the request carry TWO auth methods, which the
+            // server rejects ("provide exactly one auth method"). The message
+            // body is still sealed-sender encrypted (recipient-only sender
+            // reveal); only the transport is identified.
+            // ponytail: Basic-auth transport for now; UAK-only anonymous
+            // delivery needs an auth-less client channel — revisit if
+            // transport-level sender privacy is required.
+            let _ = &uaks;
+            let result = message_client
+                .send_sealed_message(recipient_id, device_id, sealed_message)
+                .await;
 
             match result {
                 Ok(_) => delivered += 1,
