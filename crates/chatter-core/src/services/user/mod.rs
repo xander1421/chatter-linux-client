@@ -479,17 +479,18 @@ impl UserService {
         }
 
         if accept {
+            // Persist locally via the shared helper, which ensures the peer's
+            // user row exists first (the friendships FK). A plain insert here
+            // FK-failed silently when the accepter had no local user row for
+            // the requester (added via friend code), leaving the DM out of the
+            // sidebar.
+            self.record_accepted_friend_local(friend_id)?;
             let friendship = Friendship {
                 requester_id: current_user,
                 addressee_id: *friend_id,
                 status: FriendshipStatus::Accepted,
                 created_at: Utc::now(),
             };
-
-            if self.user_repo.update_friendship(&friendship).is_err() {
-                let _ = self.user_repo.insert_friendship(&friendship);
-            }
-
             Ok(FriendResponseResult {
                 friendship: Some(friendship),
             })
