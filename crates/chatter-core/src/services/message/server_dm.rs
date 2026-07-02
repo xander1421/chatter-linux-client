@@ -18,7 +18,6 @@
 //! model for peers without a server-visible friendship. `ServerDm` is for
 //! server-known friends: standard Signal 1:1 sealed sender, no bootstrap.
 
-use std::collections::HashMap;
 
 use prost::Message as ProstMessage;
 
@@ -26,7 +25,7 @@ use crate::domain::ids::{AttachmentId, ChannelId, UserId};
 use crate::domain::message::{ConversationType, Message, MessageContent, MixedContent};
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::message_client::MessageClient;
-use crate::proto::chat_v1::{self, SealedSenderMessage};
+use crate::proto::chat_v1::SealedSenderMessage;
 use crate::proto::content_v1::AttachmentPointer;
 use crate::services::current_user::CurrentUserProvider;
 
@@ -221,7 +220,6 @@ impl MessageService {
             }
         };
 
-        let uaks = fetch_recipient_uaks(auth_client, recipient_id).await;
         let timestamp = crate::util::time::TimestampNanos::now().as_u64();
         let server_key_id = self.signal_service.get_server_key_id();
 
@@ -237,17 +235,12 @@ impl MessageService {
                 timestamp,
             };
 
-            // Deposit with Basic auth only. The recipient UAK would enable
-            // fully anonymous (server-can't-see-sender) delivery, but adding the
-            // UAK header on top of the client pool's default Basic-auth
-            // interceptor makes the request carry TWO auth methods, which the
-            // server rejects ("provide exactly one auth method"). The message
-            // body is still sealed-sender encrypted (recipient-only sender
-            // reveal); only the transport is identified.
-            // ponytail: Basic-auth transport for now; UAK-only anonymous
-            // delivery needs an auth-less client channel — revisit if
-            // transport-level sender privacy is required.
-            let _ = &uaks;
+            // Deposit with Basic auth. Friend DMs intentionally do NOT hide the
+            // sender from the server — the server already stores the friendship
+            // (contacts). Metadata-private messaging is the anon-DM path
+            // (anonymous mailboxes + blind-signed tokens), not this one. The
+            // body is still sealed-sender encrypted; only the transport is
+            // identified.
             let result = message_client
                 .send_sealed_message(recipient_id, device_id, sealed_message)
                 .await;
@@ -267,38 +260,4 @@ impl MessageService {
 
         delivered
     }
-}
-
-/// Fetch the UAK (Unidentified Access Key) for every device of `user_id`
-/// from their prekey bundles. Devices without a UAK (or bundles that
-/// fail to fetch) are simply absent from the map — callers fall back to
-/// unauthenticated `SendSealedMessage` for those devices.
-async fn fetch_recipient_uaks(auth_client: &mut AuthClient, user_id: &str) -> HashMap<u32, Vec<u8>> {
-    use chat_v1::get_pre_key_bundle_response;
-
-    let response = match auth_client.get_pre_key_bundles_all_devices(user_id).await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(user_id, error = %e, "Failed to fetch prekey bundles for UAK lookup");
-            return HashMap::new();
-        }
-    };
-
-    let mut uaks = HashMap::new();
-    match response.result {
-        Some(get_pre_key_bundle_response::Result::Devices(device_list)) => {
-            for bundle in device_list.bundles {
-                if let Some(uak) = bundle.unidentified_access_key {
-                    uaks.insert(bundle.device_id, uak);
-                }
-            }
-        }
-        Some(get_pre_key_bundle_response::Result::Bundle(bundle)) => {
-            if let Some(uak) = bundle.unidentified_access_key {
-                uaks.insert(bundle.device_id, uak);
-            }
-        }
-        None => {}
-    }
-    uaks
 }
