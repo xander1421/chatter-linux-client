@@ -182,14 +182,22 @@ impl ChatterClient {
         use crate::ui::sidebar_data::DMListItemSendData;
 
         if self.anon_mode_enabled() {
+            tracing::info!("[DM_SIDEBAR] anon_mode on — returning 0 regular DMs");
             return Vec::new();
         }
         let Some(current_user_id) = self.auth_state().get().current_user_id else {
+            tracing::warn!("[DM_SIDEBAR] auth_state.current_user_id is None — returning 0 regular DMs (this is the bug if you see it)");
             return Vec::new();
         };
 
         let mut out: Vec<DMListItemSendData> = Vec::new();
         let friends = self.users().get_friends_local().unwrap_or_default();
+        tracing::info!(
+            current_user = %current_user_id,
+            friends_local = friends.len(),
+            accepted = friends.iter().filter(|f| f.status == FriendshipStatus::Accepted).count(),
+            "[DM_SIDEBAR] list_regular_dm_sidebar: friends loaded from local"
+        );
         for friendship in friends {
             if friendship.status != FriendshipStatus::Accepted {
                 continue;

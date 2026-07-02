@@ -653,6 +653,11 @@ impl UserService {
     /// the peer never appears. Idempotent (update-then-insert).
     pub fn record_accepted_friend_local(&self, friend_id: &UserId) -> Result<(), UserError> {
         let current_user = self.settings_repo.current_user_id()?;
+        // The friendships row has a FOREIGN KEY on users(id); the requester may
+        // not have a local user row for a peer it only learned about via the
+        // friend code. Ensure it exists before inserting (same as
+        // list_friends_with_profiles does).
+        self.user_repo.ensure_user_exists(friend_id).ok();
         let friendship = Friendship {
             requester_id: current_user,
             addressee_id: *friend_id,
