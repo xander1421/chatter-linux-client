@@ -1017,6 +1017,7 @@ impl InboxEventProcessor {
                                 user_id: sender_id,
                                 display_name: profile.display_name,
                                 status_message: profile.status_message.as_ref().map(|s| s.text.clone()),
+                                avatar_bytes: profile.avatar_bytes,
                                 timestamp: chrono::Utc::now().timestamp_millis() as u64,
                             });
                         }

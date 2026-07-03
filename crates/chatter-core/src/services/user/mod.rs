@@ -309,7 +309,13 @@ impl UserService {
             match (profile_key, self.settings_repo.get_bytes(keys::AVATAR)?) {
                 (Some(pk), Some(avatar)) if !avatar.is_empty() => {
                     const AVATAR_TARGET_BYTES: usize = 64 * 1024;
-                    const ENCRYPTED_AVATAR_CAP: usize = 96_000;
+                    // Match the anon-DM avatar ceiling; the profile RPC rides a
+                    // normal gRPC stream (MB-scale limit), so the old 96 KB was
+                    // needlessly tight — a 512² WebP-lossless photo (~120-200 KB)
+                    // was being dropped. WebP-lossless of a 512² image never
+                    // approaches 1 MB, so this is a safety net, not a real gate.
+                    const ENCRYPTED_AVATAR_CAP: usize =
+                        crate::domain::anon_dm_init::MAX_AVATAR_SIZE;
                     let normalized = if avatar.len() > AVATAR_TARGET_BYTES {
                         crate::media::ImageProcessor::process_avatar_from_memory(&avatar)
                             .unwrap_or(avatar)
@@ -412,14 +418,24 @@ impl UserService {
     pub async fn send_friend_request(
         &self,
         friend_id: &UserId,
-        message: Option<&str>,
+        note: Option<&str>,
     ) -> Result<Friendship, UserError> {
         let current_user = self.settings_repo.current_user_id()?;
+
+        // E2E friend-request envelope, ECIES-encrypted to the recipient's
+        // long-term identity key (same primitive as anon-DM init). No shared
+        // key exists pre-friendship, so we encrypt to their public identity
+        // key; only they can decrypt. Always sent — it carries OUR profile key
+        // so the recipient can render our real name + avatar before accepting.
+        // The optional note rides inside the same envelope.
+        let envelope = self
+            .encrypt_friend_request_envelope(friend_id, note.map(str::trim).unwrap_or(""))
+            .await?;
 
         let mut user_client = self.user_client();
         let friend_id_str = friend_id.to_string();
         let mut stream = user_client
-            .send_friend_request(&friend_id_str, message)
+            .send_friend_request(&friend_id_str, Some(&envelope))
             .await?;
 
         while let Some(event_result) = stream.next().await {
@@ -440,6 +456,86 @@ impl UserService {
         let _ = self.user_repo.insert_friendship(&friendship);
 
         Ok(friendship)
+    }
+
+    /// Build + ECIES-encrypt the friend-request envelope to `recipient`'s
+    /// long-term identity key. Reuses the anon-DM init ECIES primitive; server
+    /// never sees plaintext.
+    ///
+    /// Plaintext layout: `profile_key (32 bytes) || note (UTF-8, may be empty)`.
+    /// The profile key lets the recipient decrypt our display name + avatar
+    /// before accepting (Signal-style first-contact profile reveal).
+    async fn encrypt_friend_request_envelope(
+        &self,
+        recipient: &UserId,
+        note: &str,
+    ) -> Result<Vec<u8>, UserError> {
+        use crate::crypto::ecies;
+        use crate::proto::chat_v1::get_pre_key_bundle_response::Result as BundleResult;
+        use crate::storage::repositories::settings_repo::keys;
+
+        let profile_key = self
+            .settings_repo
+            .get_bytes(keys::PROFILE_KEY)?
+            .filter(|k| k.len() == 32)
+            .ok_or_else(|| UserError::InvalidInput("missing profile key".to_string()))?;
+
+        let resp = self
+            .grpc_pool
+            .auth_client()
+            .get_pre_key_bundle(&recipient.to_string(), "1")
+            .await
+            .map_err(|e| UserError::InvalidInput(format!("prekey fetch failed: {e}")))?;
+
+        let identity_key = match resp.result {
+            Some(BundleResult::Bundle(b)) => b.identity_key,
+            Some(BundleResult::Devices(d)) => d.identity_key,
+            None => {
+                return Err(UserError::InvalidInput(
+                    "empty prekey bundle response".to_string(),
+                ))
+            }
+        };
+
+        let x25519_pub = ecies::signal_identity_to_x25519(&identity_key)
+            .map_err(|e| UserError::InvalidInput(format!("identity key convert failed: {e}")))?;
+
+        let mut plaintext = Vec::with_capacity(32 + note.len());
+        plaintext.extend_from_slice(&profile_key);
+        plaintext.extend_from_slice(note.as_bytes());
+
+        let msg = ecies::encrypt(&x25519_pub, &plaintext)
+            .map_err(|e| UserError::InvalidInput(format!("envelope encryption failed: {e}")))?;
+
+        Ok(msg.to_bytes())
+    }
+
+    /// Persist a friend-request sender's profile key BEFORE we accept them, so
+    /// their real display name + avatar can be decrypted for the Received tab.
+    /// Creates a `Pending` local friendship row keyed `(me, sender)` (the
+    /// friend_profile_key column lives on that row); accepting later updates
+    /// the row's status and preserves the key.
+    pub fn store_friend_request_sender_key(
+        &self,
+        sender: &UserId,
+        profile_key: &[u8; 32],
+    ) -> Result<(), UserError> {
+        let current_user = self.settings_repo.current_user_id()?;
+        self.user_repo.ensure_user_exists(sender)?;
+
+        let pending = Friendship {
+            requester_id: current_user,
+            addressee_id: *sender,
+            status: FriendshipStatus::Pending,
+            created_at: Utc::now(),
+        };
+        // Row may already exist (repeated poll / prior request) — keep whatever
+        // status it has, we only need the row present for the key UPDATE.
+        let _ = self.user_repo.insert_friendship(&pending);
+
+        self.user_repo
+            .set_friend_profile_key(&current_user, sender, profile_key)
+            .map_err(UserError::Storage)
     }
 
     /// Respond to a friend request.

@@ -256,6 +256,19 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 |pid| ui_ctx.reply_parent_missing(pid),
             );
 
+            // Decode the peer's avatar (Send-safe RGBA); the non-Send Image is
+            // built in the run_ui closure. Header shows it if present.
+            let header_avatar: Option<(u32, u32, Vec<u8>)> = peer_profile
+                .as_ref()
+                .and_then(|p| p.avatar_bytes.as_ref())
+                .and_then(|b| {
+                    image::load_from_memory(b).ok().map(|img| {
+                        let rgba = img.to_rgba8();
+                        let (aw, ah) = rgba.dimensions();
+                        (aw, ah, rgba.into_raw())
+                    })
+                });
+
             run_ui!(weak, |w| {
                 let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
                 let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
@@ -266,8 +279,14 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 w.set_channel_name(title.into());
                 w.set_topic(status_str.into());
                 w.set_header_presence_status(status_str.into());
-                w.set_channel_has_avatar(false);
-                w.set_channel_avatar_source(slint::Image::default());
+                if let Some((aw, ah, px)) = &header_avatar {
+                    let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(px, *aw, *ah);
+                    w.set_channel_avatar_source(slint::Image::from_rgba8(buf));
+                    w.set_channel_has_avatar(true);
+                } else {
+                    w.set_channel_has_avatar(false);
+                    w.set_channel_avatar_source(slint::Image::default());
+                }
             });
         });
     });

@@ -141,6 +141,7 @@ fn spawn_request_stream(
                                 } else {
                                     intro.into()
                                 },
+                                note: "".into(),
                             });
 
                             w.set_friends_private_requests(ModelRc::new(VecModel::from(requests.clone())));
@@ -348,6 +349,7 @@ fn spawn_request_stream(
                                 avatar_source,
                                 has_avatar,
                                 sent_at: intro.into(),
+                                note: "".into(),
                             });
 
                             w.set_friends_private_requests(ModelRc::new(VecModel::from(requests.clone())));

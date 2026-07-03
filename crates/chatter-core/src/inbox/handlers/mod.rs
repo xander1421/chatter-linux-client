@@ -354,6 +354,10 @@ pub enum DomainEvent {
         user_id: UserId,
         display_name: String,
         status_message: Option<String>,
+        /// Decrypted avatar bytes (raw image), if the profile carries one and
+        /// we hold the peer's profile key. Lets the UI patch the sidebar/header
+        /// avatar in-place on this event, same as it already does for the name.
+        avatar_bytes: Option<Vec<u8>>,
         timestamp: u64,
     },
 

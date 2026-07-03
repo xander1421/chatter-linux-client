@@ -267,6 +267,16 @@ pub struct ChatterClient {
     authed_notif_started: AtomicBool,
 }
 
+/// Decrypted profile of an incoming friend-request sender, surfaced to the
+/// Received-requests tab. All fields best-effort — `None` when the envelope
+/// couldn't be decrypted or the field is absent.
+#[derive(Debug, Clone, Default)]
+pub struct ReceivedFriendRequestProfile {
+    pub display_name: Option<String>,
+    pub avatar_bytes: Option<Vec<u8>>,
+    pub note: Option<String>,
+}
+
 impl ChatterClient {
     pub fn builder() -> ClientBuilder {
         ClientBuilder::new()
@@ -1678,14 +1688,77 @@ impl ChatterClient {
     pub async fn send_friend_request(
         self: &Arc<Self>,
         user_id: &crate::domain::ids::UserId,
-        message: Option<&str>,
+        note: Option<&str>,
     ) -> Result<crate::domain::user::Friendship, crate::services::user::UserError> {
-        let result = self.users().send_friend_request(user_id, message).await?;
+        // The service encrypts the intro note (ECIES to the recipient's
+        // identity key) — it holds the prekey-fetch client. See
+        // `UserService::send_friend_request`.
+        let result = self.users().send_friend_request(user_id, note).await?;
         let client = Arc::clone(self);
         tokio::spawn(async move {
             client.refresh_and_emit_friend_requests().await;
         });
         Ok(result)
+    }
+
+    /// Decrypt an incoming friend-request envelope (ECIES to our identity key),
+    /// persist the sender's profile key, and return their decrypted profile so
+    /// the Received-requests tab can show who's actually asking.
+    ///
+    /// Envelope plaintext = `profile_key (32 bytes) || note (UTF-8)`. Storing
+    /// the profile key lets `get_user_profile` decrypt the sender's display
+    /// name + avatar (they're profile-key-encrypted on the server). Everything
+    /// best-effort: undecryptable/empty → all-None (never surface ciphertext).
+    pub async fn ingest_received_friend_request(
+        &self,
+        sender_id: &crate::domain::ids::UserId,
+        ciphertext: &[u8],
+    ) -> ReceivedFriendRequestProfile {
+        use crate::crypto::ecies;
+        use zeroize::Zeroize;
+
+        let mut out = ReceivedFriendRequestProfile::default();
+        if ciphertext.is_empty() {
+            return out;
+        }
+
+        // ECIES-decrypt with our identity private key.
+        let plaintext = {
+            let mut secret = match self.signal().actor.get_identity_private_key().await {
+                Ok(s) => s,
+                Err(_) => return out,
+            };
+            let pt = ecies::EciesMessage::from_bytes(ciphertext)
+                .ok()
+                .and_then(|m| ecies::decrypt(&secret, &m).ok());
+            secret.zeroize();
+            pt
+        };
+        let Some(plaintext) = plaintext else { return out };
+        if plaintext.len() < 32 {
+            return out; // malformed — must at least carry the profile key
+        }
+
+        let mut profile_key = [0u8; 32];
+        profile_key.copy_from_slice(&plaintext[..32]);
+        out.note = String::from_utf8(plaintext[32..].to_vec())
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        // Persist the sender's key, then decrypt their real name + avatar.
+        if self
+            .users()
+            .store_friend_request_sender_key(sender_id, &profile_key)
+            .is_ok()
+        {
+            if let Ok(profile) = self.users().get_user_profile(sender_id).await {
+                out.display_name = Some(profile.display_name).filter(|s| !s.is_empty());
+                out.avatar_bytes = profile.avatar_bytes;
+            }
+        }
+        profile_key.zeroize();
+        out
     }
 
     /// Accept or decline a friend request.
@@ -1732,6 +1805,15 @@ impl ChatterClient {
     /// Re-poll friend requests from the server and emit `FriendRequestsUpdated`
     /// so sidebar / profile modals refresh uniformly. Shared path for
     /// send/respond/remove callers so there's one "source of truth" shape.
+    /// Re-poll friend requests and emit `FriendRequestsUpdated` so the UI's
+    /// event handler rebuilds the Received/Sent tabs with decrypted sender
+    /// profiles + notes. Call on load to populate immediately (the single
+    /// source of truth — the UI must not build these rows itself, since the
+    /// encrypted envelope only reaches it via this event).
+    pub async fn refresh_friend_requests(&self) {
+        self.refresh_and_emit_friend_requests().await;
+    }
+
     pub(crate) async fn refresh_and_emit_friend_requests(&self) {
         use crate::inbox::events::FriendRequestInfo;
         use crate::proto::chat_v1::friend_requests_filter;
@@ -1748,6 +1830,7 @@ impl ChatterClient {
                     user_id: r.user_id,
                     display_name: r.display_name,
                     username: r.username,
+                    encrypted_intro: r.encrypted_message,
                 })
                 .collect::<Vec<_>>(),
             Err(e) => {
@@ -1766,6 +1849,8 @@ impl ChatterClient {
                     user_id: r.user_id,
                     display_name: r.display_name,
                     username: r.username,
+                    // Sent requests: we're the sender; note is for the recipient.
+                    encrypted_intro: Vec::new(),
                 })
                 .collect::<Vec<_>>(),
             Err(e) => {

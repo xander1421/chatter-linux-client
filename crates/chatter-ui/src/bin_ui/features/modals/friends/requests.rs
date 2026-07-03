@@ -21,6 +21,11 @@ pub(crate) fn wire_send_request(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx.clone();
         let user_id_str = user_id.to_string();
+        // Read the optional intro note on the UI thread before spawning.
+        let note = weak_window
+            .upgrade()
+            .map(|w| w.get_friends_request_note().to_string())
+            .unwrap_or_default();
 
         tokio::spawn(async move {
             set_loading(&weak, true);
@@ -34,13 +39,16 @@ pub(crate) fn wire_send_request(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
                 }
             };
 
-            match ui_ctx.send_friend_request(&friend_id, None).await {
+            let note_trimmed = note.trim();
+            let note_arg = if note_trimmed.is_empty() { None } else { Some(note_trimmed) };
+            match ui_ctx.send_friend_request(&friend_id, note_arg).await {
                 Ok(_) => {
                     tracing::info!("Friend request sent to {}", user_id_str);
                     // Core emits FriendRequestsUpdated; dispatcher updates list.
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_friends_loading(false);
+                            w.set_friends_request_note("".into());
                             let query = w.get_friends_search_query().to_string();
                             if !query.is_empty() {
                                 w.invoke_friends_search_users(query.into());

@@ -31,6 +31,7 @@ pub async fn download_attachments(
         let mime = &att.metadata.mime_type;
         let filename = &att.metadata.name;
         let is_image = mime.starts_with("image/");
+        let is_video = mime.starts_with("video/");
         let is_gif = mime == "image/gif"
             || filename.to_lowercase().ends_with(".gif");
         let has_thumbnail = att.metadata.thumbnail.as_ref().map(|t| !t.is_empty()).unwrap_or(false);
@@ -62,6 +63,8 @@ pub async fn download_attachments(
                     handle_gif(&ui_ctx, &att_id, &cdn_key, &weak_window, &conversation_id);
                 } else if is_image && !has_thumbnail {
                     handle_image(&ui_ctx, &att_id, &cdn_key, &weak_window, &conversation_id);
+                } else if is_video && !has_thumbnail {
+                    handle_video(&ui_ctx, &att_id, &cdn_key, &weak_window, &conversation_id);
                 }
             }
             Err(e) => {
@@ -219,6 +222,61 @@ fn handle_image(
                 }
             }
         }
+    });
+}
+
+/// Handle video: extract a thumbnail frame if missing.
+///
+/// Server-managed DMs strip the inline thumbnail before sealing (sealed
+/// envelope is padded to small buckets for metadata privacy), so the receiver
+/// derives one from the downloaded video. GStreamer decode is blocking → runs
+/// on a background thread.
+fn handle_video(
+    ui_ctx: &Arc<chatter_core::client::ChatterClient>,
+    att_id: &AttachmentId,
+    cdn_key: &str,
+    weak_window: &slint::Weak<MainWindow>,
+    conversation_id: &str,
+) {
+    let ui_ctx_video = ui_ctx.clone();
+    let att_id = *att_id;
+    let cdn_key = cdn_key.to_string();
+    let weak = weak_window.clone();
+    let conv_id = conversation_id.to_string();
+
+    tokio::task::spawn_blocking(move || {
+        let thumb = match ui_ctx_video.decrypt_and_extract_video_thumbnail(&att_id) {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::error!(cdn_key = %cdn_key, error = %e, "Failed to extract video thumbnail");
+                return;
+            }
+        };
+
+        let width = thumb.width;
+        let height = thumb.height;
+        let thumb_bytes = thumb.image_bytes;
+
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(window) = weak.upgrade() {
+                match crate::bin_ui::slint_conversions::memory_to_slint_image(&thumb_bytes) {
+                    Ok(image) => {
+                        update_attachment_thumbnail_with_dims(
+                            &window,
+                            &ui_ctx_video,
+                            &cdn_key,
+                            image,
+                            width as i32,
+                            height as i32,
+                            &conv_id,
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(cdn_key = %cdn_key, error = ?e, "Failed to create video thumbnail image");
+                    }
+                }
+            }
+        });
     });
 }
 

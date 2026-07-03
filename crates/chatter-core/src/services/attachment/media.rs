@@ -114,6 +114,43 @@ impl AttachmentService {
         })
     }
 
+    /// Decrypt a video attachment and extract a thumbnail frame.
+    ///
+    /// Server-managed DMs strip the inline thumbnail before sealing (sealed
+    /// envelope is padded to ≤4096-byte buckets for metadata privacy), so the
+    /// receiver derives one from the downloaded video. Returns the encoded
+    /// thumbnail bytes + dims, reusing [`ImageDecodeResult`] (`image_bytes` =
+    /// the thumbnail).
+    ///
+    /// Blocking (GStreamer decode/seek) — call from a background thread.
+    pub fn decrypt_and_extract_video_thumbnail(
+        &self,
+        attachment_id: &AttachmentId,
+    ) -> Result<ImageDecodeResult, AttachmentError> {
+        let secure_buffer = self.decrypt_auto(attachment_id)?;
+        let (thumbnail, width, height, _duration_ms) =
+            crate::media::extract_video_thumbnail_from_memory(secure_buffer.as_slice())
+                .map_err(|e| {
+                    AttachmentError::DecryptionError(format!(
+                        "Video thumbnail extraction failed: {}",
+                        e
+                    ))
+                })?;
+
+        tracing::debug!(
+            attachment_id = %attachment_id,
+            width = width,
+            height = height,
+            "Extracted video thumbnail on receive"
+        );
+
+        Ok(ImageDecodeResult {
+            image_bytes: thumbnail,
+            width,
+            height,
+        })
+    }
+
     /// Decode all frames from GIF bytes (blocking, for background thread).
     ///
     /// Call this from a background thread with the `gif_bytes` from `GifDecodeResult`.

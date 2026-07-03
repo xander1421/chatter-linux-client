@@ -160,6 +160,7 @@ async fn handle_user_event(
                     user_id: profile.user_id,
                     display_name: profile.display_name.clone(),
                     status_message: profile.status_message.as_ref().map(|s| s.text.clone()),
+                    avatar_bytes: profile.avatar_bytes.clone(),
                     timestamp: chrono::Utc::now().timestamp_millis() as u64,
                 });
             }
@@ -218,6 +219,7 @@ async fn refresh_friend_requests(
                 user_id: r.user_id,
                 display_name: r.display_name,
                 username: r.username,
+                encrypted_intro: r.encrypted_message,
             })
             .collect(),
         Err(e) => {
@@ -238,6 +240,7 @@ async fn refresh_friend_requests(
                 user_id: r.user_id,
                 display_name: r.display_name,
                 username: r.username,
+                encrypted_intro: r.encrypted_message,
             })
             .collect(),
         Err(e) => {

@@ -462,6 +462,17 @@ impl ChatterClient {
         self.attachments().decrypt_and_get_image_info(attachment_id)
     }
 
+    /// Decrypt a video attachment and extract a thumbnail frame.
+    ///
+    /// Blocking (GStreamer) — call from a background thread. Used to derive a
+    /// thumbnail for server-DM videos, which arrive without inline thumbnails.
+    pub fn decrypt_and_extract_video_thumbnail(
+        &self,
+        attachment_id: &crate::domain::ids::AttachmentId,
+    ) -> Result<crate::services::attachment::ImageDecodeResult, crate::services::attachment::AttachmentError> {
+        self.attachments().decrypt_and_extract_video_thumbnail(attachment_id)
+    }
+
     /// Decode every frame of a GIF from already-decrypted bytes.
     ///
     /// Blocking — call from a background thread (e.g. `spawn_blocking`).

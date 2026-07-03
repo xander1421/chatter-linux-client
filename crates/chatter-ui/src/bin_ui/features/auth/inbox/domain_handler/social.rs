@@ -9,8 +9,15 @@ use chatter_core::domain::ids::UserId;
 use crate::MainWindow;
 
 /// Handle friend requests updated event.
-pub(super) fn handle_friend_requests_updated(
+///
+/// Received requests may carry an ECIES-encrypted intro note. Decryption is
+/// async and must NOT run inside the Slint event-loop closure, so we decrypt
+/// every received note up front (here, off the UI thread) and hand the
+/// pre-decrypted plaintext into the closure. Undecryptable/empty notes render
+/// nothing (we never surface ciphertext).
+pub(super) async fn handle_friend_requests_updated(
     window: &Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
     received: Vec<chatter_core::inbox::events::FriendRequestInfo>,
     sent: Vec<chatter_core::inbox::events::FriendRequestInfo>,
 ) {
@@ -18,30 +25,83 @@ pub(super) fn handle_friend_requests_updated(
     let received_count = received.len();
     let sent_count = sent.len();
 
+    // Received requests carry an ECIES envelope (sender's profile key + optional
+    // note). Ingest each off the UI thread: persist the key, then decrypt the
+    // sender's real display name + avatar + note. The non-Send `slint::Image`
+    // is built inside the event loop from the decoded RGBA collected here.
+    struct Prepped {
+        display_name: String,
+        avatar: Option<(u32, u32, Vec<u8>)>,
+        note: String,
+    }
+    let mut prepped: Vec<Prepped> = Vec::with_capacity(received.len());
+    for r in &received {
+        let p = match r.user_id.parse::<UserId>() {
+            Ok(sender_id) => {
+                let profile = ui_ctx
+                    .ingest_received_friend_request(&sender_id, &r.encrypted_intro)
+                    .await;
+                Prepped {
+                    display_name: profile
+                        .display_name
+                        .unwrap_or_else(|| fallback_name(&r.user_id)),
+                    avatar: profile.avatar_bytes.as_deref().and_then(decode_avatar_rgba),
+                    note: profile.note.unwrap_or_default(),
+                }
+            }
+            Err(_) => Prepped {
+                display_name: fallback_name(&r.user_id),
+                avatar: None,
+                note: String::new(),
+            },
+        };
+        prepped.push(p);
+    }
+
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
             // Update friend request lists
             let received_model: Vec<crate::FriendRequestData> = received
                 .into_iter()
-                .map(|r| crate::FriendRequestData {
-                    user_id: r.user_id.into(),
-                    display_name: r.display_name.into(),
-                    username: r.username.into(),
-                    avatar_source: slint::Image::default(),
-                    has_avatar: false,
-                    sent_at: "".into(),
+                .zip(prepped)
+                .map(|(r, p)| {
+                    let (avatar_source, has_avatar) = match p.avatar {
+                        Some((aw, ah, px)) => {
+                            let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                                &px, aw, ah,
+                            );
+                            (slint::Image::from_rgba8(buf), true)
+                        }
+                        None => (slint::Image::default(), false),
+                    };
+                    crate::FriendRequestData {
+                        user_id: r.user_id.into(),
+                        display_name: p.display_name.into(),
+                        username: r.username.into(),
+                        avatar_source,
+                        has_avatar,
+                        sent_at: "".into(),
+                        note: p.note.into(),
+                    }
                 })
                 .collect();
 
             let sent_model: Vec<crate::FriendRequestData> = sent
                 .into_iter()
-                .map(|r| crate::FriendRequestData {
-                    user_id: r.user_id.into(),
-                    display_name: r.display_name.into(),
-                    username: r.username.into(),
-                    avatar_source: slint::Image::default(),
-                    has_avatar: false,
-                    sent_at: "".into(),
+                .map(|r| {
+                    // We don't hold the recipient's profile key, so their
+                    // server display_name is ciphertext — show a stable
+                    // fallback rather than garbage.
+                    let display_name = fallback_name(&r.user_id);
+                    crate::FriendRequestData {
+                        user_id: r.user_id.into(),
+                        display_name: display_name.into(),
+                        username: r.username.into(),
+                        avatar_source: slint::Image::default(),
+                        has_avatar: false,
+                        sent_at: "".into(),
+                        note: "".into(),
+                    }
                 })
                 .collect();
 
@@ -55,6 +115,21 @@ pub(super) fn handle_friend_requests_updated(
         sent = sent_count,
         "Updated friend requests in UI"
     );
+}
+
+/// Stable placeholder name when a peer's real (profile-key-encrypted) display
+/// name isn't decryptable — never show ciphertext.
+fn fallback_name(user_id: &str) -> String {
+    format!("User {}", &user_id[..8.min(user_id.len())])
+}
+
+/// Decode raw avatar image bytes → RGBA (width, height, pixels) for building a
+/// `slint::Image` on the UI thread. `None` if the bytes don't decode.
+fn decode_avatar_rgba(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    let img = image::load_from_memory(bytes).ok()?;
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    Some((w, h, rgba.into_raw()))
 }
 
 /// Handle friend accepted event.
@@ -284,6 +359,7 @@ pub(super) fn handle_user_profile_updated(
     user_id: UserId,
     display_name: String,
     status_message: Option<String>,
+    avatar_bytes: Option<Vec<u8>>,
     timestamp: u64,
 ) {
     tracing::info!(
@@ -299,16 +375,39 @@ pub(super) fn handle_user_profile_updated(
     let display_name_slint: slint::SharedString = display_name.clone().into();
     let initials = compute_initials(&display_name);
 
+    // Decode the avatar to raw RGBA now (Send-safe); the non-Send `slint::Image`
+    // is built inside the event-loop closure below. This is the same in-place
+    // patch path the name already uses — the DM sidebar's own rebuild
+    // (refresh_dm_list) races the pre-decrypt build, so we set the avatar here
+    // where we know the decrypted bytes just arrived.
+    let avatar_decoded: Option<(u32, u32, Vec<u8>)> = avatar_bytes.as_ref().and_then(|b| {
+        image::load_from_memory(b).ok().map(|img| {
+            let rgba = img.to_rgba8();
+            let (aw, ah) = rgba.dimensions();
+            (aw, ah, rgba.into_raw())
+        })
+    });
+
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
 
-        // 1. Sidebar DM rows — update display name + initials for matching peer.
+        let avatar_img: Option<slint::Image> = avatar_decoded.as_ref().map(|(aw, ah, px)| {
+            let buf =
+                slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(px, *aw, *ah);
+            slint::Image::from_rgba8(buf)
+        });
+
+        // 1. Sidebar DM rows — update display name + initials + avatar for matching peer.
         let dms = w.get_dm_conversations();
         for i in 0..dms.row_count() {
             if let Some(mut dm) = dms.row_data(i) {
                 if dm.user_id == user_id_str {
                     dm.display_name = display_name_slint.clone();
                     dm.initials = initials.clone().into();
+                    if let Some(img) = &avatar_img {
+                        dm.avatar_source = img.clone();
+                        dm.has_avatar = true;
+                    }
                     dms.set_row_data(i, dm);
                     break;
                 }
@@ -321,6 +420,10 @@ pub(super) fn handle_user_profile_updated(
                 if let Some(dm) = dms.row_data(i) {
                     if dm.is_selected && dm.user_id == user_id_str {
                         w.set_channel_name(display_name_slint.clone());
+                        if let Some(img) = &avatar_img {
+                            w.set_channel_avatar_source(img.clone());
+                            w.set_channel_has_avatar(true);
+                        }
                         break;
                     }
                 }

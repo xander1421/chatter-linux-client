@@ -132,6 +132,7 @@ impl FriendRequestExt for FriendRequestSendData {
             avatar_source,
             has_avatar,
             sent_at: self.sent_at.into(),
+            note: "".into(),
         }
     }
 }

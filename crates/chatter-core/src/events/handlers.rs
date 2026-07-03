@@ -855,6 +855,7 @@ impl EventHandlers {
                 display_name,
                 status_message,
                 timestamp,
+                ..
             } => {
                 // Already persisted by the user events stream handler; UI subscribes
                 // directly to refresh display name + avatar caches.

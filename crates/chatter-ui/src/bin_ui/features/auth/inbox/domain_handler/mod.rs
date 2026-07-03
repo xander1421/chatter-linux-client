@@ -59,7 +59,7 @@ pub async fn handle_domain_event(
         // Friend Request Updates
         // =========================================================================
         DomainEvent::FriendRequestsUpdated { received, sent } => {
-            social::handle_friend_requests_updated(window, received, sent);
+            social::handle_friend_requests_updated(window, ui_ctx, received, sent).await;
         }
 
         // =========================================================================
@@ -468,10 +468,11 @@ pub async fn handle_domain_event(
             user_id,
             display_name,
             status_message,
+            avatar_bytes,
             timestamp,
         } => {
             social::handle_user_profile_updated(
-                window, user_id, display_name, status_message, timestamp,
+                window, user_id, display_name, status_message, avatar_bytes, timestamp,
             );
             crate::bin_ui::features::auth::initial_data::refresh_friends_list(
                 window.clone(),

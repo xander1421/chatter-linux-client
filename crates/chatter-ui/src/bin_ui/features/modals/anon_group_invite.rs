@@ -90,6 +90,7 @@ fn refresh_group_invites_ui(weak: &Weak<MainWindow>) {
                     avatar_source: slint::Image::default(),
                     has_avatar: false,
                     sent_at: SharedString::default(),
+                    note: SharedString::default(),
                 })
                 .collect();
             w.set_friends_group_invites(ModelRc::new(VecModel::from(items)));

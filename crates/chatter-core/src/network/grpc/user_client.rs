@@ -151,11 +151,11 @@ impl UserClient {
     pub async fn send_friend_request(
         &mut self,
         user_id: &str,
-        message: Option<&str>,
+        encrypted_message: Option<&[u8]>,
     ) -> Result<impl Stream<Item = Result<UserEvent, NetworkError>>, NetworkError> {
         let request = FriendRequest {
             user_id: user_id.to_string(),
-            message: message.unwrap_or("").to_string(),
+            encrypted_message: encrypted_message.unwrap_or(&[]).to_vec(),
             request_id: uuid::Uuid::new_v4().to_string(),
         };
 

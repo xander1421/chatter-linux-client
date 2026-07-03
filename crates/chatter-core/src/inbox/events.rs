@@ -577,6 +577,11 @@ pub struct FriendRequestInfo {
     pub display_name: String,
     /// Username.
     pub username: String,
+    /// Raw ECIES-encrypted intro note (opaque). Non-empty only on RECEIVED
+    /// requests that carried a note. The UI decrypts it via
+    /// `ChatterClient::decrypt_friend_request_note` (needs our identity key,
+    /// unavailable in the inbox emit paths). Empty = no note.
+    pub encrypted_intro: Vec<u8>,
 }
 
 #[cfg(test)]

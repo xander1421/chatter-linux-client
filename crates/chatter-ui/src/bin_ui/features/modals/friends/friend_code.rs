@@ -242,6 +242,12 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<Cha
             return;
         }
 
+        // Read the optional intro note on the UI thread before spawning.
+        let note = weak
+            .upgrade()
+            .map(|w| w.get_friends_request_note().to_string())
+            .unwrap_or_default();
+
         tokio::spawn(async move {
             // Set loading state
             let weak_loading = weak.clone();
@@ -251,7 +257,9 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<Cha
                 }
             });
 
-            match ui_ctx.connect_via_friend_code(&code_str, None).await {
+            let note_trimmed = note.trim();
+            let note_arg = if note_trimmed.is_empty() { None } else { Some(note_trimmed) };
+            match ui_ctx.connect_via_friend_code(&code_str, note_arg).await {
                 Ok(friendship) => {
                     let friend_id = friendship.addressee_id.to_string();
                     tracing::info!("Sent friend request via code to {}", friend_id);
@@ -262,6 +270,7 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<Cha
                             w.set_friends_loading(false);
                             // Clear the input field
                             w.set_friends_code_input("".into());
+                            w.set_friends_request_note("".into());
                             // Show success message (if UI supports it)
                             w.set_friends_code_status("Friend request sent!".into());
                         }

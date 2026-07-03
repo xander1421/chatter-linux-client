@@ -241,6 +241,7 @@ pub(crate) fn wire_message_requests_clicked(window: &MainWindow, ui_ctx: &Arc<Ch
                                 .format("%b %d, %H:%M")
                                 .to_string()
                                 .into(),
+                            note: "".into(),
                         }
                     })
                     .collect();
@@ -284,6 +285,7 @@ pub(crate) fn load_pending_message_requests_count(window: &MainWindow, ui_ctx: &
                             .format("%b %d, %H:%M")
                             .to_string()
                             .into(),
+                        note: "".into(),
                     }
                 })
                 .collect();

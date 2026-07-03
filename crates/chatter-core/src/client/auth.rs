@@ -157,6 +157,19 @@ impl ChatterClient {
         }
 
         self.start().await?;
+
+        // Push the encrypted avatar to the server profile so friends can fetch
+        // + decrypt it via the profile-key handshake (same path display_name
+        // already uses). `do_register` stored the raw bytes in `keys::AVATAR`;
+        // `update_user_profile` reads them, encrypts with the profile key, and
+        // uploads as `encrypted_avatar`. Best-effort — a failure here must not
+        // fail registration.
+        if avatar.is_some_and(|a| !a.is_empty()) {
+            if let Err(e) = self.users().update_user_profile(None, None).await {
+                tracing::warn!(error = %e, "Registration: encrypted-avatar upload failed");
+            }
+        }
+
         Ok(result)
     }
 

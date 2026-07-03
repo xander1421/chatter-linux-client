@@ -483,6 +483,7 @@ export component App inherits Rectangle {
     in-out property <string> friends-my-code: "";
     in-out property <string> friends-code-input: "";
     in-out property <string> friends-code-status: "";
+    in-out property <string> friends-request-note: "";
     in-out property <image> friends-qr-code-image;
     in-out property <bool> friends-show-qr: false;
 
@@ -1628,6 +1629,7 @@ export component App inherits Rectangle {
         my-code <=> root.friends-my-code;
         code-input <=> root.friends-code-input;
         code-status <=> root.friends-code-status;
+        request-note <=> root.friends-request-note;
         qr-code-image <=> root.friends-qr-code-image;
         show-qr <=> root.friends-show-qr;
 

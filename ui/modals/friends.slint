@@ -43,6 +43,7 @@ export struct FriendRequestData {
     avatar-source: image,   // For avatar bytes converted to image
     has-avatar: bool,       // Whether avatar-source is valid
     sent-at: string,
+    note: string,           // Decrypted intro note (received requests only; empty otherwise)
 }
 
 // Blocked user data
@@ -82,6 +83,7 @@ export component FriendsModal inherits Rectangle {
     in-out property <string> my-code: "";
     in-out property <string> code-input: "";
     in-out property <string> code-status: "";
+    in-out property <string> request-note: "";  // Optional intro note sent with a friend request
     in-out property <image> qr-code-image;
     in-out property <bool> show-qr: false;
     in-out property <bool> private-mode: true;  // Toggle between regular and private connection (default: private)
@@ -492,6 +494,14 @@ export component FriendsModal inherits Rectangle {
                                 }
                             }
 
+                            // Optional intro note — sent E2E-encrypted with the
+                            // friend request. Placed above the code entry so it
+                            // reads note → code → Connect.
+                            Input {
+                                placeholder: "Add a note (optional)";
+                                text <=> root.request-note;
+                            }
+
                             // Enter friend's code
                             HorizontalLayout {
                                 spacing: Spacing.sm;
@@ -827,7 +837,7 @@ export component FriendsModal inherits Rectangle {
                                 spacing: Spacing.xs;
 
                                 for request in root.received-requests: Rectangle {
-                                    height: 64px;
+                                    min-height: 64px;
                                     background: recv-touch.has-hover ? Colors.surface-hover : transparent;
                                     border-radius: Spacing.radius-md;
                                     border-width: recv-touch.has-hover ? 1px : 0px;
@@ -842,6 +852,7 @@ export component FriendsModal inherits Rectangle {
 
                                         Avatar {
                                             size: 40px;
+                                            source: request.avatar-source;
                                             fallback-text: request.display-name;
                                         }
 
@@ -856,6 +867,13 @@ export component FriendsModal inherits Rectangle {
                                                 font-size: Typography.sm;
                                                 font-weight: Typography.medium;
                                                 overflow: elide;
+                                            }
+
+                                            if request.note != "": Text {
+                                                text: request.note;
+                                                color: Colors.text-secondary;
+                                                font-size: Typography.xs;
+                                                wrap: word-wrap;
                                             }
 
                                             if request.sent-at != "": Text {

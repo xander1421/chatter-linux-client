@@ -9,7 +9,6 @@ use slint::{ComponentHandle, Image, ModelRc, SharedString, VecModel, Weak, Model
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::ChannelType;
 use chatter_core::domain::ids::ChannelId;
-use chatter_core::services::user::FriendRequestFilter;
 
 use crate::bin_ui::converters::{
     channel_to_slint, get_initials, messages_to_display_batch,
@@ -203,93 +202,14 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         })
         .map(|c| c.id);
 
-    // Fetch friend requests from server using UserService
-    let received_requests = match ui_ctx
-        .list_friend_requests(FriendRequestFilter::Received, 50, 0)
-        .await
-    {
-        Ok(friendships) => {
-            tracing::info!("Fetched {} received friend requests", friendships.len());
-            friendships
-        }
-        Err(e) => {
-            tracing::warn!("Failed to fetch received friend requests: {}", e);
-            Vec::new()
-        }
-    };
-
-    let sent_requests = match ui_ctx
-        .list_friend_requests(FriendRequestFilter::Sent, 50, 0)
-        .await
-    {
-        Ok(friendships) => {
-            tracing::info!("Fetched {} sent friend requests", friendships.len());
-            friendships
-        }
-        Err(e) => {
-            tracing::warn!("Failed to fetch sent friend requests: {}", e);
-            Vec::new()
-        }
-    };
-
-    // Convert to Send-safe UI types, fetching profiles for display names
-    let mut received_ui: Vec<FriendRequestSendData> = Vec::with_capacity(received_requests.len());
-    for f in received_requests {
-        let friend_id = f.addressee_id;
-        let friend_id_str = friend_id.to_string();
-
-        // Try to fetch profile from server
-        let (display_name, username, avatar_bytes) =
-            match ui_ctx.get_user_profile(&friend_id).await {
-                Ok(profile) => {
-                    let name = if profile.display_name.is_empty() {
-                        friend_id_str.clone()
-                    } else {
-                        profile.display_name.clone()
-                    };
-                    (name.clone(), name, profile.avatar_bytes)
-                }
-                Err(_) => (friend_id_str.clone(), friend_id_str.clone(), None),
-            };
-
-        received_ui.push(FriendRequestSendData {
-            user_id: friend_id_str,
-            display_name,
-            username,
-            avatar_bytes,
-            avatar_decoded: None,
-            sent_at: String::new(),
-        });
-    }
-
-    let mut sent_ui: Vec<FriendRequestSendData> = Vec::with_capacity(sent_requests.len());
-    for f in sent_requests {
-        let friend_id = f.addressee_id;
-        let friend_id_str = friend_id.to_string();
-
-        // Try to fetch profile from server
-        let (display_name, username, avatar_bytes) =
-            match ui_ctx.get_user_profile(&friend_id).await {
-                Ok(profile) => {
-                    let name = if profile.display_name.is_empty() {
-                        friend_id_str.clone()
-                    } else {
-                        profile.display_name.clone()
-                    };
-                    (name.clone(), name, profile.avatar_bytes)
-                }
-                Err(_) => (friend_id_str.clone(), friend_id_str.clone(), None),
-            };
-
-        sent_ui.push(FriendRequestSendData {
-            user_id: friend_id_str,
-            display_name,
-            username,
-            avatar_bytes,
-            avatar_decoded: None,
-            sent_at: String::new(),
-        });
-    }
+    // Friend requests (Received/Sent) are populated EXCLUSIVELY by the
+    // `FriendRequestsUpdated` event handler, which decrypts each sender's ECIES
+    // envelope (real display name + avatar + intro note). Building them here
+    // from `list_friend_requests` would only yield ciphertext names with no
+    // note/avatar — and then get clobbered by the event anyway. Start empty and
+    // fire the event once below so the rich rows appear immediately on load.
+    let received_ui: Vec<FriendRequestSendData> = Vec::new();
+    let sent_ui: Vec<FriendRequestSendData> = Vec::new();
 
     // Load anonymous DMs from local storage and add to DM list
     {
@@ -660,6 +580,12 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         load_channel_into_ui_from_services(window_weak, &channel_id, ui_ctx, current_user_id_str)
             .await;
     }
+
+    // Populate the Received/Sent friend-request tabs via the event path, which
+    // decrypts each sender's ECIES envelope (real name + avatar + note). This
+    // is the single source of truth — see the empty `received_ui`/`sent_ui`
+    // above.
+    ui_ctx.refresh_friend_requests().await;
 
     tracing::info!("Initial data load complete");
 }
