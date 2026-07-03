@@ -9,6 +9,77 @@ use crate::domain::ids::AttachmentId;
 
 use super::{attachment_file_path, attachments_dir, ensure_attachments_dir, AttachmentError, AttachmentService, CdnUploadResult};
 
+/// Ciphertext > this uses multipart; ≤ uses single-PUT.
+const MULTIPART_THRESHOLD: u64 = 100 * 1024 * 1024;
+
+/// Split `total` bytes into (offset, len) ranges of `part_size` (last may be smaller).
+fn part_ranges(total: u64, part_size: u64) -> Vec<(u64, u64)> {
+    let mut ranges = Vec::new();
+    let mut offset = 0;
+    while offset < total {
+        let len = part_size.min(total - offset);
+        ranges.push((offset, len));
+        offset += len;
+    }
+    ranges
+}
+
+/// PUT one part (byte range of the temp file) to its presigned URL, 3× retry.
+/// Returns the ETag from the response headers.
+async fn upload_one_part(
+    http: &reqwest::Client,
+    url: &str,
+    temp_path: &std::path::Path,
+    offset: u64,
+    len: u64,
+) -> Result<String, AttachmentError> {
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+    let mut last_err = String::new();
+    for attempt in 0..3 {
+        // Read the exact byte range fresh each attempt.
+        let mut f = tokio::fs::File::open(temp_path)
+            .await
+            .map_err(|e| AttachmentError::FileError(format!("open temp: {}", e)))?;
+        f.seek(std::io::SeekFrom::Start(offset))
+            .await
+            .map_err(|e| AttachmentError::FileError(format!("seek: {}", e)))?;
+        let mut buf = vec![0u8; len as usize];
+        f.read_exact(&mut buf)
+            .await
+            .map_err(|e| AttachmentError::FileError(format!("read part: {}", e)))?;
+
+        match http
+            .put(url)
+            .header("Content-Type", "application/octet-stream")
+            .header("Content-Length", len)
+            .body(buf)
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                let etag = resp
+                    .headers()
+                    .get(reqwest::header::ETAG)
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.trim_matches('"').to_string())
+                    .unwrap_or_default();
+                if etag.is_empty() {
+                    last_err = "part PUT succeeded but no ETag header".to_string();
+                } else {
+                    return Ok(etag);
+                }
+            }
+            Ok(resp) => last_err = format!("part PUT status {}", resp.status()),
+            Err(e) => last_err = format!("part PUT error: {}", e),
+        }
+        tracing::warn!(attempt, offset, len, error = %last_err, "part upload retry");
+    }
+    Err(AttachmentError::NetworkError(format!(
+        "part upload failed after 3 attempts: {}",
+        last_err
+    )))
+}
 
 impl AttachmentService {
     /// Upload a file to CDN with client-side encryption.
@@ -78,50 +149,59 @@ impl AttachmentService {
             "Attachment encrypted (streaming)"
         );
 
-        // Get presigned upload URL
-        let mut file_client = self.grpc_pool()?.file_client();
-        let upload_response = file_client
-            .get_attachment_upload_url(encrypt_result.ciphertext_size)
-            .await
-            .map_err(|e| AttachmentError::NetworkError(format!("Failed to get upload URL: {}", e)))?;
+        // Route large ciphertexts through multipart (parallel part PUTs direct to
+        // RustFS); small ones keep the single-PUT path. Both arms converge on a
+        // confirmed `cdn_key`, which feeds the shared persist/build tail below.
+        let cdn_key = if encrypt_result.ciphertext_size > MULTIPART_THRESHOLD {
+            self.upload_multipart_to_cdn(temp_file.path(), encrypt_result.ciphertext_size).await?
+        } else {
+            // Get presigned upload URL
+            let mut file_client = self.grpc_pool()?.file_client();
+            let upload_response = file_client
+                .get_attachment_upload_url(encrypt_result.ciphertext_size)
+                .await
+                .map_err(|e| AttachmentError::NetworkError(format!("Failed to get upload URL: {}", e)))?;
 
-        let cdn_key = upload_response.cdn_key;
-        let upload_url = upload_response.upload_url;
+            let cdn_key = upload_response.cdn_key;
+            let upload_url = upload_response.upload_url;
 
-        tracing::debug!(cdn_key = %cdn_key, "Got presigned URL, streaming encrypted content");
+            tracing::debug!(cdn_key = %cdn_key, "Got presigned URL, streaming encrypted content");
 
-        // Stream encrypted temp file to PUT (O(CHUNK_SIZE) memory)
-        let upload_start = std::time::Instant::now();
-        let encrypted_file = tokio::fs::File::open(temp_file.path())
-            .await
-            .map_err(|e| AttachmentError::FileError(format!("Failed to open temp file: {}", e)))?;
-        let stream = tokio_util::io::ReaderStream::new(encrypted_file);
-        let body = reqwest::Body::wrap_stream(stream);
+            // Stream encrypted temp file to PUT (O(CHUNK_SIZE) memory)
+            let upload_start = std::time::Instant::now();
+            let encrypted_file = tokio::fs::File::open(temp_file.path())
+                .await
+                .map_err(|e| AttachmentError::FileError(format!("Failed to open temp file: {}", e)))?;
+            let stream = tokio_util::io::ReaderStream::new(encrypted_file);
+            let body = reqwest::Body::wrap_stream(stream);
 
-        let http_client = reqwest::Client::new();
-        let response = http_client
-            .put(&upload_url)
-            .header("Content-Type", "application/octet-stream")
-            .header("Content-Length", encrypt_result.ciphertext_size)
-            .body(body)
-            .send()
-            .await
-            .map_err(|e| AttachmentError::NetworkError(format!("HTTP upload failed: {}", e)))?;
+            let http_client = reqwest::Client::new();
+            let response = http_client
+                .put(&upload_url)
+                .header("Content-Type", "application/octet-stream")
+                .header("Content-Length", encrypt_result.ciphertext_size)
+                .body(body)
+                .send()
+                .await
+                .map_err(|e| AttachmentError::NetworkError(format!("HTTP upload failed: {}", e)))?;
 
-        if !response.status().is_success() {
-            return Err(AttachmentError::NetworkError(format!(
-                "CDN upload failed with status: {}",
-                response.status()
-            )));
-        }
+            if !response.status().is_success() {
+                return Err(AttachmentError::NetworkError(format!(
+                    "CDN upload failed with status: {}",
+                    response.status()
+                )));
+            }
 
-        tracing::info!(cdn_key = %cdn_key, elapsed = ?upload_start.elapsed(), "CDN upload complete");
+            tracing::info!(cdn_key = %cdn_key, elapsed = ?upload_start.elapsed(), "CDN upload complete");
 
-        // Confirm upload with server
-        file_client
-            .confirm_attachment_upload(&cdn_key)
-            .await
-            .map_err(|e| AttachmentError::NetworkError(format!("Failed to confirm upload: {}", e)))?;
+            // Confirm upload with server
+            file_client
+                .confirm_attachment_upload(&cdn_key)
+                .await
+                .map_err(|e| AttachmentError::NetworkError(format!("Failed to confirm upload: {}", e)))?;
+
+            cdn_key
+        };
 
         // Generate deterministic attachment ID from cdn_key
         let attachment_id = AttachmentId::from_cdn_key(&cdn_key);
@@ -200,6 +280,74 @@ impl AttachmentService {
             chunk_size: encrypt_result.incremental_chunk_size,
             ciphertext_size: encrypt_result.ciphertext_size,
         })
+    }
+
+    /// Upload an already-encrypted temp file via multipart, direct to RustFS.
+    /// Returns the confirmed cdn_key. Bytes never touch the app server.
+    async fn upload_multipart_to_cdn(
+        &self,
+        temp_path: &std::path::Path,
+        ciphertext_size: u64,
+    ) -> Result<String, AttachmentError> {
+        use futures::stream::StreamExt;
+
+        let mut file_client = self.grpc_pool()?.file_client();
+        let create = file_client
+            .create_attachment_multipart_upload(ciphertext_size)
+            .await
+            .map_err(|e| AttachmentError::NetworkError(format!("create multipart failed: {}", e)))?;
+
+        let cdn_key = create.cdn_key.clone();
+        let upload_id = create.upload_id.clone();
+        let part_size = create.part_size as u64;
+        let ranges = part_ranges(ciphertext_size, part_size);
+        if ranges.len() != create.part_urls.len() {
+            return Err(AttachmentError::NetworkError(format!(
+                "part count mismatch: {} ranges vs {} urls",
+                ranges.len(), create.part_urls.len()
+            )));
+        }
+
+        let http = reqwest::Client::new();
+        let temp_path = temp_path.to_path_buf();
+
+        // Build one future per part; run 4 at a time.
+        let uploads = ranges.into_iter().enumerate().map(|(i, (offset, len))| {
+            let http = http.clone();
+            let url = create.part_urls[i].clone();
+            let temp_path = temp_path.clone();
+            async move {
+                let part_number = (i as u32) + 1;
+                let etag = upload_one_part(&http, &url, &temp_path, offset, len).await?;
+                Ok::<crate::proto::chat_v1::CompletedPart, AttachmentError>(
+                    crate::proto::chat_v1::CompletedPart { number: part_number, etag },
+                )
+            }
+        });
+
+        let results: Vec<Result<crate::proto::chat_v1::CompletedPart, AttachmentError>> =
+            futures::stream::iter(uploads).buffer_unordered(4).collect().await;
+
+        let mut parts = Vec::with_capacity(results.len());
+        for r in results {
+            match r {
+                Ok(p) => parts.push(p),
+                Err(e) => {
+                    let _ = file_client
+                        .abort_attachment_multipart_upload(&cdn_key, &upload_id)
+                        .await;
+                    return Err(e);
+                }
+            }
+        }
+        parts.sort_by_key(|p| p.number);
+
+        file_client
+            .complete_attachment_multipart_upload(&cdn_key, &upload_id, parts)
+            .await
+            .map_err(|e| AttachmentError::NetworkError(format!("complete multipart failed: {}", e)))?;
+
+        Ok(cdn_key)
     }
 
     /// Upload bytes directly to CDN with Signal-compatible encryption.
@@ -785,5 +933,22 @@ mod size_cap_tests {
                 msg
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod part_range_tests {
+    use super::*;
+
+    #[test]
+    fn part_ranges_covers_exactly() {
+        let total = 40 * 1024 * 1024u64;
+        let ps = 16 * 1024 * 1024u64;
+        let r = part_ranges(total, ps);
+        assert_eq!(r.len(), 3);
+        assert_eq!(r[0], (0, ps));
+        assert_eq!(r[2], (2 * ps, total - 2 * ps));
+        let covered: u64 = r.iter().map(|(_, l)| *l).sum();
+        assert_eq!(covered, total);
     }
 }

@@ -643,15 +643,16 @@ impl AttachmentCrypto {
     }
 }
 
-/// Maximum attachment size (1 GiB default).
+/// Maximum attachment size (2 GiB default).
 ///
 /// Large files are streamed as multipart chunks by the upload path (see
 /// `streaming_encrypt` in this module + the mailbox service's multipart
 /// putter) so the whole file never has to fit in RAM. Cap raised from
-/// 100 MiB after users hit the limit on video files.
+/// 100 MiB after users hit the limit on video files, then to 2 GiB once
+/// the client gained a true multipart CDN upload path.
 ///
 /// Override at startup via [`set_max_attachment_size`].
-const DEFAULT_MAX_ATTACHMENT_SIZE: u64 = 1024 * 1024 * 1024;
+const DEFAULT_MAX_ATTACHMENT_SIZE: u64 = 2 * 1024 * 1024 * 1024;
 
 static MAX_ATTACHMENT_SIZE: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(DEFAULT_MAX_ATTACHMENT_SIZE);
