@@ -535,7 +535,7 @@ mod tests {
         // Verify FriendRequest can be constructed
         let request = FriendRequest {
             user_id: "friend-456".to_string(),
-            message: "Let's be friends!".to_string(),
+            encrypted_message: "Let's be friends!".as_bytes().to_vec(),
             request_id: uuid::Uuid::new_v4().to_string(),
         };
 
