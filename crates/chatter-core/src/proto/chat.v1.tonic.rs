@@ -1846,6 +1846,103 @@ pub mod file_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /** Multipart upload for large attachments (>100 MB), presigned direct-to-RustFS.
+*/
+        pub async fn create_attachment_multipart_upload(
+            &mut self,
+            request: impl tonic::IntoRequest<
+                super::CreateAttachmentMultipartUploadRequest,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<super::CreateAttachmentMultipartUploadResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.FileService/CreateAttachmentMultipartUpload",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "chat.v1.FileService",
+                        "CreateAttachmentMultipartUpload",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn complete_attachment_multipart_upload(
+            &mut self,
+            request: impl tonic::IntoRequest<
+                super::CompleteAttachmentMultipartUploadRequest,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<super::CompleteAttachmentMultipartUploadResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.FileService/CompleteAttachmentMultipartUpload",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "chat.v1.FileService",
+                        "CompleteAttachmentMultipartUpload",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn abort_attachment_multipart_upload(
+            &mut self,
+            request: impl tonic::IntoRequest<
+                super::AbortAttachmentMultipartUploadRequest,
+            >,
+        ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.FileService/AbortAttachmentMultipartUpload",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "chat.v1.FileService",
+                        "AbortAttachmentMultipartUpload",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated client implementations.
