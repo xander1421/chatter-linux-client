@@ -9,8 +9,10 @@ use tonic::transport::Channel;
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
-    file_service_client::FileServiceClient, ConfirmAttachmentUploadRequest,
-    ConfirmAttachmentUploadResponse, GetAttachmentDownloadUrlRequest,
+    file_service_client::FileServiceClient, AbortAttachmentMultipartUploadRequest,
+    CompleteAttachmentMultipartUploadRequest, ConfirmAttachmentUploadRequest,
+    ConfirmAttachmentUploadResponse, CreateAttachmentMultipartUploadRequest,
+    CreateAttachmentMultipartUploadResponse, GetAttachmentDownloadUrlRequest,
     GetAttachmentDownloadUrlResponse, GetAttachmentUploadUrlRequest, GetAttachmentUploadUrlResponse,
 };
 
@@ -88,6 +90,57 @@ impl FileClient {
             .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
     }
+
+    // ==================== Multipart Upload RPCs ====================
+
+    /// Start a multipart upload; returns upload_id + presigned part URLs.
+    pub async fn create_attachment_multipart_upload(
+        &mut self,
+        encrypted_size: u64,
+    ) -> Result<CreateAttachmentMultipartUploadResponse, NetworkError> {
+        let request = CreateAttachmentMultipartUploadRequest { encrypted_size };
+        self.inner
+            .create_attachment_multipart_upload(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Finalize a multipart upload with the collected part ETags.
+    pub async fn complete_attachment_multipart_upload(
+        &mut self,
+        cdn_key: &str,
+        upload_id: &str,
+        parts: Vec<crate::proto::chat_v1::CompletedPart>,
+    ) -> Result<(), NetworkError> {
+        let request = CompleteAttachmentMultipartUploadRequest {
+            cdn_key: cdn_key.to_string(),
+            upload_id: upload_id.to_string(),
+            parts,
+        };
+        self.inner
+            .complete_attachment_multipart_upload(request)
+            .await
+            .map(|_| ())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Abort a multipart upload (best-effort cleanup on client give-up).
+    pub async fn abort_attachment_multipart_upload(
+        &mut self,
+        cdn_key: &str,
+        upload_id: &str,
+    ) -> Result<(), NetworkError> {
+        let request = AbortAttachmentMultipartUploadRequest {
+            cdn_key: cdn_key.to_string(),
+            upload_id: upload_id.to_string(),
+        };
+        self.inner
+            .abort_attachment_multipart_upload(request)
+            .await
+            .map(|_| ())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
 }
 
 #[cfg(test)]
@@ -114,5 +167,13 @@ mod tests {
             encrypted_size: 2048,
         };
         assert_eq!(request.encrypted_size, 2048);
+    }
+
+    #[test]
+    fn test_create_multipart_request_construction() {
+        let request = CreateAttachmentMultipartUploadRequest {
+            encrypted_size: 200 * 1024 * 1024,
+        };
+        assert_eq!(request.encrypted_size, 200 * 1024 * 1024);
     }
 }
