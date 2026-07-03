@@ -48,7 +48,7 @@ use crate::proto::content_v1::AttachmentPointer;
 use crate::services::ai_service::AIService;
 use crate::services::anon_dm::AnonDmService;
 use crate::services::anon_group::AnonGroupService;
-use crate::services::attachment::AttachmentService;
+use crate::services::attachment::{AttachmentError, AttachmentService};
 use crate::services::auth_service::AuthService;
 #[cfg(feature = "media")]
 use crate::services::call_worker::CallWorkerHandle;
@@ -1422,7 +1422,7 @@ impl ChatterClient {
         quote: Option<QuoteIntent>,
         options: Option<SendOptions>,
     ) -> Result<SendResult, SendError> {
-        let uploaded = upload_attachments(pending_attachments, self.attachments()).await;
+        let uploaded = upload_attachments(pending_attachments, self.attachments()).await?;
         let quote = if let Some(mut q) = quote {
             if q.target_preview.is_none() && !conversation.is_anon() {
                 let attachments_svc = self.attachments();
@@ -2561,7 +2561,7 @@ pub struct UploadedAttachments {
 // Private helpers
 // =============================================================================
 
-async fn upload_attachments(pending: &[PendingAttachment], attachment_service: &AttachmentService) -> UploadedAttachments {
+async fn upload_attachments(pending: &[PendingAttachment], attachment_service: &AttachmentService) -> Result<UploadedAttachments, AttachmentError> {
     let mut pointers = Vec::with_capacity(pending.len());
     let mut attachments = Vec::with_capacity(pending.len());
     for att in pending {
@@ -2575,10 +2575,17 @@ async fn upload_attachments(pending: &[PendingAttachment], attachment_service: &
                 pointers.push(res.to_attachment_pointer());
                 if let Ok(Some(full_att)) = attachment_service.get(&res.attachment_id) { attachments.push(full_att); }
             }
-            Err(e) => tracing::error!(path = %att.path.display(), error = %e, "Failed to upload attachment"),
+            Err(e) => {
+                // Propagate rather than silently dropping the attachment: if this
+                // was the only content in the message, swallowing the error here
+                // would leave `pointers` empty and the send would instead fail
+                // with the misleading "message must have text or attachments".
+                tracing::error!(path = %att.path.display(), error = %e, "Failed to upload attachment");
+                return Err(e);
+            }
         }
     }
-    UploadedAttachments { pointers, attachments }
+    Ok(UploadedAttachments { pointers, attachments })
 }
 
 fn build_intent(
@@ -2617,5 +2624,70 @@ fn build_intent(
             }
         }
         ActiveConversation::None => Err(SendError::UnsupportedAction),
+    }
+}
+
+#[cfg(test)]
+mod upload_attachments_tests {
+    //! Regression test for the "must have text or attachments" mask: a
+    //! failed pending-attachment upload must propagate its `AttachmentError`
+    //! instead of being dropped, which previously left `pointers` empty and
+    //! sent attachments-only messages into the empty-content validation path.
+    use super::*;
+    use crate::crypto::attachment_crypto::{max_attachment_size, set_max_attachment_size};
+    use crate::domain::AttachmentId;
+    use crate::storage::database::Database;
+    use crate::storage::repositories::AttachmentRepository;
+    use std::sync::Mutex;
+
+    /// Mirrors the lock in `services::attachment::upload::size_cap_tests` —
+    /// both suites mutate the same process-global size cap.
+    static SIZE_CAP_LOCK: Mutex<()> = Mutex::new(());
+
+    fn make_service() -> (AttachmentService, tempfile::TempDir) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("upload_attachments_test.db");
+        let db = Arc::new(Database::open(&db_path, "testpass").unwrap());
+        db.run_migrations().unwrap();
+        let repo = Arc::new(AttachmentRepository::new(db));
+        (AttachmentService::new_local(repo), temp_dir)
+    }
+
+    fn pending_for(path: std::path::PathBuf, size: u64) -> PendingAttachment {
+        PendingAttachment {
+            id: AttachmentId::from_cdn_key("pending-test"),
+            filename: "big.bin".to_string(),
+            path,
+            size,
+            mime_type: "application/octet-stream".to_string(),
+            pointer: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_upload_propagates_error_instead_of_dropping_pointer() {
+        let _guard = SIZE_CAP_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let original = max_attachment_size();
+        set_max_attachment_size(100);
+
+        let (svc, _tmp) = make_service();
+        let payload = vec![7u8; 200];
+        let input = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(input.path(), &payload).unwrap();
+
+        let pending = vec![pending_for(input.path().to_path_buf(), payload.len() as u64)];
+        let result = upload_attachments(&pending, &svc).await;
+
+        set_max_attachment_size(original);
+
+        match result {
+            Err(AttachmentError::EncryptionError(msg)) => {
+                assert!(msg.contains("attachment too large"), "unexpected msg: {}", msg);
+            }
+            other => panic!(
+                "expected propagated AttachmentError::EncryptionError(AttachmentTooLarge), got {:?}",
+                other.map(|u| u.pointers.len())
+            ),
+        }
     }
 }
