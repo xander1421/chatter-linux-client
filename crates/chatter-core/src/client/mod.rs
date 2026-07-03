@@ -2380,14 +2380,6 @@ impl ChatterClient {
             .await
     }
 
-    pub async fn upload_attachment(
-        &self,
-        path: &std::path::Path,
-        channel_id: &crate::domain::ids::ChannelId,
-    ) -> Result<crate::services::attachment::UploadResult, crate::services::attachment::AttachmentError> {
-        self.ui.attachment_service.upload_file(path, channel_id).await
-    }
-
     pub fn has_attachment_locally(
         &self,
         attachment_id: &crate::domain::ids::AttachmentId,

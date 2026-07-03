@@ -4,5 +4,5 @@
 //! See `attachment/` for the implementation.
 
 pub use crate::services::attachment::{
-    AttachmentError, AttachmentService, CdnUploadResult, DownloadResult, UploadResult,
+    AttachmentError, AttachmentService, CdnUploadResult,
 };

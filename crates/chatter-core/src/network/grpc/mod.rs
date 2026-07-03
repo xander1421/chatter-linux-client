@@ -2,9 +2,6 @@
 //!
 //! gRPC clients for all backend services.
 
-#[cfg(test)]
-mod upload_test;
-
 pub mod anonymous_client;
 pub mod anonymous_mailbox_client;
 pub mod auth_client;

@@ -53,29 +53,6 @@ pub enum AttachmentError {
     DecryptionError(String),
 }
 
-/// Result of a successful file upload.
-pub struct UploadResult {
-    /// The attachment ID assigned by the server.
-    pub attachment_id: AttachmentId,
-    /// The filename.
-    pub filename: String,
-    /// File size in bytes.
-    pub file_size: u64,
-    /// MIME type.
-    pub mime_type: String,
-}
-
-/// Result of a successful file download.
-pub struct DownloadResult {
-    /// Local path where the file was saved.
-    pub local_path: std::path::PathBuf,
-    /// The filename.
-    pub filename: String,
-    /// File size in bytes.
-    pub file_size: u64,
-    /// MIME type.
-    pub mime_type: String,
-}
 
 /// Result of encrypted CDN upload for E2E attachments.
 ///
@@ -152,9 +129,6 @@ impl CdnUploadResult {
         }
     }
 }
-
-/// Chunk size for file uploads (256KB).
-pub(crate) const CHUNK_SIZE: usize = 256 * 1024;
 
 // ============================================================================
 // Filesystem Storage Helpers

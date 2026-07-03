@@ -131,7 +131,7 @@ pub use message_gateway::{
 };
 pub use message::{MessageService, MessageError, SendDmContentParams, SendDmMsgParams};
 pub use message::core::{proto_to_domain_message, proto_to_domain_message_with_sender, proto_content_to_domain};
-pub use attachment_service::{AttachmentService, AttachmentError, UploadResult, CdnUploadResult};
+pub use attachment_service::{AttachmentService, AttachmentError, CdnUploadResult};
 #[cfg(feature = "media")]
 pub use call_worker::CallWorkerHandle;
 

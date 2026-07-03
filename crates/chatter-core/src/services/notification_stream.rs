@@ -254,7 +254,7 @@ fn dispatch_notification(event_bus: &EventBus, notif: Notification) {
         // is redundant — ignore so we don't double-surface.
         //
         // ChannelInvite / FriendRequest / FriendAccepted / System /
-        // Integration / Call* / FileShared currently have no consumer
+        // Integration / Call* currently have no consumer
         // wired. Drop with debug so they're visible in tracing without
         // noisy warn spam.
         other => {
