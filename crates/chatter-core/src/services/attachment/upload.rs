@@ -300,6 +300,17 @@ impl AttachmentService {
         let cdn_key = create.cdn_key.clone();
         let upload_id = create.upload_id.clone();
         let part_size = create.part_size as u64;
+        // Guard against a malformed server response: part_size 0 would make
+        // part_ranges loop forever (offset never advances), growing an
+        // unbounded Vec until OOM. Fail loudly instead.
+        if part_size == 0 {
+            let _ = file_client
+                .abort_attachment_multipart_upload(&cdn_key, &upload_id)
+                .await;
+            return Err(AttachmentError::NetworkError(
+                "server returned part_size 0 for multipart upload".to_string(),
+            ));
+        }
         let ranges = part_ranges(ciphertext_size, part_size);
         if ranges.len() != create.part_urls.len() {
             return Err(AttachmentError::NetworkError(format!(
