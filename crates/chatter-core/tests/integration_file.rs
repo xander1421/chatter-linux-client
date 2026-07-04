@@ -106,6 +106,65 @@ async fn test_rustfs_supports_presigned_multipart() {
     );
 }
 
+/// MINIMAL RustFS gate — no registration. The 3 multipart RPCs are PUBLIC
+/// (no auth, like GetAttachmentUploadUrl), so this proves the RustFS presigned
+/// UploadPart primitive works without touching the auth/registration path.
+#[tokio::test]
+async fn test_rustfs_presigned_multipart_minimal() {
+    skip_if_no_server!();
+
+    let pool = assert_ok(create_test_pool().await);
+    let mut file_client = FileClient::new(pool.channel(), pool.auth_clone());
+
+    let size = 5 * 1024 * 1024 + 1; // one part (< 16 MiB)
+    let create = assert_ok(file_client.create_attachment_multipart_upload(size as u64).await);
+    eprintln!(
+        "CREATE ok: cdn_key={} upload_id={} part_urls={} part_size={}",
+        create.cdn_key,
+        create.upload_id,
+        create.part_urls.len(),
+        create.part_size
+    );
+    assert!(!create.part_urls.is_empty(), "server returned zero part URLs");
+    eprintln!("part_url[0]={}", create.part_urls[0]);
+
+    let http = reqwest::Client::new();
+    let resp = http
+        .put(&create.part_urls[0])
+        .header("Content-Length", size as u64)
+        .body(vec![7u8; size])
+        .send()
+        .await
+        .expect("presigned part PUT should reach RustFS");
+
+    eprintln!("PART PUT status={} etag={:?}", resp.status(), resp.headers().get(reqwest::header::ETAG));
+    assert!(
+        resp.status().is_success(),
+        "CRITICAL: RustFS rejected presigned UploadPart with status {}",
+        resp.status()
+    );
+
+    let etag = resp
+        .headers()
+        .get(reqwest::header::ETAG)
+        .expect("RustFS part PUT missing ETag header")
+        .to_str()
+        .unwrap()
+        .trim_matches('"')
+        .to_string();
+
+    assert_ok(
+        file_client
+            .complete_attachment_multipart_upload(
+                &create.cdn_key,
+                &create.upload_id,
+                vec![CompletedPart { number: 1, etag }],
+            )
+            .await,
+    );
+    eprintln!("RUSTFS MULTIPART OK — presigned UploadPart accepted + completed");
+}
+
 /// Full round-trip through the real client code path: encrypt + upload a
 /// ~150 MB file (forces the multipart branch, threshold is 100 MB), download
 /// the ciphertext back via the presigned GET path, decrypt it, and assert the
