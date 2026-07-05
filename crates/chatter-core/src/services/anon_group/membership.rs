@@ -81,11 +81,6 @@ impl AnonGroupService {
         // fetch), matching the anon-DM design. Cost stays at ~1 token per new
         // peer (first contact only), not per message.
         //
-        // ponytail: shares anon-DM's cached-sender-cert dependency (prefetched
-        // at login). If a first send immediately after login ever flakes with
-        // NoCachedCertificate, the fix is a fetch-then-retry inside
-        // encrypt_message_anonymous (one place, also benefits anon-DM) — not
-        // worth adding speculatively.
         let ciphertext = if self
             .pairwise_service
             .has_session(peer_id)
@@ -97,6 +92,14 @@ impl AnonGroupService {
                 .await
                 .map_err(|e| AnonGroupError::CryptoError(e.to_string()))?
         } else {
+            // First contact: pre-warm our own sealed-sender cert before the
+            // anonymous encrypt, which uses the cached cert only. Closes the
+            // post-login race where the fire-and-forget login prefetch hasn't
+            // landed yet. Self-cert fetch — no recipient linkage leaked.
+            self.pairwise_service
+                .ensure_sender_certificate()
+                .await
+                .map_err(|e| AnonGroupError::CryptoError(e.to_string()))?;
             let token = self.get_or_request_token().await?;
             self.pairwise_service
                 .encrypt_anonymous(peer_id, &plaintext, &token)

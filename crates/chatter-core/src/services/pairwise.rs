@@ -137,6 +137,34 @@ impl PairwiseService {
             .map_err(|e| PairwiseError::SessionError(e.to_string()))
     }
 
+    /// Ensure our own sealed-sender certificate is cached.
+    ///
+    /// The anonymous encryption path (`encrypt_anonymous` → sealed encrypt)
+    /// uses the *cached* certificate only and errors with NoCachedCertificate
+    /// if it is missing. The login-time prefetch is fire-and-forget, so a send
+    /// fired immediately after login can race ahead of it. Call this before an
+    /// anonymous send to close that window.
+    ///
+    /// The certificate is our OWN (carries no recipient identity), so the
+    /// fallback authenticated fetch does not reveal who we are messaging. No-op
+    /// once cached — cheap to call on every send.
+    pub async fn ensure_sender_certificate(&self) -> Result<(), PairwiseError> {
+        if self
+            .signal_service
+            .get_cached_sender_certificate()
+            .map_err(|e| PairwiseError::SessionError(e.to_string()))?
+            .is_some()
+        {
+            return Ok(());
+        }
+        let mut auth_client = self.auth_client();
+        self.signal_service
+            .get_or_request_sender_certificate(&mut auth_client)
+            .await
+            .map(|_| ())
+            .map_err(|e| PairwiseError::SessionError(e.to_string()))
+    }
+
     /// Ensure a session exists for a peer (pre-fetch keys).
     ///
     /// Call this before encryption if you want to warm up sessions
