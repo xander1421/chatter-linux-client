@@ -321,35 +321,16 @@ fn search_messages(ui_ctx: &Arc<ChatterClient>, query: &str) -> Vec<SearchResult
             Some(m) => m,
             None => continue,
         };
-        use chatter_core::domain::message::ConversationType as CT;
-        let channel_name = match msg.conversation_type {
-            CT::Channel | CT::ServerDm | CT::MailboxDm => ui_ctx
-                .get_channel_local(&result.conversation_id)
-                .map(|c| c.name)
-                .unwrap_or_else(|| "Unknown".to_string()),
-            CT::AnonDm => result
-                .conversation_id
-                .to_string()
-                .parse::<chatter_core::domain::anon_dm::AnonDmId>()
-                .ok()
-                .and_then(|id| ui_ctx.get_anon_dm_conversation(&id))
-                .and_then(|c| c.peer_display_name)
-                .unwrap_or_else(|| "Private Chat".to_string()),
-            CT::AnonGroup => result
-                .conversation_id
-                .to_string()
-                .parse::<chatter_core::domain::anon_group::AnonGroupId>()
-                .ok()
-                .and_then(|id| ui_ctx.get_anon_group(&id))
-                .map(|g| g.name)
-                .unwrap_or_else(|| "Private Group".to_string()),
-            CT::SavedMessages => "Saved Messages".to_string(),
-        };
-        let sender_name = msg
-            .sender_id
-            .as_ref()
-            .map(|id| ui_ctx.display_name(id))
+        // Conversation name + sender name resolution both live in core.
+        let channel_name = ui_ctx
+            .get_conversation_metadata(&result.conversation_id.to_string(), &msg.conversation_type)
+            .map(|c| c.name)
+            .filter(|n| !n.is_empty())
             .unwrap_or_else(|| "Unknown".to_string());
+        let sender_name = match msg.sender_id {
+            Some(_) => ui_ctx.message_sender_display_name(&msg),
+            None => "Unknown".to_string(),
+        };
         let timestamp = msg
             .created_at
             .with_timezone(&chrono::Local)

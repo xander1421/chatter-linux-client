@@ -222,6 +222,51 @@ fn handle_local_attachment(
         return; // GIF handled entirely above
     }
 
+    // OPTIMIZATION: For large videos, stream decrypted ranges into the player
+    // instead of decrypting the whole file to memory first. Playback starts
+    // without the multi-second full-decrypt wall (and without holding the whole
+    // plaintext in RAM). Small videos keep the simple full-decrypt path.
+    const VIDEO_STREAM_THRESHOLD: u64 = 8 * 1024 * 1024; // 8MB
+    if mime_type.starts_with("video/") && file_size >= VIDEO_STREAM_THRESHOLD {
+        match ui_ctx.open_attachment_range(&att_id) {
+            Ok(dec) => {
+                play_video_from_range(weak, std::sync::Arc::new(dec), &filename);
+                return;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Streaming video open failed ({}), falling back to full decrypt",
+                    e
+                );
+                // fall through to full-decrypt path below
+            }
+        }
+    }
+
+    // Same streaming path for large audio: rodio's decoder is Read+Seek, so it
+    // pulls decrypted ranges on demand instead of holding the whole track in RAM.
+    const AUDIO_STREAM_THRESHOLD: u64 = 4 * 1024 * 1024; // 4MB
+    if mime_type.starts_with("audio/") && file_size >= AUDIO_STREAM_THRESHOLD {
+        match ui_ctx.open_attachment_range(&att_id) {
+            Ok(dec) => {
+                play_audio_from_range(
+                    weak,
+                    std::sync::Arc::new(dec),
+                    &attachment_id.to_string(),
+                    &mime_type,
+                );
+                return;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Streaming audio open failed ({}), falling back to full decrypt",
+                    e
+                );
+                // fall through to full-decrypt path below
+            }
+        }
+    }
+
     // Decrypt synchronously (we're already in a background thread)
     let secure_buffer = match ui_ctx.decrypt_attachment_auto(&att_id) {
         Ok(buffer) => buffer,
@@ -386,6 +431,49 @@ fn play_audio_from_buffer(
     }
 }
 
+/// Play large audio by streaming decrypted ranges on demand (no full decrypt).
+fn play_audio_from_range(
+    weak: slint::Weak<MainWindow>,
+    dec: std::sync::Arc<chatter_core::services::attachment::CbcRangeDecryptor>,
+    attachment_id: &str,
+    mime_type: &str,
+) {
+    let player_arc = audio_state::get_audio_player();
+    match player_arc.lock() {
+        Ok(mut player_guard) => {
+            if let Some(ref mut player) = *player_guard {
+                match player.load_from_range(dec, Some(mime_type.to_string())) {
+                    Ok(duration) => {
+                        tracing::info!("Loaded streaming audio (duration: {:?})", duration);
+                        if let Err(e) = player.play() {
+                            tracing::error!("Failed to play streaming audio: {}", e);
+                        } else {
+                            let att_id_for_state = attachment_id.to_string();
+                            audio_state::set_playing_with_duration(&att_id_for_state, duration);
+                            let att_id_for_ui = attachment_id.to_string();
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak.upgrade() {
+                                    w.set_current_playing_attachment_id(att_id_for_ui.into());
+                                    w.set_is_media_playing(true);
+                                    start_audio_progress_timer(&w);
+                                }
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to load streaming audio: {}", e);
+                    }
+                }
+            } else {
+                tracing::error!("Audio player not initialized");
+            }
+        }
+        Err(e) => {
+            tracing::error!("Failed to lock audio player: {}", e);
+        }
+    }
+}
+
 /// Display image from decrypted buffer.
 fn display_image_from_buffer(
     weak: slint::Weak<MainWindow>,
@@ -444,26 +532,38 @@ fn display_image_from_buffer(
             }
         });
     } else {
-        // Static image: Decode synchronously (we're already in a background thread)
-        let decode_start = std::time::Instant::now();
+        // Static image: decode synchronously (already on a background thread).
+        let t0 = std::time::Instant::now();
         match ImageProcessor::load_from_memory(&data) {
             Ok(image) => {
                 let rgba = image.to_rgba8();
                 let width = rgba.width();
                 let height = rgba.height();
                 let rgba_data = rgba.into_raw();
-                tracing::debug!("Image decoded in {:?}: {}x{}", decode_start.elapsed(), width, height);
+                let mb = rgba_data.len() as f64 / (1024.0 * 1024.0);
+                let decode_ms = t0.elapsed();
+                tracing::info!(
+                    "IMG TIMING decode={:?} {}x{} rgba={:.1}MB",
+                    decode_ms, width, height, mb
+                );
 
+                let queued = std::time::Instant::now();
                 let _ = slint::invoke_from_event_loop(move || {
+                    let invoke_latency = queued.elapsed();
                     if let Some(w) = weak.upgrade() {
+                        let clone_start = std::time::Instant::now();
                         let img = slint::Image::from_rgba8(
                             slint::SharedPixelBuffer::clone_from_slice(&rgba_data, width, height)
                         );
+                        let clone_ms = clone_start.elapsed();
                         w.set_image_viewer_source(img);
                         w.set_image_viewer_filename(filename_for_ui.into());
                         w.set_image_viewer_size(size_display.into());
                         w.set_image_viewer_visible(true);
-                        tracing::info!("Opened image from memory in viewer");
+                        tracing::info!(
+                            "IMG TIMING invoke_latency={:?} clone+setsource={:?} total={:?} — Opened image in viewer",
+                            invoke_latency, clone_ms, t0.elapsed()
+                        );
                     }
                 });
             }
@@ -506,6 +606,46 @@ fn play_video_from_buffer(
                 }
                 Err(e) => {
                     tracing::error!("Failed to start video from memory: {}", e);
+                }
+            }
+        },
+    );
+}
+
+/// Play a large video by streaming decrypted ranges on demand.
+///
+/// No full decrypt-to-memory: the GL pipeline pulls plaintext ranges from
+/// `dec` as it needs them (see `video_state::start_video_from_range_async`).
+fn play_video_from_range(
+    weak: slint::Weak<MainWindow>,
+    dec: std::sync::Arc<chatter_core::services::attachment::CbcRangeDecryptor>,
+    filename: &str,
+) {
+    let filename_for_video = filename.to_string();
+
+    video_state::start_video_from_range_async(
+        dec,
+        filename_for_video.clone(),
+        move |result| {
+            match result {
+                Ok((_, duration_str)) => {
+                    let filename_for_ui = filename_for_video.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_video_player_filename(filename_for_ui.into());
+                            w.set_video_player_duration(duration_str.into());
+                            w.set_video_player_elapsed("0:00".into());
+                            w.set_video_player_progress(0.0);
+                            w.set_video_player_is_playing(true);
+                            w.set_video_player_volume(1.0);
+                            w.set_video_player_visible(true);
+                            start_video_progress_timer(&w);
+                            tracing::info!("Started streaming video: {}", filename_for_video);
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to start streaming video: {}", e);
                 }
             }
         },

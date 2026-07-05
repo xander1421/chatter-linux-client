@@ -101,7 +101,6 @@ bytes = "1"
 http = "1"
 mime_guess = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking", "stream", "charset", "http2", "macos-system-configuration"] }
-openidconnect = { version = "4", default-features = false, features = ["reqwest", "rustls-tls"] }
 url = "2"
 rodio = "0.21.1"
 cpal = "0.15"
@@ -199,7 +198,6 @@ tempfile = "3"
 criterion = { version = "0.5", features = ["html_reports"] }
 mockall = "0.13"
 paste = "1.0"
-chrono = "0.4"
 proptest = "1"
 
 [[bench]]

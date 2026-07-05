@@ -109,7 +109,7 @@ impl AuthClient {
             .map_err(|s| NetworkError::from_status(&s))
     }
 
-    /// Get current identity (for OIDC clients).
+    /// Get current identity from the server.
     pub async fn get_my_identity(
         &mut self,
     ) -> Result<crate::proto::chat_v1::GetMyIdentityResponse, NetworkError> {

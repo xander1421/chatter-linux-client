@@ -228,7 +228,7 @@ pub(crate) fn wire_message_requests_clicked(window: &MainWindow, ui_ctx: &Arc<Ch
                     .map(|dm| {
                         // Use stored display name, not user_service (strangers)
                         let peer_name = dm.peer_display_name.clone()
-                            .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
+                            .unwrap_or_else(|| ui_ctx.fallback_display_name(&dm.peer_id));
 
                         crate::FriendRequestData {
                             user_id: dm.id.to_string().into(),
@@ -272,7 +272,7 @@ pub(crate) fn load_pending_message_requests_count(window: &MainWindow, ui_ctx: &
                 .map(|dm| {
                     // Use stored display name, not user_service (strangers)
                     let peer_name = dm.peer_display_name.clone()
-                        .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
+                        .unwrap_or_else(|| ui_ctx.fallback_display_name(&dm.peer_id));
 
                     crate::FriendRequestData {
                         user_id: dm.id.to_string().into(),

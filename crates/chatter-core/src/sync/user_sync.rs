@@ -92,20 +92,41 @@ impl UserSync {
                 };
                 server_friend_ids.insert(user_id);
 
-                // Upsert the base user record. Username requires a non-empty
-                // value, so when the server returns an empty display_name we
-                // fall back to the stringified UUID so downstream lookups work.
+                // The server sends display_name ENCRYPTED (Signal-style, per
+                // friend profile key). Decrypt it here or fall back to a safe
+                // name — never persist ciphertext, or reloads render base64.
                 let existing_user = self.user_repo.get(&user_id).ok().flatten();
-                let username = if !friend_profile.display_name.is_empty() {
-                    friend_profile.display_name.clone()
-                } else if let Some(existing) = existing_user.as_ref() {
-                    existing.username.clone()
-                } else {
-                    user_id.to_string()
-                };
+                let existing_profile = self.user_repo.get_profile(&user_id).ok().flatten();
 
+                // Decrypt with the friend's profile key. No key yet (handshake
+                // pending) → keep the name we already have, else a placeholder.
+                // We never store the undecryptable server value.
+                let display_name = crate::services::user::decrypt_friend_display_name(
+                    &self.user_repo,
+                    &current_user,
+                    &user_id,
+                    &friend_profile.display_name,
+                )
+                .or_else(|| {
+                    existing_profile
+                        .as_ref()
+                        .map(|p| p.display_name.clone())
+                        .filter(|n| !n.is_empty())
+                })
+                .or_else(|| {
+                    existing_user
+                        .as_ref()
+                        .map(|u| u.username.clone())
+                        .filter(|n| !n.is_empty())
+                })
+                .unwrap_or_else(|| {
+                    crate::services::user::friend_display_name_placeholder(&user_id)
+                });
+
+                // Username requires a non-empty value; the resolver never
+                // returns empty, so reuse the resolved (decrypted) name.
                 if existing_user.is_none() {
-                    let user = User::new(user_id, username, vec![]);
+                    let user = User::new(user_id, display_name.clone(), vec![]);
                     if let Err(e) = self.user_repo.insert(&user) {
                         had_failure = true;
                         tracing::debug!(
@@ -116,25 +137,16 @@ impl UserSync {
                     }
                 }
 
-                // Upsert the profile, preserving server-provided status and
-                // presence instead of clobbering with empty/Offline defaults.
-                let existing_profile = self.user_repo.get_profile(&user_id).ok().flatten();
-
-                let display_name = if !friend_profile.display_name.is_empty() {
-                    friend_profile.display_name.clone()
-                } else if let Some(existing) = existing_profile.as_ref() {
-                    existing.display_name.clone()
-                } else {
-                    // Last resort: the stringified user id, so the UI has
-                    // *something* to render rather than a blank row.
-                    user_id.to_string()
-                };
-
-                let status_message = if friend_profile.status_message.is_empty() {
-                    existing_profile.as_ref().and_then(|p| p.status_message.clone())
-                } else {
-                    Some(StatusMessage::new(friend_profile.status_message.clone()))
-                };
+                // Status is E2E-encrypted like the name; decrypt with the
+                // friend's key, else keep what we already have.
+                let status_message = crate::services::user::decrypt_friend_status(
+                    &self.user_repo,
+                    &current_user,
+                    &user_id,
+                    &friend_profile.status_message,
+                )
+                .map(StatusMessage::new)
+                .or_else(|| existing_profile.as_ref().and_then(|p| p.status_message.clone()));
 
                 let presence = presence_from_proto(friend_profile.presence);
 

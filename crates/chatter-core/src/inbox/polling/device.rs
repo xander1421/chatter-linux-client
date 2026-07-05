@@ -24,7 +24,7 @@ use crate::proto::chat_v1::{DeviceMessage, EncryptedData, SealedSenderMessage};
 use crate::proto::content_v1::{content, Content, DataMessage};
 use crate::proto::mailbox_v1::EnvelopeType;
 use crate::inbox::handlers::DomainEvent;
-use crate::services::message_gateway::{MessageGateway, RouteResult, SealedSenderResult};
+use crate::services::gateway::{MessageGateway, RouteResult, SealedSenderResult};
 use crate::storage::{ChannelRepository, MessageRepository};
 
 /// Process a single message through the validation pipeline.
@@ -223,7 +223,7 @@ async fn process_sender_key_message(
             match Content::decode(plaintext.as_slice()) {
                 Ok(content_proto) => {
                     if let Some(inner) = content_proto.content {
-                        dispatch_channel_control_content(
+                        dispatch_control_content(
                             inner,
                             sender_id,
                             &msg.message_guid,
@@ -729,7 +729,7 @@ async fn process_identified_sender_message(
         }
         Ok(SealedSenderResult::ControlContent { sender_id: actual_sender, content }) => {
             if let Some(inner) = content.content {
-                dispatch_channel_control_content(
+                dispatch_control_content(
                     inner,
                     &actual_sender,
                     &msg.message_guid,
@@ -1015,7 +1015,7 @@ async fn process_sealed_sender_message(
         }
         Ok(SealedSenderResult::ControlContent { sender_id: actual_sender, content }) => {
             if let Some(inner) = content.content {
-                dispatch_channel_control_content(
+                dispatch_control_content(
                     inner,
                     &actual_sender,
                     &msg.message_guid,
@@ -1148,7 +1148,7 @@ async fn process_sealed_sender_message(
 /// Dispatch channel control content based on type.
 ///
 /// Parses the Content proto inner type and emits appropriate channel events.
-pub fn dispatch_channel_control_content(
+pub fn dispatch_control_content(
     inner: content::Content,
     sender_id: &UserId,
     message_guid: &str,
@@ -1164,11 +1164,11 @@ pub fn dispatch_channel_control_content(
                 "DEVICE_INBOX: Received Typing content in control dispatch"
             );
             if typing.channel_id.is_empty() {
-                tracing::info!(
-                    sender_id = %sender_id,
-                    action = typing.action,
-                    "DEVICE_INBOX: Channel typing has empty channel_id - might be DM?"
-                );
+                // Empty channel_id => channel-free DM (ServerDm). Emit the DM event.
+                let _ = event_tx.send(InboxEvent::DmTyping {
+                    peer_id: *sender_id,
+                    action: typing.action,
+                });
             } else if let Ok(channel_id) = typing.channel_id.parse::<ChannelId>() {
                 tracing::info!(
                     sender_id = %sender_id,
@@ -1219,18 +1219,27 @@ pub fn dispatch_channel_control_content(
                         "Channel reaction received with invalid channel_id"
                     );
                 }
+            } else {
+                // No "channel:" prefix => channel-free DM (ServerDm) reaction.
+                let _ = event_tx.send(InboxEvent::DmReaction {
+                    peer_id: *sender_id,
+                    emoji: reaction.emoji,
+                    remove: reaction.remove,
+                    target_author_aci: reaction.target_author_aci,
+                    target_sent_timestamp: reaction.target_sent_timestamp,
+                });
             }
             stats.write().messages_processed += 1;
         }
         content::Content::Pin(pin) => {
             if pin.channel_id.is_empty() {
-                tracing::debug!(
-                    sender_id = %sender_id,
-                    target_author = %pin.target_author_aci,
-                    target_ts = pin.target_sent_timestamp,
-                    unpin = pin.unpin,
-                    "Channel pin received but missing channel_id"
-                );
+                // Empty channel_id => channel-free DM (ServerDm) pin.
+                let _ = event_tx.send(InboxEvent::DmPin {
+                    peer_id: *sender_id,
+                    target_author_aci: pin.target_author_aci,
+                    target_sent_timestamp: pin.target_sent_timestamp,
+                    unpin: pin.unpin,
+                });
             } else if let Ok(channel_id) = pin.channel_id.parse::<ChannelId>() {
                 tracing::debug!(
                     sender_id = %sender_id,
@@ -1274,12 +1283,12 @@ pub fn dispatch_channel_control_content(
             };
 
             if channel_id_str.is_empty() {
-                tracing::debug!(
-                    sender_id = %sender_id,
-                    target_ts = edit.target_sent_timestamp,
-                    preview = %new_body_preview,
-                    "Channel edit received but missing channel_id"
-                );
+                // Empty channel_id => channel-free DM (ServerDm) edit.
+                let _ = event_tx.send(InboxEvent::DmEdit {
+                    peer_id: *sender_id,
+                    target_sent_timestamp: edit.target_sent_timestamp,
+                    new_body,
+                });
             } else if let Ok(channel_id) = channel_id_str.parse::<ChannelId>() {
                 tracing::debug!(
                     sender_id = %sender_id,
@@ -1306,11 +1315,11 @@ pub fn dispatch_channel_control_content(
         content::Content::DataMessage(dm) => {
             if let Some(delete) = dm.delete {
                 if dm.channel_id.is_empty() {
-                    tracing::debug!(
-                        sender_id = %sender_id,
-                        target_ts = delete.target_sent_timestamp,
-                        "Channel delete for everyone received but missing channel_id"
-                    );
+                    // Empty channel_id => channel-free DM (ServerDm) delete-for-everyone.
+                    let _ = event_tx.send(InboxEvent::DmDeleteForEveryone {
+                        peer_id: *sender_id,
+                        target_sent_timestamp: delete.target_sent_timestamp,
+                    });
                 } else if let Ok(channel_id) = dm.channel_id.parse::<ChannelId>() {
                     tracing::debug!(
                         sender_id = %sender_id,
@@ -1354,12 +1363,12 @@ pub fn dispatch_channel_control_content(
         }
         content::Content::Receipt(receipt) => {
             if receipt.channel_id.is_empty() {
-                tracing::debug!(
-                    sender_id = %sender_id,
-                    receipt_type = receipt.r#type,
-                    timestamps = ?receipt.timestamps,
-                    "Channel receipt received but missing channel_id (might be DM)"
-                );
+                // Empty channel_id => channel-free DM (ServerDm) receipt.
+                let _ = event_tx.send(InboxEvent::DmReceipt {
+                    peer_id: *sender_id,
+                    receipt_type: receipt.r#type,
+                    timestamps: receipt.timestamps,
+                });
             } else if let Ok(channel_id) = receipt.channel_id.parse::<ChannelId>() {
                 tracing::debug!(
                     sender_id = %sender_id,

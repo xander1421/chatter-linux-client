@@ -33,7 +33,7 @@ pub use builders::{
     generate_padding, PADDING_GROUP_CONTROL, PADDING_MESSAGE, PADDING_LARGE,
     // DataMessage builders
     build_text_content, build_data_message_content, build_reply_content,
-    build_data_message_content_with_quote, build_data_message_content_with_channel,
+    build_data_message_content_with_quote,
     // Control message builders
     build_typing_content, build_typing_content_with_channel,
     build_read_receipt_content, build_read_receipt_content_with_channel,
@@ -226,29 +226,9 @@ impl MessageGateway {
             .map(|ptr| crate::domain::ids::AttachmentId::from_cdn_key(&ptr.cdn_key))
             .collect();
 
-        // Extract quote/reply context from DataMessage so reply bubbles survive reload
-        let reply_to = data_message.quote.as_ref()
-            .map(|q| MessageId::from_timestamp(q.id));
-        let reply_to_author_id = data_message.quote.as_ref()
-            .and_then(|q| {
-                if q.author_aci.is_empty() { None } else { q.author_aci.parse().ok() }
-            });
-        let reply_to_text = data_message.quote.as_ref()
-            .map(|q| q.text.clone())
-            .filter(|t| !t.is_empty());
-        let (reply_to_thumbnail, reply_to_thumbnail_mime) = data_message
-            .quote
-            .as_ref()
-            .and_then(|q| q.attachments.first())
-            .map(|qa| {
-                let thumb = (!qa.thumbnail.is_empty()).then(|| qa.thumbnail.clone());
-                let mime = (!qa.content_type.is_empty()).then(|| qa.content_type.clone());
-                (thumb, mime)
-            })
-            .unwrap_or((None, None));
-
-        // Create domain message with sender's timestamp for Signal-style dedup
-        let message = Message {
+        // Create domain message with sender's timestamp for Signal-style dedup.
+        // Reply fields are filled by the shared inbound-quote helper below.
+        let mut message = Message {
             id: message_id,
             conversation_id: channel_id,
             conversation_type,
@@ -257,11 +237,11 @@ impl MessageGateway {
             content,
             encrypted_content: None,
             thread_id: None,
-            reply_to,
-            reply_to_author_id,
-            reply_to_text,
-            reply_to_thumbnail,
-            reply_to_thumbnail_mime,
+            reply_to: None,
+            reply_to_author_id: None,
+            reply_to_text: None,
+            reply_to_thumbnail: None,
+            reply_to_thumbnail_mime: None,
             attachments,
             is_pinned: false,
             is_edited: false,
@@ -281,6 +261,13 @@ impl MessageGateway {
             targets_ai_bot: data_message.targets_ai_bot,
             delivery_status: String::new(),
         };
+
+        // Reply/quote context (shared with the MailboxDm inbound path).
+        crate::services::gateway::inbound::apply_inbound_quote(
+            &mut message,
+            data_message.quote.as_ref(),
+            &self.message_repo,
+        );
 
         // Store in repository
         self.message_repo.insert(&message)?;

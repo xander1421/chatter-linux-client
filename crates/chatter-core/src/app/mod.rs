@@ -12,13 +12,10 @@
 //!
 //! External code interacts via `ChatterClient`, not `CoreServices` directly.
 
-pub mod bootstrap;
-pub mod config;
 pub mod context;
 pub mod core_services;
 pub mod infrastructure;
 pub mod services;
-pub mod shutdown;
 
 pub use context::{AppContext, ContextError};
 pub use core_services::CoreServices;

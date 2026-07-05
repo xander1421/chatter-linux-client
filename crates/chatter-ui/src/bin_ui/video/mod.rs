@@ -146,6 +146,26 @@ pub fn start_hw_video(data: Vec<u8>) -> Option<f64> {
     }
 }
 
+/// Start hardware-accelerated video from an authenticated range decryptor
+/// (streaming — no full decrypt-to-memory). Returns duration, or None if the
+/// platform/backend can't stream (caller should fall back to software).
+pub fn start_hw_video_range(
+    dec: std::sync::Arc<chatter_core::services::attachment::CbcRangeDecryptor>,
+) -> Option<f64> {
+    #[cfg(target_os = "linux")]
+    {
+        gl_linux::start_gl_video_range(dec)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        // Range streaming is wired for the GL/Linux backend only so far; other
+        // platforms fall back to the in-memory path.
+        let _ = dec;
+        None
+    }
+}
+
 /// Stop hardware video playback.
 pub fn stop_hw_video() {
     #[cfg(target_os = "linux")]

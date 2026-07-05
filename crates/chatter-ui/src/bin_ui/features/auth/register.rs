@@ -247,6 +247,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 // Spawn UI event handlers (must be on UI thread)
                                 crate::bin_ui::features::modals::spawn_anon_group_invite_handler(weak_for_ui.clone(), &ui_ctx_for_handlers);
                                 crate::bin_ui::features::modals::spawn_anon_dm_request_handler(weak_for_ui.clone(), &ui_ctx_for_handlers);
+                                crate::bin_ui::features::modals::load_channel_invites(weak_for_ui.clone(), &ui_ctx_for_handlers);
 
                                 if let Some(w) = weak_for_ui.upgrade() {
                                     let model: Vec<slint::SharedString> = codes.iter()
@@ -263,6 +264,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             let _ = slint::invoke_from_event_loop(move || {
                                 crate::bin_ui::features::modals::spawn_anon_group_invite_handler(weak_for_ui.clone(), &ui_ctx_for_handlers);
                                 crate::bin_ui::features::modals::spawn_anon_dm_request_handler(weak_for_ui.clone(), &ui_ctx_for_handlers);
+                                crate::bin_ui::features::modals::load_channel_invites(weak_for_ui.clone(), &ui_ctx_for_handlers);
 
                                 if let Some(w) = weak_for_ui.upgrade() {
                                     w.set_register_loading(false);

@@ -2,7 +2,6 @@
 //!
 //! Decryption + decoding for GIFs and images. Keeps crypto/media work in service layer.
 
-use std::sync::mpsc;
 use std::time::Duration;
 
 use crate::domain::ids::AttachmentId;
@@ -128,34 +127,68 @@ impl AttachmentService {
         attachment_id: &AttachmentId,
     ) -> Result<ImageDecodeResult, AttachmentError> {
         let secure_buffer = self.decrypt_auto(attachment_id)?;
-        let (thumbnail, width, height, _duration_ms) =
-            crate::media::extract_video_thumbnail_from_memory(secure_buffer.as_slice())
-                .map_err(|e| {
-                    AttachmentError::DecryptionError(format!(
-                        "Video thumbnail extraction failed: {}",
-                        e
-                    ))
-                })?;
+        #[cfg(feature = "desktop-media")]
+        {
+            let (thumbnail, width, height, _duration_ms) =
+                crate::media::extract_video_thumbnail_from_memory(secure_buffer.as_slice())
+                    .map_err(|e| {
+                        AttachmentError::DecryptionError(format!(
+                            "Video thumbnail extraction failed: {}",
+                            e
+                        ))
+                    })?;
 
-        tracing::debug!(
-            attachment_id = %attachment_id,
-            width = width,
-            height = height,
-            "Extracted video thumbnail on receive"
-        );
+            tracing::debug!(
+                attachment_id = %attachment_id,
+                width = width,
+                height = height,
+                "Extracted video thumbnail on receive"
+            );
 
-        Ok(ImageDecodeResult {
-            image_bytes: thumbnail,
-            width,
-            height,
-        })
+            Ok(ImageDecodeResult {
+                image_bytes: thumbnail,
+                width,
+                height,
+            })
+        }
+        // GStreamer video processing is desktop-media only; mobile has no
+        // frame extractor, so the receiver simply renders without a thumbnail.
+        #[cfg(not(feature = "desktop-media"))]
+        {
+            let _ = secure_buffer;
+            Err(AttachmentError::DecryptionError(
+                "video thumbnail extraction unavailable on this platform".into(),
+            ))
+        }
     }
 
     /// Decode all frames from GIF bytes (blocking, for background thread).
     ///
     /// Call this from a background thread with the `gif_bytes` from `GifDecodeResult`.
     /// Returns all frames ready for animation registration.
+    ///
+    /// Fast path: a plain CPU GStreamer decode ([`decode_all_frames_cpu`]) —
+    /// pulls every frame immediately and honors the buffer stride. Measured
+    /// ~0.15s vs ~2.3s for the pure-Rust `image` crate on a 93-frame GIF, and
+    /// avoids the flaky GL pipeline that produced black frames. Falls back to
+    /// the `image` crate if GStreamer is unavailable or fails.
     pub fn decode_gif_all_frames(gif_bytes: &[u8]) -> Result<GifFullDecodeResult, AttachmentError> {
+        #[cfg(feature = "desktop-media")]
+        {
+            match crate::media::gif::decode_all_frames_cpu(gif_bytes) {
+                Ok(frames) if frames.len() > 1 => return Ok(GifFullDecodeResult { frames }),
+                Ok(_) => {} // 0/1 frame — fall through to the image crate
+                Err(e) => {
+                    tracing::warn!("GStreamer GIF decode failed ({e}), using image crate");
+                }
+            }
+        }
+
+        Self::decode_gif_all_frames_image(gif_bytes)
+    }
+
+    /// Pure-Rust `image` crate GIF decode — fallback for `decode_gif_all_frames`.
+    fn decode_gif_all_frames_image(gif_bytes: &[u8]) -> Result<GifFullDecodeResult, AttachmentError> {
         use image::codecs::gif::GifDecoder;
         use image::AnimationDecoder;
         use std::io::Cursor;
@@ -165,10 +198,8 @@ impl AttachmentService {
             AttachmentError::DecryptionError(format!("GIF decoder error: {}", e))
         })?;
 
-        let frames_iter = decoder.into_frames();
         let mut frames = Vec::new();
-
-        for frame_result in frames_iter {
+        for frame_result in decoder.into_frames() {
             let frame = match frame_result {
                 Ok(f) => f,
                 Err(e) => {
@@ -177,8 +208,7 @@ impl AttachmentService {
                 }
             };
 
-            let delay = frame.delay();
-            let (numer, denom) = delay.numer_denom_ms();
+            let (numer, denom) = frame.delay().numer_denom_ms();
             let delay_ms = if denom == 0 {
                 100
             } else {
@@ -187,7 +217,6 @@ impl AttachmentService {
 
             let buffer = frame.into_buffer();
             let (width, height) = buffer.dimensions();
-
             frames.push(GifFrame {
                 data: buffer.into_raw(),
                 width,
@@ -197,79 +226,5 @@ impl AttachmentService {
         }
 
         Ok(GifFullDecodeResult { frames })
-    }
-
-    /// Decode GIF frames progressively, sending to a channel.
-    ///
-    /// Call this from a background thread. Frames are sent as they're decoded,
-    /// allowing progressive animation updates.
-    pub fn decode_gif_progressive(
-        gif_bytes: Vec<u8>,
-        tx: mpsc::Sender<Vec<GifFrame>>,
-        batch_size: usize,
-    ) {
-        use image::codecs::gif::GifDecoder;
-        use image::AnimationDecoder;
-        use std::io::Cursor;
-
-        let cursor = Cursor::new(&gif_bytes);
-        let decoder = match GifDecoder::new(cursor) {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::warn!("Failed to create GIF decoder: {}", e);
-                return;
-            }
-        };
-
-        let frames_iter = decoder.into_frames();
-        let mut all_frames: Vec<GifFrame> = Vec::new();
-        let mut animation_started = false;
-
-        for frame_result in frames_iter {
-            let frame = match frame_result {
-                Ok(f) => f,
-                Err(e) => {
-                    tracing::warn!("GIF frame decode error: {}", e);
-                    continue;
-                }
-            };
-
-            let delay = frame.delay();
-            let (numer, denom) = delay.numer_denom_ms();
-            let delay_ms = if denom == 0 {
-                100
-            } else {
-                ((numer as u64) / (denom as u64)).max(20)
-            };
-
-            let buffer = frame.into_buffer();
-            let (width, height) = buffer.dimensions();
-
-            all_frames.push(GifFrame {
-                data: buffer.into_raw(),
-                width,
-                height,
-                delay: Duration::from_millis(delay_ms),
-            });
-
-            // Start animation early once we have enough frames
-            if !animation_started && all_frames.len() >= 2 {
-                animation_started = true;
-                if tx.send(all_frames.clone()).is_err() {
-                    tracing::debug!("GIF receiver dropped, stopping decode");
-                    return;
-                }
-            } else if animation_started && all_frames.len() % batch_size == 0 {
-                if tx.send(all_frames.clone()).is_err() {
-                    tracing::debug!("GIF receiver dropped, stopping decode");
-                    return;
-                }
-            }
-        }
-
-        // Final batch with all frames
-        if !all_frames.is_empty() {
-            let _ = tx.send(all_frames);
-        }
     }
 }

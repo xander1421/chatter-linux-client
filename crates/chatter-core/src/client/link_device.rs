@@ -28,15 +28,15 @@ impl ChatterClient {
     /// flow. Cheap to call repeatedly thereafter.
     pub(crate) fn link_device(&self) -> &Arc<LinkDeviceService> {
         self.link_device_service.get_or_init(|| {
-            let settings = Arc::new(SettingsRepository::new(self.ui.database.clone()));
-            let user_repo = Arc::new(UserRepository::new(self.ui.database.clone()));
+            let settings = Arc::new(SettingsRepository::new(self.services.database.clone()));
+            let user_repo = Arc::new(UserRepository::new(self.services.database.clone()));
             let key_store = self.signal().key_store.clone();
             Arc::new(LinkDeviceService::new(
-                self.ui.grpc_pool.clone(),
+                self.services.grpc_pool.clone(),
                 settings,
                 user_repo,
                 key_store,
-                self.ui.event_bus.clone(),
+                self.services.event_bus.clone(),
                 self.notifications().clone(),
             ))
         })
@@ -117,7 +117,6 @@ impl ChatterClient {
     ///
     /// Errors:
     /// - `ReauthFailed` — wrong password / PIN
-    /// - `ReauthUnsupportedForOidc` — OIDC user, no local password to check
     /// - other variants surface network / crypto failures
     pub async fn approve_link(
         &self,

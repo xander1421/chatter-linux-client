@@ -11,7 +11,6 @@ pub mod attachment;
 pub mod reaction;
 pub mod call;
 pub mod notification;
-pub mod ai;
 pub mod moderation;
 pub mod saved_message;
 pub mod draft;

@@ -44,6 +44,21 @@ impl ConversationType {
         }
     }
 
+    /// Whether an inbound message in this conversation should create a DM
+    /// sidebar entry for a new peer. Only the server-side DM flavors do.
+    pub fn creates_dm_sidebar_entry(&self) -> bool {
+        matches!(self, Self::ServerDm | Self::MailboxDm)
+    }
+
+    /// Anonymous conversations (NDSS'21 style, client-managed). Replies here
+    /// carry a self-contained quote snapshot and reference their parent via a
+    /// synthetic timestamp-derived `MessageId` that never matches the parent's
+    /// random stored id — so parent-by-id lookups (e.g. the "Original message
+    /// not found" check) are meaningless and must be skipped.
+    pub fn is_anon(&self) -> bool {
+        matches!(self, Self::AnonDm | Self::AnonGroup)
+    }
+
     /// Parse from database string representation.
     ///
     /// Returns an error for unknown conversation types instead of silently

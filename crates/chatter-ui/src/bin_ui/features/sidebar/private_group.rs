@@ -72,22 +72,12 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
         // Convert messages to display data
         let mut display_messages: Vec<crate::bin_ui::converters::MessageDisplayData> = Vec::with_capacity(messages.len());
         for msg in &messages {
-            let sender_id = msg.sender_id.as_ref();
-            let mut sender_name = sender_id
-                .map(|id| ui_ctx.display_name(id))
-                .unwrap_or_default();
-            let mut sender_avatar = None;
-
-            if let Some(sid) = sender_id {
-                if let Some(member) = ui_ctx.get_anon_group_member(&group_id, sid) {
-                    if let Some(ref name) = member.display_name {
-                        if !name.is_empty() {
-                            sender_name = name.clone();
-                        }
-                    }
-                    sender_avatar = member.avatar.clone();
-                }
-            }
+            // Name resolution (conversation-scoped) lives in core; avatar bytes
+            // are presentation and stay here.
+            let sender_name = ui_ctx.message_sender_display_name(msg);
+            let sender_avatar = msg.sender_id.as_ref()
+                .and_then(|sid| ui_ctx.get_anon_group_member(&group_id, sid))
+                .and_then(|member| member.avatar);
 
             // Resolve attachments from stored IDs
             let resolved_attachments: Vec<chatter_core::domain::Attachment> = msg.attachments
@@ -102,15 +92,9 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                 sender_avatar,
             );
 
-            // Resolve reply-to sender name (UserService handles fallback).
             if display_data.is_reply {
-                if let Some(ref author_id) = msg.reply_to_author_id {
-                    display_data.reply_to_sender_name = ui_ctx.display_name(author_id);
-                }
-                // Signal-Desktop parity: flag when the quoted parent is gone.
-                if let Some(ref parent_id) = msg.reply_to {
-                    display_data.reply_to_not_found = ui_ctx.reply_parent_missing(parent_id);
-                }
+                display_data.reply_to_sender_name = ui_ctx.reply_author_display_name(msg);
+                display_data.reply_to_not_found = ui_ctx.reply_parent_missing_for(msg);
             }
 
             display_messages.push(display_data);
@@ -260,18 +244,12 @@ async fn load_private_group_messages_internal(
 
     let mut display_messages = Vec::with_capacity(messages.len());
     for msg in &messages {
-        let sender_id = msg.sender_id.as_ref();
-        let mut sender_name = sender_id.map(|id| ui_ctx.display_name(id)).unwrap_or_default();
-        let mut sender_avatar = None;
-
-        if let Some(sid) = sender_id {
-            if let Some(member) = ui_ctx.get_anon_group_member(&group_id, sid) {
-                if let Some(ref name) = member.display_name {
-                    if !name.is_empty() { sender_name = name.clone(); }
-                }
-                sender_avatar = member.avatar.clone();
-            }
-        }
+        // Name resolution (conversation-scoped) lives in core; avatar bytes
+        // are presentation and stay here.
+        let sender_name = ui_ctx.message_sender_display_name(msg);
+        let sender_avatar = msg.sender_id.as_ref()
+            .and_then(|sid| ui_ctx.get_anon_group_member(&group_id, sid))
+            .and_then(|member| member.avatar);
 
         let resolved_attachments: Vec<_> = msg.attachments
             .iter()
@@ -286,13 +264,8 @@ async fn load_private_group_messages_internal(
         );
 
         if display_data.is_reply {
-            if let Some(ref author_id) = msg.reply_to_author_id {
-                display_data.reply_to_sender_name = ui_ctx.display_name(author_id);
-            }
-            // Signal-Desktop parity: flag when the quoted parent is gone.
-            if let Some(ref parent_id) = msg.reply_to {
-                display_data.reply_to_not_found = ui_ctx.reply_parent_missing(parent_id);
-            }
+            display_data.reply_to_sender_name = ui_ctx.reply_author_display_name(msg);
+            display_data.reply_to_not_found = ui_ctx.reply_parent_missing_for(msg);
         }
         display_messages.push(display_data);
     }

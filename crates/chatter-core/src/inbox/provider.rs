@@ -17,7 +17,7 @@ use crate::mailbox::timing::{TimingConfig, TimingObfuscation};
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::{AnonymousMailboxClient, MessageClient};
 use crate::network::validation::MessageValidationPipeline;
-use crate::services::message_gateway::MessageGateway;
+use crate::services::gateway::MessageGateway;
 use crate::services::pairwise::PairwiseService;
 use crate::storage::{AttachmentRepository, ChannelRepository, Database, MessageRepository, SettingsRepository, UserRepository};
 

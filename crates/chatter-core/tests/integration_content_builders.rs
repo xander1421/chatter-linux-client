@@ -10,7 +10,7 @@
 
 use chatter_core::proto::content_v1::{self, content};
 use chatter_core::services::{
-    build_text_content, build_data_message_content, build_reply_content, build_data_message_content_with_channel,
+    build_text_content, build_data_message_content, build_reply_content,
     build_typing_content, build_typing_content_with_channel,
     build_read_receipt_content, build_read_receipt_content_with_channel,
     build_delivery_receipt_content,
@@ -141,24 +141,6 @@ fn test_build_reply_content() {
             let quote = dm.quote.expect("Reply should have a quote");
             assert_eq!(quote.author_aci, "author-uuid-123");
             assert_eq!(quote.id, 1000000000);
-        }
-        other => panic!("Expected DataMessage, got {:?}", other),
-    }
-}
-
-/// Test building content scoped to a channel.
-///
-/// Architecture reference:
-///   Channel messages include the channel_id for routing.
-#[test]
-fn test_build_data_message_with_channel() {
-    let channel_id = "channel-uuid-456";
-    let content = build_data_message_content_with_channel("Hello channel", vec![], channel_id, 99);
-
-    match content.content.unwrap() {
-        content::Content::DataMessage(dm) => {
-            assert_eq!(dm.body, "Hello channel");
-            assert_eq!(dm.channel_id, channel_id);
         }
         other => panic!("Expected DataMessage, got {:?}", other),
     }

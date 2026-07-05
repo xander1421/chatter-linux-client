@@ -41,6 +41,7 @@ impl MessageService {
         text: &str,
         attachment_pointers: Vec<AttachmentPointer>,
         sent_at: u64,
+        quote: Option<&crate::services::gateway::outgoing::QuoteIntent>,
     ) -> Result<DmSendResult, MessageError> {
         let trimmed = text.trim();
         if trimmed.is_empty() && attachment_pointers.is_empty() {
@@ -53,6 +54,7 @@ impl MessageService {
             peer_id = %peer_id,
             text_len = trimmed.len(),
             attachment_count = attachment_pointers.len(),
+            is_reply = quote.is_some(),
             sent_at,
             "MessageService: send_server_dm called"
         );
@@ -62,24 +64,34 @@ impl MessageService {
             .map(|p| AttachmentId::from_cdn_key(&p.cdn_key))
             .collect();
 
-        // Strip inline thumbnails before sealing. A DM rides the device-inbox
-        // envelope, which is capped at 8192 bytes; an embedded image/video
-        // thumbnail (tens–hundreds of KB) blows past that ("sealed message too
-        // large"). The full blob is already on the CDN — the recipient fetches
-        // it (and derives its own thumbnail) from the pointer's cdn_key.
-        let attachment_pointers: Vec<AttachmentPointer> = attachment_pointers
-            .into_iter()
-            .map(|mut p| {
-                p.thumbnail.clear();
-                p
-            })
-            .collect();
+        // Resolve the quoted message once via the shared assembler (same path
+        // the mailbox DM uses). Carrying the quote on the wire is what lets the
+        // receiver's `store_data_message` rebuild the reply bubble.
+        let reply_ctx = quote.map(|q| {
+            let parts = self.assemble_reply_parts(
+                &q.target_author_id,
+                q.target_timestamp,
+                q.target_preview.as_deref().unwrap_or(""),
+            );
+            (q, parts)
+        });
 
-        let content = crate::services::build_data_message_content(
-            trimmed,
-            attachment_pointers,
-            sent_at,
-        );
+        // Attachment pointers are compact by construction — the thumbnail is a
+        // separate CDN sidecar (thumbnail_cdn_key), not inline, and no field
+        // scales with file size — so the sealed body always fits the device-inbox
+        // padding budget (≤4096-byte buckets, 8192-byte hard cap) on every path.
+        let content = match &reply_ctx {
+            Some((q, parts)) => crate::services::build_reply_content(
+                trimmed,
+                attachment_pointers,
+                &q.target_author_id.to_string(),
+                q.target_timestamp,
+                q.target_preview.as_deref().unwrap_or(""),
+                parts.quote_attachments.clone(),
+                sent_at,
+            ),
+            None => crate::services::build_data_message_content(trimmed, attachment_pointers, sent_at),
+        };
 
         // Signal-style profile-key exchange: piggyback OUR profile key on the
         // DataMessage so the friend can decrypt our encrypted display name +
@@ -106,6 +118,16 @@ impl MessageService {
             } else {
                 MessageContent::Mixed(MixedContent::new(trimmed.to_string(), attachment_ids.clone()))
             };
+        }
+
+        // Persist reply metadata on the local echo so the sender's bubble keeps
+        // its quote across reloads (mirrors the wire Quote we just sent).
+        if let Some((q, parts)) = reply_ctx {
+            message.reply_to = Some(parts.reply_to);
+            message.reply_to_author_id = Some(q.target_author_id);
+            message.reply_to_text = parts.reply_to_text;
+            message.reply_to_thumbnail = parts.reply_to_thumbnail;
+            message.reply_to_thumbnail_mime = parts.reply_to_thumbnail_mime;
         }
 
         if let Err(e) = self.message_repo.insert(&message) {

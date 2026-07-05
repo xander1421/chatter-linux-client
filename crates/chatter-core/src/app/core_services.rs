@@ -29,7 +29,7 @@ use crate::services::device_service::DeviceService;
 use crate::services::draft_service::DraftService;
 use crate::services::mailbox_manager::MailboxManager;
 use crate::services::message::MessageService;
-use crate::services::message_gateway::MessageGateway;
+use crate::services::gateway::MessageGateway;
 use crate::services::pin_service::PinService;
 use crate::services::session_service::SessionService;
 use crate::services::signal_service::SignalService;

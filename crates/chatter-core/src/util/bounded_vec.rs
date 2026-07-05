@@ -5,9 +5,6 @@
 use std::collections::{HashSet, VecDeque};
 use std::hash::Hash;
 
-/// Bounded vector with maximum size.
-pub struct BoundedVec;
-
 /// Bounded hash set with FIFO eviction.
 ///
 /// Tracks insertion order to evict oldest entries when capacity is reached.

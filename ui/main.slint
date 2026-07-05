@@ -3,12 +3,14 @@
 
 import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem } from "app.slint";
 import { JarvisGlobal } from "jarvis/jarvis_global.slint";
+import { TextFormat } from "chat/message_composer.slint";
 import { AnonMode } from "anon_mode/anon_mode_global.slint";
 import { Typography } from "theme/typography.slint";
 
 // Re-export all types for Rust binding
 export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem }
 export { JarvisGlobal }
+export { TextFormat }
 export { AnonMode }
 
 export component MainWindow inherits Window {
@@ -360,12 +362,15 @@ export component MainWindow inherits Window {
     in property <[FriendRequestData]> friends-sent-requests <=> app.friends-sent-requests;
     in property <[FriendRequestData]> friends-private-requests <=> app.friends-private-requests;
     in property <[FriendRequestData]> friends-group-invites <=> app.friends-group-invites;
+    in property <[FriendRequestData]> friends-channel-invites <=> app.friends-channel-invites;
     in property <[BlockedUserData]> friends-blocked-users <=> app.friends-blocked-users;
     in property <bool> friends-loading <=> app.friends-loading;
     // Pending message requests count (for sidebar badge)
     in property <int> pending-message-requests <=> app.pending-message-requests;
     // Pending group invites count (for sidebar badge)
     in property <int> pending-group-invites <=> app.pending-group-invites;
+    // Pending channel invites count (for sidebar badge)
+    in property <int> pending-channel-invites <=> app.pending-channel-invites;
     // Friend code (privacy-first discovery)
     in-out property <string> friends-my-code <=> app.friends-my-code;
     in-out property <string> friends-code-input <=> app.friends-code-input;
@@ -496,7 +501,6 @@ export component MainWindow inherits Window {
     callback go-to-register <=> app.go-to-register;
     callback go-to-login <=> app.go-to-login;
     callback go-to-recovery <=> app.go-to-recovery;
-    callback sso-login <=> app.sso-login;
     callback go-to-link-device <=> app.go-to-link-device;
 
     // ========== Link Device (new device side) ==========
@@ -578,7 +582,6 @@ export component MainWindow inherits Window {
     callback remove-attachment <=> app.remove-attachment;
     callback typing-changed <=> app.typing-changed;
     callback process-text <=> app.process-text;
-    callback format-text <=> app.format-text;
     callback scroll-to-bottom-clicked <=> app.scroll-to-bottom-clicked;
     callback start-voice-call <=> app.start-voice-call;
     callback start-video-call <=> app.start-video-call;
@@ -633,10 +636,14 @@ export component MainWindow inherits Window {
     callback friends-block-private-request <=> app.friends-block-private-request;
     callback friends-accept-group-invite <=> app.friends-accept-group-invite;
     callback friends-decline-group-invite <=> app.friends-decline-group-invite;
+    callback friends-accept-channel-invite <=> app.friends-accept-channel-invite;
+    callback friends-decline-channel-invite <=> app.friends-decline-channel-invite;
     // Message requests (anon DM)
     callback message-requests-clicked <=> app.message-requests-clicked;
     // Group invites (anon groups)
     callback group-invites-clicked <=> app.group-invites-clicked;
+    // Channel invites
+    callback channel-invites-clicked <=> app.channel-invites-clicked;
     callback forward-message <=> app.forward-message;
     callback revoke-session <=> app.revoke-session;
     callback revoke-all-sessions <=> app.revoke-all-sessions;

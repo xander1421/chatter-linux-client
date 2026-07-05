@@ -5,6 +5,7 @@
 
 mod anon_dm_request;
 mod anon_group_invite;
+mod channel_invites;
 mod channel_settings;
 mod create_channel;
 mod friend_requests;
@@ -23,6 +24,7 @@ use crate::MainWindow;
 
 pub use anon_dm_request::spawn_anon_dm_request_handler;
 pub use anon_group_invite::{spawn_anon_group_invite_handler, wire_group_invite_callbacks, pending_group_invite_count};
+pub use channel_invites::load_channel_invites;
 pub use channel_settings::{open_channel_settings, open_invite_member_modal};
 pub use profile::open_user_profile;
 
@@ -38,5 +40,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     sessions::wire_session_callbacks(window, ui_ctx);
     channel_settings::wire_channel_settings(window, ui_ctx);
     anon_group_invite::wire_group_invite_callbacks(window, ui_ctx);
+    channel_invites::wire_channel_invite_callbacks(window, ui_ctx);
+    channel_invites::wire_channel_invites_clicked(window, ui_ctx);
     link_approve::wire(window, ui_ctx);
 }

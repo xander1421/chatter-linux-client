@@ -98,12 +98,7 @@ pub async fn set_user_status(ui_ctx: &Arc<ChatterClient>, status: &str) {
 /// Get current presence status as string for UI
 pub async fn get_current_status() -> String {
     let current = *CURRENT_PRESENCE.read().await;
-    match current {
-        PresenceStatus::Online => "online".to_string(),
-        PresenceStatus::Away => "away".to_string(),
-        PresenceStatus::DoNotDisturb => "dnd".to_string(),
-        PresenceStatus::Offline => "offline".to_string(),
-    }
+    current.as_str().to_string()
 }
 
 /// Start idle detection background task

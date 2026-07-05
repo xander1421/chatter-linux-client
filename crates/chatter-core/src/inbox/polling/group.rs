@@ -17,7 +17,7 @@ use crate::inbox::events::InboxEvent;
 use crate::mailbox::group::{GroupCoordinator, GroupFanout};
 use crate::proto::chat_v1::SealedSenderMessage;
 use crate::services::attachment::AttachmentService;
-use crate::services::message_gateway::{MessageGateway, SealedSenderResult};
+use crate::services::gateway::{MessageGateway, SealedSenderResult};
 use crate::storage::{AttachmentRepository, ChannelRepository};
 
 /// Poll all group mailboxes for new messages.

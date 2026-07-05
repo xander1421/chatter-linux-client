@@ -33,7 +33,7 @@ pub use crate::storage::AttachmentRepository;
 pub use crate::storage::settings_keys;
 
 // Gateway builders and types
-pub use crate::services::message_gateway::{
+pub use crate::services::gateway::{
     MessageGateway,
     build_text_content, build_call_key_offer, build_call_key_answer,
     build_group_call_key_content, build_call_hangup_content, CallHangupReason,

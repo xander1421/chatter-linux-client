@@ -59,6 +59,32 @@ impl ChatterClient {
         self.users().get_display_name(user_id)
     }
 
+    /// Resolve a display name *within a conversation*, so anonymous channels
+    /// never leak the global profile name. In an anon group the per-group
+    /// member name wins; everywhere else this is just `display_name`.
+    ///
+    /// `display_name` alone prefers the global profile, which defeats
+    /// anonymity when the sender is also a known contact — this is what the
+    /// message sender and reply-quote author must use in anon conversations.
+    pub fn display_name_in(
+        &self,
+        conv_type: &crate::domain::message::ConversationType,
+        conv_id: &crate::domain::ids::ChannelId,
+        user_id: &crate::domain::ids::UserId,
+    ) -> String {
+        if *conv_type == crate::domain::message::ConversationType::AnonGroup {
+            let group_id =
+                crate::domain::anon_group::AnonGroupId::from_uuid(*conv_id.as_uuid());
+            if let Some(name) = self
+                .get_anon_group_member_display_name(&group_id, user_id)
+                .filter(|n| !n.is_empty())
+            {
+                return name;
+            }
+        }
+        self.display_name(user_id)
+    }
+
     /// Our own avatar bytes (raw image data stored in settings).
     pub fn my_avatar(&self) -> Option<Vec<u8>> {
         self.anon_dms().get_my_avatar()
@@ -363,7 +389,7 @@ impl ChatterClient {
             return true;
         }
         // Server-side
-        self.ui.user_state.is_blocked(id)
+        self.services.user_state.is_blocked(id)
     }
 
     pub async fn send_anon_dm_presence_update(
@@ -441,6 +467,18 @@ impl ChatterClient {
         self.attachments().decrypt_auto(attachment_id)
     }
 
+    /// Open a random-access decryptor for streaming playback (video/audio).
+    ///
+    /// Authenticates the whole file, then serves decrypted ranges on demand so
+    /// the player starts without a full decrypt-to-memory. See
+    /// `AttachmentService::open_range_decryptor`.
+    pub fn open_attachment_range(
+        &self,
+        attachment_id: &crate::domain::ids::AttachmentId,
+    ) -> Result<crate::services::attachment::CbcRangeDecryptor, crate::services::attachment::AttachmentError> {
+        self.attachments().open_range_decryptor(attachment_id)
+    }
+
     pub async fn download_attachment_to_filesystem(
         &self,
         attachment_id: &crate::domain::ids::AttachmentId,
@@ -511,6 +549,15 @@ impl ChatterClient {
         attachment_id: &crate::domain::ids::AttachmentId,
     ) -> Option<(Vec<u8>, u32, u32)> {
         self.attachments().get_preview_image(attachment_id)
+    }
+
+    /// Fetch + decrypt the thumbnail sidecar for a received attachment, caching
+    /// the bytes locally. Gives a preview without downloading the full blob.
+    pub async fn ensure_attachment_thumbnail(
+        &self,
+        attachment_id: &crate::domain::ids::AttachmentId,
+    ) -> Option<Vec<u8>> {
+        self.attachments().ensure_thumbnail(attachment_id).await
     }
 
     pub async fn upload_attachment_to_cdn_encrypted(

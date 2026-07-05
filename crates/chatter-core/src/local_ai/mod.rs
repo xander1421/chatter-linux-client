@@ -4,8 +4,6 @@
 
 pub mod backend;
 pub mod ollama;
-pub mod vllm;
-pub mod mlc_llm;
 pub mod model_manager;
 pub mod embeddings;
 pub mod vector_store;

@@ -43,6 +43,11 @@ enum AudioSource {
         data: Arc<Vec<u8>>,
         mime_type: Option<String>,
     },
+    /// Encrypted attachment decrypted on demand (no full plaintext in memory).
+    Range {
+        dec: Arc<crate::services::attachment::CbcRangeDecryptor>,
+        mime_type: Option<String>,
+    },
 }
 
 /// Audio player using rodio.
@@ -157,6 +162,35 @@ impl AudioPlayer {
         Ok(duration)
     }
 
+    /// Loads audio from an authenticated range decryptor (streaming).
+    ///
+    /// Decrypts on demand — no full plaintext buffer is held for the lifetime of
+    /// playback (unlike `load_from_memory`). Used for large audio attachments.
+    pub fn load_from_range(
+        &mut self,
+        dec: Arc<crate::services::attachment::CbcRangeDecryptor>,
+        mime_type: Option<String>,
+    ) -> Result<Duration, MediaError> {
+        self.stop();
+
+        let reader = crate::services::attachment::CbcRangeReader::new(dec.clone());
+        let byte_len = reader.len();
+        let decoder = self.build_seekable_decoder(reader, byte_len, mime_type.as_deref())?;
+        let duration = decoder.total_duration().unwrap_or(Duration::ZERO);
+
+        tracing::info!(
+            data_size = byte_len,
+            ?duration,
+            ?mime_type,
+            "Loaded audio for streaming playback (range decryptor)"
+        );
+
+        self.current_source = Some(AudioSource::Range { dec, mime_type });
+        self.current_duration = Some(duration);
+
+        Ok(duration)
+    }
+
     /// Build a decoder with seeking enabled.
     fn build_seekable_decoder<R: Read + Seek + Send + Sync + 'static>(
         &self,
@@ -225,6 +259,13 @@ impl AudioPlayer {
                 let byte_len = data.len() as u64;
                 let cursor = Cursor::new(data.as_ref().clone());
                 let decoder = self.build_seekable_decoder(cursor, byte_len, mime_type.as_deref())?;
+                sink.append(decoder);
+            }
+            AudioSource::Range { ref dec, ref mime_type } => {
+                let reader = crate::services::attachment::CbcRangeReader::new(dec.clone());
+                let byte_len = reader.len();
+                tracing::info!(data_size = byte_len, "Streaming audio from range decryptor");
+                let decoder = self.build_seekable_decoder(reader, byte_len, mime_type.as_deref())?;
                 sink.append(decoder);
             }
         }

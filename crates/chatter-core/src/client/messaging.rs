@@ -127,6 +127,78 @@ impl ChatterClient {
         self.messages().reply_parent_missing(parent)
     }
 
+    // ── Resolved display fields (all business rules live here, not in the UI) ──
+    //
+    // The presentation layer copies these straight onto its display struct and
+    // must not branch on conversation type or re-resolve names itself.
+
+    /// Sender display name, scoped to the conversation so anon channels show
+    /// the per-channel name instead of the global profile. `None` sender →
+    /// "Anonymous".
+    pub fn message_sender_display_name(&self, msg: &crate::domain::message::Message) -> String {
+        match msg.sender_id {
+            Some(ref id) => self.display_name_in(&msg.conversation_type, &msg.conversation_id, id),
+            None => "Anonymous".to_string(),
+        }
+    }
+
+    /// Reply-quote author display name, scoped like the sender. Empty when the
+    /// message is not a reply or carries no quoted author.
+    pub fn reply_author_display_name(&self, msg: &crate::domain::message::Message) -> String {
+        match msg.reply_to_author_id {
+            Some(ref id) => self.display_name_in(&msg.conversation_type, &msg.conversation_id, id),
+            None => String::new(),
+        }
+    }
+
+    /// Whether to show the "Original message not found" warning for a reply.
+    ///
+    /// Anon replies carry a self-contained quote snapshot and reference their
+    /// parent via a synthetic timestamp-derived id that never matches the
+    /// parent's stored id — so the by-id lookup is meaningless and we never
+    /// warn. Non-anon replies use the real parent lookup.
+    pub fn reply_parent_missing_for(&self, msg: &crate::domain::message::Message) -> bool {
+        match msg.reply_to {
+            Some(ref parent) if !msg.conversation_type.is_anon() => self.reply_parent_missing(parent),
+            _ => false,
+        }
+    }
+
+    /// Sender avatar bytes for a message, resolved per conversation type
+    /// (anon-DM own-vs-peer, anon-group member). `None` for server channels/DMs,
+    /// whose avatars come from the profile path.
+    pub fn message_sender_avatar(&self, msg: &crate::domain::message::Message) -> Option<Vec<u8>> {
+        use crate::domain::message::ConversationType;
+        match msg.conversation_type {
+            ConversationType::AnonDm => {
+                let dm_id = crate::domain::AnonDmId::from_uuid(*msg.conversation_id.as_uuid());
+                let is_own = self
+                    .session_current_user_id()
+                    .map(|uid| msg.sender_id == Some(uid))
+                    .unwrap_or(false);
+                if is_own {
+                    self.my_avatar()
+                } else {
+                    self.get_anon_dm_conversation(&dm_id).and_then(|d| d.peer_avatar)
+                }
+            }
+            ConversationType::AnonGroup => {
+                let group_id =
+                    crate::domain::anon_group::AnonGroupId::from_uuid(*msg.conversation_id.as_uuid());
+                let sid = msg.sender_id?;
+                self.get_anon_group_member(&group_id, &sid).and_then(|m| m.avatar)
+            }
+            _ => None,
+        }
+    }
+
+    /// Stable `User <id8>` placeholder for a user with no resolvable name.
+    /// Single source of truth so the UI never hand-rolls the truncation.
+    pub fn fallback_display_name(&self, user_id: &crate::domain::ids::UserId) -> String {
+        let id = user_id.to_string();
+        format!("User {}", &id[..8.min(id.len())])
+    }
+
     pub fn get_channel_local(
         &self,
         channel_id: &crate::domain::ids::ChannelId,
@@ -460,6 +532,38 @@ impl ChatterClient {
         self.channels().invite_user(channel_id, invitee_id, message).await
     }
 
+    /// List the current user's pending channel invitations (server scopes to
+    /// PENDING + unexpired). Best-effort — empty on failure.
+    pub async fn list_pending_channel_invites(
+        &self,
+    ) -> Vec<crate::proto::chat_v1::PendingChannelInvite> {
+        let mut client = self.services.grpc_pool.channel_client();
+        match client.list_pending_invites().await {
+            Ok(resp) => resp.invites,
+            Err(e) => {
+                tracing::debug!(error = %e, "list_pending_channel_invites failed");
+                Vec::new()
+            }
+        }
+    }
+
+    /// Accept or decline a channel invitation; drives the response stream to
+    /// completion.
+    pub async fn respond_to_channel_invite(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        accept: bool,
+    ) -> Result<(), crate::services::channel::ChannelError> {
+        use futures::StreamExt;
+        let cid = channel_id.to_string();
+        let mut client = self.services.grpc_pool.channel_client();
+        let mut stream = client.respond_to_invite(&cid, accept).await?;
+        while let Some(ev) = stream.next().await {
+            ev?;
+        }
+        Ok(())
+    }
+
     /// Build the list of people the user can invite to `channel_id`: their DM
     /// contacts (regular server DMs + anon DMs — the same set shown in the
     /// sidebar), deduped, with `already_member` flagged for current members.
@@ -620,6 +724,20 @@ pub struct InviteCandidate {
     /// Peer avatar bytes (decrypted profile image), empty when none cached.
     pub avatar_bytes: Vec<u8>,
     pub already_member: bool,
+}
+
+impl InviteCandidate {
+    /// Whether this candidate matches a search query (case-insensitive
+    /// substring over display name or username). Keeps the "what fields a
+    /// query matches" rule out of the UI filter.
+    pub fn matches(&self, query: &str) -> bool {
+        let needle = query.trim().to_lowercase();
+        if needle.is_empty() {
+            return true;
+        }
+        self.display_name.to_lowercase().contains(&needle)
+            || self.username.to_lowercase().contains(&needle)
+    }
 }
 
 /// UI-facing send result returned by [`ChatterClient::send_message_ui`].

@@ -6,9 +6,7 @@ use slint::{Model, ModelRc, VecModel, Weak};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::{ChannelId, UserId};
-use chatter_core::domain::message::{ConversationType, Message};
-use chatter_core::domain::anon_dm::AnonDmId;
-use chatter_core::domain::anon_group::AnonGroupId;
+use chatter_core::domain::message::Message;
 use crate::MainWindow;
 use crate::MessageItemData;
 
@@ -27,33 +25,11 @@ pub(super) fn handle_message_received(
     let timestamp = message.sent_at;
     let conv_type = message.conversation_type.clone();
 
-    // Resolve sender display name (UserService handles profile / anon DM peer
-    // / anon group member fallback — see `UserService::get_display_name`).
-    let sender_name = sender_id
-        .map(|sid| ui_ctx.display_name(&sid))
-        .unwrap_or_else(|| "Anonymous".to_string());
+    // Sender name resolution (conversation-scoped) lives in core.
+    let sender_name = ui_ctx.message_sender_display_name(&message);
 
-    // Resolve sender avatar (conversation-type specific).
-    let sender_avatar = match conv_type {
-        ConversationType::AnonDm => {
-            let dm_id = AnonDmId::from_uuid(*conversation_id.as_uuid());
-            let is_own = ui_ctx
-                .session_current_user_id()
-                .map(|uid| sender_id == Some(uid))
-                .unwrap_or(false);
-            if is_own {
-                ui_ctx.my_avatar()
-            } else {
-                ui_ctx.get_anon_dm_conversation(&dm_id).and_then(|d| d.peer_avatar)
-            }
-        }
-        ConversationType::AnonGroup => {
-            let group_id = AnonGroupId::from_uuid(*conversation_id.as_uuid());
-            let sid = sender_id.unwrap_or_else(UserId::new);
-            ui_ctx.get_anon_group_member(&group_id, &sid).and_then(|m| m.avatar)
-        }
-        _ => None,
-    };
+    // Sender avatar resolution (conversation-scoped) lives in core.
+    let sender_avatar = ui_ctx.message_sender_avatar(&message);
 
     // Resolve attachments from attachment service
     let resolved_attachments: Vec<_> = message.attachments.iter()
@@ -67,15 +43,10 @@ pub(super) fn handle_message_received(
     );
     display_data.decode_attachment_thumbnails();
 
-    // Resolve reply-to sender name (UserService fallback handles all types).
+    // Reply author name + "not found" decision both live in core.
     if display_data.is_reply {
-        if let Some(ref author_id) = message.reply_to_author_id {
-            display_data.reply_to_sender_name = ui_ctx.display_name(author_id);
-        }
-        // Signal-Desktop parity: flag when the quoted parent is missing/deleted.
-        if let Some(ref parent_id) = message.reply_to {
-            display_data.reply_to_not_found = ui_ctx.reply_parent_missing(parent_id);
-        }
+        display_data.reply_to_sender_name = ui_ctx.reply_author_display_name(&message);
+        display_data.reply_to_not_found = ui_ctx.reply_parent_missing_for(&message);
     }
 
     let current_user_id = ui_ctx.auth_state().get().current_user_id
@@ -149,7 +120,7 @@ pub(super) fn handle_message_received(
             let mut new_msg = display_data.to_slint_with_user(&current_user_id);
             
             // Only non-anon messages get auto-delivered status (anon has its own delivery logic)
-            if conv_type != ConversationType::AnonDm && conv_type != ConversationType::AnonGroup {
+            if !conv_type.is_anon() {
                 new_msg.delivery_status = "delivered".into();
             }
 
@@ -206,7 +177,7 @@ pub(super) fn handle_message_received(
         );
 
         // Create DM sidebar entry if new peer (non-anon only)
-        if conv_type == ConversationType::ServerDm || conv_type == ConversationType::MailboxDm {
+        if conv_type.creates_dm_sidebar_entry() {
             if let Some(peer_id) = peer_id_opt {
                 if !crate::bin_ui::features::sidebar::sidebar_has_dm(&w, &peer_id) {
                     crate::bin_ui::features::sidebar::create_dm_sidebar_entry(

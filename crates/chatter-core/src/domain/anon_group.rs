@@ -102,6 +102,16 @@ impl AnonGroupRole {
         self as i32
     }
 
+    /// UI/string token for this role. Single source of truth so the UI never
+    /// re-maps the enum.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Member => "member",
+            Self::Admin => "admin",
+            Self::Owner => "owner",
+        }
+    }
+
     /// Check if this role can kick members.
     pub fn can_kick(&self) -> bool {
         matches!(self, Self::Admin | Self::Owner)

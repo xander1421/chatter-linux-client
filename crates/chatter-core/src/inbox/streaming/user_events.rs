@@ -15,6 +15,7 @@ use crate::proto::chat_v1::FriendStatus;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::proto::chat_v1::{friend_requests_filter, user_event};
 use crate::proto::UserPresence;
+use crate::domain::ids::UserId;
 use crate::services::user::conversions::proto_to_domain_profile;
 use crate::storage::repositories::UserRepository;
 
@@ -38,6 +39,9 @@ pub async fn spawn_user_events_stream(
     domain_tx: Option<broadcast::Sender<DomainEvent>>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
+    // Parsed once for the friend-key lookup that decrypts inbound profile names.
+    let current_user_id = user_id.parse::<UserId>().ok();
+
     tokio::spawn(async move {
         loop {
             // Check for shutdown
@@ -69,6 +73,7 @@ pub async fn spawn_user_events_stream(
                                             &grpc_pool,
                                             &event_tx,
                                             &user_repo,
+                                            current_user_id.as_ref(),
                                             domain_tx.as_ref(),
                                         ).await;
                                     }
@@ -103,12 +108,44 @@ pub async fn spawn_user_events_stream(
     });
 }
 
+/// Resolve a profile display name that arrives on the user-events stream.
+///
+/// Server-stored display names are encrypted with the owner's profile key, so
+/// the raw `UserProfile.display_name` here is base64 ciphertext and must never
+/// be persisted or shown. We decrypt it when it belongs to a friend whose
+/// profile key we hold; otherwise we keep the name already in local storage
+/// (this covers our own profile, whose plaintext is set at login) and finally
+/// fall back to a stable `User <id>` placeholder.
+fn resolve_stream_display_name(
+    user_repo: &UserRepository,
+    current_user_id: Option<&UserId>,
+    target: &UserId,
+    raw: &str,
+) -> String {
+    // Decrypt with the friend's profile key; else keep the name we already
+    // have; else a placeholder. Never persist the undecryptable server value.
+    current_user_id
+        .and_then(|cur| {
+            crate::services::user::decrypt_friend_display_name(user_repo, cur, target, raw)
+        })
+        .or_else(|| {
+            user_repo
+                .get_profile(target)
+                .ok()
+                .flatten()
+                .map(|p| p.display_name)
+                .filter(|n| !n.is_empty())
+        })
+        .unwrap_or_else(|| crate::services::user::friend_display_name_placeholder(target))
+}
+
 /// Handle a user event from the stream.
 async fn handle_user_event(
     event: crate::proto::chat_v1::UserEvent,
     grpc_pool: &Arc<GrpcClientPool>,
     event_tx: &broadcast::Sender<InboxEvent>,
     user_repo: &Arc<UserRepository>,
+    current_user_id: Option<&UserId>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
 ) {
     match event.event {
@@ -142,13 +179,36 @@ async fn handle_user_event(
                 "Profile updated event received"
             );
 
-            let profile = match proto_to_domain_profile(&proto_profile) {
+            let mut profile = match proto_to_domain_profile(&proto_profile) {
                 Ok(p) => p,
                 Err(e) => {
                     tracing::warn!(error = %e, "Failed to convert proto profile");
                     return;
                 }
             };
+
+            // `proto_to_domain_profile` copies the raw server value, which is
+            // ciphertext (display names are stored encrypted). Resolve it to a
+            // safe name so we never persist/show ciphertext.
+            profile.display_name = resolve_stream_display_name(
+                user_repo,
+                current_user_id,
+                &profile.user_id,
+                &proto_profile.display_name,
+            );
+
+            // Status is E2E-encrypted too — decrypt with the friend's key, else
+            // drop it (never persist/emit ciphertext).
+            profile.status_message = current_user_id
+                .and_then(|cur| {
+                    crate::services::user::decrypt_friend_status(
+                        user_repo,
+                        cur,
+                        &profile.user_id,
+                        &proto_profile.status_message,
+                    )
+                })
+                .map(crate::domain::user::StatusMessage::new);
 
             if let Err(e) = user_repo.upsert_profile(&profile) {
                 tracing::warn!(error = %e, user_id = %profile.user_id, "Failed to upsert profile");

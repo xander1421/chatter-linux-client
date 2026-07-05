@@ -192,6 +192,7 @@ async fn finish_linked(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClien
 
     crate::bin_ui::features::modals::spawn_anon_group_invite_handler(weak.clone(), ui_ctx);
     crate::bin_ui::features::modals::spawn_anon_dm_request_handler(weak.clone(), ui_ctx);
+    crate::bin_ui::features::modals::load_channel_invites(weak.clone(), ui_ctx);
 
     {
         let mut domain_rx = ui_ctx.subscribe_events();

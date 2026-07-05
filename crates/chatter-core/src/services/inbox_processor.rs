@@ -926,6 +926,48 @@ impl InboxEventProcessor {
             }
 
             // =================================================================
+            // Typing indicators — bridge inbox events to TypingStarted/Stopped
+            // domain events (consumed by events/handlers.rs → chat state → UI).
+            // action: 1 = Started, else Stopped. DM typing is keyed by the
+            // peer's derived channel_id (matches the stored ServerDm rows).
+            // =================================================================
+            InboxEvent::DmTyping { peer_id, action } => {
+                let channel_id = crate::domain::ids::ChannelId::from(*peer_id);
+                self.event_bus.emit_domain(if *action == 1 {
+                    DomainEvent::TypingStarted { user_id: *peer_id, channel_id }
+                } else {
+                    DomainEvent::TypingStopped { user_id: *peer_id, channel_id }
+                });
+                false
+            }
+
+            InboxEvent::ChannelTyping { channel_id, sender_id, action } => {
+                self.event_bus.emit_domain(if *action == 1 {
+                    DomainEvent::TypingStarted { user_id: *sender_id, channel_id: *channel_id }
+                } else {
+                    DomainEvent::TypingStopped { user_id: *sender_id, channel_id: *channel_id }
+                });
+                false
+            }
+
+            // DM read/delivery receipt → update stored delivery_status, same as
+            // the channel path above (ServerDm rows keyed by peer channel_id).
+            InboxEvent::DmReceipt { peer_id, receipt_type, timestamps } => {
+                let status = match receipt_type {
+                    1 => "delivered",
+                    2 | 3 => "read", // read + viewed both surface as read
+                    _ => "sent",
+                };
+                let channel_id = crate::domain::ids::ChannelId::from(*peer_id);
+                for ts in timestamps {
+                    let _ = self.message_service.update_delivery_status_by_timestamp(
+                        &channel_id, &crate::domain::message::ConversationType::ServerDm, *ts, status,
+                    );
+                }
+                false
+            }
+
+            // =================================================================
             // Friend-request fan-out — translate the inbox-layer notification
             // into a UI-visible DomainEvent. Without this bridge the user
             // events stream fires `InboxEvent::FriendRequestsUpdated` but the

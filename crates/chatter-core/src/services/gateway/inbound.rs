@@ -8,9 +8,43 @@
 //! Phase 5 of messaging consolidation: inbound normalization (successful paths).
 
 use crate::domain::ids::{ChannelId, MessageId, UserId};
-use crate::proto::content_v1::{AttachmentPointer, GroupMailboxAddress, content};
+use crate::domain::message::Message;
+use crate::proto::content_v1::{AttachmentPointer, GroupMailboxAddress, Quote, content};
+use crate::storage::repositories::UnifiedMessageRepository;
 
 use super::CallHangupReason;
+
+/// Populate a domain `Message`'s reply fields from an inbound DataMessage quote.
+///
+/// Shared by the non-anon inbound paths (`store_data_message` for ServerDm,
+/// `dispatch_dm_content` for MailboxDm) so the quote is parsed in one place.
+/// Resolves the parent's real stored id by (author, sent_at) — so
+/// `reply_parent_missing` resolves correctly — and only falls back to a
+/// synthetic timestamp id when the parent isn't stored locally (then the UI
+/// legitimately shows "Original message not found").
+///
+/// Anon paths deliberately keep their own snapshot semantics (the quote never
+/// needs a parent lookup), so they don't route through here.
+pub fn apply_inbound_quote(
+    message: &mut Message,
+    quote: Option<&Quote>,
+    msg_repo: &UnifiedMessageRepository,
+) {
+    let Some(q) = quote else { return };
+    let author: Option<UserId> = q.author_aci.parse().ok();
+    let real_parent = author
+        .and_then(|a| msg_repo.get_by_sender_timestamp(&a, q.id).ok().flatten())
+        .map(|m| m.id);
+    message.reply_to = Some(real_parent.unwrap_or_else(|| MessageId::from_timestamp(q.id)));
+    message.reply_to_author_id = author;
+    message.reply_to_text = (!q.text.is_empty()).then(|| q.text.clone());
+    if let Some(qa) = q.attachments.first() {
+        message.reply_to_thumbnail =
+            (!qa.thumbnail.is_empty()).then(|| qa.thumbnail.clone());
+        message.reply_to_thumbnail_mime =
+            (!qa.content_type.is_empty()).then(|| qa.content_type.clone());
+    }
+}
 
 // =============================================================================
 // Content type name (for logging)
@@ -78,6 +112,9 @@ pub enum DmContent {
         /// Sender's profile key (32 bytes) for decrypting their display_name.
         /// Present when sender has enabled profile sharing with us.
         profile_key: Option<Vec<u8>>,
+        /// Reply quote, so the receiver's stored message keeps its reply
+        /// bubble (author + preview + thumbnail). `None` for non-replies.
+        quote: Option<Quote>,
     },
     /// Typing indicator
     Typing {

@@ -150,6 +150,66 @@ pub fn start_video_from_memory_async<F>(
     start_video_software(data, filename, on_ready);
 }
 
+/// Start video playback from an authenticated range decryptor (streaming).
+///
+/// The GL pipeline pulls decrypted ranges on demand, so playback starts without
+/// decrypting the whole file into memory. If HW video isn't available/connected
+/// (or the range backend isn't supported), falls back to a full decrypt + the
+/// software renderer.
+pub fn start_video_from_range_async<F>(
+    dec: Arc<chatter_core::services::attachment::CbcRangeDecryptor>,
+    filename: String,
+    on_ready: F,
+) where
+    F: FnOnce(Result<(f64, String), String>) + Send + 'static,
+{
+    stop_video();
+
+    if hw_video::is_hw_available() {
+        tracing::info!("HW video available (range source), checking connection on UI thread");
+
+        let _ = slint::invoke_from_event_loop(move || {
+            if !hw_video::is_hw_connected() {
+                tracing::debug!("HW video not connected, falling back to software (full decrypt)");
+                USING_GL_VIDEO.store(false, Ordering::SeqCst);
+                let data = dec.read_range(0, dec.plaintext_size());
+                start_video_software(data, filename, on_ready);
+                return;
+            }
+
+            match hw_video::start_hw_video_range(dec.clone()) {
+                Some(duration) => {
+                    USING_GL_VIDEO.store(true, Ordering::SeqCst);
+
+                    if let Ok(mut video_state) = get_video_state().lock() {
+                        video_state.current_path = None;
+                        video_state.filename = filename;
+                        video_state.is_playing = true;
+                        video_state.duration = duration;
+                        video_state.position = 0.0;
+                        video_state.volume = 1.0;
+                    }
+
+                    let duration_str = chatter_core::media::format_duration(duration);
+                    tracing::info!("HW video started (streaming): {}s ({})", duration, duration_str);
+                    on_ready(Ok((duration, duration_str)));
+                }
+                None => {
+                    tracing::warn!("HW range video start failed, falling back to software");
+                    USING_GL_VIDEO.store(false, Ordering::SeqCst);
+                    let data = dec.read_range(0, dec.plaintext_size());
+                    start_video_software(data, filename, on_ready);
+                }
+            }
+        });
+        return;
+    }
+
+    // No HW: software renderer needs the full plaintext.
+    let data = dec.read_range(0, dec.plaintext_size());
+    start_video_software(data, filename, on_ready);
+}
+
 /// Start video playback using software rendering.
 fn start_video_software<F>(
     data: Vec<u8>,

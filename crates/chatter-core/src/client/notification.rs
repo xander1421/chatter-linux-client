@@ -29,7 +29,7 @@ impl ChatterClient {
             self.users().clone(),
             self.notifications().clone(),
             self.signal().clone(),
-            self.ui.channel_repo.clone(),
+            self.services.channel_repo.clone(),
         );
         self.tasks.lock().push(handle);
     }
@@ -56,14 +56,14 @@ impl ChatterClient {
         }
 
         let stream_handle = crate::services::notification_stream::spawn_grpc_notification_consumer(
-            self.ui.grpc_pool.clone(),
+            self.services.grpc_pool.clone(),
             self.event_bus().clone(),
             user_id,
         );
         self.tasks.lock().push(stream_handle);
 
         #[cfg(feature = "media")]
-        if let Some(call_worker) = self.ui.call_service.get() {
+        if let Some(call_worker) = self.services.call_service.get() {
             let bridge_handle = crate::services::call_notification_bridge::spawn_call_notification_bridge(
                 call_worker,
                 self.event_bus().clone(),

@@ -1,48 +1,52 @@
-//! Format-text callback: wrap composer text with markdown markers.
+//! Markdown wrapping for the composer formatting toolbar.
+//!
+//! Wraps the selected byte range (or inserts empty markers at the cursor)
+//! with markdown. Lives in Rust because Slint has no byte-slice op; the
+//! composer's `TextFormat.wrap` global calls in here.
 
 use slint::{ComponentHandle, SharedString};
 
-use crate::MainWindow;
+use crate::{MainWindow, TextFormat};
 
-/// Apply markdown formatting to the composer text.
-fn apply_format(text: &str, format_type: &str) -> String {
-    if text.is_empty() {
-        // Insert empty markers so the user can type inside them.
-        return match format_type {
-            "bold" => "****".to_string(),
-            "italic" => "**".to_string(),
-            "strikethrough" => "~~~~".to_string(),
-            "code" => "``".to_string(),
-            "codeblock" => "```\n\n```".to_string(),
-            _ => text.to_string(),
-        };
+/// Round `i` down to the nearest UTF-8 char boundary at or below it.
+fn floor_boundary(text: &str, i: usize) -> usize {
+    let mut i = i.min(text.len());
+    while !text.is_char_boundary(i) {
+        i -= 1;
     }
+    i
+}
 
-    match format_type {
-        "bold" => format!("**{text}**"),
-        "italic" => format!("*{text}*"),
-        "strikethrough" => format!("~~{text}~~"),
-        "code" => format!("`{text}`"),
-        "codeblock" => format!("```\n{text}\n```"),
-        _ => text.to_string(),
-    }
+/// Wrap `text[start..end]` with the markdown for `fmt`. When `start == end`
+/// (no selection) the markers are inserted empty at that point.
+fn wrap_selection(text: &str, fmt: &str, start: usize, end: usize) -> String {
+    let (prefix, suffix) = match fmt {
+        "bold" => ("**", "**"),
+        "italic" => ("*", "*"),
+        "strikethrough" => ("~~", "~~"),
+        "code" => ("`", "`"),
+        "codeblock" => ("```\n", "\n```"),
+        _ => return text.to_string(),
+    };
+
+    let s = floor_boundary(text, start.min(end));
+    let e = floor_boundary(text, start.max(end));
+
+    let mut out = String::with_capacity(text.len() + prefix.len() + suffix.len());
+    out.push_str(&text[..s]);
+    out.push_str(prefix);
+    out.push_str(&text[s..e]);
+    out.push_str(suffix);
+    out.push_str(&text[e..]);
+    out
 }
 
 pub(crate) fn wire_format_text(window: &MainWindow) {
-    let weak_window = window.as_weak();
-
-    window.on_format_text(move |format_type: SharedString| {
-        let weak = weak_window.clone();
-        let fmt = format_type.to_string();
-
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                let current_text = w.get_composer_text().to_string();
-                let formatted = apply_format(&current_text, &fmt);
-                w.set_composer_text(formatted.into());
-            }
-        });
-    });
+    window.global::<TextFormat>().on_wrap(
+        |text: SharedString, fmt: SharedString, start: i32, end: i32| {
+            wrap_selection(&text, &fmt, start.max(0) as usize, end.max(0) as usize).into()
+        },
+    );
 }
 
 #[cfg(test)]
@@ -50,39 +54,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bold_wraps_text() {
-        assert_eq!(apply_format("hello", "bold"), "**hello**");
+    fn wraps_selection_only() {
+        // "hello world", select "world" (bytes 6..11)
+        assert_eq!(wrap_selection("hello world", "bold", 6, 11), "hello **world**");
     }
 
     #[test]
-    fn italic_wraps_text() {
-        assert_eq!(apply_format("hello", "italic"), "*hello*");
+    fn wraps_middle_selection() {
+        assert_eq!(wrap_selection("abcXYZdef", "strikethrough", 3, 6), "abc~~XYZ~~def");
     }
 
     #[test]
-    fn strikethrough_wraps_text() {
-        assert_eq!(apply_format("hello", "strikethrough"), "~~hello~~");
+    fn no_selection_inserts_empty_markers_at_cursor() {
+        assert_eq!(wrap_selection("abcdef", "bold", 3, 3), "abc****def");
+        assert_eq!(wrap_selection("", "italic", 0, 0), "**");
+        assert_eq!(wrap_selection("", "codeblock", 0, 0), "```\n\n```");
     }
 
     #[test]
-    fn code_wraps_text() {
-        assert_eq!(apply_format("hello", "code"), "`hello`");
+    fn reversed_offsets_normalized() {
+        // anchor after cursor — same result as forward selection
+        assert_eq!(wrap_selection("hello world", "code", 11, 6), "hello `world`");
     }
 
     #[test]
-    fn codeblock_wraps_text() {
-        assert_eq!(apply_format("hello", "codeblock"), "```\nhello\n```");
+    fn multibyte_boundary_safe() {
+        // "café world", select "world". 'é' is 2 bytes → "world" at bytes 6..11.
+        assert_eq!(wrap_selection("café world", "bold", 6, 11), "café **world**");
     }
 
     #[test]
-    fn empty_text_inserts_markers() {
-        assert_eq!(apply_format("", "bold"), "****");
-        assert_eq!(apply_format("", "italic"), "**");
-        assert_eq!(apply_format("", "code"), "``");
-    }
-
-    #[test]
-    fn unknown_format_returns_text() {
-        assert_eq!(apply_format("hello", "unknown"), "hello");
+    fn unknown_format_unchanged() {
+        assert_eq!(wrap_selection("hello", "unknown", 0, 5), "hello");
     }
 }

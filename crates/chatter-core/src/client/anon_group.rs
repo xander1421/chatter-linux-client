@@ -81,6 +81,50 @@ impl ChatterClient {
         self.anon_groups().get_member_display_name(group_id, user_id).ok().flatten()
     }
 
+    /// Build the synthetic system `Message` shown for an anon-group membership
+    /// change ("X joined", "X left", "X removed by Y"). The membership events
+    /// arrive as bare metadata; constructing the domain `Message` is core's
+    /// job, not the UI's.
+    pub fn anon_group_system_message(
+        &self,
+        group_id: crate::domain::anon_group::AnonGroupId,
+        actor_id: crate::domain::ids::UserId,
+        content: crate::domain::message::SystemMessage,
+    ) -> crate::domain::message::Message {
+        use crate::domain::ids::MessageId;
+        use crate::domain::message::{ConversationType, Message, MessageContent};
+        let now = chrono::Utc::now();
+        Message {
+            id: MessageId::new(),
+            conversation_id: group_id.into(),
+            conversation_type: ConversationType::AnonGroup,
+            sender_id: Some(actor_id),
+            device_id: None,
+            content: MessageContent::System(content),
+            encrypted_content: None,
+            thread_id: None,
+            reply_to: None,
+            reply_to_author_id: None,
+            reply_to_text: None,
+            reply_to_thumbnail: None,
+            reply_to_thumbnail_mime: None,
+            attachments: Vec::new(),
+            is_pinned: false,
+            is_edited: false,
+            is_deleted: false,
+            is_read: true,
+            sent_at: now.timestamp_nanos_opt().unwrap_or(0) as u64,
+            created_at: now,
+            updated_at: now,
+            edited_at: None,
+            reaction_counts: Vec::new(),
+            current_user_reactions: Vec::new(),
+            mentioned_integrations: Vec::new(),
+            targets_ai_bot: false,
+            delivery_status: String::new(),
+        }
+    }
+
     pub fn get_latest_anon_group_message(
         &self,
         group_id: &crate::domain::anon_group::AnonGroupId,

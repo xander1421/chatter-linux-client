@@ -1432,6 +1432,32 @@ pub mod channel_service_client {
             self.inner.server_streaming(req, path, codec).await
         }
         ///
+        pub async fn list_pending_invites(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListPendingInvitesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListPendingInvitesResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.ChannelService/ListPendingInvites",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("chat.v1.ChannelService", "ListPendingInvites"));
+            self.inner.unary(req, path, codec).await
+        }
+        ///
         pub async fn kick_user(
             &mut self,
             request: impl tonic::IntoRequest<super::KickUserRequest>,

@@ -132,8 +132,8 @@ pub fn derive_svr_secret(pin: &str, salt: &str) -> Result<[u8; 32], CryptoError>
 }
 
 /// Derive a local-only PIN fingerprint, used for in-memory PIN re-auth gates
-/// (e.g. authorising a new linked device when the user has no password —
-/// OIDC sessions). Never sent to the server. Computed as
+/// (e.g. authorising a new linked device via PIN instead of password). Never
+/// sent to the server. Computed as
 /// `HMAC-SHA256(svr_secret, "Chatter Local PIN Fingerprint")`.
 ///
 /// Persist with [`SettingsRepository::set_bytes(keys::PIN_FINGERPRINT, …)`]

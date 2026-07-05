@@ -9,7 +9,7 @@ use slint::{Image, Timer, TimerMode, Weak};
 
 use chatter_core::media::gif::{
     decode_first_frame_only,
-    decode_gif_auto, is_gpu_acceleration_available,
+    is_gpu_acceleration_available,
 };
 use crate::bin_ui::slint_conversions::gif_frame_to_slint_image;
 use tokio::sync::mpsc;
@@ -170,67 +170,38 @@ fn decode_gif_with_best_backend(
     data: &[u8],
     tx: &mpsc::Sender<RawFrame>,
 ) -> Result<usize, String> {
-    // Try unified decoder (automatically selects best backend)
-    match decode_gif_auto(data.to_vec()) {
-        Ok(mut decoder) => {
-            let mut frame_count = 0;
-
-            // The first frame is already decoded and available
-            // Skip it since we already showed it synchronously
-
-            // Poll for remaining frames
-            loop {
-                // Check for new frames
-                let new_frames = decoder.poll_frames();
-
-                if new_frames > 0 {
-                    // Send newly decoded frames
-                    let frames = decoder.frames();
-                    for frame in frames.iter().skip(1 + frame_count) {
-                        let delay_ms = frame.delay.as_millis() as u64;
-                        if tx.blocking_send((
+    // Fast, reliable CPU GStreamer decode (stride-honored, ~0.15s, no flaky GL).
+    // Decodes all frames up front, then streams them to the animation channel.
+    #[cfg(feature = "desktop-media")]
+    {
+        match chatter_core::media::gif::decode_all_frames_cpu(data) {
+            Ok(frames) if frames.len() > 1 => {
+                let mut sent = 0;
+                // Skip frame 0 — already shown synchronously.
+                for frame in frames.iter().skip(1) {
+                    if tx
+                        .blocking_send((
                             frame.data.clone(),
                             frame.width,
                             frame.height,
-                            delay_ms,
-                        )).is_err() {
-                            tracing::debug!("GIF receiver dropped at frame {}", frame_count);
-                            return Ok(frame_count);
-                        }
-                        frame_count += 1;
+                            frame.delay.as_millis() as u64,
+                        ))
+                        .is_err()
+                    {
+                        return Ok(sent);
                     }
+                    sent += 1;
                 }
-
-                if decoder.is_complete() {
-                    // Send any remaining frames
-                    let frames = decoder.frames();
-                    for frame in frames.iter().skip(1 + frame_count) {
-                        let delay_ms = frame.delay.as_millis() as u64;
-                        if tx.blocking_send((
-                            frame.data.clone(),
-                            frame.width,
-                            frame.height,
-                            delay_ms,
-                        )).is_err() {
-                            break;
-                        }
-                        frame_count += 1;
-                    }
-                    break;
-                }
-
-                // Small sleep to avoid busy-waiting
-                std::thread::sleep(std::time::Duration::from_millis(5));
+                return Ok(sent);
             }
-
-            Ok(frame_count)
-        }
-        Err(e) => {
-            // Fall back to image crate if unified decoder fails
-            tracing::debug!("Unified decoder failed ({}), using image crate fallback", e);
-            decode_gif_with_image_crate(data, tx)
+            Ok(_) => {} // 0/1 frame — fall through to image crate
+            Err(e) => {
+                tracing::debug!("CPU GStreamer decode failed ({}), image crate fallback", e);
+            }
         }
     }
+
+    decode_gif_with_image_crate(data, tx)
 }
 
 /// Fallback decoder using the `image` crate (pure Rust, no GPU).

@@ -8,7 +8,6 @@ pub mod crypto_error;
 pub mod mailbox_error;
 pub mod media_error;
 pub mod network_error;
-pub mod recovery;
 pub mod service_error;
 pub mod storage_error;
 pub mod system_error;

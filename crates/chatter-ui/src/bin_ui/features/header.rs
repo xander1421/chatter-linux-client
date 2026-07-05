@@ -175,24 +175,9 @@ fn update_pinned_ui_from_loaded_messages(
 
     // Fall back to DB lookup in background thread
     std::thread::spawn(move || {
-        let preview = if let Some(msg_id) = current_msg_id {
-            if let ActiveConversation::AnonGroup(_group_id) = conversation {
-                // Private group: look up from unified messages repo
-                let anon_id = chatter_core::domain::anon_group::AnonGroupMessageId::from_string(msg_id.to_string());
-                ui_ctx.get_anon_group_message(&anon_id)
-                    .and_then(|msg| msg.as_text().filter(|t| !t.is_empty()).map(|t| {
-                        if t.len() > 80 { format!("{}...", &t[..77]) } else { t.to_string() }
-                    }))
-                    .unwrap_or_else(|| "[Pinned message]".to_string())
-            } else {
-                // Regular channel/DM: use PinService
-                ui_ctx
-                    .get_pinned_message(&msg_id)
-                    .map(|d| d.preview)
-                    .unwrap_or_else(|| "[Pinned message]".to_string())
-            }
-        } else {
-            String::new()
+        let preview = match current_msg_id {
+            Some(msg_id) => ui_ctx.pinned_message_preview(&conversation, &msg_id),
+            None => String::new(),
         };
 
         let _ = slint::invoke_from_event_loop(move || {
@@ -233,6 +218,7 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                 let members = ui_ctx.get_anon_group_members(&group_id);
                 let member_count = members.len() as i32;
                 let group_name = group.name.clone();
+                let channel_id: chatter_core::domain::ids::ChannelId = group_id.into();
 
                 // Get current user ID to check if owner
                 let current_user_id = match ui_ctx.session_current_user_id() {
@@ -245,17 +231,13 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                 // Convert members to Slint data
                 let mut slint_members = Vec::with_capacity(members.len());
                 for member in members {
-                    let display_name = if let Some(ref name) = member.display_name {
-                        name.clone()
-                    } else {
-                        ui_ctx.display_name(&member.user_id)
-                    };
+                    let display_name = ui_ctx.display_name_in(
+                        &chatter_core::domain::message::ConversationType::AnonGroup,
+                        &channel_id,
+                        &member.user_id,
+                    );
 
-                    let role = match member.role {
-                        chatter_core::domain::anon_group::AnonGroupRole::Owner => "owner",
-                        chatter_core::domain::anon_group::AnonGroupRole::Admin => "admin",
-                        chatter_core::domain::anon_group::AnonGroupRole::Member => "member",
-                    };
+                    let role = member.role.as_str();
 
                     slint_members.push(crate::ChannelMemberData {
                         user_id: member.user_id.to_string().into(),
@@ -411,9 +393,10 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // Convert older messages to display data
             let display_messages = messages_to_display_batch(
                 &older_messages,
-                |uid| ui_ctx.display_name(uid),
+                |m| ui_ctx.message_sender_display_name(m),
                 |att_id| ui_ctx.get_attachment(att_id),
-                |pid| ui_ctx.reply_parent_missing(pid),
+                |m| ui_ctx.reply_author_display_name(m),
+                |m| ui_ctx.reply_parent_missing_for(m),
             );
 
             let msg_count = older_messages.len();

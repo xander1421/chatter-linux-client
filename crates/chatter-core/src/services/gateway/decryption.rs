@@ -484,6 +484,7 @@ impl MessageGateway {
                 timestamp: data_message.timestamp,
                 attachments: data_message.attachments,
                 profile_key,
+                quote: data_message.quote,
             }));
         }
 
@@ -509,6 +510,7 @@ impl MessageGateway {
             timestamp: 0,
             attachments: vec![],
             profile_key: None,
+            quote: None,
         }))
     }
 
@@ -543,6 +545,7 @@ impl MessageGateway {
                     timestamp: msg.timestamp,
                     attachments: msg.attachments,
                     profile_key,
+                    quote: msg.quote,
                 })
             }
             Some(content::Content::Typing(msg)) => {

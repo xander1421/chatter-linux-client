@@ -299,6 +299,96 @@ impl AttachmentService {
         Ok(SecureBuffer::new(plaintext))
     }
 
+    /// Open a random-access decryptor for streaming playback (e.g. video).
+    ///
+    /// Verifies the whole-file HMAC/digest up front (streaming, no plaintext
+    /// materialized), then returns a [`CbcRangeDecryptor`] over an mmap of the
+    /// ciphertext. The caller (media pipeline) pulls decrypted ranges on demand,
+    /// so playback starts without decrypting the whole file into memory.
+    ///
+    /// **Security**: authentication happens here, before any range is served.
+    pub fn open_range_decryptor(
+        &self,
+        attachment_id: &AttachmentId,
+    ) -> Result<super::CbcRangeDecryptor, AttachmentError> {
+        let attachment = self
+            .attachment_repo
+            .get(attachment_id)
+            .map_err(|e| AttachmentError::StorageError(e.to_string()))?
+            .ok_or_else(|| {
+                AttachmentError::InvalidAttachment(format!("Attachment {} not found", attachment_id))
+            })?;
+
+        if attachment.content_location != ContentLocation::OnFilesystem {
+            return Err(AttachmentError::InvalidAttachment(
+                "Attachment content not on filesystem - download first".to_string(),
+            ));
+        }
+
+        let encryption_key = attachment.encryption_key.as_ref().ok_or_else(|| {
+            AttachmentError::DecryptionError("No encryption key".to_string())
+        })?;
+        let digest = attachment.encryption_iv.as_ref().ok_or_else(|| {
+            AttachmentError::DecryptionError("No digest for verification".to_string())
+        })?;
+        if encryption_key.len() != KEY_SET_LENGTH {
+            return Err(AttachmentError::DecryptionError(format!(
+                "Invalid key length: expected {}, got {}",
+                KEY_SET_LENGTH,
+                encryption_key.len()
+            )));
+        }
+
+        let mut key = [0u8; KEY_SET_LENGTH];
+        key.copy_from_slice(encryption_key);
+        let mut digest_arr = [0u8; 32];
+        if digest.len() >= 32 {
+            digest_arr.copy_from_slice(&digest[..32]);
+        } else {
+            digest_arr[..digest.len()].copy_from_slice(digest);
+        }
+
+        let plaintext_size = attachment.metadata.size as usize;
+        let file_path = attachment_file_path(attachment_id);
+        let file_size = std::fs::metadata(&file_path)
+            .map_err(|e| AttachmentError::FileError(format!("Failed to stat file: {}", e)))?
+            .len() as usize;
+
+        // Auth pass (A1): HMAC + digest over the whole ciphertext. Streaming,
+        // no AES, no plaintext buffer — cheap relative to a full decrypt.
+        {
+            let file = std::fs::File::open(&file_path).map_err(|e| {
+                AttachmentError::FileError(format!(
+                    "Failed to open attachment file {}: {}",
+                    file_path.display(),
+                    e
+                ))
+            })?;
+            let reader = std::io::BufReader::with_capacity(512 * 1024, file);
+            let mut verifier =
+                StreamingDecryptor::new(reader, &key, &digest_arr, plaintext_size, file_size);
+            verifier
+                .verify()
+                .map_err(|e| AttachmentError::DecryptionError(e.to_string()))?;
+        }
+
+        // mmap the (now authenticated) ciphertext for on-demand range reads.
+        let file = std::fs::File::open(&file_path).map_err(|e| {
+            AttachmentError::FileError(format!(
+                "Failed to open attachment file {}: {}",
+                file_path.display(),
+                e
+            ))
+        })?;
+        let mmap = unsafe { Mmap::map(&file) }
+            .map_err(|e| AttachmentError::FileError(format!("Failed to mmap attachment: {}", e)))?;
+
+        let mut aes_key = [0u8; 32];
+        aes_key.copy_from_slice(&key[..32]);
+        super::CbcRangeDecryptor::new(mmap, &aes_key, plaintext_size)
+            .map_err(AttachmentError::DecryptionError)
+    }
+
     /// Decrypt attachment using the best method for its size.
     ///
     /// - Small files (<1MB): `decrypt_to_memory` with rayon parallel (fast for small data)

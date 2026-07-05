@@ -7,7 +7,6 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Image, ModelRc, SharedString, VecModel, Weak, Model};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::domain::channel::ChannelType;
 use chatter_core::domain::ids::ChannelId;
 
 use crate::bin_ui::converters::{
@@ -39,12 +38,7 @@ pub fn refresh_friends_list(window_weak: Weak<MainWindow>, ui_ctx: Arc<ChatterCl
                     username: String::new(),
                     avatar_bytes: profile.avatar_bytes.clone(),
                     avatar_decoded: None,
-                    presence_status: match profile.presence {
-                        chatter_core::domain::user::PresenceStatus::Online => "online",
-                        chatter_core::domain::user::PresenceStatus::Away => "away",
-                        chatter_core::domain::user::PresenceStatus::DoNotDisturb => "dnd",
-                        chatter_core::domain::user::PresenceStatus::Offline => "offline",
-                    }.to_string(),
+                    presence_status: profile.presence.as_str().to_string(),
                     custom_status: String::new(),
                     is_anon: false,
                 });
@@ -58,7 +52,7 @@ pub fn refresh_friends_list(window_weak: Weak<MainWindow>, ui_ctx: Arc<ChatterCl
                 let peer_name = dm
                     .peer_display_name
                     .clone()
-                    .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
+                    .unwrap_or_else(|| ui_ctx.fallback_display_name(&dm.peer_id));
                 friends_data.push(FriendDataSendData {
                     user_id: dm.id.to_string(),
                     display_name: peer_name,
@@ -126,16 +120,12 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         Err(e) => tracing::warn!("Failed to refresh anon group mailboxes: {}", e),
     }
 
-    // Now get channels from local storage (which has been synced)
-    let channels = ui_ctx.get_channels_mru();
-
     // Get current user ID for DM peer detection
     let current_user_id = ui_ctx.auth_state().get().current_user_id;
 
     // Separate channels and DMs (using Send-safe types for DMs).
     // ChannelListItemData contains a slint::Image (not Send) — hold domain
     // Channels here and convert inside the UI-thread closure below.
-    let mut channel_domain_list: Vec<chatter_core::domain::channel::Channel> = Vec::new();
     let mut dm_list: Vec<DMListItemSendData> = Vec::new();
 
     // Anon Mode: when on, drop server-friend DMs and public/private
@@ -149,21 +139,8 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         dm_list.extend(ui_ctx.list_regular_dm_sidebar());
     }
 
-    for channel in &channels {
-        match channel.channel_type {
-            ChannelType::DirectMessage => {
-                // DMs are no longer channels; a DirectMessage channel row
-                // should never exist. Ignore defensively if one lingers.
-            }
-            ChannelType::Public | ChannelType::Private => {
-                if anon_mode { continue; }
-                channel_domain_list.push(channel.clone());
-            }
-            ChannelType::SavedMessages => {
-                // Saved messages has its own sidebar button, not listed with channels
-            }
-        }
-    }
+    // Sidebar-inclusion rule (Public/Private, anon-mode aware) lives in core.
+    let channel_domain_list = ui_ctx.sidebar_channels();
 
     // Get user profile info
     let user_display_name = ui_ctx
@@ -191,16 +168,8 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
             })
         });
 
-    // Determine first channel to select (exclude DMs and SavedMessages)
-    let first_channel_id = channels
-        .iter()
-        .find(|c| {
-            !matches!(
-                c.channel_type,
-                ChannelType::DirectMessage | ChannelType::SavedMessages
-            )
-        })
-        .map(|c| c.id);
+    // First channel to select (exclude DMs and SavedMessages) — rule in core.
+    let first_channel_id = ui_ctx.first_selectable_channel_id();
 
     // Friend requests (Received/Sent) are populated EXCLUSIVELY by the
     // `FriendRequestsUpdated` event handler, which decrypts each sender's ECIES
@@ -220,7 +189,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                 // Get peer display name from conversation (revealed on accept/init)
                 // Do NOT use user_service - these are strangers
                 let peer_name = dm.peer_display_name.clone()
-                    .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
+                    .unwrap_or_else(|| ui_ctx.fallback_display_name(&dm.peer_id));
                 let peer_id_str = dm.peer_id.to_string();
 
                 // Get latest message for preview
@@ -287,7 +256,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                 // Get peer display name from conversation (revealed after ECIES decryption)
                 // Do NOT use user_service - these are strangers
                 let peer_name = dm.peer_display_name.clone()
-                    .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
+                    .unwrap_or_else(|| ui_ctx.fallback_display_name(&dm.peer_id));
                 let peer_id_str = dm.peer_id.to_string();
 
                 // Get intro message if any
@@ -337,7 +306,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
             for dm in requests {
                 // Get peer display name from conversation
                 let peer_name = dm.peer_display_name.clone()
-                    .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
+                    .unwrap_or_else(|| ui_ctx.fallback_display_name(&dm.peer_id));
                 let peer_id_str = dm.peer_id.to_string();
 
                 // Get our last sent message for preview
@@ -455,12 +424,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                     username: String::new(),
                     avatar_bytes: profile.avatar_bytes.clone(),
                     avatar_decoded: None,
-                    presence_status: match profile.presence {
-                        chatter_core::domain::user::PresenceStatus::Online => "online",
-                        chatter_core::domain::user::PresenceStatus::Away => "away",
-                        chatter_core::domain::user::PresenceStatus::DoNotDisturb => "dnd",
-                        chatter_core::domain::user::PresenceStatus::Offline => "offline",
-                    }.to_string(),
+                    presence_status: profile.presence.as_str().to_string(),
                     custom_status: String::new(),
                     is_anon: false,
                 });
@@ -478,7 +442,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
             let peer_name = dm
                 .peer_display_name
                 .clone()
-                .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
+                .unwrap_or_else(|| ui_ctx.fallback_display_name(&dm.peer_id));
             friends_data.push(FriendDataSendData {
                 user_id: dm.id.to_string(),
                 display_name: peer_name,
@@ -627,9 +591,10 @@ async fn load_channel_into_ui_from_services(
     // Convert messages to display data
     let display_messages = messages_to_display_batch(
         &messages,
-        |uid| ui_ctx.display_name(uid),
+        |m| ui_ctx.message_sender_display_name(m),
         |att_id| ui_ctx.get_attachment_metadata(att_id),
-        |pid| ui_ctx.reply_parent_missing(pid),
+        |m| ui_ctx.reply_author_display_name(m),
+        |m| ui_ctx.reply_parent_missing_for(m),
     );
 
     // Get current user ID for is_own calculation in to_slint_with_user

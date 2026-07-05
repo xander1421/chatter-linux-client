@@ -165,14 +165,6 @@ fn wire_submit(
                         w.set_link_approve_status("".into());
                         w.set_link_approve_error("Wrong password or PIN.".into());
                     }
-                    Err(LinkDeviceError::ReauthUnsupportedForOidc) => {
-                        // OIDC user with no PIN configured — they need to set a
-                        // PIN before they can authorise new devices.
-                        w.set_link_approve_status("".into());
-                        w.set_link_approve_error(
-                            "Set a recovery PIN in Settings before linking new devices.".into(),
-                        );
-                    }
                     Err(e) => {
                         w.set_link_approve_status("".into());
                         w.set_link_approve_error(format!("{e}").into());

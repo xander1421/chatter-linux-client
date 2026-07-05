@@ -50,6 +50,7 @@ export component Sidebar inherits Rectangle {
     in property <int> pending-friend-requests: 0;
     in property <int> pending-message-requests: 0;
     in property <int> pending-group-invites: 0;
+    in property <int> pending-channel-invites: 0;
 
     // ── Callbacks ──
     callback channel-selected(string);
@@ -61,8 +62,10 @@ export component Sidebar inherits Rectangle {
     callback join-channel-clicked();
     callback friends-clicked();
     callback profile-clicked();
+    callback friend-requests-clicked();
     callback message-requests-clicked();
     callback group-invites-clicked();
+    callback channel-invites-clicked();
     callback toggle-collapsed();
     callback jarvis-clicked();
     callback settings-clicked();
@@ -187,6 +190,84 @@ export component Sidebar inherits Rectangle {
                 }
 
                 // INVITE BANNERS (conditional)
+                if root.pending-friend-requests > 0: Rectangle {
+                    accessible-role: button;
+                    accessible-label: root.pending-friend-requests == 1 ? "1 friend request" : root.pending-friend-requests + " friend requests";
+                    height: 38px;
+                    border-radius: Spacing.radius-sm;
+                    background: freq-touch.has-hover ? Colors.surface-hover : Colors.surface;
+
+                    if !root.collapsed: HorizontalLayout {
+                        padding-left: Spacing.sm;
+                        padding-right: Spacing.sm;
+                        spacing: Spacing.sm;
+                        alignment: start;
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 0;
+                            Image {
+                                source: Icons.user-plus;
+                                width: 16px;
+                                height: 16px;
+                                colorize: Colors.primary;
+                            }
+                        }
+                        Text {
+                            text: "Friend Requests";
+                            color: Colors.primary;
+                            font-size: Typography.sm2;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        Rectangle {
+                            width: root.pending-friend-requests > 9 ? 22px : 18px;
+                            height: 18px;
+                            border-radius: 9px;
+                            background: Colors.error;
+                            Text {
+                                text: root.pending-friend-requests > 9 ? "9+" : root.pending-friend-requests;
+                                color: Colors.text-primary;
+                                font-size: Typography.xs2;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                width: 100%;
+                                height: 100%;
+                            }
+                        }
+                    }
+
+                    if root.collapsed: HorizontalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 20px;
+                            height: parent.height;
+                            Image {
+                                source: Icons.user-plus;
+                                width: 16px;
+                                height: 16px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                colorize: Colors.primary;
+                            }
+                            Rectangle {
+                                x: parent.width - 6px;
+                                y: 6px;
+                                width: 12px;
+                                height: 12px;
+                                border-radius: 6px;
+                                background: Colors.error;
+                            }
+                        }
+                    }
+
+                    freq-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.friend-requests-clicked(); }
+                    }
+                }
+
                 if root.pending-message-requests > 0: Rectangle {
                     accessible-role: button;
                     accessible-label: root.pending-message-requests == 1 ? "1 message request" : root.pending-message-requests + " message requests";
@@ -340,6 +421,84 @@ export component Sidebar inherits Rectangle {
                     ginv-touch := TouchArea {
                         mouse-cursor: pointer;
                         clicked => { root.group-invites-clicked(); }
+                    }
+                }
+
+                if root.pending-channel-invites > 0: Rectangle {
+                    accessible-role: button;
+                    accessible-label: root.pending-channel-invites == 1 ? "1 channel invite" : root.pending-channel-invites + " channel invites";
+                    height: 38px;
+                    border-radius: Spacing.radius-sm;
+                    background: cinv-touch.has-hover ? Colors.surface-hover : Colors.surface;
+
+                    if !root.collapsed: HorizontalLayout {
+                        padding-left: Spacing.sm;
+                        padding-right: Spacing.sm;
+                        spacing: Spacing.sm;
+                        alignment: start;
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 0;
+                            Image {
+                                source: Icons.hash;
+                                width: 16px;
+                                height: 16px;
+                                colorize: Colors.primary;
+                            }
+                        }
+                        Text {
+                            text: "Channel Invites";
+                            color: Colors.primary;
+                            font-size: Typography.sm2;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        Rectangle {
+                            width: root.pending-channel-invites > 9 ? 22px : 18px;
+                            height: 18px;
+                            border-radius: 9px;
+                            background: Colors.error;
+                            Text {
+                                text: root.pending-channel-invites > 9 ? "9+" : root.pending-channel-invites;
+                                color: Colors.text-primary;
+                                font-size: Typography.xs2;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                width: 100%;
+                                height: 100%;
+                            }
+                        }
+                    }
+
+                    if root.collapsed: HorizontalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 20px;
+                            height: parent.height;
+                            Image {
+                                source: Icons.hash;
+                                width: 16px;
+                                height: 16px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                colorize: Colors.primary;
+                            }
+                            Rectangle {
+                                x: parent.width - 6px;
+                                y: 6px;
+                                width: 12px;
+                                height: 12px;
+                                border-radius: 6px;
+                                background: Colors.error;
+                            }
+                        }
+                    }
+
+                    cinv-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.channel-invites-clicked(); }
                     }
                 }
 

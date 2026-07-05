@@ -15,12 +15,12 @@ macro_rules! service_accessor {
     ($name:ident, $ty:ty, $field:ident) => {
         #[cfg(feature = "testing")]
         pub fn $name(&self) -> &std::sync::Arc<$ty> {
-            &self.ui.$field
+            &self.services.$field
         }
 
         #[cfg(not(feature = "testing"))]
         pub(crate) fn $name(&self) -> &std::sync::Arc<$ty> {
-            &self.ui.$field
+            &self.services.$field
         }
     };
 }

@@ -21,14 +21,12 @@
 
 pub mod anon_dm;
 pub mod blind_signature;
-pub mod client;
 pub mod content;
 pub mod cover_traffic;
 pub mod dm;
 pub mod group;
 pub mod key_rolling;
 pub mod poller;
-pub mod provider;
 pub mod timing;
 pub mod token_manager;
 

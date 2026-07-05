@@ -87,12 +87,9 @@ pub fn open_user_profile(
 
         let initials = get_initials(&display_name);
 
-        let presence = match profile.as_ref().map(|p| p.presence) {
-            Some(chatter_core::domain::user::PresenceStatus::Online) => "online",
-            Some(chatter_core::domain::user::PresenceStatus::Away) => "away",
-            Some(chatter_core::domain::user::PresenceStatus::DoNotDisturb) => "dnd",
-            _ => "offline",
-        };
+        let presence = profile.as_ref()
+            .map(|p| p.presence.as_str())
+            .unwrap_or("offline");
 
         let bio = profile
             .as_ref()

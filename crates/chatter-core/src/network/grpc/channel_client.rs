@@ -342,6 +342,20 @@ impl ChannelClient {
             .map(|r| r.map_err(|s| NetworkError::from_status(&s))))
     }
 
+    /// List the current user's pending channel invitations (unary).
+    /// The server scopes to `status = PENDING AND expires_at > NOW()` for the
+    /// authenticated user.
+    pub async fn list_pending_invites(
+        &mut self,
+    ) -> Result<crate::proto::chat_v1::ListPendingInvitesResponse, NetworkError> {
+        let response = self
+            .inner
+            .list_pending_invites(crate::proto::chat_v1::ListPendingInvitesRequest {})
+            .await
+            .map_err(|s| NetworkError::from_status(&s))?;
+        Ok(response.into_inner())
+    }
+
     /// Kick a user from a channel (streaming response).
     ///
     /// Returns stream of ChannelEvent with kick progress.

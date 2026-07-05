@@ -7,6 +7,13 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 
+// Markdown wrapping for the formatting toolbar. Implemented in Rust
+// (composer/format_text.rs) because Slint has no substring/byte-slice op.
+export global TextFormat {
+    // (text, format-type, sel-start-byte, sel-end-byte) -> new text
+    pure callback wrap(string, string, int, int) -> string;
+}
+
 // Pending attachment data for the attachment tray
 export struct PendingAttachmentData {
     id: string,
@@ -85,8 +92,23 @@ export component MessageComposer inherits Rectangle {
     callback remove-attachment(string);
     callback typing-changed(bool);  // true when started typing, false when stopped
     callback process-text(string) -> string;  // Insert word breaks for wrapping
-    callback format-text(string);  // Apply formatting: "bold", "italic", "code", "strikethrough"
     callback accept-ghost-text();  // Accept the AI suggestion (e.g. Tab key)
+
+    // Wrap the current selection (or insert markers at the cursor) with the
+    // markdown for `fmt`, then re-select the inner text. Byte offsets captured
+    // before mutating `text` — the offsets collapse once `text` changes.
+    private property <int> fmt-sel-start;
+    private property <int> fmt-sel-end;
+    function apply-format(fmt: string) {
+        self.fmt-sel-start = min(text-input.anchor-position-byte-offset, text-input.cursor-position-byte-offset);
+        self.fmt-sel-end = max(text-input.anchor-position-byte-offset, text-input.cursor-position-byte-offset);
+        root.text = TextFormat.wrap(root.text, fmt, self.fmt-sel-start, self.fmt-sel-end);
+        text-input.focus();
+        text-input.set-selection-offsets(
+            self.fmt-sel-start + (fmt == "codeblock" ? 4 : (fmt == "bold" || fmt == "strikethrough") ? 2 : 1),
+            self.fmt-sel-end + (fmt == "codeblock" ? 4 : (fmt == "bold" || fmt == "strikethrough") ? 2 : 1),
+        );
+    }
 
     // Formatting toolbar always visible
     property <bool> show-formatting: true;
@@ -300,7 +322,7 @@ export component MessageComposer inherits Rectangle {
 
                         fmt-bold-touch := TouchArea {
                             mouse-cursor: pointer;
-                            clicked => { root.format-text("bold"); }
+                            clicked => { root.apply-format("bold"); }
                         }
                     }
                 }
@@ -327,7 +349,7 @@ export component MessageComposer inherits Rectangle {
 
                         fmt-italic-touch := TouchArea {
                             mouse-cursor: pointer;
-                            clicked => { root.format-text("italic"); }
+                            clicked => { root.apply-format("italic"); }
                         }
                     }
                 }
@@ -362,7 +384,7 @@ export component MessageComposer inherits Rectangle {
 
                         fmt-strike-touch := TouchArea {
                             mouse-cursor: pointer;
-                            clicked => { root.format-text("strikethrough"); }
+                            clicked => { root.apply-format("strikethrough"); }
                         }
                     }
                 }
@@ -388,7 +410,7 @@ export component MessageComposer inherits Rectangle {
 
                         fmt-code-touch := TouchArea {
                             mouse-cursor: pointer;
-                            clicked => { root.format-text("code"); }
+                            clicked => { root.apply-format("code"); }
                         }
                     }
                 }
@@ -424,7 +446,7 @@ export component MessageComposer inherits Rectangle {
 
                         fmt-codeblock-touch := TouchArea {
                             mouse-cursor: pointer;
-                            clicked => { root.format-text("codeblock"); }
+                            clicked => { root.apply-format("codeblock"); }
                         }
                     }
                 }

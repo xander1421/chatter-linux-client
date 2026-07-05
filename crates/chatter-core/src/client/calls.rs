@@ -1111,7 +1111,7 @@ impl ChatterClient {
         &self,
     ) -> crate::storage::repositories::CallHistoryRepository {
         crate::storage::repositories::CallHistoryRepository::new(
-            self.ui.database.clone(),
+            self.services.database.clone(),
         )
     }
 

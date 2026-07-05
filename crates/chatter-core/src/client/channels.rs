@@ -69,19 +69,19 @@ impl ChatterClient {
         use crate::proto::content_v1::GroupEncrypted;
         use crate::services::message::conversion::proto_to_domain_message_with_sender;
 
-        let mut msg_client = self.ui.grpc_pool.message_client();
-        let event_bus = self.ui.event_bus.clone();
+        let mut msg_client = self.services.grpc_pool.message_client();
+        let event_bus = self.services.event_bus.clone();
         let channel_id_owned = *channel_id;
         let channel_id_str = channel_id.to_string();
         // Capture current user ID to filter out own messages from the stream.
         // Own messages are already displayed optimistically at send time.
-        let current_user_id = self.ui.auth_state.get().current_user_id.clone();
+        let current_user_id = self.services.auth_state.get().current_user_id.clone();
         let signal = self.signal().clone();
         let messages = self.messages().clone();
         let attachment_service = self.attachments().clone();
         // Clone channel_repo so the spawned stream task can resolve
         // ConversationType per incoming message without borrowing self.
-        let channel_repo_for_stream = self.ui.channel_repo.clone();
+        let channel_repo_for_stream = self.services.channel_repo.clone();
 
         let handle = tokio::spawn(async move {
             let stream = match msg_client.stream_message_events(&channel_id_str, None).await {

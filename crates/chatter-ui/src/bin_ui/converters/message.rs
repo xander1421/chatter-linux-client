@@ -446,28 +446,30 @@ pub fn anon_message_to_display_data(
 /// Eliminates duplicated message-to-display conversion loops across channel loading,
 /// pagination, thread loading, and initial data loading.
 ///
+/// All name/reply business rules (conversation-scoped names, the anon
+/// "not found" rule) live in `chatter-core`; every resolver here is keyed on
+/// the whole `Message` and callers just forward the matching `ChatterClient`
+/// method. This converter stays pure presentation — it never branches on
+/// conversation type or re-resolves identities.
+///
 /// # Arguments
 /// - `messages`: slice of domain Messages to convert
-/// - `get_display_name`: resolves a `UserId` to a display name string
+/// - `sender_name`: `ChatterClient::message_sender_display_name`
 /// - `resolve_attachment`: resolves an `AttachmentId` to an `Option<Attachment>`
 ///   (callers should handle the `Result` → `Option` conversion themselves)
-/// - `reply_parent_missing`: returns whether a reply's quoted parent is missing
-///   or deleted (Signal-Desktop "Original message not found"). The repo lookup
-///   lives in chatter-core; callers forward `ChatterClient::reply_parent_missing`.
+/// - `reply_author_name`: `ChatterClient::reply_author_display_name`
+/// - `reply_not_found`: `ChatterClient::reply_parent_missing_for`
 pub fn messages_to_display_batch(
     messages: &[Message],
-    get_display_name: impl Fn(&chatter_core::domain::UserId) -> String,
+    sender_name: impl Fn(&Message) -> String,
     resolve_attachment: impl Fn(&chatter_core::domain::AttachmentId) -> Option<Attachment>,
-    reply_parent_missing: impl Fn(&chatter_core::domain::MessageId) -> bool,
+    reply_author_name: impl Fn(&Message) -> String,
+    reply_not_found: impl Fn(&Message) -> bool,
 ) -> Vec<MessageDisplayData> {
     let mut display_messages = Vec::with_capacity(messages.len());
 
     for msg in messages {
-        let sender_name = msg
-            .sender_id
-            .as_ref()
-            .map(|id| get_display_name(id))
-            .unwrap_or_else(|| "Anonymous".to_string());
+        let sender = sender_name(msg);
 
         let resolved_attachments: Vec<_> = msg
             .attachments
@@ -476,17 +478,11 @@ pub fn messages_to_display_batch(
             .collect();
 
         let mut display_data =
-            message_to_display_data(msg, &sender_name, &resolved_attachments, None);
+            message_to_display_data(msg, &sender, &resolved_attachments, None);
 
-        // Resolve reply-to sender name (converter leaves it empty for later resolution)
         if display_data.is_reply {
-            if let Some(ref author_id) = msg.reply_to_author_id {
-                display_data.reply_to_sender_name = get_display_name(author_id);
-            }
-            // Signal-Desktop parity: flag when the quoted parent is gone.
-            if let Some(ref parent_id) = msg.reply_to {
-                display_data.reply_to_not_found = reply_parent_missing(parent_id);
-            }
+            display_data.reply_to_sender_name = reply_author_name(msg);
+            display_data.reply_to_not_found = reply_not_found(msg);
         }
 
         display_messages.push(display_data);

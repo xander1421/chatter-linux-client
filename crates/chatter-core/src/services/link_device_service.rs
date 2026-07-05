@@ -56,8 +56,6 @@ pub enum LinkDeviceError {
     NotLoggedIn,
     #[error("re-authentication failed")]
     ReauthFailed,
-    #[error("re-auth not supported for OIDC sessions")]
-    ReauthUnsupportedForOidc,
     #[error("link URL malformed: {0}")]
     InvalidLinkUrl(String),
     #[error("provisioning session expired or cancelled: {0}")]
@@ -364,10 +362,9 @@ impl LinkDeviceService {
     }
 
     /// Convenience: verify EITHER a password OR a PIN against local
-    /// material. Tries the cheaper password check first when input doesn't
-    /// look like a PIN; otherwise falls through to PIN. Lets the UI keep a
-    /// single "confirm with password or PIN" input regardless of whether
-    /// the session is password- or OIDC-based.
+    /// material. Tries the cheaper PIN check first when the input looks like
+    /// a PIN; otherwise falls through to the password check. Lets the UI keep
+    /// a single "confirm with password or PIN" input.
     pub fn verify_password_or_pin(&self, secret: &str) -> Result<bool, LinkDeviceError> {
         // Try PIN first (cheap local HMAC compare against the stored
         // fingerprint). PIN and password share format constraints now (both
@@ -379,20 +376,15 @@ impl LinkDeviceService {
                 return Ok(true);
             }
         }
-        match self.verify_password(secret) {
-            Ok(v) => Ok(v),
-            Err(LinkDeviceError::ReauthUnsupportedForOidc) => Ok(false),
-            Err(e) => Err(e),
-        }
+        self.verify_password(secret)
     }
 
-    /// Re-auth gate. Validates the user's password against locally-stored
-    /// `profile_key` material. **Local-only check** — does not contact the
+    /// Re-auth gate. Validates the user's password against the locally-stored
+    /// login-auth fingerprint. **Local-only check** — does not contact the
     /// server. Constant-time comparison.
     ///
-    /// Returns `Err(ReauthUnsupportedForOidc)` if no profile key is stored
-    /// (i.e. user is on an OIDC session). Caller should fall back to
-    /// [`Self::verify_pin`].
+    /// Returns `Ok(false)` if no fingerprint is stored (nothing to match
+    /// against). Caller may fall back to [`Self::verify_pin`].
     pub fn verify_password(&self, password: &str) -> Result<bool, LinkDeviceError> {
         use subtle::ConstantTimeEq;
 
@@ -412,10 +404,10 @@ impl LinkDeviceService {
         // Re-auth via login_auth_hash: derive from entered password and
         // compare to the stored fingerprint. Profile_key cannot be used here
         // any more (it is random, not derivable from password).
-        let stored_auth_hash = self
-            .settings_repo
-            .get_bytes(keys::AUTH_LOOKUP_HASH)?
-            .ok_or(LinkDeviceError::ReauthUnsupportedForOidc)?;
+        let stored_auth_hash = match self.settings_repo.get_bytes(keys::AUTH_LOOKUP_HASH)? {
+            Some(h) => h,
+            None => return Ok(false),
+        };
         if stored_auth_hash.len() != 32 {
             return Err(LinkDeviceError::Invalid(
                 "stored auth_lookup_hash has wrong length".into(),
@@ -752,11 +744,24 @@ impl LinkDeviceService {
         self.settings_repo
             .set_bytes(keys::IDENTITY_KEY_PUBLIC, &identity_pub_full)?;
 
+        // The server sends our display_name ENCRYPTED with our profile key.
+        // Decrypt with the key we just provisioned (line above) before
+        // persisting — never store ciphertext as our own name.
         let display_name = response
             .user_profile
             .as_ref()
             .map(|p| p.display_name.clone())
-            .filter(|s| !s.is_empty());
+            .filter(|s| !s.is_empty())
+            .and_then(|encrypted_b64| {
+                use base64::Engine;
+                let pk: [u8; 32] = profile_key[..].try_into().ok()?;
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(&encrypted_b64)
+                    .ok()?;
+                crate::crypto::profile_crypto::decrypt_display_name(&pk, &bytes)
+                    .ok()
+                    .filter(|n| !n.is_empty())
+            });
         if let Some(ref name) = display_name {
             self.settings_repo.set_string(keys::DISPLAY_NAME, name)?;
         }
@@ -1348,11 +1353,10 @@ mod tests {
     }
 
     #[test]
-    fn verify_password_oidc_user_returns_unsupported() {
-        // No PROFILE_KEY persisted — simulates OIDC session.
+    fn verify_password_without_stored_hash_returns_false() {
+        // No AUTH_LOOKUP_HASH persisted — nothing to match, so not a match.
         let (svc, _db) = setup_service("alice", None, None);
-        let err = svc.verify_password("anything").unwrap_err();
-        assert!(matches!(err, LinkDeviceError::ReauthUnsupportedForOidc));
+        assert_eq!(svc.verify_password("anything").unwrap(), false);
     }
 
     #[test]
@@ -1402,16 +1406,16 @@ mod tests {
     }
 
     #[test]
-    fn verify_password_or_pin_oidc_pin_works() {
-        // OIDC session (no password) but PIN configured.
+    fn verify_password_or_pin_pin_only_account_works() {
+        // No password fingerprint stored, but a PIN is configured.
         let (svc, _db) = setup_service("alice", None, Some("98765432"));
         assert_eq!(svc.verify_password_or_pin("98765432").unwrap(), true);
     }
 
     #[test]
-    fn verify_password_or_pin_oidc_password_attempt_returns_false() {
+    fn verify_password_or_pin_no_password_wrong_secret_returns_false() {
         let (svc, _db) = setup_service("alice", None, Some("98765432"));
-        // Wrong secret => PIN mismatch + OIDC has no password => false.
+        // Wrong secret => PIN mismatch + no password fingerprint => false.
         assert_eq!(svc.verify_password_or_pin("anything-long-wrong").unwrap(), false);
     }
 }

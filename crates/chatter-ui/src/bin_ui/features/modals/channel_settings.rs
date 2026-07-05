@@ -77,14 +77,9 @@ pub fn open_channel_settings(
                 Ok(memberships) => {
                     let mut data = Vec::new();
                     for m in memberships {
-                        let display = ui_ctx.get_profile_local(&m.user_id).map(|p| p.display_name).unwrap_or_else(|| "Unknown".to_string());
+                        let display = ui_ctx.display_name(&m.user_id);
                         let uname = ui_ctx.get_user_local(&m.user_id).map(|u| u.username).unwrap_or_else(|| "unknown".to_string());
-                        let role = match m.role {
-                            chatter_core::domain::channel::MemberRole::Member => "member",
-                            chatter_core::domain::channel::MemberRole::Moderator => "moderator",
-                            chatter_core::domain::channel::MemberRole::Admin => "admin",
-                            chatter_core::domain::channel::MemberRole::Owner => "owner",
-                        };
+                        let role = m.role.as_str();
                         data.push(ChannelMemberData {
                             user_id: m.user_id.to_string().into(),
                             display_name: display.into(),
@@ -680,11 +675,7 @@ fn wire_invite_member_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let trimmed = query.trim();
 
             if !trimmed.is_empty() {
-                let needle = trimmed.to_lowercase();
-                cands.retain(|c| {
-                    c.display_name.to_lowercase().contains(&needle)
-                        || c.username.to_lowercase().contains(&needle)
-                });
+                cands.retain(|c| c.matches(trimmed));
             }
 
             let mut seen: HashSet<UserId> = cands.iter().map(|c| c.user_id).collect();

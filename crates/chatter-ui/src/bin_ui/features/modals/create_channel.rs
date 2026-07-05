@@ -373,7 +373,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         continue;
                     }
                     let display_name = dm.peer_display_name
-                        .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
+                        .unwrap_or_else(|| ui_ctx.fallback_display_name(&dm.peer_id));
                     friend_data.push(PrivateGroupFriend {
                         user_id: dm.peer_id.to_string().into(),
                         display_name: display_name.into(),

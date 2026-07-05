@@ -166,15 +166,9 @@ pub(super) fn handle_presence_changed(
     presence: chatter_core::domain::user::PresenceStatus,
     timestamp: u64,
 ) {
-    use chatter_core::domain::user::PresenceStatus;
     let weak = window.clone();
     let user_id_str = user_id.to_string();
-    let presence_str = match presence {
-        PresenceStatus::Online => "online",
-        PresenceStatus::Away => "away",
-        PresenceStatus::DoNotDisturb => "dnd",
-        PresenceStatus::Offline => "offline",
-    };
+    let presence_str = presence.as_str();
 
     let presence_slint: slint::SharedString = presence_str.into();
 

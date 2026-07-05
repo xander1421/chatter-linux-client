@@ -178,6 +178,20 @@ pub enum MemberRole {
     Owner,
 }
 
+impl MemberRole {
+    /// UI/string token for this role. Single source of truth so the UI never
+    /// re-maps the enum.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Member => "member",
+            Self::Moderator => "moderator",
+            Self::Admin => "admin",
+            Self::Owner => "owner",
+        }
+    }
+}
+
 /// Channel membership information.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Membership {

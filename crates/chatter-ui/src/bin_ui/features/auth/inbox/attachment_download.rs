@@ -54,6 +54,25 @@ pub async fn download_attachments(
             continue;
         }
 
+        // Instant preview from the thumbnail sidecar — a small, fast fetch that
+        // shows a preview BEFORE the (potentially huge) full blob downloads.
+        if (is_image || is_video) && !is_gif && !has_thumbnail {
+            if let Some(thumb_bytes) = ui_ctx.ensure_attachment_thumbnail(&att_id).await {
+                let weak = weak_window.clone();
+                let cdn_key_p = cdn_key.clone();
+                let conv = conversation_id.clone();
+                let ui_p = ui_ctx.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(window) = weak.upgrade() {
+                        match crate::bin_ui::slint_conversions::memory_to_slint_image(&thumb_bytes) {
+                            Ok(image) => update_attachment_thumbnail(&window, &ui_p, &cdn_key_p, image, &conv),
+                            Err(e) => tracing::debug!(error = ?e, "Failed to decode sidecar thumbnail for preview"),
+                        }
+                    }
+                });
+            }
+        }
+
         // Download encrypted content to filesystem
         match ui_ctx.download_attachment_to_filesystem(&att_id).await {
             Ok(()) => {

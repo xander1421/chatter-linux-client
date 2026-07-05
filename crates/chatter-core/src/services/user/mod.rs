@@ -31,6 +31,70 @@ mod tests;
 
 use conversions::{domain_presence_to_proto, proto_friend_status_to_domain, proto_to_domain_profile};
 
+/// Decrypt a friend's server `display_name` (encrypted base64) with their
+/// stored profile key.
+///
+/// Server display names are always ciphertext; the plaintext is recoverable
+/// only with the friend's profile key (exchanged via the Signal-style
+/// handshake). Returns `None` when we have no key, the value isn't decodable,
+/// or the plaintext is empty. This is the single source of truth for friend
+/// name decryption — callers pick the fallback ([`friend_display_name_placeholder`]
+/// or an existing local name). Never guesses from length, never returns ciphertext.
+pub fn decrypt_friend_display_name(
+    user_repo: &UserRepository,
+    current_user: &UserId,
+    friend_id: &UserId,
+    encrypted_base64: &str,
+) -> Option<String> {
+    use base64::Engine;
+
+    if encrypted_base64.is_empty() {
+        return None;
+    }
+    let key = user_repo
+        .get_friend_profile_key(current_user, friend_id)
+        .ok()
+        .flatten()?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encrypted_base64)
+        .ok()?;
+    let name = crate::crypto::profile_crypto::decrypt_display_name(&key, &bytes).ok()?;
+    (!name.is_empty()).then_some(name)
+}
+
+/// Stable `User <id8>` placeholder for a friend whose name can't be resolved
+/// (no profile key yet). Single source so no caller ever renders ciphertext.
+pub fn friend_display_name_placeholder(user_id: &UserId) -> String {
+    let id = user_id.to_string();
+    format!("User {}", &id[..8.min(id.len())])
+}
+
+/// Decrypt a friend's status message (encrypted base64) with their profile
+/// key. Same contract as [`decrypt_friend_display_name`]: `None` when we have
+/// no key, the value isn't decodable, or the plaintext is empty. Callers drop
+/// the status (show nothing) on `None` — never render ciphertext.
+pub fn decrypt_friend_status(
+    user_repo: &UserRepository,
+    current_user: &UserId,
+    friend_id: &UserId,
+    encrypted_base64: &str,
+) -> Option<String> {
+    use base64::Engine;
+
+    if encrypted_base64.is_empty() {
+        return None;
+    }
+    let key = user_repo
+        .get_friend_profile_key(current_user, friend_id)
+        .ok()
+        .flatten()?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encrypted_base64)
+        .ok()?;
+    let status = crate::crypto::profile_crypto::decrypt_status(&key, &bytes).ok()?;
+    (!status.is_empty()).then_some(status)
+}
+
 /// Filter for friend request queries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FriendRequestFilter {
@@ -168,25 +232,24 @@ impl UserService {
 
         let mut profile = proto_to_domain_profile(&proto_profile)?;
 
-        // Try to decrypt display_name if we have their profile key
-        profile.display_name = self.try_decrypt_display_name(
+        // Decrypt with their profile key; no key → placeholder. The server
+        // value is always ciphertext, so we never fall back to it.
+        profile.display_name = decrypt_friend_display_name(
+            &self.user_repo,
             &current_user,
             user_id,
             &proto_profile.display_name,
-        ).unwrap_or_else(|| {
-            // No profile key or decryption failed
-            // Never show encrypted ciphertext - use a placeholder instead
-            if proto_profile.display_name.is_empty() {
-                format!("User {}", &user_id.to_string()[..8.min(user_id.to_string().len())])
-            } else if proto_profile.display_name.len() > 50 {
-                // Likely encrypted (base64 encoded ciphertext is typically long)
-                // Use a short placeholder instead of showing ciphertext
-                format!("User {}", &user_id.to_string()[..8.min(user_id.to_string().len())])
-            } else {
-                // Might be unencrypted legacy name - keep it
-                proto_profile.display_name.clone()
-            }
-        });
+        )
+        .unwrap_or_else(|| friend_display_name_placeholder(user_id));
+
+        // Decrypt status the same way; proto now carries ciphertext.
+        profile.status_message = decrypt_friend_status(
+            &self.user_repo,
+            &current_user,
+            user_id,
+            &proto_profile.status_message,
+        )
+        .map(StatusMessage::new);
 
         // Decrypt the avatar with the friend's profile key (if we have it).
         profile.avatar_bytes = self.try_decrypt_avatar(
@@ -205,7 +268,7 @@ impl UserService {
     ///
     /// Returns Some(avatar_bytes) if we have their profile key and decryption
     /// succeeds; None if no key, empty blob, or decryption fails. Mirrors
-    /// [`Self::try_decrypt_display_name`] but the avatar travels as raw bytes
+    /// [`decrypt_friend_display_name`] but the avatar travels as raw bytes
     /// (no base64) in the proto's `encrypted_avatar` field.
     fn try_decrypt_avatar(
         &self,
@@ -223,38 +286,6 @@ impl UserService {
             .flatten()?;
 
         crate::crypto::profile_crypto::decrypt_avatar(&profile_key, encrypted_avatar).ok()
-    }
-
-    /// Try to decrypt a friend's display_name using their profile key.
-    ///
-    /// Returns Some(decrypted_name) if we have their profile key and decryption succeeds.
-    /// Returns None if no profile key or decryption fails.
-    fn try_decrypt_display_name(
-        &self,
-        current_user_id: &UserId,
-        friend_id: &UserId,
-        encrypted_base64: &str,
-    ) -> Option<String> {
-        use base64::Engine;
-
-        // Skip if empty
-        if encrypted_base64.is_empty() {
-            return None;
-        }
-
-        // Get friend's profile key from our local storage
-        let profile_key = self.user_repo
-            .get_friend_profile_key(current_user_id, friend_id)
-            .ok()
-            .flatten()?;
-
-        // Try to decode from base64
-        let encrypted_bytes = base64::engine::general_purpose::STANDARD
-            .decode(encrypted_base64)
-            .ok()?;
-
-        // Try to decrypt
-        crate::crypto::profile_crypto::decrypt_display_name(&profile_key, &encrypted_bytes).ok()
     }
 
     /// Update the current user's profile.
@@ -294,6 +325,16 @@ impl UserService {
         let encrypted_display_name = if let Some(ref name) = display_name {
             let profile_key = profile_key.ok_or(UserError::NotLoggedIn)?;
             let encrypted = crate::crypto::profile_crypto::encrypt_display_name(&profile_key, name)?;
+            Some(base64::engine::general_purpose::STANDARD.encode(encrypted))
+        } else {
+            None
+        };
+
+        // SECURITY: Encrypt status_message with profile_key if being updated —
+        // same E2E treatment as display_name (was previously sent plaintext).
+        let encrypted_status = if let Some(ref s) = status_message {
+            let profile_key = profile_key.ok_or(UserError::NotLoggedIn)?;
+            let encrypted = crate::crypto::profile_crypto::encrypt_status(&profile_key, &s.text)?;
             Some(base64::engine::general_purpose::STANDARD.encode(encrypted))
         } else {
             None
@@ -345,9 +386,9 @@ impl UserService {
             user_id: current_user.to_string(),
             display_name: encrypted_display_name
                 .unwrap_or_else(|| existing.display_name.clone()),
-            status_message: status_message
-                .as_ref()
-                .map(|s| s.text.clone())
+            // Encrypted when we're updating status; otherwise a throwaway value
+            // (status_message is only in the update mask when actually changed).
+            status_message: encrypted_status
                 .or_else(|| existing.status_message.as_ref().map(|s| s.text.clone()))
                 .unwrap_or_default(),
             presence: domain_presence_to_proto(existing.presence),
@@ -392,11 +433,25 @@ impl UserService {
             UserError::InvalidInput("no profile updated event received".to_string())
         })?;
 
-        // Decrypt the display name before storing locally
-        // The server returns the encrypted version, but we want plaintext in local storage
-        if let Some(plaintext_name) = display_name {
-            profile.display_name = plaintext_name;
-        }
+        // Store plaintext locally. When we ARE changing the name, use the
+        // plaintext we just sent. When we're NOT (status/avatar-only update),
+        // the ProfileUpdated event echoes the ENCRYPTED display_name, so never
+        // persist proto_profile.display_name — keep our own plaintext name
+        // (settings holds it decrypted since login/registration).
+        profile.display_name = match display_name {
+            Some(plaintext_name) => plaintext_name,
+            None => self
+                .settings_repo
+                .get_string(keys::DISPLAY_NAME)
+                .ok()
+                .flatten()
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| friend_display_name_placeholder(&profile.user_id)),
+        };
+
+        // Same for status: the echo carries the ENCRYPTED value. Keep the
+        // plaintext we just set, else the existing local plaintext.
+        profile.status_message = status_message.or(existing.status_message);
 
         // Store our own (normalized) avatar bytes locally — the returned event
         // only carries the encrypted blob, which we can't decrypt for ourselves
@@ -665,17 +720,20 @@ impl UserService {
 
             // Build profile from the proto UserProfile already in the response.
             let mut profile = proto_to_domain_profile(friend)?;
-            profile.display_name = self.try_decrypt_display_name(
+            profile.display_name = decrypt_friend_display_name(
+                &self.user_repo,
                 &current_user,
                 &friend_id,
                 &friend.display_name,
-            ).unwrap_or_else(|| {
-                if friend.display_name.is_empty() || friend.display_name.len() > 50 {
-                    format!("User {}", &friend_id.to_string()[..8.min(friend_id.to_string().len())])
-                } else {
-                    friend.display_name.clone()
-                }
-            });
+            )
+            .unwrap_or_else(|| friend_display_name_placeholder(&friend_id));
+            profile.status_message = decrypt_friend_status(
+                &self.user_repo,
+                &current_user,
+                &friend_id,
+                &friend.status_message,
+            )
+            .map(StatusMessage::new);
             profile.avatar_bytes = self.try_decrypt_avatar(
                 &current_user,
                 &friend_id,

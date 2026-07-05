@@ -203,10 +203,8 @@ pub async fn app_init() -> AppState {
     #[cfg(target_os = "android")]
     crate::platform::android::call_actions::register_call_client(client.clone());
 
-    // Async variant so an OIDC session that's near-expiry gets refreshed
-    // before the first RPC runs. Falls back to identical behaviour for
-    // password/device-auth sessions.
-    ui_ctx.restore_session_async().await;
+    // Restore a saved device-auth session before the first RPC runs.
+    ui_ctx.restore_session();
 
     // Connect to server (reactor is active here inside block_on)
     let connected = match client.connect().await {
@@ -278,6 +276,7 @@ pub async fn app_init() -> AppState {
         let weak_window = window.as_weak();
         bin_ui::features::modals::spawn_anon_dm_request_handler(weak_window.clone(), &ui_ctx);
         bin_ui::features::modals::spawn_anon_group_invite_handler(weak_window.clone(), &ui_ctx);
+        bin_ui::features::modals::load_channel_invites(weak_window.clone(), &ui_ctx);
 
         {
             let mut domain_rx = ui_ctx.subscribe_events();

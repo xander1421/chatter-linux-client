@@ -38,12 +38,6 @@ pub const MAX_URLS_PER_MESSAGE: usize = 3;
 /// HTTP requests in parallel from one call, to avoid thundering herds.
 pub const PREFETCH_CONCURRENCY: usize = 3;
 
-/// Stub retained for the legacy module path.
-///
-/// Previous callers imported `EmbedService` as a type-level placeholder;
-/// the real caching front-end is [`LinkPreviewService`].
-pub struct EmbedService;
-
 /// URL-keyed link-preview cache with concurrent batch prefetch.
 ///
 /// Keyed globally by URL (not by message id) so the same link shared

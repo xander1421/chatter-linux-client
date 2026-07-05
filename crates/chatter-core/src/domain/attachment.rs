@@ -207,7 +207,10 @@ impl Attachment {
             plaintext_size: self.metadata.size,
             content_type: self.metadata.mime_type.clone(),
             file_name: self.metadata.name.clone(),
-            thumbnail: self.metadata.thumbnail.clone().unwrap_or_default(),
+            thumbnail_cdn_key: self.metadata.thumbnail_cdn_key.clone().unwrap_or_default(),
+            thumbnail_key: self.metadata.thumbnail_key.clone().unwrap_or_default(),
+            thumbnail_digest: self.metadata.thumbnail_digest.clone().unwrap_or_default(),
+            thumbnail_plaintext_size: self.metadata.thumbnail_plaintext_size.unwrap_or(0),
             thumbnail_width: self.metadata.thumbnail_width.unwrap_or(0),
             thumbnail_height: self.metadata.thumbnail_height.unwrap_or(0),
             width: self.metadata.width.unwrap_or(0),
@@ -248,6 +251,19 @@ pub struct FileMetadata {
     pub thumbnail_width: Option<u32>,
     #[serde(default)]
     pub thumbnail_height: Option<u32>,
+    /// Thumbnail sidecar — the thumbnail is uploaded as its own small encrypted
+    /// CDN object (not inlined in the message) so the attachment pointer fits the
+    /// sealed-DM padding budget on every transport. These carry the decryption
+    /// material for that sidecar blob; `thumbnail` above holds the decrypted
+    /// bytes once fetched (sender fills it immediately, receiver lazily).
+    #[serde(default)]
+    pub thumbnail_cdn_key: Option<String>,
+    #[serde(default)]
+    pub thumbnail_key: Option<Vec<u8>>,
+    #[serde(default)]
+    pub thumbnail_digest: Option<Vec<u8>>,
+    #[serde(default)]
+    pub thumbnail_plaintext_size: Option<u32>,
 }
 
 impl FileMetadata {
@@ -267,6 +283,10 @@ impl FileMetadata {
             thumbnail: None,
             thumbnail_width: None,
             thumbnail_height: None,
+            thumbnail_cdn_key: None,
+            thumbnail_key: None,
+            thumbnail_digest: None,
+            thumbnail_plaintext_size: None,
         }
     }
 

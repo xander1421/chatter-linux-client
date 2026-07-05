@@ -135,14 +135,17 @@ impl ConversationHandle {
                 }
                 Ok(())
             }
-            ActiveConversation::MailboxDm { peer_id, .. } => {
-                // Send the reaction content over the wire — the wire payload
-                // only needs target_author + target_sent_timestamp, so don't
-                // block the send on a local DB lookup.
-                let content = crate::services::build_reaction_content(
+            ActiveConversation::None => Err(ConversationError::NoConversation),
+            // DM (mailbox/server) and channel share build + persist; only the
+            // channel embeds a channel_id and the transport differs.
+            _ => {
+                // Wire payload only needs target_author + target_sent_timestamp,
+                // so don't block the send on a local DB lookup.
+                let content = crate::services::build_reaction_content_with_channel(
                     emoji, remove, &target_author_str, target_sent_timestamp,
+                    self.active_channel_id().as_deref(),
                 );
-                self.send_dm_content(content, peer_id).await?;
+                self.dispatch_content(content).await?;
                 // Best-effort local persist: no-op if the target message
                 // isn't in our DB (receiver may have scrolled past it).
                 let _ = self.client.messages().update_reaction_by_sender(
@@ -150,28 +153,6 @@ impl ConversationHandle {
                 );
                 Ok(())
             }
-            ActiveConversation::ServerDm { peer_id } => {
-                let content = crate::services::build_reaction_content(
-                    emoji, remove, &target_author_str, target_sent_timestamp,
-                );
-                self.send_server_dm_content(content, peer_id).await?;
-                let _ = self.client.messages().update_reaction_by_sender(
-                    target_author, target_sent_timestamp, emoji, !remove,
-                );
-                Ok(())
-            }
-            ActiveConversation::Channel(channel_id) => {
-                let content = crate::services::build_reaction_content_with_channel(
-                    emoji, remove, &target_author_str, target_sent_timestamp,
-                    Some(&channel_id.to_string()),
-                );
-                self.send_channel_content(content, channel_id).await?;
-                let _ = self.client.messages().update_reaction_by_sender(
-                    target_author, target_sent_timestamp, emoji, !remove,
-                );
-                Ok(())
-            }
-            ActiveConversation::None => Err(ConversationError::NoConversation),
         }
     }
 
@@ -186,21 +167,13 @@ impl ConversationHandle {
                 self.client.anon_groups().send_typing_indicator(id, started).await?;
                 Ok(())
             }
-            ActiveConversation::MailboxDm { peer_id, .. } => {
-                let content = crate::services::build_typing_content(started);
-                self.send_dm_content(content, peer_id).await
-            }
-            ActiveConversation::ServerDm { peer_id } => {
-                let content = crate::services::build_typing_content(started);
-                self.send_server_dm_content(content, peer_id).await
-            }
-            ActiveConversation::Channel(channel_id) => {
-                let content = crate::services::build_typing_content_with_channel(
-                    started, Some(&channel_id.to_string()),
-                );
-                self.send_channel_content(content, channel_id).await
-            }
             ActiveConversation::None => Err(ConversationError::NoConversation),
+            _ => {
+                let content = crate::services::build_typing_content_with_channel(
+                    started, self.active_channel_id().as_deref(),
+                );
+                self.dispatch_content(content).await
+            }
         }
     }
 
@@ -237,38 +210,18 @@ impl ConversationHandle {
                     .await?;
                 Ok(())
             }
-            ActiveConversation::MailboxDm { peer_id, .. } => {
-                let msg = self.lookup_message(target_author, target_sent_timestamp)?;
-                let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
-                let content = crate::services::build_pin_content(
-                    &author_aci, target_sent_timestamp, unpin,
-                );
-                self.send_dm_content(content, peer_id).await?;
-                let _ = self.client.messages().set_message_pinned(&msg.id, new_pinned);
-                Ok(())
-            }
-            ActiveConversation::ServerDm { peer_id } => {
-                let msg = self.lookup_message(target_author, target_sent_timestamp)?;
-                let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
-                let content = crate::services::build_pin_content(
-                    &author_aci, target_sent_timestamp, unpin,
-                );
-                self.send_server_dm_content(content, peer_id).await?;
-                let _ = self.client.messages().set_message_pinned(&msg.id, new_pinned);
-                Ok(())
-            }
-            ActiveConversation::Channel(channel_id) => {
+            ActiveConversation::None => Err(ConversationError::NoConversation),
+            _ => {
                 let msg = self.lookup_message(target_author, target_sent_timestamp)?;
                 let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
                 let content = crate::services::build_pin_content_with_channel(
                     &author_aci, target_sent_timestamp, unpin,
-                    Some(&channel_id.to_string()),
+                    self.active_channel_id().as_deref(),
                 );
-                self.send_channel_content(content, channel_id).await?;
+                self.dispatch_content(content).await?;
                 let _ = self.client.messages().set_message_pinned(&msg.id, new_pinned);
                 Ok(())
             }
-            ActiveConversation::None => Err(ConversationError::NoConversation),
         }
     }
 
@@ -338,32 +291,15 @@ impl ConversationHandle {
                     .await?;
                 Ok(())
             }
-            ActiveConversation::MailboxDm { peer_id, .. } => {
-                let content = crate::services::gateway::builders::build_edit_content(
-                    target_sent_timestamp, new_text,
-                );
-                self.send_dm_content(content, peer_id).await?;
-                // Persist edit locally
-                self.persist_edit(target_sent_timestamp, new_text);
-                Ok(())
-            }
-            ActiveConversation::ServerDm { peer_id } => {
-                let content = crate::services::gateway::builders::build_edit_content(
-                    target_sent_timestamp, new_text,
-                );
-                self.send_server_dm_content(content, peer_id).await?;
-                self.persist_edit(target_sent_timestamp, new_text);
-                Ok(())
-            }
-            ActiveConversation::Channel(channel_id) => {
-                let content = crate::services::gateway::builders::build_edit_content_with_channel(
-                    target_sent_timestamp, new_text, Some(&channel_id.to_string()),
-                );
-                self.send_channel_content(content, channel_id).await?;
-                self.persist_edit(target_sent_timestamp, new_text);
-                Ok(())
-            }
             ActiveConversation::None => Err(ConversationError::NoConversation),
+            _ => {
+                let content = crate::services::gateway::builders::build_edit_content_with_channel(
+                    target_sent_timestamp, new_text, self.active_channel_id().as_deref(),
+                );
+                self.dispatch_content(content).await?;
+                self.persist_edit(target_sent_timestamp, new_text);
+                Ok(())
+            }
         }
     }
 
@@ -390,32 +326,16 @@ impl ConversationHandle {
                 }
                 Ok(())
             }
-            ActiveConversation::MailboxDm { peer_id, .. } => {
-                let content = crate::services::build_delete_for_everyone_content(
-                    target_sent_timestamp,
+            ActiveConversation::None => Err(ConversationError::NoConversation),
+            _ => {
+                let content = crate::services::build_delete_for_everyone_content_with_channel(
+                    target_sent_timestamp, self.active_channel_id().as_deref(),
                 );
-                self.send_dm_content(content, peer_id).await?;
+                self.dispatch_content(content).await?;
                 // Persist deletion locally (sender doesn't get their own delete back)
                 self.delete_local_by_timestamp(target_sent_timestamp);
                 Ok(())
             }
-            ActiveConversation::ServerDm { peer_id } => {
-                let content = crate::services::build_delete_for_everyone_content(
-                    target_sent_timestamp,
-                );
-                self.send_server_dm_content(content, peer_id).await?;
-                self.delete_local_by_timestamp(target_sent_timestamp);
-                Ok(())
-            }
-            ActiveConversation::Channel(channel_id) => {
-                let content = crate::services::build_delete_for_everyone_content_with_channel(
-                    target_sent_timestamp, Some(&channel_id.to_string()),
-                );
-                self.send_channel_content(content, channel_id).await?;
-                self.delete_local_by_timestamp(target_sent_timestamp);
-                Ok(())
-            }
-            ActiveConversation::None => Err(ConversationError::NoConversation),
         }
     }
 
@@ -438,37 +358,17 @@ impl ConversationHandle {
                     .map(|_| ())
                     .map_err(|e| ConversationError::Other(e.to_string()))
             }
-            ActiveConversation::MailboxDm { peer_id, .. } => {
-                let msg = self.lookup_message(target_author, target_sent_timestamp)?;
-                let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
-                let content = crate::services::build_delete_for_me_content(
-                    &peer_id.to_string(), &author_aci, target_sent_timestamp,
-                );
-                self.send_dm_content(content, peer_id).await?;
-                self.client.messages().delete_message_local(&msg.id)
-                    .map_err(ConversationError::Message)
-            }
-            ActiveConversation::ServerDm { peer_id } => {
-                let msg = self.lookup_message(target_author, target_sent_timestamp)?;
-                let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
-                let content = crate::services::build_delete_for_me_content(
-                    &peer_id.to_string(), &author_aci, target_sent_timestamp,
-                );
-                self.send_server_dm_content(content, peer_id).await?;
-                self.client.messages().delete_message_local(&msg.id)
-                    .map_err(ConversationError::Message)
-            }
-            ActiveConversation::Channel(channel_id) => {
-                let msg = self.lookup_message(target_author, target_sent_timestamp)?;
-                let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
-                let content = crate::services::build_delete_for_me_content(
-                    &channel_id.to_string(), &author_aci, target_sent_timestamp,
-                );
-                self.send_channel_content(content, channel_id).await?;
-                self.client.messages().delete_message_local(&msg.id)
-                    .map_err(ConversationError::Message)
-            }
             ActiveConversation::None => Err(ConversationError::NoConversation),
+            _ => {
+                let msg = self.lookup_message(target_author, target_sent_timestamp)?;
+                let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
+                let content = crate::services::build_delete_for_me_content(
+                    &self.dm_or_channel_id(), &author_aci, target_sent_timestamp,
+                );
+                self.dispatch_content(content).await?;
+                self.client.messages().delete_message_local(&msg.id)
+                    .map_err(ConversationError::Message)
+            }
         }
     }
 
@@ -565,6 +465,24 @@ impl ConversationHandle {
         }
     }
 
+    /// Whether the current user may delete a message for everyone.
+    ///
+    /// DMs let either participant delete any message (`Permissions::dm()`);
+    /// channels and groups are role-based, which here reduces to "you can
+    /// delete your own message". Keeps the capability rule in core.
+    pub fn can_delete_for_everyone(
+        &self,
+        target_author: &UserId,
+        target_sent_timestamp: u64,
+    ) -> ConversationResult<bool> {
+        use crate::domain::channel::Permissions;
+        match &self.conversation {
+            ActiveConversation::AnonDm(_)
+            | ActiveConversation::MailboxDm { .. }
+            | ActiveConversation::ServerDm { .. } => Ok(Permissions::dm().can_delete_any_message),
+            _ => self.is_own_message(target_author, target_sent_timestamp),
+        }
+    }
 
     // ========================================================================
     // Receipts
@@ -581,21 +499,13 @@ impl ConversationHandle {
             }
             // Groups don't track per-user read state to preserve sender anonymity.
             ActiveConversation::AnonGroup(_) => Ok(()),
-            ActiveConversation::MailboxDm { peer_id, .. } => {
-                let content = crate::services::gateway::build_read_receipt_content(timestamps.to_vec());
-                self.send_dm_content(content, peer_id).await
-            }
-            ActiveConversation::ServerDm { peer_id } => {
-                let content = crate::services::gateway::build_read_receipt_content(timestamps.to_vec());
-                self.send_server_dm_content(content, peer_id).await
-            }
-            ActiveConversation::Channel(channel_id) => {
-                let content = crate::services::gateway::build_read_receipt_content_with_channel(
-                    timestamps.to_vec(), Some(&channel_id.to_string()),
-                );
-                self.send_channel_content(content, channel_id).await
-            }
             ActiveConversation::None => Err(ConversationError::NoConversation),
+            _ => {
+                let content = crate::services::gateway::build_read_receipt_content_with_channel(
+                    timestamps.to_vec(), self.active_channel_id().as_deref(),
+                );
+                self.dispatch_content(content).await
+            }
         }
     }
 
@@ -610,21 +520,13 @@ impl ConversationHandle {
             }
             // Groups don't track per-user delivery state to preserve sender anonymity.
             ActiveConversation::AnonGroup(_) => Ok(()),
-            ActiveConversation::MailboxDm { peer_id, .. } => {
-                let content = crate::services::gateway::build_delivery_receipt_content(timestamps.to_vec());
-                self.send_dm_content(content, peer_id).await
-            }
-            ActiveConversation::ServerDm { peer_id } => {
-                let content = crate::services::gateway::build_delivery_receipt_content(timestamps.to_vec());
-                self.send_server_dm_content(content, peer_id).await
-            }
-            ActiveConversation::Channel(channel_id) => {
-                let content = crate::services::gateway::build_delivery_receipt_content_with_channel(
-                    timestamps.to_vec(), Some(&channel_id.to_string()),
-                );
-                self.send_channel_content(content, channel_id).await
-            }
             ActiveConversation::None => Err(ConversationError::NoConversation),
+            _ => {
+                let content = crate::services::gateway::build_delivery_receipt_content_with_channel(
+                    timestamps.to_vec(), self.active_channel_id().as_deref(),
+                );
+                self.dispatch_content(content).await
+            }
         }
     }
 
@@ -899,5 +801,40 @@ impl ConversationHandle {
             .await
             .map(|_| ())
             .map_err(ConversationError::Message)
+    }
+
+    /// The active channel's id as a string, or `None` for DM conversations.
+    /// Channel builders embed it for routing; DM builders leave it empty.
+    fn active_channel_id(&self) -> Option<String> {
+        match &self.conversation {
+            ActiveConversation::Channel(cid) => Some(cid.to_string()),
+            _ => None,
+        }
+    }
+
+    /// The conversation-id payload field for delete-for-me sync: the peer's
+    /// id for DMs, the channel id for channels.
+    fn dm_or_channel_id(&self) -> String {
+        match &self.conversation {
+            ActiveConversation::MailboxDm { peer_id, .. }
+            | ActiveConversation::ServerDm { peer_id } => peer_id.to_string(),
+            ActiveConversation::Channel(cid) => cid.to_string(),
+            _ => String::new(),
+        }
+    }
+
+    /// Route already-built `Content` to the transport for the active DM or
+    /// channel conversation. Valid only for MailboxDm / ServerDm / Channel;
+    /// anon and None return `NoConversation`.
+    async fn dispatch_content(
+        &self,
+        content: crate::proto::content_v1::Content,
+    ) -> ConversationResult {
+        match &self.conversation {
+            ActiveConversation::MailboxDm { peer_id, .. } => self.send_dm_content(content, peer_id).await,
+            ActiveConversation::ServerDm { peer_id } => self.send_server_dm_content(content, peer_id).await,
+            ActiveConversation::Channel(channel_id) => self.send_channel_content(content, channel_id).await,
+            _ => Err(ConversationError::NoConversation),
+        }
     }
 }

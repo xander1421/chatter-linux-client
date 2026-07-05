@@ -144,29 +144,6 @@ pub fn build_data_message_content_with_quote(
     }
 }
 
-/// Create a Content proto for a channel message with channel_id.
-///
-/// Used for group fanout delivery where the channel_id must be embedded
-/// in the DataMessage so recipients can route the decrypted content.
-pub fn build_data_message_content_with_channel(
-    body: &str,
-    attachments: Vec<AttachmentPointer>,
-    channel_id: &str,
-    sent_at: u64,
-) -> Content {
-    Content {
-        timestamp: sent_at,
-        content: Some(content::Content::DataMessage(DataMessage {
-            body: body.to_string(),
-            timestamp: sent_at,
-            channel_id: channel_id.to_string(),
-            attachments,
-            ..Default::default()
-        })),
-        ..Default::default()
-    }
-}
-
 /// Create a Content proto for typing indicator.
 pub fn build_typing_content(started: bool) -> Content {
     build_typing_content_with_channel(started, None)

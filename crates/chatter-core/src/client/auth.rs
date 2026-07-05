@@ -76,24 +76,6 @@ impl ChatterClient {
     /// If `pin` is provided and this is a new device (no local identity keys),
     /// the method attempts to restore keys from an SVR backup. The result
     /// fields `keys_restored` / `keys_missing` indicate the outcome.
-    #[cfg(not(target_os = "android"))]
-    pub fn oidc(&self) -> Arc<crate::services::oidc_service::OidcService> {
-        self.oidc_service.get_or_init(|| {
-            Arc::new(crate::services::oidc_service::OidcService::new(self.ui.auth_service.settings_repo.clone()))
-        }).clone()
-    }
-
-    pub async fn login_with_oidc_token(
-        &self,
-        access_token: &str,
-        _device_name: &str,
-    ) -> Result<LoginResult, ClientError> {
-        self.auth()
-            .login_with_oidc_token(access_token)
-            .await
-            .map_err(ClientError::Auth)
-    }
-
     pub async fn login(
         self: &Arc<Self>,
         username: &str,

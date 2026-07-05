@@ -3,7 +3,6 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
-import { Icons } from "../theme/icons.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 
@@ -12,16 +11,12 @@ export component LoginPage inherits Rectangle {
     in-out property <string> password: "";
     in-out property <string> pin: "";
     in-out property <string> server-url: "";
-    in-out property <string> sso-issuer-url: "";
-    in-out property <string> sso-client-id: "chatter-app";
     in property <bool> loading: false;
     in property <string> error: "";
 
     property <bool> submitted: false;
-    property <bool> show-advanced: false;
 
     callback login(string, string, string, string);
-    callback sso-login(string, string, string);
     callback register();
     callback go-to-recovery();
     callback go-to-link-device();
@@ -129,34 +124,6 @@ export component LoginPage inherits Rectangle {
 
                     }
 
-                    // Advanced settings toggle (SSO config only)
-                    HorizontalLayout {
-                        alignment: start;
-                        spacing: 4px;
-
-                        Image {
-                            source: root.show-advanced ? Icons.chevron-left : Icons.chevron-right;
-                            width: 12px;
-                            height: 12px;
-                            colorize: Colors.text-muted;
-                            y: (parent.height - self.height) / 2;
-                            // Rotate down when expanded
-                            transform-rotation: root.show-advanced ? -90deg : 0deg;
-                        }
-
-                        Text {
-                            text: "Advanced";
-                            color: Colors.text-muted;
-                            font-size: Typography.xs;
-                            vertical-alignment: center;
-
-                            TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => { root.show-advanced = !root.show-advanced; }
-                            }
-                        }
-                    }
-
                     if error != "": Text {
                         text: root.error;
                         color: Colors.error;
@@ -189,43 +156,6 @@ export component LoginPage inherits Rectangle {
                             if username != "" && password != "" && server-url != "" {
                                 root.login(root.username, root.password, root.server-url, root.pin);
                             }
-                        }
-                    }
-
-                    // SSO divider
-                    HorizontalLayout {
-                        spacing: Spacing.sm;
-                        Rectangle { height: 1px; background: Colors.border; vertical-stretch: 0; horizontal-stretch: 1; y: (parent.height - self.height) / 2; }
-                        Text { text: "or"; color: Colors.text-muted; font-size: Typography.xs; vertical-alignment: center; }
-                        Rectangle { height: 1px; background: Colors.border; vertical-stretch: 0; horizontal-stretch: 1; y: (parent.height - self.height) / 2; }
-                    }
-
-                    // SSO login button
-                    Button {
-                        text: loading ? "" : "Login with SSO";
-                        variant: "secondary";
-                        loading: root.loading;
-                        disabled: root.loading;
-
-                        clicked => {
-                            if server-url != "" {
-                                root.sso-login(root.server-url, root.sso-issuer-url, root.sso-client-id);
-                            }
-                        }
-                    }
-
-                    // SSO config (in Advanced section)
-                    if root.show-advanced: VerticalLayout {
-                        spacing: 2px;
-                        Input {
-                            placeholder: "SSO Issuer URL (e.g. http://localhost:8180/realms/chatter)";
-                            text <=> root.sso-issuer-url;
-                            disabled: root.loading;
-                        }
-                        Input {
-                            placeholder: "SSO Client ID";
-                            text <=> root.sso-client-id;
-                            disabled: root.loading;
                         }
                     }
 

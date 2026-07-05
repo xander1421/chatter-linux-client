@@ -70,9 +70,10 @@ fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<ChatterClient
             if let Ok(replies) = ui_ctx.list_thread_replies(&thread.root_message_id, None, 50) {
                 let display = messages_to_display_batch(
                     &replies,
-                    |uid| ui_ctx.display_name(uid),
+                    |m| ui_ctx.message_sender_display_name(m),
                     |att_id| ui_ctx.get_attachment(att_id),
-                    |pid| ui_ctx.reply_parent_missing(pid),
+                    |m| ui_ctx.reply_author_display_name(m),
+                    |m| ui_ctx.reply_parent_missing_for(m),
                 );
                 let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
                 let _ = slint::invoke_from_event_loop(move || { if let Some(w) = weak.upgrade() {
@@ -109,9 +110,10 @@ pub fn load_thread_data(
                 .unwrap_or_else(|| "Unknown".to_string());
             let display = messages_to_display_batch(
                 &replies,
-                |uid| ui_ctx.display_name(uid),
+                |m| ui_ctx.message_sender_display_name(m),
                 |att_id| ui_ctx.get_attachment(att_id),
-                |pid| ui_ctx.reply_parent_missing(pid),
+                |m| ui_ctx.reply_author_display_name(m),
+                |m| ui_ctx.reply_parent_missing_for(m),
             );
             let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
             let _ = slint::invoke_from_event_loop(move || { if let Some(w) = window.upgrade() {

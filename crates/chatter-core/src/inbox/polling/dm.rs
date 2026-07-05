@@ -17,7 +17,7 @@ use crate::inbox::handlers::DomainEvent;
 use crate::mailbox::dm::{ConversationKey, DmConversationManager, PeerMailbox, TwoWayAnonymity};
 use crate::network::grpc::AnonymousMailboxClient;
 use crate::network::validation::MessageDeduplicator;
-use crate::services::message_gateway::{DmContent, MessageGateway};
+use crate::services::gateway::{DmContent, MessageGateway};
 use crate::services::attachment::AttachmentService;
 use crate::storage::repositories::settings_repo::keys;
 use crate::storage::repositories::user_repo::UserRepository;
@@ -288,7 +288,7 @@ fn dispatch_dm_content(
     );
 
     match dm_content {
-        DmContent::Text { body, timestamp, attachments, profile_key } => {
+        DmContent::Text { body, timestamp, attachments, profile_key, quote } => {
             // Store sender's profile key if present (for decrypting their display_name)
             if let Some(ref key) = profile_key {
                 if key.len() == 32 {
@@ -388,6 +388,14 @@ fn dispatch_dm_content(
                     .filter(|p| !p.cdn_key.is_empty())
                     .map(|p| AttachmentId::from_cdn_key(&p.cdn_key))
                     .collect();
+
+                // Carry the reply quote so the receiver's bubble keeps its
+                // reply context. Shared with the ServerDm inbound path.
+                crate::services::gateway::inbound::apply_inbound_quote(
+                    &mut message,
+                    quote.as_ref(),
+                    message_repo,
+                );
 
                 match message_repo.insert_or_ignore(&message) {
                     Ok(true) => {
@@ -1029,7 +1037,7 @@ async fn try_parse_bootstrap_response(
     {
         Ok(result) => {
             match result {
-                crate::services::message_gateway::SealedSenderResult::KeyExchange {
+                crate::services::gateway::SealedSenderResult::KeyExchange {
                     ephemeral_public_key,
                     ..
                 } => {
@@ -1055,28 +1063,28 @@ async fn try_parse_bootstrap_response(
 
                     result
                 }
-                crate::services::message_gateway::SealedSenderResult::MessageStored => {
+                crate::services::gateway::SealedSenderResult::MessageStored => {
                     tracing::debug!(
                         peer_id = %peer_id,
                         "Decrypted and stored message (not a KeyExchange)"
                     );
                     None
                 }
-                crate::services::message_gateway::SealedSenderResult::SenderKeyRequested { .. } => {
+                crate::services::gateway::SealedSenderResult::SenderKeyRequested { .. } => {
                     tracing::debug!(
                         peer_id = %peer_id,
                         "Received SenderKeyRequest in DM bootstrap path (unexpected)"
                     );
                     None
                 }
-                crate::services::message_gateway::SealedSenderResult::MailboxAnnouncement { .. } => {
+                crate::services::gateway::SealedSenderResult::MailboxAnnouncement { .. } => {
                     tracing::debug!(
                         peer_id = %peer_id,
                         "Received MailboxAnnouncement in DM bootstrap path (unexpected)"
                     );
                     None
                 }
-                crate::services::message_gateway::SealedSenderResult::DataMessageReceived { .. } => {
+                crate::services::gateway::SealedSenderResult::DataMessageReceived { .. } => {
                     tracing::debug!(
                         peer_id = %peer_id,
                         "Received DataMessage in DM bootstrap path (unexpected)"

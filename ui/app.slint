@@ -473,12 +473,15 @@ export component App inherits Rectangle {
     in property <[FriendRequestData]> friends-sent-requests: [];
     in property <[FriendRequestData]> friends-private-requests: [];
     in property <[FriendRequestData]> friends-group-invites: [];
+    in property <[FriendRequestData]> friends-channel-invites: [];
     in property <[BlockedUserData]> friends-blocked-users: [];
     in property <bool> friends-loading: false;
     // Pending message requests count (for sidebar badge)
     in property <int> pending-message-requests: 0;
     // Pending group invites count (for sidebar badge)
     in property <int> pending-group-invites: 0;
+    // Pending channel invites count (for sidebar badge)
+    in property <int> pending-channel-invites: 0;
     // Friend code (privacy-first discovery)
     in-out property <string> friends-my-code: "";
     in-out property <string> friends-code-input: "";
@@ -595,7 +598,6 @@ export component App inherits Rectangle {
     callback go-to-login();
     callback go-to-recovery();
     callback go-to-link-device();
-    callback sso-login(string, string, string);
 
     // Welcome page callbacks
     callback welcome-add-friends();
@@ -650,7 +652,6 @@ export component App inherits Rectangle {
     callback remove-attachment(string);
     callback typing-changed(bool);  // true when started typing, false when stopped
     callback process-text(string) -> string;  // Insert word breaks for text wrapping
-    callback format-text(string);  // Apply formatting: "bold", "italic", "code", "strikethrough"
     callback scroll-to-bottom-clicked();  // Emitted when scroll-to-bottom button is clicked
     callback start-voice-call();  // Start voice call in current channel
     callback start-video-call();  // Start video call in current channel
@@ -725,10 +726,14 @@ export component App inherits Rectangle {
     callback friends-block-private-request(string);    // Block anon DM request
     callback friends-accept-group-invite(string);      // Accept anon group invite
     callback friends-decline-group-invite(string);     // Decline anon group invite
+    callback friends-accept-channel-invite(string);    // Accept channel invite
+    callback friends-decline-channel-invite(string);   // Decline channel invite
     // Message requests (anon DM)
     callback message-requests-clicked();
     // Group invites (anon groups)
     callback group-invites-clicked();
+    // Channel invites
+    callback channel-invites-clicked();
 
     // Forward message
     callback forward-message(string);
@@ -891,7 +896,6 @@ export component App inherits Rectangle {
 
         // Login page
         if current-view == "login": LoginPage {
-        sso-login(server-url, issuer-url, client-id) => { root.sso-login(server-url, issuer-url, client-id); }
             username <=> root.login-username;
             password <=> root.login-password;
             pin <=> root.login-pin;
@@ -1029,6 +1033,7 @@ export component App inherits Rectangle {
                 pending-friend-requests: root.friends-received-requests.length;
                 pending-message-requests: root.pending-message-requests;
                 pending-group-invites: root.pending-group-invites;
+                pending-channel-invites: root.pending-channel-invites;
 
                 channel-selected(id) => {
                     root.channel-selected(id);
@@ -1051,6 +1056,15 @@ export component App inherits Rectangle {
                 friends-clicked => {
                     root.active-modal = "friends";
                 }
+                friend-requests-clicked => {
+                    // Open friends modal on Requests → Received. The Received tab
+                    // is populated by the FriendRequestsUpdated event path (with
+                    // decrypted sender name/avatar/note), so no refresh callback
+                    // is needed here — just reveal it.
+                    root.friends-modal-tab = "requests";
+                    root.friends-requests-sub-tab = "received";
+                    root.active-modal = "friends";
+                }
                 message-requests-clicked => {
                     // Open friends modal with requests tab and private sub-tab selected
                     root.friends-modal-tab = "requests";
@@ -1064,6 +1078,13 @@ export component App inherits Rectangle {
                     root.friends-requests-sub-tab = "groups";
                     root.active-modal = "friends";
                     root.group-invites-clicked();
+                }
+                channel-invites-clicked => {
+                    // Open friends modal with requests tab and channels sub-tab selected
+                    root.friends-modal-tab = "requests";
+                    root.friends-requests-sub-tab = "channels";
+                    root.active-modal = "friends";
+                    root.channel-invites-clicked();
                 }
                 profile-clicked => {
                     root.profile-clicked();
@@ -1291,7 +1312,6 @@ export component App inherits Rectangle {
                     remove-attachment(id) => { root.remove-attachment(id); }
                     typing-changed(is-typing) => { root.typing-changed(is-typing); }
                     process-text(text) => { return root.process-text(text); }
-                    format-text(fmt) => { root.format-text(fmt); }
                     scroll-to-bottom-clicked => { root.scroll-to-bottom-clicked(); }
                 }
                     } // end VerticalLayout (call dock + ChatLayout)
@@ -1623,6 +1643,7 @@ export component App inherits Rectangle {
         sent-requests: root.friends-sent-requests;
         private-requests: root.friends-private-requests;
         group-invites: root.friends-group-invites;
+        channel-invites: root.friends-channel-invites;
         blocked-users: root.friends-blocked-users;
         loading: root.friends-loading;
         // Friend code (privacy-first discovery)
@@ -1701,6 +1722,12 @@ export component App inherits Rectangle {
         }
         decline-group-invite(group-id) => {
             root.friends-decline-group-invite(group-id);
+        }
+        accept-channel-invite(channel-id) => {
+            root.friends-accept-channel-invite(channel-id);
+        }
+        decline-channel-invite(channel-id) => {
+            root.friends-decline-channel-invite(channel-id);
         }
     }
 

@@ -537,17 +537,15 @@ async fn route_channel_dm(
     file_paths: Vec<PathBuf>,
     quote: Option<QuoteIntent>,
 ) -> Result<SendResult, MessageError> {
-    // Use pre-uploaded pointers if available, otherwise upload from file paths
-    // NOTE: when `attachment_pointers` is non-empty we still go through the
-    // plain `send_dm_with_pointers` path (no quote-aware variant exists yet),
-    // and patch the stored row below so reply metadata is persisted.
-    let patch_pointer_path = !attachment_pointers.is_empty() && quote.is_some();
+    // Both branches carry the quote on the wire (via build_reply_content) and
+    // stamp the local echo's reply fields — no post-send patch needed.
     let dm_result = if !attachment_pointers.is_empty() {
         let attachment_ids = attachment_pointers.iter()
             .map(|p| crate::domain::AttachmentId::from_cdn_key(&p.cdn_key))
             .collect();
         message_service.send_dm_with_pointers(
             peer_id, dm_channel_id, text, attachment_pointers, attachment_ids, mailbox_manager,
+            quote.as_ref(),
         ).await?
     } else {
         let path_refs: Vec<&std::path::Path> = file_paths.iter().map(|p| p.as_path()).collect();
@@ -560,30 +558,6 @@ async fn route_channel_dm(
         } else {
             message_service.send_dm_with_files(peer_id, dm_channel_id, text, path_refs, mailbox_manager).await?
         }
-    };
-
-    // Patch the locally stored message with reply/quote context when the send
-    // path doesn't natively carry it (currently: pointer-based sends). Without
-    // this, navigating away and back would render the reply bubble without
-    // its quote preview.
-    let dm_result = if patch_pointer_path {
-        let mut result = dm_result;
-        if let (Some(msg), Some(q)) = (result.message.take(), quote) {
-            result.message = Some(
-                message_service
-                    .persist_outgoing_reply_context(msg, &q)
-                    .unwrap_or_else(|(m, err)| {
-                        tracing::warn!(
-                            error = %err,
-                            "Failed to persist outgoing DM reply context; quote will be visible this session only"
-                        );
-                        m
-                    }),
-            );
-        }
-        result
-    } else {
-        dm_result
     };
 
     Ok(SendResult {
@@ -609,25 +583,12 @@ async fn route_server_dm(
     quote: Option<QuoteIntent>,
 ) -> Result<SendResult, MessageError> {
     let sent_at = crate::util::time::TimestampNanos::now().as_u64();
-    let mut dm_result = message_service
-        .send_server_dm(peer_id, text, attachment_pointers, sent_at)
+    // `send_server_dm` carries the quote on the wire (via build_reply_content)
+    // AND stores the reply metadata on the local echo, so no separate
+    // persist-patch is needed here.
+    let dm_result = message_service
+        .send_server_dm(peer_id, text, attachment_pointers, sent_at, quote.as_ref())
         .await?;
-
-    // Persist quote/reply context so reply bubbles survive a reload —
-    // mirrors the behaviour of the channel + mailbox-DM paths.
-    if let (Some(msg), Some(q)) = (dm_result.message.take(), quote) {
-        dm_result.message = Some(
-            message_service
-                .persist_outgoing_reply_context(msg, &q)
-                .unwrap_or_else(|(m, err)| {
-                    tracing::warn!(
-                        error = %err,
-                        "Failed to persist outgoing ServerDm reply context; quote will be visible this session only"
-                    );
-                    m
-                }),
-        );
-    }
 
     Ok(SendResult {
         sent_at: dm_result.sent_at,

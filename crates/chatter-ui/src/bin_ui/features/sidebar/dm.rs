@@ -9,7 +9,6 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::{ChannelId, UserId};
 use chatter_core::domain::AnonDmId;
-use chatter_core::domain::user::PresenceStatus;
 
 use crate::{MainWindow, run_ui};
 use crate::bin_ui::converters::messages_to_display_batch;
@@ -133,7 +132,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let ids = pinned.iter().map(|m| m.id).collect();
                     let preview = pinned[0].as_text()
                         .filter(|t| !t.is_empty())
-                        .map(|t| if t.len() > 80 { format!("{}...", &t[..77]) } else { t.to_string() })
+                        .map(|t| ui_ctx.truncate_message_preview(&t))
                         .unwrap_or_else(|| "[Pinned message]".to_string());
                     (ids, preview)
                 };
@@ -152,9 +151,10 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                 let display_messages = messages_to_display_batch(
                     &messages,
-                    |uid| ui_ctx.display_name(uid),
+                    |m| ui_ctx.message_sender_display_name(m),
                     |att_id| ui_ctx.get_attachment(att_id),
-                    |pid| ui_ctx.reply_parent_missing(pid),
+                    |m| ui_ctx.reply_author_display_name(m),
+                    |m| ui_ctx.reply_parent_missing_for(m),
                 );
 
                 // Get conversation info for the header
@@ -241,19 +241,15 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 .unwrap_or_else(|| peer_id.to_string());
             
             let status_str = peer_profile.as_ref()
-                .map(|p| match p.presence {
-                    PresenceStatus::Online => "online",
-                    PresenceStatus::Away => "away",
-                    PresenceStatus::DoNotDisturb => "dnd",
-                    PresenceStatus::Offline => "offline",
-                })
+                .map(|p| p.presence.as_str())
                 .unwrap_or("offline");
 
             let display_messages = messages_to_display_batch(
                 &messages,
-                |uid| ui_ctx.display_name(uid),
+                |m| ui_ctx.message_sender_display_name(m),
                 |att_id| ui_ctx.get_attachment(att_id),
-                |pid| ui_ctx.reply_parent_missing(pid),
+                |m| ui_ctx.reply_author_display_name(m),
+                |m| ui_ctx.reply_parent_missing_for(m),
             );
 
             // Decode the peer's avatar (Send-safe RGBA); the non-Send Image is

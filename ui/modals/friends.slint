@@ -67,11 +67,12 @@ export component FriendsModal inherits Rectangle {
     in property <bool> search-loading: false;
 
     // Requests tab data
-    in-out property <string> requests-sub-tab: "received";  // "received", "sent", "private", or "groups"
+    in-out property <string> requests-sub-tab: "received";  // "received", "sent", "private", "groups", or "channels"
     in property <[FriendRequestData]> received-requests: [];
     in property <[FriendRequestData]> sent-requests: [];
     in property <[FriendRequestData]> private-requests: [];  // Anonymous DM requests
     in property <[FriendRequestData]> group-invites: [];     // Pending anonymous group invites
+    in property <[FriendRequestData]> channel-invites: [];   // Pending channel invitations
 
     // Blocked tab data
     in property <[BlockedUserData]> blocked-users: [];
@@ -121,6 +122,10 @@ export component FriendsModal inherits Rectangle {
     // Group invite actions
     callback accept-group-invite(string);      // group_id
     callback decline-group-invite(string);     // group_id
+
+    // Channel invite actions
+    callback accept-channel-invite(string);    // channel_id
+    callback decline-channel-invite(string);   // channel_id
 
     // Blocked actions
     callback unblock-user(string);    // user_id
@@ -494,14 +499,6 @@ export component FriendsModal inherits Rectangle {
                                 }
                             }
 
-                            // Optional intro note — sent E2E-encrypted with the
-                            // friend request. Placed above the code entry so it
-                            // reads note → code → Connect.
-                            Input {
-                                placeholder: "Add a note (optional)";
-                                text <=> root.request-note;
-                            }
-
                             // Enter friend's code
                             HorizontalLayout {
                                 spacing: Spacing.sm;
@@ -547,6 +544,14 @@ export component FriendsModal inherits Rectangle {
                                         }
                                     }
                                 }
+                            }
+
+                            // Optional intro note — sent E2E-encrypted with the
+                            // friend request. Below the code entry: enter code →
+                            // add note → Connect.
+                            Input {
+                                placeholder: "Add a note (optional)";
+                                text <=> root.request-note;
                             }
 
                             // Private mode toggle
@@ -805,6 +810,39 @@ export component FriendsModal inherits Rectangle {
                                 mouse-cursor: pointer;
                                 clicked => {
                                     root.requests-sub-tab = "groups";
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            background: channels-tab-touch.has-hover ? Colors.surface-hover.with-alpha(0.3) : transparent;
+
+                            VerticalLayout {
+                                HorizontalLayout {
+                                    alignment: center;
+                                    vertical-stretch: 1;
+
+                                    Text {
+                                        text: "Channels (" + root.channel-invites.length + ")";
+                                        color: root.requests-sub-tab == "channels" ? Colors.text-primary : Colors.text-secondary;
+                                        font-size: Typography.xs;
+                                        font-weight: root.requests-sub-tab == "channels" ? Typography.semibold : Typography.normal;
+                                    }
+                                }
+
+                                Rectangle {
+                                    height: 2px;
+                                    background: root.requests-sub-tab == "channels" ? Colors.primary : transparent;
+                                }
+                            }
+
+                            channels-tab-touch := TouchArea {
+                                width: 100%;
+                                height: 100%;
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.requests-sub-tab = "channels";
                                 }
                             }
                         }
@@ -1252,6 +1290,141 @@ export component FriendsModal inherits Rectangle {
 
                                                 clicked => {
                                                     root.decline-group-invite(invite.user-id);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Channel invites (pending channel invitations)
+                    if root.requests-sub-tab == "channels": VerticalLayout {
+                        vertical-stretch: 1;
+
+                        if root.channel-invites.length == 0: VerticalLayout {
+                            alignment: center;
+                            spacing: Spacing.sm;
+
+                            Text {
+                                text: "\u{0023}";  // Hash
+                                font-size: Typography.huge;
+                                horizontal-alignment: center;
+                            }
+
+                            Text {
+                                text: "No pending channel invites";
+                                color: Colors.text-muted;
+                                font-size: Typography.base;
+                                horizontal-alignment: center;
+                            }
+
+                            Text {
+                                text: "Accept an invite to join the channel";
+                                color: Colors.text-muted.with-alpha(0.7);
+                                font-size: Typography.sm;
+                                horizontal-alignment: center;
+                            }
+                        }
+
+                        if root.channel-invites.length > 0: Flickable {
+                            viewport-height: channel-invite-list.preferred-height;
+
+                            channel-invite-list := VerticalLayout {
+                                spacing: Spacing.xs;
+
+                                for invite in root.channel-invites: Rectangle {
+                                    height: 72px;
+                                    background: ci-touch.has-hover ? Colors.surface-hover : transparent;
+                                    border-radius: Spacing.radius-md;
+                                    border-width: ci-touch.has-hover ? 1px : 0px;
+                                    border-color: Colors.neo-highlight;
+
+                                    ci-touch := TouchArea {}
+
+                                    HorizontalLayout {
+                                        padding: Spacing.sm;
+                                        spacing: Spacing.sm;
+
+                                        // Hash icon for channel
+                                        Rectangle {
+                                            width: 40px;
+                                            height: 40px;
+                                            border-radius: 20px;
+                                            background: Colors.primary.with-alpha(0.2);
+
+                                            Text {
+                                                text: "\u{0023}";  // Hash
+                                                font-size: Typography.xl;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                                width: 100%;
+                                                height: 100%;
+                                            }
+                                        }
+
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            alignment: center;
+                                            spacing: 2px;
+
+                                            HorizontalLayout {
+                                                spacing: Spacing.xs;
+
+                                                Text {
+                                                    text: invite.display-name;
+                                                    color: Colors.text-primary;
+                                                    font-size: Typography.sm;
+                                                    font-weight: Typography.medium;
+                                                    overflow: elide;
+                                                }
+
+                                                Rectangle {
+                                                    width: 16px;
+                                                    height: 16px;
+                                                    border-radius: 8px;
+                                                    background: Colors.primary.with-alpha(0.2);
+
+                                                    Text {
+                                                        text: "\u{0023}";
+                                                        font-size: Typography.xxs;
+                                                        horizontal-alignment: center;
+                                                        vertical-alignment: center;
+                                                        width: 100%;
+                                                        height: 100%;
+                                                    }
+                                                }
+                                            }
+
+                                            // Invitation message (stored in note field)
+                                            if invite.note != "": Text {
+                                                text: invite.note;
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                                overflow: elide;
+                                            }
+                                        }
+
+                                        HorizontalLayout {
+                                            spacing: Spacing.xs;
+                                            alignment: center;
+
+                                            Button {
+                                                text: "Join";
+                                                variant: "primary";
+
+                                                clicked => {
+                                                    root.accept-channel-invite(invite.user-id);
+                                                }
+                                            }
+
+                                            Button {
+                                                text: "Decline";
+                                                variant: "ghost";
+
+                                                clicked => {
+                                                    root.decline-channel-invite(invite.user-id);
                                                 }
                                             }
                                         }

@@ -18,7 +18,6 @@ pub mod envelope_crypto;
 pub mod kdf;
 pub mod profile_crypto;
 pub mod provisioning;
-pub mod rng;
 pub mod secret_key;
 pub mod secret_string;
 pub mod secure_buffer;

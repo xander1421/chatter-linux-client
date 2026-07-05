@@ -8,7 +8,6 @@ use std::sync::Arc;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::domain::channel::ChannelType;
 use chatter_core::domain::ids::SectionId;
 use chatter_core::domain::message::ConversationType;
 
@@ -289,12 +288,8 @@ fn refresh_channel_list(
     weak: &slint::Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
 ) {
-    let channels = ui_ctx.get_channels_mru();
-    // Filter on this thread, then convert on UI thread — slint::Image is !Send.
-    let filtered: Vec<_> = channels
-        .into_iter()
-        .filter(|c| matches!(c.channel_type, ChannelType::Public | ChannelType::Private))
-        .collect();
+    // Sidebar-inclusion rule (Public/Private, anon-mode aware) lives in core.
+    let filtered = ui_ctx.sidebar_channels();
     let ui_ctx_convert = ui_ctx.clone();
     run_ui!(weak, |w| {
         let channel_list: Vec<_> = filtered.iter().map(|c| channel_to_slint(c, &ui_ctx_convert)).collect();

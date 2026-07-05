@@ -5,9 +5,11 @@
 mod crypto;
 mod download;
 mod media;
+mod range_decrypt;
 mod upload;
 
 pub use media::{GifDecodeResult, GifFullDecodeResult, ImageDecodeResult};
+pub use range_decrypt::{CbcRangeDecryptor, CbcRangeReader};
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -76,8 +78,16 @@ pub struct CdnUploadResult {
     pub waveform: Vec<u8>,
     /// Duration in milliseconds - only for audio/video.
     pub duration_ms: u64,
-    /// Thumbnail JPEG bytes - only for images/videos.
+    /// Decoded thumbnail bytes - only for images/videos (kept for the sender's
+    /// own local preview; not sent inline).
     pub thumbnail: Vec<u8>,
+    /// Thumbnail sidecar reference: the thumbnail is uploaded as its own small
+    /// encrypted CDN object so the pointer fits the sealed-DM budget on every
+    /// transport. Empty when there is no thumbnail.
+    pub thumbnail_cdn_key: String,
+    pub thumbnail_key: Vec<u8>,
+    pub thumbnail_digest: Vec<u8>,
+    pub thumbnail_plaintext_size: u32,
     /// Thumbnail width.
     pub thumbnail_width: u32,
     /// Thumbnail height.
@@ -117,13 +127,14 @@ impl CdnUploadResult {
             file_name: self.file_name.clone(),
             waveform: self.waveform.clone(),
             duration_ms: self.duration_ms,
-            thumbnail: self.thumbnail.clone(),
+            thumbnail_cdn_key: self.thumbnail_cdn_key.clone(),
+            thumbnail_key: self.thumbnail_key.clone(),
+            thumbnail_digest: self.thumbnail_digest.clone(),
+            thumbnail_plaintext_size: self.thumbnail_plaintext_size,
             thumbnail_width: self.thumbnail_width,
             thumbnail_height: self.thumbnail_height,
             width: self.width,
             height: self.height,
-            incremental_mac: self.incremental_mac.clone(),
-            chunk_size: self.chunk_size,
             ciphertext_size: self.ciphertext_size,
             ..Default::default()
         }
@@ -340,11 +351,9 @@ impl AttachmentService {
                     } else {
                         Some(pointer.waveform.clone())
                     },
-                    thumbnail: if pointer.thumbnail.is_empty() {
-                        None
-                    } else {
-                        Some(pointer.thumbnail.clone())
-                    },
+                    // Thumbnail bytes are fetched lazily from the sidecar (see
+                    // ensure_thumbnail); only the reference lands here on receive.
+                    thumbnail: None,
                     thumbnail_width: if pointer.thumbnail_width > 0 {
                         Some(pointer.thumbnail_width)
                     } else {
@@ -352,6 +361,26 @@ impl AttachmentService {
                     },
                     thumbnail_height: if pointer.thumbnail_height > 0 {
                         Some(pointer.thumbnail_height)
+                    } else {
+                        None
+                    },
+                    thumbnail_cdn_key: if pointer.thumbnail_cdn_key.is_empty() {
+                        None
+                    } else {
+                        Some(pointer.thumbnail_cdn_key.clone())
+                    },
+                    thumbnail_key: if pointer.thumbnail_key.is_empty() {
+                        None
+                    } else {
+                        Some(pointer.thumbnail_key.clone())
+                    },
+                    thumbnail_digest: if pointer.thumbnail_digest.is_empty() {
+                        None
+                    } else {
+                        Some(pointer.thumbnail_digest.clone())
+                    },
+                    thumbnail_plaintext_size: if pointer.thumbnail_plaintext_size > 0 {
+                        Some(pointer.thumbnail_plaintext_size)
                     } else {
                         None
                     },
@@ -379,7 +408,7 @@ impl AttachmentService {
                     cdn_key = %pointer.cdn_key,
                     filename = %pointer.file_name,
                     content_type = %pointer.content_type,
-                    thumbnail_bytes = pointer.thumbnail.len(),
+                    thumbnail_cdn_key = %pointer.thumbnail_cdn_key,
                     waveform_samples = pointer.waveform.len(),
                     "Created attachment record from pointer"
                 );
@@ -432,6 +461,67 @@ impl AttachmentService {
                 None
             }
         }
+    }
+
+    /// Fetch + decrypt the thumbnail sidecar for a received attachment and cache
+    /// the decoded bytes into the local record, so the receiver gets a preview
+    /// WITHOUT downloading the (potentially huge) full blob. Idempotent and
+    /// cheap: returns immediately if the thumbnail is already present locally.
+    ///
+    /// Returns the decoded thumbnail bytes (JPEG/WebP), or `None` when the
+    /// attachment has no thumbnail sidecar or the fetch/decrypt fails.
+    pub async fn ensure_thumbnail(&self, attachment_id: &AttachmentId) -> Option<Vec<u8>> {
+        let mut attachment = self.attachment_repo.get(attachment_id).ok()??;
+
+        // Already have the decoded bytes locally (sender's own upload, or a
+        // previous fetch) — no network.
+        if let Some(t) = &attachment.metadata.thumbnail {
+            if !t.is_empty() {
+                return Some(t.clone());
+            }
+        }
+
+        let cdn_key = attachment.metadata.thumbnail_cdn_key.clone()?;
+        let key_vec = attachment.metadata.thumbnail_key.clone()?;
+        let digest_vec = attachment.metadata.thumbnail_digest.clone()?;
+        let plaintext_size = attachment.metadata.thumbnail_plaintext_size? as usize;
+        if key_vec.len() != KEY_SET_LENGTH || digest_vec.len() != 32 {
+            tracing::warn!(attachment_id = %attachment_id, "Thumbnail sidecar refs malformed");
+            return None;
+        }
+
+        // Download the small encrypted thumbnail blob.
+        let mut file_client = self.grpc_pool().ok()?.file_client();
+        let dl = file_client.get_attachment_download_url(&cdn_key).await.ok()?;
+        let resp = reqwest::Client::new().get(&dl.download_url).send().await.ok()?;
+        if !resp.status().is_success() {
+            tracing::warn!(cdn_key = %cdn_key, status = %resp.status(), "Thumbnail sidecar GET failed");
+            return None;
+        }
+        let ciphertext = resp.bytes().await.ok()?.to_vec();
+
+        // Decrypt — verifies whole-ciphertext digest + trailing HMAC.
+        let mut key = [0u8; KEY_SET_LENGTH];
+        key.copy_from_slice(&key_vec);
+        let mut digest = [0u8; 32];
+        digest.copy_from_slice(&digest_vec);
+        let plaintext = match crate::crypto::attachment_crypto::AttachmentCrypto::decrypt(
+            &ciphertext, &key, &digest, plaintext_size,
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(attachment_id = %attachment_id, error = %e, "Thumbnail sidecar decrypt failed");
+                return None;
+            }
+        };
+
+        // Cache into the local record for instant subsequent previews.
+        attachment.metadata.thumbnail = Some(plaintext.clone());
+        if let Err(e) = self.attachment_repo.update(&attachment) {
+            tracing::debug!(error = %e, "Failed to persist fetched thumbnail (continuing)");
+        }
+        tracing::debug!(attachment_id = %attachment_id, bytes = plaintext.len(), "Fetched thumbnail sidecar");
+        Some(plaintext)
     }
 
     /// Clean up orphaned attachment files (files with no DB record).

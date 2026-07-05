@@ -216,6 +216,13 @@ impl AttachmentService {
             permanent_path.display()
         );
 
+        // Upload the thumbnail as a separate small CDN object (sidecar) so the
+        // attachment pointer stays tiny and fits every transport's cap.
+        let (thumb_cdn_key, thumb_key, thumb_digest, thumb_pt_size) = match &media_meta.thumbnail {
+            Some(t) => self.upload_thumbnail_sidecar(t).await.unwrap_or_default(),
+            None => Default::default(),
+        };
+
         // Build metadata
         let domain_metadata = FileMetadata {
             name: filename.clone(),
@@ -230,6 +237,10 @@ impl AttachmentService {
             thumbnail: media_meta.thumbnail.clone(),
             thumbnail_width: media_meta.thumbnail_width,
             thumbnail_height: media_meta.thumbnail_height,
+            thumbnail_cdn_key: (!thumb_cdn_key.is_empty()).then(|| thumb_cdn_key.clone()),
+            thumbnail_key: (!thumb_key.is_empty()).then(|| thumb_key.clone()),
+            thumbnail_digest: (!thumb_digest.is_empty()).then(|| thumb_digest.clone()),
+            thumbnail_plaintext_size: (thumb_pt_size > 0).then_some(thumb_pt_size),
         };
 
         // Create attachment record
@@ -272,6 +283,10 @@ impl AttachmentService {
             waveform: media_meta.waveform.unwrap_or_default(),
             duration_ms: media_meta.duration_ms,
             thumbnail: media_meta.thumbnail.unwrap_or_default(),
+            thumbnail_cdn_key: thumb_cdn_key,
+            thumbnail_key: thumb_key,
+            thumbnail_digest: thumb_digest,
+            thumbnail_plaintext_size: thumb_pt_size,
             thumbnail_width: media_meta.thumbnail_width.unwrap_or(0),
             thumbnail_height: media_meta.thumbnail_height.unwrap_or(0),
             width: media_meta.width.unwrap_or(0),
@@ -280,6 +295,61 @@ impl AttachmentService {
             chunk_size: encrypt_result.incremental_chunk_size,
             ciphertext_size: encrypt_result.ciphertext_size,
         })
+    }
+
+    /// Upload a decoded thumbnail as its own small encrypted CDN object.
+    ///
+    /// Returns `(cdn_key, key[64], digest[32], plaintext_size)`. Best-effort:
+    /// on any failure returns `None` so the parent upload still succeeds — the
+    /// receiver just won't have a before-download preview. Keeping the thumbnail
+    /// out-of-band is what lets the attachment pointer fit the sealed-DM padding
+    /// budget (≤4096 bytes) on every transport.
+    async fn upload_thumbnail_sidecar(
+        &self,
+        thumbnail: &[u8],
+    ) -> Option<(String, Vec<u8>, Vec<u8>, u32)> {
+        if thumbnail.is_empty() {
+            return None;
+        }
+        let plaintext_size = thumbnail.len() as u32;
+        let encrypted = match AttachmentCrypto::encrypt(thumbnail) {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!(error = %e, "Thumbnail sidecar encrypt failed; sending without preview");
+                return None;
+            }
+        };
+        let encrypted_size = encrypted.ciphertext.len() as u64;
+        let mut file_client = self.grpc_pool().ok()?.file_client();
+        let upload_response = match file_client.get_attachment_upload_url(encrypted_size).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, "Thumbnail sidecar upload-url failed; sending without preview");
+                return None;
+            }
+        };
+        let cdn_key = upload_response.cdn_key;
+        let resp = reqwest::Client::new()
+            .put(&upload_response.upload_url)
+            .header("Content-Type", "application/octet-stream")
+            .header("Content-Length", encrypted_size)
+            .body(encrypted.ciphertext.clone())
+            .send()
+            .await;
+        match resp {
+            Ok(r) if r.status().is_success() => {}
+            Ok(r) => {
+                tracing::warn!(status = %r.status(), "Thumbnail sidecar PUT failed; sending without preview");
+                return None;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Thumbnail sidecar PUT errored; sending without preview");
+                return None;
+            }
+        }
+        let _ = file_client.confirm_attachment_upload(&cdn_key).await;
+        tracing::debug!(cdn_key = %cdn_key, plaintext_size, "Thumbnail sidecar uploaded");
+        Some((cdn_key, encrypted.key.to_vec(), encrypted.digest.to_vec(), plaintext_size))
     }
 
     /// Upload an already-encrypted temp file via multipart, direct to RustFS.
@@ -454,6 +524,12 @@ impl AttachmentService {
         // Extract media metadata from bytes (for GIFs)
         let media_meta = self.extract_media_metadata_from_bytes(content, mime_type);
 
+        // Thumbnail sidecar (see upload_thumbnail_sidecar).
+        let (thumb_cdn_key, thumb_key, thumb_digest, thumb_pt_size) = match &media_meta.thumbnail {
+            Some(t) => self.upload_thumbnail_sidecar(t).await.unwrap_or_default(),
+            None => Default::default(),
+        };
+
         // Build metadata
         let domain_metadata = FileMetadata {
             name: filename.to_string(),
@@ -468,6 +544,10 @@ impl AttachmentService {
             thumbnail: media_meta.thumbnail.clone(),
             thumbnail_width: media_meta.thumbnail_width,
             thumbnail_height: media_meta.thumbnail_height,
+            thumbnail_cdn_key: (!thumb_cdn_key.is_empty()).then(|| thumb_cdn_key.clone()),
+            thumbnail_key: (!thumb_key.is_empty()).then(|| thumb_key.clone()),
+            thumbnail_digest: (!thumb_digest.is_empty()).then(|| thumb_digest.clone()),
+            thumbnail_plaintext_size: (thumb_pt_size > 0).then_some(thumb_pt_size),
         };
 
         // Ensure attachments directory exists
@@ -527,6 +607,10 @@ impl AttachmentService {
             waveform: media_meta.waveform.unwrap_or_default(),
             duration_ms: media_meta.duration_ms,
             thumbnail: media_meta.thumbnail.unwrap_or_default(),
+            thumbnail_cdn_key: thumb_cdn_key,
+            thumbnail_key: thumb_key,
+            thumbnail_digest: thumb_digest,
+            thumbnail_plaintext_size: thumb_pt_size,
             thumbnail_width: media_meta.thumbnail_width.unwrap_or(0),
             thumbnail_height: media_meta.thumbnail_height.unwrap_or(0),
             width: media_meta.width.unwrap_or(0),

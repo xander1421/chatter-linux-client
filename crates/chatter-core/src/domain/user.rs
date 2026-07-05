@@ -21,6 +21,18 @@ pub enum PresenceStatus {
 }
 
 impl PresenceStatus {
+    /// UI/string token for this presence (`online`/`away`/`dnd`/`offline`).
+    /// Single source of truth so the UI never re-maps the enum.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Online => "online",
+            Self::Away => "away",
+            Self::DoNotDisturb => "dnd",
+            Self::Offline => "offline",
+        }
+    }
+
     /// Check if the user is available (online or away).
     #[must_use]
     pub fn is_available(&self) -> bool {

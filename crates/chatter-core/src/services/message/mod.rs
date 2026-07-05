@@ -146,6 +146,10 @@ pub struct SendDmMsgParams<'a> {
     pub mailbox_manager: &'a MailboxManager,
     /// Timestamp in nanoseconds (caller generates this for consistent UI/storage).
     pub sent_at: u64,
+    /// Reply quote, when this send is a reply. Carries the `Quote` on the wire
+    /// and stamps the local echo's reply fields (via `assemble_reply_parts`) so
+    /// the receiver's bubble survives — same contract as the ServerDm path.
+    pub quote: Option<&'a crate::services::gateway::outgoing::QuoteIntent>,
 }
 
 /// Result from sending a DM with file attachments.

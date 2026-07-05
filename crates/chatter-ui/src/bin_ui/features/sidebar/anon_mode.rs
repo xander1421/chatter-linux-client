@@ -111,18 +111,11 @@ fn refresh_sidebar(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// synchronous on the UI thread (the data already lives in local
 /// storage). Anon Mode short-circuits to an empty list.
 fn rebuild_channels(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    use chatter_core::domain::channel::ChannelType;
-
-    let anon_mode = ui_ctx.anon_mode_enabled();
-    let channel_list: Vec<crate::ChannelListItemData> = if anon_mode {
-        Vec::new()
-    } else {
-        let channels = ui_ctx.get_channels_mru();
-        channels
-            .iter()
-            .filter(|c| matches!(c.channel_type, ChannelType::Public | ChannelType::Private))
-            .map(|c| crate::bin_ui::converters::channel_to_slint(c, ui_ctx))
-            .collect()
-    };
+    // Sidebar-inclusion rule (Public/Private, anon-mode aware) lives in core.
+    let channel_list: Vec<crate::ChannelListItemData> = ui_ctx
+        .sidebar_channels()
+        .iter()
+        .map(|c| crate::bin_ui::converters::channel_to_slint(c, ui_ctx))
+        .collect();
     window.set_channels(slint::ModelRc::new(slint::VecModel::from(channel_list)));
 }

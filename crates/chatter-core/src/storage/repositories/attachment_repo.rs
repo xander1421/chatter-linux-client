@@ -696,6 +696,10 @@ mod tests {
             thumbnail: None,
             thumbnail_width: None,
             thumbnail_height: None,
+            thumbnail_cdn_key: None,
+            thumbnail_key: None,
+            thumbnail_digest: None,
+            thumbnail_plaintext_size: None,
         };
 
         let blob = db_serialize(&metadata).unwrap();
@@ -724,6 +728,10 @@ mod tests {
             thumbnail: None,
             thumbnail_width: None,
             thumbnail_height: None,
+            thumbnail_cdn_key: None,
+            thumbnail_key: None,
+            thumbnail_digest: None,
+            thumbnail_plaintext_size: None,
         };
 
         let blob = db_serialize(&metadata).unwrap();
@@ -747,6 +755,10 @@ mod tests {
             thumbnail: None,
             thumbnail_width: None,
             thumbnail_height: None,
+            thumbnail_cdn_key: None,
+            thumbnail_key: None,
+            thumbnail_digest: None,
+            thumbnail_plaintext_size: None,
         };
 
         let blob = db_serialize(&metadata).unwrap();
@@ -772,6 +784,10 @@ mod tests {
             thumbnail: None,
             thumbnail_width: None,
             thumbnail_height: None,
+            thumbnail_cdn_key: None,
+            thumbnail_key: None,
+            thumbnail_digest: None,
+            thumbnail_plaintext_size: None,
         };
 
         let blob = db_serialize(&metadata).unwrap();
@@ -800,6 +816,10 @@ mod tests {
             thumbnail: None,
             thumbnail_width: None,
             thumbnail_height: None,
+            thumbnail_cdn_key: None,
+            thumbnail_key: None,
+            thumbnail_digest: None,
+            thumbnail_plaintext_size: None,
         };
 
         let bincode_size = db_serialize(&metadata).unwrap().len();
@@ -827,6 +847,10 @@ mod tests {
             thumbnail: None,
             thumbnail_width: None,
             thumbnail_height: None,
+            thumbnail_cdn_key: None,
+            thumbnail_key: None,
+            thumbnail_digest: None,
+            thumbnail_plaintext_size: None,
         };
 
         let blob = db_serialize(&metadata).unwrap();
@@ -850,6 +874,10 @@ mod tests {
             thumbnail: None,
             thumbnail_width: None,
             thumbnail_height: None,
+            thumbnail_cdn_key: None,
+            thumbnail_key: None,
+            thumbnail_digest: None,
+            thumbnail_plaintext_size: None,
         };
 
         let blob = db_serialize(&metadata).unwrap();
@@ -877,6 +905,10 @@ mod tests {
             thumbnail: None,
             thumbnail_width: None,
             thumbnail_height: None,
+            thumbnail_cdn_key: None,
+            thumbnail_key: None,
+            thumbnail_digest: None,
+            thumbnail_plaintext_size: None,
         };
 
         let blob = db_serialize(&metadata).unwrap();
@@ -901,6 +933,10 @@ mod tests {
             thumbnail: None,
             thumbnail_width: None,
             thumbnail_height: None,
+            thumbnail_cdn_key: None,
+            thumbnail_key: None,
+            thumbnail_digest: None,
+            thumbnail_plaintext_size: None,
         };
 
         let blob = db_serialize(&metadata).unwrap();
@@ -937,6 +973,10 @@ mod tests {
             thumbnail: None,
             thumbnail_width: None,
             thumbnail_height: None,
+            thumbnail_cdn_key: None,
+            thumbnail_key: None,
+            thumbnail_digest: None,
+            thumbnail_plaintext_size: None,
         };
 
         let mut blob = db_serialize(&metadata).unwrap();

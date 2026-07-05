@@ -13,7 +13,7 @@ use chatter_core::domain::{ChannelId, UserId};
 use chatter_core::events::EventBus;
 use chatter_core::inbox::handlers::DomainEvent;
 use chatter_core::proto::content_v1::{content, Content, KeyExchange};
-use chatter_core::services::message_gateway::SealedSenderResult;
+use chatter_core::services::gateway::SealedSenderResult;
 
 /// Test that SealedSenderResult::KeyExchange is returned for KeyExchange content.
 #[test]

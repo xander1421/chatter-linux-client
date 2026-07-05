@@ -14,7 +14,7 @@ pub mod friends;
 pub mod group;
 
 pub use anon_dm::{process_anon_dm_results, ProcessedAnonDmMessages};
-pub use device::{dispatch_channel_control_content, process_device_message};
+pub use device::{dispatch_control_content, process_device_message};
 pub use dm::poll_dm_mailboxes;
 pub use friends::{poll_friend_requests, FriendRequestPoller};
 pub use group::poll_group_mailboxes;

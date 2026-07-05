@@ -195,23 +195,12 @@ impl AuthService {
 
     /// Restore the authentication session from saved credentials.
     ///
-    /// Handles both password-based (Basic auth) and OIDC (Bearer token) sessions.
-    /// Loads credentials from encrypted settings and configures the auth interceptor.
-    /// This must be called on application startup.
+    /// Loads password-based (Basic auth) credentials from encrypted settings
+    /// and configures the auth interceptor. This must be called on application
+    /// startup.
     ///
     /// Returns true if a session was successfully restored.
     pub fn restore_session(&self) -> bool {
-        // Check if this is an OIDC session
-        let is_oidc = self.settings_repo
-            .get::<bool>(keys::OIDC_SESSION)
-            .ok()
-            .flatten()
-            .unwrap_or(false);
-
-        if is_oidc {
-            return self.restore_oidc_session();
-        }
-
         self.restore_password_session()
     }
 
@@ -271,42 +260,6 @@ impl AuthService {
         true
     }
 
-    /// Restore an OIDC (Bearer token) session.
-    fn restore_oidc_session(&self) -> bool {
-        let user_id_str = match self.settings_repo.get_string(keys::CURRENT_USER_ID) {
-            Ok(Some(id)) => id,
-            _ => return false,
-        };
-
-        let access_token = match self.settings_repo.get_string(keys::OIDC_ACCESS_TOKEN) {
-            Ok(Some(token)) => token,
-            _ => return false,
-        };
-
-        // Check if token is expired
-        if let Ok(Some(expires_at)) = self.settings_repo.get::<u64>(keys::OIDC_EXPIRES_AT) {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            if now >= expires_at {
-                tracing::warn!("OIDC token expired, cannot restore session (refresh needed)");
-                return false;
-            }
-        }
-
-        // Configure auth interceptor for Bearer auth
-        use crate::network::grpc::interceptors::AuthMode;
-        self.auth_interceptor.set_mode(AuthMode::Bearer(access_token));
-
-        tracing::info!(
-            user_id = %user_id_str,
-            "Restored OIDC authentication session"
-        );
-
-        true
-    }
-
     /// Login with username and password.
     ///
     /// Orchestrates:
@@ -316,7 +269,7 @@ impl AuthService {
     /// 4. Server authentication
     /// 5. Local state persistence
     /// 6. Auth interceptor configuration
-    /// Get current identity (for OIDC clients).
+    /// Get current identity from the server.
     pub async fn get_my_identity(&self) -> Result<crate::proto::chat_v1::GetMyIdentityResponse, AuthError> {
         let mut client = self.try_auth_client().ok_or(AuthError::NotLoggedIn)?;
         client.get_my_identity().await.map_err(AuthError::Network)
@@ -600,9 +553,8 @@ impl AuthService {
             .set_string(keys::FULL_USERNAME, &full_username)?;
 
         // Store local-only PIN fingerprint so re-auth gates (e.g. linked-device
-        // approval for OIDC sessions) can verify the PIN without a server
-        // round-trip. Derived from the same Argon2id SVR secret; never sent
-        // to the server.
+        // approval) can verify the PIN without a server round-trip. Derived
+        // from the same Argon2id SVR secret; never sent to the server.
         if let Some(p) = pin {
             let mut fp = crate::crypto::svr::derive_pin_fingerprint(p, username)?;
             self.settings_repo.set_bytes(keys::PIN_FINGERPRINT, &fp)?;
@@ -851,14 +803,6 @@ impl AuthService {
         self.settings_repo.delete(keys::CURRENT_DEVICE_ID)?;
         self.settings_repo.delete(keys::DEVICE_AUTH_TOKEN)?;
 
-        // Clear any stored OIDC tokens so the next cold-start doesn't try to
-        // restore a bearer session we're explicitly leaving.
-        let _ = self.settings_repo.delete(keys::OIDC_SESSION);
-        let _ = self.settings_repo.delete(keys::OIDC_ACCESS_TOKEN);
-        let _ = self.settings_repo.delete(keys::OIDC_REFRESH_TOKEN);
-        let _ = self.settings_repo.delete(keys::OIDC_ID_TOKEN);
-        let _ = self.settings_repo.delete(keys::OIDC_EXPIRES_AT);
-
         // Clear the local PIN fingerprint — re-derived on next login from
         // user-supplied PIN. Leaving stale fingerprints behind would let a
         // linked-device approve flow run after logout if the modal stayed
@@ -1021,46 +965,6 @@ impl AuthService {
         registration_lock.zeroize();
 
         Ok(result.map_err(AuthError::Network)?)
-    }
-
-    /// Log in via an OIDC access token.
-    ///
-    /// Sets the token as the bearer auth header, queries the server for our
-    /// identity, ensures we have a Signal identity keypair (generating one on
-    /// first contact), and returns a `LoginResult` describing the account.
-    /// Does NOT mutate auth state or start background tasks — the caller
-    /// orchestrates those.
-    pub async fn login_with_oidc_token(
-        &self,
-        access_token: &str,
-    ) -> Result<LoginResult, AuthError> {
-        self.auth_interceptor.set_bearer(access_token.to_string());
-
-        let identity = self.get_my_identity().await?;
-
-        let needs_prekey_upload = if !self.identity_manager.has_identity()? {
-            self.identity_manager.generate_identity(&mut rand::rng())?;
-            true
-        } else {
-            false
-        };
-
-        let user_id: crate::domain::ids::UserId = identity.user_id.parse()
-            .map_err(|e| AuthError::InvalidInput(format!("invalid user_id: {e}")))?;
-        let display_name = identity.user_profile
-            .map(|p| p.display_name)
-            .unwrap_or_else(|| "User".to_string());
-
-        Ok(LoginResult {
-            user_id,
-            device_id: identity.device_id,
-            display_name,
-            needs_prekey_upload,
-            keys_restored: false,
-            keys_missing: !self.identity_manager.has_identity().unwrap_or(false),
-            backup_destroyed: false,
-            recovery_codes: None,
-        })
     }
 
     /// Regenerate the caller's recovery codes.

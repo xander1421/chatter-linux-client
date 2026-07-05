@@ -191,7 +191,7 @@ impl SvrBackupService {
     /// Profile_key is random (Signal-aligned) and stored locally at
     /// registration; this retry just reads it. The caller must already have
     /// gated the operation behind a password / PIN re-auth check (e.g.
-    /// `LinkDeviceService::verify_password_for_oidc_link`).
+    /// `LinkDeviceService::verify_password_or_pin`).
     pub async fn retry_from_credentials(
         &self,
         pin: &str,

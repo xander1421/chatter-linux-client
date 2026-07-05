@@ -5,7 +5,6 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, SharedString};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::domain::channel::Permissions;
 use chatter_core::domain::UserId;
 use chatter_core::state::ActiveConversation;
 
@@ -56,15 +55,10 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
-            // Derive delete-for-everyone from permissions:
-            // DMs use Permissions::dm() (both users can delete any message),
-            // channels use role-based permissions checked via is_own_message.
-            let can_delete_for_everyone = match &conversation {
-                ActiveConversation::MailboxDm { .. } | ActiveConversation::ServerDm { .. } | ActiveConversation::AnonDm(_) => {
-                    Permissions::dm().can_delete_any_message
-                }
-                _ => is_own_message,
-            };
+            // Capability decision (DM-any vs own-only) lives in core.
+            let can_delete_for_everyone = handle
+                .can_delete_for_everyone(&target_sender_id, target_sent_timestamp)
+                .unwrap_or(is_own_message);
 
             if conversation.is_anon() {
                 // Anon conversations: get pin state and attachments from UI model

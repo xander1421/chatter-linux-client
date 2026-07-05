@@ -13,13 +13,9 @@ pub mod account_service;
 pub mod device_service;
 pub mod message;
 pub mod gateway;
-pub mod message_gateway;
 pub mod channel;
-pub mod channel_template;
 pub mod user;
-pub mod status_service;
 pub mod attachment;
-pub mod attachment_service;
 #[cfg(feature = "media")]
 pub mod call_worker;
 #[cfg(feature = "media")]
@@ -31,7 +27,6 @@ pub mod search_service;
 #[cfg(feature = "local-ai")]
 pub mod semantic_search;
 pub mod sync_service;
-pub mod offline_queue;
 pub mod moderation_service;
 pub mod ai_service;
 #[cfg(feature = "local-ai")]
@@ -39,13 +34,9 @@ pub mod local_ai_service;
 pub mod ai_summarize;
 pub mod draft_service;
 pub mod pin_service;
-pub mod thread_service;
 pub mod outgoing_typing;
 pub mod presence_service;
-pub mod ephemeral_message;
 pub mod ephemeral_service;
-pub mod forward_service;
-pub mod mention_service;
 pub mod embed_service;
 // Removed - gif_service.rs file was deleted
 pub mod quick_switcher;
@@ -64,8 +55,6 @@ pub mod svr_backup_service;
 #[cfg(feature = "jarvis")]
 pub mod jarvis;
 pub mod validation;
-#[cfg(not(target_os = "android"))]
-pub mod oidc_service;
 
 // Re-exports for DM bootstrap service
 pub use dm_bootstrap_service::{DmBootstrapError, DmBootstrapService};
@@ -105,13 +94,13 @@ pub use user::{FriendResponseResult, UserError, UserService};
 pub use signal_service::SignalService;
 pub use mailbox_manager::{MailboxManager, MailboxError, ActiveMailbox};
 pub use inbox_processor::InboxEventProcessor;
-pub use message_gateway::{
+pub use gateway::{
     DmContent, MessageGateway, RouteResult,
     // Padding
     generate_padding, PADDING_GROUP_CONTROL, PADDING_MESSAGE, PADDING_LARGE,
     // DataMessage builders
     build_text_content, build_data_message_content, build_reply_content,
-    build_data_message_content_with_quote, build_data_message_content_with_channel,
+    build_data_message_content_with_quote,
     // Control message builders
     build_typing_content, build_typing_content_with_channel,
     build_read_receipt_content, build_read_receipt_content_with_channel,
@@ -131,7 +120,7 @@ pub use message_gateway::{
 };
 pub use message::{MessageService, MessageError, SendDmContentParams, SendDmMsgParams};
 pub use message::core::{proto_to_domain_message, proto_to_domain_message_with_sender, proto_content_to_domain};
-pub use attachment_service::{AttachmentService, AttachmentError, CdnUploadResult};
+pub use attachment::{AttachmentService, AttachmentError, CdnUploadResult};
 #[cfg(feature = "media")]
 pub use call_worker::CallWorkerHandle;
 

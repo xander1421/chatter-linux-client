@@ -79,6 +79,14 @@ impl MessageService {
         };
 
         if needs_bootstrap {
+            // DIAGNOSTIC: a ServerDm (regular friend) may have no ready mailbox
+            // conversation, so any mailbox-transport send (incl. call signaling)
+            // bootstraps instead of delivering. Surfaces the transport mismatch.
+            tracing::info!(
+                peer_id = %peer_id,
+                conversation_exists = conversation.is_some(),
+                "[DM_TRANSPORT] mailbox send needs bootstrap — content queued, not delivered now"
+            );
             return self.handle_dm_bootstrap(
                 auth_client,
                 peer_id,
@@ -248,10 +256,33 @@ impl MessageService {
             dm_channel_id,
             mailbox_manager,
             sent_at,
+            quote,
         } = params;
 
+        // Resolve the reply once (shared assembler) so the quote rides the wire
+        // AND the local echo keeps its reply fields — mirrors the ServerDm path.
+        let reply_ctx = quote.map(|q| {
+            let parts = self.assemble_reply_parts(
+                &q.target_author_id,
+                q.target_timestamp,
+                q.target_preview.as_deref().unwrap_or(""),
+            );
+            (q, parts)
+        });
+
         // Use caller-provided timestamp for proto AND storage
-        let content = crate::services::build_data_message_content(text, attachment_pointers, sent_at);
+        let content = match &reply_ctx {
+            Some((q, parts)) => crate::services::build_reply_content(
+                text,
+                attachment_pointers,
+                &q.target_author_id.to_string(),
+                q.target_timestamp,
+                q.target_preview.as_deref().unwrap_or(""),
+                parts.quote_attachments.clone(),
+                sent_at,
+            ),
+            None => crate::services::build_data_message_content(text, attachment_pointers, sent_at),
+        };
 
         // Send the message via Signal Protocol - pass attachment_ids for storage
         let mut auth_client = self.auth_client();
@@ -269,6 +300,14 @@ impl MessageService {
         let current_user_id = self.settings_repo.current_user_id()?;
         let mut message = Message::new_text(*dm_channel_id, ConversationType::MailboxDm, Some(current_user_id), text.to_string(), sent_at);
         message.attachments = attachment_ids;
+
+        if let Some((q, parts)) = reply_ctx {
+            message.reply_to = Some(parts.reply_to);
+            message.reply_to_author_id = Some(q.target_author_id);
+            message.reply_to_text = parts.reply_to_text;
+            message.reply_to_thumbnail = parts.reply_to_thumbnail;
+            message.reply_to_thumbnail_mime = parts.reply_to_thumbnail_mime;
+        }
 
         // Handle send result - save to DB for both success and bootstrap cases
         match send_result {
@@ -353,16 +392,17 @@ impl MessageService {
                         plaintext_size: result.plaintext_size,
                         content_type: result.content_type,
                         file_name: result.file_name,
-                        thumbnail: result.thumbnail,
-                        thumbnail_width: 0,
-                        thumbnail_height: 0,
+                        thumbnail_cdn_key: result.thumbnail_cdn_key,
+                        thumbnail_key: result.thumbnail_key,
+                        thumbnail_digest: result.thumbnail_digest,
+                        thumbnail_plaintext_size: result.thumbnail_plaintext_size,
+                        thumbnail_width: result.thumbnail_width,
+                        thumbnail_height: result.thumbnail_height,
                         blur_hash: String::new(),
-                        width: 0,
-                        height: 0,
+                        width: result.width,
+                        height: result.height,
                         duration_ms: result.duration_ms,
                         voice_note: false,
-                        incremental_mac: result.incremental_mac,
-                        chunk_size: result.chunk_size,
                         ciphertext_size: result.ciphertext_size,
                         plaintext_hash: String::new(),
                         waveform: result.waveform,
@@ -376,32 +416,9 @@ impl MessageService {
             }
         }
         
-        // Resolve quoted message locally so we can populate both wire + local
-        // reply metadata from a single source of truth.
-        let original = self
-            .message_repo
-            .get_by_sender_timestamp(quote_author_id, quote_timestamp)
-            .ok()
-            .flatten();
-        let original_attachments: Vec<_> = original
-            .as_ref()
-            .map(|m| {
-                m.attachments
-                    .iter()
-                    .filter_map(|id| self.attachment_repo.get(id).ok().flatten())
-                    .collect()
-            })
-            .unwrap_or_default();
-        let quote_attachments =
-            crate::services::gateway::shared::build_quoted_attachments(&original_attachments);
-        let (quote_thumb, quote_mime) = quote_attachments
-            .first()
-            .map(|qa| {
-                let thumb = (!qa.thumbnail.is_empty()).then(|| qa.thumbnail.clone());
-                let mime = (!qa.content_type.is_empty()).then(|| qa.content_type.clone());
-                (thumb, mime)
-            })
-            .unwrap_or((None, None));
+        // Resolve the quoted message once (shared with the ServerDm path) —
+        // feeds both the wire Quote and the local reply metadata.
+        let parts = self.assemble_reply_parts(quote_author_id, quote_timestamp, quote_text);
 
         // Build reply content with Quote proto
         let sent_at = TimestampNanos::now().as_u64();
@@ -411,7 +428,7 @@ impl MessageService {
             &quote_author_id.to_string(),
             quote_timestamp,
             quote_text,
-            quote_attachments,
+            parts.quote_attachments,
             sent_at,
         );
 
@@ -423,25 +440,11 @@ impl MessageService {
         let mut message = Message::new_text(*dm_channel_id, ConversationType::MailboxDm, Some(our_user_id), text.to_string(), sent_at);
         message.attachments = attachment_ids.clone();
 
-        message.reply_to = Some(
-            original
-                .as_ref()
-                .map(|m| m.id)
-                .unwrap_or_else(|| crate::domain::ids::MessageId::from_timestamp(quote_timestamp)),
-        );
+        message.reply_to = Some(parts.reply_to);
         message.reply_to_author_id = Some(*quote_author_id);
-        message.reply_to_text = {
-            if !quote_text.is_empty() {
-                Some(crate::services::gateway::shared::truncate_preview(quote_text))
-            } else {
-                original.as_ref().map(|m| {
-                    crate::services::gateway::shared::message_reply_preview(m, &original_attachments)
-                })
-            }
-            .filter(|t| !t.is_empty())
-        };
-        message.reply_to_thumbnail = quote_thumb;
-        message.reply_to_thumbnail_mime = quote_mime;
+        message.reply_to_text = parts.reply_to_text;
+        message.reply_to_thumbnail = parts.reply_to_thumbnail;
+        message.reply_to_thumbnail_mime = parts.reply_to_thumbnail_mime;
 
         // Store in database
         if let Err(e) = self.message_repo.insert(&message) {
@@ -538,6 +541,7 @@ impl MessageService {
                 dm_channel_id,
                 mailbox_manager,
                 sent_at,
+                quote: None,
             })
             .await
         {
@@ -581,6 +585,7 @@ impl MessageService {
         attachment_pointers: Vec<crate::proto::content_v1::AttachmentPointer>,
         attachment_ids: Vec<crate::domain::AttachmentId>,
         mailbox_manager: &MailboxManager,
+        quote: Option<&crate::services::gateway::outgoing::QuoteIntent>,
     ) -> Result<DmSendResult, MessageError> {
         let sent_at = crate::util::time::TimestampNanos::now().as_u64();
 
@@ -595,6 +600,7 @@ impl MessageService {
                 dm_channel_id,
                 mailbox_manager,
                 sent_at,
+                quote,
             })
             .await
         {
@@ -997,5 +1003,73 @@ impl MessageService {
         }
 
         Ok(content)
+    }
+}
+
+/// Reply metadata assembled from a quoted message, feeding both the outgoing
+/// wire `Quote` and the local echo's stored reply fields. Shared across DM
+/// transports so reply assembly lives in one place.
+pub(crate) struct OutboundReplyParts {
+    pub quote_attachments: Vec<crate::proto::content_v1::QuotedAttachment>,
+    pub reply_to: crate::domain::ids::MessageId,
+    pub reply_to_text: Option<String>,
+    pub reply_to_thumbnail: Option<Vec<u8>>,
+    pub reply_to_thumbnail_mime: Option<String>,
+}
+
+impl MessageService {
+    /// Resolve a quoted message into wire + local reply metadata from a single
+    /// source of truth. Used by every DM reply send (mailbox + ServerDm) so the
+    /// quote-assembly logic isn't duplicated per transport.
+    pub(crate) fn assemble_reply_parts(
+        &self,
+        quote_author: &crate::domain::ids::UserId,
+        quote_timestamp: u64,
+        quote_preview: &str,
+    ) -> OutboundReplyParts {
+        let original = self
+            .message_repo
+            .get_by_sender_timestamp(quote_author, quote_timestamp)
+            .ok()
+            .flatten();
+        let original_attachments: Vec<_> = original
+            .as_ref()
+            .map(|m| {
+                m.attachments
+                    .iter()
+                    .filter_map(|id| self.attachment_repo.get(id).ok().flatten())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let quote_attachments =
+            crate::services::gateway::shared::build_quoted_attachments(&original_attachments);
+        let (reply_to_thumbnail, reply_to_thumbnail_mime) = quote_attachments
+            .first()
+            .map(|qa| {
+                let thumb = (!qa.thumbnail.is_empty()).then(|| qa.thumbnail.clone());
+                let mime = (!qa.content_type.is_empty()).then(|| qa.content_type.clone());
+                (thumb, mime)
+            })
+            .unwrap_or((None, None));
+        let reply_to = original
+            .as_ref()
+            .map(|m| m.id)
+            .unwrap_or_else(|| crate::domain::ids::MessageId::from_timestamp(quote_timestamp));
+        let reply_to_text = if !quote_preview.is_empty() {
+            Some(crate::services::gateway::shared::truncate_preview(quote_preview))
+        } else {
+            original.as_ref().map(|m| {
+                crate::services::gateway::shared::message_reply_preview(m, &original_attachments)
+            })
+        }
+        .filter(|t| !t.is_empty());
+
+        OutboundReplyParts {
+            quote_attachments,
+            reply_to,
+            reply_to_text,
+            reply_to_thumbnail,
+            reply_to_thumbnail_mime,
+        }
     }
 }
