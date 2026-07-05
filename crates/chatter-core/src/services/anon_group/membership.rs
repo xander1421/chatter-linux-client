@@ -69,12 +69,40 @@ impl AnonGroupService {
         // 1. Serialize content
         let plaintext = content.encode_to_vec();
 
-        // 2. Encrypt with Signal Protocol (pairwise, no DM-specific layers)
-        let ciphertext = self
+        // 2. Encrypt with Signal Protocol (pairwise, no DM-specific layers).
+        //
+        // If a usable session already exists, encrypt locally — no prekey
+        // fetch, no server contact, no token spent. On FIRST contact with a
+        // member there is no session yet; establishing one via the normal
+        // AUTHENTICATED prekey fetch would let the server observe "user X is
+        // starting a session with member Y", and over a fan-out that
+        // reconstructs the group roster this feature promises to hide. So we
+        // bootstrap the session ANONYMOUSLY (blind token + anonymous prekey
+        // fetch), matching the anon-DM design. Cost stays at ~1 token per new
+        // peer (first contact only), not per message.
+        //
+        // ponytail: shares anon-DM's cached-sender-cert dependency (prefetched
+        // at login). If a first send immediately after login ever flakes with
+        // NoCachedCertificate, the fix is a fetch-then-retry inside
+        // encrypt_message_anonymous (one place, also benefits anon-DM) — not
+        // worth adding speculatively.
+        let ciphertext = if self
             .pairwise_service
-            .encrypt(peer_id, &plaintext)
+            .has_session(peer_id)
             .await
-            .map_err(|e| AnonGroupError::CryptoError(e.to_string()))?;
+            .map_err(|e| AnonGroupError::CryptoError(e.to_string()))?
+        {
+            self.pairwise_service
+                .encrypt(peer_id, &plaintext)
+                .await
+                .map_err(|e| AnonGroupError::CryptoError(e.to_string()))?
+        } else {
+            let token = self.get_or_request_token().await?;
+            self.pairwise_service
+                .encrypt_anonymous(peer_id, &plaintext, &token)
+                .await
+                .map_err(|e| AnonGroupError::CryptoError(e.to_string()))?
+        };
 
         // 3. Send directly to anonymous mailbox
         self.mailbox_manager
@@ -83,6 +111,35 @@ impl AnonGroupService {
             .map_err(|e| AnonGroupError::MessageError(e.to_string()))?;
 
         Ok(())
+    }
+
+    /// Atomically claim a blind-signature token, requesting a fresh batch if
+    /// none are available.
+    ///
+    /// Mirrors `AnonDmService::get_or_request_token`. Used to fetch a member's
+    /// prekey bundle anonymously on first contact so the server never learns
+    /// the group membership graph from session establishment. `claim` is an
+    /// atomic UPDATE ... RETURNING, so concurrent fan-out sends never reuse a
+    /// credential.
+    pub(crate) async fn get_or_request_token(
+        &self,
+    ) -> Result<crate::mailbox::token_manager::MailboxToken, AnonGroupError> {
+        match self.token_manager.claim_available_token() {
+            Ok(Some(token)) => Ok(token),
+            Ok(None) => {
+                let mut mailbox_client = self.grpc_pool.mailbox_client();
+                self.token_manager
+                    .request_tokens(&mut mailbox_client, 5)
+                    .await
+                    .map_err(|e| AnonGroupError::CryptoError(e.to_string()))?;
+
+                self.token_manager
+                    .claim_available_token()
+                    .map_err(|e| AnonGroupError::CryptoError(e.to_string()))?
+                    .ok_or_else(|| AnonGroupError::CryptoError("No tokens available".to_string()))
+            }
+            Err(e) => Err(AnonGroupError::CryptoError(e.to_string())),
+        }
     }
 
     /// Send an invite message to a user via their existing DM session.

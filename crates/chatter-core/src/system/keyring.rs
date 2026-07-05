@@ -66,28 +66,33 @@ impl Keyring {
     /// Retrieves the database passphrase.
     ///
     /// Priority:
-    /// 1. `CHATTER_DB_PASSPHRASE` env var
-    /// 2. System Keyring IFF `CHATTER_USE_KEYRING` is set
-    /// 3. Local `.passphrase` file (default — see SECURITY.md "DB passphrase
-    ///    at rest")
+    /// 1. `CHATTER_DB_PASSPHRASE` env var (explicit override, e.g. CI/headless)
+    /// 2. Local `.passphrase` file IFF `CHATTER_DB_PASSPHRASE_FILE` is set
+    /// 3. System Keyring (default — Secret Service / Keychain / Cred Manager)
     ///
-    /// SECURITY: the default local-file mode is naked - the passphrase sits
-    /// at `<db>.passphrase` mode 0600. Anything that can read the user's
-    /// home (compromised browser, sync agent, backup tool, second user on
-    /// a misconfigured box) recovers the SQLCipher key. Set
-    /// `CHATTER_USE_KEYRING=1` to delegate to Secret Service / Keychain /
-    /// Credential Manager instead.
+    /// SECURITY: the keyring is the secure default. The local-file mode
+    /// (`CHATTER_DB_PASSPHRASE_FILE=1`) is naked — the passphrase sits at
+    /// `<db>.passphrase` mode 0600, so anything that can read the user's home
+    /// (compromised browser, sync agent, backup tool, second user on a
+    /// misconfigured box) recovers the SQLCipher key. Only opt into it on
+    /// boxes with no Secret Service daemon (some minimal WMs, headless CI),
+    /// and prefer `CHATTER_DB_PASSPHRASE` there instead.
     pub fn get_passphrase(&self) -> Result<String, SystemError> {
         if let Ok(passphrase) = std::env::var("CHATTER_DB_PASSPHRASE") {
             return Ok(passphrase);
         }
 
-        if std::env::var("CHATTER_USE_KEYRING").is_ok() {
-            tracing::debug!("CHATTER_USE_KEYRING is set, accessing system keyring");
-            return self.entry()?.get_password().map_err(map_keyring_error);
+        if Self::use_local_file() {
+            return self.read_local_file();
         }
 
-        self.read_local_file()
+        tracing::debug!("accessing system keyring for DB passphrase");
+        self.entry()?.get_password().map_err(map_keyring_error)
+    }
+
+    /// Whether the naked local-file passphrase mode is explicitly opted into.
+    fn use_local_file() -> bool {
+        std::env::var("CHATTER_DB_PASSPHRASE_FILE").is_ok()
     }
 
     /// Read the on-disk default passphrase.
@@ -107,7 +112,7 @@ impl Keyring {
     ) -> Result<String, SystemError> {
         // Retry only matters for the keyring path (Secret Service unlock
         // prompt). Env var + local file are synchronous.
-        if std::env::var("CHATTER_USE_KEYRING").is_err() {
+        if std::env::var("CHATTER_DB_PASSPHRASE").is_ok() || Self::use_local_file() {
             return self.get_passphrase();
         }
 
@@ -134,13 +139,13 @@ impl Keyring {
             return Ok(());
         }
 
-        if std::env::var("CHATTER_USE_KEYRING").is_ok() {
-            return self.entry()?
-                .set_password(passphrase)
-                .map_err(map_keyring_error);
+        if Self::use_local_file() {
+            return self.write_local_file(passphrase);
         }
 
-        self.write_local_file(passphrase)
+        self.entry()?
+            .set_password(passphrase)
+            .map_err(map_keyring_error)
     }
 
     fn write_local_file(&self, passphrase: &str) -> Result<(), SystemError> {
@@ -177,7 +182,7 @@ impl Keyring {
     ) -> Result<(), SystemError> {
         // Retry only matters for the keyring path. Env var + local file
         // are synchronous.
-        if std::env::var("CHATTER_USE_KEYRING").is_err() {
+        if std::env::var("CHATTER_DB_PASSPHRASE").is_ok() || Self::use_local_file() {
             return self.set_passphrase(passphrase);
         }
 
@@ -244,11 +249,13 @@ mod tests {
         let keyring = Keyring::new(db_path);
         let test_pass = "test-passphrase-local";
 
-        // Default is local file - no env var manipulation needed.
-        assert!(keyring.get_passphrase().is_err());
+        // Exercise the local-file path directly (private methods) so the test
+        // is independent of the CHATTER_DB_PASSPHRASE_FILE env toggle and can't
+        // race other tests mutating process env, nor touch the real keyring.
+        assert!(keyring.read_local_file().is_err());
 
-        keyring.set_passphrase(test_pass).expect("Should set");
-        let retrieved = keyring.get_passphrase().expect("Should get");
+        keyring.write_local_file(test_pass).expect("Should write");
+        let retrieved = keyring.read_local_file().expect("Should read");
         assert_eq!(retrieved, test_pass);
 
         assert!(keyring.local_path.exists());

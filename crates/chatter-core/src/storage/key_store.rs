@@ -830,6 +830,22 @@ impl KeyStore {
         Ok(())
     }
 
+    /// Clear a peer's verification flag without touching the stored safety
+    /// number.
+    ///
+    /// Called when a peer's identity key changes: the previously-verified
+    /// safety number no longer matches the new key, so the peer must be
+    /// re-verified. No-op if the peer was never verified.
+    pub fn unverify_peer(&self, peer_user_id: &str) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        conn.execute(
+            "UPDATE peer_verification SET is_verified = 0, verified_at = NULL
+             WHERE peer_user_id = ?1",
+            params![peer_user_id],
+        )?;
+        Ok(())
+    }
+
     /// Get the stored safety number for a peer (if any).
     ///
     /// Returns `None` if we have never generated a safety number for this peer.

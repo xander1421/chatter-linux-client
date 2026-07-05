@@ -125,6 +125,14 @@ impl IdentityKeyStore for SignalStore {
                 address = %address_str,
                 "Identity key changed - archiving session for re-establishment"
             );
+            // The peer's safety number no longer matches the new key, so any
+            // prior manual verification is stale. Clear it so the peer must be
+            // re-verified — this is the MITM/re-registration signal the
+            // verification system exists to surface. Keyed on the bare user-id
+            // (address.name()), not the "user.device" address_str.
+            self.key_store
+                .unverify_peer(address.name())
+                .map_err(storage_to_signal_error)?;
             if let Some(record_bytes) = self
                 .key_store
                 .load_session(&address_str)

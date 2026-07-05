@@ -123,6 +123,20 @@ impl PairwiseService {
         Ok((address.name().to_string(), plaintext))
     }
 
+    /// Returns true if a usable Signal session already exists with this peer's
+    /// primary device.
+    ///
+    /// Callers use this to avoid an authenticated prekey fetch on first
+    /// contact (which would leak the sender→recipient pair to the server),
+    /// branching to `encrypt_anonymous` instead when no session exists yet.
+    pub async fn has_session(&self, peer_id: &UserId) -> Result<bool, PairwiseError> {
+        let peer_id_str = peer_id.to_string();
+        self.signal_service
+            .has_session(&peer_id_str, 1u32)
+            .await
+            .map_err(|e| PairwiseError::SessionError(e.to_string()))
+    }
+
     /// Ensure a session exists for a peer (pre-fetch keys).
     ///
     /// Call this before encryption if you want to warm up sessions

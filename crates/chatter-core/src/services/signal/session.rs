@@ -53,6 +53,19 @@ impl SignalService {
     ///
     /// Sessions that are structurally corrupted (fail to serialize) are treated as
     /// non-existent and trigger fresh prekey bundle fetch.
+    /// Returns true if a *usable* Signal session already exists for
+    /// (recipient, device) — structurally valid, not merely present (the same
+    /// check `ensure_session` uses to decide whether to skip the prekey fetch).
+    ///
+    /// Lets callers avoid an authenticated prekey fetch on first contact by
+    /// branching to an anonymous session-establishment path instead.
+    pub async fn has_session(&self, recipient_id: &str, device_id: u32) -> Result<bool, ServiceError> {
+        let device_id_struct = DeviceId::try_from(device_id)
+            .map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
+        let address = ProtocolAddress::new(recipient_id.to_string(), device_id_struct);
+        self.actor.has_session(address).await
+    }
+
     pub async fn ensure_session(
         &self,
         auth_client: &mut AuthClient,
