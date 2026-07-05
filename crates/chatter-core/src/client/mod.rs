@@ -2460,18 +2460,32 @@ impl ChatterClient {
             return Ok(());
         }
 
-        let user_id = match self.services.auth_state.get().current_user_id {
-            Some(uid) => uid,
-            None => {
-                return Err(ClientError::Validation(
-                    "configure_push requires an authenticated user".into(),
-                ));
-            }
+        if self.services.auth_state.get().current_user_id.is_none() {
+            return Err(ClientError::Validation(
+                "configure_push requires an authenticated user".into(),
+            ));
+        }
+
+        // Use the opaque topic the server issued in AuthResponse (persisted at
+        // login), not a locally-derived chatter_{user_id}. Empty means push is
+        // disabled server-side (or we haven't logged in since the field was
+        // added) — nothing to subscribe to.
+        let topic = {
+            use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+            SettingsRepository::new(self.services.database.clone())
+                .get_string(keys::PUSH_TOPIC)
+                .ok()
+                .flatten()
+                .unwrap_or_default()
         };
+        if topic.is_empty() {
+            tracing::info!("Push listener not started: no server-issued push topic");
+            return Ok(());
+        }
 
         let config = crate::network::streaming::push_listener::PushListenerConfig::new(
             ntfy_url.to_string(),
-            &user_id.to_string(),
+            topic.clone(),
         );
 
         // Fresh shutdown channel for this listener instance.
@@ -2484,7 +2498,6 @@ impl ChatterClient {
         let wake_rx = listener.subscribe();
         let event_bus = self.services.event_bus.clone();
         let ui = self.services.clone();
-        let topic = format!("chatter_{}", user_id);
 
         // Task A: SSE consumer. Runs the listener's reconnect loop; exits
         // when shutdown fires.

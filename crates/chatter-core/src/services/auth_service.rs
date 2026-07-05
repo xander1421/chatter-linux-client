@@ -395,6 +395,9 @@ impl AuthService {
         self.settings_repo.set_string(keys::CURRENT_USER_ID, &user_id.to_string())?;
         self.settings_repo.set(keys::CURRENT_DEVICE_ID, &device_id)?;
         self.settings_repo.set_string(keys::DISPLAY_NAME, &display_name)?;
+        // Server-issued opaque push topic (empty when push is disabled).
+        // configure_push subscribes to this instead of deriving it locally.
+        self.settings_repo.set_string(keys::PUSH_TOPIC, &response.push_topic)?;
 
         // SECURITY: store auth token. profile_key is NOT touched on login -
         // it is set at registration (random) and on a fresh device is loaded

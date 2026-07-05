@@ -48,12 +48,16 @@ pub struct PushListenerConfig {
 }
 
 impl PushListenerConfig {
-    /// Create config for a user's push topic.
-    pub fn new(ntfy_url: String, user_id: &str) -> Self {
+    /// Create config for a pre-derived push topic.
+    ///
+    /// The topic is the opaque, server-issued value from AuthResponse — the
+    /// client no longer derives `chatter_{user_id}` locally (that leaked the
+    /// user_id and did not match the server's publish topic).
+    pub fn new(ntfy_url: String, topic: String) -> Self {
         let reconnect = ReconnectConfig::const_default();
         Self {
             ntfy_url,
-            topic: format!("chatter_{}", user_id),
+            topic,
             auth_token: None,
             reconnect_delay: reconnect.initial_delay,
             reconnect,
@@ -361,7 +365,7 @@ mod tests {
 
     #[test]
     fn test_push_listener_config_new() {
-        let config = PushListenerConfig::new("http://localhost:8090".to_string(), "user-123");
+        let config = PushListenerConfig::new("http://localhost:8090".to_string(), "chatter_user-123".to_string());
         assert_eq!(config.topic, "chatter_user-123");
         assert_eq!(config.ntfy_url, "http://localhost:8090");
         assert!(config.auth_token.is_none());
@@ -369,7 +373,7 @@ mod tests {
 
     #[test]
     fn test_push_listener_config_with_auth() {
-        let config = PushListenerConfig::new("http://localhost:8090".to_string(), "user-123")
+        let config = PushListenerConfig::new("http://localhost:8090".to_string(), "chatter_user-123".to_string())
             .with_auth("tk_test_token".to_string());
         assert_eq!(config.auth_token, Some("tk_test_token".to_string()));
     }
@@ -377,7 +381,7 @@ mod tests {
     #[test]
     fn test_parse_sse_event_valid() {
         let listener = PushListener::new(
-            PushListenerConfig::new("http://localhost:8090".to_string(), "test"),
+            PushListenerConfig::new("http://localhost:8090".to_string(), "test".to_string()),
         );
 
         let event_text = r#"event: message
@@ -397,7 +401,7 @@ data: {"id":"abc123","event":"message","title":"Chatter","message":"New activity
     #[test]
     fn test_parse_sse_event_keepalive_ignored() {
         let listener = PushListener::new(
-            PushListenerConfig::new("http://localhost:8090".to_string(), "test"),
+            PushListenerConfig::new("http://localhost:8090".to_string(), "test".to_string()),
         );
 
         let event_text = r#"event: open
@@ -410,7 +414,7 @@ data: {"id":"abc","event":"open"}"#;
     #[test]
     fn test_parse_sse_event_invalid_json() {
         let listener = PushListener::new(
-            PushListenerConfig::new("http://localhost:8090".to_string(), "test"),
+            PushListenerConfig::new("http://localhost:8090".to_string(), "test".to_string()),
         );
 
         let event_text = "data: not valid json";
@@ -421,7 +425,7 @@ data: {"id":"abc","event":"open"}"#;
     #[test]
     fn test_push_event_subscribe() {
         let listener = PushListener::new(
-            PushListenerConfig::new("http://localhost:8090".to_string(), "test"),
+            PushListenerConfig::new("http://localhost:8090".to_string(), "test".to_string()),
         );
 
         let _rx1 = listener.subscribe();
@@ -431,13 +435,13 @@ data: {"id":"abc","event":"open"}"#;
 
     #[test]
     fn test_push_listener_config_reconnect_delay() {
-        let config = PushListenerConfig::new("http://localhost:8090".to_string(), "user-123");
+        let config = PushListenerConfig::new("http://localhost:8090".to_string(), "chatter_user-123".to_string());
         assert_eq!(config.reconnect_delay, Duration::from_secs(5));
     }
 
     #[test]
     fn test_push_listener_config_default_reconnect_is_historical() {
-        let config = PushListenerConfig::new("http://localhost:8090".to_string(), "user-123");
+        let config = PushListenerConfig::new("http://localhost:8090".to_string(), "chatter_user-123".to_string());
         // Default config must preserve exact historical tuning so existing
         // deployments don't shift behavior after the refactor.
         assert_eq!(config.reconnect, ReconnectConfig::default());
@@ -458,7 +462,7 @@ data: {"id":"abc","event":"open"}"#;
             max_attempts: Some(3),
             give_up_after: Some(Duration::from_secs(60)),
         };
-        let config = PushListenerConfig::new("http://localhost:8090".to_string(), "user-123")
+        let config = PushListenerConfig::new("http://localhost:8090".to_string(), "chatter_user-123".to_string())
             .with_reconnect(custom);
         assert_eq!(config.reconnect, custom);
         // `reconnect_delay` should track the custom initial
@@ -499,7 +503,7 @@ data: {"id":"abc","event":"open"}"#;
         use futures::stream;
 
         let listener = PushListener::new(
-            PushListenerConfig::new("http://localhost:8090".to_string(), "test"),
+            PushListenerConfig::new("http://localhost:8090".to_string(), "test".to_string()),
         );
         let mut rx = listener.subscribe();
 
@@ -538,7 +542,7 @@ data: {"id":"abc","event":"open"}"#;
         use futures::stream;
 
         let listener = PushListener::new(
-            PushListenerConfig::new("http://localhost:8090".to_string(), "test"),
+            PushListenerConfig::new("http://localhost:8090".to_string(), "test".to_string()),
         );
         let mut rx = listener.subscribe();
 

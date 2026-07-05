@@ -16,6 +16,10 @@ pub mod keys {
     pub const THEME: &str = "app.theme";
     pub const NOTIFICATION_SOUND: &str = "app.notification_sound";
     pub const NOTIFICATION_ENABLED: &str = "app.notification_enabled";
+    /// Opaque ntfy push topic issued by the server in AuthResponse. The client
+    /// subscribes to this instead of deriving `chatter_{user_id}` locally
+    /// (which leaked the user_id and didn't match the server's publish topic).
+    pub const PUSH_TOPIC: &str = "push.topic";
 
     // Privacy settings
     pub const SEND_READ_RECEIPTS: &str = "privacy.send_read_receipts";
