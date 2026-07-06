@@ -52,12 +52,46 @@ fn get_argon2_params() -> Params {
     .expect("Valid Argon2 parameters")
 }
 
-/// Validate a PIN's wire shape.
+/// Minimum estimated entropy (bits) for a PIN.
 ///
-/// `MIN_PIN_LENGTH..=MAX_PIN_LENGTH` ASCII printable bytes. Numeric-only
-/// PINs are still allowed (a 6-digit numeric PIN is rejected; an 8-digit
-/// numeric PIN is permitted but discouraged). The crypto layer cannot
-/// enforce true password strength - that's a UX-layer concern.
+/// The SVR backup wrapping the identity + profile key is protected only by
+/// Argon2id(PIN) with no enclave throttling yet (see SECURITY.md "SVR enclave
+/// gap"), so a stolen blob is brute-forced offline. This floor rejects the
+/// weakest common case — an 8-digit numeric PIN (~26.6 bits) — while still
+/// accepting an 8-char alphanumeric PIN (~37.6 bits). It is a tunable
+/// mitigation, not the cure; the cure is enclave-backed SVR.
+pub const MIN_PIN_ENTROPY_BITS: f64 = 30.0;
+
+/// Estimate PIN entropy as `len * log2(charset)`, where `charset` grows with
+/// the character classes present (digits, lower, upper, symbols). This is a
+/// deliberate over-estimate (assumes uniform random over the used classes);
+/// it only needs to distinguish "trivially small keyspace" from "not".
+fn estimate_pin_entropy_bits(pin: &str) -> f64 {
+    let mut charset = 0u32;
+    if pin.chars().any(|c| c.is_ascii_digit()) {
+        charset += 10;
+    }
+    if pin.chars().any(|c| c.is_ascii_lowercase()) {
+        charset += 26;
+    }
+    if pin.chars().any(|c| c.is_ascii_uppercase()) {
+        charset += 26;
+    }
+    if pin.chars().any(|c| c.is_ascii_graphic() && !c.is_ascii_alphanumeric()) {
+        charset += 32;
+    }
+    if charset == 0 {
+        return 0.0;
+    }
+    pin.chars().count() as f64 * (charset as f64).log2()
+}
+
+/// Validate a PIN's shape and strength.
+///
+/// `MIN_PIN_LENGTH..=MAX_PIN_LENGTH` ASCII printable bytes, and at least
+/// [`MIN_PIN_ENTROPY_BITS`] of estimated entropy. The entropy floor rejects
+/// low-keyspace PINs (e.g. an 8-digit numeric PIN) that a software-only SVR
+/// cannot otherwise defend against.
 pub fn validate_pin(pin: &str) -> Result<(), CryptoError> {
     if pin.len() < MIN_PIN_LENGTH {
         return Err(CryptoError::Validation(format!(
@@ -72,6 +106,11 @@ pub fn validate_pin(pin: &str) -> Result<(), CryptoError> {
     if !pin.chars().all(|c| c.is_ascii_graphic()) {
         return Err(CryptoError::Validation(
             "PIN must contain only printable ASCII characters".into(),
+        ));
+    }
+    if estimate_pin_entropy_bits(pin) < MIN_PIN_ENTROPY_BITS {
+        return Err(CryptoError::Validation(
+            "PIN is too weak — use more characters or mix digits, letters, and symbols".into(),
         ));
     }
     Ok(())
@@ -297,10 +336,18 @@ mod tests {
 
     #[test]
     fn validate_pin_accepts_minimum_length() {
-        assert!(validate_pin("abcdefgh").is_ok(), "8 chars exactly accepted");
-        assert!(validate_pin("12345678").is_ok(), "8 ASCII digits accepted");
+        assert!(validate_pin("abcdefgh").is_ok(), "8 lowercase (~37.6 bits) accepted");
         assert!(validate_pin("AaBbCc12").is_ok(), "mixed alphanumeric accepted");
         assert!(validate_pin("Pa$$w0rd!").is_ok(), "symbols accepted");
+    }
+
+    #[test]
+    fn validate_pin_rejects_low_entropy() {
+        // 8-digit numeric (~26.6 bits) is below the entropy floor — the case a
+        // software-only SVR can't defend against.
+        assert!(validate_pin("12345678").is_err(), "8-digit numeric rejected");
+        // A longer numeric PIN clears the floor (10 digits ~= 33 bits).
+        assert!(validate_pin("1234567890").is_ok(), "10-digit numeric accepted");
     }
 
     #[test]
