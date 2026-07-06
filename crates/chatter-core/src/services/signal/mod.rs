@@ -110,4 +110,47 @@ mod tests {
         // Store should be created successfully
         drop(store);
     }
+
+    /// Audit C2: identity is pinned per ACCOUNT, so a server-injected "ghost"
+    /// device (new address, divergent identity key) is rejected, while a
+    /// legitimate second device sharing the account's identity key is trusted.
+    #[tokio::test]
+    async fn ghost_device_with_divergent_identity_key_is_rejected() {
+        use libsignal_protocol::{
+            DeviceId, Direction, IdentityKeyPair, IdentityKeyStore, ProtocolAddress,
+        };
+        use rand::TryRngCore;
+
+        let db_file = NamedTempFile::new().unwrap();
+        let (_service, key_store, _settings) = setup_service(db_file.path()).await;
+        let mut store = SignalStore::new(key_store);
+
+        let mut rng = rand::rngs::OsRng.unwrap_err();
+        let real = *IdentityKeyPair::generate(&mut rng).identity_key();
+        let attacker = *IdentityKeyPair::generate(&mut rng).identity_key();
+
+        let dev1 = ProtocolAddress::new("alice_uuid".to_string(), DeviceId::new(1).unwrap());
+        let dev2 = ProtocolAddress::new("alice_uuid".to_string(), DeviceId::new(2).unwrap());
+        let dev3 = ProtocolAddress::new("alice_uuid".to_string(), DeviceId::new(3).unwrap());
+
+        // First contact TOFU-pins the account identity (device 1, real key).
+        assert!(store
+            .is_trusted_identity(&dev1, &real, Direction::Receiving)
+            .await
+            .unwrap());
+        store.save_identity(&dev1, &real).await.unwrap();
+
+        // A second legitimate device shares the SAME identity key -> trusted,
+        // even though its (user:device) address was never seen before.
+        assert!(store
+            .is_trusted_identity(&dev2, &real, Direction::Sending)
+            .await
+            .unwrap());
+
+        // A server-injected ghost device presents a DIFFERENT key -> rejected.
+        assert!(!store
+            .is_trusted_identity(&dev3, &attacker, Direction::Sending)
+            .await
+            .unwrap());
+    }
 }

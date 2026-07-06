@@ -110,38 +110,42 @@ impl IdentityKeyStore for SignalStore {
         address: &ProtocolAddress,
         identity: &IdentityKey,
     ) -> Result<IdentityChange> {
-        let address_str = address_to_string(address);
+        // SECURITY: identity keys are pinned per ACCOUNT (bare user id), not per
+        // (user, device). Chatter's linked devices all share the primary's
+        // identity key, so every legitimate device of a user presents the same
+        // key. Per-account keying means a device presenting a DIFFERENT key — a
+        // server-injected "ghost" device — fails is_trusted_identity and is
+        // never encrypted to. (Sessions/prekeys/sender-keys remain per-device.)
+        let account = address.name();
         let key_changed = self
             .key_store
-            .save_identity(&address_str, &identity.serialize())
+            .save_identity(account, &identity.serialize())
             .map_err(storage_to_signal_error)?;
 
-        // If identity key changed, archive the old session (not delete).
-        // archive_current_state() moves the current session to previous_sessions,
-        // preserving it so in-transit messages under the old key can still decrypt.
-        // This matches Signal-Desktop behavior and forces new session establishment.
         if key_changed {
             tracing::warn!(
-                address = %address_str,
-                "Identity key changed - archiving session for re-establishment"
+                account = %account,
+                "Identity key changed - archiving all device sessions for re-establishment"
             );
-            // The peer's safety number no longer matches the new key, so any
-            // prior manual verification is stale. Clear it so the peer must be
-            // re-verified — this is the MITM/re-registration signal the
-            // verification system exists to surface. Keyed on the bare user-id
-            // (address.name()), not the "user.device" address_str.
+            // The safety number no longer matches the new key, so any prior
+            // manual verification is stale — clear it (the MITM/re-registration
+            // signal the verification system exists to surface).
             self.key_store
-                .unverify_peer(address.name())
+                .unverify_peer(account)
                 .map_err(storage_to_signal_error)?;
-            if let Some(record_bytes) = self
+            // A re-key invalidates EVERY device session for this account, not
+            // just the device whose message surfaced the change. Archive each
+            // (not delete) so in-transit messages under the old ratchet still
+            // decrypt while forcing new session establishment for all devices.
+            for (addr, record_bytes) in self
                 .key_store
-                .load_session(&address_str)
+                .list_sessions_for_user(account)
                 .map_err(storage_to_signal_error)?
             {
                 let mut record = SessionRecord::deserialize(&record_bytes)?;
                 record.archive_current_state()?;
                 self.key_store
-                    .store_session(&address_str, &record.serialize()?)
+                    .store_session(&addr, &record.serialize()?)
                     .map_err(storage_to_signal_error)?;
             }
         }
@@ -155,16 +159,16 @@ impl IdentityKeyStore for SignalStore {
         identity: &IdentityKey,
         _direction: Direction,
     ) -> Result<bool> {
-        let address_str = address_to_string(address);
-
-        // TOFU (Trust On First Use): if no stored key, trust it
+        // Per-account keying (see save_identity): trust is evaluated against the
+        // account's single pinned identity key, so a ghost device with a
+        // divergent key is rejected regardless of its device id.
         let stored_key = self
             .key_store
-            .get_identity(&address_str)
+            .get_identity(address.name())
             .map_err(storage_to_signal_error)?;
 
         match stored_key {
-            None => Ok(true), // First use, trust it
+            None => Ok(true), // TOFU: first key seen for this account
             Some(bytes) => {
                 let stored_identity = IdentityKey::try_from(bytes.as_slice())
                     .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
@@ -174,11 +178,9 @@ impl IdentityKeyStore for SignalStore {
     }
 
     async fn get_identity(&self, address: &ProtocolAddress) -> Result<Option<IdentityKey>> {
-        let address_str = address_to_string(address);
-
         let stored_key = self
             .key_store
-            .get_identity(&address_str)
+            .get_identity(address.name())
             .map_err(storage_to_signal_error)?;
 
         match stored_key {

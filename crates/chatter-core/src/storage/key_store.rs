@@ -179,20 +179,12 @@ impl KeyStore {
     ///
     /// Note: Address format in the store is "{uuid}:{device_id}" (colon separator).
     pub fn get_identity_by_uuid(&self, uuid: &str) -> Result<Option<Vec<u8>>, StorageError> {
-        let conn = self.db.connection()?;
-        // Match addresses like "uuid:1", "uuid:2", etc. (colon separator)
-        let pattern = format!("{}:%", uuid);
-        let mut stmt = conn.prepare(
-            "SELECT identity_key FROM remote_identities WHERE address LIKE ?1 LIMIT 1"
-        )?;
-
-        let result: Result<Vec<u8>, _> = stmt.query_row(params![pattern], |row| row.get(0));
-
-        match result {
-            Ok(key) => Ok(Some(key)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(StorageError::Database(e)),
-        }
+        // Identity keys are pinned per ACCOUNT (keyed by the bare user id), so
+        // this is an exact lookup that returns THE single pinned key for the
+        // user — which is what the safety number must reflect. (Previously a
+        // `LIKE 'uuid:%' LIMIT 1` over per-device rows returned an arbitrary
+        // device's key.)
+        self.get_identity(uuid)
     }
 
     // ========================================================================
@@ -553,6 +545,24 @@ impl KeyStore {
             params![pattern],
         )?;
         Ok(rows_affected as u32)
+    }
+
+    /// List all sessions for a user (all devices) as `(address, record)` pairs.
+    ///
+    /// Address format is "user_id:device_id", so we match on "user_id:%". Used
+    /// to archive every device session when the account's identity key changes.
+    pub fn list_sessions_for_user(&self, user_id: &str) -> Result<Vec<(String, Vec<u8>)>, StorageError> {
+        let conn = self.db.connection()?;
+        let pattern = format!("{}:%", user_id);
+        let mut stmt = conn.prepare("SELECT address, record FROM sessions WHERE address LIKE ?1")?;
+        let rows = stmt.query_map(params![pattern], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
     }
 
     // ========================================================================
