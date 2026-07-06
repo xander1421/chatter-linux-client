@@ -6,6 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use ed25519_dalek::{Signer, SigningKey};
 use parking_lot::RwLock;
 use tokio::sync::{broadcast, watch};
 
@@ -45,30 +46,48 @@ const MAX_DECOY_MAILBOXES: usize = 10;
 /// this from a legitimate poll to an empty mailbox.
 async fn perform_dummy_poll(
     mailbox_client: &Arc<tokio::sync::Mutex<AnonymousMailboxClient>>,
-    decoys: &tokio::sync::RwLock<Vec<[u8; 32]>>,
+    decoys: &tokio::sync::RwLock<Vec<SigningKey>>,
 ) {
-    // Ensure we have decoy addresses
+    // Ensure we have decoy signing keys. These must be real keypairs (not bare
+    // random pubkeys) so a dummy poll can complete the SAME two-leg
+    // challenge->sign->poll flow as a real poll. A bare pubkey could only do the
+    // challenge leg, so decoys were trivially distinguishable from real polls by
+    // request count — defeating the access-pattern obfuscation.
     {
         let mut decoys_guard = decoys.write().await;
         while decoys_guard.len() < MAX_DECOY_MAILBOXES {
-            let mut key = [0u8; 32];
-            {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut key[..]).expect("OS CSPRNG must not fail");}
-            decoys_guard.push(key);
+            let mut seed = [0u8; 32];
+            {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut seed[..]).expect("OS CSPRNG must not fail");}
+            decoys_guard.push(SigningKey::from_bytes(&seed));
         }
     }
 
-    // Select random decoy
-    let decoy_key = {
+    // Select a random decoy keypair.
+    let decoy = {
         use rand::prelude::IndexedRandom;
         let decoys_guard = decoys.read().await;
-        decoys_guard.choose(&mut rand::rng()).copied()
+        decoys_guard.choose(&mut rand::rng()).cloned()
     };
 
-    if let Some(key) = decoy_key {
-        // Poll the decoy mailbox (will fail, but that's expected)
+    if let Some(key) = decoy {
+        let pubkey = key.verifying_key().to_bytes().to_vec();
         let mut client = mailbox_client.lock().await;
-        let _ = client.get_mailbox_challenge(key.to_vec()).await;
-        tracing::trace!("Performed dummy poll to decoy mailbox");
+        // Leg 1: challenge. Leg 2: signed poll — byte-for-byte the same request
+        // shape as a real poll (server hides mailbox existence, so an unregistered
+        // decoy is indistinguishable from an empty real mailbox).
+        if let Ok(challenge_response) = client.get_mailbox_challenge(pubkey.clone()).await {
+            let sig = key.sign(&challenge_response.challenge);
+            let _ = client
+                .poll_ephemeral_mailbox(
+                    pubkey,
+                    sig.to_bytes().to_vec(),
+                    challenge_response.challenge.clone(),
+                    None,
+                    10,
+                )
+                .await;
+        }
+        tracing::trace!("Performed 2-leg dummy poll to decoy mailbox");
     }
 }
 
@@ -143,7 +162,7 @@ pub struct DeviceInboxProvider {
     /// Probability of dummy polling (0.0 - 1.0).
     dummy_poll_probability: f64,
     /// Decoy mailbox addresses for dummy polling.
-    decoys: Arc<tokio::sync::RwLock<Vec<[u8; 32]>>>,
+    decoys: Arc<tokio::sync::RwLock<Vec<SigningKey>>>,
     /// Anonymous DM poller (optional).
     anon_dm_poller: Option<Arc<AnonDmPoller>>,
     /// Pairwise service for anon DM decryption (optional).
@@ -354,7 +373,7 @@ impl DeviceInboxProvider {
         attachment_repo: Arc<AttachmentRepository>,
         timing: TimingObfuscation,
         dummy_poll_probability: f64,
-        decoys: Arc<tokio::sync::RwLock<Vec<[u8; 32]>>>,
+        decoys: Arc<tokio::sync::RwLock<Vec<SigningKey>>>,
         anon_dm_poller: Option<Arc<AnonDmPoller>>,
         pairwise_service: Option<Arc<PairwiseService>>,
         anon_mailbox_client: Option<Arc<tokio::sync::Mutex<AnonymousMailboxClient>>>,

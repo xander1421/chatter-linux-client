@@ -29,7 +29,6 @@ pub mod content;
 pub mod dm;
 pub mod group;
 pub mod key_rolling;
-pub mod poller;
 pub mod timing;
 pub mod token_manager;
 
@@ -72,12 +71,6 @@ pub use key_rolling::{
 pub use timing::{
     TimingConfig, TimingObfuscation, DEFAULT_JITTER_PERCENT, DEFAULT_MAX_DELAY_MS,
     DEFAULT_MIN_DELAY_MS,
-};
-
-// Re-export poller types
-pub use poller::{
-    MailboxPoller, PollerConfig, PollerStats, UnifiedPollResult,
-    DEFAULT_DUMMY_POLL_PROBABILITY, DEFAULT_POLL_INTERVAL_SECS,
 };
 
 // Re-export anonymous DM polling types
