@@ -79,6 +79,16 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
         aes_key.copy_from_slice(&key[..AES_KEY_LENGTH]);
         mac_key.copy_from_slice(&key[AES_KEY_LENGTH..]);
 
+        // SECURITY: plaintext_size comes from the sender-controlled
+        // AttachmentPointer. Clamp it to the actual ciphertext capacity
+        // (total_size minus IV+HMAC) — real plaintext can never exceed the
+        // ciphertext body, so this never truncates legitimate data. Without it
+        // a hostile size triggers a huge `Vec::with_capacity` (alloc abort) and
+        // an `encrypted_len - plaintext_size` usize underflow panic — a remote
+        // client DoS from a single attachment, before any MAC verification.
+        let ciphertext_body = total_size.saturating_sub(IV_LENGTH + HMAC_LENGTH);
+        let plaintext_size = plaintext_size.min(ciphertext_body);
+
         Self {
             reader,
             aes_key,
@@ -550,6 +560,24 @@ mod tests {
     use super::*;
     use crate::crypto::attachment_crypto::{AttachmentCrypto, INCREMENTAL_MAC_CHUNK_SIZE};
     use std::io::Cursor;
+
+    #[test]
+    fn plaintext_size_clamped_to_ciphertext_capacity() {
+        // Hostile AttachmentPointer: plaintext_size far larger than the actual
+        // ciphertext. Must be clamped so `Vec::with_capacity` can't abort and
+        // the `encrypted_len - plaintext_size` padding calc can't underflow.
+        let key = [0u8; KEY_SET_LENGTH];
+        let digest = [0u8; 32];
+
+        let total_size = 100; // IV(16) + HMAC(32) overhead → body = 52
+        let d = StreamingDecryptor::new(Cursor::new(Vec::<u8>::new()), &key, &digest, usize::MAX, total_size);
+        assert_eq!(d.plaintext_size, total_size - IV_LENGTH - HMAC_LENGTH);
+
+        // Degenerate total_size smaller than the IV+HMAC overhead must clamp to
+        // 0, not underflow.
+        let d2 = StreamingDecryptor::new(Cursor::new(Vec::<u8>::new()), &key, &digest, 1000, 10);
+        assert_eq!(d2.plaintext_size, 0);
+    }
 
     #[test]
     fn test_streaming_decrypt_small() {

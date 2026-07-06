@@ -12,6 +12,12 @@ use super::{attachment_file_path, attachments_dir, ensure_attachments_dir, Attac
 /// Ciphertext > this uses multipart; ≤ uses single-PUT.
 const MULTIPART_THRESHOLD: u64 = 100 * 1024 * 1024;
 
+/// Upper bound on multipart parts. With the 2 GiB attachment cap and S3's
+/// 5 MiB minimum part size, a legitimate upload is well under 500 parts; this
+/// caps a hostile/broken server `part_size` (e.g. 1) before `part_ranges`
+/// allocates a multi-GB Vec.
+const MAX_MULTIPART_PARTS: u64 = 10_000;
+
 /// Split `total` bytes into (offset, len) ranges of `part_size` (last may be smaller).
 fn part_ranges(total: u64, part_size: u64) -> Vec<(u64, u64)> {
     let mut ranges = Vec::new();
@@ -380,6 +386,19 @@ impl AttachmentService {
             return Err(AttachmentError::NetworkError(
                 "server returned part_size 0 for multipart upload".to_string(),
             ));
+        }
+        // Reject an absurd implied part count (e.g. hostile part_size=1) BEFORE
+        // part_ranges builds the Vec — otherwise it allocates ~ciphertext/part_size
+        // tuples (multi-GB) before the len-mismatch check below can fire.
+        let implied_parts = ciphertext_size.div_ceil(part_size);
+        if implied_parts > MAX_MULTIPART_PARTS {
+            let _ = file_client
+                .abort_attachment_multipart_upload(&cdn_key, &upload_id)
+                .await;
+            return Err(AttachmentError::NetworkError(format!(
+                "server part_size {} implies {} parts (max {})",
+                part_size, implied_parts, MAX_MULTIPART_PARTS
+            )));
         }
         let ranges = part_ranges(ciphertext_size, part_size);
         if ranges.len() != create.part_urls.len() {
