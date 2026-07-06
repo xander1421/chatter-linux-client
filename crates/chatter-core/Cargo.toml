@@ -132,8 +132,8 @@ libc = "0.2"
 # ============================================================================
 # WebRTC / LiveKit (desktop only, gated behind `desktop-media`)
 # ============================================================================
-livekit = { version = "0.7.37", default-features = false, features = ["tokio", "rustls-tls-webpki-roots"], optional = true }
-livekit-api = { version = "0.4.14", default-features = false, features = ["services-tokio", "access-token", "webhooks", "signal-client-tokio", "rustls-tls-webpki-roots"], optional = true }
+livekit = { git = "https://github.com/livekit/rust-sdks", rev = "a7f72696c69a7a0cf2b537857f37e8a5f20b2af0", default-features = false, features = ["tokio", "rustls-tls-webpki-roots"], optional = true }
+livekit-api = { git = "https://github.com/livekit/rust-sdks", rev = "a7f72696c69a7a0cf2b537857f37e8a5f20b2af0", default-features = false, features = ["services-tokio", "access-token", "webhooks", "signal-client-tokio", "rustls-tls-webpki-roots"], optional = true }
 # lazy_static removed — migrated to std::sync::LazyLock
 async-stream = "0.3.6"
 
