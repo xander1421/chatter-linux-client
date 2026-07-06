@@ -103,8 +103,7 @@ impl AudioPlayer {
         // Open and decode the file to get duration
         let file = File::open(path)?;
         let reader = BufReader::new(file);
-        let source = Decoder::new(reader)
-            .map_err(|e| MediaError::InvalidFormat(format!("failed to decode audio: {}", e)))?;
+        let source = decode_catching_panics(reader)?;
 
         // Get duration (may not be available for all formats)
         let duration = source.total_duration().unwrap_or(Duration::ZERO);
@@ -213,8 +212,17 @@ impl AudioPlayer {
             builder = builder.with_mime_type(mime);
         }
 
-        builder.build()
-            .map_err(|e| MediaError::InvalidFormat(format!("failed to decode audio: {}", e)))
+        // Symphonia's decoders can panic on malformed frames (e.g. a subtract-
+        // with-overflow in symphonia-bundle-mp3's demuxer on certain MP3s).
+        // Catch it here rather than let it unwind through the caller's
+        // Mutex<AudioPlayer> guard and poison it for every future playback.
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| builder.build())) {
+            Ok(Ok(decoder)) => Ok(decoder),
+            Ok(Err(e)) => Err(MediaError::InvalidFormat(format!("failed to decode audio: {}", e))),
+            Err(_) => Err(MediaError::InvalidFormat(
+                "failed to decode audio: decoder panicked on malformed data".to_string(),
+            )),
+        }
     }
 
     /// Get duration from in-memory audio data.
@@ -222,7 +230,7 @@ impl AudioPlayer {
     /// Static method for extracting duration without creating a full player.
     pub fn get_duration_from_memory(data: &[u8]) -> Option<Duration> {
         let cursor = Cursor::new(data.to_vec());
-        let source = Decoder::new(cursor).ok()?;
+        let source = decode_catching_panics(cursor).ok()?;
         source.total_duration()
     }
 
@@ -392,7 +400,24 @@ impl AudioPlayer {
     pub fn get_duration(path: &Path) -> Option<Duration> {
         let file = File::open(path).ok()?;
         let reader = BufReader::new(file);
-        let source = Decoder::new(reader).ok()?;
+        let source = decode_catching_panics(reader).ok()?;
         source.total_duration()
+    }
+}
+
+/// Build a `Decoder` while catching panics from the underlying format
+/// probe/demuxer (e.g. symphonia-bundle-mp3's subtract-with-overflow on
+/// certain malformed MP3 frames). A single bad file must return a decode
+/// error, not unwind through a caller's `Mutex` guard and poison it for
+/// every subsequent playback attempt.
+fn decode_catching_panics<R: Read + Seek + Send + Sync + 'static>(
+    reader: R,
+) -> Result<Decoder<R>, MediaError> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Decoder::new(reader))) {
+        Ok(Ok(decoder)) => Ok(decoder),
+        Ok(Err(e)) => Err(MediaError::InvalidFormat(format!("failed to decode audio: {}", e))),
+        Err(_) => Err(MediaError::InvalidFormat(
+            "failed to decode audio: decoder panicked on malformed data".to_string(),
+        )),
     }
 }
