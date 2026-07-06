@@ -61,9 +61,17 @@ impl Directories {
         let project_dirs = ProjectDirs::from("com", "chatter", APP_ID)
             .ok_or(SystemError::DirectoryInit)?;
 
+        // `directories` only reads XDG_DATA_HOME on its Linux backend — macOS
+        // and Windows ignore it and always resolve the platform-native path.
+        // Honor it explicitly so `XDG_DATA_HOME=/tmp/chatter-userN` (used for
+        // multi-user local testing) works the same way on every platform.
+        let data_dir = std::env::var_os("XDG_DATA_HOME")
+            .map(|dir| PathBuf::from(dir).join(APP_ID))
+            .unwrap_or_else(|| project_dirs.data_dir().to_path_buf());
+
         Self::init(
             project_dirs.config_dir().to_path_buf(),
-            project_dirs.data_dir().to_path_buf(),
+            data_dir,
             project_dirs.cache_dir().to_path_buf(),
             project_dirs.runtime_dir().map(|p| p.to_path_buf()),
         )

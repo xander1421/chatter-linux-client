@@ -185,7 +185,8 @@ fn wire_copy_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
                 // Use wl-copy for Wayland (more reliable than arboard on Wayland)
                 let code_clone = code.clone();
                 std::thread::spawn(move || {
-                    // Try wl-copy first (Wayland), fall back to xclip (X11)
+                    // Try wl-copy first (Wayland), fall back to xclip (X11),
+                    // then arboard (macOS/Windows, or Linux without either tool).
                     let result = std::process::Command::new("wl-copy")
                         .arg(&code_clone)
                         .status()
@@ -207,11 +208,17 @@ fn wire_copy_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
                         Ok(status) if status.success() => {
                             tracing::info!("Copied friend code to clipboard: {}", code_clone);
                         }
-                        Ok(status) => {
-                            tracing::error!("Clipboard command failed with status: {}", status);
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to copy to clipboard: {}", e);
+                        _ => {
+                            match arboard::Clipboard::new()
+                                .and_then(|mut c| c.set_text(code_clone.clone()))
+                            {
+                                Ok(()) => {
+                                    tracing::info!("Copied friend code to clipboard: {}", code_clone);
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to copy to clipboard: {}", e);
+                                }
+                            }
                         }
                     }
                 });

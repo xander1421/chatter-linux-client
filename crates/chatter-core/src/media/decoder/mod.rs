@@ -7,10 +7,10 @@ use std::path::Path;
 
 use crate::error::MediaError;
 
-#[cfg(all(feature = "desktop-media", any(target_os = "linux", target_os = "windows")))]
+#[cfg(all(feature = "desktop-media", any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 mod gstreamer;
 
-#[cfg(all(feature = "desktop-media", any(target_os = "linux", target_os = "windows")))]
+#[cfg(all(feature = "desktop-media", any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub use self::gstreamer::GStreamerDecoder as PlatformDecoder;
 
 // Future platform implementations
@@ -19,9 +19,9 @@ mod mediacodec;
 #[cfg(target_os = "android")]
 pub use self::mediacodec::MediaCodecDecoder as PlatformDecoder;
 
-#[cfg(any(target_os = "ios", target_os = "macos"))]
+#[cfg(target_os = "ios")]
 mod videotoolbox;
-#[cfg(any(target_os = "ios", target_os = "macos"))]
+#[cfg(target_os = "ios")]
 pub use self::videotoolbox::VideoToolboxDecoder as PlatformDecoder;
 
 /// Information about an opened video.

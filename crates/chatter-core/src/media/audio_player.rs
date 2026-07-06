@@ -65,6 +65,12 @@ pub struct AudioPlayer {
     current_duration: Option<Duration>,
 }
 
+// cpal's CoreAudio backend holds a `Box<dyn FnMut()>` property-listener callback
+// without a Send bound, so `OutputStream` is !Send on macOS. All access to
+// AudioPlayer goes through the global Mutex in audio_state.rs, which already
+// serializes it, so moving it across threads is sound.
+unsafe impl Send for AudioPlayer {}
+
 impl AudioPlayer {
     /// Creates a new audio player.
     ///
