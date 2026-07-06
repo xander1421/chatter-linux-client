@@ -162,7 +162,12 @@ pub async fn app_init() -> AppState {
         tracing::info!("GStreamer initialized: {}", gstreamer::version_string());
     }
 
-    #[cfg(not(target_os = "android"))]
+    // Only Linux's hardware video path (gl_linux.rs) needs a GLES/EGL context.
+    // Windows uses D3D11 and macOS has no hw video path at all (see
+    // video/mod.rs), so forcing GLES there just risks the platform's default,
+    // better-tested Slint renderer (e.g. ANGLE's GLES-on-macOS emulation is
+    // known to mishandle window resize/backing-layer sizing).
+    #[cfg(target_os = "linux")]
     if let Err(e) = slint::BackendSelector::new()
         .backend_name("winit".into())
         .require_opengl_es()
@@ -492,10 +497,10 @@ pub async fn app_init() -> AppState {
                 .unwrap_or("http://localhost:50051")
                 .to_string()
         } else {
-            // Desktop dev: override the gRPC server at runtime with CHATTER_SERVER
+            // Desktop dev: override the gRPC server at runtime with CHATTER_SERVER_URL
             // (e.g. http://192.168.122.1:50051 to reach the host from a VM guest),
             // otherwise default to localhost.
-            std::env::var("CHATTER_SERVER")
+            std::env::var("CHATTER_SERVER_URL")
                 .unwrap_or_else(|_| "http://localhost:50051".to_string())
         };
 
