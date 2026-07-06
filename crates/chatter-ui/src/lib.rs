@@ -392,9 +392,10 @@ pub async fn app_init() -> AppState {
         let username = format!("dev{}", suffix);
         let display_name = format!("Dev User {}", suffix);
         let password = "devpass123";
-        // PIN must satisfy `crypto::svr::validate_pin`: 8-64 ASCII printable
-        // (was "123456" pre round-1 / round-5 PIN refactor; rejected now).
-        let pin = "12345678";
+        // PIN must satisfy `crypto::svr::validate_pin`: 8-64 ASCII printable AND
+        // clear the entropy floor (audit M1). Mixed alnum → ~46 bits, passes.
+        // (was "123456", then "12345678" — both rejected now.)
+        let pin = "devpin123";
         let server_url: String = if cfg!(target_os = "android") {
             // Android dev defaults to localhost via `adb reverse` tunnels
             // (50051 gRPC, 9000 RustFS, 7880/7881 LiveKit). For tunnel-free LAN
