@@ -393,9 +393,13 @@ impl DmConversationManager {
     ) -> Result<Option<DmMailbox>, MailboxError> {
         let mut stmt = conn
             .prepare(
+                // During rotation two mailboxes coexist for a conversation; the
+                // NEWEST is the active one that sends must target. (All non-expired
+                // rows are still polled for receive via get_active_mailbox_keys.)
                 "SELECT id, mailbox_public_key, mailbox_private_key, signature, randomizer,
                         token_id, created_at, expires_at, last_polled_at
-                 FROM dm_mailboxes WHERE conversation_id = ?1",
+                 FROM dm_mailboxes WHERE conversation_id = ?1
+                 ORDER BY created_at DESC LIMIT 1",
             )
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
 

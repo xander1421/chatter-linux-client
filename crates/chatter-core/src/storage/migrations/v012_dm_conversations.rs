@@ -26,7 +26,7 @@ impl Migration for V012DmConversations {
         -- Active DM mailboxes (our mailboxes for receiving)
         CREATE TABLE dm_mailboxes (
             id TEXT PRIMARY KEY,
-            conversation_id TEXT NOT NULL UNIQUE,
+            conversation_id TEXT NOT NULL,
             mailbox_public_key BLOB NOT NULL,
             mailbox_private_key BLOB NOT NULL,
             signature BLOB NOT NULL,

@@ -25,7 +25,7 @@ impl Migration for V013GroupMailboxes {
         -- Our mailbox for each group we're in
         CREATE TABLE group_mailboxes (
             id TEXT PRIMARY KEY,
-            group_id TEXT NOT NULL UNIQUE,
+            group_id TEXT NOT NULL,
             mailbox_public_key BLOB NOT NULL,
             mailbox_private_key BLOB NOT NULL,
             signature BLOB NOT NULL,
