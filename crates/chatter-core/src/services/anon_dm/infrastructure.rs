@@ -115,19 +115,34 @@ impl AnonDmService {
             "[ANON_DM_MAILBOX] Encrypting message for peer"
         );
 
-        // Encrypt with Signal Protocol
-        let ciphertext = self
+        // Encrypt with Signal Protocol. If a session already exists, encrypt
+        // locally (no server contact keyed to the peer). If it does NOT — e.g.
+        // after a SESSION_RESET — re-establishing via the authenticated prekey
+        // fetch would leak this anon-DM's sender->recipient edge to the server.
+        // Re-establish anonymously instead (blind token + anonymous fetch),
+        // mirroring the anon-group path. Without this guard a reset silently
+        // deanonymizes the conversation on the next message.
+        let ciphertext = if self
             .pairwise_service
-            .encrypt(peer_id, &plaintext)
+            .has_session(peer_id)
             .await
-            .map_err(|e| {
-                tracing::error!(
-                    peer_id = %peer_id,
-                    error = %e,
-                    "[ANON_DM_MAILBOX] Failed to encrypt"
-                );
-                AnonDmError::CryptoError(e.to_string())
-            })?;
+            .map_err(|e| AnonDmError::CryptoError(e.to_string()))?
+        {
+            self.pairwise_service
+                .encrypt(peer_id, &plaintext)
+                .await
+                .map_err(|e| AnonDmError::CryptoError(e.to_string()))?
+        } else {
+            self.pairwise_service
+                .ensure_sender_certificate()
+                .await
+                .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
+            let token = self.get_or_request_token().await?;
+            self.pairwise_service
+                .encrypt_anonymous(peer_id, &plaintext, &token)
+                .await
+                .map_err(|e| AnonDmError::CryptoError(e.to_string()))?
+        };
 
         tracing::debug!(
             peer_id = %peer_id,
