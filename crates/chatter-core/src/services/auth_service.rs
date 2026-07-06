@@ -11,6 +11,7 @@
 //! 3. Rainbow table attacks are infeasible (password acts as secret)
 
 use base64::Engine;
+use rand::TryRngCore;
 use std::sync::Arc;
 use zeroize::Zeroize;
 
@@ -322,7 +323,7 @@ impl AuthService {
                 .ok_or(CryptoError::NoIdentity)?
         } else {
             // Generate new identity for this device
-            self.identity_manager.generate_identity(&mut rand::rng())?
+            self.identity_manager.generate_identity(&mut rand::rngs::OsRng.unwrap_err())?
         };
 
         // For login, device_id might come from settings (re-auth) or be assigned by server
@@ -530,12 +531,12 @@ impl AuthService {
 
         // Generate new identity (always fresh for registration)
         let (registration_id, identity_key_pair) =
-            self.identity_manager.generate_identity(&mut rand::rng())?;
+            self.identity_manager.generate_identity(&mut rand::rngs::OsRng.unwrap_err())?;
 
         // Generate signed prekey
         let signed_prekey = self
             .prekey_manager
-            .generate_signed_prekey(&mut rand::rng(), 1, &identity_key_pair)?;
+            .generate_signed_prekey(&mut rand::rngs::OsRng.unwrap_err(), 1, &identity_key_pair)?;
 
         // Generate Kyber prekey for post-quantum resistance
         let kyber_prekey = self
@@ -543,7 +544,7 @@ impl AuthService {
             .generate_kyber_prekey(1, &identity_key_pair)?;
 
         // Generate one-time prekeys (100 for initial batch)
-        let one_time_prekeys = self.prekey_manager.generate_prekeys(&mut rand::rng(), 1, 100)?;
+        let one_time_prekeys = self.prekey_manager.generate_prekeys(&mut rand::rngs::OsRng.unwrap_err(), 1, 100)?;
 
         // Store profile key locally (needed for profile encryption)
         // Stored in SQLCipher encrypted database

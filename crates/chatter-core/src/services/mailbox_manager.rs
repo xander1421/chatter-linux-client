@@ -206,7 +206,12 @@ impl MailboxManager {
         for _ in 0..count {
             // Generate Ed25519 keypair for this mailbox
             let mut secret_bytes = [0u8; 32];
-            rand::RngCore::fill_bytes(&mut rand::rng(), &mut secret_bytes);
+            // SECURITY: mailbox signing-key seed must draw from the OS entropy
+            // pool, not a once-seeded userspace PRG (ThreadRng).
+            {
+                use rand::TryRngCore;
+                rand::RngCore::fill_bytes(&mut rand::rngs::OsRng.unwrap_err(), &mut secret_bytes);
+            }
             let private_key = SigningKey::from_bytes(&secret_bytes);
             let public_key = private_key.verifying_key();
 

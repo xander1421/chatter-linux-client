@@ -193,7 +193,12 @@ impl AnonDmService {
 
         // Generate random 32-byte E2EE key for this call
         let mut call_encryption_key = vec![0u8; 32];
-        rand::RngCore::fill_bytes(&mut rand::rng(), &mut call_encryption_key);
+        // SECURITY: call E2EE key must draw from the OS entropy pool, not a
+        // once-seeded userspace PRG (ThreadRng). Matches call_key_provider.
+        {
+            use rand::TryRngCore;
+            rand::RngCore::fill_bytes(&mut rand::rngs::OsRng.unwrap_err(), &mut call_encryption_key);
+        }
 
         // Create the call offer
         let offer = AnonCallOffer {

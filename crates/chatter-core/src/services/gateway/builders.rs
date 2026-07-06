@@ -506,7 +506,12 @@ pub fn generate_anon_call_room() -> ([u8; 16], String, Vec<u8>) {
 
     // Generate random 32-byte E2EE key
     let mut encryption_key = vec![0u8; 32];
-    rand::rng().fill_bytes(&mut encryption_key);
+    // SECURITY: call E2EE key must draw from the OS entropy pool, not a
+    // once-seeded userspace PRG (ThreadRng). Matches call_key_provider.
+    {
+        use rand::TryRngCore;
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng.unwrap_err(), &mut encryption_key);
+    }
 
     (room_id_bytes, room_name, encryption_key)
 }
