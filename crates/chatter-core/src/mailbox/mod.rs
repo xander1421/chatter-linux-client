@@ -1,9 +1,10 @@
 //! Ephemeral Mailbox System (NDSS '21).
 //!
-//! Privacy-preserving message routing to prevent Statistical Disclosure Attacks.
+//! Privacy-preserving message routing that resists Statistical Disclosure
+//! Attacks (partial — see the cover-traffic note below).
 //!
 //! This module implements the protocol from "Improving Signal's Sealed Sender"
-//! (NDSS 2021) which prevents the Statistical Disclosure Attack by using:
+//! (NDSS 2021), using:
 //!
 //! - **Ephemeral Mailboxes**: Each conversation uses a unique, temporary mailbox
 //! - **Blind Signatures**: Anonymous mailbox registration (server can't link user to mailbox)
@@ -16,13 +17,15 @@
 //!
 //! - **Content Padding** ([`content`]): Log-bucketing to hide message sizes
 //! - **Timing Obfuscation** ([`timing`]): Random delays before operations
-//! - **Cover Traffic** ([`cover_traffic`]): Fake messages at random intervals
 //! - **Dummy Polling** ([`poller`]): Polls to decoy mailboxes hide access patterns
+//!
+//! Note: rate/volume cover traffic (fake messages at random intervals) is NOT
+//! implemented — it belongs with the broader anonymity-egress work (unlinkable
+//! network path + traffic analysis) rather than as an inert module.
 
 pub mod anon_dm;
 pub mod blind_signature;
 pub mod content;
-pub mod cover_traffic;
 pub mod dm;
 pub mod group;
 pub mod key_rolling;
@@ -64,11 +67,6 @@ pub use key_rolling::{
     DEFAULT_CHECK_INTERVAL_SECS, DEFAULT_OVERLAP_SECS, DEFAULT_ROTATION_THRESHOLD_HOURS,
 };
 
-// Re-export cover traffic types
-pub use cover_traffic::{
-    CoverTrafficConfig, CoverTrafficGenerator, CoverTrafficMessage, CoverTrafficStats,
-    DEFAULT_BASE_INTERVAL_SECS, MAX_INTERVAL_SECS, MIN_INTERVAL_SECS,
-};
 
 // Re-export timing obfuscation types
 pub use timing::{
