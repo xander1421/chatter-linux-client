@@ -63,7 +63,7 @@ pub use content::{ContentEncoder, MAX_CONTENT_SIZE, MIN_PADDED_SIZE};
 // Re-export key rolling types
 pub use key_rolling::{
     KeyRollingService, RotationNotification, RotationResult, RotationTarget,
-    DEFAULT_CHECK_INTERVAL_SECS, DEFAULT_OVERLAP_SECS, DEFAULT_ROTATION_THRESHOLD_HOURS,
+    DEFAULT_CHECK_INTERVAL_SECS, DEFAULT_ROTATION_THRESHOLD_HOURS,
 };
 
 

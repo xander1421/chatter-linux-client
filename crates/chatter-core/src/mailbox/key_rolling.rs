@@ -8,24 +8,20 @@
 
 use std::sync::Arc;
 
-use chrono::{DateTime, Duration, Utc};
-use tokio::sync::RwLock;
+use chrono::{DateTime, Utc};
 
 use crate::domain::{ChannelId, UserId};
 use crate::error::MailboxError;
 use crate::mailbox::dm::{DmConversationManager, DmMailbox};
 use crate::mailbox::group::{GroupMailbox, GroupMailboxManager};
 use crate::mailbox::TokenManager;
+use crate::network::grpc::client_pool::GrpcClientPool;
 
 /// Default rotation check interval (1 hour).
 pub const DEFAULT_CHECK_INTERVAL_SECS: u64 = 3600;
 
 /// Default threshold for rotation (24 hours before expiry).
 pub const DEFAULT_ROTATION_THRESHOLD_HOURS: i64 = 24;
-
-/// Default overlap period for old mailboxes (1 hour).
-/// Old mailbox stays active briefly for in-flight messages.
-pub const DEFAULT_OVERLAP_SECS: u64 = 3600;
 
 /// Result of a mailbox rotation.
 #[derive(Debug)]
@@ -58,12 +54,6 @@ pub struct RotationNotification {
     pub old_mailbox_expires_at: DateTime<Utc>,
 }
 
-/// Tracks old mailboxes pending deletion.
-struct PendingDeletion {
-    mailbox_id: String,
-    delete_at: DateTime<Utc>,
-}
-
 /// Key rolling service for mailbox forward secrecy.
 ///
 /// Periodically rotates mailbox keys to limit the window during which
@@ -72,10 +62,8 @@ pub struct KeyRollingService {
     token_manager: Arc<TokenManager>,
     dm_manager: Arc<DmConversationManager>,
     group_manager: Arc<GroupMailboxManager>,
-    /// Pending old mailboxes to be deleted after overlap period.
-    pending_deletions: RwLock<Vec<PendingDeletion>>,
-    /// Overlap period for old mailboxes.
-    overlap_period: Duration,
+    /// For creating the rotated mailbox server-side (anonymous, no auth).
+    grpc_pool: Arc<GrpcClientPool>,
 }
 
 impl KeyRollingService {
@@ -84,29 +72,13 @@ impl KeyRollingService {
         token_manager: Arc<TokenManager>,
         dm_manager: Arc<DmConversationManager>,
         group_manager: Arc<GroupMailboxManager>,
+        grpc_pool: Arc<GrpcClientPool>,
     ) -> Self {
         Self {
             token_manager,
             dm_manager,
             group_manager,
-            pending_deletions: RwLock::new(Vec::new()),
-            overlap_period: Duration::seconds(DEFAULT_OVERLAP_SECS as i64),
-        }
-    }
-
-    /// Create with custom thresholds.
-    pub fn with_thresholds(
-        token_manager: Arc<TokenManager>,
-        dm_manager: Arc<DmConversationManager>,
-        group_manager: Arc<GroupMailboxManager>,
-        overlap_secs: u64,
-    ) -> Self {
-        Self {
-            token_manager,
-            dm_manager,
-            group_manager,
-            pending_deletions: RwLock::new(Vec::new()),
-            overlap_period: Duration::seconds(overlap_secs as i64),
+            grpc_pool,
         }
     }
 
@@ -148,23 +120,33 @@ impl KeyRollingService {
             .claim_available_token()?
             .ok_or(MailboxError::NoTokensAvailable)?;
 
-        // 3. Generate new Ed25519 keypair
-        let mut secret_bytes = [0u8; 32];
-        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut secret_bytes).expect("OS CSPRNG must not fail");}
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret_bytes);
-        let verifying_key = signing_key.verifying_key();
+        // 3. Create the new mailbox server-side using the TOKEN-BOUND keypair.
+        //    The blind signature signs the token's public key, so the mailbox key
+        //    MUST be the token key (a fresh random key would be rejected) — this is
+        //    also exactly what keeps creation unlinkable to the account.
+        if token.public_key.len() != 32 || token.private_key.len() != 64 {
+            return Err(MailboxError::InvalidServerKey(
+                "rotation token key size".to_string(),
+            ));
+        }
+        let mut client = self.grpc_pool.anonymous_mailbox_client();
+        let response = client
+            .create_ephemeral_mailbox(
+                token.public_key.clone(),
+                token.signature.clone(),
+                crate::mailbox::dm::bootstrap::DEFAULT_MAILBOX_TTL_SECONDS,
+                token.randomizer.clone().unwrap_or_default(),
+            )
+            .await
+            .map_err(|e| MailboxError::Network(e.to_string()))?;
 
-        let public_key = verifying_key.to_bytes();
-        let private_key = {
-            let mut combined = [0u8; 64];
-            combined[..32].copy_from_slice(&secret_bytes);
-            combined[32..].copy_from_slice(&public_key);
-            combined
-        };
-
-        // 4. Create new mailbox (server creation happens via MailboxClient - prepare here)
+        // 4. Build the token-bound mailbox (key copied from the token, id from server).
+        let mut public_key = [0u8; 32];
+        let mut private_key = [0u8; 64];
+        public_key.copy_from_slice(&token.public_key);
+        private_key.copy_from_slice(&token.private_key);
         let new_mailbox = DmMailbox {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: response.mailbox_id.clone(),
             public_key,
             private_key,
             signature: token.signature.clone(),
@@ -178,20 +160,14 @@ impl KeyRollingService {
             last_polled_at: None,
         };
 
-        // 5. Save new mailbox
+        // 5. Save the new mailbox ALONGSIDE the old one (schema now allows two rows).
+        //    The old mailbox is NOT deleted early — it stays pollable until its own
+        //    expiry, giving a loss-free overlap for a peer that hasn't switched yet.
+        //    Sends target the newest (load_our_mailbox_internal ORDER BY created_at).
         self.dm_manager.save_our_mailbox(peer_id, &new_mailbox)?;
 
-        // 7. Schedule old mailbox for deletion after overlap period
-        let delete_at = Utc::now() + self.overlap_period;
-        {
-            let mut deletions = self.pending_deletions.write().await;
-            deletions.push(PendingDeletion {
-                mailbox_id: old_mailbox.id.clone(),
-                delete_at,
-            });
-        }
-
-        // 8. Return notification for caller to send to peer
+        // 6. Return notification; the caller sends a DmMailboxRotation to the peer's
+        //    CURRENT mailbox so they switch to depositing into the new one.
         Ok(RotationNotification {
             target: RotationTarget::Dm(*peer_id),
             new_mailbox_public_key: public_key,
@@ -228,23 +204,31 @@ impl KeyRollingService {
             .claim_available_token()?
             .ok_or(MailboxError::NoTokensAvailable)?;
 
-        // 3. Generate new Ed25519 keypair
-        let mut secret_bytes = [0u8; 32];
-        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut secret_bytes).expect("OS CSPRNG must not fail");}
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret_bytes);
-        let verifying_key = signing_key.verifying_key();
+        // 3. Create the new group mailbox server-side using the TOKEN-BOUND key
+        //    (a fresh random key would fail the blind-signature check).
+        if token.public_key.len() != 32 || token.private_key.len() != 64 {
+            return Err(MailboxError::InvalidServerKey(
+                "rotation token key size".to_string(),
+            ));
+        }
+        let mut client = self.grpc_pool.anonymous_mailbox_client();
+        let response = client
+            .create_ephemeral_mailbox(
+                token.public_key.clone(),
+                token.signature.clone(),
+                crate::mailbox::dm::bootstrap::DEFAULT_MAILBOX_TTL_SECONDS,
+                token.randomizer.clone().unwrap_or_default(),
+            )
+            .await
+            .map_err(|e| MailboxError::Network(e.to_string()))?;
 
-        let public_key = verifying_key.to_bytes();
-        let private_key = {
-            let mut combined = [0u8; 64];
-            combined[..32].copy_from_slice(&secret_bytes);
-            combined[32..].copy_from_slice(&public_key);
-            combined
-        };
-
-        // 4. Create new group mailbox
+        // 4. Build the token-bound group mailbox.
+        let mut public_key = [0u8; 32];
+        let mut private_key = [0u8; 64];
+        public_key.copy_from_slice(&token.public_key);
+        private_key.copy_from_slice(&token.private_key);
         let new_mailbox = GroupMailbox {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: response.mailbox_id.clone(),
             group_id: *group_id,
             public_key,
             private_key,
@@ -259,20 +243,10 @@ impl KeyRollingService {
             last_polled_at: None,
         };
 
-        // 5. Save new mailbox
+        // 5. Save alongside the old (old expires naturally → loss-free overlap).
         self.group_manager.save_our_mailbox(&new_mailbox)?;
 
-        // 6. Schedule old mailbox deletion
-        let delete_at = Utc::now() + self.overlap_period;
-        {
-            let mut deletions = self.pending_deletions.write().await;
-            deletions.push(PendingDeletion {
-                mailbox_id: old_mailbox.id.clone(),
-                delete_at,
-            });
-        }
-
-        // 8. Return notification for all group members
+        // 6. Return notification; caller re-announces via GroupMailboxAddress.
         Ok(RotationNotification {
             target: RotationTarget::Group(*group_id),
             new_mailbox_public_key: public_key,
@@ -280,35 +254,10 @@ impl KeyRollingService {
         })
     }
 
-    /// Process pending deletions whose overlap period has elapsed.
-    ///
-    /// Call periodically (e.g., every hour) to clean up old mailboxes.
-    pub async fn process_pending_deletions(&self) -> Result<u32, MailboxError> {
-        let now = Utc::now();
-        let mut deleted_count = 0u32;
-
-        let mut deletions = self.pending_deletions.write().await;
-
-        // Partition into ready and not-ready
-        let (ready, not_ready): (Vec<_>, Vec<_>) =
-            deletions.drain(..).partition(|d| d.delete_at <= now);
-
-        // Put back the not-ready ones
-        *deletions = not_ready;
-
-        drop(deletions); // Release lock before logging
-
-        // Delete ready ones (in practice, these are already replaced in DB)
-        // The old mailbox records should be cleaned up
-        for pending in ready {
-            // Old mailboxes are replaced by new ones, so just log
-            // Actual deletion from server happens when server TTL expires
-            deleted_count += 1;
-            tracing::debug!(mailbox_id = %pending.mailbox_id, "Old mailbox overlap period elapsed");
-        }
-
-        Ok(deleted_count)
-    }
+    // Old mailboxes are not deleted explicitly: after rotation the old row stays
+    // pollable (loss-free overlap for a peer that hasn't switched) until its own
+    // expiry, then the server reaps it by TTL and the client's cleanup_expired
+    // drops the local row. There is no server Delete RPC and none is needed.
 
     /// Get all rotation candidates (DM + group).
     pub fn get_all_rotation_candidates(&self) -> Result<Vec<RotationTarget>, MailboxError> {
