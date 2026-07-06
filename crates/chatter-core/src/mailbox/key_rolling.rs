@@ -283,6 +283,7 @@ impl KeyRollingService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration;
 
     #[test]
     fn test_rotation_target_dm() {
@@ -336,7 +337,6 @@ mod tests {
     fn test_default_constants() {
         assert_eq!(DEFAULT_CHECK_INTERVAL_SECS, 3600);
         assert_eq!(DEFAULT_ROTATION_THRESHOLD_HOURS, 24);
-        assert_eq!(DEFAULT_OVERLAP_SECS, 3600);
     }
 
     #[test]

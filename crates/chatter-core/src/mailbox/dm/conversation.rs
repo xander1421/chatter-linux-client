@@ -1079,4 +1079,118 @@ mod tests {
 
         assert!(conv.is_ready_to_send());
     }
+
+    // ========================================================================
+    // L4 rotation: two-mailbox overlap semantics (DB-backed)
+    // ========================================================================
+
+    /// The token every test mailbox references (dm_mailboxes.token_id FK →
+    /// mailbox_tokens.id → mailbox_server_keys.key_id). Seeded by `setup_db`.
+    const TEST_TOKEN_ID: &str = "test-token";
+
+    fn setup_db() -> Arc<Database> {
+        // tempfile + SQLCipher (matches call_repo tests): Database::open needs a
+        // real path, so a temp file is the closest to in-memory available.
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("dm_conversation_test.db");
+        let db = Arc::new(Database::open(&db_path, "testpass").unwrap());
+        db.run_migrations().unwrap();
+
+        // Seed the FK parents so saving a mailbox (which references a token)
+        // satisfies dm_mailboxes.token_id → mailbox_tokens.id → server key.
+        let conn = db.connection().unwrap();
+        conn.execute(
+            "INSERT INTO mailbox_server_keys (key_id, public_key_der, valid_until, created_at)
+             VALUES ('test-key', X'00', 0, ?1)",
+            rusqlite::params![Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO mailbox_tokens
+             (id, ephemeral_public_key, ephemeral_private_key, signature, server_key_id, created_at)
+             VALUES (?1, X'01', X'02', X'03', 'test-key', ?2)",
+            rusqlite::params![TEST_TOKEN_ID, Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+        drop(conn);
+
+        Box::leak(Box::new(temp_dir));
+        db
+    }
+
+    fn make_mailbox(id: &str, created_at: DateTime<Utc>, expires_at: DateTime<Utc>) -> DmMailbox {
+        DmMailbox {
+            id: id.to_string(),
+            // Distinct public key per id so callers can assert which row won.
+            public_key: [id.as_bytes()[0]; 32],
+            private_key: [7u8; 64],
+            signature: vec![1, 2, 3],
+            randomizer: None,
+            token_id: TEST_TOKEN_ID.to_string(),
+            created_at,
+            expires_at,
+            last_polled_at: None,
+        }
+    }
+
+    #[test]
+    fn test_two_mailboxes_both_polled() {
+        // (a) Two coexisting mailbox rows for one conversation → get_active_mailbox_keys
+        // returns BOTH (overlap polling is automatic once two rows coexist).
+        let db = setup_db();
+        let mgr = DmConversationManager::new(db);
+        let peer = UserId::new();
+
+        let now = Utc::now();
+        let old = make_mailbox("a", now - Duration::hours(2), now + Duration::hours(22));
+        let new = make_mailbox("b", now, now + Duration::hours(24));
+        mgr.save_our_mailbox(&peer, &old).unwrap();
+        mgr.save_our_mailbox(&peer, &new).unwrap();
+
+        let active = mgr.get_active_mailbox_keys().unwrap();
+        let ids: Vec<String> = active.iter().map(|(_, _, _, id)| id.clone()).collect();
+        assert_eq!(active.len(), 2, "both non-expired rows must be polled");
+        assert!(ids.contains(&"a".to_string()));
+        assert!(ids.contains(&"b".to_string()));
+    }
+
+    #[test]
+    fn test_send_targets_newest_mailbox() {
+        // (b) load_conversation().our_mailbox (via load_our_mailbox_internal) returns
+        // the NEWEST row (larger created_at) so sends target the rotated mailbox.
+        let db = setup_db();
+        let mgr = DmConversationManager::new(db);
+        let peer = UserId::new();
+
+        let now = Utc::now();
+        let old = make_mailbox("a", now - Duration::hours(2), now + Duration::hours(22));
+        let new = make_mailbox("b", now, now + Duration::hours(24));
+        // Insert old last to prove ordering is by created_at, not insertion order.
+        mgr.save_our_mailbox(&peer, &new).unwrap();
+        mgr.save_our_mailbox(&peer, &old).unwrap();
+
+        let conv = mgr.load_conversation(&peer).unwrap().unwrap();
+        let our = conv.our_mailbox.expect("our mailbox present");
+        assert_eq!(our.id, "b", "send mailbox must be the newest by created_at");
+    }
+
+    #[test]
+    fn test_expired_row_excluded_from_active_polling() {
+        // (c) A row past its expires_at is excluded from active polling — the old
+        // mailbox retires naturally once its TTL elapses.
+        let db = setup_db();
+        let mgr = DmConversationManager::new(db);
+        let peer = UserId::new();
+
+        let now = Utc::now();
+        let expired = make_mailbox("a", now - Duration::hours(48), now - Duration::hours(1));
+        let live = make_mailbox("b", now, now + Duration::hours(24));
+        mgr.save_our_mailbox(&peer, &expired).unwrap();
+        mgr.save_our_mailbox(&peer, &live).unwrap();
+
+        let active = mgr.get_active_mailbox_keys().unwrap();
+        let ids: Vec<String> = active.iter().map(|(_, _, _, id)| id.clone()).collect();
+        assert_eq!(active.len(), 1, "expired row must be excluded from polling");
+        assert_eq!(ids, vec!["b".to_string()]);
+    }
 }

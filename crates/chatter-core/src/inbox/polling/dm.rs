@@ -144,6 +144,7 @@ pub async fn poll_dm_mailboxes(
                                     channel_repo,
                                     attachment_repo,
                                     user_repo,
+                                    conversation_manager,
                                     domain_tx,
                                 );
                             }
@@ -263,6 +264,7 @@ fn dispatch_dm_content(
     channel_repo: &Arc<ChannelRepository>,
     attachment_repo: &Arc<AttachmentRepository>,
     user_repo: &Arc<UserRepository>,
+    conversation_manager: &DmConversationManager,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
 ) {
     // Log the content type being dispatched
@@ -277,6 +279,7 @@ fn dispatch_dm_content(
         DmContent::DeleteForEveryone { .. } => "DeleteForEveryone",
         DmContent::KeyExchange { .. } => "KeyExchange",
         DmContent::SavedMessageSync { .. } => "SavedMessageSync",
+        DmContent::MailboxRotation { .. } => "MailboxRotation",
         _ => "Other",
     };
     tracing::info!(
@@ -609,6 +612,39 @@ fn dispatch_dm_content(
                     peer_id = %peer_id,
                     "Received KeyExchange in DM mailbox but no domain event sender configured"
                 );
+            }
+        }
+
+        DmContent::MailboxRotation { new_mailbox_pk } => {
+            // L4 rotation announce: peer minted a new mailbox and wants future
+            // sends directed there. Update the stored peer mailbox address.
+            // Does NOT touch the ratchet / conversation key.
+            let pk: [u8; 32] = match new_mailbox_pk.as_slice().try_into() {
+                Ok(pk) => pk,
+                Err(_) => {
+                    tracing::warn!(
+                        peer_id = %peer_id,
+                        len = new_mailbox_pk.len(),
+                        "MailboxRotation announce has invalid pk length (expected 32), ignoring"
+                    );
+                    return;
+                }
+            };
+            let peer_mailbox = PeerMailbox::new(pk, None);
+            match conversation_manager.save_peer_mailbox(&peer_id, &peer_mailbox) {
+                Ok(()) => {
+                    tracing::info!(
+                        peer_id = %peer_id,
+                        "MailboxRotation: peer mailbox updated to rotated address"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        peer_id = %peer_id,
+                        error = %e,
+                        "MailboxRotation: failed to save rotated peer mailbox"
+                    );
+                }
             }
         }
 

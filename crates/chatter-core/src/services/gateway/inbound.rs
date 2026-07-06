@@ -196,6 +196,12 @@ pub enum DmContent {
         sent_at: u64,
         attachment_ids: Vec<String>,
     },
+    /// Mailbox rotation announce (L4): the peer minted a new mailbox and wants
+    /// us to send future messages to it. We update the stored peer mailbox.
+    MailboxRotation {
+        /// The new mailbox public key to send to (32 bytes Ed25519).
+        new_mailbox_pk: Vec<u8>,
+    },
     // ========================================================================
     // Anonymous Group Messages (NDSS'21 style)
     // ========================================================================

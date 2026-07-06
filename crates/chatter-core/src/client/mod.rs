@@ -1404,13 +1404,16 @@ impl ChatterClient {
         // ── PreKey replenishment (runs initial check immediately) ────
         let h_prekey = self.services.spawn_prekey_replenishment();
 
+        // ── DM mailbox key rolling (L4 anonymity rotation) ───────────
+        let h_key_rolling = self.services.spawn_key_rolling();
+
         // ── Presence ────────────────────────────────────────────────
         self.set_presence(crate::domain::user::PresenceStatus::Online).await;
         self.touch_activity();
 
         // ── Store handles for shutdown ───────────────────────────────
         let mut tasks = self.tasks.lock();
-        tasks.extend([h_events, h_inbox, h_skdm_retry, h_channel_stream, h_channel_bootstrap, h_dm_bootstrap, h_ai, h_prekey]);
+        tasks.extend([h_events, h_inbox, h_skdm_retry, h_channel_stream, h_channel_bootstrap, h_dm_bootstrap, h_ai, h_prekey, h_key_rolling]);
         #[cfg(feature = "jarvis")]
         {
             tasks.push(jarvis.maintenance);

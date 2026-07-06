@@ -464,6 +464,102 @@ impl CoreServices {
         })
     }
 
+    /// Spawn the DM mailbox key-rolling background task (L4 anonymity).
+    ///
+    /// Periodically rotates DM mailboxes that are approaching expiry: mints a
+    /// fresh token-bound mailbox server-side (saved alongside the old for a
+    /// loss-free overlap), then announces the new address to the peer via a
+    /// `DmMailboxRotation` content so they redirect future sends. Sends always
+    /// target the newest mailbox; the old one is polled until its natural TTL.
+    ///
+    /// DM only — group rotation is intentionally not driven here.
+    ///
+    /// Returns a JoinHandle that should be stored for graceful shutdown.
+    pub fn spawn_key_rolling(&self) -> tokio::task::JoinHandle<()> {
+        use std::time::Duration;
+        use crate::mailbox::dm::DmConversationManager;
+        use crate::mailbox::group::GroupMailboxManager;
+        use crate::mailbox::key_rolling::{KeyRollingService, DEFAULT_CHECK_INTERVAL_SECS};
+        use crate::proto::content_v1;
+        use crate::services::message::SendDmContentParams;
+        use crate::util::time::TimestampNanos;
+
+        let grpc_pool = self.grpc_pool.clone();
+        let database = self.database.clone();
+        let token_manager = self.token_manager.clone();
+        let message_service = self.message_service.clone();
+        let mailbox_manager = self.mailbox_manager.clone();
+
+        tokio::spawn(async move {
+            let dm_manager = Arc::new(DmConversationManager::new(database.clone()));
+            let group_manager = Arc::new(GroupMailboxManager::new(database.clone()));
+            let svc = KeyRollingService::new(
+                token_manager,
+                dm_manager,
+                group_manager,
+                grpc_pool.clone(),
+            );
+
+            loop {
+                tokio::time::sleep(Duration::from_secs(DEFAULT_CHECK_INTERVAL_SECS)).await;
+
+                let candidates = match svc.get_dm_rotation_candidates() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!("KeyRolling: failed to list DM rotation candidates: {}", e);
+                        continue;
+                    }
+                };
+
+                for peer_id in candidates {
+                    let notif = match svc.rotate_dm_mailbox(&peer_id).await {
+                        Ok(n) => n,
+                        Err(e) => {
+                            tracing::warn!(peer_id = %peer_id, "KeyRolling: DM rotation failed: {}", e);
+                            continue;
+                        }
+                    };
+
+                    // Announce the new mailbox to the peer's CURRENT mailbox so
+                    // they switch to depositing into the rotated one.
+                    let content = content_v1::Content {
+                        content: Some(content_v1::content::Content::DmMailboxRotation(
+                            content_v1::DmMailboxRotation {
+                                new_mailbox_pk: notif.new_mailbox_public_key.to_vec(),
+                                old_mailbox_pk: vec![],
+                                timestamp: TimestampNanos::now().as_u64(),
+                            },
+                        )),
+                        ephemeral_reply_to: None,
+                        timestamp: TimestampNanos::now().as_u64(),
+                        padding: vec![],
+                    };
+
+                    let mut auth_client = grpc_pool.auth_client();
+                    match message_service
+                        .send_dm_content(SendDmContentParams {
+                            auth_client: &mut auth_client,
+                            peer_id: &peer_id,
+                            content,
+                            mailbox_manager: &mailbox_manager,
+                            grpc_pool: Some(&grpc_pool),
+                            attachment_ids: None,
+                            channel_id: None,
+                        })
+                        .await
+                    {
+                        Ok(_) => {
+                            tracing::info!(peer_id = %peer_id, "KeyRolling: rotation announced to peer");
+                        }
+                        Err(e) => {
+                            tracing::warn!(peer_id = %peer_id, "KeyRolling: failed to announce rotation: {}", e);
+                        }
+                    }
+                }
+            }
+        })
+    }
+
     /// Initialize the call service if not already set.
     ///
     /// Safe to call multiple times — uses `get_or_init` internally.

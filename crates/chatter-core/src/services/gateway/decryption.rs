@@ -776,6 +776,13 @@ impl MessageGateway {
                     })?,
                 })
             }
+            // L4 mailbox rotation announce: peer minted a new mailbox and wants
+            // future sends directed there. Does not touch the ratchet.
+            Some(content::Content::DmMailboxRotation(rotation)) => {
+                Ok(DmContent::MailboxRotation {
+                    new_mailbox_pk: rotation.new_mailbox_pk,
+                })
+            }
             _ => {
                 Err(ServiceError::Validation("Unknown or empty content type".into()))
             }
