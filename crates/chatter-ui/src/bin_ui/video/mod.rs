@@ -210,6 +210,15 @@ pub fn set_hw_video_playing(playing: bool) {
     {
         metal_ios::set_metal_video_playing(playing);
     }
+
+    // No hw video path on this platform (e.g. macOS) — see init_hw_video above.
+    #[cfg(not(any(
+        target_os = "linux",
+        all(target_os = "android", feature = "desktop-media"),
+        target_os = "windows",
+        target_os = "ios"
+    )))]
+    let _ = playing;
 }
 
 /// Check if hardware video is currently active.

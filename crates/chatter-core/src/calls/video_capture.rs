@@ -8,6 +8,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+#[cfg(target_os = "linux")]
 use std::path::Path;
 
 use livekit::webrtc::video_frame::{VideoFrame, I420Buffer, VideoRotation};
@@ -314,6 +315,11 @@ impl VideoCapture {
 
         #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
+            // Unused on desktop platforms without a camera backend (e.g. macOS);
+            // only the android branch below consumes it.
+            #[cfg(not(target_os = "android"))]
+            let _ = &device_path;
+
             // Android: drive CameraX via the registered platform camera. Falls
             // back to the test pattern only if no platform camera registered.
             #[cfg(target_os = "android")]

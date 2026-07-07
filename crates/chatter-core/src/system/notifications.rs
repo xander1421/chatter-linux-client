@@ -5,7 +5,9 @@
 //! - Windows: WinRT toast notifications
 //! - macOS: macOS notification center
 
-use crate::domain::notification::{Notification, NotificationPriority, NotificationType};
+use crate::domain::notification::{Notification, NotificationPriority};
+#[cfg(target_os = "linux")]
+use crate::domain::notification::NotificationType;
 use crate::error::SystemError;
 use super::platform::APP_DISPLAY_NAME;
 use notify_rust::Notification as DesktopNotif;
@@ -130,7 +132,8 @@ impl DesktopNotifications {
         }
     }
 
-    /// Determine priority based on notification type.
+    /// Determine priority based on notification type (Linux only).
+    #[cfg(target_os = "linux")]
     fn type_to_priority(&self, notification_type: &NotificationType) -> NotificationPriority {
         match notification_type {
             NotificationType::Call { .. } => NotificationPriority::Urgent,
