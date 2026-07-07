@@ -666,6 +666,14 @@ pub fn set_max_attachment_size(size: u64) {
     MAX_ATTACHMENT_SIZE.store(size, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Test-only lock serializing EVERY test that reads or mutates the process-global
+/// `MAX_ATTACHMENT_SIZE` — across the attachment_crypto, streaming_decrypt, and
+/// upload suites (they all share the one atomic). Without it, a size-cap test that
+/// lowers the cap races readers that encrypt large files, so the same suite passes
+/// serially but fails under `cargo test`'s default parallelism.
+#[cfg(test)]
+pub(crate) static SIZE_CAP_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -886,6 +894,7 @@ mod tests {
 
     #[test]
     fn test_streaming_encrypt_large_file() {
+        let _cap = SIZE_CAP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // 1MB of patterned data
         let plaintext: Vec<u8> = (0..1024 * 1024).map(|i| (i % 256) as u8).collect();
 
@@ -985,6 +994,7 @@ mod tests {
 
     #[test]
     fn test_streaming_encrypt_small_file_no_incremental_mac() {
+        let _cap = SIZE_CAP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // Files <= 50KB should NOT have incremental MAC
         let plaintext = vec![42u8; 1024]; // 1KB
 
@@ -1004,6 +1014,7 @@ mod tests {
 
     #[test]
     fn test_streaming_encrypt_large_file_has_incremental_mac() {
+        let _cap = SIZE_CAP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // Files > 50KB should have incremental MAC
         let plaintext: Vec<u8> = (0..100_000).map(|i| (i % 256) as u8).collect(); // 100KB
 
@@ -1031,6 +1042,7 @@ mod tests {
 
     #[test]
     fn test_streaming_encrypt_incremental_mac_deterministic() {
+        let _cap = SIZE_CAP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // Same plaintext, same key → different ciphertext (random IV/key)
         // But the relationship between ciphertext and incremental MAC should be consistent
         let plaintext: Vec<u8> = (0..100_000).map(|i| (i % 256) as u8).collect();
@@ -1060,12 +1072,10 @@ mod tests {
         assert_eq!(result.incremental_mac, recomputed_mac);
     }
 
-    /// Serializes any test that mutates the process-global `MAX_ATTACHMENT_SIZE`.
-    static MAX_SIZE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn test_max_attachment_size_enforcement() {
-        let _guard = MAX_SIZE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = SIZE_CAP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let original = max_attachment_size();
         set_max_attachment_size(100);
 

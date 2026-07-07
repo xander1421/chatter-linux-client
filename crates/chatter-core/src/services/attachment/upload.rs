@@ -958,10 +958,6 @@ mod size_cap_tests {
     use crate::storage::repositories::AttachmentRepository;
     use std::sync::{Arc, Mutex};
 
-    /// Serializes any test that mutates the process-global `MAX_ATTACHMENT_SIZE`.
-    /// Mirrors the lock used by `attachment_crypto::tests` since both suites
-    /// share the same atomic.
-    static SIZE_CAP_LOCK: Mutex<()> = Mutex::new(());
 
     /// Build a real but offline `AttachmentService`. The size cap check fires
     /// before any gRPC or repository access, so `new_local` (no grpc pool) is
@@ -977,7 +973,7 @@ mod size_cap_tests {
 
     #[tokio::test]
     async fn upload_to_cdn_encrypted_rejects_oversized_payload() {
-        let _guard = SIZE_CAP_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::crypto::attachment_crypto::SIZE_CAP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let original = max_attachment_size();
         set_max_attachment_size(100);
 
@@ -1003,7 +999,7 @@ mod size_cap_tests {
 
     #[tokio::test]
     async fn upload_bytes_to_cdn_encrypted_rejects_oversized_payload() {
-        let _guard = SIZE_CAP_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::crypto::attachment_crypto::SIZE_CAP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let original = max_attachment_size();
         set_max_attachment_size(100);
 
@@ -1029,7 +1025,7 @@ mod size_cap_tests {
 
     #[tokio::test]
     async fn upload_bytes_under_default_cap_passes_check() {
-        let _guard = SIZE_CAP_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::crypto::attachment_crypto::SIZE_CAP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let original = max_attachment_size();
         set_max_attachment_size(original);
 

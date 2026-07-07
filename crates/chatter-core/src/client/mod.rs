@@ -2691,12 +2691,6 @@ mod upload_attachments_tests {
     use crate::domain::AttachmentId;
     use crate::storage::database::Database;
     use crate::storage::repositories::AttachmentRepository;
-    use std::sync::Mutex;
-
-    /// Mirrors the lock in `services::attachment::upload::size_cap_tests` —
-    /// both suites mutate the same process-global size cap.
-    static SIZE_CAP_LOCK: Mutex<()> = Mutex::new(());
-
     fn make_service() -> (AttachmentService, tempfile::TempDir) {
         let temp_dir = tempfile::tempdir().unwrap();
         let db_path = temp_dir.path().join("upload_attachments_test.db");
@@ -2719,7 +2713,7 @@ mod upload_attachments_tests {
 
     #[tokio::test]
     async fn failed_upload_propagates_error_instead_of_dropping_pointer() {
-        let _guard = SIZE_CAP_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::crypto::attachment_crypto::SIZE_CAP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let original = max_attachment_size();
         set_max_attachment_size(100);
 

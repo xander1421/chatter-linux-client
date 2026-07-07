@@ -1204,10 +1204,13 @@ export component App inherits Rectangle {
                             }
                         }
 
-                    ChatLayout {
-                    vertical-stretch: root.active-call-fullscreen ? 0 : 1;
-                    visible: !root.active-call-fullscreen
-                        && !(root.is-small-screen && root.thread-panel-visible);
+                    // `if` (not `visible`): a Slint element hidden via `visible:false`
+                    // still occupies its layout slot, so in fullscreen the hidden
+                    // ChatLayout reserved black space below the call dock. `if`
+                    // removes it from the layout tree entirely.
+                    if !root.active-call-fullscreen
+                        && !(root.is-small-screen && root.thread-panel-visible): ChatLayout {
+                    vertical-stretch: 1;
                     hide-header: false;
                     show-back-button: false;
                     back-clicked => { }
