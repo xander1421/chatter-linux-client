@@ -32,11 +32,28 @@ use super::retry::{retry_unary, RetryConfig};
 /// // Get channel for creating service clients
 /// let channel = pool.channel();
 /// ```
+/// Which network path the pool's connections take.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportMode {
+    /// Direct TCP/TLS to the server URL.
+    Direct,
+    /// Over a Tor v3 onion service (requires the `onion` feature to actually
+    /// route; without it, switching returns an error and the caller stays put).
+    Onion,
+}
+
 pub struct GrpcClientPool {
     channel: Arc<RwLock<Option<Channel>>>,
     endpoint: Arc<RwLock<Endpoint>>,
     auth: AuthInterceptor,
     timeout: Option<Duration>,
+    /// The direct server URL, remembered so we can rebuild a direct endpoint
+    /// when switching transport back from onion.
+    direct_url: Arc<RwLock<String>>,
+    /// Pinned server .onion address (e.g. "http://<hash>.onion:443"), if any.
+    onion_addr: Arc<RwLock<Option<String>>>,
+    /// Active transport (Direct by default; anon mode flips it to Onion).
+    transport_mode: Arc<RwLock<TransportMode>>,
 }
 
 impl GrpcClientPool {
@@ -92,6 +109,9 @@ impl GrpcClientPool {
             endpoint: Arc::new(RwLock::new(endpoint)),
             auth: AuthInterceptor::new(),
             timeout,
+            direct_url: Arc::new(RwLock::new(server_url.to_string())),
+            onion_addr: Arc::new(RwLock::new(None)),
+            transport_mode: Arc::new(RwLock::new(TransportMode::Direct)),
         })
     }
 
@@ -143,9 +163,61 @@ impl GrpcClientPool {
         
         // Update endpoint
         *self.endpoint.write() = new_endpoint;
-        
+        *self.direct_url.write() = server_url.to_string();
+
         tracing::info!("gRPC pool URL updated to: {}", server_url);
         Ok(())
+    }
+
+    /// Pin the server's Tor v3 onion address (e.g. "http://<hash>.onion:443").
+    /// Required before switching to `TransportMode::Onion`.
+    pub fn set_onion_address(&self, addr: Option<String>) {
+        *self.onion_addr.write() = addr;
+    }
+
+    /// The currently active transport.
+    pub fn transport_mode(&self) -> TransportMode {
+        *self.transport_mode.read()
+    }
+
+    /// Switch the network transport. `Direct` rebuilds a normal endpoint from the
+    /// remembered server URL; `Onion` routes the whole pool over Tor to the pinned
+    /// `.onion` (requires the `onion` feature). Rebuilding disconnects the current
+    /// connection; the next `channel()` reconnects over the new transport.
+    ///
+    /// Returns an error (leaving the transport unchanged) if onion is requested
+    /// but not available — callers treat that as "stay on the current path".
+    pub fn set_transport_mode(&self, mode: TransportMode) -> Result<(), NetworkError> {
+        match mode {
+            TransportMode::Direct => {
+                let url = self.direct_url.read().clone();
+                let ep = Self::create_endpoint(&url, self.timeout)?;
+                self.disconnect();
+                *self.endpoint.write() = ep;
+                *self.transport_mode.write() = TransportMode::Direct;
+                tracing::info!("transport: direct ({url})");
+                Ok(())
+            }
+            TransportMode::Onion => {
+                let _onion = self.onion_addr.read().clone().ok_or_else(|| {
+                    NetworkError::ConnectionFailed("no .onion address pinned".into())
+                })?;
+                #[cfg(feature = "onion")]
+                {
+                    // Stage 2 wires an Arti connector here (isolated Tor circuit
+                    // dialing `_onion`), then flips transport_mode + disconnects.
+                    Err(NetworkError::ConnectionFailed(
+                        "onion transport connector not yet wired (Stage 2)".into(),
+                    ))
+                }
+                #[cfg(not(feature = "onion"))]
+                {
+                    Err(NetworkError::ConnectionFailed(
+                        "onion transport not built (rebuild with --features onion)".into(),
+                    ))
+                }
+            }
+        }
     }
 
     /// Connect to the server.
@@ -416,6 +488,25 @@ mod tests {
         // Should not panic
         pool.disconnect();
         assert!(!pool.is_connected());
+    }
+
+    #[test]
+    fn test_transport_mode_switching() {
+        let pool = GrpcClientPool::new("http://localhost:50051").unwrap();
+        assert_eq!(pool.transport_mode(), TransportMode::Direct);
+
+        // Direct rebuild always works (no connect, just an endpoint swap).
+        assert!(pool.set_transport_mode(TransportMode::Direct).is_ok());
+
+        // Onion with no pinned .onion fails, and must leave the mode unchanged.
+        assert!(pool.set_transport_mode(TransportMode::Onion).is_err());
+        assert_eq!(pool.transport_mode(), TransportMode::Direct);
+
+        // Onion with an address but the feature off is still "not built" — again
+        // failing closed without flipping the mode (no false anonymity).
+        pool.set_onion_address(Some("http://abc.onion:443".into()));
+        assert!(pool.set_transport_mode(TransportMode::Onion).is_err());
+        assert_eq!(pool.transport_mode(), TransportMode::Direct);
     }
 
     #[test]

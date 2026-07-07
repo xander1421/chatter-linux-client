@@ -206,6 +206,10 @@ harness = false
 
 [features]
 default = ["desktop-system", "desktop-media"]
+# Tor v3 onion transport for anon mode. Off by default — pulls a heavy Tor
+# dependency (arti-client, added in Stage 2). Without it, switching to onion
+# transport returns an error and anon mode stays UI-filter-only.
+onion = []
 desktop-system = ["keyring/sync-secret-service", "keyring/windows-native"]
 # Shared media stack (LiveKit + WebRTC) — works on every target the `livekit`
 # crate supports. Mobile bridges opt in via `--features media`; desktop pulls

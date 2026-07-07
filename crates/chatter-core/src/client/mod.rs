@@ -1119,6 +1119,22 @@ impl ChatterClient {
     /// presentation concern, not a chatter-core state change.
     pub fn set_anon_mode_enabled(&self, enabled: bool) {
         self.anon_mode.store(enabled, Ordering::Release);
+
+        // Anon mode also routes the network transport over Tor (onion): enabling
+        // it switches the whole pool to the pinned .onion, disabling it switches
+        // back to direct. If onion isn't available (feature not built, no .onion
+        // pinned, or bootstrap fails), we log LOUDLY and keep the current
+        // transport — the UI filter still applies, but we must NOT pretend the
+        // network location is hidden when it isn't.
+        use crate::network::grpc::client_pool::TransportMode;
+        let mode = if enabled { TransportMode::Onion } else { TransportMode::Direct };
+        if let Err(e) = self.services.grpc_pool.set_transport_mode(mode) {
+            tracing::warn!(
+                requested = ?mode,
+                error = %e,
+                "anon mode: transport switch failed — UI filter applies but network location is NOT hidden"
+            );
+        }
     }
 
     /// PIN-gate for enabling anon mode. Wraps `LinkDeviceService::verify_pin`
