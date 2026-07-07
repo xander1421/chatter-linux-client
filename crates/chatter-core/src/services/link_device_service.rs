@@ -1361,19 +1361,19 @@ mod tests {
 
     #[test]
     fn verify_pin_accepts_correct_pin() {
-        let (svc, _db) = setup_service("alice", None, Some("12345678"));
-        assert_eq!(svc.verify_pin("12345678").unwrap(), true);
+        let (svc, _db) = setup_service("alice", None, Some("devpin123"));
+        assert_eq!(svc.verify_pin("devpin123").unwrap(), true);
     }
 
     #[test]
     fn verify_pin_rejects_wrong_pin() {
-        let (svc, _db) = setup_service("alice", None, Some("12345678"));
-        assert_eq!(svc.verify_pin("00000000").unwrap(), false);
+        let (svc, _db) = setup_service("alice", None, Some("devpin123"));
+        assert_eq!(svc.verify_pin("wrongpin1").unwrap(), false);
     }
 
     #[test]
     fn verify_pin_format_validation() {
-        let (svc, _db) = setup_service("alice", None, Some("12345678"));
+        let (svc, _db) = setup_service("alice", None, Some("devpin123"));
         // Too short (< MIN_PIN_LENGTH).
         assert!(matches!(
             svc.verify_pin("1234567").unwrap_err(),
@@ -1391,16 +1391,16 @@ mod tests {
         // Password-only account, no PIN persisted.
         let (svc, _db) = setup_service("alice", Some("hunter2-strong"), None);
         assert!(matches!(
-            svc.verify_pin("12345678").unwrap_err(),
+            svc.verify_pin("devpin123").unwrap_err(),
             LinkDeviceError::Invalid(_)
         ));
     }
 
     #[test]
     fn verify_password_or_pin_routes_pin_first() {
-        let (svc, _db) = setup_service("alice", Some("hunter2-strong"), Some("12345678"));
+        let (svc, _db) = setup_service("alice", Some("hunter2-strong"), Some("devpin123"));
         // Correct PIN matches via PIN path.
-        assert_eq!(svc.verify_password_or_pin("12345678").unwrap(), true);
+        assert_eq!(svc.verify_password_or_pin("devpin123").unwrap(), true);
         // Correct password also matches via password fallback.
         assert_eq!(svc.verify_password_or_pin("hunter2-strong").unwrap(), true);
     }
@@ -1408,13 +1408,13 @@ mod tests {
     #[test]
     fn verify_password_or_pin_pin_only_account_works() {
         // No password fingerprint stored, but a PIN is configured.
-        let (svc, _db) = setup_service("alice", None, Some("98765432"));
-        assert_eq!(svc.verify_password_or_pin("98765432").unwrap(), true);
+        let (svc, _db) = setup_service("alice", None, Some("devpin123"));
+        assert_eq!(svc.verify_password_or_pin("devpin123").unwrap(), true);
     }
 
     #[test]
     fn verify_password_or_pin_no_password_wrong_secret_returns_false() {
-        let (svc, _db) = setup_service("alice", None, Some("98765432"));
+        let (svc, _db) = setup_service("alice", None, Some("devpin123"));
         // Wrong secret => PIN mismatch + no password fingerprint => false.
         assert_eq!(svc.verify_password_or_pin("anything-long-wrong").unwrap(), false);
     }
