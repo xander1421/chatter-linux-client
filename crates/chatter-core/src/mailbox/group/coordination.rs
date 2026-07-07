@@ -437,4 +437,50 @@ mod tests {
         };
         assert_ne!(invalid.mailbox_pk.len(), 32);
     }
+
+    #[test]
+    fn test_process_announcement_overwrites_member_mailbox() {
+        // Option A rotation inbound: a member re-announcing a rotated
+        // GroupMailboxAddress overwrites their stored address (UNIQUE(group_id,
+        // user_id) → INSERT OR REPLACE), switching our send target to their new
+        // mailbox. This is what makes GroupMailboxAddress double as the rotation
+        // announcement — no new proto needed.
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("coordination_test.db");
+        let db = Arc::new(Database::open(&db_path, "testpass").unwrap());
+        db.run_migrations().unwrap();
+
+        let mgr = Arc::new(GroupMailboxManager::new(db.clone()));
+        let coordinator = GroupCoordinator::new(db, mgr.clone());
+
+        let channel_id = ChannelId::new();
+        let member = UserId::new();
+
+        // First announcement: member's original mailbox.
+        let first = GroupMailboxAddress {
+            channel_id: channel_id.to_string(),
+            mailbox_pk: vec![1u8; 32],
+            timestamp: TimestampNanos::now().as_u64(),
+        };
+        coordinator.process_announcement(member, &first).unwrap();
+
+        let state = mgr.load_group_state(&channel_id).unwrap().unwrap();
+        assert_eq!(state.member_mailboxes.get(&member).unwrap().public_key, [1u8; 32]);
+
+        // Rotated announcement: same member, new mailbox pk → must overwrite.
+        let rotated = GroupMailboxAddress {
+            channel_id: channel_id.to_string(),
+            mailbox_pk: vec![2u8; 32],
+            timestamp: TimestampNanos::now().as_u64(),
+        };
+        coordinator.process_announcement(member, &rotated).unwrap();
+
+        let state = mgr.load_group_state(&channel_id).unwrap().unwrap();
+        assert_eq!(state.member_mailboxes.len(), 1, "must overwrite, not duplicate");
+        assert_eq!(
+            state.member_mailboxes.get(&member).unwrap().public_key,
+            [2u8; 32],
+            "send target must switch to the rotated mailbox"
+        );
+    }
 }

@@ -812,10 +812,18 @@ impl DmConversationManager {
         let threshold = (Utc::now() + Duration::hours(within_hours)).to_rfc3339();
         let now = Utc::now().to_rfc3339();
 
+        // Re-rotation guard: a conversation is a candidate only if its NEWEST
+        // row is expiring within the window. Once rotation has minted a fresh
+        // row (expires_at > threshold) the conversation is excluded, so a
+        // lingering old row in the overlap window can't re-trigger rotation
+        // every cycle and drain the token budget.
         let mut stmt = conn
             .prepare(
-                "SELECT conversation_id FROM dm_mailboxes
-                 WHERE expires_at > ?1 AND expires_at <= ?2",
+                "SELECT DISTINCT conversation_id FROM dm_mailboxes
+                 WHERE expires_at > ?1 AND expires_at <= ?2
+                   AND conversation_id NOT IN (
+                       SELECT conversation_id FROM dm_mailboxes WHERE expires_at > ?2
+                   )",
             )
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
 
@@ -1192,5 +1200,37 @@ mod tests {
         let ids: Vec<String> = active.iter().map(|(_, _, _, id)| id.clone()).collect();
         assert_eq!(active.len(), 1, "expired row must be excluded from polling");
         assert_eq!(ids, vec!["b".to_string()]);
+    }
+
+    #[test]
+    fn test_dm_rotation_candidate_not_reselected_when_fresh() {
+        // Re-rotation guard (over-rotation rider): while only an expiring row
+        // exists the conversation is a candidate; once a fresh (post-rotation)
+        // row coexists the conversation is NO LONGER selected — a lingering old
+        // row can't re-trigger rotation every cycle and drain the token budget.
+        let db = setup_db();
+        let mgr = DmConversationManager::new(db);
+        let peer = UserId::new();
+
+        let now = Utc::now();
+        // Threshold is 24h; this row expires in 12h → within the window.
+        let expiring = make_mailbox("a", now - Duration::hours(36), now + Duration::hours(12));
+        mgr.save_our_mailbox(&peer, &expiring).unwrap();
+
+        let candidates = mgr.get_expiring_mailboxes(24).unwrap();
+        assert_eq!(candidates, vec![peer], "expiring conversation must be a rotation candidate");
+
+        // Rotation mints a fresh row alongside the old (loss-free overlap).
+        let fresh = make_mailbox("b", now, now + Duration::hours(48));
+        mgr.save_our_mailbox(&peer, &fresh).unwrap();
+
+        // Old row survives …
+        assert_eq!(mgr.get_active_mailbox_keys().unwrap().len(), 2);
+        // … but the conversation is no longer re-selected for rotation.
+        let candidates = mgr.get_expiring_mailboxes(24).unwrap();
+        assert!(
+            candidates.is_empty(),
+            "conversation with a fresh row must not be re-selected for rotation"
+        );
     }
 }

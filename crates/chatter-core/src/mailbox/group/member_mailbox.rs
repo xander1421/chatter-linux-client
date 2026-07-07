@@ -238,9 +238,13 @@ impl GroupMailboxManager {
     ) -> Result<Option<GroupMailbox>, MailboxError> {
         let mut stmt = conn
             .prepare(
+                // During rotation two mailboxes coexist for a group; the NEWEST is
+                // the active one that sends must target. (All non-expired rows are
+                // still polled for receive via get_all_group_mailboxes.)
                 "SELECT id, mailbox_public_key, mailbox_private_key, signature, randomizer,
                         token_id, created_at, expires_at, last_polled_at
-                 FROM group_mailboxes WHERE group_id = ?1",
+                 FROM group_mailboxes WHERE group_id = ?1
+                 ORDER BY created_at DESC LIMIT 1",
             )
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
 
@@ -735,10 +739,18 @@ impl GroupMailboxManager {
         let threshold = (Utc::now() + Duration::hours(within_hours)).to_rfc3339();
         let now = Utc::now().to_rfc3339();
 
+        // Re-rotation guard: a group is a candidate only if its NEWEST row is
+        // expiring within the window. Once rotation has minted a fresh row
+        // (expires_at > threshold) the group is excluded, so a lingering old
+        // row in the overlap window can't re-trigger rotation every cycle and
+        // drain the token budget (gate G5).
         let mut stmt = conn
             .prepare(
-                "SELECT group_id FROM group_mailboxes
-                 WHERE expires_at > ?1 AND expires_at <= ?2",
+                "SELECT DISTINCT group_id FROM group_mailboxes
+                 WHERE expires_at > ?1 AND expires_at <= ?2
+                   AND group_id NOT IN (
+                       SELECT group_id FROM group_mailboxes WHERE expires_at > ?2
+                   )",
             )
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
 
@@ -1281,5 +1293,158 @@ mod tests {
         });
 
         assert!(!state.mailbox_needs_refresh());
+    }
+
+    // ========================================================================
+    // L4 group rotation: two-mailbox overlap semantics (DB-backed)
+    // ========================================================================
+
+    /// The token every test mailbox references (group_mailboxes.token_id FK →
+    /// mailbox_tokens.id → mailbox_server_keys.key_id). Seeded by `setup_db`.
+    const TEST_TOKEN_ID: &str = "test-token";
+
+    fn setup_db() -> Arc<Database> {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("group_mailbox_test.db");
+        let db = Arc::new(Database::open(&db_path, "testpass").unwrap());
+        db.run_migrations().unwrap();
+
+        // Seed the FK parents so saving a mailbox (which references a token)
+        // satisfies group_mailboxes.token_id → mailbox_tokens.id → server key.
+        let conn = db.connection().unwrap();
+        conn.execute(
+            "INSERT INTO mailbox_server_keys (key_id, public_key_der, valid_until, created_at)
+             VALUES ('test-key', X'00', 0, ?1)",
+            rusqlite::params![Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO mailbox_tokens
+             (id, ephemeral_public_key, ephemeral_private_key, signature, server_key_id, created_at)
+             VALUES (?1, X'01', X'02', X'03', 'test-key', ?2)",
+            rusqlite::params![TEST_TOKEN_ID, Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+        drop(conn);
+
+        Box::leak(Box::new(temp_dir));
+        db
+    }
+
+    fn make_group_mailbox(
+        id: &str,
+        group_id: ChannelId,
+        created_at: DateTime<Utc>,
+        expires_at: DateTime<Utc>,
+    ) -> GroupMailbox {
+        GroupMailbox {
+            id: id.to_string(),
+            group_id,
+            // Distinct public key per id so callers can assert which row won.
+            public_key: [id.as_bytes()[0]; 32],
+            private_key: [7u8; 64],
+            signature: vec![1, 2, 3],
+            randomizer: None,
+            token_id: TEST_TOKEN_ID.to_string(),
+            created_at,
+            expires_at,
+            last_polled_at: None,
+        }
+    }
+
+    #[test]
+    fn test_two_group_mailboxes_both_polled() {
+        // Two coexisting mailbox rows for one group → get_all_group_mailboxes
+        // returns BOTH (overlap polling is automatic once two rows coexist).
+        let db = setup_db();
+        let mgr = GroupMailboxManager::new(db);
+        let group = ChannelId::new();
+
+        let now = Utc::now();
+        let old = make_group_mailbox("a", group, now - Duration::hours(2), now + Duration::hours(22));
+        let new = make_group_mailbox("b", group, now, now + Duration::hours(24));
+        mgr.save_our_mailbox(&old).unwrap();
+        mgr.save_our_mailbox(&new).unwrap();
+
+        let active = mgr.get_all_group_mailboxes().unwrap();
+        let ids: Vec<String> = active.iter().map(|(_, _, _, id)| id.clone()).collect();
+        assert_eq!(active.len(), 2, "both non-expired rows must be polled");
+        assert!(ids.contains(&"a".to_string()));
+        assert!(ids.contains(&"b".to_string()));
+    }
+
+    #[test]
+    fn test_group_send_targets_newest_mailbox() {
+        // load_group_state().our_mailbox (via load_our_mailbox_internal) returns
+        // the NEWEST row (larger created_at) so sends target the rotated mailbox.
+        let db = setup_db();
+        let mgr = GroupMailboxManager::new(db);
+        let group = ChannelId::new();
+
+        let now = Utc::now();
+        let old = make_group_mailbox("a", group, now - Duration::hours(2), now + Duration::hours(22));
+        let new = make_group_mailbox("b", group, now, now + Duration::hours(24));
+        // Insert old last to prove ordering is by created_at, not insertion order.
+        mgr.save_our_mailbox(&new).unwrap();
+        mgr.save_our_mailbox(&old).unwrap();
+
+        let state = mgr.load_group_state(&group).unwrap().unwrap();
+        let our = state.our_mailbox.expect("our mailbox present");
+        assert_eq!(our.id, "b", "send mailbox must be the newest by created_at");
+    }
+
+    #[test]
+    fn test_expired_group_row_excluded() {
+        // A row past its expires_at is excluded from active polling — the old
+        // mailbox retires naturally once its TTL elapses.
+        let db = setup_db();
+        let mgr = GroupMailboxManager::new(db);
+        let group = ChannelId::new();
+
+        let now = Utc::now();
+        let expired = make_group_mailbox("a", group, now - Duration::hours(48), now - Duration::hours(1));
+        let live = make_group_mailbox("b", group, now, now + Duration::hours(24));
+        mgr.save_our_mailbox(&expired).unwrap();
+        mgr.save_our_mailbox(&live).unwrap();
+
+        let active = mgr.get_all_group_mailboxes().unwrap();
+        let ids: Vec<String> = active.iter().map(|(_, _, _, id)| id.clone()).collect();
+        assert_eq!(active.len(), 1, "expired row must be excluded from polling");
+        assert_eq!(ids, vec!["b".to_string()]);
+    }
+
+    #[test]
+    fn test_group_rotation_candidate_not_reselected_when_fresh() {
+        // Re-rotation guard (gate G5): while only an expiring row exists the
+        // group is a candidate; once a fresh (post-rotation) row coexists the
+        // group is NO LONGER selected — so a lingering old row can't re-trigger
+        // rotation every cycle and drain the token budget. Also proves the old
+        // row survives the rotate (loss-free overlap).
+        let db = setup_db();
+        let mgr = GroupMailboxManager::new(db);
+        let group = ChannelId::new();
+
+        let now = Utc::now();
+        // Threshold is 24h; this row expires in 12h → within the window.
+        let expiring = make_group_mailbox("a", group, now - Duration::hours(36), now + Duration::hours(12));
+        mgr.save_our_mailbox(&expiring).unwrap();
+
+        let candidates = mgr.get_expiring_group_mailboxes(24).unwrap();
+        assert_eq!(candidates, vec![group], "expiring group must be a rotation candidate");
+
+        // Rotation mints a fresh row alongside the old (both coexist).
+        let fresh = make_group_mailbox("b", group, now, now + Duration::hours(48));
+        mgr.save_our_mailbox(&fresh).unwrap();
+
+        // Old row survives (loss-free overlap) …
+        let active = mgr.get_all_group_mailboxes().unwrap();
+        assert_eq!(active.len(), 2, "old row must survive rotation for overlap");
+
+        // … but the group is no longer re-selected for rotation.
+        let candidates = mgr.get_expiring_group_mailboxes(24).unwrap();
+        assert!(
+            candidates.is_empty(),
+            "group with a fresh row must not be re-selected for rotation"
+        );
     }
 }
