@@ -35,6 +35,12 @@ pub(crate) const DEFAULT_SERVER_URL: &str = "http://localhost:50051";
 /// Environment variable for server URL.
 pub(crate) const SERVER_URL_ENV: &str = "CHATTER_SERVER_URL";
 
+/// Server .onion address for anon-mode Tor transport. Accepts a bare
+/// "<hash>.onion" or a full "http://<hash>.onion:443". When set, anon mode
+/// routes the pool over Tor to this address. In production this should be pinned
+/// in the signed build rather than sourced from env.
+pub(crate) const ONION_ADDRESS_ENV: &str = "CHATTER_ONION_ADDR";
+
 /// Infrastructure container holding low-level dependencies.
 ///
 /// Contains storage, crypto managers, and network pool. These are the foundation
@@ -242,6 +248,21 @@ impl InfrastructureContainer {
         let server_url = env::var(SERVER_URL_ENV).unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string());
         let grpc_pool = Arc::new(GrpcClientPool::new_for_streaming(&server_url)?);
         let auth_interceptor = grpc_pool.auth_clone();
+
+        // Pin the server's .onion (if configured) so anon mode can route the pool
+        // over Tor. Normalize a bare "<hash>.onion" into "http://<hash>.onion:443".
+        if let Ok(onion) = env::var(ONION_ADDRESS_ENV) {
+            let onion = onion.trim();
+            if !onion.is_empty() {
+                let url = if onion.contains("://") {
+                    onion.to_string()
+                } else {
+                    format!("http://{onion}:443")
+                };
+                grpc_pool.set_onion_address(Some(url));
+                tracing::info!("pinned server .onion for anon-mode Tor transport");
+            }
+        }
 
         // 10. Create group mailbox infrastructure
         let group_mailbox_manager = Arc::new(GroupMailboxManager::new(database.clone()));
