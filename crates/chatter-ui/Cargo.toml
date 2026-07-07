@@ -34,8 +34,8 @@ chatter-core = { path = "../chatter-core", default-features = false }
 # ============================================================================
 # UI Framework - Slint
 # ============================================================================
-slint = { version = "1.15.1", default-features = false, features = ["compat-1-2", "accessibility"] }
-i-slint-backend-winit = { version = "1.15.1", optional = true }
+slint = { version = "1.17.0", default-features = false, features = ["compat-1-2", "accessibility"] }
+i-slint-backend-winit = { version = "1.17.0", optional = true }
 winit = { version = "0.30", optional = true }
 
 # ============================================================================
@@ -78,7 +78,7 @@ glutin_egl_sys = { version = "0.7", optional = true }
 # Platform-specific: Android
 # ============================================================================
 [target.'cfg(target_os = "android")'.dependencies]
-i-slint-backend-android-activity = { version = "1.15.1", default-features = false, features = ["aa-06", "game-activity"], optional = true }
+i-slint-backend-android-activity = { version = "=1.17.0", default-features = false, features = ["aa-06", "game-activity"], optional = true }
 android-activity = { version = "0.6", features = ["game-activity"], optional = true }
 # Slint's backend-selector unconditionally references i_slint_backend_android_activity
 # on android (api.rs uses `cfg!(...)`, which still compiles the reference). The only
@@ -86,7 +86,7 @@ android-activity = { version = "0.6", features = ["game-activity"], optional = t
 # `native-activity`, conflicting with game-activity. So we enable the selector's
 # `backend-android-activity` feature directly here — it pulls the backend crate with
 # default-features=false, letting our game-activity selection above stand alone.
-i-slint-backend-selector = { version = "1.15.1", default-features = false, optional = true }
+i-slint-backend-selector = { version = "1.17.0", default-features = false, optional = true }
 # JNI bindings for Android system APIs (notifications, window insets).
 # These live in chatter-ui (platform layer), not chatter-core (platform-neutral).
 jni = "0.21"
@@ -96,7 +96,7 @@ ndk-context = "0.1"
 tempfile = "3"
 
 [build-dependencies]
-slint-build = "1.15.1"
+slint-build = "1.17.0"
 # Android calls: force-keep + export the libwebrtc Java_* JNI symbols so the
 # bundled livekit.org.webrtc Java classes resolve their native methods (else the
 # linker dead-strips them and calls abort with UnsatisfiedLinkError on join).

@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use crate::error::SystemError;
 #[cfg(target_os = "linux")]
 use super::platform::APP_BINARY;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use super::platform::APP_ID;
 #[cfg(target_os = "linux")]
 use super::platform::APP_DISPLAY_NAME;
