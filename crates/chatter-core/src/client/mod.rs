@@ -1126,6 +1126,15 @@ impl ChatterClient {
         // pinned, or bootstrap fails), we log LOUDLY and keep the current
         // transport — the UI filter still applies, but we must NOT pretend the
         // network location is hidden when it isn't.
+        // RESIDUAL (onion): set_transport_mode drops the pool's cached channels,
+        // so every *new* RPC and every per-attempt retry rebuilds over the new
+        // transport. But a long-lived server-stream opened BEFORE the flip (the
+        // authenticated notification stream) holds its own channel clone and
+        // keeps riding the previous transport until it naturally reconnects —
+        // a bounded IP-leak window at the moment of enabling anon mode. Closing
+        // it means force-restarting the notification loop on switch; deferred as
+        // load-bearing anon work, not a tail-of-session change (onion is
+        // feature-flagged off by default). Tracked in ANONYMITY_ROADMAP §onion.
         use crate::network::grpc::client_pool::TransportMode;
         let mode = if enabled { TransportMode::Onion } else { TransportMode::Direct };
         if let Err(e) = self.services.grpc_pool.set_transport_mode(mode) {

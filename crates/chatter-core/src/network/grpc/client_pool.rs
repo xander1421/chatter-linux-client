@@ -603,6 +603,29 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn test_transport_switch_drops_cached_channel() {
+        // The anonymity guarantee of anon mode depends on a transport switch
+        // actually rebuilding the connection: if the switch left the old cached
+        // channel in place, live traffic would keep riding the previous
+        // transport (e.g. direct IP) after the user believed they were on Tor.
+        // set_transport_mode must disconnect so the next channel() rebuilds.
+        let pool = GrpcClientPool::new("http://localhost:50051").unwrap();
+
+        // Materialise a (lazy) channel — pool now reports connected + caches it.
+        let _ch = pool.channel();
+        assert!(pool.is_connected(), "channel() should cache a channel");
+
+        // Any transport switch — even Direct→Direct — must drop the cache.
+        pool.set_transport_mode(TransportMode::Direct).unwrap();
+        assert!(
+            !pool.is_connected(),
+            "transport switch must drop the cached channel so the next \
+             channel() rebuilds over the new transport"
+        );
+        assert!(pool.try_channel().is_none());
+    }
+
     #[test]
     fn test_auth_interceptor_access() {
         let pool = GrpcClientPool::new("http://localhost:50051").unwrap();
