@@ -16,6 +16,8 @@ pub mod interceptors;
 pub mod mailbox_client;
 pub mod message_client;
 pub mod notification_client;
+#[cfg(feature = "onion")]
+pub mod onion_transport;
 pub mod provisioning_client;
 pub mod svr_client;
 pub mod user_client;

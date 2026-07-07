@@ -66,7 +66,7 @@ qrcode = "0.14"
 # ============================================================================
 # Database (SQLite + SQLCipher)
 # ============================================================================
-rusqlite = { version = "0.32", features = ["bundled-sqlcipher", "unlock_notify", "blob"] }
+rusqlite = { version = "0.36", features = ["bundled-sqlcipher", "unlock_notify", "blob"] }
 memmap2 = "0.9"
 
 # ============================================================================
@@ -141,6 +141,16 @@ async-stream = "0.3.6"
 # Local AI (optional - requires CUDA)
 # ============================================================================
 mistralrs = { version = "0.7", optional = true, features = ["cuda", "flash-attn"] }
+
+# ============================================================================
+# Tor onion transport (optional — gated behind `onion` feature, Stage 2)
+# ============================================================================
+# arti-client: pure-Rust Tor client. `tokio` gives DataStream the tokio
+# AsyncRead/AsyncWrite impls hyper-util's TokioIo needs; `rustls` avoids an
+# OpenSSL system dep. tor-rtcompat provides PreferredRuntime.
+arti-client = { version = "0.32", default-features = false, features = ["tokio", "rustls"], optional = true }
+tor-rtcompat = { version = "0.32", default-features = false, features = ["tokio", "rustls"], optional = true }
+hyper-util = { version = "0.1", features = ["tokio"], optional = true }
 unicode-segmentation = "1.12.0"
 argon2 = "0.5.3"
 tempfile = "3"
@@ -209,7 +219,7 @@ default = ["desktop-system", "desktop-media"]
 # Tor v3 onion transport for anon mode. Off by default — pulls a heavy Tor
 # dependency (arti-client, added in Stage 2). Without it, switching to onion
 # transport returns an error and anon mode stays UI-filter-only.
-onion = []
+onion = ["dep:arti-client", "dep:tor-rtcompat", "dep:hyper-util"]
 desktop-system = ["keyring/sync-secret-service", "keyring/windows-native"]
 # Shared media stack (LiveKit + WebRTC) — works on every target the `livekit`
 # crate supports. Mobile bridges opt in via `--features media`; desktop pulls

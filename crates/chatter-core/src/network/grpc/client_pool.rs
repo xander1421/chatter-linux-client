@@ -54,6 +54,10 @@ pub struct GrpcClientPool {
     onion_addr: Arc<RwLock<Option<String>>>,
     /// Active transport (Direct by default; anon mode flips it to Onion).
     transport_mode: Arc<RwLock<TransportMode>>,
+    /// Lazily-bootstrapped, pool-wide Tor client for the onion transport.
+    /// Bootstrap is deferred to the first onion dial and cached thereafter.
+    #[cfg(feature = "onion")]
+    onion_tor: super::onion_transport::SharedTorClient,
 }
 
 impl GrpcClientPool {
@@ -112,6 +116,8 @@ impl GrpcClientPool {
             direct_url: Arc::new(RwLock::new(server_url.to_string())),
             onion_addr: Arc::new(RwLock::new(None)),
             transport_mode: Arc::new(RwLock::new(TransportMode::Direct)),
+            #[cfg(feature = "onion")]
+            onion_tor: Arc::new(tokio::sync::OnceCell::new()),
         })
     }
 
@@ -204,11 +210,17 @@ impl GrpcClientPool {
                 })?;
                 #[cfg(feature = "onion")]
                 {
-                    // Stage 2 wires an Arti connector here (isolated Tor circuit
-                    // dialing `_onion`), then flips transport_mode + disconnects.
-                    Err(NetworkError::ConnectionFailed(
-                        "onion transport connector not yet wired (Stage 2)".into(),
-                    ))
+                    // Build an h2c endpoint straight at the `.onion` (no TLS — the
+                    // onion address self-authenticates). The real dial goes through
+                    // the Arti connector on the next `channel()`/`connect()`.
+                    // TODO(onion): isolate anon vs auth circuits — one shared circuit
+                    // for the whole pool for now (hides client + server IP).
+                    let ep = Self::create_endpoint(&_onion, self.timeout)?;
+                    self.disconnect();
+                    *self.endpoint.write() = ep;
+                    *self.transport_mode.write() = TransportMode::Onion;
+                    tracing::info!("transport: onion ({_onion})");
+                    Ok(())
                 }
                 #[cfg(not(feature = "onion"))]
                 {
@@ -230,14 +242,30 @@ impl GrpcClientPool {
     /// Returns `NetworkError::ConnectionFailed` if the connection fails.
     pub async fn connect(&self) -> Result<(), NetworkError> {
         let endpoint = self.endpoint.read().clone();
-        
-        let channel = endpoint
-            .connect()
-            .await
+
+        // Onion transport tunnels the channel through Tor via the Arti connector;
+        // Direct transport uses tonic's built-in TCP/TLS dialer.
+        #[cfg(feature = "onion")]
+        let connect_result = if *self.transport_mode.read() == TransportMode::Onion {
+            endpoint.connect_with_connector(self.onion_connector()).await
+        } else {
+            endpoint.connect().await
+        };
+        #[cfg(not(feature = "onion"))]
+        let connect_result = endpoint.connect().await;
+
+        let channel = connect_result
             .map_err(|e| NetworkError::ConnectionFailed(format!("connection failed: {}", e)))?;
 
         *self.channel.write() = Some(channel);
         Ok(())
+    }
+
+    /// Build a fresh onion connector sharing the pool's lazily-bootstrapped
+    /// Tor client, so reconnects reuse the same warm circuit.
+    #[cfg(feature = "onion")]
+    fn onion_connector(&self) -> super::onion_transport::OnionConnector {
+        super::onion_transport::OnionConnector::new(self.onion_tor.clone())
     }
 
     /// Disconnect from the server.
@@ -271,6 +299,13 @@ impl GrpcClientPool {
             return ch;
         }
         let endpoint = self.endpoint.read().clone();
+        #[cfg(feature = "onion")]
+        let channel = if *self.transport_mode.read() == TransportMode::Onion {
+            endpoint.connect_with_connector_lazy(self.onion_connector())
+        } else {
+            endpoint.connect_lazy()
+        };
+        #[cfg(not(feature = "onion"))]
         let channel = endpoint.connect_lazy();
         tracing::warn!("GrpcClientPool: no active connection — created lazy channel (RPCs will attempt on-demand connect)");
         *guard = Some(channel.clone());
@@ -502,11 +537,22 @@ mod tests {
         assert!(pool.set_transport_mode(TransportMode::Onion).is_err());
         assert_eq!(pool.transport_mode(), TransportMode::Direct);
 
-        // Onion with an address but the feature off is still "not built" — again
-        // failing closed without flipping the mode (no false anonymity).
+        // With an address pinned, behaviour splits on the `onion` feature:
         pool.set_onion_address(Some("http://abc.onion:443".into()));
-        assert!(pool.set_transport_mode(TransportMode::Onion).is_err());
-        assert_eq!(pool.transport_mode(), TransportMode::Direct);
+        #[cfg(not(feature = "onion"))]
+        {
+            // Feature off: still "not built" — fail closed, mode unchanged
+            // (no false anonymity).
+            assert!(pool.set_transport_mode(TransportMode::Onion).is_err());
+            assert_eq!(pool.transport_mode(), TransportMode::Direct);
+        }
+        #[cfg(feature = "onion")]
+        {
+            // Feature on: the onion endpoint builds and the mode flips (the
+            // actual Tor dial is deferred to the next channel()).
+            assert!(pool.set_transport_mode(TransportMode::Onion).is_ok());
+            assert_eq!(pool.transport_mode(), TransportMode::Onion);
+        }
     }
 
     #[test]

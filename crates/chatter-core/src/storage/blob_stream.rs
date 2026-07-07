@@ -60,7 +60,7 @@ impl<'conn> BlobStream<'conn> {
     ) -> Result<Self, StorageError> {
         let blob = conn
             .blob_open(
-                rusqlite::DatabaseName::Main,
+                rusqlite::MAIN_DB,
                 table,
                 column,
                 rowid,
@@ -213,7 +213,7 @@ impl OwnedBlobStream {
         let conn_ptr = conn.as_ref() as *const Connection;
         let blob = unsafe {
             (*conn_ptr).blob_open(
-                rusqlite::DatabaseName::Main,
+                rusqlite::MAIN_DB,
                 table,
                 column,
                 rowid,
