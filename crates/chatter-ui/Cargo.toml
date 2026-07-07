@@ -136,6 +136,9 @@ desktop-media-no-livekit = [
 ]
 local-ai = ["chatter-core/local-ai"]
 jarvis = ["chatter-core/jarvis"]
+# Route the network transport over Tor for anon mode. Forwards to chatter-core,
+# which owns the onion connector. See docs/ONION_DEPLOYMENT.md §8.3.
+onion = ["chatter-core/onion"]
 # NOTE: deliberately NOT pulling `slint/backend-android-activity-06` — that
 # umbrella feature hard-enables `i-slint-backend-android-activity/native-activity`,
 # which is mutually exclusive with `game-activity`. We select the backend +

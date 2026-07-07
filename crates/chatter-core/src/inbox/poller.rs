@@ -49,6 +49,17 @@ impl InboxPoller {
     /// * `event_tx` - Sender for inbox events
     /// * `stats` - Shared statistics
     /// * `state` - Shared state
+    /// Rebuild the authenticated message client from the pool so the poller
+    /// re-dials over the pool's current transport (used when anon mode toggles
+    /// the transport between direct and onion; the captured client is otherwise
+    /// pinned to the transport that was active at construction).
+    pub async fn refresh_message_client(
+        &self,
+        pool: &crate::network::grpc::GrpcClientPool,
+    ) {
+        *self.message_client.lock().await = pool.message_client();
+    }
+
     pub fn new(
         config: InboxConfig,
         message_client: Arc<Mutex<MessageClient>>,

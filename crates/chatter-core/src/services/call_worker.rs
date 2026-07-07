@@ -286,6 +286,14 @@ enum CallCommand {
     DisconnectLocal {
         response: oneshot::Sender<()>,
     },
+    /// Swap the worker's gRPC call client (anon-mode transport switch).
+    ///
+    /// The command loop is strictly sequential and fully awaits each call
+    /// operation before dequeuing the next, so this is only ever processed
+    /// BETWEEN complete operations — never mid-RPC — making the swap safe.
+    SwapCallClient {
+        client: CallClient,
+    },
     /// Get active call info.
     GetActiveCall {
         response: oneshot::Sender<Option<Call>>,
@@ -514,6 +522,23 @@ impl CallWorkerHandle {
             shared_video_frames,
             call_events_tx,
             latest_pending_incoming,
+        }
+    }
+
+    /// Swap the worker's gRPC call client so subsequent signaling RPCs
+    /// (create/join/leave/end) egress over the pool's current transport.
+    /// Used on anon-mode toggle. The worker applies it between complete call
+    /// operations, so no in-flight call is corrupted. Awaits enqueue so the
+    /// swap is not silently dropped under buffer pressure; a closed channel
+    /// (worker gone) is logged and ignored.
+    pub async fn swap_call_client(&self, client: CallClient) {
+        if self
+            .cmd_tx
+            .send(CallCommand::SwapCallClient { client })
+            .await
+            .is_err()
+        {
+            tracing::warn!("call worker: failed to enqueue call client swap (worker unavailable)");
         }
     }
 
@@ -1270,6 +1295,18 @@ fn run_call_worker(
                     }
 
                     let _ = response.send(());
+                }
+
+                CallCommand::SwapCallClient { client } => {
+                    // Safe by construction: this arm only runs between complete
+                    // call operations (the loop awaits each fully), so the
+                    // signaling client's mutex is free and no RPC is in flight.
+                    // Any active LiveKit media session lives in `room_manager`,
+                    // independent of this signaling client, so an ongoing call
+                    // is not disturbed — only the NEXT signaling RPC (e.g. the
+                    // eventual leave/end) egresses over the new transport.
+                    *call_client.lock().await = client;
+                    tracing::info!("call worker: swapped gRPC call client for new transport");
                 }
 
                 CallCommand::GetActiveCall { response } => {

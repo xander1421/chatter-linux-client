@@ -334,6 +334,25 @@ impl DeviceInboxProvider {
         Ok(())
     }
 
+    /// Rebuild every transport-bound gRPC client from the pool so the next
+    /// `start()` polls over the pool's CURRENT transport.
+    ///
+    /// The provider captures its mailbox/message clients at construction, and a
+    /// tonic `Channel` is pinned to the transport (direct TCP vs. the Tor/Arti
+    /// connector) it was built with — a direct channel can never route over
+    /// onion. When anon mode toggles the pool's transport we must therefore
+    /// swap the captured clients, not just restart the loop. Call this while the
+    /// loop is STOPPED (between `stop()` and `start()`); the mutexes make it
+    /// safe regardless, but rebuilding a live client mid-poll would be pointless.
+    pub async fn refresh_clients(&self, pool: &GrpcClientPool) {
+        *self.mailbox_client.lock().await = pool.anonymous_mailbox_client();
+        if let Some(anon) = &self.anon_mailbox_client {
+            *anon.lock().await = pool.anonymous_mailbox_client();
+        }
+        self.poller.refresh_message_client(pool).await;
+        tracing::info!("inbox provider: rebuilt gRPC clients for new transport");
+    }
+
     /// Stop the polling loop.
     ///
     /// Sends shutdown signal and waits for graceful termination.

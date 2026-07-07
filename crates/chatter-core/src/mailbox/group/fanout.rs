@@ -158,6 +158,19 @@ impl GroupFanout {
         }
     }
 
+    /// Rebuild the mailbox client from the pool so subsequent group sends and
+    /// polls re-dial over the pool's CURRENT transport.
+    ///
+    /// The client is captured at login (`init_group_fanout`) and a tonic
+    /// `Channel` is pinned to the transport it was built with, so a direct
+    /// channel can never route over onion. When anon mode toggles the pool's
+    /// transport this swap is required — otherwise every group-message deposit
+    /// keeps egressing the real client IP over the pre-switch transport.
+    pub async fn refresh_client(&self, pool: &crate::network::grpc::GrpcClientPool) {
+        *self.mailbox_client.lock().await = pool.anonymous_mailbox_client();
+        tracing::info!("group fanout: rebuilt mailbox client for new transport");
+    }
+
     /// Send an encrypted envelope to all group members.
     ///
     /// Delivers the message to each member's ephemeral mailbox in parallel.

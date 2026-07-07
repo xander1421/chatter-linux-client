@@ -167,6 +167,9 @@ impl ClientBuilder {
             link_device_service: std::sync::OnceLock::new(),
             anon_mode: AtomicBool::new(false),
             authed_notif_started: AtomicBool::new(false),
+            notif_stream_handle: Mutex::new(None),
+            push_url: Mutex::new(None),
+            transport_switch_lock: tokio::sync::Mutex::new(()),
         }))
     }
 }
@@ -261,6 +264,21 @@ pub struct ChatterClient {
     /// can't start at boot like the consumer because there's no authenticated
     /// user / call service yet — see `start_authed_notification_streams`.
     authed_notif_started: AtomicBool,
+    /// Handle to the long-lived gRPC notification-stream consumer, held apart
+    /// from the `tasks` bag so a transport switch (anon mode toggle) can abort
+    /// and re-spawn just that loop — forcing it to re-dial over the new
+    /// transport instead of riding the pre-switch channel until it naturally
+    /// reconnects. See `respawn_notification_stream`.
+    notif_stream_handle: Mutex<Option<JoinHandle<()>>>,
+    /// Last non-empty ntfy push URL configured via `configure_push`, remembered
+    /// so anon mode can suspend push (poll-only) on enter and restore it on
+    /// exit. `None` means push was never configured / explicitly disabled.
+    push_url: Mutex<Option<String>>,
+    /// Serializes the async loop teardown/rebuild that runs on every anon-mode
+    /// toggle, so two rapid toggles can't interleave their inbox stop/start.
+    /// Each rebuild reads live pool transport state, so any ordering converges
+    /// to the final transport.
+    transport_switch_lock: tokio::sync::Mutex<()>,
 }
 
 /// Decrypted profile of an incoming friend-request sender, surfaced to the
@@ -1117,7 +1135,7 @@ impl ChatterClient {
     /// responsible for re-running sidebar refresh helpers after flip;
     /// this method does not emit a domain event because the flag is a
     /// presentation concern, not a chatter-core state change.
-    pub fn set_anon_mode_enabled(&self, enabled: bool) {
+    pub fn set_anon_mode_enabled(self: &Arc<Self>, enabled: bool) {
         self.anon_mode.store(enabled, Ordering::Release);
 
         // Anon mode also routes the network transport over Tor (onion): enabling
@@ -1126,15 +1144,6 @@ impl ChatterClient {
         // pinned, or bootstrap fails), we log LOUDLY and keep the current
         // transport — the UI filter still applies, but we must NOT pretend the
         // network location is hidden when it isn't.
-        // RESIDUAL (onion): set_transport_mode drops the pool's cached channels,
-        // so every *new* RPC and every per-attempt retry rebuilds over the new
-        // transport. But a long-lived server-stream opened BEFORE the flip (the
-        // authenticated notification stream) holds its own channel clone and
-        // keeps riding the previous transport until it naturally reconnects —
-        // a bounded IP-leak window at the moment of enabling anon mode. Closing
-        // it means force-restarting the notification loop on switch; deferred as
-        // load-bearing anon work, not a tail-of-session change (onion is
-        // feature-flagged off by default). Tracked in ANONYMITY_ROADMAP §onion.
         use crate::network::grpc::client_pool::TransportMode;
         let mode = if enabled { TransportMode::Onion } else { TransportMode::Direct };
         if let Err(e) = self.services.grpc_pool.set_transport_mode(mode) {
@@ -1143,6 +1152,99 @@ impl ChatterClient {
                 error = %e,
                 "anon mode: transport switch failed — UI filter applies but network location is NOT hidden"
             );
+            // Transport unchanged: leave the long-lived loops alone. They are
+            // already on the current (correct) transport, and tearing them down
+            // would only churn connections for no anonymity gain.
+            return;
+        }
+
+        // ANONYMITY-CRITICAL: set_transport_mode drops the pool's cached
+        // channels so every *new* RPC and per-attempt retry rebuilds over the
+        // new transport — but the long-lived loops opened BEFORE the flip hold
+        // their own channel clones (pinned to the pre-switch transport) and
+        // would keep egressing the client IP until they naturally reconnect.
+        // Rebuild them now so they re-dial over the new transport. Runs on the
+        // client runtime (this method is invoked from the UI thread, which has
+        // no ambient runtime and must never block). Serialized via
+        // `transport_switch_lock` so rapid toggles converge, not interleave.
+        let this = Arc::clone(self);
+        self.services.runtime_handle.spawn(async move {
+            let _guard = this.transport_switch_lock.lock().await;
+            this.rebuild_transport_loops().await;
+        });
+    }
+
+    /// Tear down and rebuild every long-lived network loop so it re-dials over
+    /// the transport that is now active. Called after a successful anon-mode
+    /// transport switch. Runs inside the client runtime (ambient runtime
+    /// required for the re-spawns) and under `transport_switch_lock`.
+    async fn rebuild_transport_loops(self: &Arc<Self>) {
+        // Read the LIVE anon state, not a captured param. Under rapid toggles
+        // the `transport_switch_lock` grants in arrival order (not spawn order),
+        // so a stale captured value could resurrect push against the final Onion
+        // transport (SSE-over-direct leak). notif/inbox/fanout already read live
+        // pool state; the push decision must converge with them to the final
+        // transport, so it reads the same authoritative atomic.
+        let anon = self.anon_mode.load(std::sync::atomic::Ordering::Acquire);
+
+        // 1. gRPC notification stream — abort the in-flight stream (pinned to
+        //    the old channel) and re-spawn so it connects over the new one.
+        self.respawn_notification_stream();
+
+        // 2. ntfy push SSE listener — egresses to the ntfy server over plain
+        //    HTTP (no Tor). PRODUCT DECISION: push is OFF while anon mode is on;
+        //    delivery falls back to mailbox polling (the primary path anyway).
+        //    Restore the previously-configured push on exit.
+        if anon {
+            if let Some(tx) = self.push_shutdown.lock().take() {
+                let _ = tx.send(());
+                tracing::info!("anon mode: ntfy push suspended (poll-only delivery)");
+            }
+        } else if let Some(url) = self.push_url.lock().clone() {
+            if let Err(e) = self.configure_push(&url) {
+                tracing::warn!(error = %e, "anon mode: failed to restore ntfy push on exit");
+            } else {
+                tracing::info!("anon mode: ntfy push restored");
+            }
+        }
+
+        // 3. Inbox poll loop — the provider captured its mailbox/message gRPC
+        //    clients at construction (pinned to the pre-switch channel), so a
+        //    bare stop/start would keep the old transport. Stop, rebuild those
+        //    clients from the pool (now on the new transport), then restart.
+        if let Some(provider) = self.ctx.get_device_inbox_provider() {
+            if let Err(e) = provider.stop().await {
+                tracing::warn!(error = %e, "anon mode: inbox provider stop failed during transport switch");
+            }
+            provider.refresh_clients(&self.services.grpc_pool).await;
+            if let Err(e) = provider.start().await {
+                tracing::warn!(error = %e, "anon mode: inbox provider restart failed during transport switch");
+            } else {
+                tracing::info!("anon mode: inbox poll loop re-dialed over new transport");
+            }
+        }
+
+        // 4. Group fanout — the mailbox client is captured once at login
+        //    (`init_group_fanout`) and pinned into a OnceLock, so every group
+        //    send deposits through it. Without this swap the core group-message
+        //    path keeps egressing the real IP after anon-enable. Rebuild it
+        //    from the pool (now on the new transport).
+        if let Some(fanout) = self.ctx.get_group_fanout() {
+            fanout.refresh_client(&self.services.grpc_pool).await;
+            tracing::info!("anon mode: group fanout client re-dialed over new transport");
+        }
+
+        // 5. Call worker — the signaling `CallClient` is captured for the
+        //    worker's lifetime, so call create/join/leave/end would leak the
+        //    real IP after anon-enable. Hand the worker a fresh client built on
+        //    the new transport; it applies the swap between complete call
+        //    operations, so no in-flight call is corrupted.
+        #[cfg(feature = "media")]
+        if let Some(handle) = self.ctx.get_call_service() {
+            handle
+                .swap_call_client(self.services.grpc_pool.call_client())
+                .await;
+            tracing::info!("anon mode: call worker client swap enqueued for new transport");
         }
     }
 
@@ -2366,6 +2468,11 @@ impl ChatterClient {
             handle.abort();
         }
 
+        // Abort the separately-tracked gRPC notification stream.
+        if let Some(handle) = self.notif_stream_handle.lock().take() {
+            handle.abort();
+        }
+
         // Disconnect gRPC
         self.services.auth_service.disconnect();
 
@@ -2484,9 +2591,15 @@ impl ChatterClient {
 
         let ntfy_url = ntfy_url.trim();
         if ntfy_url.is_empty() {
+            // Explicit disable — forget the remembered URL so anon-mode exit
+            // doesn't resurrect a listener the caller intentionally stopped.
+            *self.push_url.lock() = None;
             tracing::info!("Push listener disabled (empty URL)");
             return Ok(());
         }
+        // Remember the desired push URL so anon mode can suspend push on enter
+        // and restore this exact config on exit.
+        *self.push_url.lock() = Some(ntfy_url.to_string());
 
         if self.services.auth_state.get().current_user_id.is_none() {
             return Err(ClientError::Validation(
@@ -2745,5 +2858,119 @@ mod upload_attachments_tests {
                 other.map(|u| u.pointers.len())
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod transport_switch_tests {
+    //! GAP 2 bookkeeping: toggling anon mode must stop/re-spawn the long-lived
+    //! loops so they re-dial over the new transport, and must be idempotent /
+    //! race-safe (the flip runs on the UI thread). A full transport switch
+    //! needs the `onion` feature + a live Tor server, so these assert the
+    //! stop/restart bookkeeping directly instead.
+    use super::*;
+
+    fn build_test_client() -> Arc<ChatterClient> {
+        let dir = tempfile::tempdir().unwrap();
+        ChatterClient::builder()
+            .server_url("http://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client")
+    }
+
+    /// Entering anon mode must fire the ntfy push shutdown and clear the slot
+    /// (product decision: push OFF while anon, poll-only). Idempotent: a second
+    /// enter with no listener is a clean no-op.
+    #[tokio::test]
+    async fn anon_enter_suspends_push_and_is_idempotent() {
+        let client = build_test_client();
+
+        // Simulate a configured push listener with anon mode enabled — the
+        // rebuild reads the LIVE atomic (Fix 3), not a param, so set it first.
+        client.anon_mode.store(true, Ordering::Release);
+        let (tx, mut rx) = tokio::sync::broadcast::channel::<()>(1);
+        *client.push_shutdown.lock() = Some(tx);
+        *client.push_url.lock() = Some("http://push.example".into());
+
+        client.rebuild_transport_loops().await;
+
+        // Shutdown fired and the slot was taken.
+        assert!(rx.try_recv().is_ok(), "push shutdown signal must fire on anon enter");
+        assert!(client.push_shutdown.lock().is_none(), "push slot must be cleared");
+        // The URL is remembered so exit can restore it.
+        assert_eq!(client.push_url.lock().clone(), Some("http://push.example".into()));
+
+        // Idempotent: second enter with no live listener does not panic.
+        client.rebuild_transport_loops().await;
+        assert!(client.push_shutdown.lock().is_none());
+    }
+
+    /// Fix 3 convergence: with the live atomic at `false` (final transport =
+    /// direct), a rebuild must NOT suspend push even if invoked as part of a
+    /// toggle burst — the push decision reads the authoritative atomic, not a
+    /// stale captured param.
+    #[tokio::test]
+    async fn push_decision_follows_live_atomic_not_stale_param() {
+        let client = build_test_client();
+        client.anon_mode.store(false, Ordering::Release);
+        let (tx, mut rx) = tokio::sync::broadcast::channel::<()>(1);
+        *client.push_shutdown.lock() = Some(tx);
+
+        client.rebuild_transport_loops().await;
+
+        // anon=false → push must be left intact (no shutdown fired).
+        assert!(rx.try_recv().is_err(), "push must not be suspended when live anon=false");
+        assert!(client.push_shutdown.lock().is_some(), "push slot must be preserved");
+    }
+
+    /// Fix 1: `refresh_client` on the group fanout runs without deadlock and is
+    /// idempotent under repeated invocation (rapid toggle). Uses the live pool.
+    #[tokio::test]
+    async fn group_fanout_refresh_is_idempotent() {
+        let client = build_test_client();
+        client.ctx.init_group_fanout();
+        let fanout = client.ctx.get_group_fanout().expect("fanout initialized");
+
+        // Repeated refresh (simulated rapid toggle) must not deadlock the
+        // tokio Mutex or panic.
+        for _ in 0..5 {
+            fanout.refresh_client(&client.services.grpc_pool).await;
+        }
+    }
+
+    /// Re-spawning the notification stream before login is a safe no-op — the
+    /// stream hasn't started, so the "started" flag stays clear and no task is
+    /// installed.
+    #[tokio::test]
+    async fn notification_respawn_is_noop_before_login() {
+        let client = build_test_client();
+        assert!(!client.authed_notif_started.load(Ordering::SeqCst));
+
+        client.respawn_notification_stream();
+        client.respawn_notification_stream();
+
+        assert!(!client.authed_notif_started.load(Ordering::SeqCst));
+        assert!(
+            client.notif_stream_handle.lock().is_none(),
+            "no notification stream task should be installed before login"
+        );
+    }
+
+    /// The public toggle must remain race-safe when hammered: the sync flag
+    /// tracks the last value and the spawned rebuild tasks (no provider yet)
+    /// converge without panicking or hanging the caller.
+    #[tokio::test]
+    async fn rapid_toggle_converges_without_hang() {
+        let client = build_test_client();
+        for _ in 0..10 {
+            client.set_anon_mode_enabled(true);
+            client.set_anon_mode_enabled(false);
+        }
+        assert!(!client.anon_mode_enabled());
+        client.set_anon_mode_enabled(true);
+        assert!(client.anon_mode_enabled());
+        // Give the serialized rebuild tasks a chance to drain.
+        tokio::task::yield_now().await;
     }
 }

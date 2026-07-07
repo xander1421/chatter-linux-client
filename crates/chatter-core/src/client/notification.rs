@@ -55,12 +55,11 @@ impl ChatterClient {
             return;
         }
 
-        let stream_handle = crate::services::notification_stream::spawn_grpc_notification_consumer(
-            self.services.grpc_pool.clone(),
-            self.event_bus().clone(),
-            user_id,
-        );
-        self.tasks.lock().push(stream_handle);
+        // The gRPC notification stream is held in its own slot (not the `tasks`
+        // bag) so an anon-mode transport switch can abort + re-spawn just this
+        // loop. The call → notification bridge below carries no server
+        // connection, so it stays a one-time spawn in `tasks`.
+        self.spawn_notification_stream(user_id);
 
         #[cfg(feature = "media")]
         if let Some(call_worker) = self.services.call_service.get() {
@@ -73,5 +72,42 @@ impl ChatterClient {
         } else {
             tracing::warn!("call service not ready — call ring notifications disabled this session");
         }
+    }
+
+    /// Spawn the gRPC notification-stream consumer and store its handle in the
+    /// dedicated slot, aborting any previous stream first. Internal helper used
+    /// by both the initial start and the transport-switch re-spawn.
+    fn spawn_notification_stream(self: &Arc<Self>, user_id: crate::domain::ids::UserId) {
+        let handle = crate::services::notification_stream::spawn_grpc_notification_consumer(
+            self.services.grpc_pool.clone(),
+            self.event_bus().clone(),
+            user_id,
+        );
+        let mut slot = self.notif_stream_handle.lock();
+        if let Some(old) = slot.take() {
+            old.abort();
+        }
+        *slot = Some(handle);
+    }
+
+    /// Re-spawn the gRPC notification stream so it re-dials over the currently
+    /// active transport (anon mode toggles the pool between direct and onion).
+    /// No-op before login — the stream hasn't started, and the normal
+    /// post-login `start_authed_notification_streams` will bring it up on the
+    /// right transport. Idempotent: aborts the previous stream before spawning,
+    /// so repeated toggles never stack or leak a task.
+    pub fn respawn_notification_stream(self: &Arc<Self>) {
+        if !self
+            .authed_notif_started
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return;
+        }
+        let user_id = match self.auth_state().get().current_user_id {
+            Some(id) => id,
+            None => return,
+        };
+        self.spawn_notification_stream(user_id);
+        tracing::info!("notification stream re-dialed over new transport");
     }
 }
