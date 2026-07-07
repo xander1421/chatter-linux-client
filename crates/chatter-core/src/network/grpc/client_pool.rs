@@ -54,10 +54,18 @@ pub struct GrpcClientPool {
     onion_addr: Arc<RwLock<Option<String>>>,
     /// Active transport (Direct by default; anon mode flips it to Onion).
     transport_mode: Arc<RwLock<TransportMode>>,
+    /// Separate channel for the anonymous mailbox/message/auth clients, so their
+    /// traffic rides its OWN connection — an isolated Tor circuit under onion — and
+    /// the server can't correlate anon ops with authenticated RPCs by connection.
+    anon_channel: Arc<RwLock<Option<Channel>>>,
     /// Lazily-bootstrapped, pool-wide Tor client for the onion transport.
     /// Bootstrap is deferred to the first onion dial and cached thereafter.
     #[cfg(feature = "onion")]
     onion_tor: super::onion_transport::SharedTorClient,
+    /// Cached ISOLATED Tor client for the anon channel (separate circuit-group
+    /// from `onion_tor`). Derived from the bootstrapped client on first anon dial.
+    #[cfg(feature = "onion")]
+    anon_onion_tor: super::onion_transport::SharedTorClient,
 }
 
 impl GrpcClientPool {
@@ -116,8 +124,11 @@ impl GrpcClientPool {
             direct_url: Arc::new(RwLock::new(server_url.to_string())),
             onion_addr: Arc::new(RwLock::new(None)),
             transport_mode: Arc::new(RwLock::new(TransportMode::Direct)),
+            anon_channel: Arc::new(RwLock::new(None)),
             #[cfg(feature = "onion")]
             onion_tor: Arc::new(tokio::sync::OnceCell::new()),
+            #[cfg(feature = "onion")]
+            anon_onion_tor: Arc::new(tokio::sync::OnceCell::new()),
         })
     }
 
@@ -268,11 +279,48 @@ impl GrpcClientPool {
         super::onion_transport::OnionConnector::new(self.onion_tor.clone())
     }
 
+    /// Isolated onion connector for the anonymous channel (separate circuit).
+    #[cfg(feature = "onion")]
+    fn anon_onion_connector(&self) -> super::onion_transport::OnionConnector {
+        super::onion_transport::OnionConnector::new_isolated(
+            self.onion_tor.clone(),
+            self.anon_onion_tor.clone(),
+        )
+    }
+
+    /// The channel for the anonymous mailbox/message/auth clients.
+    ///
+    /// Under onion transport this is a SEPARATE channel over an isolated Tor
+    /// circuit, so the server cannot correlate anonymous mailbox ops with the
+    /// account's authenticated RPCs by connection/circuit. On the direct
+    /// transport isolation is moot (both connections share the client IP), so it
+    /// falls back to the shared channel.
+    pub fn anon_channel(&self) -> Channel {
+        #[cfg(feature = "onion")]
+        {
+            if *self.transport_mode.read() == TransportMode::Onion {
+                if let Some(ch) = self.anon_channel.read().clone() {
+                    return ch;
+                }
+                let mut guard = self.anon_channel.write();
+                if let Some(ch) = guard.clone() {
+                    return ch;
+                }
+                let endpoint = self.endpoint.read().clone();
+                let ch = endpoint.connect_with_connector_lazy(self.anon_onion_connector());
+                *guard = Some(ch.clone());
+                return ch;
+            }
+        }
+        self.channel()
+    }
+
     /// Disconnect from the server.
     ///
     /// Drops the underlying channel. Safe to call multiple times.
     pub fn disconnect(&self) {
         *self.channel.write() = None;
+        *self.anon_channel.write() = None;
     }
 
     /// Check if currently connected.
@@ -458,17 +506,17 @@ impl GrpcClientPool {
 
     /// Create an anonymous mailbox client (no auth headers).
     pub fn anonymous_mailbox_client(&self) -> super::AnonymousMailboxClient {
-        super::AnonymousMailboxClient::new(self.channel())
+        super::AnonymousMailboxClient::new(self.anon_channel())
     }
 
     /// Create an anonymous message client (no auth headers).
     pub fn anonymous_message_client(&self) -> super::AnonymousMessageClient {
-        super::AnonymousMessageClient::new(self.channel())
+        super::AnonymousMessageClient::new(self.anon_channel())
     }
 
     /// Create an anonymous auth client (no auth headers).
     pub fn anonymous_auth_client(&self) -> super::AnonymousAuthClient {
-        super::AnonymousAuthClient::new(self.channel())
+        super::AnonymousAuthClient::new(self.anon_channel())
     }
 
     /// Get auth info (user_id, device_id, token) from the auth interceptor.
