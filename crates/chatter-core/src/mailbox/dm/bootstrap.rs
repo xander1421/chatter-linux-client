@@ -27,8 +27,9 @@ use crate::proto::content_v1::{content, Content, KeyExchange};
 use crate::storage::Database;
 use crate::util::time::TimestampNanos;
 
-/// Default mailbox TTL: 7 days in seconds.
-pub const DEFAULT_MAILBOX_TTL_SECONDS: u64 = 7 * 24 * 60 * 60;
+/// Default mailbox TTL: 48 hours in seconds. Paired with a 12h rotation
+/// threshold (key_rolling.rs) → ~36h effective epoch, 12h overlap.
+pub const DEFAULT_MAILBOX_TTL_SECONDS: u64 = 48 * 60 * 60;
 
 /// Global lock to prevent concurrent bootstrap operations for the same peer.
 /// This avoids race conditions where multiple threads could create duplicate mailboxes.
@@ -632,8 +633,8 @@ mod tests {
     #[test]
     fn test_default_mailbox_ttl() {
         // 7 days in seconds
-        assert_eq!(DEFAULT_MAILBOX_TTL_SECONDS, 7 * 24 * 60 * 60);
-        assert_eq!(DEFAULT_MAILBOX_TTL_SECONDS, 604800);
+        assert_eq!(DEFAULT_MAILBOX_TTL_SECONDS, 48 * 60 * 60);
+        assert_eq!(DEFAULT_MAILBOX_TTL_SECONDS, 172800);
     }
 
     #[test]

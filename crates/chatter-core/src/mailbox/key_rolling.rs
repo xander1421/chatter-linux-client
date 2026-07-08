@@ -17,11 +17,14 @@ use crate::mailbox::group::{GroupMailbox, GroupMailboxManager};
 use crate::mailbox::TokenManager;
 use crate::network::grpc::client_pool::GrpcClientPool;
 
-/// Default rotation check interval (1 hour).
-pub const DEFAULT_CHECK_INTERVAL_SECS: u64 = 3600;
+/// Default rotation check interval (30 minutes). Must be ≪ threshold so
+/// proactive rotation always fires inside the overlap window.
+pub const DEFAULT_CHECK_INTERVAL_SECS: u64 = 1800;
 
-/// Default threshold for rotation (24 hours before expiry).
-pub const DEFAULT_ROTATION_THRESHOLD_HOURS: i64 = 24;
+/// Default threshold for rotation (12 hours before expiry). With a 48h TTL
+/// this yields a ~36h effective epoch and a 12h old/new overlap window.
+/// Invariant: TTL − threshold must exceed 2×check_interval + offline slack.
+pub const DEFAULT_ROTATION_THRESHOLD_HOURS: i64 = 12;
 
 /// Result of a mailbox rotation.
 #[derive(Debug)]
@@ -335,8 +338,15 @@ mod tests {
 
     #[test]
     fn test_default_constants() {
-        assert_eq!(DEFAULT_CHECK_INTERVAL_SECS, 3600);
-        assert_eq!(DEFAULT_ROTATION_THRESHOLD_HOURS, 24);
+        assert_eq!(DEFAULT_CHECK_INTERVAL_SECS, 1800);
+        assert_eq!(DEFAULT_ROTATION_THRESHOLD_HOURS, 12);
+
+        // Epoch safety invariant: TTL − threshold must leave room for at least
+        // two rotation checks plus offline slack, or a mailbox can expire before
+        // members switch. 48h − 12h = 36h ≫ 2×30m.
+        let ttl_hours = crate::mailbox::dm::bootstrap::DEFAULT_MAILBOX_TTL_SECONDS as i64 / 3600;
+        let two_checks_hours = 2 * DEFAULT_CHECK_INTERVAL_SECS as i64 / 3600;
+        assert!(ttl_hours - DEFAULT_ROTATION_THRESHOLD_HOURS > two_checks_hours);
     }
 
     #[test]

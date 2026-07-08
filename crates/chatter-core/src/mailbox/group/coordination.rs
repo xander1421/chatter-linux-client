@@ -24,8 +24,9 @@ use crate::proto::content_v1::{GroupMailboxAddress, SenderKeyDistribution};
 use crate::storage::Database;
 use crate::util::time::TimestampNanos;
 
-/// Default group mailbox TTL: 7 days in seconds.
-pub const DEFAULT_GROUP_MAILBOX_TTL_SECONDS: u64 = 7 * 24 * 60 * 60;
+/// Default group mailbox TTL: 48 hours in seconds. Matches the DM TTL so the
+/// shared rotation threshold (12h) gives the same ~36h epoch / 12h overlap.
+pub const DEFAULT_GROUP_MAILBOX_TTL_SECONDS: u64 = 48 * 60 * 60;
 
 /// Result of setting up a group mailbox.
 pub struct GroupMailboxSetupResult {
@@ -381,8 +382,8 @@ mod tests {
     #[test]
     fn test_default_group_mailbox_ttl() {
         // 7 days in seconds
-        assert_eq!(DEFAULT_GROUP_MAILBOX_TTL_SECONDS, 7 * 24 * 60 * 60);
-        assert_eq!(DEFAULT_GROUP_MAILBOX_TTL_SECONDS, 604800);
+        assert_eq!(DEFAULT_GROUP_MAILBOX_TTL_SECONDS, 48 * 60 * 60);
+        assert_eq!(DEFAULT_GROUP_MAILBOX_TTL_SECONDS, 172800);
     }
 
     #[test]
