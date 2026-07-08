@@ -233,6 +233,88 @@ impl AttachmentService {
         })
     }
 
+    /// True when the pool is routing over Tor (anon mode). CDN HTTP must then be
+    /// tunnelled, never sent direct — a direct request would leak the real IP.
+    #[cfg(feature = "onion")]
+    pub(crate) fn transport_is_onion(&self) -> bool {
+        self.grpc_pool
+            .as_ref()
+            .map(|p| p.transport_mode() == crate::network::grpc::client_pool::TransportMode::Onion)
+            .unwrap_or(false)
+    }
+
+    /// GET a presigned/CDN URL, over Tor in anon mode and direct otherwise.
+    ///
+    /// Returns the full body on 2xx, else a `NetworkError` carrying the status —
+    /// same fail-on-non-2xx semantics the direct path had. In anon mode this
+    /// tunnels through the pool's Tor client (real IP hidden); it never falls
+    /// back to a direct request, so the leak stays closed.
+    pub(crate) async fn cdn_http_get(&self, url: &str) -> Result<Vec<u8>, AttachmentError> {
+        #[cfg(feature = "onion")]
+        if self.transport_is_onion() {
+            let tor = self.grpc_pool()?.onion_tor();
+            return crate::network::anon_http::get(&tor, url)
+                .await
+                .map_err(AttachmentError::NetworkError);
+        }
+
+        let response = reqwest::Client::new()
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| AttachmentError::NetworkError(format!("HTTP download failed: {}", e)))?;
+        if !response.status().is_success() {
+            return Err(AttachmentError::NetworkError(format!(
+                "CDN download failed with status: {}",
+                response.status()
+            )));
+        }
+        response
+            .bytes()
+            .await
+            .map(|b| b.to_vec())
+            .map_err(|e| AttachmentError::NetworkError(format!("Failed to read response: {}", e)))
+    }
+
+    /// PUT `body` to a presigned URL, over Tor in anon mode and direct otherwise.
+    ///
+    /// Returns `(status, etag)`; the caller decides how to treat the status
+    /// (single PUTs error on non-2xx, multipart parts retry). Never falls back to
+    /// a direct request in anon mode.
+    pub(crate) async fn cdn_http_put(
+        &self,
+        url: &str,
+        body: Vec<u8>,
+        content_type: &str,
+    ) -> Result<(u16, Option<String>), AttachmentError> {
+        #[cfg(feature = "onion")]
+        if self.transport_is_onion() {
+            let tor = self.grpc_pool()?.onion_tor();
+            let resp = crate::network::anon_http::put(&tor, url, body, content_type)
+                .await
+                .map_err(AttachmentError::NetworkError)?;
+            return Ok((resp.status, resp.etag));
+        }
+
+        let content_length = body.len();
+        let response = reqwest::Client::new()
+            .put(url)
+            .header("Content-Type", content_type)
+            .header("Content-Length", content_length)
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| AttachmentError::NetworkError(format!("HTTP upload failed: {}", e)))?;
+        let status = response.status().as_u16();
+        let etag = response
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim_matches('"').to_string())
+            .filter(|s| !s.is_empty());
+        Ok((status, etag))
+    }
+
     /// Create a new AttachmentService with network capability.
     pub fn new(attachment_repo: Arc<AttachmentRepository>, grpc_pool: Arc<GrpcClientPool>) -> Self {
         Self {
@@ -493,12 +575,14 @@ impl AttachmentService {
         // Download the small encrypted thumbnail blob.
         let mut file_client = self.grpc_pool().ok()?.file_client();
         let dl = file_client.get_attachment_download_url(&cdn_key).await.ok()?;
-        let resp = reqwest::Client::new().get(&dl.download_url).send().await.ok()?;
-        if !resp.status().is_success() {
-            tracing::warn!(cdn_key = %cdn_key, status = %resp.status(), "Thumbnail sidecar GET failed");
-            return None;
-        }
-        let ciphertext = resp.bytes().await.ok()?.to_vec();
+        // Over Tor in anon mode; cdn_http_get already fails on non-2xx.
+        let ciphertext = match self.cdn_http_get(&dl.download_url).await {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                tracing::warn!(cdn_key = %cdn_key, error = %e, "Thumbnail sidecar GET failed");
+                return None;
+            }
+        };
 
         // Decrypt — verifies whole-ciphertext digest + trailing HMAC.
         let mut key = [0u8; KEY_SET_LENGTH];

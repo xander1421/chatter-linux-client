@@ -197,6 +197,13 @@ impl GrpcClientPool {
         *self.transport_mode.read()
     }
 
+    /// Shared handle to the pool's lazily-bootstrapped Tor client, for carrying
+    /// direct HTTP (CDN content) over the same circuit substrate in anon mode.
+    #[cfg(feature = "onion")]
+    pub fn onion_tor(&self) -> super::onion_transport::SharedTorClient {
+        self.onion_tor.clone()
+    }
+
     /// Switch the network transport. `Direct` rebuilds a normal endpoint from the
     /// remembered server URL; `Onion` routes the whole pool over Tor to the pinned
     /// `.onion` (requires the `onion` feature). Rebuilding disconnects the current

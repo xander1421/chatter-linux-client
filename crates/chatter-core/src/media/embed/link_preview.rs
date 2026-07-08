@@ -10,6 +10,12 @@ use std::time::Duration;
 /// Maximum response body size to download (100KB).
 const MAX_BODY_SIZE: usize = 100 * 1024;
 
+/// Log the "disabled in anon mode" notice at most once per process.
+fn log_anon_disabled_once() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| tracing::debug!("link preview disabled in anon mode (third-party host, no Tor route)"));
+}
+
 /// Abstraction over link-preview fetching.
 ///
 /// This trait gives the caching service in `services::embed_service` a seam
@@ -44,6 +50,14 @@ impl LinkPreviewGenerator {
     ///
     /// Fetches the URL and parses OpenGraph meta tags from the HTML.
     pub async fn generate(&self, url: &str) -> Result<LinkPreview, MediaError> {
+        // Anon mode: fetching an arbitrary link's OpenGraph metadata hits a
+        // third-party host with no Tor route, leaking the real IP. Hard-disable —
+        // no preview rather than a leak.
+        if crate::network::anon_http::ANON_HTTP_ACTIVE.load(std::sync::atomic::Ordering::Acquire) {
+            log_anon_disabled_once();
+            return Err(MediaError::EmbedError("link preview disabled in anon mode".to_string()));
+        }
+
         let response = self
             .client
             .get(url)

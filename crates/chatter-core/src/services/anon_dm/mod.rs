@@ -232,14 +232,9 @@ impl AnonDmService {
         Ok(())
     }
     
-    /// Download avatar from URL and store it in the conversation record.
-    ///
-    /// Returns the downloaded bytes on success (for UI display).
-    pub async fn download_and_store_avatar(
-        &self,
-        conversation_id: &crate::domain::anon_dm::AnonDmId,
-        url: &str,
-    ) -> Result<Vec<u8>, AnonDmError> {
+    /// Direct (non-Tor) avatar fetch with a 15s timeout. Used only when the
+    /// transport is not routed over Tor.
+    async fn download_avatar_direct(&self, url: &str) -> Result<Vec<u8>, AnonDmError> {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(15))
             .build()
@@ -254,9 +249,35 @@ impl AnonDmService {
             ));
         }
 
-        let bytes = response.bytes().await
+        Ok(response.bytes().await
             .map_err(|e| AnonDmError::MessageError(format!("Avatar read failed: {}", e)))?
-            .to_vec();
+            .to_vec())
+    }
+
+    /// Download avatar from URL and store it in the conversation record.
+    ///
+    /// Returns the downloaded bytes on success (for UI display).
+    pub async fn download_and_store_avatar(
+        &self,
+        conversation_id: &crate::domain::anon_dm::AnonDmId,
+        url: &str,
+    ) -> Result<Vec<u8>, AnonDmError> {
+        // Avatar bytes are anon-DM content: in anon mode they MUST ride the Tor
+        // circuit (a direct request would leak the real IP to the avatar host);
+        // direct otherwise.
+        #[cfg(feature = "onion")]
+        let bytes = if self.grpc_pool.transport_mode()
+            == crate::network::grpc::client_pool::TransportMode::Onion
+        {
+            let tor = self.grpc_pool.onion_tor();
+            crate::network::anon_http::get(&tor, url)
+                .await
+                .map_err(|e| AnonDmError::MessageError(format!("Avatar download over Tor failed: {}", e)))?
+        } else {
+            self.download_avatar_direct(url).await?
+        };
+        #[cfg(not(feature = "onion"))]
+        let bytes = self.download_avatar_direct(url).await?;
 
         if bytes.is_empty() {
             return Err(AnonDmError::MessageError("Empty avatar response".into()));

@@ -47,26 +47,8 @@ impl AttachmentService {
             .await
             .map_err(|e| AttachmentError::NetworkError(format!("Failed to get download URL: {}", e)))?;
 
-        // Download encrypted ciphertext via HTTP GET
-        let http_client = reqwest::Client::new();
-        let response = http_client
-            .get(&download_response.download_url)
-            .send()
-            .await
-            .map_err(|e| AttachmentError::NetworkError(format!("HTTP download failed: {}", e)))?;
-
-        if !response.status().is_success() {
-            return Err(AttachmentError::NetworkError(format!(
-                "CDN download failed with status: {}",
-                response.status()
-            )));
-        }
-
-        let ciphertext = response
-            .bytes()
-            .await
-            .map_err(|e| AttachmentError::NetworkError(format!("Failed to read response: {}", e)))?
-            .to_vec();
+        // Download encrypted ciphertext via HTTP GET (over Tor in anon mode).
+        let ciphertext = self.cdn_http_get(&download_response.download_url).await?;
 
         let ciphertext_size = ciphertext.len();
 

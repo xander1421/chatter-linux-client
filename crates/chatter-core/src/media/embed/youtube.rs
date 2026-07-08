@@ -11,6 +11,12 @@ pub struct YouTubeExtractor {
     client: reqwest::Client,
 }
 
+/// Log the "disabled in anon mode" notice at most once per process.
+fn log_anon_disabled_once() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| tracing::debug!("YouTube embed disabled in anon mode (third-party host, no Tor route)"));
+}
+
 /// oEmbed response from YouTube.
 #[derive(Debug, Deserialize)]
 struct OEmbedResponse {
@@ -34,6 +40,13 @@ impl YouTubeExtractor {
     /// Returns `Ok(Some(embed))` with metadata from oEmbed, or fallback data
     /// if oEmbed request fails.
     pub async fn extract(&self, url: &str) -> Result<Option<YouTubeEmbed>, MediaError> {
+        // Anon mode: the oEmbed/thumbnail hosts are third-party (YouTube) with no
+        // Tor route, so hard-disable — no embed rather than a real-IP leak.
+        if crate::network::anon_http::ANON_HTTP_ACTIVE.load(std::sync::atomic::Ordering::Acquire) {
+            log_anon_disabled_once();
+            return Ok(None);
+        }
+
         // Extract video ID
         let video_id = match YouTubeEmbed::extract_video_id(url) {
             Some(id) => id,

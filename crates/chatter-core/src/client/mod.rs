@@ -1146,7 +1146,18 @@ impl ChatterClient {
         // network location is hidden when it isn't.
         use crate::network::grpc::client_pool::TransportMode;
         let mode = if enabled { TransportMode::Onion } else { TransportMode::Direct };
-        if let Err(e) = self.services.grpc_pool.set_transport_mode(mode) {
+        let switch_result = self.services.grpc_pool.set_transport_mode(mode);
+
+        // Reflect the pool's ACTUAL transport into the process-global HTTP flag
+        // that leaf media modules (gif/youtube/link_preview) gate on and that the
+        // CDN reqwest callsites branch on. Keyed on the real transport, not the
+        // request, so a failed onion switch leaves it false — no false anonymity.
+        crate::network::anon_http::ANON_HTTP_ACTIVE.store(
+            self.services.grpc_pool.transport_mode() == TransportMode::Onion,
+            Ordering::Release,
+        );
+
+        if let Err(e) = switch_result {
             tracing::warn!(
                 requested = ?mode,
                 error = %e,
@@ -2871,6 +2882,15 @@ mod transport_switch_tests {
     use super::*;
 
     fn build_test_client() -> Arc<ChatterClient> {
+        // These tests build a real ChatterClient, which stores the DB passphrase
+        // in the OS keyring. A headless/CI session has no Secret Service, so point
+        // keyring at its in-memory mock backend (process-global, set once) — the
+        // tests exercise transport-switch bookkeeping, not credential storage.
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+
         let dir = tempfile::tempdir().unwrap();
         ChatterClient::builder()
             .server_url("http://localhost:1")

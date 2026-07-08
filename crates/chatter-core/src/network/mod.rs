@@ -2,6 +2,7 @@
 //!
 //! All network communication including gRPC clients and real-time streaming.
 
+pub mod anon_http;
 pub mod connection;
 pub mod connection_manager;
 pub mod grpc;

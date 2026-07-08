@@ -8,6 +8,12 @@ use serde::Deserialize;
 /// Base URL for Tenor API v2.
 const TENOR_BASE_URL: &str = "https://tenor.googleapis.com/v2";
 
+/// Log the "disabled in anon mode" notice at most once per process.
+fn log_anon_disabled_once() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| tracing::debug!("GIF search disabled in anon mode (third-party host, no Tor route)"));
+}
+
 /// Default search/trending limit.
 const DEFAULT_LIMIT: u32 = 20;
 
@@ -138,6 +144,13 @@ impl GifClient {
 
     /// Fetch and parse a Tenor API response.
     async fn fetch_and_parse(&self, url: &str) -> Result<Vec<GifResult>, MediaError> {
+        // Anon mode: the Tenor API is a third-party host with no Tor route, so
+        // querying it would leak the real IP. Hard-disable — return no results.
+        if crate::network::anon_http::ANON_HTTP_ACTIVE.load(std::sync::atomic::Ordering::Acquire) {
+            log_anon_disabled_once();
+            return Ok(Vec::new());
+        }
+
         let response = self
             .client
             .get(url)
@@ -225,5 +238,24 @@ mod urlencoding {
             }
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod anon_gate_tests {
+    use super::*;
+    use crate::network::anon_http::ANON_HTTP_ACTIVE;
+    use std::sync::atomic::Ordering;
+
+    /// With anon mode active, search must return no results WITHOUT touching the
+    /// network (the fake key would otherwise 4xx, but the gate short-circuits
+    /// before any request is made).
+    #[tokio::test]
+    async fn search_disabled_in_anon_mode() {
+        ANON_HTTP_ACTIVE.store(true, Ordering::Release);
+        let client = GifClient::new("fake-key".to_string());
+        let result = client.search("cats", 5).await;
+        ANON_HTTP_ACTIVE.store(false, Ordering::Release);
+        assert!(matches!(result, Ok(ref v) if v.is_empty()));
     }
 }

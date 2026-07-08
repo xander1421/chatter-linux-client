@@ -30,64 +30,49 @@ fn part_ranges(total: u64, part_size: u64) -> Vec<(u64, u64)> {
     ranges
 }
 
-/// PUT one part (byte range of the temp file) to its presigned URL, 3× retry.
-/// Returns the ETag from the response headers.
-async fn upload_one_part(
-    http: &reqwest::Client,
-    url: &str,
-    temp_path: &std::path::Path,
-    offset: u64,
-    len: u64,
-) -> Result<String, AttachmentError> {
-    use tokio::io::{AsyncReadExt, AsyncSeekExt};
-
-    let mut last_err = String::new();
-    for attempt in 0..3 {
-        // Read the exact byte range fresh each attempt.
-        let mut f = tokio::fs::File::open(temp_path)
-            .await
-            .map_err(|e| AttachmentError::FileError(format!("open temp: {}", e)))?;
-        f.seek(std::io::SeekFrom::Start(offset))
-            .await
-            .map_err(|e| AttachmentError::FileError(format!("seek: {}", e)))?;
-        let mut buf = vec![0u8; len as usize];
-        f.read_exact(&mut buf)
-            .await
-            .map_err(|e| AttachmentError::FileError(format!("read part: {}", e)))?;
-
-        match http
-            .put(url)
-            .header("Content-Type", "application/octet-stream")
-            .header("Content-Length", len)
-            .body(buf)
-            .send()
-            .await
-        {
-            Ok(resp) if resp.status().is_success() => {
-                let etag = resp
-                    .headers()
-                    .get(reqwest::header::ETAG)
-                    .and_then(|v| v.to_str().ok())
-                    .map(|s| s.trim_matches('"').to_string())
-                    .unwrap_or_default();
-                if etag.is_empty() {
-                    last_err = "part PUT succeeded but no ETag header".to_string();
-                } else {
-                    return Ok(etag);
-                }
-            }
-            Ok(resp) => last_err = format!("part PUT status {}", resp.status()),
-            Err(e) => last_err = format!("part PUT error: {}", e),
-        }
-        tracing::warn!(attempt, offset, len, error = %last_err, "part upload retry");
-    }
-    Err(AttachmentError::NetworkError(format!(
-        "part upload failed after 3 attempts: {}",
-        last_err
-    )))
-}
-
 impl AttachmentService {
+    /// PUT one part (byte range of the temp file) to its presigned URL, 3× retry.
+    /// Returns the ETag from the response headers. Routes over Tor in anon mode
+    /// via `cdn_http_put` (never a direct request that would leak the real IP).
+    async fn upload_one_part(
+        &self,
+        url: &str,
+        temp_path: &std::path::Path,
+        offset: u64,
+        len: u64,
+    ) -> Result<String, AttachmentError> {
+        use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+        let mut last_err = String::new();
+        for attempt in 0..3 {
+            // Read the exact byte range fresh each attempt.
+            let mut f = tokio::fs::File::open(temp_path)
+                .await
+                .map_err(|e| AttachmentError::FileError(format!("open temp: {}", e)))?;
+            f.seek(std::io::SeekFrom::Start(offset))
+                .await
+                .map_err(|e| AttachmentError::FileError(format!("seek: {}", e)))?;
+            let mut buf = vec![0u8; len as usize];
+            f.read_exact(&mut buf)
+                .await
+                .map_err(|e| AttachmentError::FileError(format!("read part: {}", e)))?;
+
+            match self.cdn_http_put(url, buf, "application/octet-stream").await {
+                Ok((status, etag)) if (200..300).contains(&status) => match etag {
+                    Some(e) => return Ok(e),
+                    None => last_err = "part PUT succeeded but no ETag header".to_string(),
+                },
+                Ok((status, _)) => last_err = format!("part PUT status {}", status),
+                Err(e) => last_err = format!("part PUT error: {}", e),
+            }
+            tracing::warn!(attempt, offset, len, error = %last_err, "part upload retry");
+        }
+        Err(AttachmentError::NetworkError(format!(
+            "part upload failed after 3 attempts: {}",
+            last_err
+        )))
+    }
+
     /// Upload a file to CDN with client-side encryption.
     ///
     /// Encrypts the file in a streaming fashion (O(CHUNK_SIZE) memory) to a temp
@@ -173,28 +158,50 @@ impl AttachmentService {
 
             tracing::debug!(cdn_key = %cdn_key, "Got presigned URL, streaming encrypted content");
 
-            // Stream encrypted temp file to PUT (O(CHUNK_SIZE) memory)
             let upload_start = std::time::Instant::now();
-            let encrypted_file = tokio::fs::File::open(temp_file.path())
-                .await
-                .map_err(|e| AttachmentError::FileError(format!("Failed to open temp file: {}", e)))?;
-            let stream = tokio_util::io::ReaderStream::new(encrypted_file);
-            let body = reqwest::Body::wrap_stream(stream);
 
-            let http_client = reqwest::Client::new();
-            let response = http_client
-                .put(&upload_url)
-                .header("Content-Type", "application/octet-stream")
-                .header("Content-Length", encrypt_result.ciphertext_size)
-                .body(body)
-                .send()
-                .await
-                .map_err(|e| AttachmentError::NetworkError(format!("HTTP upload failed: {}", e)))?;
+            // Anon mode: tunnel the PUT over Tor. The Tor client takes an
+            // in-memory body, so read the ciphertext (bounded by the ≤100 MiB
+            // single-PUT threshold) into memory rather than streaming the file.
+            #[cfg(feature = "onion")]
+            let sent = if self.transport_is_onion() {
+                let bytes = tokio::fs::read(temp_file.path())
+                    .await
+                    .map_err(|e| AttachmentError::FileError(format!("Failed to read temp file: {}", e)))?;
+                let (status, _etag) = self
+                    .cdn_http_put(&upload_url, bytes, "application/octet-stream")
+                    .await?;
+                Some(status)
+            } else {
+                None
+            };
+            #[cfg(not(feature = "onion"))]
+            let sent: Option<u16> = None;
 
-            if !response.status().is_success() {
+            let status = if let Some(status) = sent {
+                status
+            } else {
+                // Direct: stream the encrypted temp file to PUT (O(CHUNK_SIZE) memory).
+                let encrypted_file = tokio::fs::File::open(temp_file.path())
+                    .await
+                    .map_err(|e| AttachmentError::FileError(format!("Failed to open temp file: {}", e)))?;
+                let stream = tokio_util::io::ReaderStream::new(encrypted_file);
+                let body = reqwest::Body::wrap_stream(stream);
+                let response = reqwest::Client::new()
+                    .put(&upload_url)
+                    .header("Content-Type", "application/octet-stream")
+                    .header("Content-Length", encrypt_result.ciphertext_size)
+                    .body(body)
+                    .send()
+                    .await
+                    .map_err(|e| AttachmentError::NetworkError(format!("HTTP upload failed: {}", e)))?;
+                response.status().as_u16()
+            };
+
+            if !(200..300).contains(&status) {
                 return Err(AttachmentError::NetworkError(format!(
                     "CDN upload failed with status: {}",
-                    response.status()
+                    status
                 )));
             }
 
@@ -335,17 +342,18 @@ impl AttachmentService {
             }
         };
         let cdn_key = upload_response.cdn_key;
-        let resp = reqwest::Client::new()
-            .put(&upload_response.upload_url)
-            .header("Content-Type", "application/octet-stream")
-            .header("Content-Length", encrypted_size)
-            .body(encrypted.ciphertext.clone())
-            .send()
-            .await;
-        match resp {
-            Ok(r) if r.status().is_success() => {}
-            Ok(r) => {
-                tracing::warn!(status = %r.status(), "Thumbnail sidecar PUT failed; sending without preview");
+        // Over Tor in anon mode; direct otherwise.
+        match self
+            .cdn_http_put(
+                &upload_response.upload_url,
+                encrypted.ciphertext.clone(),
+                "application/octet-stream",
+            )
+            .await
+        {
+            Ok((status, _etag)) if (200..300).contains(&status) => {}
+            Ok((status, _etag)) => {
+                tracing::warn!(status, "Thumbnail sidecar PUT failed; sending without preview");
                 return None;
             }
             Err(e) => {
@@ -408,17 +416,15 @@ impl AttachmentService {
             )));
         }
 
-        let http = reqwest::Client::new();
         let temp_path = temp_path.to_path_buf();
 
         // Build one future per part; run 4 at a time.
         let uploads = ranges.into_iter().enumerate().map(|(i, (offset, len))| {
-            let http = http.clone();
             let url = create.part_urls[i].clone();
             let temp_path = temp_path.clone();
             async move {
                 let part_number = (i as u32) + 1;
-                let etag = upload_one_part(&http, &url, &temp_path, offset, len).await?;
+                let etag = self.upload_one_part(&url, &temp_path, offset, len).await?;
                 Ok::<crate::proto::chat_v1::CompletedPart, AttachmentError>(
                     crate::proto::chat_v1::CompletedPart { number: part_number, etag },
                 )
@@ -510,22 +516,16 @@ impl AttachmentService {
             "Got presigned URL, uploading encrypted content"
         );
 
-        // Upload encrypted ciphertext via HTTP PUT
+        // Upload encrypted ciphertext via HTTP PUT (over Tor in anon mode).
         let upload_start = std::time::Instant::now();
-        let http_client = reqwest::Client::new();
-        let response = http_client
-            .put(&upload_url)
-            .header("Content-Type", "application/octet-stream")
-            .header("Content-Length", encrypted_size)
-            .body(encrypted.ciphertext.clone())
-            .send()
-            .await
-            .map_err(|e| AttachmentError::NetworkError(format!("HTTP upload failed: {}", e)))?;
+        let (status, _etag) = self
+            .cdn_http_put(&upload_url, encrypted.ciphertext.clone(), "application/octet-stream")
+            .await?;
 
-        if !response.status().is_success() {
+        if !(200..300).contains(&status) {
             return Err(AttachmentError::NetworkError(format!(
                 "CDN upload failed with status: {}",
-                response.status()
+                status
             )));
         }
 
@@ -650,18 +650,9 @@ impl AttachmentService {
         url: &str,
         gif_id: &str,
     ) -> Result<CdnUploadResult, AttachmentError> {
-        let client = reqwest::Client::new();
-        let response = client.get(url).send().await
-            .map_err(|e| AttachmentError::NetworkError(format!("GIF download failed: {}", e)))?;
-
-        if !response.status().is_success() {
-            return Err(AttachmentError::NetworkError(
-                format!("GIF download HTTP {}", response.status())
-            ));
-        }
-
-        let bytes = response.bytes().await
-            .map_err(|e| AttachmentError::NetworkError(format!("GIF read failed: {}", e)))?;
+        // Download the GIF bytes (over Tor in anon mode — the source URL is a
+        // third-party/CDN host whose operator must not see the real IP).
+        let bytes = self.cdn_http_get(url).await?;
 
         let filename = format!("{}.gif", gif_id.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_"));
 
@@ -669,28 +660,13 @@ impl AttachmentService {
     }
 
     /// Download bytes from a URL (for media display, GIF animation, etc).
+    ///
+    /// Routes over Tor in anon mode so the source host never sees the real IP.
     pub async fn download_url_bytes(
         &self,
         url: &str,
     ) -> Result<Vec<u8>, AttachmentError> {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .map_err(|e| AttachmentError::NetworkError(format!("HTTP client error: {}", e)))?;
-
-        let response = client.get(url).send().await
-            .map_err(|e| AttachmentError::NetworkError(format!("Download failed: {}", e)))?;
-
-        if !response.status().is_success() {
-            return Err(AttachmentError::NetworkError(
-                format!("Download HTTP {}", response.status())
-            ));
-        }
-
-        let bytes = response.bytes().await
-            .map_err(|e| AttachmentError::NetworkError(format!("Read failed: {}", e)))?;
-
-        Ok(bytes.to_vec())
+        self.cdn_http_get(url).await
     }
 
     /// Extract media metadata from bytes (for in-memory content like downloaded GIFs).
