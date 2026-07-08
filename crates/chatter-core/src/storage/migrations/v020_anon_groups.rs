@@ -119,6 +119,15 @@ mod tests {
         assert!(up.contains("CREATE TABLE anon_group_mailboxes"));
         assert!(up.contains("CREATE TABLE anon_group_pending"));
         assert!(up.contains("UNIQUE(group_id, user_id)"));
+
+        // Anon-group mailboxes are single-row-per-group (group_id UNIQUE): a
+        // refresh does INSERT OR REPLACE, so the old row never lingers in the
+        // DB. This is why the DM/group re-rotation guard (which fixes an
+        // old-row-re-selected-every-cycle token drain caused by TWO coexisting
+        // in-window rows) is NOT needed on refresh_expiring_group_mailboxes.
+        // If this UNIQUE is ever dropped for a multi-row dual-poll overlap
+        // design, that guard must be added — see lifecycle.rs refresh path.
+        assert!(up.contains("group_id TEXT NOT NULL UNIQUE"));
     }
 
     #[test]

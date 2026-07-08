@@ -578,6 +578,15 @@ impl AnonGroupService {
     ///
     /// Separated from [`refresh_expiring_group_mailboxes`] so tests and
     /// callers with non-default cadence can pick their own window.
+    ///
+    /// No re-rotation guard is needed here (unlike the DM/group paths). Those
+    /// keep two coexisting in-window rows during overlap, so the expiring-set
+    /// query could re-select the lingering old row every cycle and drain a
+    /// token per pass. This path is single-row-per-group
+    /// (`anon_group_mailboxes.group_id UNIQUE`): `refresh_group_mailbox` does
+    /// INSERT OR REPLACE, so after a refresh `get_mailbox` returns only the
+    /// fresh row and the `expires_at > threshold` check below skips it. The
+    /// guarding invariant is asserted in the v020 migration test.
     pub async fn refresh_expiring_group_mailboxes_within(
         &self,
         lead: chrono::Duration,
