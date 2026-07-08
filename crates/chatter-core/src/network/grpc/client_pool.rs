@@ -473,6 +473,19 @@ impl GrpcClientPool {
 
     /// Create an authenticated FileClient.
     pub fn file_client(&self) -> super::FileClient {
+        // In anon mode the attachment brokering must be anonymous too. The
+        // FileService URL-mint methods are public (auth-exempt) and the object
+        // key is an opaque random cdn_key, so the ONLY account linkage is the
+        // Basic-auth header the interceptor would attach. Under onion transport
+        // build the client with an EMPTY interceptor (AuthMode::None → no header)
+        // over the ISOLATED anon circuit, so the server can't tie the cdn_key to
+        // the account by credential or by connection. Combined with the CDN blob
+        // transfer already routed over Tor (anon_http), this closes H3. Direct
+        // transport keeps the authenticated client.
+        #[cfg(feature = "onion")]
+        if self.transport_mode() == TransportMode::Onion {
+            return super::FileClient::new(self.anon_channel(), AuthInterceptor::new());
+        }
         super::FileClient::new(self.channel(), self.auth_clone())
     }
 
