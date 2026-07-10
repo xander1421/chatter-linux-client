@@ -8,6 +8,7 @@ import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 import { Avatar } from "../components/avatar.slint";
+import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 
 // Friend data structure
 export struct FriendData {
@@ -87,7 +88,12 @@ export component FriendsModal inherits Rectangle {
     in-out property <string> request-note: "";  // Optional intro note sent with a friend request
     in-out property <image> qr-code-image;
     in-out property <bool> show-qr: false;
-    in-out property <bool> private-mode: true;  // Toggle between regular and private connection (default: private)
+    // Connection mode is IMPLIED by shield state, not a user toggle: shield on =
+    // private/anon (no server), shield off = normal server friend request. A
+    // server-managed request while in shield mode would leak identity, so there
+    // is deliberately no way to pick it there. (Core `RequiresAnonMode` guard is
+    // the real boundary; this just keeps the UI honest.)
+    property <bool> effective-private-mode: AnonMode.enabled;
 
     // Callbacks
     callback close();
@@ -427,7 +433,7 @@ export component FriendsModal inherits Rectangle {
                                         horizontal-stretch: 1;
 
                                         clicked => {
-                                            root.generate-code(root.private-mode);
+                                            root.generate-code(root.effective-private-mode);
                                         }
                                     }
 
@@ -448,7 +454,7 @@ export component FriendsModal inherits Rectangle {
 
                                         clicked => {
                                             if (!root.show-qr) {
-                                                root.generate-qr(root.private-mode);
+                                                root.generate-qr(root.effective-private-mode);
                                             }
                                             root.show-qr = !root.show-qr;
                                         }
@@ -505,11 +511,11 @@ export component FriendsModal inherits Rectangle {
 
                                 Input {
                                     horizontal-stretch: 1;
-                                    placeholder: root.private-mode ? "Enter private friend code..." : "Enter friend's code or ID...";
+                                    placeholder: root.effective-private-mode ? "Enter private friend code..." : "Enter friend's code or ID...";
                                     text <=> root.code-input;
 
                                     accepted(code) => {
-                                        if (root.private-mode) {
+                                        if (root.effective-private-mode) {
                                             root.connect-private(code);
                                         } else {
                                             root.connect-via-code(code);
@@ -537,7 +543,7 @@ export component FriendsModal inherits Rectangle {
                                     loading: root.loading;
 
                                     clicked => {
-                                        if (root.private-mode) {
+                                        if (root.effective-private-mode) {
                                             root.connect-private(root.code-input);
                                         } else {
                                             root.connect-via-code(root.code-input);
@@ -554,56 +560,33 @@ export component FriendsModal inherits Rectangle {
                                 text <=> root.request-note;
                             }
 
-                            // Private mode toggle
+                            // Read-only mode indicator — implied by shield state,
+                            // not toggleable (see effective-private-mode note).
                             HorizontalLayout {
                                 spacing: Spacing.sm;
                                 alignment: start;
 
-                                // Toggle switch
                                 Rectangle {
-                                    width: 40px;
-                                    height: 22px;
-                                    border-radius: 11px;
-                                    background: root.private-mode ? Colors.primary : Colors.text-muted.with-alpha(0.3);
-
-                                    animate background { duration: 150ms; }
-
-                                    Rectangle {
-                                        x: root.private-mode ? parent.width - self.width - 2px : 2px;
-                                        y: 2px;
-                                        width: 18px;
-                                        height: 18px;
-                                        border-radius: 9px;
-                                        background: white;
-
-                                        animate x { duration: 150ms; easing: ease-out; }
-                                    }
-
-                                    toggle-touch := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            root.private-mode = !root.private-mode;
-                                            // Clear code when mode changes - user should regenerate
-                                            root.my-code = "";
-                                            root.show-qr = false;
-                                        }
-                                    }
+                                    width: 8px;
+                                    height: 8px;
+                                    border-radius: 4px;
+                                    y: 3px;
+                                    background: root.effective-private-mode ? Colors.success : Colors.text-muted;
                                 }
 
-                                // Label and detail wrapped together
                                 VerticalLayout {
                                     horizontal-stretch: 1;
                                     spacing: 2px;
 
                                     Text {
-                                        text: "Private mode";
-                                        color: root.private-mode ? Colors.text-primary : Colors.text-secondary;
+                                        text: root.effective-private-mode ? "Private mode (Shield)" : "Server-managed";
+                                        color: root.effective-private-mode ? Colors.text-primary : Colors.text-secondary;
                                         font-size: Typography.xs;
-                                        font-weight: root.private-mode ? Typography.medium : Typography.normal;
+                                        font-weight: Typography.medium;
                                     }
 
                                     Text {
-                                        text: root.private-mode ? "(No server involvement)" : "(Server-managed)";
+                                        text: root.effective-private-mode ? "(No server involvement)" : "(Enable Shield for a private, anonymous contact)";
                                         color: Colors.text-muted.with-alpha(0.7);
                                         font-size: Typography.xs;
                                         wrap: word-wrap;
@@ -661,7 +644,7 @@ export component FriendsModal inherits Rectangle {
                             }
 
                             Text {
-                                text: root.private-mode
+                                text: root.effective-private-mode
                                     ? "\u{1F510} Private mode uses end-to-end encryption with no server involvement"
                                     : "\u{1F517} Standard mode sends a friend request through the server";
                                 color: Colors.text-muted.with-alpha(0.7);

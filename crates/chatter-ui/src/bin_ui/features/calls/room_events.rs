@@ -69,62 +69,63 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
                 LiveKitRoomEvent::ParticipantJoined { identity, display_name } => {
                     tracing::info!("Participant joined: {} ({:?})", identity, display_name);
-                    let display = display_name.clone().unwrap_or_else(|| identity.clone());
+                    // Core resolves the peer's decrypted name, initials, and avatar
+                    // from local state (the LiveKit `name` field is unusable — names
+                    // are E2E encrypted). UI only decodes bytes → image and renders.
+                    let info = ui_ctx.resolve_call_participant(&identity);
+                    let display = info.display_name;
+                    let initials = info.initials;
+                    let avatar_bytes = info.avatar_bytes;
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             let mut data = w.get_active_call_data();
 
-                            // Check if participant already exists (e.g. pre-populated placeholder)
-                            let existing: Vec<CallParticipantData> =
+                            // Decode the resolved avatar (if any) on the UI thread.
+                            let avatar_img = avatar_bytes
+                                .as_deref()
+                                .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
+                                .unwrap_or_default();
+
+                            // Local participant is pinned LAST (the layout feeds it
+                            // `local-video-frame`). Split it off so a remote join can
+                            // NEVER overwrite "You" — in DM calls the local tile's
+                            // user_id is the local user's UUID (not the literal "You",
+                            // see incoming.rs), so identity-string guards can't tell it
+                            // apart from a peer. Position is the contract, matching the
+                            // track handlers' split_local/order_participants.
+                            let all: Vec<CallParticipantData> =
                                 (0..data.participants.row_count())
                                     .map(|i| data.participants.row_data(i).unwrap_or_default())
                                     .collect();
-                            let already_has_remote = existing.iter().any(|p| {
-                                let uid = p.user_id.as_str();
-                                uid == identity.as_str() || (uid != "You" && uid != identity.as_str())
-                            });
-                            if already_has_remote {
-                                // Update the existing placeholder with the real identity
-                                let mut participants = existing;
-                                for p in &mut participants {
-                                    let uid = p.user_id.as_str();
-                                    if uid != "You" && uid != identity.as_str() {
-                                        // Replace placeholder (e.g. "Anonymous") with real identity
-                                        p.user_id = identity.clone().into();
-                                        p.display_name = display.clone().into();
-                                        p.initials = get_initials(&display).into();
-                                        break;
-                                    }
-                                }
-                                data.participants = ModelRc::new(VecModel::from(participants));
-                                w.set_active_call_data(data);
-                                tracing::debug!("UI updated existing participant placeholder");
-                                return;
+                            let (mut remotes, local) = split_local(all);
+
+                            // LiveKit identity == plain user UUID (server SetIdentity),
+                            // so a pre-populated remote (peer_id) matches by user_id.
+                            if let Some(p) = remotes
+                                .iter_mut()
+                                .find(|p| p.user_id.as_str() == identity.as_str())
+                            {
+                                p.display_name = display.into();
+                                p.initials = initials.into();
+                                p.avatar_source = avatar_img;
+                            } else {
+                                remotes.push(CallParticipantData {
+                                    user_id: identity.into(),
+                                    display_name: display.into(),
+                                    initials: initials.into(),
+                                    avatar_source: avatar_img,
+                                    is_muted: false,
+                                    is_video_enabled: false,
+                                    is_screen_sharing: false,
+                                    is_speaking: false,
+                                    is_audio_muted_locally: false,
+                                    is_video_paused_locally: false,
+                                });
                             }
 
-                            data.participant_count += 1;
-
-                            // Add participant to list
-                            let new_initials = get_initials(&display);
-                            let new_participant = CallParticipantData {
-                                user_id: identity.into(),
-                                display_name: display.into(),
-                                initials: new_initials.into(),
-                                avatar_source: slint::Image::default(),
-                                is_muted: false,
-                                is_video_enabled: false,
-                                is_screen_sharing: false,
-                                is_speaking: false,
-                                is_audio_muted_locally: false,
-                                is_video_paused_locally: false,
-                            };
-
-                            let mut participants = existing;
-                            // Insert remote participants at the beginning, keeping local participant last
-                            // This matches the Slint layout which assumes remote participants come first
-                            participants.insert(0, new_participant);
+                            let participants = order_participants(remotes, local);
+                            data.participant_count = participants.len() as i32;
                             data.participants = ModelRc::new(VecModel::from(participants));
-
                             w.set_active_call_data(data);
                             tracing::debug!("UI updated for participant join");
                         }

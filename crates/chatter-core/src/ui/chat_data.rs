@@ -532,6 +532,15 @@ pub fn message_to_item_data(
         .with_show_sender(show_sender)
 }
 
+/// View-ready call-participant data resolved in core from local state. The UI
+/// decodes `avatar_bytes` to an image and renders; no resolution logic in the UI.
+#[derive(Clone, Debug, Default)]
+pub struct CallParticipantInfo {
+    pub display_name: String,
+    pub initials: String,
+    pub avatar_bytes: Option<Vec<u8>>,
+}
+
 /// Generate initials from a display name.
 ///
 /// Takes up to 2 characters from the first two words.

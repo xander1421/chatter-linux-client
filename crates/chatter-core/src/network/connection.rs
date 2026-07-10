@@ -18,6 +18,64 @@ pub enum FailReason {
     MaxRetriesExceeded,
 }
 
+/// Tor onion transport status, for the UI indicator.
+///
+/// Reflects the *Circuit + RPC* signal: `Connected` means an onion RPC has
+/// actually round-tripped to the server (not merely that a circuit was built).
+/// Only meaningful while anon/shield mode is on; `Off` otherwise.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TorStatus {
+    /// Not using onion transport (direct mode / shield off).
+    #[default]
+    Off,
+    /// Switched to onion; bootstrapping/dialing, no successful RPC yet.
+    Connecting,
+    /// An onion RPC round-tripped — server reachable over Tor.
+    Connected,
+    /// Onion connect or poll timed out / failed.
+    Error,
+}
+
+impl TorStatus {
+    /// Stable integer for the Slint global (0=Off,1=Connecting,2=Connected,3=Error).
+    pub fn as_i32(self) -> i32 {
+        match self {
+            Self::Off => 0,
+            Self::Connecting => 1,
+            Self::Connected => 2,
+            Self::Error => 3,
+        }
+    }
+
+    fn from_u8(v: u8) -> Self {
+        match v {
+            1 => Self::Connecting,
+            2 => Self::Connected,
+            3 => Self::Error,
+            _ => Self::Off,
+        }
+    }
+}
+
+/// Process-global Tor status, mirrored to the UI indicator.
+///
+/// A single global (like `ANON_HTTP_ACTIVE`) avoids threading an `OfflineState`
+/// handle through the whole inbox provider/poller builder chain. Written from:
+/// the anon toggle (`Connecting`/`Off`) and the inbox poller's onion RPC outcome
+/// (`Connected` on success, `Error` on timeout). The UI bridge reads it on a
+/// short timer and pushes to the Slint `TorStatus` global.
+static TOR_STATUS: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Set the process-global Tor status.
+pub fn set_tor_status(status: TorStatus) {
+    TOR_STATUS.store(status.as_i32() as u8, std::sync::atomic::Ordering::Release);
+}
+
+/// Read the process-global Tor status.
+pub fn tor_status() -> TorStatus {
+    TorStatus::from_u8(TOR_STATUS.load(std::sync::atomic::Ordering::Acquire))
+}
+
 /// Connection state for the state machine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[derive(Default)]

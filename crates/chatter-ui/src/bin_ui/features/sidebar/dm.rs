@@ -283,6 +283,12 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     w.set_channel_has_avatar(false);
                     w.set_channel_avatar_source(slint::Image::default());
                 }
+                // Re-register GIFs for inline animation on every open. The
+                // animation state is UI-thread-local and the message model is
+                // rebuilt here, so without this a ServerDM gif renders its
+                // static first frame and never animates on reload. Mirrors the
+                // anon-DM / channel / group open paths.
+                crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx.clone());
             });
         });
     });

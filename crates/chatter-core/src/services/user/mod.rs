@@ -149,6 +149,12 @@ pub enum UserError {
     #[error("not authorized")]
     NotAuthorized,
 
+    /// Operation is only permitted in anonymous (shield) mode. Generating a
+    /// private/anon friend code outside shield mode would leak the setup over
+    /// the identified/direct path, defeating its purpose.
+    #[error("requires anon (shield) mode")]
+    RequiresAnonMode,
+
     /// Input validation failed.
     #[error("invalid input: {0}")]
     InvalidInput(String),

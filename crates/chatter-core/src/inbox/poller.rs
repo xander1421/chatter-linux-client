@@ -26,6 +26,9 @@ use super::state::{InboxState, InboxStats};
 pub struct InboxPoller {
     config: InboxConfig,
     message_client: Arc<Mutex<MessageClient>>,
+    /// Pool handle, used only to read the active transport so the per-RPC
+    /// timeout can stretch for a cold onion connect (bootstrap + HS circuit).
+    grpc_pool: Arc<crate::network::grpc::GrpcClientPool>,
     shutdown_rx: watch::Receiver<bool>,
     event_tx: broadcast::Sender<InboxEvent>,
     stats: Arc<RwLock<InboxStats>>,
@@ -33,9 +36,6 @@ pub struct InboxPoller {
     // For device queue, we use queue_id (int64) for pagination, not string
     last_queue_id: RwLock<i64>,
     last_activity: RwLock<Option<Instant>>,
-    /// Whether the first poll has been performed yet.
-    /// The first poll should be immediate (no interval wait).
-    first_poll_done: RwLock<bool>,
 }
 
 impl InboxPoller {
@@ -63,6 +63,7 @@ impl InboxPoller {
     pub fn new(
         config: InboxConfig,
         message_client: Arc<Mutex<MessageClient>>,
+        grpc_pool: Arc<crate::network::grpc::GrpcClientPool>,
         shutdown_rx: watch::Receiver<bool>,
         event_tx: broadcast::Sender<InboxEvent>,
         stats: Arc<RwLock<InboxStats>>,
@@ -71,13 +72,13 @@ impl InboxPoller {
         Self {
             config,
             message_client,
+            grpc_pool,
             shutdown_rx,
             event_tx,
             stats,
             state,
             last_queue_id: RwLock::new(0),
             last_activity: RwLock::new(None),
-            first_poll_done: RwLock::new(false),
         }
     }
 
@@ -93,39 +94,9 @@ impl InboxPoller {
             return Ok(None);
         }
 
-        // First poll is immediate — don't wait for interval.
-        // After registration, messages may already be queued.
-        let is_first = {
-            let mut first = self.first_poll_done.write();
-            if !*first {
-                *first = true;
-                true
-            } else {
-                false
-            }
-        };
-
-        if !is_first {
-            // Wait for the appropriate interval
-            let interval = self.current_interval();
-            let mut shutdown_rx = self.shutdown_rx.clone();
-
-            tokio::select! {
-                _ = shutdown_rx.changed() => {
-                    if *shutdown_rx.borrow() {
-                        return Ok(None);
-                    }
-                }
-                _ = tokio::time::sleep(interval) => {
-                    // Continue to poll
-                }
-            }
-
-            // Check shutdown again after sleep
-            if *self.shutdown_rx.borrow() {
-                return Ok(None);
-            }
-        }
+        // Pacing lives in the run loop (a single jittered, shutdown-aware sleep
+        // between cycles). run_once just polls immediately — no internal interval
+        // sleep, otherwise the loop would pace twice (~2× the configured gap).
 
         // Perform the poll
         self.set_state(InboxState::Polling);
@@ -180,16 +151,41 @@ impl InboxPoller {
         let response = {
             let mut client = self.message_client.lock().await;
             tracing::info!(after_id, "Calling GetDeviceMessages RPC...");
-            let result = tokio::time::timeout(
-                std::time::Duration::from_secs(15),
+            // Onion needs a much larger budget: the first poll after a switch to
+            // onion transport drives a cold Tor connect (bootstrap + HS circuit,
+            // ~24-40s on a fresh Arti cache). A 15s cap would fire first, cancel
+            // the in-flight connect, and the next poll would restart it from
+            // scratch — a livelock that never establishes the channel. Direct TCP
+            // keeps the tight 15s.
+            let on_onion = self.grpc_pool.transport_mode()
+                == crate::network::grpc::client_pool::TransportMode::Onion;
+            let rpc_timeout = if on_onion {
+                std::time::Duration::from_secs(95)
+            } else {
+                std::time::Duration::from_secs(15)
+            };
+            let outcome = tokio::time::timeout(
+                rpc_timeout,
                 client.get_device_messages(
                     after_id,
                     self.config.max_batch_size as i32,
                 ),
             )
-            .await
-            .map_err(|_| InboxError::PollFailed("GetDeviceMessages RPC timed out after 15s".into()))?
-            .map_err(|e| InboxError::PollFailed(e.to_string()))?;
+            .await;
+            // Drive the Tor indicator off the real onion RPC outcome (Circuit+RPC
+            // signal): a completed round-trip = Connected, a timeout = Error. Only
+            // touch it on onion — direct mode owns its own connection state.
+            if on_onion {
+                use crate::network::connection::{set_tor_status, TorStatus};
+                match &outcome {
+                    Ok(Ok(_)) => set_tor_status(TorStatus::Connected),
+                    Err(_) => set_tor_status(TorStatus::Error),
+                    Ok(Err(_)) => {} // transport-level RPC error; leave as-is (may be app-level)
+                }
+            }
+            let result = outcome
+                .map_err(|_| InboxError::PollFailed(format!("GetDeviceMessages RPC timed out after {}s", rpc_timeout.as_secs())))?
+                .map_err(|e| InboxError::PollFailed(e.to_string()))?;
             tracing::info!(
                 after_id,
                 message_count = result.messages.len(),
@@ -202,8 +198,11 @@ impl InboxPoller {
         Ok((response.messages, response.has_more))
     }
 
-    /// Get the current polling interval based on activity.
-    fn current_interval(&self) -> std::time::Duration {
+    /// Get the current polling interval based on activity (5s when recently
+    /// active, 30s idle). The run loop sleeps this (jittered) between full poll
+    /// cycles; without it the loop would re-fire after only the sub-second
+    /// obfuscation delays and hammer the server.
+    pub fn current_interval(&self) -> std::time::Duration {
         let last_activity = self.last_activity.read();
         match *last_activity {
             Some(instant) => {

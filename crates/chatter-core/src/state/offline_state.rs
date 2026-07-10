@@ -108,6 +108,7 @@ impl OfflineState {
         self.store.get().connection_state
     }
 
+
     /// Check if currently connected (online).
     #[must_use]
     pub fn is_online(&self) -> bool {

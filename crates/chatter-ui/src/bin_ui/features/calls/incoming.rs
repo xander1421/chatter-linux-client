@@ -355,14 +355,10 @@ fn handle_orchestrator_event(
                 kind,
                 OrchestratedCallKind::AnonDm | OrchestratedCallKind::AnonGroup
             );
-            // Caller avatar. Server-DM peers carry it on their user-directory
-            // profile; anonymous peers have no directory profile, so fall back to
-            // the anon DM row (same source the sidebar uses). Pass bytes (Send)
-            // and decode on the UI thread; slint::Image is not Send.
-            let avatar_bytes = ui_ctx
-                .get_profile_local(&peer_id)
-                .and_then(|p| p.avatar_bytes)
-                .or_else(|| ui_ctx.anon_dm_peer_avatar(&peer_id));
+            // Caller avatar — core owns the "server-DM profile vs anon-DM row"
+            // source rule. Pass bytes (Send) and decode on the UI thread;
+            // slint::Image is not Send.
+            let avatar_bytes = ui_ctx.resolve_call_participant(&peer_id_str).avatar_bytes;
 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {

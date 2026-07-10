@@ -1422,15 +1422,35 @@ fn run_call_worker(
                     let success = match <[u8; 32]>::try_from(key.as_slice()) {
                         Ok(arr) => {
                             let mut guard = active_call.write();
-                            if let Some(state) = guard.as_mut() {
+                            // Install the SAME key the callee gave LiveKit: the
+                            // HKDF-derived `current_key_vec()`, NOT the raw ECDH
+                            // secret. The callee connects with
+                            // `CallKeyState::new(secret, call_id).current_key_vec()`
+                            // (see join_call_impl), so installing the raw secret
+                            // here leaves the caller's LiveKit index-0 key one HKDF
+                            // step off from the callee's — E2EE frames then never
+                            // decrypt and remote video/audio stays black.
+                            let derived = if let Some(state) = guard.as_mut() {
                                 let call_id = state.key_state.call_id().to_string();
                                 match CallKeyState::new(&arr, &call_id) {
-                                    Ok(ks) => state.key_state = ks,
-                                    Err(e) => tracing::error!("Re-root key_state failed: {}", e),
+                                    Ok(ks) => {
+                                        let k = ks.current_key_vec();
+                                        state.key_state = ks;
+                                        Some(k)
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Re-root key_state failed: {}", e);
+                                        None
+                                    }
                                 }
-                            }
+                            } else {
+                                None
+                            };
                             drop(guard);
-                            room_manager.reset_shared_key(key)
+                            match derived {
+                                Some(k) => room_manager.reset_shared_key(k),
+                                None => false,
+                            }
                         }
                         Err(_) => {
                             tracing::error!("Encryption key is not 32 bytes; ignoring");

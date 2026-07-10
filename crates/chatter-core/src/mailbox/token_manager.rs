@@ -171,17 +171,24 @@ impl TokenManager {
     pub fn get_cached_server_key(&self) -> Result<Option<ServerPublicKey>, MailboxError> {
         let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
 
-        // valid_until is stored in nanoseconds (per proto spec)
+        // valid_until is stored in nanoseconds (per proto spec). Treat a key
+        // within CACHE_REFRESH_LEAD of expiry as stale so we re-fetch and adopt
+        // the server's freshly-rotated key DURING the overlap window — otherwise
+        // we'd keep minting tokens under the old key right up to its expiry and
+        // they'd die seconds later. The server rotates well before expiry, so the
+        // new key already exists (and our fetch triggers rotation if it doesn't).
+        const CACHE_REFRESH_LEAD_NANOS: i64 = 3_600 * 1_000_000_000; // 1 hour
         let now_nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as i64)
             .unwrap_or(0);
+        let stale_threshold = now_nanos + CACHE_REFRESH_LEAD_NANOS;
 
         let result: Option<(String, Vec<u8>, i64)> = conn
             .query_row(
                 "SELECT key_id, public_key_der, valid_until FROM mailbox_server_keys
                  WHERE valid_until > ?1 ORDER BY valid_until DESC LIMIT 1",
-                rusqlite::params![now_nanos],
+                rusqlite::params![stale_threshold],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .ok();
@@ -463,18 +470,29 @@ impl TokenManager {
     pub fn claim_available_token(&self) -> Result<Option<MailboxToken>, MailboxError> {
         let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
+        // Signing-key validity is stored in nanoseconds. Only claim tokens whose
+        // signing key is STILL currently valid: the server verifies anonymous
+        // credentials against currently-valid keys only (no grace), so a token
+        // signed by a now-expired key would be rejected. Skipping them here means
+        // request_tokens re-mints under the current key instead of us burning a
+        // send on a dead credential.
+        let now_nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as i64)
+            .unwrap_or(0);
 
         let result = conn.query_row(
             "UPDATE mailbox_tokens \
              SET used_at = ?1 \
              WHERE id = ( \
-                 SELECT id FROM mailbox_tokens \
-                 WHERE used_at IS NULL \
-                 ORDER BY created_at ASC \
+                 SELECT t.id FROM mailbox_tokens t \
+                 JOIN mailbox_server_keys k ON k.key_id = t.server_key_id \
+                 WHERE t.used_at IS NULL AND k.valid_until > ?2 \
+                 ORDER BY t.created_at ASC \
                  LIMIT 1 \
              ) \
              RETURNING id, ephemeral_public_key, ephemeral_private_key, signature, message_randomizer",
-            rusqlite::params![now],
+            rusqlite::params![now, now_nanos],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,

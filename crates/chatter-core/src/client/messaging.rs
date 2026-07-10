@@ -341,8 +341,13 @@ impl ChatterClient {
         use crate::ui::chat_data::initials_from_name;
         use crate::ui::sidebar_data::DMListItemSendData;
 
-        // Regular DMs first (friend-keyed, channel-free).
-        let mut out: Vec<DMListItemSendData> = self.list_regular_dm_sidebar();
+        // Mode-exclusive: shield ON shows ONLY anon DMs; OFF shows ONLY regular
+        // (friend-keyed) DMs. An anon conversation must not surface — or be
+        // operable — in the identified UI, and identified friends must not show
+        // in anon mode. This is the reactive filter behind the sidebar refresh on
+        // toggle.
+        if self.anon_mode_enabled() {
+            let mut out: Vec<DMListItemSendData> = Vec::new();
 
         // Anon DMs — active conversations.
         for dm in self.list_anon_dm_conversations() {
@@ -421,7 +426,50 @@ impl ChatterClient {
             });
         }
 
-        out
+        // Anon DMs — outgoing requests we sent, awaiting acceptance.
+        for dm in self.list_anon_dm_outgoing_requests() {
+            let peer_name = dm
+                .peer_display_name
+                .clone()
+                .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
+            let (last_message, timestamp) = match self.get_latest_anon_dm_message(&dm.id) {
+                Some(msg) => {
+                    let preview = msg
+                        .as_text()
+                        .map(|t| format!("You: {}", truncate_preview_text(t, 50)))
+                        .unwrap_or_else(|| "Message request sent".to_string());
+                    (
+                        preview,
+                        msg.created_at.with_timezone(&chrono::Local).format("%H:%M").to_string(),
+                    )
+                }
+                None => (
+                    "Waiting for response...".to_string(),
+                    dm.created_at.with_timezone(&chrono::Local).format("%H:%M").to_string(),
+                ),
+            };
+            out.push(DMListItemSendData {
+                channel_id: dm.id.to_string(),
+                user_id: dm.peer_id.to_string(),
+                initials: initials_from_name(&peer_name),
+                // Postbox marker distinguishes an outgoing pending request.
+                display_name: format!("\u{1F4EE} {} (pending)", peer_name),
+                avatar_bytes: dm.peer_avatar.clone(),
+                avatar_decoded: None,
+                presence_status: "offline".to_string(),
+                last_message,
+                timestamp,
+                unread_count: 0,
+                is_typing: false,
+                is_anon: true,
+            });
+        }
+
+            out
+        } else {
+            // Non-anon mode: only identified, friend-keyed DMs.
+            self.list_regular_dm_sidebar()
+        }
     }
 
     /// Enriched mention suggestion — everything the composer autocomplete

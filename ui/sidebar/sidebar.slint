@@ -21,7 +21,7 @@ import { SectionContextMenu, SectionHeaderContextMenu } from "section_context_me
 import { Avatar } from "../components/avatar.slint";
 import { TooltipArea } from "../components/tooltip.slint";
 import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
-import { AnonMode } from "../anon_mode/anon_mode_global.slint";
+import { AnonMode, TorStatus } from "../anon_mode/anon_mode_global.slint";
 
 export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, CustomSectionData, SectionConversationData }
 
@@ -169,22 +169,25 @@ export component Sidebar inherits Rectangle {
                     saved-touch := TouchArea { clicked => { root.saved-messages-clicked(); } }
                 }
 
-                if !AnonMode.enabled : Rectangle {
+                // Visible in BOTH modes. In shield mode it's the entry to add an
+                // ANON contact via private code (the modal is private-only there);
+                // labelled "Add Contact" to avoid implying the server friend list.
+                Rectangle {
                     height: 34px;
                     background: friends-touch.has-hover ? Colors.surface-hover : transparent;
                     accessible-role: button;
-                    accessible-label: "Friends";
+                    accessible-label: AnonMode.enabled ? "Add Contact" : "Friends";
                     if !root.collapsed: HorizontalLayout {
                         padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
                         VerticalLayout { alignment: center; horizontal-stretch: 0;
-                            Image { source: Icons.users; width: 14px; height: 14px; colorize: Colors.text-secondary; }
+                            Image { source: AnonMode.enabled ? Icons.user-plus : Icons.users; width: 14px; height: 14px; colorize: Colors.text-secondary; }
                         }
-                        Text { text: "Friends"; color: Colors.text-secondary; font-size: Typography.sm2; vertical-alignment: center; }
+                        Text { text: AnonMode.enabled ? "Add Contact" : "Friends"; color: Colors.text-secondary; font-size: Typography.sm2; vertical-alignment: center; }
                     }
                     if root.collapsed: TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
-                        tooltip-text: "Friends"; tooltip-enabled: true; placement: "right";
-                        HorizontalLayout { alignment: center; Image { source: Icons.users; width: 16px; height: 16px; colorize: Colors.text-secondary; } }
+                        tooltip-text: AnonMode.enabled ? "Add Contact" : "Friends"; tooltip-enabled: true; placement: "right";
+                        HorizontalLayout { alignment: center; Image { source: AnonMode.enabled ? Icons.user-plus : Icons.users; width: 16px; height: 16px; colorize: Colors.text-secondary; } }
                     }
                     friends-touch := TouchArea { clicked => { root.friends-clicked(); } }
                 }
@@ -793,6 +796,16 @@ export component Sidebar inherits Rectangle {
                         background: anon-touch.has-hover ? Colors.surface-hover : (AnonMode.enabled ? Colors.primary.with-alpha(0.15) : transparent);
                         Image { source: Icons.shield; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                             colorize: AnonMode.enabled ? Colors.primary : Colors.text-muted; }
+                        // Tor status dot: green=connected, amber=connecting, red=error. Shield mode only.
+                        Rectangle {
+                            visible: AnonMode.enabled;
+                            width: 8px; height: 8px; border-radius: 4px;
+                            x: parent.width - self.width; y: 0;
+                            border-width: 1px; border-color: Colors.surface;
+                            background: TorStatus.state == 2 ? Colors.success
+                                : TorStatus.state == 3 ? Colors.error
+                                : Colors.warning;
+                        }
                         anon-touch := TouchArea { clicked => { root.anon-mode-clicked(); } }
                     }
                 }
@@ -831,6 +844,16 @@ export component Sidebar inherits Rectangle {
                         background: AnonMode.enabled ? Colors.primary.with-alpha(0.2) : Colors.surface;
                         Image { source: Icons.shield; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                             colorize: AnonMode.enabled ? Colors.primary : Colors.text-secondary; }
+                        // Tor status dot: green=connected, amber=connecting, red=error. Shield mode only.
+                        Rectangle {
+                            visible: AnonMode.enabled;
+                            width: 10px; height: 10px; border-radius: 5px;
+                            x: parent.width - self.width - 2px; y: 2px;
+                            border-width: 1px; border-color: Colors.surface;
+                            background: TorStatus.state == 2 ? Colors.success
+                                : TorStatus.state == 3 ? Colors.error
+                                : Colors.warning;
+                        }
                         TouchArea { clicked => { root.anon-mode-clicked(); } }
                     } }
                 }

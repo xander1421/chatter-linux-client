@@ -203,6 +203,46 @@ impl InboxEventProcessor {
                 true
             }
 
+            InboxEvent::CallKeyOfferReceived {
+                peer_id,
+                call_id,
+                ephemeral_public_key,
+                call_type,
+                channel_id,
+                timestamp,
+            } => {
+                // Bridge the inbox-layer offer to the domain event the call
+                // orchestrator + incoming-call UI consume. Without this arm the
+                // decrypted offer is emitted onto the inbox broadcast and dropped
+                // — the callee never rings. (Answer/GroupCallKey are bridged
+                // below; the offer arm was the missing sibling.)
+                let is_identity_verified = self
+                    .signal_service
+                    .is_peer_verified(&peer_id.to_string())
+                    .unwrap_or(false);
+                let caller_name = self.user_service.get_display_name(peer_id);
+                tracing::info!(
+                    peer_id = %peer_id,
+                    call_id = %call_id,
+                    is_identity_verified,
+                    "Call offer received - presenting incoming call"
+                );
+                self.event_bus.emit_domain(DomainEvent::CallKeyOfferReceived {
+                    call_id: call_id.clone(),
+                    peer_id: *peer_id,
+                    ephemeral_public_key: *ephemeral_public_key,
+                    call_type: call_type.clone(),
+                    channel_id: channel_id.clone(),
+                    is_identity_verified,
+                    // No existing producer emits a warning string; a mismatch/
+                    // change surfaces via the safety-number flow, not here.
+                    identity_warning: String::new(),
+                    caller_name,
+                    timestamp: *timestamp,
+                });
+                true
+            }
+
             InboxEvent::GroupCallKeyReceived {
                 sender_id,
                 call_id,

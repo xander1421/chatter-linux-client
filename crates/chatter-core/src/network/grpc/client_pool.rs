@@ -14,6 +14,19 @@ use crate::error::NetworkError;
 use super::interceptors::AuthInterceptor;
 use super::retry::{retry_unary, RetryConfig};
 
+/// Connect timeout for an endpoint URL.
+///
+/// Onion cold-start is slow: Arti bootstraps, then may retry a dead HS
+/// descriptor/rendezvous circuit before one holds (~24s observed). A 10s
+/// connect timeout kills it mid-retry. Direct TCP keeps the tight 10s.
+fn connect_timeout_for(server_url: &str) -> Duration {
+    if server_url.contains(".onion") {
+        Duration::from_secs(60)
+    } else {
+        Duration::from_secs(10)
+    }
+}
+
 /// gRPC connection pool with shared channel and authentication.
 ///
 /// Manages a single tonic Channel that can be cloned cheaply for
@@ -136,7 +149,7 @@ impl GrpcClientPool {
     fn create_endpoint(server_url: &str, timeout: Option<Duration>) -> Result<Endpoint, NetworkError> {
         let mut endpoint = Endpoint::from_shared(server_url.to_string())
             .map_err(|e| NetworkError::ConnectionFailed(format!("invalid URL: {}", e)))?
-            .connect_timeout(Duration::from_secs(10))
+            .connect_timeout(connect_timeout_for(server_url))
             .tcp_keepalive(Some(Duration::from_secs(300)))
             .http2_keep_alive_interval(Duration::from_secs(30))
             .keep_alive_timeout(Duration::from_secs(10))
@@ -558,6 +571,30 @@ mod tests {
     fn test_new_valid_url() {
         let pool = GrpcClientPool::new("http://localhost:50051");
         assert!(pool.is_ok());
+    }
+
+    #[test]
+    fn test_connect_timeout_onion_gets_long_deadline() {
+        // Onion cold-start (~24s observed) must outlast the connect timeout,
+        // otherwise the dial is killed mid HS-circuit retry.
+        assert_eq!(
+            connect_timeout_for("http://abc123.onion:443"),
+            Duration::from_secs(60)
+        );
+        // The scheme-less / bare-host forms both still route to the long path.
+        assert_eq!(
+            connect_timeout_for("nxpu2qh2eewzufrs.onion"),
+            Duration::from_secs(60)
+        );
+        // Direct TCP stays tight.
+        assert_eq!(
+            connect_timeout_for("http://localhost:50051"),
+            Duration::from_secs(10)
+        );
+        assert_eq!(
+            connect_timeout_for("https://api.example.com:443"),
+            Duration::from_secs(10)
+        );
     }
 
     #[test]

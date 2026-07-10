@@ -59,6 +59,12 @@ pub enum AnonDmError {
     #[error("cannot send message to yourself")]
     CannotMessageSelf,
 
+    /// Anon DM setup is only permitted in anonymous (shield) mode. Starting it
+    /// outside shield mode would run the ECIES init + delivery over the
+    /// identified/direct path, leaking the very link it is meant to hide.
+    #[error("requires anon (shield) mode")]
+    RequiresAnonMode,
+
     /// Conversation already exists with this peer.
     #[error("conversation already exists with peer: {0}")]
     ConversationExists(UserId),

@@ -101,7 +101,7 @@ pub fn load_thread_data(
                 .unwrap_or_else(|| "Anonymous".to_string());
             let content_preview = root_message
                 .as_text()
-                .map(|t| if t.len() > 100 { format!("{}...", &t[..97]) } else { t.to_string() })
+                .map(|t| chatter_core::domain::message::truncate_preview_text(t, 100))
                 .unwrap_or_else(|| "[Attachment]".to_string());
             let replies = ui_ctx.list_thread_replies(&root_message_id, None, 50).unwrap_or_default();
             let channel_name = ui_ctx

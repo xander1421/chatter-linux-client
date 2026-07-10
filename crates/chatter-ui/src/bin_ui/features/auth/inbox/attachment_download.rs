@@ -56,7 +56,14 @@ pub async fn download_attachments(
 
         // Instant preview from the thumbnail sidecar — a small, fast fetch that
         // shows a preview BEFORE the (potentially huge) full blob downloads.
-        if (is_image || is_video) && !is_gif && !has_thumbnail {
+        // GIFs included: `ensure_attachment_thumbnail` PERSISTS the decrypted
+        // sidecar into the attachment record, so the bubble renders a static
+        // preview durably on reopen/restart (the DB record's `thumbnail` field
+        // is otherwise None on receive). Without this a GIF showed a bare
+        // placeholder until clicked, because the live-only first-frame push in
+        // `handle_gif` is lost on any re-render. The animated frames still come
+        // from the full download below.
+        if (is_image || is_video) && !has_thumbnail {
             if let Some(thumb_bytes) = ui_ctx.ensure_attachment_thumbnail(&att_id).await {
                 let weak = weak_window.clone();
                 let cdn_key_p = cdn_key.clone();

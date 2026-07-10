@@ -153,10 +153,21 @@ impl CallSignalingService {
         channel_id: &str,
     ) -> Result<(), CallSignalingError> {
         let content = build_call_key_offer(call_id, ephemeral_public_key, call_type, channel_id);
-        self.message_service
+        match self
+            .message_service
             .send_dm(peer_id, content, &self.mailbox_manager)
-            .await?;
-        tracing::info!(peer_id = %peer_id, call_id, "Call offer sent");
+            .await
+        {
+            Ok(_) => tracing::info!(peer_id = %peer_id, call_id, "Call offer sent"),
+            // First DM to this peer: the Signal session is bootstrapping. send_dm
+            // has QUEUED the offer and will deliver it once the secure channel is
+            // ready — a moment later. Not a failure; let the call proceed (caller
+            // shows "calling…", callee rings when the offer lands).
+            Err(crate::services::message::MessageError::BootstrapInitiated) => {
+                tracing::info!(peer_id = %peer_id, call_id, "Call offer queued during DM bootstrap — will deliver when secure channel is ready");
+            }
+            Err(e) => return Err(e.into()),
+        }
         Ok(())
     }
 
@@ -187,15 +198,28 @@ impl CallSignalingService {
         call_id: &str,
         reason: CallHangupReason,
     ) -> Result<(), CallSignalingError> {
-        let peer_id = self.channel_service
-            .get_dm_peer_local(channel_id)?
-            .ok_or_else(|| CallSignalingError::NoPeer(*channel_id))?;
+        // For a channel/group DM there's a server DM channel to look the peer up
+        // in. For a private (anon-derived) DM call there is no server channel —
+        // the "channel_id" IS the peer's user_id — so fall back to that.
+        let peer_id = match self.channel_service.get_dm_peer_local(channel_id)? {
+            Some(p) => p,
+            None => UserId::from_uuid(*channel_id.as_uuid()),
+        };
 
         let content = build_call_hangup_content(call_id, reason);
-        self.message_service
+        match self
+            .message_service
             .send_dm(&peer_id, content, &self.mailbox_manager)
-            .await?;
-        tracing::info!(peer_id = %peer_id, call_id, "Call hangup sent");
+            .await
+        {
+            Ok(_) => tracing::info!(peer_id = %peer_id, call_id, "Call hangup sent"),
+            // Session still bootstrapping — the queued hangup will deliver, and the
+            // peer sees the LiveKit disconnect regardless. Not fatal.
+            Err(crate::services::message::MessageError::BootstrapInitiated) => {
+                tracing::info!(peer_id = %peer_id, call_id, "Call hangup queued during DM bootstrap");
+            }
+            Err(e) => return Err(e.into()),
+        }
         Ok(())
     }
 
@@ -473,7 +497,12 @@ impl CallSignalingService {
 
         Ok(CallSetupResult {
             call_id: call.id,
-            channel_id: call.channel_id,
+            // A DM call's channel_id is the OTHER party's user_id (DMs have no
+            // server channel). The server-stored channel_id is the caller's
+            // view (= us, the callee), so using it verbatim would route our
+            // hangup/answer back to ourselves. Rewrite to the caller so this
+            // side's scope points at the real peer.
+            channel_id: (*caller_id).into(),
             verification_emojis: [e1, e2, e3, e4],
             is_video: false, // caller provides this info via the offer
         })

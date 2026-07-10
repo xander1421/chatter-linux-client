@@ -4,7 +4,6 @@
 //! event broadcasting, and lifecycle management.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use ed25519_dalek::{Signer, SigningKey};
 use parking_lot::RwLock;
@@ -33,9 +32,6 @@ use super::streaming::spawn_user_events_stream;
 /// Event channel capacity for inbox events.
 /// Increased from 64 to 256 to handle message bursts without lagging.
 const EVENT_CHANNEL_CAPACITY: usize = 256;
-
-/// Timeout for graceful shutdown.
-const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Maximum number of decoy mailboxes to maintain.
 const MAX_DECOY_MAILBOXES: usize = 10;
@@ -141,6 +137,10 @@ pub struct DeviceInboxProvider {
     event_tx: broadcast::Sender<InboxEvent>,
     shutdown_tx: watch::Sender<bool>,
     poller_handle: RwLock<Option<tokio::task::JoinHandle<()>>>,
+    /// Handle to the spawned user-events stream, so it can be ABORTED on stop /
+    /// transport switch. Without this the old stream survives on its pre-switch
+    /// (direct) channel, keeping an IP-revealing socket open in shield mode.
+    user_events_handle: Arc<parking_lot::Mutex<Option<tokio::task::JoinHandle<()>>>>,
     stats: Arc<RwLock<InboxStats>>,
     state: Arc<RwLock<InboxState>>,
     message_gateway: Arc<MessageGateway>,
@@ -219,6 +219,7 @@ impl DeviceInboxProvider {
         let poller = Arc::new(InboxPoller::new(
             config.clone(),
             message_client,
+            grpc_pool.clone(),
             shutdown_rx,
             event_tx.clone(),
             stats.clone(),
@@ -235,6 +236,7 @@ impl DeviceInboxProvider {
             event_tx,
             shutdown_tx,
             poller_handle: RwLock::new(None),
+            user_events_handle: Arc::new(parking_lot::Mutex::new(None)),
             stats,
             state,
             message_gateway,
@@ -291,6 +293,14 @@ impl DeviceInboxProvider {
         let mailbox_client = self.mailbox_client.clone();
         let database = self.database.clone();
         let grpc_pool = self.grpc_pool.clone();
+        // Reset the shutdown latch before subscribing. `watch` retains its last
+        // value, so after a prior `stop()` (which sent `true`) a fresh subscriber
+        // would read `true` and the new loop would exit on cycle 1 — exactly what
+        // stops device-inbox polling from ever resuming after a transport switch
+        // (shield toggle → stop() → refresh_clients() → start()). Sealed-sender
+        // anon-DM requests land in the device queue, so a dead poll loop means the
+        // recipient never sees them.
+        let _ = self.shutdown_tx.send(false);
         let shutdown_rx = self.shutdown_tx.subscribe();
         let event_bus = self.event_bus.clone();
         let dm_deduplicator = self.dm_deduplicator.clone();
@@ -301,6 +311,7 @@ impl DeviceInboxProvider {
         let anon_dm_poller = self.anon_dm_poller.clone();
         let pairwise_service = self.pairwise_service.clone();
         let anon_mailbox_client = self.anon_mailbox_client.clone();
+        let user_events_handle = self.user_events_handle.clone();
 
         tracing::info!("Spawning inbox provider task...");
         let handle = tokio::spawn(async move {
@@ -324,6 +335,7 @@ impl DeviceInboxProvider {
                 anon_dm_poller,
                 pairwise_service,
                 anon_mailbox_client,
+                user_events_handle,
             )
             .await;
             tracing::info!("Inbox provider run_loop exited");
@@ -360,19 +372,30 @@ impl DeviceInboxProvider {
         // Signal shutdown
         let _ = self.shutdown_tx.send(true);
 
-        // Wait for handle with timeout
+        // Abort the user-events stream outright: it is a separate spawned task we
+        // never join here, and relying on the shared watch races with start()'s
+        // reset — an un-aborted old stream keeps its pre-switch (direct) channel
+        // alive, leaking an IP-revealing socket in shield mode.
+        if let Some(h) = self.user_events_handle.lock().take() {
+            h.abort();
+        }
+
+        // Kill the run_loop. The old code awaited the handle with a timeout and,
+        // ON TIMEOUT, DROPPED it — which DETACHES the tokio task, leaving it
+        // running forever. Every transport toggle / reconnect that didn't drain
+        // in time orphaned a poll loop: duplicate GetDeviceMessages spam (many
+        // loops polling in parallel) AND a survivor still bound to the pre-switch
+        // (direct) channel. Abort unconditionally so the task cannot detach; the
+        // cooperative shutdown signal above lets an idle loop exit cleanly first,
+        // and a mid-cycle abort is safe (unacked messages are re-delivered and
+        // de-duplicated).
         let handle = self.poller_handle.write().take();
         if let Some(handle) = handle {
-            match tokio::time::timeout(SHUTDOWN_TIMEOUT, handle).await {
-                Ok(_) => {
-                    *self.state.write() = InboxState::Stopped;
-                    Ok(())
-                }
-                Err(_) => Err(InboxError::ShutdownTimeout),
-            }
-        } else {
-            Ok(())
+            handle.abort();
+            let _ = handle.await; // reap; JoinError(cancelled) is expected
         }
+        *self.state.write() = InboxState::Stopped;
+        Ok(())
     }
 
     /// Main polling loop.
@@ -386,7 +409,7 @@ impl DeviceInboxProvider {
         mailbox_client: Arc<tokio::sync::Mutex<AnonymousMailboxClient>>,
         database: Arc<Database>,
         grpc_pool: Arc<GrpcClientPool>,
-        shutdown_rx: watch::Receiver<bool>,
+        mut shutdown_rx: watch::Receiver<bool>,
         event_bus: Option<EventBus>,
         dm_deduplicator: Arc<crate::network::validation::MessageDeduplicator>,
         attachment_repo: Arc<AttachmentRepository>,
@@ -396,6 +419,7 @@ impl DeviceInboxProvider {
         anon_dm_poller: Option<Arc<AnonDmPoller>>,
         pairwise_service: Option<Arc<PairwiseService>>,
         anon_mailbox_client: Option<Arc<tokio::sync::Mutex<AnonymousMailboxClient>>>,
+        user_events_handle: Arc<parking_lot::Mutex<Option<tokio::task::JoinHandle<()>>>>,
     ) {
         tracing::info!("Inbox provider run_loop started");
 
@@ -420,7 +444,7 @@ impl DeviceInboxProvider {
         match settings_repo.get::<String>(crate::storage::settings_keys::CURRENT_USER_ID) {
             Ok(Some(user_id)) => {
                 tracing::info!(user_id = %user_id, "Starting user events stream");
-                spawn_user_events_stream(
+                let ue_handle = spawn_user_events_stream(
                     user_id,
                     grpc_pool.clone(),
                     event_tx.clone(),
@@ -429,6 +453,11 @@ impl DeviceInboxProvider {
                     shutdown_rx.clone(),
                 )
                 .await;
+                // Track the handle and abort any prior-generation stream so its
+                // pre-switch (direct) channel is dropped immediately.
+                if let Some(old) = user_events_handle.lock().replace(ue_handle) {
+                    old.abort();
+                }
                 tracing::info!("User events stream spawned");
             }
             Ok(None) => {
@@ -629,6 +658,23 @@ impl DeviceInboxProvider {
                     has_anon_client = anon_mailbox_client.is_some(),
                     "[ANON_DM] Skipping anonymous DM polling (not configured)"
                 );
+            }
+
+            // Base poll interval between full cycles (5s max — the config's
+            // active/idle interval). Jittered DOWNWARD only (clamp to base) so the
+            // gap never exceeds 5s while still adding timing noise. The per-batch
+            // delays above are only sub-second access-pattern noise; this is what
+            // actually paces the loop. Honour shutdown during the wait.
+            let base = poller.current_interval();
+            let wait = timing.jitter_interval(base).min(base);
+            tokio::select! {
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        tracing::info!(cycle = poll_cycle, "Inbox run_loop: shutdown during inter-poll wait");
+                        break;
+                    }
+                }
+                _ = tokio::time::sleep(wait) => {}
             }
         }
     }

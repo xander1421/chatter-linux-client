@@ -38,10 +38,15 @@ pub async fn spawn_user_events_stream(
     user_repo: Arc<UserRepository>,
     domain_tx: Option<broadcast::Sender<DomainEvent>>,
     mut shutdown_rx: watch::Receiver<bool>,
-) {
+) -> tokio::task::JoinHandle<()> {
     // Parsed once for the friend-key lookup that decrypts inbound profile names.
     let current_user_id = user_id.parse::<UserId>().ok();
 
+    // Return the handle so the caller can ABORT this task on transport switch.
+    // The old stream holds a channel clone pinned to the pre-switch transport
+    // (direct); relying on the shared shutdown watch alone races with its reset,
+    // leaving a direct, IP-revealing socket alive in shield mode. Abort is
+    // unconditional and immediate.
     tokio::spawn(async move {
         loop {
             // Check for shutdown
@@ -105,7 +110,7 @@ pub async fn spawn_user_events_stream(
                 _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
             }
         }
-    });
+    })
 }
 
 /// Resolve a profile display name that arrives on the user-events stream.

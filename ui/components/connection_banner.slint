@@ -3,6 +3,7 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { AnonMode, TorStatus } from "../anon_mode/anon_mode_global.slint";
 
 export component ConnectionBanner inherits Rectangle {
     // "connected", "connecting", "reconnecting", "disconnected", "failed"
@@ -14,12 +15,20 @@ export component ConnectionBanner inherits Rectangle {
     property <bool> just-reconnected: false;
     property <bool> was-disconnected: false;
 
-    // Show banner when not connected (or briefly after reconnect)
+    // Tor connect in progress / failed while in shield mode — surface it in the
+    // banner (state 1 = connecting, 3 = error; 2 = connected is silent).
+    property <bool> tor-connecting: AnonMode.enabled && TorStatus.state == 1;
+    property <bool> tor-error: AnonMode.enabled && TorStatus.state == 3;
+
+    // Show banner when not connected (or briefly after reconnect), or while Tor
+    // is still establishing / has errored in shield mode.
     property <bool> should-show:
         connection-state == "connecting"
         || connection-state == "reconnecting"
         || connection-state == "disconnected"
         || connection-state == "failed"
+        || root.tor-connecting
+        || root.tor-error
         || root.just-reconnected;
 
     visible: root.should-show;
@@ -29,6 +38,8 @@ export component ConnectionBanner inherits Rectangle {
     // Banner color based on state
     property <color> banner-color:
         root.just-reconnected ? Colors.success :
+        root.tor-error ? Colors.error :
+        root.tor-connecting ? Colors.warning :
         connection-state == "connecting" || connection-state == "reconnecting" ? Colors.warning :
         connection-state == "failed" ? Colors.error :
         Colors.error;  // disconnected
@@ -78,6 +89,8 @@ export component ConnectionBanner inherits Rectangle {
         // Status text
         Text {
             text: root.just-reconnected ? "Connected" :
+                  root.tor-error ? "Tor connection error — retrying…" :
+                  root.tor-connecting ? "Connecting over Tor…" :
                   connection-state == "connecting" ? "Connecting…" :
                   connection-state == "reconnecting" ? "Reconnecting" + (reconnect-attempt > 0 ? " (attempt " + reconnect-attempt + ")…" : "…") :
                   connection-state == "failed" ? "Connection failed — check your network" :

@@ -122,20 +122,43 @@ mod tor {
     }
 
     /// Bootstrap (once) and connect a raw Tor stream to `host:port`.
+    ///
+    /// This shares the gRPC pool's `SharedTorClient` OnceCell, so the init here
+    /// MUST match the gRPC connector's: run on the dedicated Tor runtime (so Arti
+    /// never binds to the app's DB-starved runtime, whichever path wins the init
+    /// race) and install the ring crypto provider before bootstrap. See
+    /// [`crate::network::grpc::onion_transport::tor_runtime`].
     async fn connect_tor(
         tor: &SharedTorClient,
         host: &str,
         port: u16,
     ) -> Result<arti_client::DataStream, String> {
+        use crate::network::grpc::onion_transport::tor_runtime;
         let base = tor
             .get_or_try_init(|| async {
-                TorClient::create_bootstrapped(TorClientConfig::default()).await
+                let jh = tor_runtime().spawn(async {
+                    let _ = tokio_rustls::rustls::crypto::ring::default_provider()
+                        .install_default();
+                    TorClient::create_bootstrapped(TorClientConfig::default()).await
+                });
+                match tokio::time::timeout(std::time::Duration::from_secs(120), jh).await {
+                    Err(_) => Err("Tor bootstrap timed out after 120s".to_string()),
+                    Ok(Err(join)) => Err(format!("Tor bootstrap task panicked: {join}")),
+                    Ok(Ok(Err(e))) => Err(format!("Tor bootstrap failed: {e}")),
+                    Ok(Ok(Ok(c))) => Ok(c),
+                }
             })
-            .await
-            .map_err(|e| format!("Tor bootstrap failed: {e}"))?;
-        base.connect((host, port))
-            .await
-            .map_err(|e| format!("Tor connect to {host}:{port} failed: {e}"))
+            .await?;
+        let client = base.clone();
+        let (dial_host, dial_port) = (host.to_string(), port);
+        let jh = tor_runtime()
+            .spawn(async move { client.connect((dial_host.as_str(), dial_port)).await });
+        match tokio::time::timeout(std::time::Duration::from_secs(90), jh).await {
+            Err(_) => Err(format!("Tor connect to {host}:{port} timed out after 90s")),
+            Ok(Err(join)) => Err(format!("Tor connect task panicked: {join}")),
+            Ok(Ok(Err(e))) => Err(format!("Tor connect to {host}:{port} failed: {e}")),
+            Ok(Ok(Ok(s))) => Ok(s),
+        }
     }
 
     /// Drive one HTTP/1.1 request over `io` and return (status, headers, body).

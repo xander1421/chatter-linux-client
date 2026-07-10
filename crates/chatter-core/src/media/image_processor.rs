@@ -11,6 +11,17 @@ use std::path::Path;
 /// Default maximum dimension for thumbnails (width or height).
 pub const DEFAULT_THUMBNAIL_SIZE: u32 = 256;
 
+/// Long-edge cap for the inline preview thumbnail shown in the chat bubble.
+///
+/// The bubble renders at ~280x380 logical px, which is ~560x760 physical on a
+/// 2x HiDPI display — so a 768px thumbnail is right-sized for the largest box
+/// and holds enough resolution to read small text in screenshots. This is what
+/// both sender and receiver see inline (the full image is only fetched on tap).
+///
+/// ponytail: WebP-lossless keeps screenshot text crisp but is heavy for photos;
+/// if the inline payload gets too big, switch these paths to lossy JPEG q90.
+const INLINE_THUMBNAIL_MAX_SIZE: u32 = 768;
+
 /// JPEG quality for thumbnail compression (0-100).
 const JPEG_QUALITY: u8 = 85;
 
@@ -295,10 +306,13 @@ impl ImageProcessor {
     ///
     /// Returns WebP-encoded thumbnail bytes with dimensions.
     pub fn generate_thumbnail_from_memory(data: &[u8]) -> Result<(Vec<u8>, u32, u32), MediaError> {
-        const THUMBNAIL_MAX_SIZE: u32 = 400;
-
         let image = Self::load_from_memory(data)?;
-        let thumbnail = image.thumbnail(THUMBNAIL_MAX_SIZE, THUMBNAIL_MAX_SIZE);
+        // Lanczos3 (not the fast `.thumbnail()` box filter) keeps text legible.
+        let thumbnail = image.resize(
+            INLINE_THUMBNAIL_MAX_SIZE,
+            INLINE_THUMBNAIL_MAX_SIZE,
+            FilterType::Lanczos3,
+        );
 
         let width = thumbnail.width();
         let height = thumbnail.height();
@@ -339,7 +353,7 @@ impl ImageProcessor {
 
     /// Generate a thumbnail as WebP bytes for embedding in protos.
     ///
-    /// Creates a thumbnail (max 400px) compressed as WebP.
+    /// Creates a thumbnail (max [`INLINE_THUMBNAIL_MAX_SIZE`]) compressed as WebP.
     /// For large images (>10MB), uses ffmpeg for memory-efficient streaming.
     /// For smaller images, uses in-memory decoding (faster for small files).
     ///
@@ -351,7 +365,6 @@ impl ImageProcessor {
     ///
     /// Tuple of (webp_bytes, width, height) or error.
     pub fn generate_thumbnail_bytes(source: &Path) -> Result<(Vec<u8>, u32, u32), MediaError> {
-        const THUMBNAIL_MAX_SIZE: u32 = 400;
         const LARGE_FILE_THRESHOLD: u64 = 10 * 1024 * 1024; // 10MB
 
         // Check file size to decide approach
@@ -366,12 +379,17 @@ impl ImageProcessor {
                 source.display(),
                 file_size
             );
-            return Self::generate_thumbnail_ffmpeg(source, THUMBNAIL_MAX_SIZE);
+            return Self::generate_thumbnail_ffmpeg(source, INLINE_THUMBNAIL_MAX_SIZE);
         }
 
         // Small file: use in-memory decode (faster)
         let image = Self::load_image(source)?;
-        let thumbnail = image.thumbnail(THUMBNAIL_MAX_SIZE, THUMBNAIL_MAX_SIZE);
+        // Lanczos3 (not the fast `.thumbnail()` box filter) keeps text legible.
+        let thumbnail = image.resize(
+            INLINE_THUMBNAIL_MAX_SIZE,
+            INLINE_THUMBNAIL_MAX_SIZE,
+            FilterType::Lanczos3,
+        );
 
         let width = thumbnail.width();
         let height = thumbnail.height();

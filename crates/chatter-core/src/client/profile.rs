@@ -112,11 +112,49 @@ impl ChatterClient {
         self.users().get_user_local(user_id).ok().flatten()
     }
 
+    /// Resolve a call participant's view data (display name, initials, avatar
+    /// bytes) from local state, by LiveKit identity (a user_id string). The UI
+    /// only decodes `avatar_bytes` to an image and renders — identity/profile
+    /// resolution (decrypted name, the server-DM-profile-vs-anon-DM-row avatar
+    /// fallback, initials) stays in core, not the UI. A non-user_id identity
+    /// (unlikely) falls back to showing the raw identity.
+    pub fn resolve_call_participant(
+        &self,
+        identity: &str,
+    ) -> crate::ui::chat_data::CallParticipantInfo {
+        use crate::ui::chat_data::{initials_from_name, CallParticipantInfo};
+        match identity.parse::<crate::domain::ids::UserId>() {
+            Ok(uid) => {
+                let display_name = self.display_name(&uid);
+                let avatar_bytes = self
+                    .get_profile_local(&uid)
+                    .and_then(|p| p.avatar_bytes)
+                    .or_else(|| self.anon_dm_peer_avatar(&uid));
+                CallParticipantInfo {
+                    initials: initials_from_name(&display_name),
+                    display_name,
+                    avatar_bytes,
+                }
+            }
+            Err(_) => CallParticipantInfo {
+                initials: initials_from_name(identity),
+                display_name: identity.to_string(),
+                avatar_bytes: None,
+            },
+        }
+    }
+
     pub fn generate_friend_code(&self) -> Result<String, crate::services::UserError> {
         self.users().generate_friend_code()
     }
 
     pub fn generate_private_friend_code(&self) -> Result<String, crate::services::UserError> {
+        // Anon contact setup is only safe in shield mode — otherwise the code
+        // generation/redemption and the resulting conversation run over the
+        // identified/direct path, leaking what anon DM exists to hide.
+        if !self.anon_mode_enabled() {
+            return Err(crate::services::UserError::RequiresAnonMode);
+        }
         self.users().generate_private_friend_code()
     }
 
@@ -125,6 +163,9 @@ impl ChatterClient {
     }
 
     pub fn generate_private_friend_qr(&self, size: u32) -> Result<Vec<u8>, crate::services::UserError> {
+        if !self.anon_mode_enabled() {
+            return Err(crate::services::UserError::RequiresAnonMode);
+        }
         self.users().generate_private_friend_qr(size)
     }
 
@@ -193,6 +234,12 @@ impl ChatterClient {
         intro_message: Option<&str>,
         sender_display_name: Option<&str>,
     ) -> Result<crate::domain::anon_dm::AnonDm, crate::services::anon_dm::AnonDmError> {
+        // Redeeming a private code + firing the ECIES init must ride the anon
+        // transport (isolated Tor circuit, blind-token delivery). Outside shield
+        // mode it would go over the identified/direct path — refuse.
+        if !self.anon_mode_enabled() {
+            return Err(crate::services::anon_dm::AnonDmError::RequiresAnonMode);
+        }
         self.anon_dms().start_conversation_private(friend_code, intro_message, sender_display_name).await
     }
 

@@ -1152,10 +1152,17 @@ impl ChatterClient {
         // that leaf media modules (gif/youtube/link_preview) gate on and that the
         // CDN reqwest callsites branch on. Keyed on the real transport, not the
         // request, so a failed onion switch leaves it false — no false anonymity.
-        crate::network::anon_http::ANON_HTTP_ACTIVE.store(
-            self.services.grpc_pool.transport_mode() == TransportMode::Onion,
-            Ordering::Release,
-        );
+        let on_onion = self.services.grpc_pool.transport_mode() == TransportMode::Onion;
+        crate::network::anon_http::ANON_HTTP_ACTIVE.store(on_onion, Ordering::Release);
+
+        // Drive the Tor UI indicator: entering onion = Connecting (until the
+        // first onion RPC round-trips, when the poller flips it to Connected);
+        // leaving onion = Off.
+        crate::network::connection::set_tor_status(if on_onion {
+            crate::network::connection::TorStatus::Connecting
+        } else {
+            crate::network::connection::TorStatus::Off
+        });
 
         if let Err(e) = switch_result {
             tracing::warn!(

@@ -8,3 +8,10 @@
 export global AnonMode {
     in-out property <bool> enabled: false;
 }
+
+// Tor onion transport status, pushed from Rust (see connection.rs `tor_status`).
+// 0 = Off (not on onion), 1 = Connecting, 2 = Connected (onion RPC round-tripped),
+// 3 = Error (connect/poll timed out). Drives the sidebar dot + the connection banner.
+export global TorStatus {
+    in-out property <int> state: 0;
+}

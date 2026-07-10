@@ -126,18 +126,10 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     // Separate channels and DMs (using Send-safe types for DMs).
     // ChannelListItemData contains a slint::Image (not Send) — hold domain
     // Channels here and convert inside the UI-thread closure below.
-    let mut dm_list: Vec<DMListItemSendData> = Vec::new();
-
-    // Anon Mode: when on, drop server-friend DMs and public/private
-    // channels from the sidebar models. Anon DMs (is_anon=true rows below)
-    // and anon groups stay because they have no server-side identity link.
-    let anon_mode = ui_ctx.anon_mode_enabled();
-
-    // Regular DMs are channel-free (Signal-style) — sourced from friends in
-    // core, keyed by peer user_id. The UI no longer scans channels for DMs.
-    if !anon_mode {
-        dm_list.extend(ui_ctx.list_regular_dm_sidebar());
-    }
+    // The DM sidebar is built ENTIRELY in core: mode-exclusive (regular vs anon),
+    // active + incoming requests + outgoing, with all previews/markers/presence.
+    // Same source of truth as refresh_dm_list — the UI never hand-rolls it.
+    let dm_list: Vec<DMListItemSendData> = ui_ctx.list_dm_sidebar();
 
     // Sidebar-inclusion rule (Public/Private, anon-mode aware) lives in core.
     let channel_domain_list = ui_ctx.sidebar_channels();
@@ -180,72 +172,6 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     let received_ui: Vec<FriendRequestSendData> = Vec::new();
     let sent_ui: Vec<FriendRequestSendData> = Vec::new();
 
-    // Load anonymous DMs from local storage and add to DM list
-    {
-        let anon_dms = ui_ctx.list_anon_dm_conversations();
-        tracing::info!("Loaded {} anonymous DM conversations", anon_dms.len());
-        {
-            for dm in anon_dms {
-                // Get peer display name from conversation (revealed on accept/init)
-                // Do NOT use user_service - these are strangers
-                let peer_name = dm.peer_display_name.clone()
-                    .unwrap_or_else(|| ui_ctx.fallback_display_name(&dm.peer_id));
-                let peer_id_str = dm.peer_id.to_string();
-
-                // Get latest message for preview
-                let (last_message, timestamp) = match ui_ctx.get_latest_anon_dm_message(&dm.id) {
-                    Some(msg) => {
-                        let is_own = current_user_id.map(|id| msg.sender_id == Some(id)).unwrap_or(false);
-                        let preview = msg.as_text()
-                            .map(|text| {
-                                if text.chars().count() > 50 {
-                                    truncate_sidebar_preview(text)
-                                } else if is_own {
-                                    format!("You: {}", text)
-                                } else {
-                                    text.to_string()
-                                }
-                            })
-                            .unwrap_or_default();
-                        let ts = msg.created_at
-                            .with_timezone(&chrono::Local)
-                            .format("%H:%M")
-                            .to_string();
-                        (preview, ts)
-                    }
-                    // Message-less anon DM (e.g. just accepted) — show a
-                    // placeholder so it isn't blank on either side after reload.
-                    _ => (
-                        "Conversation started".to_string(),
-                        dm.updated_at.with_timezone(&chrono::Local).format("%H:%M").to_string(),
-                    ),
-                };
-
-                // Anon DMs share the DM model with regular DMs — the
-                // `is_anon` flag is the discriminator.
-                let dm_item = DMListItemSendData {
-                    channel_id: dm.id.to_string(),
-                    user_id: peer_id_str.clone(),
-                    display_name: peer_name.clone(),
-                    avatar_bytes: dm.peer_avatar.clone(),
-                    avatar_decoded: None,
-                    initials: get_initials(&peer_name),
-                    presence_status: if dm.status == chatter_core::domain::anon_dm::AnonDmStatus::Active {
-                        "online".to_string()
-                    } else {
-                        "offline".to_string()
-                    },
-                    last_message,
-                    timestamp,
-                    unread_count: dm.unread_count,
-                    is_typing: false,
-                    is_anon: true,
-                };
-                dm_list.push(dm_item);
-            }
-        }
-    }
-
     // Load pending anon DM requests (message requests) - show as pending in sidebar and modal
     let mut private_requests_ui: Vec<FriendRequestSendData> = Vec::new();
     {
@@ -257,7 +183,6 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                 // Do NOT use user_service - these are strangers
                 let peer_name = dm.peer_display_name.clone()
                     .unwrap_or_else(|| ui_ctx.fallback_display_name(&dm.peer_id));
-                let peer_id_str = dm.peer_id.to_string();
 
                 // Get intro message if any
                 let last_message = match ui_ctx.get_latest_anon_dm_message(&dm.id) {
@@ -265,26 +190,8 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                     None => "Message request".to_string(),
                 };
 
-                // Add to DM sidebar
-                let dm_item = DMListItemSendData {
-                    channel_id: dm.id.to_string(),
-                    user_id: peer_id_str.clone(),
-                    display_name: format!("\u{1F4E9} {}", peer_name), // Envelope emoji for pending
-                    avatar_bytes: dm.peer_avatar.clone(),
-                    avatar_decoded: None,
-                    initials: get_initials(&peer_name),
-                    presence_status: "pending".to_string(),
-                    last_message: last_message.clone(),
-                    timestamp: dm.created_at
-                        .with_timezone(&chrono::Local)
-                        .format("%H:%M")
-                        .to_string(),
-                    unread_count: 1,
-                    is_typing: false,
-                    is_anon: true,
-                };
-                dm_list.push(dm_item);
-
+                // DM-sidebar row for this request is produced by list_dm_sidebar
+                // (core). Here we only build the Friends-modal Requests tab entry.
                 // Add to friends modal private requests list (use conversation_id as user_id)
                 private_requests_ui.push(FriendRequestSendData {
                     user_id: dm.id.to_string(),
@@ -294,52 +201,6 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                     avatar_decoded: None,
                     sent_at: last_message,
                 });
-            }
-        }
-    }
-
-    // Load outgoing pending anon DM requests (requests we sent but haven't been accepted)
-    {
-        let requests = ui_ctx.list_anon_dm_outgoing_requests();
-        tracing::info!("Loaded {} outgoing anon DM requests", requests.len());
-        {
-            for dm in requests {
-                // Get peer display name from conversation
-                let peer_name = dm.peer_display_name.clone()
-                    .unwrap_or_else(|| ui_ctx.fallback_display_name(&dm.peer_id));
-                let peer_id_str = dm.peer_id.to_string();
-
-                // Get our last sent message for preview
-                let (last_message, timestamp) = match ui_ctx.get_latest_anon_dm_message(&dm.id) {
-                    Some(msg) => {
-                        let preview = msg.as_text()
-                            .map(|text| format!("You: {}", truncate_sidebar_preview(text)))
-                            .unwrap_or_else(|| "Message request sent".to_string());
-                        let ts = msg.created_at
-                            .with_timezone(&chrono::Local)
-                            .format("%H:%M")
-                            .to_string();
-                        (preview, ts)
-                    }
-                    _ => ("Waiting for response...".to_string(), dm.created_at.with_timezone(&chrono::Local).format("%H:%M").to_string()),
-                };
-
-                // Add to DM sidebar with "Waiting" indicator
-                let dm_item = DMListItemSendData {
-                    channel_id: dm.id.to_string(),
-                    user_id: peer_id_str.clone(),
-                    display_name: format!("\u{1F4EE} {} (pending)", peer_name), // Postbox emoji
-                    avatar_bytes: dm.peer_avatar.clone(),
-                    avatar_decoded: None,
-                    initials: get_initials(&peer_name),
-                    presence_status: "offline".to_string(),
-                    last_message,
-                    timestamp,
-                    unread_count: 0,
-                    is_typing: false,
-                    is_anon: true,
-                };
-                dm_list.push(dm_item);
             }
         }
     }
@@ -391,9 +252,9 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     tracing::info!("Loaded {} blocked users", users.len());
     let blocked_users_data: Vec<(String, String)> = users.into_iter()
         .map(|user_id| {
-            let id_str = user_id.to_string();
-            let display_name = format!("User {}", &id_str[..8.min(id_str.len())]);
-            (id_str, display_name)
+            // Name resolution (incl. the short-id fallback) belongs in core.
+            let display_name = ui_ctx.fallback_display_name(&user_id);
+            (user_id.to_string(), display_name)
         })
         .collect();
 

@@ -55,6 +55,31 @@ impl AttachmentDisplayData {
         if !self.is_image && !self.is_video {
             return;
         }
+        // Prefer the full-resolution local file for images (sender's picked file,
+        // or the receiver's copy after download) — the transmitted thumbnail is a
+        // low-res placeholder only. Downscale to a display cap with Lanczos3 so the
+        // bubble is crisp (Telegram-parity) without decoding a multi-MP image on
+        // the UI thread. Videos have no still to load here, so they keep using the
+        // sender-provided thumbnail bytes below.
+        if self.is_image {
+            if let Some(path) = self
+                .local_path
+                .as_deref()
+                .filter(|p| std::path::Path::new(p).exists())
+            {
+                if let Ok(img) = image::open(path) {
+                    // Cap the long edge; the bubble is ~280 logical px, so this is
+                    // ample even at 2x HiDPI while staying cheap to hold in memory.
+                    const DISPLAY_MAX: u32 = 1024;
+                    let rgba = img
+                        .resize(DISPLAY_MAX, DISPLAY_MAX, image::imageops::FilterType::Lanczos3)
+                        .to_rgba8();
+                    let (w, h) = rgba.dimensions();
+                    self.thumbnail_pixels = Some((rgba.into_raw(), w, h));
+                    return;
+                }
+            }
+        }
         if !self.thumbnail_bytes.is_empty() {
             self.thumbnail_pixels = image::load_from_memory(&self.thumbnail_bytes)
                 .ok()

@@ -367,7 +367,7 @@ pub(super) fn handle_user_profile_updated(
     let weak = window.clone();
     let user_id_str = user_id.to_string();
     let display_name_slint: slint::SharedString = display_name.clone().into();
-    let initials = compute_initials(&display_name);
+    let initials = chatter_core::ui::chat_data::initials_from_name(&display_name);
 
     // Decode the avatar to raw RGBA now (Send-safe); the non-Send `slint::Image`
     // is built inside the event-loop closure below. This is the same in-place
@@ -434,10 +434,3 @@ pub(super) fn handle_user_profile_updated(
     });
 }
 
-fn compute_initials(name: &str) -> String {
-    name.split_whitespace()
-        .filter_map(|w| w.chars().next())
-        .take(2)
-        .collect::<String>()
-        .to_uppercase()
-}
