@@ -90,6 +90,8 @@ export struct MessageItemData {
     reply-to-category: string,       // Quoted parent media category ("audio"/"image"/"video"/"") — drives rich quote rendering
     reply-to-attachment-id: string,  // Quoted parent's media attachment id (keys the inline quote audio player)
     reply-to-duration: string,       // Quoted audio parent duration ("0:37"), empty if unknown
+    reply-to-filename: string,       // Quoted audio parent filename (shown in the inline quote player)
+    reply-to-waveform: [int],        // Quoted audio parent waveform (32 values 0-100) for the inline quote player
     reply-to-has-thumbnail: bool,    // Whether the quoted message has a media thumbnail
     reply-to-thumbnail: image,       // Thumbnail image for the quoted message (e.g. photo, video)
     show-sender: bool,

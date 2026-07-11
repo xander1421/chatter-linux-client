@@ -23,7 +23,7 @@ pub mod events;
 mod jarvis;
 mod link_device;
 mod messaging;
-pub use messaging::InviteCandidate;
+pub use messaging::{InviteCandidate, ReplyParentMedia};
 mod notification;
 mod pin;
 mod profile;
@@ -1673,7 +1673,7 @@ impl ChatterClient {
         let reply_thumbnail_bytes = result
             .message
             .as_ref()
-            .and_then(|m| m.reply_to_thumbnail.clone().or_else(|| self.reply_parent_media(m).3));
+            .and_then(|m| m.reply_to_thumbnail.clone().or_else(|| self.reply_parent_media(m).thumbnail));
 
         Ok(SendMessageUiResult {
             message_id_effective,

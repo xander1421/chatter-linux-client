@@ -164,31 +164,22 @@ impl ChatterClient {
         }
     }
 
-    /// Media descriptor of a reply's quoted parent: `(category, attachment_id,
-    /// duration, local_thumbnail)`. Lets the quote bubble render the parent's
-    /// media richly (an inline audio player for audio parents, a thumbnail for
-    /// visual parents) instead of plain text.
-    ///
-    /// `category` is `"audio"`/`"image"`/`"gif"`/`"video"` — `"gif"` splits out
-    /// of image so the quote can badge it as animated. `duration` is a formatted
-    /// `"m:ss"` for audio, else empty. `local_thumbnail` is the parent
-    /// attachment's locally-stored thumbnail bytes for visual categories — a
-    /// fallback the converter uses when the wire quote thumbnail (capped at
-    /// ~12KB and often dropped) is absent, so image/gif/video quotes still show
-    /// a preview instead of degrading to text. All fields are empty/`None` when
-    /// the message is not a reply, the parent or its first attachment can't be
-    /// resolved locally, or the parent carries no renderable media.
+    /// Media descriptor of a reply's quoted parent — see [`ReplyParentMedia`].
+    /// Lets the quote bubble render the parent's media richly (an inline audio
+    /// player for audio parents, a thumbnail for visual parents) instead of
+    /// plain text. Returns a default (all-empty) descriptor when the message is
+    /// not a reply, the parent or its first attachment can't be resolved
+    /// locally, or the parent carries no renderable media.
     pub fn reply_parent_media(
         &self,
         msg: &crate::domain::message::Message,
-    ) -> (String, String, String, Option<Vec<u8>>) {
+    ) -> ReplyParentMedia {
         use crate::domain::attachment::FileCategory;
-        let empty = || (String::new(), String::new(), String::new(), None);
 
-        let Some(parent_id) = msg.reply_to.as_ref() else { return empty() };
-        let Some(parent) = self.get_message_local(parent_id) else { return empty() };
-        let Some(att_id) = parent.attachments.first() else { return empty() };
-        let Some(att) = self.get_attachment(att_id) else { return empty() };
+        let Some(parent_id) = msg.reply_to.as_ref() else { return ReplyParentMedia::default() };
+        let Some(parent) = self.get_message_local(parent_id) else { return ReplyParentMedia::default() };
+        let Some(att_id) = parent.attachments.first() else { return ReplyParentMedia::default() };
+        let Some(att) = self.get_attachment(att_id) else { return ReplyParentMedia::default() };
 
         let meta = &att.metadata;
         // GIFs are an image MIME but read as animated — split them out before
@@ -200,7 +191,7 @@ impl ChatterClient {
                 FileCategory::Audio => "audio",
                 FileCategory::Image => "image",
                 FileCategory::Video => "video",
-                _ => return empty(),
+                _ => return ReplyParentMedia::default(),
             }
         };
 
@@ -219,7 +210,22 @@ impl ChatterClient {
             _ => None,
         };
 
-        (category.to_string(), att.id.to_string(), duration, local_thumbnail)
+        // Audio waveform (32 values, 0-100) mapped to i32 for the inline quote
+        // player; empty when the parent carries none.
+        let waveform = meta
+            .waveform_samples
+            .as_ref()
+            .map(|samples| samples.iter().map(|&s| s as i32).collect())
+            .unwrap_or_default();
+
+        ReplyParentMedia {
+            category: category.to_string(),
+            attachment_id: att.id.to_string(),
+            duration,
+            thumbnail: local_thumbnail,
+            filename: meta.name.clone(),
+            waveform,
+        }
     }
 
     /// Sender avatar bytes for a message, resolved per conversation type
@@ -817,6 +823,33 @@ impl ChatterClient {
     ) -> Result<(), crate::services::message::MessageError> {
         self.messages().send_profile_key_handshake(peer_id).await
     }
+}
+
+/// Media descriptor of a reply's quoted parent, shaped by
+/// [`ChatterClient::reply_parent_media`]. Lets the quote bubble render the
+/// parent's media richly (an inline audio player for audio parents, a thumbnail
+/// for visual parents) instead of plain text. All fields are empty/`None` when
+/// the message is not a reply, the parent or its first attachment can't be
+/// resolved locally, or the parent carries no renderable media.
+#[derive(Debug, Clone, Default)]
+pub struct ReplyParentMedia {
+    /// `"audio"`/`"image"`/`"gif"`/`"video"` — `"gif"` splits out of image so
+    /// the quote can badge it as animated. Empty when no renderable media.
+    pub category: String,
+    /// Parent attachment id (for play/seek callbacks).
+    pub attachment_id: String,
+    /// Formatted `"m:ss"` for audio, else empty.
+    pub duration: String,
+    /// Parent attachment's locally-stored thumbnail bytes for visual categories
+    /// — a fallback the converter uses when the wire quote thumbnail (capped at
+    /// ~12KB and often dropped) is absent, so image/gif/video quotes still show
+    /// a preview instead of degrading to text.
+    pub thumbnail: Option<Vec<u8>>,
+    /// Parent attachment filename, shown in the inline audio quote player.
+    pub filename: String,
+    /// Audio waveform (32 values, 0-100) for the inline quote player; empty when
+    /// the parent carries none.
+    pub waveform: Vec<i32>,
 }
 
 /// A person the user can invite to a channel, shaped by

@@ -60,6 +60,12 @@ pub struct MessageDisplayData {
     /// Formatted duration of the quoted audio parent (e.g. "0:37"); empty when
     /// unknown or the parent is not audio.
     pub reply_to_duration: String,
+    /// Filename of the quoted audio parent, shown in the inline quote player.
+    /// Empty when unknown or the parent is not audio.
+    pub reply_to_filename: String,
+    /// Waveform samples (32 values, 0-100) of the quoted audio parent, drawn by
+    /// the inline quote player. Empty when unknown or the parent is not audio.
+    pub reply_to_waveform: Vec<i32>,
     /// Raw thumbnail bytes of the quoted media (image/jpeg, image/png).
     /// Populated from `Message.reply_to_thumbnail` on receive/send.
     pub reply_to_thumbnail_bytes: Option<Vec<u8>>,
@@ -230,6 +236,8 @@ impl MessageDisplayData {
         reply_to_category: self.reply_to_category.clone().into(),
         reply_to_attachment_id: self.reply_to_attachment_id.clone().into(),
         reply_to_duration: self.reply_to_duration.clone().into(),
+        reply_to_filename: self.reply_to_filename.clone().into(),
+        reply_to_waveform: ModelRc::new(VecModel::from(self.reply_to_waveform.clone())),
         reply_to_has_thumbnail,
         reply_to_thumbnail,
         show_sender: true,
@@ -343,6 +351,8 @@ pub fn message_to_display_data_with_replies(
         reply_to_category: String::new(),          // Resolved by batch via parent lookup
         reply_to_attachment_id: String::new(),     // Resolved by batch via parent lookup
         reply_to_duration: String::new(),          // Resolved by batch via parent lookup
+        reply_to_filename: String::new(),          // Resolved by batch via parent lookup
+        reply_to_waveform: Vec::new(),             // Resolved by batch via parent lookup
         reply_to_thumbnail_bytes: msg.reply_to_thumbnail.clone(),
         reply_to_thumbnail_decoded: None,
         delivery_status: msg.delivery_status.clone(),
@@ -455,6 +465,8 @@ pub fn anon_message_to_display_data(
         reply_to_category: String::new(),
         reply_to_attachment_id: String::new(),
         reply_to_duration: String::new(),
+        reply_to_filename: String::new(),
+        reply_to_waveform: Vec::new(),
         reply_to_thumbnail_bytes: None,
         reply_to_thumbnail_decoded: None,
         delivery_status: msg.delivery_status().to_string(),
@@ -488,17 +500,18 @@ pub fn anon_message_to_display_data(
 /// - `reply_author_name`: `ChatterClient::reply_author_display_name`
 /// - `reply_not_found`: `ChatterClient::reply_parent_missing_for`
 /// - `reply_parent_media`: `ChatterClient::reply_parent_media` — resolves the
-///   quoted parent's `(category, attachment_id, duration, local_thumbnail)` for
-///   rich quote rendering (inline audio player, thumbnail); empty fields fall
-///   back to text. The local thumbnail backfills `reply_to_thumbnail_bytes`
-///   when the wire quote thumbnail was dropped.
+///   quoted parent's [`ReplyParentMedia`] (category, attachment id, duration,
+///   local thumbnail, filename, waveform) for rich quote rendering (inline
+///   audio player, thumbnail); empty fields fall back to text. The local
+///   thumbnail backfills `reply_to_thumbnail_bytes` when the wire quote
+///   thumbnail was dropped.
 pub fn messages_to_display_batch(
     messages: &[Message],
     sender_name: impl Fn(&Message) -> String,
     resolve_attachment: impl Fn(&chatter_core::domain::AttachmentId) -> Option<Attachment>,
     reply_author_name: impl Fn(&Message) -> String,
     reply_not_found: impl Fn(&Message) -> bool,
-    reply_parent_media: impl Fn(&Message) -> (String, String, String, Option<Vec<u8>>),
+    reply_parent_media: impl Fn(&Message) -> chatter_core::client::ReplyParentMedia,
 ) -> Vec<MessageDisplayData> {
     let mut display_messages = Vec::with_capacity(messages.len());
 
@@ -517,10 +530,13 @@ pub fn messages_to_display_batch(
         if display_data.is_reply {
             display_data.reply_to_sender_name = reply_author_name(msg);
             display_data.reply_to_not_found = reply_not_found(msg);
-            let (category, attachment_id, duration, local_thumbnail) = reply_parent_media(msg);
-            display_data.reply_to_category = category;
-            display_data.reply_to_attachment_id = attachment_id;
-            display_data.reply_to_duration = duration;
+            let parent_media = reply_parent_media(msg);
+            display_data.reply_to_category = parent_media.category;
+            display_data.reply_to_attachment_id = parent_media.attachment_id;
+            display_data.reply_to_duration = parent_media.duration;
+            display_data.reply_to_filename = parent_media.filename;
+            display_data.reply_to_waveform = parent_media.waveform;
+            let local_thumbnail = parent_media.thumbnail;
             // Wire quote thumbnail is capped at ~12KB and often dropped (gifs,
             // big images/videos), degrading a visual quote to text. When absent,
             // fall back to the parent's local thumbnail so the bubble still

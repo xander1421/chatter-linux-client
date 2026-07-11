@@ -92,6 +92,8 @@ pub fn build_own_message_item(
         reply_to_category: "".into(),
         reply_to_attachment_id: "".into(),
         reply_to_duration: "".into(),
+        reply_to_filename: "".into(),
+        reply_to_waveform: slint::ModelRc::new(slint::VecModel::from(Vec::<i32>::new())),
         reply_to_has_thumbnail,
         reply_to_thumbnail,
         show_sender: true,

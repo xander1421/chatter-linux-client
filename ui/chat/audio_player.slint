@@ -1,0 +1,114 @@
+// Inline audio player — a round play/pause button, filename, a seekable
+// waveform, and an elapsed/duration readout. Shared by the main message
+// attachment and the reply/quote bubble so both render identically. The
+// `compact` variant shrinks the button/track for the tighter quote layout.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+
+export component AudioPlayer inherits HorizontalLayout {
+    // Audio identity / metadata
+    in property <string> attachment-id: "";
+    in property <string> filename: "";
+    in property <[int]> waveform: [];
+    in property <string> duration-display: "";
+
+    // Shared playback state (driven from the owning message list)
+    in property <string> current-playing-attachment-id: "";
+    in property <bool> is-media-playing: false;
+    in property <float> audio-progress: 0.0;
+    in property <string> audio-elapsed: "0:00";
+
+    // Slightly smaller variant for the reply/quote bubble
+    in property <bool> compact: false;
+
+    callback play-clicked(string);          // toggle playback for attachment-id
+    callback audio-seek(string, float);     // attachment-id, 0..1 seek position
+    callback more-clicked(length, length);  // absolute x, y for the context menu
+
+    property <bool> is-this-playing: root.attachment-id == root.current-playing-attachment-id;
+    property <length> button-size: root.compact ? 28px : 40px;
+    property <length> icon-size: root.compact ? 12px : 16px;
+    property <length> track-width: root.compact ? 160px : 180px;
+
+    spacing: root.compact ? Spacing.xs : Spacing.sm;
+
+    // Play / pause button
+    Rectangle {
+        width: root.button-size;
+        height: root.button-size;
+        border-radius: root.button-size / 2;
+        background: play-touch.has-hover ? Colors.primary.darker(0.1) : Colors.primary;
+
+        Image {
+            width: root.icon-size;
+            height: root.icon-size;
+            source: (root.is-this-playing && root.is-media-playing) ? Icons.pause : Icons.play;
+            colorize: Colors.text-primary;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+        }
+
+        play-touch := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.play-clicked(root.attachment-id); }
+            pointer-event(event) => {
+                if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
+                    root.more-clicked(self.absolute-position.x + self.mouse-x,
+                        self.absolute-position.y + self.mouse-y);
+                }
+            }
+        }
+    }
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 4px;
+        width: root.track-width;
+
+        Text {
+            text: root.filename;
+            color: Colors.text-primary;
+            font-size: Typography.xs;
+            overflow: elide;
+        }
+
+        waveform := Rectangle {
+            height: 16px;
+
+            HorizontalLayout {
+                spacing: 3px;
+
+                for bar[idx] in root.waveform: Rectangle {
+                    property <float> bar-position: (idx + 1) / 32.0;
+                    property <bool> is-played: root.is-this-playing && bar-position <= root.audio-progress;
+
+                    horizontal-stretch: 1;
+                    height: max(3px, bar * 0.12px + 3px);
+                    background: is-played ? Colors.primary : Colors.text-muted;
+                    border-radius: 1px;
+                }
+            }
+
+            waveform-touch := TouchArea {
+                property <float> seek-pos: clamp(self.mouse-x / parent.width, 0.0, 1.0);
+                mouse-cursor: pointer;
+                clicked => { root.audio-seek(root.attachment-id, self.seek-pos); }
+                pointer-event(event) => {
+                    if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
+                        root.more-clicked(self.absolute-position.x + self.mouse-x,
+                            self.absolute-position.y + self.mouse-y);
+                    }
+                }
+            }
+        }
+
+        Text {
+            text: root.is-this-playing ? root.audio-elapsed + " / " + root.duration-display : root.duration-display;
+            color: Colors.text-muted;
+            font-size: Typography.xs;
+        }
+    }
+}
