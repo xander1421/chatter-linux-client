@@ -21,6 +21,7 @@ export component MessageList inherits Rectangle {
     in property <bool> is-dm: false;  // When true, messages show minimal UI (no avatars/names in DMs)
     in-out property <length> scroll-position: 0;
     in property <int> scroll-to-index: -1;  // Set to message index to scroll to it
+    in property <string> highlighted-message-id: "";  // Message id to briefly flash (quote jump)
     in property <string> current-playing-attachment-id: "";
     in property <bool> is-media-playing: false;
     in property <float> audio-progress: 0.0;
@@ -40,6 +41,7 @@ export component MessageList inherits Rectangle {
     callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback thread-clicked(string);
     callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
+    callback quote-clicked(string);  // (reply-to-message-id) — jump to quoted original
     callback load-more();
     callback attachment-clicked(string);  // attachment ID
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
@@ -196,6 +198,20 @@ export component MessageList inherits Rectangle {
                 }
             }
 
+            // Jump-to-message (quote click, search result): move the viewport to
+            // the target index. Item heights vary and we can't measure each one
+            // here, so approximate proportionally — the target lands in view and
+            // the green highlight pins exactly which message it is. `animate
+            // viewport-y` (below the fold) makes it a smooth glide. Mirror the
+            // root property locally so `changed` fires inside Flickable scope.
+            property <int> jump-index: root.scroll-to-index;
+            changed jump-index => {
+                if (self.jump-index >= 0 && root.messages.length > 1) {
+                    self.viewport-y = (self.jump-index / (root.messages.length - 1))
+                        * min(0px, self.height - self.viewport-height);
+                }
+            }
+
             messages-layout := VerticalLayout {
             // Explicit width from parent for proper text wrapping
             width: parent.width;
@@ -284,6 +300,8 @@ export component MessageList inherits Rectangle {
                 is-thread-reply: item.is-thread-reply;
                 is-reply: item.is-reply;
                 reply-to-not-found: item.reply-to-not-found;
+                reply-to-message-id: item.reply-to-message-id;
+                highlighted: item.message-id == root.highlighted-message-id;
                 reply-to-sender-name: item.reply-to-sender-name;
                 reply-to-preview: item.reply-to-preview;
                 reply-to-has-thumbnail: item.reply-to-has-thumbnail;
@@ -310,6 +328,10 @@ export component MessageList inherits Rectangle {
 
                 more-clicked(sender-id, timestamp-ns, x, y) => {
                     root.more-clicked(sender-id, timestamp-ns, x, y);
+                }
+
+                quote-clicked(id) => {
+                    root.quote-clicked(id);
                 }
 
                 attachment-clicked(id) => {

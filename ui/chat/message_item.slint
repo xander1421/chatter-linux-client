@@ -79,6 +79,8 @@ export component MessageItem inherits Rectangle {
     // Quote / reply-to context
     in property <bool> is-reply: false;
     in property <bool> reply-to-not-found: false;  // Quoted parent missing/deleted
+    in property <string> reply-to-message-id: "";  // Parent MessageId — tap-to-jump target
+    in property <bool> highlighted: false;          // Brief green flash when this is a jump target
     in property <string> reply-to-sender-name: "";
     in property <string> reply-to-preview: "";
     in property <bool> reply-to-has-thumbnail: false;
@@ -95,6 +97,7 @@ export component MessageItem inherits Rectangle {
     callback message-clicked(string);
     callback attachment-clicked(string);
     callback audio-seek(string, float);
+    callback quote-clicked(string);  // (reply-to-message-id) — jump to quoted original
 
     // Styling
     min-height: main-layout.preferred-height;
@@ -411,6 +414,17 @@ export component MessageItem inherits Rectangle {
                                         font-size: Typography.xs;
                                         font-italic: true;
                                         overflow: elide;
+                                    }
+                                }
+                            }
+
+                            // Tap the quote to jump to the original message.
+                            // Suppressed when the parent is gone/unknown.
+                            quote-touch := TouchArea {
+                                mouse-cursor: (root.reply-to-not-found || root.reply-to-message-id == "") ? default : pointer;
+                                clicked => {
+                                    if (!root.reply-to-not-found && root.reply-to-message-id != "") {
+                                        root.quote-clicked(root.reply-to-message-id);
                                     }
                                 }
                             }
@@ -1027,6 +1041,22 @@ export component MessageItem inherits Rectangle {
                             }
                         }
 
+                    }
+
+                    // Tap-to-jump flash — brief green highlight when this bubble
+                    // is the scroll target of a quote click. Plain Rectangle
+                    // (no TouchArea) so it never blocks input; fades via animate.
+                    Rectangle {
+                        width: 100%;
+                        height: 100%;
+                        border-radius: bubble.border-radius;
+                        background: Colors.primary.with-alpha(root.highlighted ? 0.22 : 0.0);
+                        border-width: root.highlighted ? 1.5px : 0px;
+                        border-color: Colors.primary.with-alpha(root.highlighted ? 0.85 : 0.0);
+                        animate background, border-color, border-width {
+                            duration: 400ms;
+                            easing: ease-out;
+                        }
                     }
                 }
 

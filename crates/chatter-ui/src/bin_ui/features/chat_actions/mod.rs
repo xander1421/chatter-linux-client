@@ -30,6 +30,7 @@ mod video_player;
 /// Wire message action callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     message_actions::wire_message_clicked(window);
+    message_actions::wire_quote_clicked(window);
     message_actions::wire_reply_clicked(window, ui_ctx);
     message_actions::wire_cancel_reply(window);
     message_actions::wire_react_clicked(window);

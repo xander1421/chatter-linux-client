@@ -78,6 +78,10 @@ pub fn build_own_message_item(
         reply_count_text: "".into(),
         is_thread_reply: false,
         is_reply,
+        // Optimistic echo identifies its reply by (sender, timestamp), not a
+        // parent MessageId; leave empty (tap-to-jump suppressed) until the
+        // canonical DB-converted message — which carries reply_to — replaces it.
+        reply_to_message_id: "".into(),
         // Own outgoing reply: the parent existed at send time.
         reply_to_not_found: false,
         reply_to_sender_name: reply_to_sender_name.into(),

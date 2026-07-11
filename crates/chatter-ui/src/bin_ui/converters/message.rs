@@ -41,6 +41,9 @@ pub struct MessageDisplayData {
     pub is_thread_reply: bool,
     // Quote / reply-to context
     pub is_reply: bool,
+    /// Stringified parent `MessageId` (`Message.reply_to`); empty when this
+    /// message is not a reply. Drives tap-to-jump to the quoted original.
+    pub reply_to_message_id: String,
     /// Signal-Desktop parity: the quoted parent message is missing or deleted.
     /// When true the snapshot still renders but with an "Original message not
     /// found" warning, and tap-to-scroll-to-original is suppressed.
@@ -210,6 +213,7 @@ impl MessageDisplayData {
         reply_count_text: self.reply_count_text.clone().into(),
         is_thread_reply: self.is_thread_reply,
         is_reply: self.is_reply,
+        reply_to_message_id: self.reply_to_message_id.clone().into(),
         reply_to_not_found: self.reply_to_not_found,
         reply_to_sender_name: self.reply_to_sender_name.clone().into(),
         reply_to_preview: self.reply_to_preview.clone().into(),
@@ -319,6 +323,7 @@ pub fn message_to_display_data_with_replies(
         reply_count_text,
         is_thread_reply: msg.is_thread_reply(),
         is_reply: msg.reply_to.is_some(),
+        reply_to_message_id: msg.reply_to.map(|id| id.to_string()).unwrap_or_default(),
         reply_to_not_found: false,  // Resolved by build sites via core (needs repo access)
         reply_to_sender_name: String::new(),  // Resolved by UI handler after conversion
         reply_to_preview: msg.reply_to_text.clone().unwrap_or_default(),
@@ -423,7 +428,9 @@ pub fn anon_message_to_display_data(
         is_thread_reply: false,
         is_reply: quote_data.is_some(),
         // Anon replies embed the quote in content_json with no parent MessageId
-        // reference, so there is no parent row to look up — never "not found".
+        // reference — there is no parent row to jump to, so leave the id empty
+        // (tap-to-jump stays suppressed) and never "not found".
+        reply_to_message_id: String::new(),
         reply_to_not_found: false,
         reply_to_sender_name: quote_data.as_ref().map(|q| q.0.clone()).unwrap_or_default(),
         reply_to_preview: quote_data.as_ref().map(|q| q.1.clone()).unwrap_or_default(),

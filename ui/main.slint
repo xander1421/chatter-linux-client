@@ -118,6 +118,7 @@ export component MainWindow inherits Window {
     in property <[MessageItemData]> messages <=> app.messages;
     in property <bool> loading-messages <=> app.loading-messages;
     in property <int> scroll-to-message-index <=> app.scroll-to-message-index;
+    in property <string> highlighted-message-id <=> app.highlighted-message-id;
     in-out property <length> message-scroll-position <=> app.message-scroll-position;
     in-out property <bool> is-at-bottom <=> app.is-at-bottom;  // True when scrolled to bottom
     in property <bool> should-auto-scroll <=> app.should-auto-scroll;  // Enable auto-scroll
@@ -567,6 +568,7 @@ export component MainWindow inherits Window {
     callback reply-clicked <=> app.reply-clicked;
     callback react-clicked <=> app.react-clicked;
     callback thread-clicked <=> app.thread-clicked;
+    callback quote-clicked <=> app.quote-clicked;
     callback more-clicked <=> app.more-clicked;
     callback view-attachment <=> app.view-attachment;
     callback audio-seek <=> app.audio-seek;

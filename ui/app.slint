@@ -214,6 +214,7 @@ export component App inherits Rectangle {
     in property <[MessageItemData]> messages: [];
     in property <bool> loading-messages: false;
     in property <int> scroll-to-message-index: -1;  // Set to scroll to a specific message
+    in property <string> highlighted-message-id: "";  // Message id to briefly flash (quote jump)
     in-out property <length> message-scroll-position: 0px;  // Scroll position for message list
     in-out property <bool> is-at-bottom: true;  // True when message list is scrolled to bottom
     in property <bool> should-auto-scroll: true;  // Enable/disable auto-scroll on new messages
@@ -637,6 +638,7 @@ export component App inherits Rectangle {
     callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback thread-clicked(string);
     callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
+    callback quote-clicked(string);  // (reply-to-message-id) — jump to quoted original
     callback view-attachment(string);  // attachment ID - for viewing/opening attachments
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
     callback load-more();
@@ -1229,6 +1231,7 @@ export component App inherits Rectangle {
                     messages: root.messages;
                     loading-messages: root.loading-messages;
                     scroll-to-message-index: root.scroll-to-message-index;
+                    highlighted-message-id: root.highlighted-message-id;
                     message-scroll-position <=> root.message-scroll-position;
                     should-auto-scroll: root.should-auto-scroll;
                     current-playing-attachment-id: root.current-playing-attachment-id;
@@ -1283,6 +1286,7 @@ export component App inherits Rectangle {
                     }
                     thread-clicked(id) => { root.thread-clicked(id); }
                     more-clicked(sender-id, timestamp-ns, x, y) => { root.more-clicked(sender-id, timestamp-ns, x, y); }
+                    quote-clicked(id) => { root.quote-clicked(id); }
                     view-attachment(id) => { root.view-attachment(id); }
                     audio-seek(id, pos) => { root.audio-seek(id, pos); }
                     load-more => { root.load-more(); }

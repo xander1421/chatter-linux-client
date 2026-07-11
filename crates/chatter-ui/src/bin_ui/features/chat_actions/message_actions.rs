@@ -2,9 +2,12 @@
 //!
 //! Handles message click, reply, react, and thread actions.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
-use slint::{ComponentHandle, Model, SharedString};
+use slint::{ComponentHandle, Model, SharedString, Timer};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::MessageId;
@@ -25,6 +28,82 @@ pub fn wire_message_clicked(window: &MainWindow) {
                 tracing::trace!("Message selected: {}", message_id_str);
             }
         });
+    });
+}
+
+/// Scroll to (and briefly flash) the message whose id matches `parent_id`,
+/// if it is present in the current UI model. Returns whether it was found.
+fn try_jump_to_message(w: &MainWindow, parent_id: &str) -> bool {
+    let messages = w.get_messages();
+    for i in 0..messages.row_count() {
+        if let Some(m) = messages.row_data(i) {
+            if m.message_id.as_str() == parent_id {
+                w.set_scroll_to_message_index(i as i32);
+                w.set_highlighted_message_id(parent_id.into());
+
+                // Auto-clear the flash after ~1.5s — a brief pulse, not a
+                // permanent highlight.
+                let weak = w.as_weak();
+                Timer::single_shot(Duration::from_millis(1500), move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_highlighted_message_id(SharedString::new());
+                    }
+                });
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Wire quote/reply-bubble click callback.
+///
+/// Jumps the message list to the quoted parent and flashes it. If the parent
+/// isn't loaded yet, pulls older history via `load-more` and re-resolves a few
+/// times as the model repopulates; if it still isn't found, logs and no-ops.
+pub fn wire_quote_clicked(window: &MainWindow) {
+    let weak_window = window.as_weak();
+
+    window.on_quote_clicked(move |parent_id: SharedString| {
+        let parent_id = parent_id.to_string();
+        if parent_id.is_empty() {
+            return;
+        }
+        let Some(w) = weak_window.upgrade() else { return };
+
+        // Fast path: parent already in the visible model.
+        if try_jump_to_message(&w, &parent_id) {
+            return;
+        }
+
+        // Parent not loaded — request older history, then re-resolve as the
+        // model repopulates. Bounded, self-owning single-shot timers avoid a
+        // retained-Timer reference cycle.
+        tracing::debug!(parent = %parent_id, "Quote target not loaded; requesting older history");
+        w.invoke_load_more();
+
+        let done = Rc::new(Cell::new(false));
+        for &delay_ms in &[200u64, 450, 750, 1100, 1500] {
+            let weak_try = w.as_weak();
+            let target = parent_id.clone();
+            let done = done.clone();
+            let is_last = delay_ms == 1500;
+            Timer::single_shot(Duration::from_millis(delay_ms), move || {
+                if done.get() {
+                    return;
+                }
+                if let Some(w) = weak_try.upgrade() {
+                    if try_jump_to_message(&w, &target) {
+                        done.set(true);
+                    } else if is_last {
+                        tracing::info!(
+                            parent = %target,
+                            "Quote parent still not loaded after fetching older history"
+                        );
+                    }
+                }
+            });
+        }
     });
 }
 

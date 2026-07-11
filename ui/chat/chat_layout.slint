@@ -45,6 +45,7 @@ export component ChatLayout inherits Rectangle {
     in property <float> audio-progress: 0.0;
     in property <string> audio-elapsed: "0:00";
     in property <int> scroll-to-message-index: -1;  // Set to scroll to a specific message
+    in property <string> highlighted-message-id: "";  // Message id to briefly flash (quote jump)
     in-out property <length> message-scroll-position: 0px;  // Scroll position for message list
     out property <bool> is-at-bottom: message-list.is-at-bottom;  // True when scrolled to bottom
     in property <bool> should-auto-scroll: true;  // Enable/disable auto-scroll on new messages
@@ -105,6 +106,7 @@ export component ChatLayout inherits Rectangle {
     callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback thread-clicked(string);
     callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
+    callback quote-clicked(string);  // (reply-to-message-id) — jump to quoted original
     callback view-attachment(string);  // attachment ID - for viewing attachment in messages
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
     callback load-more();
@@ -375,6 +377,7 @@ export component ChatLayout inherits Rectangle {
             audio-progress: root.audio-progress;
             audio-elapsed: root.audio-elapsed;
             scroll-to-index: root.scroll-to-message-index;
+            highlighted-message-id: root.highlighted-message-id;
             scroll-position <=> root.message-scroll-position;
             should-auto-scroll: root.should-auto-scroll;
 
@@ -392,6 +395,9 @@ export component ChatLayout inherits Rectangle {
             }
             more-clicked(sender-id, timestamp-ns, x, y) => {
                 root.more-clicked(sender-id, timestamp-ns, x, y);
+            }
+            quote-clicked(id) => {
+                root.quote-clicked(id);
             }
             load-more => {
                 root.load-more();
