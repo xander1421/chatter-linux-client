@@ -127,6 +127,10 @@ pub struct RoomManager {
     e2ee: Arc<RwLock<E2eeState>>,
     /// Handle to the spawned event handler task so disconnect() can await it.
     event_task: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
+    /// Shared frame store the UI reads. Kept here (not just inside
+    /// `video_playback`) so the capture path can tee the LOCAL camera/screen
+    /// feed into it for the self-preview tile.
+    shared_frames: Option<SharedVideoFrames>,
 }
 
 impl RoomManager {
@@ -149,8 +153,8 @@ impl RoomManager {
         };
 
         // Initialize video playback with shared frames if provided
-        let video_playback = match shared_frames {
-            Some(shared) => VideoPlayback::with_shared_frames(shared),
+        let video_playback = match &shared_frames {
+            Some(shared) => VideoPlayback::with_shared_frames(shared.clone()),
             None => VideoPlayback::new(),
         };
 
@@ -170,6 +174,7 @@ impl RoomManager {
             screen_share_track_sid: Arc::new(RwLock::new(None)),
             e2ee: Arc::new(RwLock::new(E2eeState { provider: None, epoch: 0 })),
             event_task: Arc::new(RwLock::new(None)),
+            shared_frames,
         };
         (manager, event_rx)
     }
@@ -257,10 +262,20 @@ impl RoomManager {
             room.as_ref().ok_or(CallError::NotInCall)?.local_participant()
         };
 
+        // Tee the local camera to the self-preview ("You") tile, keyed by the
+        // local participant identity (== the "You" tile's user_id).
+        let local_preview = self.shared_frames.as_ref().map(|shared| {
+            super::video_capture::LocalPreview {
+                shared: shared.clone(),
+                local_id: local_participant.identity().to_string(),
+                screen_share: false,
+            }
+        });
+
         // Start video capture
         let video_source = {
             let mut capture = self.video_capture.write();
-            capture.start(device_path, config)?
+            capture.start(device_path, config, local_preview)?
         };
 
         // Create and publish track
@@ -316,9 +331,20 @@ impl RoomManager {
             .map(|c| c.fps)
             .unwrap_or_else(|| ScreenCaptureConfig::default().fps);
 
+        // Tee the local screen feed to its OWN tile (throttled inside the
+        // capture loop), keyed by `screen_share_frame_id` — NOT the bare local
+        // id — so it doesn't overwrite the camera in the shared "You" slot.
+        let local_preview = self.shared_frames.as_ref().map(|shared| {
+            super::video_capture::LocalPreview {
+                shared: shared.clone(),
+                local_id: super::screen_share_frame_id(&local_participant.identity().to_string(), true),
+                screen_share: true,
+            }
+        });
+
         let handshake = {
             let mut capture = self.screen_capture.write();
-            capture.begin(source, config)?
+            capture.begin(source, config, local_preview)?
         };
 
         // Wait for the capture thread's probe frame to come back with
@@ -453,6 +479,10 @@ impl RoomManager {
                 None => return,
             }
         };
+        // Drop the self-preview frame so the "You" tile reverts to the avatar.
+        if let Some(ref shared) = self.shared_frames {
+            shared.remove_frame(&local_participant.identity().to_string());
+        }
         match local_participant.unpublish_track(&sid).await {
             Ok(_) => tracing::info!("Unpublished camera track sid={}", sid),
             Err(e) => tracing::warn!("Failed to unpublish camera track {}: {}", sid, e),
@@ -484,6 +514,11 @@ impl RoomManager {
         match local_participant.unpublish_track(&sid).await {
             Ok(_) => tracing::info!("Unpublished screen share track sid={}", sid),
             Err(e) => tracing::warn!("Failed to unpublish screen share track {}: {}", sid, e),
+        }
+        // Drop the local screen frame (its own tile key) so the screen tile
+        // clears. The camera tile (bare local id) is untouched.
+        if let Some(ref shared) = self.shared_frames {
+            shared.remove_frame(&super::screen_share_frame_id(&local_participant.identity().to_string(), true));
         }
     }
 

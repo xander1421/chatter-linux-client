@@ -548,6 +548,28 @@ pub fn on_before_rendering(window: &crate::MainWindow) {
         for i in (new_len..old_len).rev() {
             vm.remove(i);
         }
+
+        // Local self-preview: the last tile is "You", excluded from the remote
+        // list above and bound to `local-video-frame`. Its capture feed is teed
+        // into the shared store under the local participant id, so look up that
+        // texture and publish it. Blank when absent (camera/screen off) → the
+        // tile's is-video-enabled guard falls back to the avatar.
+        let local_img = participants
+            .row_data(participants.row_count().saturating_sub(1))
+            .map(|p| p.user_id.to_string())
+            .and_then(|pid| textures.get(&pid).filter(|t| t.width != 0 && t.height != 0).map(|tex| {
+                // SAFETY: same invariants as the remote textures above — live,
+                // non-zero RGBA 2D texture kept in `state.textures` across the draw.
+                unsafe {
+                    slint::BorrowedOpenGLTextureBuilder::new_gl_2d_rgba_texture(
+                        tex.id,
+                        [tex.width, tex.height].into(),
+                    )
+                    .build()
+                }
+            }))
+            .unwrap_or_default();
+        window.set_call_local_video_frame(local_img);
     });
 }
 

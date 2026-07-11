@@ -576,7 +576,10 @@ fn nv12_to_rgba_buf(
 
 /// Convert an I420 buffer to RGBA, reusing `recycled` in place when present
 /// (it is uniquely owned and correctly sized — the caller guarantees both).
-fn convert_i420_into(
+///
+/// `pub(crate)` so the capture path can reuse it to tee the local camera feed
+/// into `SharedVideoFrames` for the self-preview tile.
+pub(crate) fn convert_i420_into(
     recycled: Option<Arc<Vec<u8>>>,
     buffer: &livekit::webrtc::video_frame::I420Buffer,
     width: u32,

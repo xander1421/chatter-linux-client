@@ -244,12 +244,14 @@ pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFr
                 // CPU path: deep-copy each frame OFF the UI thread. The
                 // `SharedPixelBuffer` carries the data; wrapping it in
                 // `slint::Image` on the UI side is cheap (no copy). We can't
-                // build `slint::Image` here because it isn't `Send`.
-                let remote_buffers: Vec<slint::SharedPixelBuffer<slint::Rgba8Pixel>> = ordered
+                // build `slint::Image` here because it isn't `Send`. Keep the
+                // participant id with each buffer so the local self-preview
+                // frame can be split out on the UI thread.
+                let buffers: Vec<(String, slint::SharedPixelBuffer<slint::Rgba8Pixel>)> = ordered
                     .iter()
-                    .map(|(_, frame)| slint::SharedPixelBuffer::clone_from_slice(
+                    .map(|(id, frame)| ((*id).clone(), slint::SharedPixelBuffer::clone_from_slice(
                         &frame.rgba_data, frame.width, frame.height,
-                    ))
+                    )))
                     .collect();
 
                 let weak_invoke = weak.clone();
@@ -263,10 +265,22 @@ pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFr
                                 snapshot_len
                             );
                         }
-                        let remote_images: Vec<slint::Image> = remote_buffers
-                            .into_iter()
-                            .map(slint::Image::from_rgba8)
-                            .collect();
+                        // The last tile is the local "You" participant; its
+                        // frame draws into `local-video-frame`, not a remote row.
+                        let participants = w.get_active_call_data().participants;
+                        let local_id = participants
+                            .row_data(participants.row_count().saturating_sub(1))
+                            .map(|p| p.user_id.to_string());
+                        let mut local_img = slint::Image::default();
+                        let mut remote_images: Vec<slint::Image> = Vec::with_capacity(buffers.len());
+                        for (id, buf) in buffers {
+                            if Some(&id) == local_id.as_ref() {
+                                local_img = slint::Image::from_rgba8(buf);
+                            } else {
+                                remote_images.push(slint::Image::from_rgba8(buf));
+                            }
+                        }
+                        w.set_call_local_video_frame(local_img);
                         apply_remote_video_frames(&w, remote_images);
                     }
                     ui_busy_for_invoke.store(false, Ordering::Relaxed);

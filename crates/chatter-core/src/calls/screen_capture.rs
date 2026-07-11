@@ -300,6 +300,7 @@ impl ScreenCapture {
         &mut self,
         source: ScreenSource,
         config: Option<ScreenCaptureConfig>,
+        local_preview: Option<super::video_capture::LocalPreview>,
     ) -> Result<ScreenCaptureHandshake, CallError> {
         if self.running.load(Ordering::SeqCst) {
             return Err(CallError::TrackPublishFailed(
@@ -338,7 +339,7 @@ impl ScreenCapture {
 
         let handle = std::thread::spawn(move || {
             Self::capture_loop(
-                source_id, source_type, options, running, fps, dims_tx, source_rx,
+                source_id, source_type, options, running, fps, dims_tx, source_rx, local_preview,
             );
         });
 
@@ -370,11 +371,20 @@ impl ScreenCapture {
         fps: u32,
         dims_tx: tokio::sync::oneshot::Sender<(u32, u32)>,
         source_rx: std::sync::mpsc::Receiver<NativeVideoSource>,
+        local_preview: Option<super::video_capture::LocalPreview>,
     ) {
         use std::time::{Duration, Instant};
         use livekit::webrtc::desktop_capturer::CaptureError;
 
         let frame_duration = Duration::from_secs_f64(1.0 / fps as f64);
+        // Self-preview tee runs at most a few times a second: a full-res screen
+        // RGBA convert (e.g. 30 MB at 5120×1440) is far too costly per frame, and
+        // the preview tile is tiny. Throttle by wall-clock.
+        // ponytail: 400ms fixed; downsample before convert if even this shows on a profile.
+        let preview_min_interval = Duration::from_millis(400);
+        let mut last_preview = Instant::now()
+            .checked_sub(preview_min_interval)
+            .unwrap_or_else(Instant::now);
         let use_portal = is_wayland() || source_id == 0;
 
         let mut capturer = match DesktopCapturer::new(options) {
@@ -620,6 +630,20 @@ impl ScreenCapture {
                     let push_start = Instant::now();
                     video_source.capture_frame(&frame);
                     let push_done = Instant::now();
+
+                    // Release `frame`'s borrow of `i420_buffer` before the tee
+                    // reborrows it.
+                    drop(frame);
+
+                    // Tee to the self-preview tile (throttled — see above). The
+                    // screen frame is marked is_screen_share=false so it lands in
+                    // the local tile's slot exactly like the camera feed does.
+                    if let Some(ref preview) = local_preview {
+                        if last_preview.elapsed() >= preview_min_interval {
+                            preview.tee_i420(i420_buffer, dims.0, dims.1);
+                            last_preview = Instant::now();
+                        }
+                    }
                     frame_count += 1;
 
                     // Return the BGRA buffer to `spare` so the next

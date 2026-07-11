@@ -21,17 +21,36 @@ use super::timers::{get_call_duration_secs, stop_call_timer, stop_video_frame_ti
 /// flip it here.
 #[cfg(not(target_os = "android"))]
 fn set_local_participant_screen_sharing(window: &MainWindow, local_user_id: &str, sharing: bool) {
+    // The local screen gets its OWN tile (mirroring the remote path in
+    // room_events) — NOT flipping the "You" camera tile. Sharing the camera's
+    // tile made screen + camera fight over one slot and render in one frame.
+    // The screen frames are teed under `screen_share_frame_id`, so the tile
+    // keyed the same way picks them up via the by-user_id texture lookup.
+    let screen_id = chatter_core::calls::screen_share_frame_id(local_user_id, true);
     let mut data = window.get_active_call_data();
-    let updated: Vec<CallParticipantData> = (0..data.participants.row_count())
-        .map(|i| {
-            let mut p = data.participants.row_data(i).unwrap_or_default();
-            if p.user_id.to_string() == local_user_id {
-                p.is_screen_sharing = sharing;
-            }
-            p
-        })
+    let mut participants: Vec<CallParticipantData> = (0..data.participants.row_count())
+        .filter_map(|i| data.participants.row_data(i))
         .collect();
-    data.participants = ModelRc::new(VecModel::from(updated));
+    // Always drop any existing local screen tile first (idempotent).
+    participants.retain(|p| p.user_id.as_str() != screen_id);
+    if sharing {
+        // Insert the screen tile just before the local "You" tile (pinned last).
+        let insert_at = participants.len().saturating_sub(1);
+        participants.insert(insert_at, CallParticipantData {
+            user_id: screen_id.into(),
+            display_name: "Your screen".into(),
+            initials: "".into(),
+            avatar_source: slint::Image::default(),
+            is_muted: false,
+            is_video_enabled: true,
+            is_screen_sharing: true,
+            is_speaking: false,
+            is_audio_muted_locally: false,
+            is_video_paused_locally: false,
+        });
+    }
+    data.participant_count = participants.len() as i32;
+    data.participants = ModelRc::new(VecModel::from(participants));
     window.set_active_call_data(data);
 }
 

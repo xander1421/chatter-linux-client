@@ -15,6 +15,35 @@ use livekit::webrtc::video_source::native::NativeVideoSource;
 use livekit::webrtc::video_source::VideoResolution;
 
 use crate::error::CallError;
+use super::shared_frames::SharedVideoFrames;
+
+/// Where to tee the locally-captured frames so the self-preview ("You") tile
+/// can render them. `local_id` is the LiveKit local participant identity, which
+/// is also the local tile's `user_id`, so the UI consumer can pick this entry
+/// out of the shared frame map. `None` (the default) skips the tee.
+#[derive(Clone)]
+pub struct LocalPreview {
+    pub shared: SharedVideoFrames,
+    /// Frame-store key. Camera uses the bare local participant id (the "You"
+    /// tile); screen uses `screen_share_frame_id(id, true)` so it lands in its
+    /// OWN tile instead of overwriting the camera in the shared local slot.
+    pub local_id: String,
+    /// Whether this feed is a screen share (drives the `is_screen_share` flag on
+    /// the stored frame).
+    pub screen_share: bool,
+}
+
+impl LocalPreview {
+    /// Convert an I420 capture frame to RGBA and publish it under `local_id`.
+    /// Reuses the playback path's converter so the self-preview matches remote
+    /// rendering exactly. Runs on the capture thread — one libyuv pass/frame.
+    #[cfg(not(target_os = "android"))]
+    pub(crate) fn tee_i420(&self, buffer: &I420Buffer, width: u32, height: u32) {
+        let rgba_len = (width as usize) * (height as usize) * 4;
+        let rgba = crate::calls::video_playback::convert_i420_into(None, buffer, width, height, rgba_len);
+        self.shared.set_frame(self.local_id.clone(), rgba, width, height, self.screen_share);
+    }
+}
 
 /// Information about an available video input device.
 #[derive(Debug, Clone)]
@@ -208,6 +237,7 @@ impl VideoCapture {
         &mut self,
         device_path: Option<&str>,
         config: Option<VideoCaptureConfig>,
+        local_preview: Option<LocalPreview>,
     ) -> Result<NativeVideoSource, CallError> {
         if self.running.load(Ordering::SeqCst) {
             return Err(CallError::TrackPublishFailed(
@@ -249,7 +279,7 @@ impl VideoCapture {
         self.running.store(true, Ordering::SeqCst);
 
         let handle = std::thread::spawn(move || {
-            Self::capture_loop(path, source_clone, running, width, height, fps);
+            Self::capture_loop(path, source_clone, running, width, height, fps, local_preview);
         });
 
         self.capture_handle = Some(handle);
@@ -267,16 +297,20 @@ impl VideoCapture {
         width: u32,
         height: u32,
         fps: u32,
+        local_preview: Option<LocalPreview>,
     ) {
         #[cfg(target_os = "linux")]
         {
-            Self::capture_loop_linux(device_path, video_source, running, width, height, fps);
+            Self::capture_loop_linux(device_path, video_source, running, width, height, fps, local_preview);
         }
 
         #[cfg(target_os = "windows")]
         {
-            Self::capture_loop_windows(device_path, video_source, running, width, height, fps);
+            Self::capture_loop_windows(device_path, video_source, running, width, height, fps, local_preview);
         }
+
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        let _ = local_preview; // android/fallback: self-preview tee not wired
 
         #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
@@ -312,6 +346,7 @@ impl VideoCapture {
         width: u32,
         height: u32,
         fps: u32,
+        local_preview: Option<LocalPreview>,
     ) {
         use std::time::{Duration, Instant};
         use v4l::buffer::Type;
@@ -453,6 +488,16 @@ impl VideoCapture {
                     video_source.capture_frame(&frame);
                     let t_push = t1.elapsed();
 
+                    // Tee to the self-preview tile. Every other frame (~12fps)
+                    // keeps the extra RGBA convert off the capture hot path.
+                    // ponytail: fixed /2 throttle; make it fps-relative if the
+                    // preview looks choppy on low-fps cameras.
+                    if let Some(ref preview) = local_preview {
+                        if win_frames % 2 == 0 {
+                            preview.tee_i420(&frame.buffer, actual_width, actual_height);
+                        }
+                    }
+
                     win_frames += 1;
                     sum_wait += t_wait;
                     sum_conv += t_conv;
@@ -494,6 +539,7 @@ impl VideoCapture {
         width: u32,
         height: u32,
         fps: u32,
+        local_preview: Option<LocalPreview>,
     ) {
         use std::time::{Duration, Instant};
         use gstreamer as gst;
@@ -601,6 +647,12 @@ impl VideoCapture {
                                     };
 
                                     video_source.capture_frame(&frame);
+                                    // Tee every other frame to the self-preview tile.
+                                    if let Some(ref preview) = local_preview {
+                                        if frame_count % 2 == 0 {
+                                            preview.tee_i420(&frame.buffer, actual_w, actual_h);
+                                        }
+                                    }
                                     frame_count += 1;
                                 }
                             }
