@@ -1666,10 +1666,14 @@ impl ChatterClient {
                 .collect()
         };
 
+        // Prefer the wire quote thumbnail; when it was capped/dropped (>12KB,
+        // e.g. big images / gifs) fall back to the parent's LOCAL thumbnail so
+        // the sender's own bubble shows the preview immediately instead of a
+        // "📷 Photo" label until reload (matches the reloaded canonical message).
         let reply_thumbnail_bytes = result
             .message
             .as_ref()
-            .and_then(|m| m.reply_to_thumbnail.clone());
+            .and_then(|m| m.reply_to_thumbnail.clone().or_else(|| self.reply_parent_media(m).3));
 
         Ok(SendMessageUiResult {
             message_id_effective,

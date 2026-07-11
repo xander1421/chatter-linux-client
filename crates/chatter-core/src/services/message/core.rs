@@ -930,6 +930,32 @@ impl MessageService {
             .filter_map(|att| att.to_pointer())
             .collect();
 
+        // Build the wire Quote from the local parent so the RECEIVER's reply
+        // bubble renders. Channel replies previously dropped this — the quote
+        // rode only the sender's local copy, so the receiver (and reload) saw
+        // plain text. Mirrors the DM path (build_reply_content).
+        let wire_quote = self.message_repo.get(reply_to_id).ok().flatten().map(|original| {
+            let atts: Vec<_> = original
+                .attachments
+                .iter()
+                .filter_map(|id| self.attachment_repo.get(id).ok().flatten())
+                .collect();
+            let preview = original
+                .as_text()
+                .filter(|t| !t.is_empty())
+                .map(crate::services::gateway::shared::truncate_preview)
+                .unwrap_or_else(|| {
+                    crate::services::gateway::shared::message_reply_preview(&original, &atts)
+                });
+            let author = original.sender_id.map(|s| s.to_string()).unwrap_or_default();
+            crate::services::gateway::shared::build_quote_with_attachments(
+                &author,
+                original.sent_at,
+                &preview,
+                crate::services::gateway::shared::build_quoted_attachments(&atts),
+            )
+        });
+
         let plaintext_bytes = {
             use prost::Message as _;
             let dm = crate::proto::content_v1::DataMessage {
@@ -942,6 +968,7 @@ impl MessageService {
                     .map(|id| id.to_string())
                     .collect(),
                 targets_ai_bot,
+                quote: wire_quote,
                 ..Default::default()
             };
             let wrap = crate::proto::content_v1::Content {
