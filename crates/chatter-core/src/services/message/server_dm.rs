@@ -86,7 +86,9 @@ impl MessageService {
                 attachment_pointers,
                 &q.target_author_id.to_string(),
                 q.target_timestamp,
-                q.target_preview.as_deref().unwrap_or(""),
+                // Core-computed preview (media label / truncated text), not the
+                // raw UI preview which is empty for image/gif/video parents.
+                parts.reply_to_text.as_deref().unwrap_or(""),
                 parts.quote_attachments.clone(),
                 sent_at,
             ),

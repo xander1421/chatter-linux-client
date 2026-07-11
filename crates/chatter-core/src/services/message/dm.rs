@@ -277,7 +277,10 @@ impl MessageService {
                 attachment_pointers,
                 &q.target_author_id.to_string(),
                 q.target_timestamp,
-                q.target_preview.as_deref().unwrap_or(""),
+                // Send the core-computed preview (media label / truncated text),
+                // NOT the raw UI preview — the latter is empty for image/gif/
+                // video parents, so the receiver's quote bubble came up blank.
+                parts.reply_to_text.as_deref().unwrap_or(""),
                 parts.quote_attachments.clone(),
                 sent_at,
             ),
@@ -427,7 +430,9 @@ impl MessageService {
             attachment_pointers,
             &quote_author_id.to_string(),
             quote_timestamp,
-            quote_text,
+            // Core-computed preview (media label / truncated text), not the raw
+            // UI `quote_text` which is empty for image/gif/video parents.
+            parts.reply_to_text.as_deref().unwrap_or(""),
             parts.quote_attachments,
             sent_at,
         );

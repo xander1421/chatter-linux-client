@@ -991,12 +991,15 @@ impl MessageService {
         // Populate reply quote context so reply bubbles survive reload
         if let Ok(Some(original)) = self.message_repo.get(reply_to_id) {
             message.reply_to_author_id = original.sender_id;
-            message.reply_to_text = original.as_text().map(|t| t.to_string());
             let atts: Vec<_> = original
                 .attachments
                 .iter()
                 .filter_map(|id| self.attachment_repo.get(id).ok().flatten())
                 .collect();
+            // Media-aware preview (📷 Photo / 🎬 Video / 🎵 …), not just text —
+            // `as_text()` is None for attachments, blanking the quote bubble.
+            let preview = crate::services::gateway::shared::message_reply_preview(&original, &atts);
+            message.reply_to_text = (!preview.is_empty()).then_some(preview);
             let quote_atts = crate::services::gateway::shared::build_quoted_attachments(&atts);
             if let Some(qa) = quote_atts.first() {
                 message.reply_to_thumbnail = (!qa.thumbnail.is_empty()).then(|| qa.thumbnail.clone());
