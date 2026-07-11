@@ -480,11 +480,56 @@ export component MessageItem inherits Rectangle {
                                             height: parent.height;
                                             image-fit: cover;
                                         }
+
+                                        // Video badge — centered play triangle so a
+                                        // video quote isn't mistaken for a photo.
+                                        // Non-interactive: taps fall through to jump.
+                                        if root.reply-to-category == "video": Rectangle {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            width: 28px;
+                                            height: 28px;
+                                            border-radius: 14px;
+                                            background: Colors.overlay;
+
+                                            Image {
+                                                width: 12px;
+                                                height: 12px;
+                                                source: Icons.play;
+                                                colorize: Colors.text-primary;
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
+                                            }
+                                        }
+
+                                        // GIF chip — corner tag marking an animated
+                                        // quote. Non-interactive overlay.
+                                        if root.reply-to-category == "gif": Rectangle {
+                                            x: Spacing.xs;
+                                            y: Spacing.xs;
+                                            width: gif-label.preferred-width + 8px;
+                                            height: 16px;
+                                            border-radius: 4px;
+                                            background: Colors.primary;
+
+                                            gif-label := Text {
+                                                text: "GIF";
+                                                color: Colors.text-primary;
+                                                font-size: Typography.xs;
+                                                font-weight: Typography.semibold;
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
+                                            }
+                                        }
                                     }
 
-                                    // Text preview — non-audio parent with no thumbnail
+                                    // Text preview — non-audio parent with no thumbnail.
+                                    // Guard the empty edge so the quote is never just a
+                                    // sender name over a blank gap.
                                     if root.reply-to-category != "audio" && !root.reply-to-has-thumbnail: Text {
-                                        text: root.reply-to-preview;
+                                        text: root.reply-to-preview != ""
+                                            ? root.reply-to-preview
+                                            : (root.reply-to-category != "" ? "📎 Attachment" : "Message");
                                         color: Colors.text-secondary;
                                         font-size: Typography.xs;
                                         overflow: elide;

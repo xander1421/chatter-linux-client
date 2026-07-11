@@ -488,15 +488,17 @@ pub fn anon_message_to_display_data(
 /// - `reply_author_name`: `ChatterClient::reply_author_display_name`
 /// - `reply_not_found`: `ChatterClient::reply_parent_missing_for`
 /// - `reply_parent_media`: `ChatterClient::reply_parent_media` — resolves the
-///   quoted parent's `(category, attachment_id, duration)` for rich quote
-///   rendering (inline audio player); empty fields fall back to text/thumbnail
+///   quoted parent's `(category, attachment_id, duration, local_thumbnail)` for
+///   rich quote rendering (inline audio player, thumbnail); empty fields fall
+///   back to text. The local thumbnail backfills `reply_to_thumbnail_bytes`
+///   when the wire quote thumbnail was dropped.
 pub fn messages_to_display_batch(
     messages: &[Message],
     sender_name: impl Fn(&Message) -> String,
     resolve_attachment: impl Fn(&chatter_core::domain::AttachmentId) -> Option<Attachment>,
     reply_author_name: impl Fn(&Message) -> String,
     reply_not_found: impl Fn(&Message) -> bool,
-    reply_parent_media: impl Fn(&Message) -> (String, String, String),
+    reply_parent_media: impl Fn(&Message) -> (String, String, String, Option<Vec<u8>>),
 ) -> Vec<MessageDisplayData> {
     let mut display_messages = Vec::with_capacity(messages.len());
 
@@ -515,10 +517,25 @@ pub fn messages_to_display_batch(
         if display_data.is_reply {
             display_data.reply_to_sender_name = reply_author_name(msg);
             display_data.reply_to_not_found = reply_not_found(msg);
-            let (category, attachment_id, duration) = reply_parent_media(msg);
+            let (category, attachment_id, duration, local_thumbnail) = reply_parent_media(msg);
             display_data.reply_to_category = category;
             display_data.reply_to_attachment_id = attachment_id;
             display_data.reply_to_duration = duration;
+            // Wire quote thumbnail is capped at ~12KB and often dropped (gifs,
+            // big images/videos), degrading a visual quote to text. When absent,
+            // fall back to the parent's local thumbnail so the bubble still
+            // renders a preview. Decode stays off the UI thread below.
+            let wire_thumb_empty = display_data
+                .reply_to_thumbnail_bytes
+                .as_ref()
+                .map_or(true, |b| b.is_empty());
+            if wire_thumb_empty {
+                if let Some(bytes) = local_thumbnail {
+                    if !bytes.is_empty() {
+                        display_data.reply_to_thumbnail_bytes = Some(bytes);
+                    }
+                }
+            }
         }
 
         display_messages.push(display_data);
