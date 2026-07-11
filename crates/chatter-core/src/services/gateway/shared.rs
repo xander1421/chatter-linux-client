@@ -63,6 +63,9 @@ pub fn message_reply_preview(msg: &Message, attachments: &[Attachment]) -> Strin
             };
             return format!("{} {}", emoji, name);
         }
+        if att.metadata.mime_type == "image/gif" {
+            return "🎞️ GIF".to_string();
+        }
         let (emoji, label) = match cat {
             FileCategory::Image => ("📷", "Photo"),
             FileCategory::Video => ("🎬", "Video"),
@@ -128,12 +131,18 @@ pub fn build_quote_with_attachments(
 /// attachments. Only image/video attachments with a sender thumbnail are
 /// serialized — others are skipped to keep the quote payload small.
 pub fn build_quoted_attachments(attachments: &[Attachment]) -> Vec<QuotedAttachment> {
+    // Quote rides inside the encrypted DM, which is capped at MAX_CONTENT_SIZE
+    // (64KB) after padding. The stored thumbnail is a 768px lossless WebP that
+    // can run to hundreds of KB (gifs especially) — embedding it whole blew the
+    // cap and the whole reply silently failed to send. Cap the embedded quote
+    // thumbnail; over budget → skip it and let the text label carry the quote.
+    const MAX_QUOTE_THUMB: usize = 12 * 1024;
     attachments
         .iter()
         .filter(|a| a.metadata.is_image() || a.metadata.is_video())
         .filter_map(|a| {
             let thumb = a.metadata.thumbnail.clone().unwrap_or_default();
-            if thumb.is_empty() {
+            if thumb.is_empty() || thumb.len() > MAX_QUOTE_THUMB {
                 return None;
             }
             Some(QuotedAttachment {

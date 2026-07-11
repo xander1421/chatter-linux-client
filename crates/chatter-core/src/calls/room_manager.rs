@@ -77,6 +77,10 @@ pub enum RoomEvent {
         participant_identity: String,
         quality: u8,
     },
+    /// The set of currently-speaking participants changed. Carries every
+    /// speaking identity (local included); the UI marks matching tiles and
+    /// clears the rest so the "who's talking" ring follows the audio.
+    ActiveSpeakersChanged { speaker_identities: Vec<String> },
 }
 
 /// E2EE key state (key provider + epoch under one lock).
@@ -1156,6 +1160,13 @@ impl RoomManager {
                     participant_identity: participant.identity().to_string(),
                     is_encrypted,
                 });
+            }
+            livekit::RoomEvent::ActiveSpeakersChanged { speakers } => {
+                let speaker_identities = speakers
+                    .iter()
+                    .map(|p| p.identity().to_string())
+                    .collect();
+                let _ = event_tx.try_send(RoomEvent::ActiveSpeakersChanged { speaker_identities });
             }
             _ => {}
         }

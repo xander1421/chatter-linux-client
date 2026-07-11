@@ -33,11 +33,11 @@ component ParticipantTile inherits Rectangle {
     border-radius: Spacing.radius-lg;
     // Border + outer glow drive the "is speaking" affordance — both animate
     // between idle and active so the transition feels alive rather than a
-    // hard on/off flip. Glow colour uses glow-cyan so it reads on dark OLED.
+    // hard on/off flip. Bright green reads instantly as "talking" on dark OLED.
     border-width: participant.is-speaking ? 3px : 1px;
-    border-color: participant.is-speaking ? Colors.glow-cyan : Colors.neo-highlight;
+    border-color: participant.is-speaking ? #22ff77 : Colors.neo-highlight;
     drop-shadow-blur: participant.is-speaking ? 18px : 0px;
-    drop-shadow-color: participant.is-speaking ? Colors.glow-cyan-soft : transparent;
+    drop-shadow-color: participant.is-speaking ? #22ff7799 : transparent;
     drop-shadow-offset-x: 0px;
     drop-shadow-offset-y: 0px;
     clip: true;

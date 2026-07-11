@@ -283,6 +283,25 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         }
                     });
                 }
+                LiveKitRoomEvent::ActiveSpeakersChanged { speaker_identities } => {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            let mut data = w.get_active_call_data();
+                            let updated: Vec<CallParticipantData> =
+                                (0..data.participants.row_count())
+                                    .map(|i| {
+                                        let mut p = data.participants.row_data(i).unwrap_or_default();
+                                        p.is_speaking = speaker_identities
+                                            .iter()
+                                            .any(|id| id == p.user_id.as_str());
+                                        p
+                                    })
+                                    .collect();
+                            data.participants = ModelRc::new(VecModel::from(updated));
+                            w.set_active_call_data(data);
+                        }
+                    });
+                }
                 LiveKitRoomEvent::ConnectionQualityChanged { participant_identity, quality } => {
                     // UI doesn't surface per-participant quality today.
                     // Log so SDK users see the stream is live.
