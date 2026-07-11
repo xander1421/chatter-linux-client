@@ -117,10 +117,22 @@ fn render_accepted_call(
         } => {
             let weak = weak.clone();
             let frames = shared_frames.clone();
+            // Resolve the peer's avatar from local state (same source the DM
+            // sidebar uses) so the pre-populated remote tile carries it. Without
+            // this the placeholder shows default initials, and this
+            // set_active_call_data can race-clobber the avatar ParticipantJoined
+            // would otherwise install — leaving the caller's tile blank.
+            let peer_avatar_bytes = ui_ctx
+                .resolve_call_participant(&peer_id.to_string())
+                .avatar_bytes;
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
                 let local_initials = get_initials(&my_display_name);
                 let remote_initials = get_initials(&peer_name);
+                let remote_avatar = peer_avatar_bytes
+                    .as_deref()
+                    .and_then(avatar_bytes_to_image)
+                    .unwrap_or_default();
                 let local_participant = CallParticipantData {
                     user_id: current_user_id.clone().into(),
                     display_name: my_display_name.clone().into(),
@@ -137,7 +149,7 @@ fn render_accepted_call(
                     user_id: peer_id.to_string().into(),
                     display_name: peer_name.clone().into(),
                     initials: remote_initials.into(),
-                    avatar_source: slint::Image::default(),
+                    avatar_source: remote_avatar,
                     is_muted: false,
                     is_video_enabled: is_video,
                     is_screen_sharing: false,
@@ -170,7 +182,7 @@ fn render_accepted_call(
                 w.set_call_is_video_enabled(is_video);
                 w.set_call_is_screen_sharing(false);
                 w.set_active_call_visible(true);
-                start_call_timer(&w, None);
+                start_call_timer(&w, (setup.started_at_ns != 0).then_some(setup.started_at_ns));
                 start_video_frame_timer(&w, frames);
             });
             // Media is auto-published by the call worker after connect.

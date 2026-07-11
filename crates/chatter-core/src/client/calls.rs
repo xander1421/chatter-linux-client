@@ -300,6 +300,11 @@ impl ChatterClient {
             channel_id,
             verification_emojis: [emojis.0, emojis.1, emojis.2, emojis.3],
             is_video: matches!(call_type, crate::domain::call::CallType::Video),
+            started_at_ns: call.started_at
+                .and_then(|d| d.timestamp_nanos_opt())
+                .filter(|n| *n > 0)
+                .map(|n| n as u64)
+                .unwrap_or(0),
         })
     }
 

@@ -1713,6 +1713,10 @@ async fn initiate_call_impl(
     let mut call = Call::new(channel_id, initiator_id, call_type);
     call.id = call_id;
     call.start();
+    // Anchor to the server's creation time so both peers show the same duration.
+    if let Some(dt) = response.call_info.as_ref().and_then(|ci| server_ns_to_utc(ci.created_at)) {
+        call.started_at = Some(dt);
+    }
     call.add_participant(Participant::new(initiator_id));
 
     // Store active call
@@ -1724,6 +1728,15 @@ async fn initiate_call_impl(
     });
 
     Ok(call)
+}
+
+/// Convert a server Unix-nanoseconds timestamp to `DateTime<Utc>`, or `None`
+/// when the value is 0/out of range (caller then keeps the local `started_at`).
+fn server_ns_to_utc(ns: u64) -> Option<chrono::DateTime<chrono::Utc>> {
+    if ns == 0 {
+        return None;
+    }
+    chrono::DateTime::from_timestamp((ns / 1_000_000_000) as i64, (ns % 1_000_000_000) as u32)
 }
 
 async fn join_call_impl(
@@ -1778,6 +1791,11 @@ async fn join_call_impl(
     let mut call = Call::new(channel_id, initiator_id, call_type);
     call.id = call_id;
     call.start();
+    // Anchor to the server's creation time so both peers show the same duration
+    // (the callee otherwise counts from accept — ~ring-duration behind).
+    if let Some(dt) = server_ns_to_utc(call_info.created_at) {
+        call.started_at = Some(dt);
+    }
     call.add_participant(Participant::new(joiner_id));
 
     // Store active call

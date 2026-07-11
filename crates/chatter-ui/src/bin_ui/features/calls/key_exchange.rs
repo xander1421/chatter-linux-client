@@ -76,7 +76,7 @@ pub async fn handle_call_key_answer(
         }
         w.set_active_call_data(call_data);
 
-        start_call_timer(&w, None);
+        start_call_timer(&w, (setup.started_at_ns != 0).then_some(setup.started_at_ns));
         if let Some(frames) = shared_frames {
             start_video_frame_timer(&w, frames);
         }

@@ -25,6 +25,18 @@ use crate::domain::call::{AnonCallAnswerOutcome, AnonCallSetupResult, CallSetupR
 #[cfg(feature = "media")]
 use crate::domain::call::CallType;
 use crate::domain::call::PendingDmCall;
+
+/// Server call-creation time as Unix nanos, taken from the domain `Call`
+/// (worker sets `started_at` from the server's `created_at`). 0 when unknown —
+/// the UI timer then falls back to local `now`.
+#[cfg(feature = "media")]
+fn call_started_at_ns(call: &crate::domain::call::Call) -> u64 {
+    call.started_at
+        .and_then(|d| d.timestamp_nanos_opt())
+        .filter(|n| *n > 0)
+        .map(|n| n as u64)
+        .unwrap_or(0)
+}
 #[cfg(feature = "media")]
 use crate::domain::ids::CallId;
 use crate::domain::ids::{ChannelId, UserId};
@@ -328,7 +340,8 @@ impl CallSignalingService {
             "Call offer sent, storing pending state"
         );
 
-        // Store pending call state (ephemeral key kept until answer)
+        // Store pending call state (ephemeral key kept until answer). Carry the
+        // server creation time so the post-answer timer matches the callee.
         self.set_pending_dm_call(PendingDmCall {
             call_id: call.id,
             channel_id,
@@ -336,6 +349,7 @@ impl CallSignalingService {
             peer_id: *peer_id,
             call_type: call_type_str.to_string(),
             is_video,
+            started_at_ns: call_started_at_ns(&call),
         });
 
         Ok(call.id)
@@ -377,6 +391,7 @@ impl CallSignalingService {
 
         // Capture call view-data before `pending` is dropped (zeroizes the key).
         let is_video = pending.is_video;
+        let started_at_ns = pending.started_at_ns;
 
         // Delegate all crypto to the Signal service (ECDH + identity lookup + HKDF)
         let priv_key = pending.ephemeral_key.private_key_bytes();
@@ -431,6 +446,7 @@ impl CallSignalingService {
             channel_id: ChannelId::new(), // channel_id was consumed with pending
             verification_emojis: [e1, e2, e3, e4],
             is_video,
+            started_at_ns,
         })
     }
 
@@ -505,6 +521,7 @@ impl CallSignalingService {
             channel_id: (*caller_id).into(),
             verification_emojis: [e1, e2, e3, e4],
             is_video: false, // caller provides this info via the offer
+            started_at_ns: call_started_at_ns(&call),
         })
     }
 
@@ -1409,6 +1426,7 @@ impl CallSignalingService {
             peer_id: *peer_id,
             call_type: call_type_str.to_string(),
             is_video,
+            started_at_ns: response.call_info.as_ref().map(|c| c.created_at).unwrap_or(0),
         });
 
         Ok(call_id)
