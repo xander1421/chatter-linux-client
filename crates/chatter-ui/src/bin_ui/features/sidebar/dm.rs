@@ -155,6 +155,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     |att_id| ui_ctx.get_attachment(att_id),
                     |m| ui_ctx.reply_author_display_name(m),
                     |m| ui_ctx.reply_parent_missing_for(m),
+                    |m| ui_ctx.reply_parent_media(m),
                 );
 
                 // Get conversation info for the header
@@ -250,6 +251,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 |att_id| ui_ctx.get_attachment(att_id),
                 |m| ui_ctx.reply_author_display_name(m),
                 |m| ui_ctx.reply_parent_missing_for(m),
+                |m| ui_ctx.reply_parent_media(m),
             );
 
             // Decode the peer's avatar (Send-safe RGBA); the non-Send Image is

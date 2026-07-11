@@ -74,6 +74,7 @@ fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<ChatterClient
                     |att_id| ui_ctx.get_attachment(att_id),
                     |m| ui_ctx.reply_author_display_name(m),
                     |m| ui_ctx.reply_parent_missing_for(m),
+                    |m| ui_ctx.reply_parent_media(m),
                 );
                 let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
                 let _ = slint::invoke_from_event_loop(move || { if let Some(w) = weak.upgrade() {
@@ -114,6 +115,7 @@ pub fn load_thread_data(
                 |att_id| ui_ctx.get_attachment(att_id),
                 |m| ui_ctx.reply_author_display_name(m),
                 |m| ui_ctx.reply_parent_missing_for(m),
+                |m| ui_ctx.reply_parent_media(m),
             );
             let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
             let _ = slint::invoke_from_event_loop(move || { if let Some(w) = window.upgrade() {

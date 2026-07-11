@@ -164,6 +164,46 @@ impl ChatterClient {
         }
     }
 
+    /// Media descriptor of a reply's quoted parent: `(category, attachment_id,
+    /// duration)`. Lets the quote bubble render the parent's media richly (an
+    /// inline audio player for audio parents) instead of plain text.
+    ///
+    /// `category` is `"audio"`/`"image"`/`"video"`; `duration` is a formatted
+    /// `"m:ss"` for audio, else empty. All fields are empty when the message
+    /// is not a reply, the parent or its first attachment can't be resolved
+    /// locally, or the parent carries no renderable media — the quote then
+    /// falls back to its text/thumbnail snapshot with no inline player.
+    pub fn reply_parent_media(
+        &self,
+        msg: &crate::domain::message::Message,
+    ) -> (String, String, String) {
+        use crate::domain::attachment::FileCategory;
+        let empty = || (String::new(), String::new(), String::new());
+
+        let Some(parent_id) = msg.reply_to.as_ref() else { return empty() };
+        let Some(parent) = self.get_message_local(parent_id) else { return empty() };
+        let Some(att_id) = parent.attachments.first() else { return empty() };
+        let Some(att) = self.get_attachment(att_id) else { return empty() };
+
+        let meta = &att.metadata;
+        let category = match meta.category() {
+            FileCategory::Audio => "audio",
+            FileCategory::Image => "image",
+            FileCategory::Video => "video",
+            _ => return empty(),
+        };
+
+        let duration = meta
+            .duration_seconds
+            .map(|secs| {
+                let total = secs as u64;
+                format!("{}:{:02}", total / 60, total % 60)
+            })
+            .unwrap_or_default();
+
+        (category.to_string(), att.id.to_string(), duration)
+    }
+
     /// Sender avatar bytes for a message, resolved per conversation type
     /// (anon-DM own-vs-peer, anon-group member). `None` for server channels/DMs,
     /// whose avatars come from the profile path.

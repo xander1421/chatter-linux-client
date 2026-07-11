@@ -456,6 +456,7 @@ async fn load_channel_into_ui_from_services(
         |att_id| ui_ctx.get_attachment_metadata(att_id),
         |m| ui_ctx.reply_author_display_name(m),
         |m| ui_ctx.reply_parent_missing_for(m),
+        |m| ui_ctx.reply_parent_media(m),
     );
 
     // Get current user ID for is_own calculation in to_slint_with_user

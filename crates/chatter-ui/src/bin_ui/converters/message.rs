@@ -50,6 +50,16 @@ pub struct MessageDisplayData {
     pub reply_to_not_found: bool,
     pub reply_to_sender_name: String,
     pub reply_to_preview: String,
+    /// Media category of the quoted parent ("audio"/"image"/"video"), empty
+    /// when the parent has no renderable media or can't be resolved locally.
+    /// Drives the rich quote rendering (e.g. inline audio player) vs plain text.
+    pub reply_to_category: String,
+    /// Attachment id of the quoted parent's first media attachment; keys the
+    /// inline quote audio player into the shared playback machinery.
+    pub reply_to_attachment_id: String,
+    /// Formatted duration of the quoted audio parent (e.g. "0:37"); empty when
+    /// unknown or the parent is not audio.
+    pub reply_to_duration: String,
     /// Raw thumbnail bytes of the quoted media (image/jpeg, image/png).
     /// Populated from `Message.reply_to_thumbnail` on receive/send.
     pub reply_to_thumbnail_bytes: Option<Vec<u8>>,
@@ -217,6 +227,9 @@ impl MessageDisplayData {
         reply_to_not_found: self.reply_to_not_found,
         reply_to_sender_name: self.reply_to_sender_name.clone().into(),
         reply_to_preview: self.reply_to_preview.clone().into(),
+        reply_to_category: self.reply_to_category.clone().into(),
+        reply_to_attachment_id: self.reply_to_attachment_id.clone().into(),
+        reply_to_duration: self.reply_to_duration.clone().into(),
         reply_to_has_thumbnail,
         reply_to_thumbnail,
         show_sender: true,
@@ -327,6 +340,9 @@ pub fn message_to_display_data_with_replies(
         reply_to_not_found: false,  // Resolved by build sites via core (needs repo access)
         reply_to_sender_name: String::new(),  // Resolved by UI handler after conversion
         reply_to_preview: msg.reply_to_text.clone().unwrap_or_default(),
+        reply_to_category: String::new(),          // Resolved by batch via parent lookup
+        reply_to_attachment_id: String::new(),     // Resolved by batch via parent lookup
+        reply_to_duration: String::new(),          // Resolved by batch via parent lookup
         reply_to_thumbnail_bytes: msg.reply_to_thumbnail.clone(),
         reply_to_thumbnail_decoded: None,
         delivery_status: msg.delivery_status.clone(),
@@ -434,6 +450,11 @@ pub fn anon_message_to_display_data(
         reply_to_not_found: false,
         reply_to_sender_name: quote_data.as_ref().map(|q| q.0.clone()).unwrap_or_default(),
         reply_to_preview: quote_data.as_ref().map(|q| q.1.clone()).unwrap_or_default(),
+        // Anon quotes carry a self-contained snapshot with no parent row to
+        // resolve, so there is no inline media player — text/thumbnail only.
+        reply_to_category: String::new(),
+        reply_to_attachment_id: String::new(),
+        reply_to_duration: String::new(),
         reply_to_thumbnail_bytes: None,
         reply_to_thumbnail_decoded: None,
         delivery_status: msg.delivery_status().to_string(),
@@ -466,12 +487,16 @@ pub fn anon_message_to_display_data(
 ///   (callers should handle the `Result` → `Option` conversion themselves)
 /// - `reply_author_name`: `ChatterClient::reply_author_display_name`
 /// - `reply_not_found`: `ChatterClient::reply_parent_missing_for`
+/// - `reply_parent_media`: `ChatterClient::reply_parent_media` — resolves the
+///   quoted parent's `(category, attachment_id, duration)` for rich quote
+///   rendering (inline audio player); empty fields fall back to text/thumbnail
 pub fn messages_to_display_batch(
     messages: &[Message],
     sender_name: impl Fn(&Message) -> String,
     resolve_attachment: impl Fn(&chatter_core::domain::AttachmentId) -> Option<Attachment>,
     reply_author_name: impl Fn(&Message) -> String,
     reply_not_found: impl Fn(&Message) -> bool,
+    reply_parent_media: impl Fn(&Message) -> (String, String, String),
 ) -> Vec<MessageDisplayData> {
     let mut display_messages = Vec::with_capacity(messages.len());
 
@@ -490,6 +515,10 @@ pub fn messages_to_display_batch(
         if display_data.is_reply {
             display_data.reply_to_sender_name = reply_author_name(msg);
             display_data.reply_to_not_found = reply_not_found(msg);
+            let (category, attachment_id, duration) = reply_parent_media(msg);
+            display_data.reply_to_category = category;
+            display_data.reply_to_attachment_id = attachment_id;
+            display_data.reply_to_duration = duration;
         }
 
         display_messages.push(display_data);

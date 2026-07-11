@@ -86,6 +86,12 @@ pub fn build_own_message_item(
         reply_to_not_found: false,
         reply_to_sender_name: reply_to_sender_name.into(),
         reply_to_preview: reply_to_preview.into(),
+        // Optimistic echo carries no resolved parent-media snapshot; the
+        // canonical DB-converted message supplies the rich quote (inline audio
+        // player) once it replaces this echo.
+        reply_to_category: "".into(),
+        reply_to_attachment_id: "".into(),
+        reply_to_duration: "".into(),
         reply_to_has_thumbnail,
         reply_to_thumbnail,
         show_sender: true,
