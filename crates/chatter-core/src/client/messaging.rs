@@ -911,6 +911,10 @@ pub struct SendMessageUiResult {
     pub attachments: Vec<crate::domain::attachment::Attachment>,
     /// Raw thumbnail bytes for the quoted message (JPEG/PNG), if any.
     pub reply_thumbnail_bytes: Option<Vec<u8>>,
+    /// Quoted parent's media descriptor (category/attachment/duration/filename/
+    /// waveform) so the sender's own bubble renders the audio player / media
+    /// preview immediately, without waiting for a reload.
+    pub reply_parent_media: crate::client::ReplyParentMedia,
 }
 
 /// Enriched mention suggestion surfaced by

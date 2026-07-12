@@ -189,6 +189,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let timestamp_str = ui_result.timestamp_display.clone();
             let sidebar_preview = ui_result.sidebar_preview.clone();
             let reply_thumbnail_bytes = ui_result.reply_thumbnail_bytes.clone();
+            let reply_media = ui_result.reply_parent_media.clone();
             let msg_id = ui_result.message_id_effective.clone();
             let delivery_status = ui_result.delivery_status;
             let bootstrap_initiated = ui_result.bootstrap_initiated;
@@ -219,6 +220,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         &timestamp_str, sent_at, slint_attachments,
                         is_reply, &reply_sender_name, &reply_preview_text,
                         reply_thumbnail, reply_has_thumbnail, reply_thumb_w, reply_thumb_h,
+                        &reply_media,
                         delivery_status,
                     );
                     {

@@ -1666,6 +1666,14 @@ impl ChatterClient {
                 .collect()
         };
 
+        // Resolve the quoted parent's media once so the sender's own bubble
+        // renders the audio player / preview immediately (not text until reload).
+        let reply_parent_media = result
+            .message
+            .as_ref()
+            .map(|m| self.reply_parent_media(m))
+            .unwrap_or_default();
+
         // Prefer the wire quote thumbnail; when it was capped/dropped (>12KB,
         // e.g. big images / gifs) fall back to the parent's LOCAL thumbnail so
         // the sender's own bubble shows the preview immediately instead of a
@@ -1673,7 +1681,8 @@ impl ChatterClient {
         let reply_thumbnail_bytes = result
             .message
             .as_ref()
-            .and_then(|m| m.reply_to_thumbnail.clone().or_else(|| self.reply_parent_media(m).thumbnail));
+            .and_then(|m| m.reply_to_thumbnail.clone())
+            .or_else(|| reply_parent_media.thumbnail.clone());
 
         Ok(SendMessageUiResult {
             message_id_effective,
@@ -1684,6 +1693,7 @@ impl ChatterClient {
             bootstrap_initiated: result.bootstrap_initiated,
             attachments,
             reply_thumbnail_bytes,
+            reply_parent_media,
         })
     }
 

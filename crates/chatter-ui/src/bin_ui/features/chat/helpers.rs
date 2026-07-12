@@ -50,6 +50,7 @@ pub fn build_own_message_item(
     reply_to_has_thumbnail: bool,
     reply_to_thumbnail_width: i32,
     reply_to_thumbnail_height: i32,
+    reply_media: &chatter_core::client::ReplyParentMedia,
     delivery_status: &str,
 ) -> crate::MessageItemData {
     use slint::{ModelRc, VecModel};
@@ -88,14 +89,14 @@ pub fn build_own_message_item(
         reply_to_not_found: false,
         reply_to_sender_name: reply_to_sender_name.into(),
         reply_to_preview: reply_to_preview.into(),
-        // Optimistic echo carries no resolved parent-media snapshot; the
-        // canonical DB-converted message supplies the rich quote (inline audio
-        // player) once it replaces this echo.
-        reply_to_category: "".into(),
-        reply_to_attachment_id: "".into(),
-        reply_to_duration: "".into(),
-        reply_to_filename: "".into(),
-        reply_to_waveform: slint::ModelRc::new(slint::VecModel::from(Vec::<i32>::new())),
+        // Parent-media snapshot (resolved at send time) so the echo shows the
+        // rich quote — inline audio player, media label — immediately, not text
+        // until the canonical DB message replaces it.
+        reply_to_category: reply_media.category.clone().into(),
+        reply_to_attachment_id: reply_media.attachment_id.clone().into(),
+        reply_to_duration: reply_media.duration.clone().into(),
+        reply_to_filename: reply_media.filename.clone().into(),
+        reply_to_waveform: ModelRc::new(VecModel::from(reply_media.waveform.clone())),
         reply_to_has_thumbnail,
         reply_to_thumbnail,
         reply_to_thumbnail_width,
