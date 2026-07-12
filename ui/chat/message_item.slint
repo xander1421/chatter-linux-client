@@ -382,10 +382,13 @@ export component MessageItem inherits Rectangle {
                                 }
                             }
 
+                            // Compact Signal/Telegram-style quote: small media
+                            // thumbnail on the LEFT, sender + label/player filling
+                            // the right. A thin strip — no big block that leaves a
+                            // wasted L-shape when the reply body is wide.
                             quote-row := HorizontalLayout {
-                                padding-left: 0px;
-                                padding-right: 0px;
-                                spacing: 0px;
+                                padding: Spacing.xs;
+                                spacing: Spacing.sm;
                                 alignment: stretch;
 
                                 // Accent bar
@@ -395,12 +398,70 @@ export component MessageItem inherits Rectangle {
                                     border-radius: 1.5px;
                                 }
 
+                                // Small media thumbnail on the LEFT (image/gif/video).
+                                // Aspect-fit within a compact box so the whole preview
+                                // shows without dominating the bubble.
+                                if root.reply-to-category != "audio" && root.reply-to-has-thumbnail: Rectangle {
+                                    property <float> aspect: root.reply-to-thumbnail-width > 0 && root.reply-to-thumbnail-height > 0
+                                        ? root.reply-to-thumbnail-width / root.reply-to-thumbnail-height
+                                        : 1.4;
+                                    property <length> max-h: 60px;
+                                    property <length> max-w: 96px;
+                                    height: min(self.max-h, self.max-w / self.aspect);
+                                    width: self.height * self.aspect;
+                                    border-radius: 4px;
+                                    clip: true;
+
+                                    Image {
+                                        source: root.reply-to-thumbnail;
+                                        width: parent.width;
+                                        height: parent.height;
+                                        image-fit: cover;
+                                    }
+
+                                    // Video play badge (compact, centered).
+                                    if root.reply-to-category == "video": Rectangle {
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        width: 20px;
+                                        height: 20px;
+                                        border-radius: 10px;
+                                        background: Colors.overlay;
+                                        Image {
+                                            width: 9px;
+                                            height: 9px;
+                                            source: Icons.play;
+                                            colorize: Colors.text-primary;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                        }
+                                    }
+
+                                    // GIF chip — tiny corner tag.
+                                    if root.reply-to-category == "gif": Rectangle {
+                                        x: 2px;
+                                        y: 2px;
+                                        width: gif-label.preferred-width + 6px;
+                                        height: 13px;
+                                        border-radius: 3px;
+                                        background: Colors.primary;
+                                        gif-label := Text {
+                                            text: "GIF";
+                                            color: Colors.text-primary;
+                                            font-size: 8px;
+                                            font-weight: Typography.semibold;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                        }
+                                    }
+                                }
+
+                                // Right column — sender name + label/player, fills
+                                // the width beside the thumbnail (no empty gap).
                                 VerticalLayout {
-                                    padding: Spacing.xs;
-                                    padding-left: Spacing.sm;
-                                    padding-right: Spacing.sm;
                                     spacing: 4px;
                                     horizontal-stretch: 1;
+                                    alignment: center;
 
                                     Text {
                                         text: root.reply-to-sender-name;
@@ -410,13 +471,10 @@ export component MessageItem inherits Rectangle {
                                         overflow: elide;
                                     }
 
-                                    // Audio parent — the same shared inline
-                                    // player the main message uses, in its
-                                    // compact variant. Its play/seek TouchAreas
-                                    // sit above quote-touch so they consume their
-                                    // clicks; the rest of the quote still falls
-                                    // through to jump. more-clicked is left
-                                    // unconnected here (no per-quote context menu).
+                                    // Audio parent — the shared inline player (compact
+                                    // variant). Its play/seek TouchAreas sit above
+                                    // quote-touch so they consume their clicks; the rest
+                                    // of the quote still falls through to jump.
                                     if root.reply-to-category == "audio": AudioPlayer {
                                         compact: true;
                                         attachment-id: root.reply-to-attachment-id;
@@ -432,76 +490,10 @@ export component MessageItem inherits Rectangle {
                                         audio-seek(id, pos) => { root.audio-seek(id, pos); }
                                     }
 
-                                    // Thumbnail below sender name, spanning full bubble width.
-                                    // `contain` (not `cover`) so wide banners aren't sliced
-                                    // to a strip — the whole preview stays visible, letterboxed.
-                                    if root.reply-to-category != "audio" && root.reply-to-has-thumbnail: Rectangle {
-                                        // Size to the thumbnail's aspect within a bounded
-                                        // box so the quote doesn't reserve the full bubble
-                                        // width (portrait shots left a big empty gap).
-                                        // Fall back to a 4:3 box when dims are unknown.
-                                        property <float> aspect: root.reply-to-thumbnail-width > 0 && root.reply-to-thumbnail-height > 0
-                                            ? root.reply-to-thumbnail-width / root.reply-to-thumbnail-height
-                                            : 1.4;
-                                        property <length> max-h: 140px;
-                                        property <length> max-w: 220px;
-                                        height: min(self.max-h, self.max-w / self.aspect);
-                                        width: self.height * self.aspect;
-                                        border-radius: 6px;
-                                        clip: true;
-                                        Image {
-                                            source: root.reply-to-thumbnail;
-                                            width: parent.width;
-                                            height: parent.height;
-                                            image-fit: cover;
-                                        }
-
-                                        // Video badge — centered play triangle so a
-                                        // video quote isn't mistaken for a photo.
-                                        // Non-interactive: taps fall through to jump.
-                                        if root.reply-to-category == "video": Rectangle {
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-                                            width: 28px;
-                                            height: 28px;
-                                            border-radius: 14px;
-                                            background: Colors.overlay;
-
-                                            Image {
-                                                width: 12px;
-                                                height: 12px;
-                                                source: Icons.play;
-                                                colorize: Colors.text-primary;
-                                                x: (parent.width - self.width) / 2;
-                                                y: (parent.height - self.height) / 2;
-                                            }
-                                        }
-
-                                        // GIF chip — corner tag marking an animated
-                                        // quote. Non-interactive overlay.
-                                        if root.reply-to-category == "gif": Rectangle {
-                                            x: Spacing.xs;
-                                            y: Spacing.xs;
-                                            width: gif-label.preferred-width + 8px;
-                                            height: 16px;
-                                            border-radius: 4px;
-                                            background: Colors.primary;
-
-                                            gif-label := Text {
-                                                text: "GIF";
-                                                color: Colors.text-primary;
-                                                font-size: Typography.xs;
-                                                font-weight: Typography.semibold;
-                                                x: (parent.width - self.width) / 2;
-                                                y: (parent.height - self.height) / 2;
-                                            }
-                                        }
-                                    }
-
-                                    // Text preview — non-audio parent with no thumbnail.
-                                    // Guard the empty edge so the quote is never just a
-                                    // sender name over a blank gap.
-                                    if root.reply-to-category != "audio" && !root.reply-to-has-thumbnail: Text {
+                                    // Non-audio: one-line preview/label filling the
+                                    // right of the thumbnail. Guard the empty edge so
+                                    // the quote is never just a bare sender name.
+                                    if root.reply-to-category != "audio": Text {
                                         text: root.reply-to-preview != ""
                                             ? root.reply-to-preview
                                             : (root.reply-to-category != "" ? "📎 Attachment" : "Message");
@@ -510,8 +502,7 @@ export component MessageItem inherits Rectangle {
                                         overflow: elide;
                                     }
 
-                                    // Signal-Desktop parity: the quoted snapshot stays
-                                    // above, but warn when the original is gone.
+                                    // Signal-Desktop parity: warn when the original is gone.
                                     if root.reply-to-not-found: Text {
                                         text: "Original message not found";
                                         color: Colors.warning;
