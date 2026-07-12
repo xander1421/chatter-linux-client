@@ -91,6 +91,8 @@ export component MessageItem inherits Rectangle {
     in property <[int]> reply-to-waveform: [];          // Quoted audio parent waveform (32 values 0-100)
     in property <bool> reply-to-has-thumbnail: false;
     in property <image> reply-to-thumbnail;
+    in property <int> reply-to-thumbnail-width: 0;      // Quoted thumbnail natural dims for aspect sizing (0 = unknown)
+    in property <int> reply-to-thumbnail-height: 0;
 
     // Internal hover state — touch covers entire message row
     property <bool> is-hovered: touch.has-hover;
@@ -434,15 +436,24 @@ export component MessageItem inherits Rectangle {
                                     // `contain` (not `cover`) so wide banners aren't sliced
                                     // to a strip — the whole preview stays visible, letterboxed.
                                     if root.reply-to-category != "audio" && root.reply-to-has-thumbnail: Rectangle {
-                                        height: 120px;
+                                        // Size to the thumbnail's aspect within a bounded
+                                        // box so the quote doesn't reserve the full bubble
+                                        // width (portrait shots left a big empty gap).
+                                        // Fall back to a 4:3 box when dims are unknown.
+                                        property <float> aspect: root.reply-to-thumbnail-width > 0 && root.reply-to-thumbnail-height > 0
+                                            ? root.reply-to-thumbnail-width / root.reply-to-thumbnail-height
+                                            : 1.4;
+                                        property <length> max-h: 140px;
+                                        property <length> max-w: 220px;
+                                        height: min(self.max-h, self.max-w / self.aspect);
+                                        width: self.height * self.aspect;
                                         border-radius: 6px;
                                         clip: true;
                                         Image {
                                             source: root.reply-to-thumbnail;
                                             width: parent.width;
                                             height: parent.height;
-                                            image-fit: contain;
-                                            horizontal-alignment: left;
+                                            image-fit: cover;
                                         }
 
                                         // Video badge — centered play triangle so a

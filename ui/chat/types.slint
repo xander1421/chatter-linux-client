@@ -94,6 +94,8 @@ export struct MessageItemData {
     reply-to-waveform: [int],        // Quoted audio parent waveform (32 values 0-100) for the inline quote player
     reply-to-has-thumbnail: bool,    // Whether the quoted message has a media thumbnail
     reply-to-thumbnail: image,       // Thumbnail image for the quoted message (e.g. photo, video)
+    reply-to-thumbnail-width: int,   // Quoted thumbnail natural width (px) — for aspect sizing; 0 = unknown
+    reply-to-thumbnail-height: int,  // Quoted thumbnail natural height (px)
     show-sender: bool,
     // Link preview
     has-link-preview: bool,

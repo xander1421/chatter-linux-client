@@ -96,6 +96,9 @@ pub fn build_own_message_item(
         reply_to_waveform: slint::ModelRc::new(slint::VecModel::from(Vec::<i32>::new())),
         reply_to_has_thumbnail,
         reply_to_thumbnail,
+        // Echo has no decoded dims; 0/0 → quote uses the 4:3 fallback aspect.
+        reply_to_thumbnail_width: 0,
+        reply_to_thumbnail_height: 0,
         show_sender: true,
         delivery_status: delivery_status.into(),
         is_pinned: false,

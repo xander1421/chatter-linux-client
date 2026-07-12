@@ -176,14 +176,14 @@ impl MessageDisplayData {
             (slint::Image::default(), false)
         };
 
-        let (reply_to_thumbnail, reply_to_has_thumbnail) =
+        let (reply_to_thumbnail, reply_to_has_thumbnail, reply_to_thumb_w, reply_to_thumb_h) =
             if let Some((ref pixels, w, h)) = self.reply_to_thumbnail_decoded {
                 let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
                     pixels, w, h,
                 );
-                (slint::Image::from_rgba8(buffer), true)
+                (slint::Image::from_rgba8(buffer), true, w as i32, h as i32)
             } else {
-                (slint::Image::default(), false)
+                (slint::Image::default(), false, 0, 0)
             };
 
     // Parse markdown for rich rendering
@@ -240,6 +240,8 @@ impl MessageDisplayData {
         reply_to_waveform: ModelRc::new(VecModel::from(self.reply_to_waveform.clone())),
         reply_to_has_thumbnail,
         reply_to_thumbnail,
+        reply_to_thumbnail_width: reply_to_thumb_w,
+        reply_to_thumbnail_height: reply_to_thumb_h,
         show_sender: true,
         // For own messages with empty status, default to "sent"
         delivery_status: if is_own && self.delivery_status.is_empty() {
