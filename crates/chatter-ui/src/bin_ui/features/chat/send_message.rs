@@ -202,7 +202,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 };
                 {
                     let slint_attachments: Vec<_> = attachment_display.iter().map(|a| a.to_slint()).collect();
-                    let (reply_thumbnail, reply_has_thumbnail) = reply_thumbnail_bytes
+                    let (reply_thumbnail, reply_has_thumbnail, reply_thumb_w, reply_thumb_h) = reply_thumbnail_bytes
                         .as_ref()
                         .and_then(|bytes| image::load_from_memory(bytes).ok())
                         .map(|img| {
@@ -211,14 +211,14 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
                                 rgba.as_raw(), w, h,
                             );
-                            (slint::Image::from_rgba8(buf), true)
+                            (slint::Image::from_rgba8(buf), true, w as i32, h as i32)
                         })
-                        .unwrap_or_else(|| (slint::Image::default(), false));
+                        .unwrap_or_else(|| (slint::Image::default(), false, 0, 0));
                     let msg_item = super::helpers::build_own_message_item(
                         &msg_id, &current_user_id, &current_user_name, &sent_text,
                         &timestamp_str, sent_at, slint_attachments,
                         is_reply, &reply_sender_name, &reply_preview_text,
-                        reply_thumbnail, reply_has_thumbnail,
+                        reply_thumbnail, reply_has_thumbnail, reply_thumb_w, reply_thumb_h,
                         delivery_status,
                     );
                     {

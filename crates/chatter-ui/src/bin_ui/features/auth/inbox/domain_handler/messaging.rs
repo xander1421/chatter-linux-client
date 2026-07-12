@@ -41,13 +41,19 @@ pub(super) fn handle_message_received(
     let mut display_data = crate::bin_ui::converters::message_to_display_data(
         &message, &sender_name, &resolved_attachments, sender_avatar,
     );
-    display_data.decode_attachment_thumbnails();
 
-    // Reply author name + "not found" decision both live in core.
+    // Reply metadata — mirror the reload batch so a LIVE-received reply shows the
+    // quote thumbnail/player immediately instead of a text label until reload.
+    // Must run BEFORE decode so the local-thumbnail fallback gets decoded.
     if display_data.is_reply {
         display_data.reply_to_sender_name = ui_ctx.reply_author_display_name(&message);
         display_data.reply_to_not_found = ui_ctx.reply_parent_missing_for(&message);
+        crate::bin_ui::converters::apply_reply_parent_media(
+            &mut display_data,
+            ui_ctx.reply_parent_media(&message),
+        );
     }
+    display_data.decode_attachment_thumbnails();
 
     let current_user_id = ui_ctx.auth_state().get().current_user_id
         .map(|id| id.to_string())

@@ -507,6 +507,33 @@ pub fn anon_message_to_display_data(
 ///   audio player, thumbnail); empty fields fall back to text. The local
 ///   thumbnail backfills `reply_to_thumbnail_bytes` when the wire quote
 ///   thumbnail was dropped.
+/// Apply resolved parent-media to a reply's display data (category, attachment
+/// id/duration/filename/waveform, and a local-thumbnail fallback when the wire
+/// quote thumbnail was capped/dropped). Shared by the reload batch AND the live
+/// receive path so both render the quote thumbnail/player without a reload.
+/// Caller decodes thumbnails afterward.
+pub fn apply_reply_parent_media(
+    display_data: &mut MessageDisplayData,
+    parent_media: chatter_core::client::ReplyParentMedia,
+) {
+    display_data.reply_to_category = parent_media.category;
+    display_data.reply_to_attachment_id = parent_media.attachment_id;
+    display_data.reply_to_duration = parent_media.duration;
+    display_data.reply_to_filename = parent_media.filename;
+    display_data.reply_to_waveform = parent_media.waveform;
+    let wire_thumb_empty = display_data
+        .reply_to_thumbnail_bytes
+        .as_ref()
+        .map_or(true, |b| b.is_empty());
+    if wire_thumb_empty {
+        if let Some(bytes) = parent_media.thumbnail {
+            if !bytes.is_empty() {
+                display_data.reply_to_thumbnail_bytes = Some(bytes);
+            }
+        }
+    }
+}
+
 pub fn messages_to_display_batch(
     messages: &[Message],
     sender_name: impl Fn(&Message) -> String,
@@ -532,28 +559,7 @@ pub fn messages_to_display_batch(
         if display_data.is_reply {
             display_data.reply_to_sender_name = reply_author_name(msg);
             display_data.reply_to_not_found = reply_not_found(msg);
-            let parent_media = reply_parent_media(msg);
-            display_data.reply_to_category = parent_media.category;
-            display_data.reply_to_attachment_id = parent_media.attachment_id;
-            display_data.reply_to_duration = parent_media.duration;
-            display_data.reply_to_filename = parent_media.filename;
-            display_data.reply_to_waveform = parent_media.waveform;
-            let local_thumbnail = parent_media.thumbnail;
-            // Wire quote thumbnail is capped at ~12KB and often dropped (gifs,
-            // big images/videos), degrading a visual quote to text. When absent,
-            // fall back to the parent's local thumbnail so the bubble still
-            // renders a preview. Decode stays off the UI thread below.
-            let wire_thumb_empty = display_data
-                .reply_to_thumbnail_bytes
-                .as_ref()
-                .map_or(true, |b| b.is_empty());
-            if wire_thumb_empty {
-                if let Some(bytes) = local_thumbnail {
-                    if !bytes.is_empty() {
-                        display_data.reply_to_thumbnail_bytes = Some(bytes);
-                    }
-                }
-            }
+            apply_reply_parent_media(&mut display_data, reply_parent_media(msg));
         }
 
         display_messages.push(display_data);
