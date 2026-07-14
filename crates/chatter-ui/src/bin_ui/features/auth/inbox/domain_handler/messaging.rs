@@ -87,9 +87,9 @@ pub(super) fn handle_message_received(
     // Classify into the typed ActiveConversation via the core helper.
     let sidebar_conversation = ui_ctx.classify_active_conversation(&conversation_id, &conv_type, sender_id);
 
-    // Trigger attachment auto-download in background
+    // Trigger attachment auto-download in background (fetchable = has CDN url + key).
     let downloadable: Vec<_> = resolved_attachments.iter()
-        .filter(|a| a.remote_url.is_some() && a.encryption_key.is_some())
+        .filter(|a| a.is_downloadable())
         .cloned()
         .collect();
 
@@ -130,46 +130,41 @@ pub(super) fn handle_message_received(
                 new_msg.delivery_status = "delivered".into();
             }
 
-            // Deduplicate by (sender_id, timestamp_ns)
+            // Dedup + ordered-insert POLICY lives in core (Signal-style: by
+            // timestamp_ns, tiebreak sender_id). Here we only extract the keys
+            // and apply the decision to the Slint model.
             let current_model = w.get_messages();
-            let ts_str = new_msg.timestamp_ns.to_string();
-            let sender_str = new_msg.sender_id.to_string();
-            let already_exists = (0..current_model.row_count()).any(|i| {
-                current_model.row_data(i).map(|m| {
-                    m.sender_id.as_str() == sender_str && m.timestamp_ns.as_str() == ts_str
-                }).unwrap_or(false)
-            });
+            let new_ts = new_msg.timestamp_ns.to_string().parse::<u64>().unwrap_or(0);
+            let new_sender = new_msg.sender_id.to_string();
 
-            tracing::info!(already_exists, existing = current_model.row_count(), "[UI_RECV] dedup check");
-            if !already_exists {
-                // Find sorted insert position (by timestamp, tiebreak by sender_id)
-                let new_ts = ts_str.parse::<u64>().unwrap_or(0);
-                let mut messages: Vec<MessageItemData> = (0..current_model.row_count())
-                    .filter_map(|i| current_model.row_data(i))
-                    .collect();
+            let keys: Vec<(u64, String)> = (0..current_model.row_count())
+                .filter_map(|i| current_model.row_data(i))
+                .map(|m| (m.timestamp_ns.to_string().parse::<u64>().unwrap_or(0), m.sender_id.to_string()))
+                .collect();
+            let key_refs: Vec<(u64, &str)> = keys.iter().map(|(t, s)| (*t, s.as_str())).collect();
 
-                let insert_pos = messages.iter().position(|m| {
-                    let ts = m.timestamp_ns.to_string().parse::<u64>().unwrap_or(0);
-                    match ts.cmp(&new_ts) {
-                        std::cmp::Ordering::Greater => true,
-                        std::cmp::Ordering::Equal => m.sender_id.as_str() > sender_str.as_str(),
-                        std::cmp::Ordering::Less => false,
-                    }
-                }).unwrap_or(messages.len());
-
-                if let Some(vec_model) = current_model.as_any().downcast_ref::<VecModel<MessageItemData>>() {
-                    vec_model.insert(insert_pos, new_msg);
-                    tracing::info!(insert_pos, "[UI_RECV] inserted via VecModel.insert");
-                } else {
-                    messages.insert(insert_pos, new_msg);
-                    w.set_messages(ModelRc::new(VecModel::from(messages)));
-                    tracing::warn!(insert_pos, "[UI_RECV] downcast failed; replaced model");
+            match chatter_core::domain::message::ordered_insert_position(&key_refs, new_ts, &new_sender) {
+                chatter_core::domain::message::InsertPosition::Duplicate => {
+                    tracing::info!(existing = current_model.row_count(), "[UI_RECV] duplicate, skipped");
                 }
+                chatter_core::domain::message::InsertPosition::At(insert_pos) => {
+                    if let Some(vec_model) = current_model.as_any().downcast_ref::<VecModel<MessageItemData>>() {
+                        vec_model.insert(insert_pos, new_msg);
+                        tracing::info!(insert_pos, "[UI_RECV] inserted via VecModel.insert");
+                    } else {
+                        let mut messages: Vec<MessageItemData> = (0..current_model.row_count())
+                            .filter_map(|i| current_model.row_data(i))
+                            .collect();
+                        messages.insert(insert_pos, new_msg);
+                        w.set_messages(ModelRc::new(VecModel::from(messages)));
+                        tracing::warn!(insert_pos, "[UI_RECV] downcast failed; replaced model");
+                    }
 
-                crate::bin_ui::gif_state::auto_register_gifs_from_messages(
-                    weak.clone(),
-                    ui_ctx_ui.clone(),
-                );
+                    crate::bin_ui::gif_state::auto_register_gifs_from_messages(
+                        weak.clone(),
+                        ui_ctx_ui.clone(),
+                    );
+                }
             }
 
             if was_at_bottom {

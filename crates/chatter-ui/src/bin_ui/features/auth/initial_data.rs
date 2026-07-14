@@ -441,7 +441,7 @@ async fn load_channel_into_ui_from_services(
     let conversation_type = channel.conversation_type();
 
     // Fetch recent messages (limit 50)
-    let messages = match ui_ctx.get_messages_local_asc(channel_id, &conversation_type, None, 50) {
+    let messages = match ui_ctx.get_messages_local_asc(channel_id, &conversation_type, None, chatter_core::config::MESSAGE_PAGE_SIZE as u32) {
         Ok(msgs) => msgs,
         Err(e) => {
             tracing::error!("Failed to get messages for channel {}: {}", channel_id, e);

@@ -30,10 +30,10 @@ pub async fn download_attachments(
         let att_id = att.id;
         let mime = &att.metadata.mime_type;
         let filename = &att.metadata.name;
-        let is_image = mime.starts_with("image/");
-        let is_video = mime.starts_with("video/");
-        let is_gif = mime == "image/gif"
-            || filename.to_lowercase().ends_with(".gif");
+        // Media-kind classification is domain behavior on the attachment metadata.
+        let is_image = att.metadata.is_image();
+        let is_video = att.metadata.is_video();
+        let is_gif = att.metadata.is_gif();
         let has_thumbnail = att.metadata.thumbnail.as_ref().map(|t| !t.is_empty()).unwrap_or(false);
 
         tracing::info!(

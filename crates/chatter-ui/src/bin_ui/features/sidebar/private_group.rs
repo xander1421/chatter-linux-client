@@ -46,28 +46,14 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
         let current_user_id = auth_state.get().current_user_id;
         let current_user_id_str = current_user_id.map(|id| id.to_string()).unwrap_or_default();
 
-        // Load messages for this group
-        let mut messages = match ui_ctx.get_anon_group_messages_asc(&group_id, None, 50) {
+        // Load messages for this group (reaction counts populated in core).
+        let messages = match ui_ctx.get_anon_group_messages_asc(&group_id, None, chatter_core::config::MESSAGE_PAGE_SIZE) {
             Ok(msgs) => msgs,
             Err(e) => {
                 tracing::error!("Failed to load messages for private group {}: {}", group_id, e);
                 Vec::new()
             }
         };
-
-        // Load reaction counts from DB and populate messages
-        let reaction_map = ui_ctx.get_anon_group_reaction_counts(&group_id);
-        for msg in &mut messages {
-            if let Some(counts) = reaction_map.get(&msg.sent_at) {
-                msg.reaction_counts = counts
-                    .iter()
-                    .map(|(emoji, count): &(String, u32)| chatter_core::domain::message::ReactionCount {
-                        emoji: emoji.clone(),
-                        count: *count,
-                    })
-                    .collect();
-            }
-        }
 
         // Convert messages to display data
         let mut display_messages: Vec<crate::bin_ui::converters::MessageDisplayData> = Vec::with_capacity(messages.len());
@@ -226,21 +212,8 @@ async fn load_private_group_messages_internal(
 
     let current_user_id_str = auth_state.get().current_user_id.map(|id| id.to_string()).unwrap_or_default();
 
-    let mut messages = ui_ctx.get_anon_group_messages_asc(&group_id, None, 50).unwrap_or_default();
-
-    // Populate reactions
-    let reaction_map = ui_ctx.get_anon_group_reaction_counts(&group_id);
-    for msg in &mut messages {
-        if let Some(counts) = reaction_map.get(&msg.sent_at) {
-            msg.reaction_counts = counts
-                .iter()
-                .map(|(emoji, count)| chatter_core::domain::message::ReactionCount {
-                    emoji: emoji.clone(),
-                    count: *count,
-                })
-                .collect();
-        }
-    }
+    // Reaction counts populated in core.
+    let messages = ui_ctx.get_anon_group_messages_asc(&group_id, None, chatter_core::config::MESSAGE_PAGE_SIZE).unwrap_or_default();
 
     let mut display_messages = Vec::with_capacity(messages.len());
     for msg in &messages {

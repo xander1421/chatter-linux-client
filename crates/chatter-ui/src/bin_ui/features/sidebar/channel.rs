@@ -118,7 +118,7 @@ pub async fn load_channel_into_ui(
     // 2. Load messages — use the channel's actual conversation type so
     // SavedMessages (stored as ConversationType::SavedMessages) round-trip correctly.
     let conv_type = channel.conversation_type();
-    let messages = match ui_ctx.get_messages_local_asc(&channel_id, &conv_type, None, 50) {
+    let messages = match ui_ctx.get_messages_local_asc(&channel_id, &conv_type, None, chatter_core::config::MESSAGE_PAGE_SIZE as u32) {
         Ok(msgs) => msgs,
         Err(e) => {
             tracing::error!("Failed to list channel messages: {}", e);

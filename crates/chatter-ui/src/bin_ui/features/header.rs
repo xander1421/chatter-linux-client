@@ -369,7 +369,7 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             let before = cursor.and_then(|c| c.oldest_message_id);
 
-            let older_messages = match ui_ctx.get_messages_local_asc(&channel_id, &conversation_type, before.as_ref(), 50) {
+            let older_messages = match ui_ctx.get_messages_local_asc(&channel_id, &conversation_type, before.as_ref(), chatter_core::config::MESSAGE_PAGE_SIZE as u32) {
                 Ok(msgs) => msgs,
                 Err(e) => {
                     tracing::error!("Failed to load more messages: {}", e);
@@ -378,7 +378,7 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
-            let has_more = older_messages.len() >= 50;
+            let has_more = older_messages.len() as i32 >= chatter_core::config::MESSAGE_PAGE_SIZE;
             let new_cursor = if !older_messages.is_empty() {
                 chatter_core::state::PaginationCursor::new(
                     has_more,

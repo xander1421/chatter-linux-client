@@ -140,7 +140,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), channel_id, msg_ids, preview);
 
                 // Load messages
-                let messages = match ui_ctx.get_anon_dm_messages_asc(&anon_dm_id, None, 50) {
+                let messages = match ui_ctx.get_anon_dm_messages_asc(&anon_dm_id, None, chatter_core::config::MESSAGE_PAGE_SIZE) {
                     Ok(msgs) => msgs,
                     Err(e) => {
                         tracing::error!("Failed to list anon DM messages: {}", e);
@@ -227,7 +227,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), channel_id, msg_ids, preview);
 
             // Load messages
-            let messages = match ui_ctx.get_messages_local_asc(&channel_id, &conv_type, None, 50) {
+            let messages = match ui_ctx.get_messages_local_asc(&channel_id, &conv_type, None, chatter_core::config::MESSAGE_PAGE_SIZE as u32) {
                 Ok(msgs) => msgs,
                 Err(e) => {
                     tracing::error!("Failed to list DM messages: {}", e);
