@@ -163,8 +163,34 @@ export component ActiveCallView inherits Rectangle {
     // the parent layout). Driven by app.slint, toggled via the fullscreen
     // button on the maximized tile.
     in property <bool> fullscreen: false;
-    // -1 = grid view, 0..n = that tile is maximized.
-    property <int> maximized-index: -1;
+    // Window height, passed from app.slint so the non-fullscreen dock can
+    // scale with the viewport instead of a fixed band.
+    in property <length> viewport-height: 720px;
+    // Vertical space reserved at the bottom of the grid for the floating
+    // control pill. Single source so every tile branch stays in sync.
+    property <length> controls-reserve: 56px;
+    // The user's explicit focus choice: -2 = auto (follow any screen share),
+    // -1 = user chose the grid, 0..n = user maximized that tile.
+    property <int> user-focus: -2;
+    // Index of the first screen-sharing tile, else -1. Slint has no array-find
+    // in expressions, so this is a bounded manual scan.
+    // ponytail: capped at 6 tiles — the grid renders at most 4 cameras plus a
+    // screen tile; widen the ladder if calls ever show more tiles at once.
+    property <int> screen-share-index:
+          (call-data.participants.length > 0 && call-data.participants[0].is-screen-sharing) ? 0
+        : (call-data.participants.length > 1 && call-data.participants[1].is-screen-sharing) ? 1
+        : (call-data.participants.length > 2 && call-data.participants[2].is-screen-sharing) ? 2
+        : (call-data.participants.length > 3 && call-data.participants[3].is-screen-sharing) ? 3
+        : (call-data.participants.length > 4 && call-data.participants[4].is-screen-sharing) ? 4
+        : (call-data.participants.length > 5 && call-data.participants[5].is-screen-sharing) ? 5
+        : -1;
+    // Effective focus: honor the user's explicit choice, otherwise auto-focus a
+    // screen share so it comes forward big instead of a letterboxed grid cell.
+    // -1 = grid view, 0..n = that tile is maximized. Render branches read this.
+    property <int> maximized-index: user-focus == -2 ? screen-share-index : user-focus;
+    // A new/changed screen share re-arms auto-focus even if the user had dropped
+    // back to the grid, so the share always surfaces.
+    changed screen-share-index => { user-focus = -2; }
     // Derived properties only evaluate meaningfully when maximized-index >= 0;
     // the explicit guard avoids `remote-video-frames[-1]` (Slint indexes the
     // array eagerly and a negative index aborts the per-frame property
@@ -194,12 +220,16 @@ export component ActiveCallView inherits Rectangle {
     // Dock: collapses to zero height when hidden so parent VerticalLayout
     // reclaims the space and the underlying chat header/messages fill it.
     // In fullscreen mode `vertical-stretch: 1` (set by the parent in
-    // app.slint) plus a large `max-height` lets the dock grow to occupy
-    // the full chat-column slot; otherwise we pin it at 280px.
+    // app.slint) plus a large `max-height` lets the dock grow to occupy the
+    // full chat-column slot. Otherwise it's a responsive dock: ~45% of the
+    // window height, clamped so chat stays visible on tall screens and the
+    // dock isn't oversized on short/mobile ones (was a fixed 280px band that
+    // ignored the viewport).
+    property <length> dock-height: clamp(viewport-height * 0.45, 240px, 560px);
     visible: show;
-    min-height: show ? (fullscreen ? 0px : 280px) : 0px;
-    max-height: show ? (fullscreen ? 100000px : 280px) : 0px;
-    preferred-height: show ? 280px : 0px;
+    min-height: show ? (fullscreen ? 0px : dock-height) : 0px;
+    max-height: show ? (fullscreen ? 100000px : dock-height) : 0px;
+    preferred-height: show ? dock-height : 0px;
     background: Colors.surface.with-alpha(0.6);
     border-width: 1px;
     border-color: Colors.neo-inset-shadow;
@@ -289,23 +319,23 @@ export component ActiveCallView inherits Rectangle {
                 x: Spacing.sm;
                 y: Spacing.sm;
                 width: parent.width - 2 * Spacing.sm;
-                height: parent.height - 2 * Spacing.sm - 56px; // leave room for floating controls
+                height: parent.height - 2 * Spacing.sm - controls-reserve; // leave room for floating controls
                 participant: call-data.participants[0];
                 video-frame: local-video-frame;
                 is-local: true;
-                clicked => { root.maximized-index = 0; }
+                clicked => { root.user-focus = 0; }
             }
 
             if maximized-index < 0 && call-data.participant-count == 2: HorizontalLayout {
                 padding: Spacing.sm;
-                padding-bottom: 56px; // leave room for floating controls
+                padding-bottom: controls-reserve; // leave room for floating controls
                 spacing: Spacing.sm;
 
                 ParticipantTile {
                     horizontal-stretch: 1;
                     participant: call-data.participants[0];
                     video-frame: remote-video-frames.length > 0 ? remote-video-frames[0] : local-video-frame;
-                    clicked => { root.maximized-index = 0; }
+                    clicked => { root.user-focus = 0; }
                 }
 
                 ParticipantTile {
@@ -313,13 +343,13 @@ export component ActiveCallView inherits Rectangle {
                     participant: call-data.participants.length > 1 ? call-data.participants[1] : call-data.participants[0];
                     video-frame: local-video-frame;
                     is-local: true;
-                    clicked => { root.maximized-index = 1; }
+                    clicked => { root.user-focus = 1; }
                 }
             }
 
             if maximized-index < 0 && call-data.participant-count >= 3 && call-data.participant-count <= 4: VerticalLayout {
                 padding: Spacing.sm;
-                padding-bottom: 56px;
+                padding-bottom: controls-reserve;
                 spacing: Spacing.sm;
 
                 HorizontalLayout {
@@ -329,13 +359,13 @@ export component ActiveCallView inherits Rectangle {
                         horizontal-stretch: 1;
                         participant: call-data.participants[0];
                         video-frame: remote-video-frames.length > 0 ? remote-video-frames[0] : local-video-frame;
-                        clicked => { root.maximized-index = 0; }
+                        clicked => { root.user-focus = 0; }
                     }
                     ParticipantTile {
                         horizontal-stretch: 1;
                         participant: call-data.participants.length > 1 ? call-data.participants[1] : call-data.participants[0];
                         video-frame: remote-video-frames.length > 1 ? remote-video-frames[1] : local-video-frame;
-                        clicked => { root.maximized-index = 1; }
+                        clicked => { root.user-focus = 1; }
                     }
                 }
 
@@ -346,7 +376,7 @@ export component ActiveCallView inherits Rectangle {
                         horizontal-stretch: 1;
                         participant: call-data.participants.length > 2 ? call-data.participants[2] : call-data.participants[0];
                         video-frame: remote-video-frames.length > 2 ? remote-video-frames[2] : local-video-frame;
-                        clicked => { root.maximized-index = 2; }
+                        clicked => { root.user-focus = 2; }
                     }
                     ParticipantTile {
                         horizontal-stretch: 1;
@@ -355,7 +385,7 @@ export component ActiveCallView inherits Rectangle {
                         is-local: call-data.participant-count >= 4;
                         opacity: call-data.participant-count >= 4 ? 1.0 : 0.0;
                         clicked => {
-                            if (call-data.participant-count >= 4) { root.maximized-index = 3; }
+                            if (call-data.participant-count >= 4) { root.user-focus = 3; }
                         }
                     }
                 }
@@ -370,12 +400,12 @@ export component ActiveCallView inherits Rectangle {
                 x: Spacing.sm;
                 y: Spacing.sm;
                 width: parent.width - 2 * Spacing.sm;
-                height: parent.height - 2 * Spacing.sm - 56px;
+                height: parent.height - 2 * Spacing.sm - controls-reserve;
                 participant: call-data.participants[maximized-index];
                 video-frame: maximized-video-frame;
                 is-local: maximized-is-local;
                 fill-mode: fullscreen;
-                clicked => { root.maximized-index = -1; }
+                clicked => { root.user-focus = -1; }
             }
 
             // Per-peer controls bar — top of the maximized tile, remote only.
