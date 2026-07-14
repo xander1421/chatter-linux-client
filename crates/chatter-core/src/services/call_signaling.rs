@@ -812,13 +812,16 @@ impl CallSignalingService {
             return Ok(AnonCallAnswerOutcome::AlreadyInCall);
         }
 
-        // Reconstruct room name from call_room_id
-        let room_name = format!(
-            "anon-{}",
-            uuid::Uuid::from_bytes(
-                call_room_id.try_into().unwrap_or_default()
-            )
-        );
+        // Reconstruct room name from call_room_id. A wrong-length id can't map
+        // to any pending call — surface it instead of silently degrading to a
+        // nil-UUID room name that always misses (misleading NoPendingCall).
+        let id_bytes: [u8; 16] = call_room_id.try_into().map_err(|_| {
+            CallSignalingError::AnonCall(format!(
+                "invalid call_room_id length: {} (expected 16)",
+                call_room_id.len()
+            ))
+        })?;
+        let room_name = format!("anon-{}", uuid::Uuid::from_bytes(id_bytes));
 
         let pending = self.anon_dm_service.take_pending_anon_call(&room_name)
             .ok_or(CallSignalingError::NoPendingCall)?;
@@ -1335,7 +1338,10 @@ impl CallSignalingService {
         let message = Message {
             id: crate::domain::ids::MessageId::new(),
             conversation_id: *channel_id,
-            conversation_type: ConversationType::AnonGroup,
+            // Derive from the channel row — this stores DM *and* channel/group
+            // call history (see end_dm_call / end_group_call callers), so a
+            // hardcoded type mislabels every non-anon-group call in history.
+            conversation_type: self.message_service.conversation_type(channel_id),
             sender_id: Some(*initiator_id),
             device_id: None,
             content: MessageContent::Call(call_msg),

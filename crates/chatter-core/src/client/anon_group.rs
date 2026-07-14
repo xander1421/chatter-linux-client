@@ -138,7 +138,23 @@ impl ChatterClient {
         before: Option<&chrono::DateTime<chrono::Utc>>,
         limit: i32,
     ) -> Result<Vec<crate::domain::message::Message>, crate::services::anon_group::AnonGroupError> {
-        self.anon_groups().get_messages_asc(group_id, before, limit)
+        let mut messages = self.anon_groups().get_messages_asc(group_id, before, limit)?;
+        // Join reaction counts here (keyed by sent_at) so callers render a
+        // complete Message. Previously the UI issued a second call and merged —
+        // duplicated across sidebar sites and a data-shaping leak into the view.
+        let reactions = self.anon_groups().get_all_reaction_counts(group_id).unwrap_or_default();
+        for msg in &mut messages {
+            if let Some(counts) = reactions.get(&msg.sent_at) {
+                msg.reaction_counts = counts
+                    .iter()
+                    .map(|(emoji, count)| crate::domain::message::ReactionCount {
+                        emoji: emoji.clone(),
+                        count: *count,
+                    })
+                    .collect();
+            }
+        }
+        Ok(messages)
     }
 
     pub fn list_anon_group_pinned(
@@ -146,13 +162,6 @@ impl ChatterClient {
         group_id: &crate::domain::anon_group::AnonGroupId,
     ) -> Vec<crate::domain::message::Message> {
         self.anon_groups().list_pinned(group_id).unwrap_or_default()
-    }
-
-    pub fn get_anon_group_reaction_counts(
-        &self,
-        group_id: &crate::domain::anon_group::AnonGroupId,
-    ) -> std::collections::HashMap<u64, Vec<(String, u32)>> {
-        self.anon_groups().get_all_reaction_counts(group_id).unwrap_or_default()
     }
 
     pub async fn refresh_expiring_group_mailboxes(

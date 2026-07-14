@@ -281,15 +281,7 @@ pub struct ChatterClient {
     transport_switch_lock: tokio::sync::Mutex<()>,
 }
 
-/// Decrypted profile of an incoming friend-request sender, surfaced to the
-/// Received-requests tab. All fields best-effort — `None` when the envelope
-/// couldn't be decrypted or the field is absent.
-#[derive(Debug, Clone, Default)]
-pub struct ReceivedFriendRequestProfile {
-    pub display_name: Option<String>,
-    pub avatar_bytes: Option<Vec<u8>>,
-    pub note: Option<String>,
-}
+pub use crate::services::user::ReceivedFriendRequestProfile;
 
 impl ChatterClient {
     pub fn builder() -> ClientBuilder {
@@ -1390,6 +1382,82 @@ impl ChatterClient {
     /// - Channel event stream, bootstrap, DM bootstrap
     /// - AI services (Jarvis, local AI)
     /// - Presence (broadcasts online status)
+    /// Multi-device crypto maintenance listener. One task that:
+    ///   * `SenderKeyReceived` → replays any deferred group decrypts whose SKDM
+    ///     finally arrived.
+    ///   * `ChannelMemberLeft` (someone else) → marks the channel for sender-key
+    ///     rotation so the next send issues a new key the ex-member can't read.
+    ///     Skips our own departure — `leave_channel` already rotated + purged.
+    fn spawn_crypto_maintenance_listener(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let client = Arc::clone(self);
+        let mut rx = self.services.event_bus.subscribe_domain();
+        let own_user_id = self.services.auth_state.get().current_user_id;
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(DomainEvent::SenderKeyReceived { sender_id, sender_device_id, channel_id, .. }) => {
+                        client.messages().retry_pending_group_decrypts(
+                            channel_id, sender_id, sender_device_id,
+                        ).await;
+                    }
+                    Ok(DomainEvent::ChannelMemberLeft { channel_id, user_id, .. }) => {
+                        if Some(user_id) == own_user_id {
+                            continue;
+                        }
+                        if let Err(e) = client.signal().mark_channel_for_rotation(&channel_id) {
+                            tracing::warn!(
+                                channel_id = %channel_id,
+                                user_id = %user_id,
+                                error = %e,
+                                "Failed to mark channel for rotation after member left"
+                            );
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "Multi-device crypto listener lagged");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        })
+    }
+
+    /// Call-worker room-events policy listener. On `ParticipantLeft` in a
+    /// channel-based group call, the initiator rotates the encryption key and
+    /// redistributes it so the departed participant can't decrypt future
+    /// frames. The "when" decision lives in core, not the UI crate.
+    #[cfg(feature = "media")]
+    fn spawn_call_room_policy_listener(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let client = Arc::clone(self);
+        tokio::spawn(async move {
+            // Wait for the call worker to be initialized. init_call_service runs
+            // before start() returns, but on Android it is deferred.
+            let mut rx = loop {
+                if let Some(w) = client.ctx.get_call_service() {
+                    break w.subscribe_room_events();
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            };
+
+            use crate::calls::LiveKitRoomEvent;
+            loop {
+                match rx.recv().await {
+                    Ok(LiveKitRoomEvent::ParticipantLeft { .. }) => {
+                        if let Err(e) = client.handle_participant_departed().await {
+                            tracing::error!(error = %e, "Failed to handle participant departure");
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "Call room-events policy lagged");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        })
+    }
+
     pub async fn start(self: &Arc<Self>) -> Result<(), ClientError> {
         if self.started.swap(true, Ordering::SeqCst) {
             return Err(ClientError::AlreadyStarted);
@@ -1405,87 +1473,11 @@ impl ChatterClient {
         let h_events = self.ctx.spawn_event_handlers();
 
         // ── Multi-device crypto maintenance listener ────────────────
-        // Single task that handles:
-        //   * SenderKeyReceived → replay any deferred group decrypts whose
-        //     SKDM finally arrived.
-        //   * ChannelMemberLeft (someone else) → mark the channel for
-        //     sender-key rotation so next send issues a new key the ex-member
-        //     cannot read.
-        let h_skdm_retry = {
-            let client = Arc::clone(self);
-            let mut rx = self.services.event_bus.subscribe_domain();
-            let own_user_id = self.services.auth_state.get().current_user_id;
-            tokio::spawn(async move {
-                loop {
-                    match rx.recv().await {
-                        Ok(DomainEvent::SenderKeyReceived { sender_id, sender_device_id, channel_id, .. }) => {
-                            client.messages().retry_pending_group_decrypts(
-                                channel_id, sender_id, sender_device_id,
-                            ).await;
-                        }
-                        Ok(DomainEvent::ChannelMemberLeft { channel_id, user_id, .. }) => {
-                            // Skip if WE left — `leave_channel` already rotated + purged.
-                            if Some(user_id) == own_user_id {
-                                continue;
-                            }
-                            if let Err(e) = client.signal().mark_channel_for_rotation(&channel_id) {
-                                tracing::warn!(
-                                    channel_id = %channel_id,
-                                    user_id = %user_id,
-                                    error = %e,
-                                    "Failed to mark channel for rotation after member left"
-                                );
-                            }
-                        }
-                        Ok(_) => {}
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            tracing::warn!(skipped = n, "Multi-device crypto listener lagged");
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            })
-        };
+        let h_skdm_retry = self.spawn_crypto_maintenance_listener();
 
         // ── Call worker room-events policy listener ─────────────────
-        // On `ParticipantLeft` in a channel-based group call, the initiator
-        // rotates the encryption key and redistributes it so the departed
-        // participant can't decrypt future frames. The "when" decision
-        // (reacting to a LiveKit event) now lives in core rather than the
-        // UI crate.
         #[cfg(feature = "media")]
-        let _h_call_room_policy = {
-            let client = Arc::clone(self);
-            tokio::spawn(async move {
-                // Wait for the call worker to be initialized. init_call_service
-                // runs before start() returns, but on Android it is deferred.
-                let mut rx = loop {
-                    if let Some(w) = client.ctx.get_call_service() {
-                        break w.subscribe_room_events();
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                };
-
-                use crate::calls::LiveKitRoomEvent;
-                loop {
-                    match rx.recv().await {
-                        Ok(LiveKitRoomEvent::ParticipantLeft { .. }) => {
-                            if let Err(e) = client.handle_participant_departed().await {
-                                tracing::error!(
-                                    error = %e,
-                                    "Failed to handle participant departure"
-                                );
-                            }
-                        }
-                        Ok(_) => {}
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            tracing::warn!(skipped = n, "Call room-events policy lagged");
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            })
-        };
+        let _h_call_room_policy = self.spawn_call_room_policy_listener();
 
         // ── Inbox polling + protocol processor ──────────────────────
         let inbox_rx = match self.services.start_inbox_provider().await {
@@ -1884,63 +1876,27 @@ impl ChatterClient {
         Ok(result)
     }
 
-    /// Decrypt an incoming friend-request envelope (ECIES to our identity key),
-    /// persist the sender's profile key, and return their decrypted profile so
-    /// the Received-requests tab can show who's actually asking.
-    ///
-    /// Envelope plaintext = `profile_key (32 bytes) || note (UTF-8)`. Storing
-    /// the profile key lets `get_user_profile` decrypt the sender's display
-    /// name + avatar (they're profile-key-encrypted on the server). Everything
-    /// best-effort: undecryptable/empty → all-None (never surface ciphertext).
+    /// Decrypt an incoming friend-request envelope and return the sender's
+    /// profile for the Received-requests tab. Fetches our identity private key
+    /// (the facade's only signal touch) and delegates the protocol work —
+    /// ECIES decrypt, profile-key persistence, profile decrypt — to
+    /// [`UserService::ingest_received_friend_request`].
     pub async fn ingest_received_friend_request(
         &self,
         sender_id: &crate::domain::ids::UserId,
         ciphertext: &[u8],
     ) -> ReceivedFriendRequestProfile {
-        use crate::crypto::ecies;
         use zeroize::Zeroize;
 
-        let mut out = ReceivedFriendRequestProfile::default();
-        if ciphertext.is_empty() {
-            return out;
-        }
-
-        // ECIES-decrypt with our identity private key.
-        let plaintext = {
-            let mut secret = match self.signal().actor.get_identity_private_key().await {
-                Ok(s) => s,
-                Err(_) => return out,
-            };
-            let pt = ecies::EciesMessage::from_bytes(ciphertext)
-                .ok()
-                .and_then(|m| ecies::decrypt(&secret, &m).ok());
-            secret.zeroize();
-            pt
+        let mut secret = match self.signal().actor.get_identity_private_key().await {
+            Ok(s) => s,
+            Err(_) => return ReceivedFriendRequestProfile::default(),
         };
-        let Some(plaintext) = plaintext else { return out };
-        if plaintext.len() < 32 {
-            return out; // malformed — must at least carry the profile key
-        }
-
-        let mut profile_key = [0u8; 32];
-        profile_key.copy_from_slice(&plaintext[..32]);
-        out.note = String::from_utf8(plaintext[32..].to_vec())
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-
-        // Persist the sender's key, then decrypt their real name + avatar.
-        if self
+        let out = self
             .users()
-            .store_friend_request_sender_key(sender_id, &profile_key)
-            .is_ok()
-        {
-            if let Ok(profile) = self.users().get_user_profile(sender_id).await {
-                out.display_name = Some(profile.display_name).filter(|s| !s.is_empty());
-                out.avatar_bytes = profile.avatar_bytes;
-            }
-        }
-        profile_key.zeroize();
+            .ingest_received_friend_request(sender_id, ciphertext, &secret)
+            .await;
+        secret.zeroize();
         out
     }
 

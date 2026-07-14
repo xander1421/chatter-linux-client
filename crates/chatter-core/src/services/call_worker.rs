@@ -4,7 +4,9 @@
 //! on a single dedicated thread. This module provides a Send-safe handle that
 //! communicates with the worker via channels.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -475,11 +477,6 @@ pub struct CallWorkerHandle {
     /// Broadcast sender for orchestrator events. Kept on the handle so UI
     /// subscribers can call `subscribe_call_events` any number of times.
     call_events_tx: broadcast::Sender<CallOrchestratorEvent>,
-    /// Snapshot of the most recently presented incoming call. The worker
-    /// writes here whenever it fires `IncomingPresented`, and drains the
-    /// slot on withdraw / accept / decline so callers always see current
-    /// state without plumbing extra channels.
-    latest_pending_incoming: Arc<parking_lot::RwLock<Option<PendingIncomingSnapshot>>>,
 }
 
 impl CallWorkerHandle {
@@ -489,15 +486,12 @@ impl CallWorkerHandle {
         let (events_tx, events_rx) = mpsc::channel(256);
         let (call_events_tx, _) = broadcast::channel(64);
         let (room_events_broadcast, _) = broadcast::channel(128);
-        let latest_pending_incoming: Arc<parking_lot::RwLock<Option<PendingIncomingSnapshot>>> =
-            Arc::new(parking_lot::RwLock::new(None));
 
         // Create shared video frames storage (shared between worker and UI)
         let shared_video_frames = SharedVideoFrames::new();
         let shared_frames_for_worker = shared_video_frames.clone();
         let call_events_for_worker = call_events_tx.clone();
         let room_events_broadcast_for_worker = room_events_broadcast.clone();
-        let latest_pending_for_worker = latest_pending_incoming.clone();
 
         // Spawn dedicated thread for call operations
         std::thread::Builder::new()
@@ -510,7 +504,6 @@ impl CallWorkerHandle {
                     shared_frames_for_worker,
                     call_events_for_worker,
                     room_events_broadcast_for_worker,
-                    latest_pending_for_worker,
                 );
             })
             .expect("Failed to spawn call worker thread");
@@ -521,7 +514,6 @@ impl CallWorkerHandle {
             room_events_broadcast,
             shared_video_frames,
             call_events_tx,
-            latest_pending_incoming,
         }
     }
 
@@ -540,18 +532,6 @@ impl CallWorkerHandle {
         {
             tracing::warn!("call worker: failed to enqueue call client swap (worker unavailable)");
         }
-    }
-
-    /// Read the most recently presented pending incoming call without
-    /// consuming it. Returns `None` if there is no outstanding presented
-    /// incoming.
-    pub fn peek_latest_pending_incoming(&self) -> Option<PendingIncomingSnapshot> {
-        self.latest_pending_incoming.read().clone()
-    }
-
-    /// Take (consume) the most recently presented pending incoming call.
-    pub fn take_latest_pending_incoming(&self) -> Option<PendingIncomingSnapshot> {
-        self.latest_pending_incoming.write().take()
     }
 
     // ========================================================================
@@ -1078,7 +1058,6 @@ fn run_call_worker(
     shared_video_frames: SharedVideoFrames,
     call_events_tx: broadcast::Sender<CallOrchestratorEvent>,
     room_events_broadcast: broadcast::Sender<LiveKitRoomEvent>,
-    latest_pending_incoming: Arc<parking_lot::RwLock<Option<PendingIncomingSnapshot>>>,
 ) {
     // Create single-threaded runtime for non-Send types
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -1096,12 +1075,17 @@ fn run_call_worker(
         let (room_manager, mut room_events_rx) = RoomManager::with_shared_frames(Some(shared_video_frames));
         let room_manager = Arc::new(room_manager);
         let call_client = Arc::new(TokioMutex::new(call_client));
-        let active_call: Arc<parking_lot::RwLock<Option<ActiveCallState>>> =
-            Arc::new(parking_lot::RwLock::new(None));
+        // Single-threaded: this state lives entirely on the call-worker thread
+        // (created here, accessed synchronously or from spawn_local tasks, never
+        // sent across threads — the handle reaches it only via the command
+        // channel). Rc<RefCell> is the honest type; Rc-not-Send compile-guards
+        // the invariant.
+        let active_call: Rc<RefCell<Option<ActiveCallState>>> =
+            Rc::new(RefCell::new(None));
 
         // Key ratchet timer control
-        let ratchet_cancel: Arc<parking_lot::RwLock<Option<tokio::sync::oneshot::Sender<()>>>> =
-            Arc::new(parking_lot::RwLock::new(None));
+        let ratchet_cancel: Rc<RefCell<Option<tokio::sync::oneshot::Sender<()>>>> =
+            Rc::new(RefCell::new(None));
 
         // Orchestrator state (single source of truth for incoming/outgoing/active
         // call presentation policy).
@@ -1229,7 +1213,7 @@ fn run_call_worker(
                     stop_key_ratchet_timer(&ratchet_cancel);
 
                     // Capture handle before leave clears active_call
-                    let handle = active_call.read().as_ref().map(derive_call_handle);
+                    let handle = active_call.borrow().as_ref().map(derive_call_handle);
 
                     let result = leave_call_impl(&call_client, &room_manager, &active_call).await;
 
@@ -1253,7 +1237,7 @@ fn run_call_worker(
                     // Cancel key ratchet timer
                     stop_key_ratchet_timer(&ratchet_cancel);
 
-                    let handle = active_call.read().as_ref().map(derive_call_handle);
+                    let handle = active_call.borrow().as_ref().map(derive_call_handle);
 
                     let result =
                         end_call_impl(&call_client, &room_manager, &active_call, reason.as_deref())
@@ -1277,10 +1261,10 @@ fn run_call_worker(
                     // Cancel key ratchet timer
                     stop_key_ratchet_timer(&ratchet_cancel);
 
-                    let handle = active_call.read().as_ref().map(derive_call_handle);
+                    let handle = active_call.borrow().as_ref().map(derive_call_handle);
 
                     room_manager.disconnect().await;
-                    *active_call.write() = None;
+                    *active_call.borrow_mut() = None;
                     tracing::info!("Disconnected locally from call");
 
                     if let Some(h) = handle {
@@ -1310,17 +1294,17 @@ fn run_call_worker(
                 }
 
                 CallCommand::GetActiveCall { response } => {
-                    let call = active_call.read().as_ref().map(|a| a.call.clone());
+                    let call = active_call.borrow().as_ref().map(|a| a.call.clone());
                     let _ = response.send(call);
                 }
 
                 CallCommand::GetRoomName { response } => {
-                    let name = active_call.read().as_ref().map(|a| a.room_name.clone());
+                    let name = active_call.borrow().as_ref().map(|a| a.room_name.clone());
                     let _ = response.send(name);
                 }
 
                 CallCommand::IsInCall { response } => {
-                    let _ = response.send(active_call.read().is_some());
+                    let _ = response.send(active_call.borrow().is_some());
                 }
 
                 CallCommand::GetRoomState { response } => {
@@ -1388,7 +1372,7 @@ fn run_call_worker(
 
                 CallCommand::RotateKey { new_key, response } => {
                     let result = {
-                        let mut call_guard = active_call.write();
+                        let mut call_guard = active_call.borrow_mut();
                         if let Some(ref mut state) = *call_guard {
                             state.key_state.reset(new_key);
                             let epoch = state.key_state.epoch();
@@ -1421,7 +1405,7 @@ fn run_call_worker(
                     // first 30s ratchet.
                     let success = match <[u8; 32]>::try_from(key.as_slice()) {
                         Ok(arr) => {
-                            let mut guard = active_call.write();
+                            let mut guard = active_call.borrow_mut();
                             // Install the SAME key the callee gave LiveKit: the
                             // HKDF-derived `current_key_vec()`, NOT the raw ECDH
                             // secret. The callee connects with
@@ -1483,8 +1467,6 @@ fn run_call_worker(
                     let replaces_active = orchestrator.active.is_some();
                     let snapshot = incoming.clone();
                     orchestrator.incoming.insert(incoming.call.clone(), incoming);
-                    *latest_pending_incoming.write() =
-                        Some(PendingIncomingSnapshot::from(snapshot.clone()));
                     let _ = call_events_tx.send(CallOrchestratorEvent::IncomingPresented {
                         call: snapshot.call,
                         kind: snapshot.kind,
@@ -1501,7 +1483,6 @@ fn run_call_worker(
 
                 CallCommand::OrchWithdrawIncoming { call, reason } => {
                     if orchestrator.incoming.remove(&call).is_some() {
-                        clear_latest_if_matches(&latest_pending_incoming, &call);
                         let _ = call_events_tx.send(CallOrchestratorEvent::IncomingWithdrawn {
                             call,
                             reason,
@@ -1531,7 +1512,6 @@ fn run_call_worker(
                     // incoming or outgoing — either way it's now connected.
                     orchestrator.outgoing.remove(&call);
                     orchestrator.incoming.remove(&call);
-                    clear_latest_if_matches(&latest_pending_incoming, &call);
                     orchestrator.active = Some(OrchestratedActive {
                         call: call.clone(),
                         kind,
@@ -1564,7 +1544,6 @@ fn run_call_worker(
                             reason,
                         });
                     } else if orchestrator.incoming.remove(&call).is_some() {
-                        clear_latest_if_matches(&latest_pending_incoming, &call);
                         let _ = call_events_tx.send(CallOrchestratorEvent::IncomingWithdrawn {
                             call,
                             reason,
@@ -1584,7 +1563,6 @@ fn run_call_worker(
                     let result = if orchestrator.active.is_some() {
                         Err(CallError::AlreadyInCall)
                     } else if let Some(p) = orchestrator.incoming.remove(&call) {
-                        clear_latest_if_matches(&latest_pending_incoming, &call);
                         Ok(p)
                     } else {
                         Err(CallError::NotInCall)
@@ -1596,7 +1574,6 @@ fn run_call_worker(
                     let pending = orchestrator.incoming.remove(&call);
                     let result = match pending {
                         Some(p) => {
-                            clear_latest_if_matches(&latest_pending_incoming, &call);
                             if let Some(prev) = orchestrator.active.take() {
                                 let _ = call_events_tx.send(
                                     CallOrchestratorEvent::ActiveEnded {
@@ -1615,7 +1592,6 @@ fn run_call_worker(
                 CallCommand::OrchDeclineIncoming { call, response } => {
                     let result = match orchestrator.incoming.remove(&call) {
                         Some(p) => {
-                            clear_latest_if_matches(&latest_pending_incoming, &call);
                             let _ = call_events_tx.send(
                                 CallOrchestratorEvent::IncomingWithdrawn {
                                     call: p.call.clone(),
@@ -1665,7 +1641,7 @@ struct ActiveCallState {
 async fn initiate_call_impl(
     call_client: &Arc<TokioMutex<CallClient>>,
     room_manager: &Arc<RoomManager>,
-    active_call: &Arc<parking_lot::RwLock<Option<ActiveCallState>>>,
+    active_call: &Rc<RefCell<Option<ActiveCallState>>>,
     channel_id: ChannelId,
     title: &str,
     call_type: CallType,
@@ -1673,7 +1649,7 @@ async fn initiate_call_impl(
     initiator_id: UserId,
 ) -> Result<Call, CallError> {
     // Check if already in a call
-    if active_call.read().is_some() {
+    if active_call.borrow().is_some() {
         return Err(CallError::AlreadyInCall);
     }
 
@@ -1720,7 +1696,7 @@ async fn initiate_call_impl(
     call.add_participant(Participant::new(initiator_id));
 
     // Store active call
-    *active_call.write() = Some(ActiveCallState {
+    *active_call.borrow_mut() = Some(ActiveCallState {
         call: call.clone(),
         key_state,
         room_name: response.room_name,
@@ -1742,13 +1718,13 @@ fn server_ns_to_utc(ns: u64) -> Option<chrono::DateTime<chrono::Utc>> {
 async fn join_call_impl(
     call_client: &Arc<TokioMutex<CallClient>>,
     room_manager: &Arc<RoomManager>,
-    active_call: &Arc<parking_lot::RwLock<Option<ActiveCallState>>>,
+    active_call: &Rc<RefCell<Option<ActiveCallState>>>,
     call_id: CallId,
     encryption_root_key: &[u8; 32],
     joiner_id: UserId,
 ) -> Result<Call, CallError> {
     // Check if already in a call
-    if active_call.read().is_some() {
+    if active_call.borrow().is_some() {
         return Err(CallError::AlreadyInCall);
     }
 
@@ -1799,7 +1775,7 @@ async fn join_call_impl(
     call.add_participant(Participant::new(joiner_id));
 
     // Store active call
-    *active_call.write() = Some(ActiveCallState {
+    *active_call.borrow_mut() = Some(ActiveCallState {
         call: call.clone(),
         key_state,
         room_name: call_info.room_name,
@@ -1815,7 +1791,7 @@ async fn join_call_impl(
 /// Used for anonymous calls where we get the token from the anonymous call service.
 async fn connect_with_token_impl(
     room_manager: &Arc<RoomManager>,
-    active_call: &Arc<parking_lot::RwLock<Option<ActiveCallState>>>,
+    active_call: &Rc<RefCell<Option<ActiveCallState>>>,
     access_token: String,
     livekit_url: String,
     encryption_key: Vec<u8>,
@@ -1824,7 +1800,7 @@ async fn connect_with_token_impl(
     channel_id: ChannelId,
 ) -> Result<(), CallError> {
     // Check if already in a call
-    if active_call.read().is_some() {
+    if active_call.borrow().is_some() {
         return Err(CallError::AlreadyInCall);
     }
 
@@ -1856,7 +1832,7 @@ async fn connect_with_token_impl(
         .map_err(|e| CallError::CryptoError(e.to_string()))?;
 
     // Store active call info
-    *active_call.write() = Some(ActiveCallState {
+    *active_call.borrow_mut() = Some(ActiveCallState {
         call: call.clone(),
         key_state,
         room_name: room_name.clone(),
@@ -1874,10 +1850,10 @@ async fn connect_with_token_impl(
 async fn leave_call_impl(
     call_client: &Arc<TokioMutex<CallClient>>,
     room_manager: &Arc<RoomManager>,
-    active_call: &Arc<parking_lot::RwLock<Option<ActiveCallState>>>,
+    active_call: &Rc<RefCell<Option<ActiveCallState>>>,
 ) -> Result<(), CallError> {
     let (call_id, is_anonymous) = {
-        let active = active_call.read();
+        let active = active_call.borrow();
         let state = active.as_ref().ok_or(CallError::NotInCall)?;
         (state.call.id.to_string(), state.room_name.starts_with("anon-"))
     };
@@ -1907,7 +1883,7 @@ async fn leave_call_impl(
     room_manager.disconnect().await;
 
     // Clear active call
-    *active_call.write() = None;
+    *active_call.borrow_mut() = None;
 
     Ok(())
 }
@@ -1915,11 +1891,11 @@ async fn leave_call_impl(
 async fn end_call_impl(
     call_client: &Arc<TokioMutex<CallClient>>,
     room_manager: &Arc<RoomManager>,
-    active_call: &Arc<parking_lot::RwLock<Option<ActiveCallState>>>,
+    active_call: &Rc<RefCell<Option<ActiveCallState>>>,
     reason: Option<&str>,
 ) -> Result<(), CallError> {
     let call_id = {
-        let active = active_call.read();
+        let active = active_call.borrow();
         active
             .as_ref()
             .map(|a| a.call.id.to_string())
@@ -1939,7 +1915,7 @@ async fn end_call_impl(
     room_manager.disconnect().await;
 
     // Clear active call
-    *active_call.write() = None;
+    *active_call.borrow_mut() = None;
 
     Ok(())
 }
@@ -1950,11 +1926,11 @@ async fn end_call_impl(
 async fn reconnect_impl(
     call_client: &Arc<TokioMutex<CallClient>>,
     room_manager: &Arc<RoomManager>,
-    active_call: &Arc<parking_lot::RwLock<Option<ActiveCallState>>>,
+    active_call: &Rc<RefCell<Option<ActiveCallState>>>,
 ) -> Result<(), CallError> {
     // Get current call info
     let (call_id, key_vec, livekit_url) = {
-        let active = active_call.read();
+        let active = active_call.borrow();
         let state = active.as_ref().ok_or(CallError::NotInCall)?;
         (
             state.call.id.to_string(),
@@ -1990,13 +1966,35 @@ async fn reconnect_impl(
 /// Ratcheting every 30 seconds provides good forward secrecy without excessive overhead.
 const KEY_RATCHET_INTERVAL_SECS: u64 = 30;
 
+/// Given the seconds elapsed since the shared call-start anchor, return the
+/// epoch that should be current now and the delay (seconds) until the next
+/// ratchet boundary at `call_start + (epoch+1) * interval`.
+///
+/// Pure so it can be unit-tested without a running call. Both peers feed the
+/// same `call_start`, so they compute the same boundaries and ratchet in
+/// lockstep regardless of when each connected.
+fn aligned_ratchet_schedule(elapsed_secs: f64, interval_secs: u64) -> (u32, f64) {
+    let interval = interval_secs as f64;
+    let elapsed = elapsed_secs.max(0.0);
+    let epoch_now = (elapsed / interval).floor() as u32;
+    let next_boundary = ((epoch_now + 1) as f64) * interval;
+    (epoch_now, (next_boundary - elapsed).max(0.0))
+}
+
 /// Start the coordinated key ratchet timer.
 ///
-/// Both sides ratchet at deterministic epoch boundaries aligned to the call start
-/// timestamp, ensuring they produce identical keys without any signaling.
+/// Both peers ratchet at wall-clock boundaries anchored to the server-assigned
+/// call start time (`call.started_at`, identical for every participant). A peer
+/// that connects 4s later than another still ratchets epoch N at exactly
+/// `call_start + N*interval`, so the two never drift out of sync — the earlier
+/// free-running `interval()` (counting from each peer's own connect moment) let
+/// them ratchet up to `interval` seconds apart, which froze video whenever the
+/// skew window coincided with a keyframe/loss (LiveKit's own recovery ratchet is
+/// disabled). A peer joining after boundaries have already passed fast-forwards
+/// its key chain to the current epoch on start.
 ///
 /// The ratchet uses `CallKeyState::ratchet()` (HKDF-SHA256 with call_id + epoch)
-/// which is deterministic, then pushes the new key to LiveKit via `set_encryption_key()`.
+/// which is deterministic, then pushes the new key to LiveKit.
 ///
 /// # Forward secrecy
 /// Each ratchet derives a new key from the current one. Compromising epoch N
@@ -2007,65 +2005,128 @@ const KEY_RATCHET_INTERVAL_SECS: u64 = 30;
 /// However, once the call ends, the keys are zeroized and can't be recovered.
 fn start_key_ratchet_timer(
     room_manager: &Arc<RoomManager>,
-    ratchet_cancel: &Arc<parking_lot::RwLock<Option<tokio::sync::oneshot::Sender<()>>>>,
-    active_call: &Arc<parking_lot::RwLock<Option<ActiveCallState>>>,
+    ratchet_cancel: &Rc<RefCell<Option<tokio::sync::oneshot::Sender<()>>>>,
+    active_call: &Rc<RefCell<Option<ActiveCallState>>>,
 ) {
     // Cancel any existing timer
     stop_key_ratchet_timer(ratchet_cancel);
 
     let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel();
-    *ratchet_cancel.write() = Some(cancel_tx);
+    *ratchet_cancel.borrow_mut() = Some(cancel_tx);
+
+    // Shared wall-clock anchor. Read once — it's fixed for the call's lifetime.
+    let call_start = active_call.borrow().as_ref().and_then(|s| s.call.started_at);
 
     let room_manager = room_manager.clone();
     let active_call = active_call.clone();
 
     tokio::task::spawn_local(async move {
-        let mut interval = tokio::time::interval(
-            tokio::time::Duration::from_secs(KEY_RATCHET_INTERVAL_SECS)
+        // Advance our deterministic CallKeyState by one epoch and push this
+        // epoch's key plus the next (forward window) to LiveKit. Returns false
+        // if the call ended (caller should stop the timer).
+        let ratchet_once = |active_call: &Rc<RefCell<Option<ActiveCallState>>>,
+                            room_manager: &Arc<RoomManager>|
+         -> bool {
+            let ratcheted = {
+                let mut call_guard = active_call.borrow_mut();
+                match call_guard.as_mut() {
+                    Some(state) => match state.key_state.ratchet() {
+                        Ok(()) => {
+                            let epoch = state.key_state.epoch();
+                            let key_cur = state.key_state.current_key_vec();
+                            let key_next = match state.key_state.peek_next_key() {
+                                Ok(k) => k.to_vec(),
+                                Err(e) => {
+                                    tracing::error!("Key peek failed: {}", e);
+                                    key_cur.clone()
+                                }
+                            };
+                            tracing::info!(epoch = epoch, "Coordinated key ratchet completed");
+                            Some((epoch, key_cur, key_next))
+                        }
+                        Err(e) => {
+                            tracing::error!("Key ratchet failed: {}", e);
+                            None
+                        }
+                    },
+                    None => {
+                        tracing::debug!("Key ratchet timer stopping: no active call");
+                        return false;
+                    }
+                }
+            };
+            if let Some((epoch, key_cur, key_next)) = ratcheted {
+                if !room_manager.set_ratcheted_shared_key(epoch, key_cur, key_next) {
+                    tracing::warn!("Failed to push ratcheted key to LiveKit");
+                }
+            }
+            true
+        };
+
+        // Align the first tick to the next boundary past `call_start`, and
+        // catch up any epochs that elapsed before we connected.
+        let first_delay_secs = match call_start {
+            Some(start) => {
+                let elapsed = (chrono::Utc::now() - start).num_milliseconds() as f64 / 1000.0;
+                let (epoch_now, delay) =
+                    aligned_ratchet_schedule(elapsed, KEY_RATCHET_INTERVAL_SECS);
+
+                // Fast-forward to the wall-clock epoch (a peer that joined after
+                // one or more boundaries already passed). Bounded by call age.
+                if epoch_now > 0 {
+                    let ratcheted = {
+                        let mut guard = active_call.borrow_mut();
+                        guard.as_mut().map(|state| {
+                            while state.key_state.epoch() < epoch_now {
+                                if let Err(e) = state.key_state.ratchet() {
+                                    tracing::error!("Key fast-forward failed: {}", e);
+                                    break;
+                                }
+                            }
+                            let epoch = state.key_state.epoch();
+                            let key_cur = state.key_state.current_key_vec();
+                            let key_next = state
+                                .key_state
+                                .peek_next_key()
+                                .map(|k| k.to_vec())
+                                .unwrap_or_else(|_| key_cur.clone());
+                            (epoch, key_cur, key_next)
+                        })
+                    };
+                    if let Some((epoch, key_cur, key_next)) = ratcheted {
+                        tracing::info!(epoch, "Fast-forwarded key to wall-clock epoch on join");
+                        room_manager.set_ratcheted_shared_key(epoch, key_cur, key_next);
+                    }
+                }
+                delay
+            }
+            // No anchor (shouldn't happen): behave like the old free-running timer.
+            None => KEY_RATCHET_INTERVAL_SECS as f64,
+        };
+
+        // Wait to the aligned boundary, then ratchet every interval from there.
+        let sleep = tokio::time::sleep(tokio::time::Duration::from_secs_f64(first_delay_secs));
+        tokio::pin!(sleep);
+        tokio::select! {
+            _ = &mut sleep => {}
+            _ = &mut cancel_rx => {
+                tracing::debug!("Key ratchet timer cancelled");
+                return;
+            }
+        }
+
+        // interval_at with start=now fires its first tick immediately (at the
+        // boundary we just reached), then every interval after.
+        let mut interval = tokio::time::interval_at(
+            tokio::time::Instant::now(),
+            tokio::time::Duration::from_secs(KEY_RATCHET_INTERVAL_SECS),
         );
-        // Skip the first tick (immediate)
-        interval.tick().await;
 
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    // Advance our deterministic CallKeyState and capture both
-                    // this epoch's key and the next one (for the forward
-                    // window). Both peers run the same chain at the same
-                    // cadence, so they reach the same epoch == key index.
-                    let ratcheted = {
-                        let mut call_guard = active_call.write();
-                        if let Some(ref mut state) = *call_guard {
-                            match state.key_state.ratchet() {
-                                Ok(()) => {
-                                    let epoch = state.key_state.epoch();
-                                    let key_cur = state.key_state.current_key_vec();
-                                    let key_next = match state.key_state.peek_next_key() {
-                                        Ok(k) => k.to_vec(),
-                                        Err(e) => {
-                                            tracing::error!("Key peek failed: {}", e);
-                                            key_cur.clone()
-                                        }
-                                    };
-                                    tracing::info!(epoch = epoch, "Coordinated key ratchet completed");
-                                    Some((epoch, key_cur, key_next))
-                                }
-                                Err(e) => {
-                                    tracing::error!("Key ratchet failed: {}", e);
-                                    None
-                                }
-                            }
-                        } else {
-                            tracing::debug!("Key ratchet timer stopping: no active call");
-                            break;
-                        }
-                    };
-
-                    // Push the keys to LiveKit outside the lock.
-                    if let Some((epoch, key_cur, key_next)) = ratcheted {
-                        if !room_manager.set_ratcheted_shared_key(epoch, key_cur, key_next) {
-                            tracing::warn!("Failed to push ratcheted key to LiveKit");
-                        }
+                    if !ratchet_once(&active_call, &room_manager) {
+                        break;
                     }
                 }
                 _ = &mut cancel_rx => {
@@ -2078,7 +2139,7 @@ fn start_key_ratchet_timer(
 
     tracing::info!(
         interval_secs = KEY_RATCHET_INTERVAL_SECS,
-        "Key ratchet timer started"
+        "Key ratchet timer started (wall-clock aligned)"
     );
 }
 
@@ -2107,25 +2168,11 @@ async fn auto_publish_media(room_manager: &RoomManager, is_video: bool) {
     }
 }
 
-/// Clear the "latest pending incoming" slot if it currently points at
-/// `call`. Caller-responsibility is to hold no other locks at call time —
-/// this grabs a write guard on the shared cache.
-fn clear_latest_if_matches(
-    slot: &Arc<parking_lot::RwLock<Option<PendingIncomingSnapshot>>>,
-    call: &CallHandle,
-) {
-    let mut guard = slot.write();
-    let matches = guard.as_ref().map(|s| &s.call == call).unwrap_or(false);
-    if matches {
-        *guard = None;
-    }
-}
-
 /// Stop the periodic key ratchet timer.
 fn stop_key_ratchet_timer(
-    ratchet_cancel: &Arc<parking_lot::RwLock<Option<tokio::sync::oneshot::Sender<()>>>>,
+    ratchet_cancel: &Rc<RefCell<Option<tokio::sync::oneshot::Sender<()>>>>,
 ) {
-    if let Some(cancel_tx) = ratchet_cancel.write().take() {
+    if let Some(cancel_tx) = ratchet_cancel.borrow_mut().take() {
         let _ = cancel_tx.send(());
     }
 }
@@ -2186,7 +2233,7 @@ fn handle_domain_event(
             peer_id,
             ephemeral_public_key,
             call_type,
-            channel_id,
+            channel_id: _,
             is_identity_verified,
             identity_warning,
             caller_name,
@@ -2203,7 +2250,8 @@ fn handle_domain_event(
                 is_identity_verified,
                 identity_warning,
                 Some(ephemeral_public_key),
-                Some(channel_id),
+                // DM has no channel name — notification reads "X is calling".
+                None,
             );
         }
 
@@ -2239,7 +2287,8 @@ fn handle_domain_event(
                 true, // anon-auth is treated as verified
                 String::new(),
                 None,
-                Some(conversation_id.to_string()),
+                // 1:1 anon DM — no channel name.
+                None,
             );
         }
 
@@ -2273,7 +2322,7 @@ fn handle_domain_event(
             room_name,
             call_type,
             caller_display_name,
-            group_id,
+            group_id: _,
             ..
         } => {
             let is_video = call_type == 2;
@@ -2291,7 +2340,10 @@ fn handle_domain_event(
                 true,
                 String::new(),
                 None,
-                Some(group_id.to_string()),
+                // ponytail: group name would read "X is calling in <group>", but no
+                // resolver wired yet — None beats leaking the raw group UUID. Pass a
+                // resolved name here when a group-name lookup exists.
+                None,
             );
         }
 
@@ -2410,4 +2462,42 @@ fn spawn_anon_call_answer_task(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod ratchet_align_tests {
+    use super::{aligned_ratchet_schedule, KEY_RATCHET_INTERVAL_SECS};
+
+    #[test]
+    fn two_peers_align_to_same_boundaries() {
+        let iv = KEY_RATCHET_INTERVAL_SECS; // 30
+        // Peer A connects ~at call start, peer B 4s later. Both still target
+        // epoch 0 now and the SAME absolute first boundary (call_start + 30).
+        let (ea, da) = aligned_ratchet_schedule(0.2, iv);
+        let (eb, db) = aligned_ratchet_schedule(4.2, iv);
+        assert_eq!(ea, 0);
+        assert_eq!(eb, 0);
+        // call_start + da (from A) == call_start + 4.0 + db (from B) == boundary 30.
+        assert!((da - 29.8).abs() < 1e-6, "A delay {}", da);
+        assert!((db - 25.8).abs() < 1e-6, "B delay {}", db);
+        assert!(((0.2 + da) - (4.2 + db)).abs() < 1e-6, "boundaries must match");
+    }
+
+    #[test]
+    fn late_joiner_fast_forwards_to_current_epoch() {
+        let iv = KEY_RATCHET_INTERVAL_SECS;
+        // Joined 95s in: epochs 0,1,2 already passed -> current epoch 3,
+        // next boundary at 120s -> 25s away.
+        let (epoch, delay) = aligned_ratchet_schedule(95.0, iv);
+        assert_eq!(epoch, 3);
+        assert!((delay - 25.0).abs() < 1e-6, "delay {}", delay);
+    }
+
+    #[test]
+    fn negative_elapsed_clamps_to_zero() {
+        // Clock skew: local clock behind server anchor.
+        let (epoch, delay) = aligned_ratchet_schedule(-3.0, KEY_RATCHET_INTERVAL_SECS);
+        assert_eq!(epoch, 0);
+        assert!((delay - 30.0).abs() < 1e-6);
+    }
 }

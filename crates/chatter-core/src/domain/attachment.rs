@@ -146,6 +146,14 @@ pub struct Attachment {
 }
 
 impl Attachment {
+    /// Whether this attachment has what it needs to fetch + decrypt its remote
+    /// content: a CDN URL and an encryption key. Callers use this to decide
+    /// whether to enqueue a background download.
+    #[must_use]
+    pub fn is_downloadable(&self) -> bool {
+        self.remote_url.is_some() && self.encryption_key.is_some()
+    }
+
     /// Create a new pending attachment.
     #[must_use]
     pub fn new(id: AttachmentId, metadata: FileMetadata) -> Self {
@@ -306,6 +314,12 @@ impl FileMetadata {
     #[must_use]
     pub fn is_video(&self) -> bool {
         matches!(self.category(), FileCategory::Video)
+    }
+
+    /// Check if file is a GIF (by MIME or `.gif` extension).
+    #[must_use]
+    pub fn is_gif(&self) -> bool {
+        self.mime_type == "image/gif" || self.name.to_lowercase().ends_with(".gif")
     }
 
     /// Check if file is audio.

@@ -594,6 +594,17 @@ impl MessageService {
     ///
     /// Lives here because UI callers used to inline this across multiple
     /// feature handlers.
+    /// Derive the `ConversationType` for a channel/DM id from the local channel
+    /// row. Defaults to `Channel` when the row isn't synced yet. Thin accessor
+    /// so callers outside `message/` (e.g. call-history storage) don't reach
+    /// into `channel_repo` directly.
+    pub fn conversation_type(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+    ) -> crate::domain::message::ConversationType {
+        conversion::conversation_type_for_channel(&self.channel_repo, channel_id)
+    }
+
     pub fn classify_active_conversation(
         &self,
         channel_id: &crate::domain::ids::ChannelId,

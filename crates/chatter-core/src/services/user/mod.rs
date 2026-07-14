@@ -181,6 +181,17 @@ impl From<CurrentUserError> for UserError {
     }
 }
 
+/// Decrypted profile of a friend-request sender, for the Received-requests
+/// tab. All fields best-effort — `None` when the envelope couldn't be
+/// decrypted or the field is absent. Produced by
+/// [`UserService::ingest_received_friend_request`].
+#[derive(Debug, Clone, Default)]
+pub struct ReceivedFriendRequestProfile {
+    pub display_name: Option<String>,
+    pub avatar_bytes: Option<Vec<u8>>,
+    pub note: Option<String>,
+}
+
 /// User service for all user operations.
 ///
 /// Orchestrates profile management, friends, blocking, and presence by
@@ -569,6 +580,56 @@ impl UserService {
             .map_err(|e| UserError::InvalidInput(format!("envelope encryption failed: {e}")))?;
 
         Ok(msg.to_bytes())
+    }
+
+    /// Decrypt an incoming friend-request envelope and resolve the sender's
+    /// profile. Protocol logic (ECIES decrypt with our identity key, profile-key
+    /// extraction, key persistence, profile decrypt) lives here in the service;
+    /// the facade only fetches `identity_secret` and delegates.
+    ///
+    /// Envelope plaintext = `profile_key (32 bytes) || note (UTF-8)`. Everything
+    /// is best-effort: undecryptable/empty → all-`None` (never surface
+    /// ciphertext). The caller owns zeroizing `identity_secret`.
+    pub async fn ingest_received_friend_request(
+        &self,
+        sender_id: &UserId,
+        ciphertext: &[u8],
+        identity_secret: &[u8; 32],
+    ) -> ReceivedFriendRequestProfile {
+        use crate::crypto::ecies;
+        use zeroize::Zeroize;
+
+        let mut out = ReceivedFriendRequestProfile::default();
+        if ciphertext.is_empty() {
+            return out;
+        }
+
+        let Some(plaintext) = ecies::EciesMessage::from_bytes(ciphertext)
+            .ok()
+            .and_then(|m| ecies::decrypt(identity_secret, &m).ok())
+        else {
+            return out;
+        };
+        if plaintext.len() < 32 {
+            return out; // malformed — must at least carry the profile key
+        }
+
+        let mut profile_key = [0u8; 32];
+        profile_key.copy_from_slice(&plaintext[..32]);
+        out.note = String::from_utf8(plaintext[32..].to_vec())
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        // Persist the sender's key, then decrypt their real name + avatar.
+        if self.store_friend_request_sender_key(sender_id, &profile_key).is_ok() {
+            if let Ok(profile) = self.get_user_profile(sender_id).await {
+                out.display_name = Some(profile.display_name).filter(|s| !s.is_empty());
+                out.avatar_bytes = profile.avatar_bytes;
+            }
+        }
+        profile_key.zeroize();
+        out
     }
 
     /// Persist a friend-request sender's profile key BEFORE we accept them, so

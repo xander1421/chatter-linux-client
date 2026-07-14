@@ -121,6 +121,11 @@ pub static TRUST_ROOT_PUBLIC_KEY: std::sync::LazyLock<PublicKey> = std::sync::La
 /// Used for key rotation coordination.
 pub const TRUST_ROOT_KEY_ID: u32 = 1;
 
+/// Messages fetched per page when loading a conversation or paging older
+/// history. Single source of truth so the fetch limit and the `has_more`
+/// check (`len >= MESSAGE_PAGE_SIZE`) can't drift apart.
+pub const MESSAGE_PAGE_SIZE: i32 = 50;
+
 #[cfg(test)]
 mod tests {
     use super::*;
