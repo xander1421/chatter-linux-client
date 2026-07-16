@@ -6,9 +6,12 @@
 //!
 //! Coverage:
 //!   - Finding #1 + #2: `ChannelRepository::get_membership` distinguishes
-//!     current members from non-members. Both gates in
-//!     `services/gateway/routing.rs` consult exactly this primitive
-//!     (`process_sender_key_distribution` and `process_sender_key_request`).
+//!     current members from non-members. The gate in
+//!     `services/gateway/routing.rs` consults exactly this primitive
+//!     (`process_sender_key_request`). The cleartext SKDM-install path
+//!     (`process_sender_key_distribution`) was removed in the H4 fix —
+//!     SKDMs now install only over the authenticated sealed-sender path
+//!     (`services/gateway/decryption.rs`).
 //!   - Finding #3 + #6: `ConversationKey::is_established` +
 //!     `their_ephemeral_public` together act as the bootstrap idempotency
 //!     marker AND the replay guard, exactly as
@@ -24,13 +27,18 @@
 
 use std::sync::Arc;
 
+use chatter_core::crypto::SignalStore;
 use chatter_core::domain::ids::{ChannelId, UserId};
 use chatter_core::domain::{Channel, ChannelType, Membership, MemberRole, NotificationPreference};
 use chatter_core::mailbox::dm::ConversationKey;
 use chatter_core::storage::repositories::channel_repo::ChannelRepository;
-use chatter_core::storage::Database;
+use chatter_core::storage::{Database, KeyStore};
 
 use chrono::Utc;
+use libsignal_protocol::{
+    DeviceId, Direction, IdentityKeyPair, IdentityKeyStore, ProtocolAddress,
+};
+use rand::{rngs::StdRng, SeedableRng};
 use tempfile::NamedTempFile;
 
 // ============================================================================
@@ -70,9 +78,10 @@ fn make_membership(channel_id: ChannelId, user_id: UserId) -> Membership {
 // #1 + #2 — channel-membership gate primitive
 // ============================================================================
 
-/// `process_sender_key_distribution` and `process_sender_key_request`
-/// both call `channel_repo.get_membership(channel, peer)` and reject when
-/// it returns `Ok(None)`. Lock that primitive's behavior here.
+/// `process_sender_key_request` calls `channel_repo.get_membership(channel,
+/// peer)` and rejects when it returns `Ok(None)`. (The cleartext
+/// `process_sender_key_distribution` path was removed in the H4 fix.)
+/// Lock that primitive's behavior here.
 #[test]
 fn round3_finding_1_2_membership_gate_distinguishes_member_from_non_member() {
     let (repo, _dbf) = fresh_channel_repo();
@@ -221,4 +230,108 @@ fn round3_finding_4_call_keys_are_random_per_draw() {
     let g2 = generate_group_call_key();
     assert_ne!(g1, g2);
     assert_ne!(g1, [0u8; 32]);
+}
+
+// ============================================================================
+// Ghost-device regression: identity keys pin per ACCOUNT, not per device
+// ============================================================================
+
+fn fresh_signal_store() -> (SignalStore, NamedTempFile) {
+    let (db, dbf) = fresh_db();
+    (SignalStore::new(Arc::new(KeyStore::new(db))), dbf)
+}
+
+/// A server-injected "ghost" device presenting a DIVERGENT identity key must
+/// fail `is_trusted_identity`, so senders never encrypt to it during
+/// multi-device fan-out.
+///
+/// This locks `crypto/signal/store.rs::is_trusted_identity` (and its
+/// `save_identity` sibling) keying on `address.name()` — the bare account id —
+/// rather than libsignal's default per-(account, device) `address.to_string()`.
+///
+/// Why this is load-bearing: chatter's linked devices all share the primary's
+/// identity key, and the server owns the device list — it can write a rogue row
+/// and publish prekeys for it at will. Per-account pinning is the ONLY thing
+/// that makes such a device detectable, because the rogue cannot present the
+/// account's identity key (that private half exists solely inside the
+/// ProvisioningCipher envelope the server cannot decrypt). Under per-device
+/// keying a ghost is merely an unseen address, TOFU-trusts on first sight, and
+/// silently receives a fan-out copy of every message. That flip is a one-word
+/// change with no compile error — hence this test.
+#[tokio::test]
+async fn ghost_device_with_divergent_identity_is_untrusted() {
+    let (mut store, _dbf) = fresh_signal_store();
+
+    let mut rng = StdRng::seed_from_u64(0xC0FFEE);
+    let account = IdentityKeyPair::generate(&mut rng);
+    let ghost = IdentityKeyPair::generate(&mut rng);
+
+    let device1 = ProtocolAddress::new("alice-uuid".to_string(), DeviceId::new(1).unwrap());
+    let device2 = ProtocolAddress::new("alice-uuid".to_string(), DeviceId::new(2).unwrap());
+
+    // Primary device pins the account identity key.
+    store
+        .save_identity(&device1, account.identity_key())
+        .await
+        .expect("save primary identity");
+
+    // A genuine linked device shares the primary's key -> trusted, even though
+    // device 2 has never been seen before.
+    assert!(
+        store
+            .is_trusted_identity(&device2, account.identity_key(), Direction::Sending)
+            .await
+            .expect("is_trusted_identity"),
+        "a real linked device shares the primary's identity key and must be trusted"
+    );
+
+    // The kill: same account, unseen device id, DIFFERENT key -> untrusted.
+    assert!(
+        !store
+            .is_trusted_identity(&device2, ghost.identity_key(), Direction::Sending)
+            .await
+            .expect("is_trusted_identity"),
+        "REGRESSION: a ghost device with a divergent identity key was TRUSTED. \
+         is_trusted_identity must key on address.name() (per-account), not \
+         address.to_string() (per-device). A malicious server can now inject a \
+         rogue device and receive fan-out copies of every message."
+    );
+}
+
+/// The pinning must not be so coarse that a *different account* is affected,
+/// and a divergent key on the ALREADY-PINNED device must also fail (the
+/// re-registration / MITM signal that safety-number verification surfaces).
+#[tokio::test]
+async fn divergent_identity_fails_on_pinned_device_and_accounts_are_isolated() {
+    let (mut store, _dbf) = fresh_signal_store();
+
+    let mut rng = StdRng::seed_from_u64(0xBADC0DE);
+    let alice = IdentityKeyPair::generate(&mut rng);
+    let bob = IdentityKeyPair::generate(&mut rng);
+
+    let alice_d1 = ProtocolAddress::new("alice-uuid".to_string(), DeviceId::new(1).unwrap());
+    let bob_d1 = ProtocolAddress::new("bob-uuid".to_string(), DeviceId::new(1).unwrap());
+
+    store
+        .save_identity(&alice_d1, alice.identity_key())
+        .await
+        .expect("save alice identity");
+
+    // Alice's own device presenting Bob's key is a key change -> untrusted.
+    assert!(
+        !store
+            .is_trusted_identity(&alice_d1, bob.identity_key(), Direction::Sending)
+            .await
+            .expect("is_trusted_identity"),
+        "a divergent key on the pinned device must not be trusted"
+    );
+
+    // Pinning alice must not leak into bob's account: bob is unseen -> TOFU.
+    assert!(
+        store
+            .is_trusted_identity(&bob_d1, bob.identity_key(), Direction::Sending)
+            .await
+            .expect("is_trusted_identity"),
+        "pinning is per-account: an unrelated account must still TOFU"
+    );
 }

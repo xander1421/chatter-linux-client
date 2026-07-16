@@ -1143,7 +1143,17 @@ fn run_call_worker(
                     // lifecycle side-effects in one place.
                     if result.is_ok() {
                         start_key_ratchet_timer(&room_manager, &ratchet_cancel, &active_call);
-                        auto_publish_media(&room_manager, matches!(call_type, CallType::Video)).await;
+                        // ponytail: the DM caller connects under an all-zero
+                        // placeholder key — its real ECDH key only lands later
+                        // in complete_dm_call. Publishing here would leak live
+                        // mic/cam to the SFU under a fully server-derivable key.
+                        // So defer the DM-caller publish until the real key is
+                        // installed (complete_dm_call publishes right after
+                        // set_encryption_key). Group/join connect with a real
+                        // random key, so they still publish immediately.
+                        if encryption_root_key != [0u8; 32] {
+                            auto_publish_media(&room_manager, matches!(call_type, CallType::Video)).await;
+                        }
                     }
 
                     let _ = response.send(result);
@@ -1321,10 +1331,13 @@ fn run_call_worker(
                     config,
                     response,
                 } => {
-                    let result = room_manager
-                        .publish_camera(device_path.as_deref(), config)
-                        .await;
-                    let _ = response.send(result);
+                    // Spawn — never await a capture publish inside the command
+                    // loop (see PublishScreenShare below for the full rationale).
+                    let rm = room_manager.clone();
+                    tokio::task::spawn_local(async move {
+                        let result = rm.publish_camera(device_path.as_deref(), config).await;
+                        let _ = response.send(result);
+                    });
                 }
 
                 CallCommand::StopMicrophone => {
@@ -1357,8 +1370,20 @@ fn run_call_worker(
 
                 #[cfg(not(target_os = "android"))]
                 CallCommand::PublishScreenShare { source, response } => {
-                    let result = room_manager.publish_screen_share(source, None).await;
-                    let _ = response.send(result);
+                    // CRITICAL: spawn, don't await here. publish_screen_share runs
+                    // the desktop-capture handshake, which on Wayland waits on the
+                    // XDG portal and can stall for tens of seconds (flaky portals)
+                    // or until the user picks a source. Awaiting it inside the
+                    // sequential command loop wedges the ENTIRE worker: GetRoomState
+                    // and every other command block, so call_is_connected() hangs
+                    // and all call UI buttons (share, video, …) go dead with no
+                    // feedback. Spawning keeps the loop live; the oneshot still
+                    // carries the result back when the publish finishes or fails.
+                    let rm = room_manager.clone();
+                    tokio::task::spawn_local(async move {
+                        let result = rm.publish_screen_share(source, None).await;
+                        let _ = response.send(result);
+                    });
                 }
 
                 #[cfg(not(target_os = "android"))]

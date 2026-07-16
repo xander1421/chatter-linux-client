@@ -399,7 +399,6 @@ mod tests {
                 r#type: Some(Type::Text(text.to_string())),
             }),
             timestamp: 1234567890000,
-            signature: vec![],
             ephemeral: false,
             ephemeral_ttl: None,
             pinned: false,

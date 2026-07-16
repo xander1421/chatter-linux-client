@@ -110,9 +110,14 @@ impl MessageGateway {
                     skdm_len = skdm.distribution_message.len(),
                     "GATEWAY: Received SKDM via sealed sender, processing sender key"
                 );
-                // Process the SKDM so we can decrypt future messages from this sender
+                // Process the SKDM so we can decrypt future messages from this sender.
+                // Use the sender's REAL device id from the verified sealed-sender
+                // address, not a hardcoded primary (1) — otherwise SKDMs from linked
+                // devices install under the wrong address and group messages from
+                // those devices fail to decrypt.
+                let sender_device_id: u32 = sender_address.device_id().into();
                 self.signal_service
-                    .process_sender_key(&sender_id, 1, &skdm) // device_id=1 (primary)
+                    .process_sender_key(&sender_id, sender_device_id, &skdm)
                     .await
                     .map_err(|e| {
                         tracing::error!(
@@ -128,7 +133,17 @@ impl MessageGateway {
                     channel_id = %channel_id,
                     "GATEWAY: Successfully stored sender key from channel member"
                 );
-                return Ok(SealedSenderResult::MessageStored);
+                // Signal that the key is now installed so the caller can drain
+                // any group messages that arrived before it (F14c). Carry the
+                // exact identifiers the pending-decrypt buffer is keyed on:
+                // (channel_id, sender_id, sender_device_id).
+                return Ok(SealedSenderResult::SenderKeyProcessed {
+                    sender_id,
+                    sender_device_id,
+                    channel_id,
+                    distribution_message: skdm.distribution_message.clone(),
+                    timestamp: content_proto.timestamp,
+                });
             }
 
             // Handle GroupMailboxAddress - member is announcing their ephemeral mailbox (NDSS '21)
@@ -150,8 +165,43 @@ impl MessageGateway {
                 });
             }
 
+            // Handle SyncSent — a copy of a message WE sent, synced to our own
+            // other devices (Signal's SyncMessage.Sent). File it as our OUTGOING
+            // message in the conversation with the carried destination, NOT as an
+            // inbound message from ourselves. This is the receive-side F8 fix.
+            if let Some(content::Content::SyncSent(sync)) = content_proto.content {
+                tracing::info!(
+                    sender_id = %sender_id,
+                    destination = %sync.destination_user_id,
+                    "GATEWAY: Received SyncSent self-sync, filing as outgoing to destination"
+                );
+                return self.store_synced_sent_message(sync, sender_id).await;
+            }
+
             // Handle DataMessage inside Content
+            let content_ts = content_proto.timestamp;
             if let Some(content::Content::DataMessage(data_message)) = content_proto.content {
+                // Delete-for-everyone rides an empty-body `DataMessage` carrying
+                // the `delete` field on this same sealed ServerDm path
+                // (builders::build_delete_for_everyone_content_with_channel). It
+                // is CONTROL, not stored content: `store_data_message` ignores
+                // `delete`, so routing it there would persist a junk empty-body
+                // row and leave the TARGET message intact — the recipient would
+                // never actually delete (the whole point of "delete for
+                // everyone"). Hand it to the control dispatcher instead, which
+                // already turns it into DmDeleteForEveryone / ChannelDeleteForEveryone
+                // (inbox/polling/device.rs::dispatch_control_content) and reuses
+                // the existing MessageDeleted -> delete_message_local handler.
+                if data_message.delete.is_some() {
+                    return Ok(SealedSenderResult::ControlContent {
+                        sender_id,
+                        content: Box::new(Content {
+                            timestamp: content_ts,
+                            content: Some(content::Content::DataMessage(data_message)),
+                            ..Default::default()
+                        }),
+                    });
+                }
                 return self.store_data_message(data_message, Some(sender_id)).await;
             }
 

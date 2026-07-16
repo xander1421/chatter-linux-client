@@ -27,7 +27,9 @@ use chatter_core::state::chat_state::PendingAttachment;
 
 const SERVER_URL: &str = "http://localhost:50051";
 const EVENT_TIMEOUT: Duration = Duration::from_secs(30);
-const PIN: &str = "12345678";
+// Must clear crypto::svr::MIN_PIN_ENTROPY_BITS (30.0). An 8-digit numeric PIN
+// is ~26.6 bits and is rejected by design; mix classes to clear the floor.
+const PIN: &str = "Va1idPin!x9";
 const PASSWORD: &str = "TestPass123!";
 
 // ============================================================================
@@ -174,14 +176,12 @@ async fn t2_friend_request() {
 
     // User A generates friend code
     let friend_code = client_a
-        .users()
         .generate_friend_code()
         .expect("Failed to generate friend code");
     println!("  Friend code from A: {}", friend_code);
 
     // User B connects via friend code
     let friendship = client_b
-        .users()
         .connect_via_friend_code(&friend_code, Some("Hey from Bob!"))
         .await
         .expect("connect_via_friend_code failed");
@@ -387,7 +387,6 @@ async fn t5_anonymous_dm() {
 
     // User A generates private friend code
     let private_code = client_a
-        .users()
         .generate_private_friend_code()
         .expect("generate_private_friend_code failed");
     println!("  A's private friend code generated (length: {})", private_code.len());
@@ -681,8 +680,8 @@ async fn t2_inner() {
     let client_b = build_client(&dir_b);
     let uid_a = register_and_start(&client_a, &unique_user("t2a"), "Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("t2b"), "Bob").await;
-    let friend_code = client_a.users().generate_friend_code().unwrap();
-    client_b.users().connect_via_friend_code(&friend_code, Some("Hey!")).await.unwrap();
+    let friend_code = client_a.generate_friend_code().unwrap();
+    client_b.connect_via_friend_code(&friend_code, Some("Hey!")).await.unwrap();
     tokio::time::sleep(Duration::from_secs(2)).await;
     client_a.respond_friend_request(&uid_b, true).await.unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -752,7 +751,7 @@ async fn t5_inner() {
     let client_b = build_client(&dir_b);
     let uid_a = register_and_start(&client_a, &unique_user("t5a"), "Alice").await;
     register_and_start(&client_b, &unique_user("t5b"), "Bob").await;
-    let _code = client_a.users().generate_private_friend_code().unwrap();
+    let _code = client_a.generate_private_friend_code().unwrap();
     let anon = client_b.start_anon_dm(uid_a, Some("Hi anon")).await.unwrap();
     assert!(!anon.id.to_string().is_empty());
     tokio::time::sleep(Duration::from_secs(5)).await;

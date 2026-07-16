@@ -115,6 +115,33 @@ pub static TRUST_ROOT_PUBLIC_KEY: std::sync::LazyLock<PublicKey> = std::sync::La
         .expect("Invalid production trust root key - check config.rs")
 });
 
+// ─── Key Transparency tree-head signing key (pinned) ───────────────────────
+//
+// The KT server signs every SignedTreeHead with an Ed25519 key; the client
+// pins its PUBLIC key here, exactly as it pins TRUST_ROOT_PUBLIC_KEY for
+// sealed-sender certificates. A signed tree head whose signature does not
+// verify under this key is worthless, so a malicious server cannot forge a
+// tree head that commits to an identity key it controls.
+//
+// This is the raw 32-byte Ed25519 public key (NO 0x05 prefix — that prefix is a
+// libsignal Curve25519 convention; KT tree heads are plain RFC-8032 Ed25519,
+// matching the Go server's github.com/cloudflare/circl/sign/ed25519 signer).
+//
+// Development key (server logs it loudly at boot, service.go:41):
+//   "Public key: 88ad412806054a7534e1b9deb42ef249bd7c92709f5bebf1d6be7b0e40926f72"
+//
+// PHASE 3 TODO (Vault prod signing key): production deployments must move the KT
+// tree-head signing key into Vault and replace the release bytes below with the
+// corresponding public key (mirroring the GRA-249 fix for TRUST_ROOT). Until
+// then the server itself runs on the well-known dev key (CHATTER_KT_ALLOW_DEV_KEY),
+// so both build profiles pin the same key.
+pub const KT_TREE_HEAD_PUBLIC_KEY_BYTES: [u8; 32] = [
+    0x88, 0xad, 0x41, 0x28, 0x06, 0x05, 0x4a, 0x75,
+    0x34, 0xe1, 0xb9, 0xde, 0xb4, 0x2e, 0xf2, 0x49,
+    0xbd, 0x7c, 0x92, 0x70, 0x9f, 0x5b, 0xeb, 0xf1,
+    0xd6, 0xbe, 0x7b, 0x0e, 0x40, 0x92, 0x6f, 0x72,
+];
+
 // ─── Shared constants ──────────────────────────────────────────────────────
 
 /// Trust root key ID (matches server's key_id in Vault).

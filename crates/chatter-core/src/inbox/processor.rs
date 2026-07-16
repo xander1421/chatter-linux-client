@@ -458,7 +458,15 @@ impl MessageProcessor {
         SP: SignedPreKeyStore,
         K: KyberPreKeyStore,
     {
-        let timestamp = libsignal_protocol::Timestamp::from_epoch_millis(message.timestamp);
+        // Certificate validity must be checked against real wall-clock time, not the
+        // sender-controlled envelope timestamp (which an attacker could backdate to
+        // revalidate a stale/revoked sender certificate).
+        let timestamp = libsignal_protocol::Timestamp::from_epoch_millis(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        );
 
         let result = SealedSenderManager::decrypt(
             &message.encrypted_envelope,

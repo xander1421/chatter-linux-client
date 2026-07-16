@@ -559,6 +559,14 @@ impl ScreenCapture {
         // first `capture_frame()` request so we don't drop it.
         let mut pending: Option<CapturedFrame> = Some(pending_first_frame);
 
+        // Stamp frames with REAL capture time, not frame_count/fps. The portal
+        // hands us frames at the panel's real cadence (~100 Hz here), which
+        // never equals the 144 fps target; a synthetic frame_count/fps clock
+        // runs ~44% fast, so the receiver's jitter buffer plays out ahead of
+        // arrival, starves, and stutters — the same bug the camera path already
+        // fixed. Real elapsed microseconds encode the true cadence + jitter.
+        let capture_base = Instant::now();
+
         // Pooled I420 output buffer, reused across frames; reallocated only on
         // a resolution change. `capture_frame` borrows the buffer (via RefBuf)
         // and the C++ side takes its own ref-counted hold, so the same buffer
@@ -622,7 +630,7 @@ impl ScreenCapture {
 
                     let frame = VideoFrame {
                         rotation: VideoRotation::VideoRotation0,
-                        timestamp_us: (frame_count * 1_000_000 / fps as u64) as i64,
+                        timestamp_us: capture_base.elapsed().as_micros() as i64,
                         frame_metadata: None,
                         buffer: RefBuf(i420_buffer),
                     };
@@ -724,6 +732,15 @@ impl ScreenCapture {
     /// libyuv names destinations by little-endian 32-bit word value, so
     /// "ARGB" word = 0xAARRGGBB → LE memory bytes B, G, R, A — exactly
     /// what the desktop capturer emits. SIMD-accelerated (SSSE3/AVX2/NEON).
+    ///
+    /// PARALLEL across horizontal bands. libyuv's per-frame convert is
+    /// single-threaded SIMD; at 5120×1440 (7.4 MP) it's the last CPU stage
+    /// gating our end-to-end fps once the encoder throttle is off (H.265/NVENC
+    /// clears 100+ fps, this convert must not be the new wall). Splitting the
+    /// frame into per-core row bands and running libyuv on each via rayon's
+    /// global pool cuts it ~linearly with cores — portable across amd64 (AVX2)
+    /// and arm64 (NEON) since each band still uses the same SIMD kernel. Bands
+    /// are chroma-safe: every boundary is on an EVEN row (4:2:0 subsamples 2×2).
     fn bgra_to_i420(
         bgra: &[u8],
         width: usize,
@@ -733,16 +750,61 @@ impl ScreenCapture {
         u_plane: &mut [u8],
         v_plane: &mut [u8],
     ) {
-        let w = width as u32;
-        let h = height as u32;
-        let half_w = (width / 2) as u32;
-        livekit::webrtc::native::yuv_helper::argb_to_i420(
-            bgra, stride as u32,
-            y_plane, w,
-            u_plane, half_w,
-            v_plane, half_w,
-            w as i32, h as i32,
-        );
+        // Capture-free helper (a plain fn, so it's trivially shareable across
+        // rayon tasks — a closure capturing the strides could only be moved into
+        // one spawn).
+        fn conv(src: &[u8], stride: usize, y: &mut [u8], u: &mut [u8], v: &mut [u8], w: usize, rows: usize) {
+            livekit::webrtc::native::yuv_helper::argb_to_i420(
+                src, stride as u32,
+                y, w as u32,
+                u, (w / 2) as u32,
+                v, (w / 2) as u32,
+                w as i32, rows as i32,
+            );
+        }
+
+        // Pick a band count from the core budget, but keep bands ≥64 rows so the
+        // SIMD kernel amortises rayon dispatch, and only bother past ~2 MP.
+        let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+        let bands = cores.min(height / 64).max(1);
+        if bands == 1 || width * height < 2_000_000 {
+            conv(bgra, stride, y_plane, u_plane, v_plane, width, height);
+            return;
+        }
+
+        // Even-aligned rows per band; the last band absorbs the remainder (also
+        // even, since `height` is even and `rows_each` is even).
+        let rows_each = (height / bands) & !1;
+        if rows_each == 0 {
+            conv(bgra, stride, y_plane, u_plane, v_plane, width, height);
+            return;
+        }
+
+        // Carve disjoint mutable Y/U/V slices per band, front to back.
+        let (wc, hchroma_stride) = (width, width / 2);
+        let mut y_rest = y_plane;
+        let mut u_rest = u_plane;
+        let mut v_rest = v_plane;
+        let mut tasks: Vec<(&[u8], &mut [u8], &mut [u8], &mut [u8], u32)> = Vec::with_capacity(bands);
+        let mut y0 = 0usize;
+        for b in 0..bands {
+            let rows = if b == bands - 1 { height - y0 } else { rows_each };
+            let (yh, yt) = y_rest.split_at_mut(rows * wc);
+            let (uh, ut) = u_rest.split_at_mut((rows / 2) * hchroma_stride);
+            let (vh, vt) = v_rest.split_at_mut((rows / 2) * hchroma_stride);
+            y_rest = yt;
+            u_rest = ut;
+            v_rest = vt;
+            let src = &bgra[y0 * stride..(y0 + rows) * stride];
+            tasks.push((src, yh, uh, vh, rows as u32));
+            y0 += rows;
+        }
+
+        rayon::scope(|s| {
+            for (src, yh, uh, vh, rows) in tasks {
+                s.spawn(move |_| conv(src, stride, yh, uh, vh, width, rows as usize));
+            }
+        });
     }
 
     /// Signal screen capture to stop (non-blocking).
@@ -995,6 +1057,45 @@ mod tests {
         }
         assert!(u_plane[0] > 120 && u_plane[0] < 136, "U value for white should be ~128, got {}", u_plane[0]);
         assert!(v_plane[0] > 120 && v_plane[0] < 136, "V value for white should be ~128, got {}", v_plane[0]);
+    }
+
+    // Parallel band-split must be byte-identical to a single full-frame convert.
+    // Uses a >2 MP frame so the rayon path actually triggers (on multi-core);
+    // on a single core it falls back to the same single-shot call and trivially
+    // matches. A non-flat gradient makes any wrong band offset/stride visible.
+    #[test]
+    fn test_bgra_to_i420_parallel_matches_single() {
+        let (width, height) = (1920usize, 1088usize); // 2.09 MP, 1088/64=17 bands
+        let stride = width * 4;
+        let mut bgra = vec![0u8; stride * height];
+        for y in 0..height {
+            for x in 0..width {
+                let p = (y * stride) + x * 4;
+                bgra[p] = (x % 256) as u8;         // B
+                bgra[p + 1] = (y % 256) as u8;     // G
+                bgra[p + 2] = ((x + y) % 256) as u8; // R
+                bgra[p + 3] = 255;                 // A
+            }
+        }
+
+        let ysz = width * height;
+        let csz = (width / 2) * (height / 2);
+        let (mut yp, mut up, mut vp) = (vec![0u8; ysz], vec![0u8; csz], vec![0u8; csz]);
+        ScreenCapture::bgra_to_i420(&bgra, width, height, stride, &mut yp, &mut up, &mut vp);
+
+        // Reference: one libyuv call over the whole frame.
+        let (mut yr, mut ur, mut vr) = (vec![0u8; ysz], vec![0u8; csz], vec![0u8; csz]);
+        livekit::webrtc::native::yuv_helper::argb_to_i420(
+            &bgra, stride as u32,
+            &mut yr, width as u32,
+            &mut ur, (width / 2) as u32,
+            &mut vr, (width / 2) as u32,
+            width as i32, height as i32,
+        );
+
+        assert_eq!(yp, yr, "Y plane mismatch between parallel and single convert");
+        assert_eq!(up, ur, "U plane mismatch between parallel and single convert");
+        assert_eq!(vp, vr, "V plane mismatch between parallel and single convert");
     }
 
     #[test]

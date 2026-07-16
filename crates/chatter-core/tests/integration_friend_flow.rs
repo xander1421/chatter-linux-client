@@ -37,7 +37,9 @@ async fn test_friend_request_send_and_list() {
     // Send friend request to user2
     let stream = assert_ok(
         user_client
-            .send_friend_request(&user2.user_id, Some("Hey, let's be friends!"))
+            // No greeting: the field takes a client-encrypted blob, and this
+            // test asserts on the friend relationship, not the message.
+            .send_friend_request(&user2.user_id, None)
             .await,
     );
 

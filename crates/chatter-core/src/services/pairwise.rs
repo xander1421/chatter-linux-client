@@ -278,9 +278,18 @@ impl PairwiseService {
             .await
             .map_err(|e| PairwiseError::SessionError(format!("Anonymous prekey fetch failed: {}", e)))?;
 
-        // Establish session using the anonymously-fetched bundle
+        // Establish session using the anonymously-fetched bundle.
+        //
+        // KT gate (Phase 3a): the peer's identity key is verified against its
+        // signed Key Transparency proof — fetched over the ANONYMOUS channel, so
+        // no authenticated identity is used — before the session is established.
+        // A server-forged identity key is REJECTED here, closing the anon-path
+        // MITM hole. The proof fetch reveals only which peer is looked up (the
+        // same user_id already sent in the anonymous prekey fetch above); VRF
+        // query-privacy for that lookup is the remaining Phase 3b work.
+        let mut anon_kt_client = self.grpc_pool.anonymous_kt_client();
         self.signal_service
-            .ensure_session_with_bundle(&peer_id_str, device_id, bundle_response)
+            .ensure_session_with_bundle(&mut anon_kt_client, &peer_id_str, device_id, bundle_response)
             .await
             .map_err(|e| PairwiseError::SessionError(e.to_string()))?;
 

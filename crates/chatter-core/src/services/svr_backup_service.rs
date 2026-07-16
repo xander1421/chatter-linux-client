@@ -128,11 +128,16 @@ impl SvrBackupService {
         pin: &str,
         username: &str,
     ) -> Result<u32, SvrBackupError> {
-        use crate::crypto::svr::derive_svr_secret;
+        use crate::crypto::svr::derive_svr_secret_async;
         use crate::storage::repositories::settings_repo::keys;
         use zeroize::Zeroize;
 
-        let mut svr_secret = derive_svr_secret(pin, username)
+        // CORRECTNESS: off the async worker — see `derive_svr_secret_async`.
+        // Registration calls this immediately after the account is created,
+        // while the client's event stream and h2 connection are live; blocking
+        // the runtime here for ~450ms stalls both.
+        let mut svr_secret = derive_svr_secret_async(pin, username)
+            .await
             .map_err(|e| SvrBackupError::Crypto(e))?;
 
         let mut private_bytes = self.signal_service.actor.get_identity_private_key().await

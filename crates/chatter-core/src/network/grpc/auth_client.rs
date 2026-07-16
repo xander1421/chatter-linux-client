@@ -16,11 +16,14 @@ use tonic::transport::Channel;
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
-    auth_event, auth_service_client::AuthServiceClient, signal_pre_key_bundle,
+    auth_event, auth_service_client::AuthServiceClient,
+    key_transparency_service_client::KeyTransparencyServiceClient, signal_pre_key_bundle,
     AccountDeletionEvent, AuthEvent, AuthResponse, ChangePasswordRequest,
     DeleteAccountRequest,
     GetActiveSessionsRequest, GetActiveSessionsResponse, GetPreKeyBundleRequest,
-    GetPreKeyBundleResponse, GetPreKeyStatsRequest, GetPreKeyStatsResponse,
+    GetPreKeyBundleResponse, GetPreKeyStatsRequest, GetPreKeyStatsResponse, GetProofRequest,
+    GetProofResponse, GetSealedSenderPolicyRequest, GetSealedSenderPolicyResponse,
+    SetSealedSenderPolicyRequest, SetSealedSenderPolicyResponse,
     InvalidateAllSessionsRequest,
     InvalidateSessionRequest, ListDevicesRequest, ListDevicesResponse, LoginRequest, LogoutRequest,
     RefreshPreKeysRequest, RegenerateRecoveryCodesRequest, RegisterRequest, RegistrationResult,
@@ -46,6 +49,10 @@ use crate::proto::chat_v1::{
 /// ```
 pub struct AuthClient {
     inner: AuthServiceClient<InterceptedService<Channel, AuthInterceptor>>,
+    /// Key Transparency client, built on the same channel + auth interceptor.
+    /// Used to fetch a peer's signed inclusion proof before trusting the
+    /// identity key in their prekey bundle (Phase 2 KT verification).
+    kt: KeyTransparencyServiceClient<InterceptedService<Channel, AuthInterceptor>>,
 }
 
 impl AuthClient {
@@ -57,7 +64,29 @@ impl AuthClient {
     /// * `interceptor` - Cloned auth interceptor for credential injection
     pub fn new(channel: Channel, interceptor: AuthInterceptor) -> Self {
         Self {
-            inner: AuthServiceClient::with_interceptor(channel, interceptor),
+            inner: AuthServiceClient::with_interceptor(channel.clone(), interceptor.clone()),
+            kt: KeyTransparencyServiceClient::with_interceptor(channel, interceptor),
+        }
+    }
+
+    /// Fetch the Key Transparency inclusion proof for `user_id`.
+    ///
+    /// Returns `Ok(Some(proof))` when the user has a leaf in the KT log,
+    /// `Ok(None)` when the server reports `NotFound` (a pre-KT user with no
+    /// leaf — the caller decides the no-proof policy), and `Err` on any other
+    /// transport/server failure (which must NOT be silently treated as "no
+    /// proof": a network error is not evidence of a missing leaf).
+    pub async fn get_key_transparency_proof(
+        &mut self,
+        user_id: &str,
+    ) -> Result<Option<GetProofResponse>, NetworkError> {
+        let request = GetProofRequest {
+            user_id: user_id.to_string(),
+        };
+        match self.kt.get_proof(request).await {
+            Ok(resp) => Ok(Some(resp.into_inner())),
+            Err(status) if status.code() == tonic::Code::NotFound => Ok(None),
+            Err(status) => Err(NetworkError::from_status(&status)),
         }
     }
 
@@ -117,6 +146,37 @@ impl AuthClient {
 
         self.inner
             .get_my_identity(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Read the caller's sealed-sender RECEIVING policy from the server
+    /// (users.unrestricted_unidentified_access). `allow_from_anyone == false`
+    /// means contacts-only; `true` means anyone may send sealed messages.
+    pub async fn get_sealed_sender_policy(
+        &mut self,
+    ) -> Result<GetSealedSenderPolicyResponse, NetworkError> {
+        let request = GetSealedSenderPolicyRequest {};
+
+        self.inner
+            .get_sealed_sender_policy(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Set the caller's sealed-sender RECEIVING policy on the server. This
+    /// changes what the server DOES on inbound sealed messages — it is not a
+    /// local-only flag. Sealed *sending* is unaffected (always on).
+    pub async fn set_sealed_sender_policy(
+        &mut self,
+        allow_from_anyone: bool,
+    ) -> Result<SetSealedSenderPolicyResponse, NetworkError> {
+        let request = SetSealedSenderPolicyRequest { allow_from_anyone };
+
+        self.inner
+            .set_sealed_sender_policy(request)
             .await
             .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))

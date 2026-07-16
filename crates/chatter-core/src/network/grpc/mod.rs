@@ -22,7 +22,7 @@ pub mod provisioning_client;
 pub mod svr_client;
 pub mod user_client;
 
-pub use anonymous_client::{AnonymousAuthClient, AnonymousMessageClient};
+pub use anonymous_client::{AnonymousAuthClient, AnonymousKtClient, AnonymousMessageClient};
 pub use anonymous_mailbox_client::AnonymousMailboxClient;
 pub use auth_client::AuthClient;
 pub use call_client::CallClient;

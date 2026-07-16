@@ -291,6 +291,131 @@ impl MessageGateway {
         })
     }
 
+    /// Store a self-synced `SyncSent` (a copy of a message WE sent, delivered to
+    /// our own other devices) as an OUTGOING message in the conversation with the
+    /// real recipient.
+    ///
+    /// This is the receive-side half of the F8 fix. Unlike `store_data_message`,
+    /// which buckets a channel-free DM by the *sender's* id, this buckets by the
+    /// `SyncSent.destination_user_id` and attributes the message to *us* (the
+    /// current user) — so the message shows up on our linked device as our own
+    /// outgoing message to the recipient, not as an inbound note-to-self.
+    ///
+    /// `sealed_sender_id` is the identity the sealed-sender certificate carried;
+    /// a self-sync is by definition sent by us, so it MUST equal the current
+    /// user. Anything else is a forged/misrouted sync and is rejected — no other
+    /// account can legitimately place an outgoing message in our transcript.
+    pub(crate) async fn store_synced_sent_message(
+        &self,
+        sync: crate::proto::content_v1::SyncSent,
+        sealed_sender_id: UserId,
+    ) -> Result<SealedSenderResult, crate::error::ServiceError> {
+        use crate::error::ServiceError;
+
+        let current_user = self.settings_repo.current_user_id().map_err(|e| {
+            ServiceError::Validation(format!("SyncSent received but no current user: {e}"))
+        })?;
+        if sealed_sender_id != current_user {
+            return Err(ServiceError::Validation(format!(
+                "SyncSent sealed-sender identity {sealed_sender_id} != current user \
+                 {current_user}: a self-sync must be sent by us — rejecting"
+            )));
+        }
+
+        let destination: UserId = sync.destination_user_id.parse().map_err(|e| {
+            ServiceError::Validation(format!("SyncSent has invalid destination_user_id: {e}"))
+        })?;
+
+        let data_message = sync.message.ok_or_else(|| {
+            ServiceError::Validation("SyncSent carried no inner message".into())
+        })?;
+
+        // Empty-body carriers (profile-key handshake, delete-for-everyone) are not
+        // wrapped on the send side, so a wrapped copy is always a real message.
+        // Guard defensively anyway: nothing outgoing to surface.
+        if data_message.body.is_empty() && data_message.attachments.is_empty() {
+            return Ok(SealedSenderResult::MessageStored);
+        }
+
+        let channel_id = ChannelId::from(destination);
+        let message_id = MessageId::new();
+
+        let created_at = if data_message.timestamp > 0 {
+            TimestampNanos::from_nanos(data_message.timestamp)
+                .to_datetime()
+                .unwrap_or_else(chrono::Utc::now)
+        } else {
+            chrono::Utc::now()
+        };
+
+        let attachments: Vec<crate::domain::ids::AttachmentId> = data_message
+            .attachments
+            .iter()
+            .filter(|ptr| !ptr.cdn_key.is_empty())
+            .map(|ptr| crate::domain::ids::AttachmentId::from_cdn_key(&ptr.cdn_key))
+            .collect();
+
+        let mut message = Message {
+            id: message_id,
+            conversation_id: channel_id,
+            conversation_type: ConversationType::ServerDm,
+            // Attributed to US — this is our outgoing message, synced from our
+            // other device.
+            sender_id: Some(current_user),
+            device_id: None,
+            content: MessageContent::Text(data_message.body.clone()),
+            encrypted_content: None,
+            thread_id: None,
+            reply_to: None,
+            reply_to_author_id: None,
+            reply_to_text: None,
+            reply_to_thumbnail: None,
+            reply_to_thumbnail_mime: None,
+            attachments,
+            is_pinned: false,
+            is_edited: false,
+            is_deleted: false,
+            is_read: false,
+            sent_at: data_message.timestamp,
+            created_at,
+            updated_at: created_at,
+            edited_at: None,
+            reaction_counts: vec![],
+            current_user_reactions: vec![],
+            mentioned_integrations: data_message
+                .mentioned_integrations
+                .iter()
+                .filter_map(|id| id.parse().ok())
+                .collect(),
+            targets_ai_bot: data_message.targets_ai_bot,
+            delivery_status: String::new(),
+        };
+
+        crate::services::gateway::inbound::apply_inbound_quote(
+            &mut message,
+            data_message.quote.as_ref(),
+            &self.message_repo,
+        );
+
+        self.message_repo.insert(&message)?;
+
+        tracing::info!(
+            message_id = %message.id,
+            channel_id = %message.conversation_id,
+            destination = %destination,
+            "Stored self-synced outgoing message (SyncSent) in conversation with recipient"
+        );
+
+        Ok(SealedSenderResult::DataMessageReceived {
+            sender_id: current_user,
+            channel_id,
+            message_id,
+            body: data_message.body,
+            timestamp: data_message.timestamp,
+            attachments: data_message.attachments,
+        })
+    }
+
     /// Create a sender key request message for a channel member.
     ///
     /// Call this when you receive an encrypted message but don't have

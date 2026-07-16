@@ -53,18 +53,9 @@ async fn test_appcontext_three_tier_initialization() {
                 return;
             };
 
-            // Tier 2: All services are constructed (16+ services)
-            let _ = client.auth();
-            let _ = client.messages();
-            let _ = client.channels();
-            let _ = client.users();
-            let _ = client.attachments();
-            let _ = client.signal();
-            let _ = client.anon_dms();
-            let _ = client.anon_groups();
-            let _ = client.mailbox_manager();
-            let _ = client.dm_bootstrap();
-            let _ = client.notifications();
+            // Tier 2 services are private to the facade (the UI only talks to
+            // ChatterClient's public API), so there is nothing to poke here —
+            // a successful `build()` above already proves they constructed.
 
             // Tier 3: State stores are initialized
             assert!(!client.auth_state().is_logged_in(), "Should not be logged in on fresh init");
@@ -103,19 +94,6 @@ async fn test_chatter_client_builder() {
 
     match result {
         Ok(client) => {
-            // Client exposes all services
-            let _ = client.auth();
-            let _ = client.messages();
-            let _ = client.channels();
-            let _ = client.users();
-            let _ = client.attachments();
-            let _ = client.signal();
-            let _ = client.anon_dms();
-            let _ = client.anon_groups();
-            let _ = client.mailbox_manager();
-            let _ = client.dm_bootstrap();
-            let _ = client.notifications();
-
             // Client exposes all state stores
             assert!(!client.auth_state().is_logged_in());
             let _ = client.chat_state();

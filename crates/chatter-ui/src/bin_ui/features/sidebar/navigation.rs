@@ -130,6 +130,8 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
 
         // Fetch identity fingerprint asynchronously and set it on the UI
         let weak_fp = weak_window.clone();
+        let ui_ctx_policy = ui_ctx_fp.clone();
+        let weak_policy = weak_window.clone();
         tokio::spawn(async move {
             match ui_ctx_fp.my_identity_fingerprint().await {
                 Ok(fingerprint) => {
@@ -141,6 +143,23 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                 }
                 Err(e) => {
                     tracing::error!("Failed to load identity fingerprint for settings: {}", e);
+                }
+            }
+        });
+
+        // Fetch the sealed-sender RECEIVING policy from the server so the toggle
+        // reflects users.unrestricted_unidentified_access (not a stale local bool).
+        tokio::spawn(async move {
+            match ui_ctx_policy.get_sealed_sender_policy().await {
+                Ok(allow_from_anyone) => {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak_policy.upgrade() {
+                            w.set_settings_sealed_sender_unrestricted(allow_from_anyone);
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to load sealed sender policy for settings: {}", e);
                 }
             }
         });

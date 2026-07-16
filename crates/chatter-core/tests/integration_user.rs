@@ -187,7 +187,7 @@ async fn test_send_friend_request() {
     // Send friend request to user2
     let stream = assert_ok(
         user_client
-            .send_friend_request(&user2.user_id, Some("Let's be friends!"))
+            .send_friend_request(&user2.user_id, None)
             .await,
     );
 

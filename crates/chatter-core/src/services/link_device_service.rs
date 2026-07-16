@@ -566,6 +566,7 @@ impl LinkDeviceService {
                 libsignal_protocol::SignedPreKeyRecord,
                 libsignal_protocol::KyberPreKeyRecord,
                 Vec<libsignal_protocol::PreKeyRecord>,
+                Vec<libsignal_protocol::KyberPreKeyRecord>,
             ),
             CryptoError,
         > {
@@ -573,11 +574,35 @@ impl LinkDeviceService {
             let reg_id = (rand::Rng::random::<u32>(&mut rng) % 0x3FFF) + 1;
             let signed =
                 prekey_manager.generate_signed_prekey(&mut rng, 1, identity_pair)?;
+            // The medium-term LAST-RESORT PQSPK (id 1) — reused across
+            // handshakes until rotated, so it is a floor, not the primary PQ
+            // key material.
             let kyber = prekey_manager.generate_kyber_prekey(1, identity_pair)?;
             let one_time = prekey_manager.generate_prekeys(&mut rng, 1, 100)?;
-            Ok((reg_id, signed, kyber, one_time))
+
+            // The one-time Kyber prekey pool (PQOPK), same batch size as the
+            // classical OPKs above. Per PQXDH §3.2 the server pops one PQOPK for
+            // every classical OPK it hands out, so the two pools MUST be seeded
+            // in lockstep. A linked device is a full recipient of every message
+            // the account receives; without its own pool the server has nothing
+            // to pop for it and every PQXDH handshake to this device falls back
+            // to the single last-resort PQSPK above — spec-permitted, but one
+            // reused PQ secret across every session (see the warning at
+            // crypto/signal/identity.rs:38-42).
+            //
+            // This mirrors `services/auth_service.rs::register`, which seeds the
+            // same pool for the device created by registration. IDs start at 2:
+            // the last-resort PQSPK holds id 1, and `generate_kyber_prekey`
+            // persists each record, so `get_next_kyber_prekey_id` advances as we
+            // go.
+            let mut kyber_one_time = Vec::with_capacity(100);
+            for _ in 0..100 {
+                let id = prekey_manager.get_next_kyber_prekey_id()?;
+                kyber_one_time.push(prekey_manager.generate_kyber_prekey(id, identity_pair)?);
+            }
+            Ok((reg_id, signed, kyber, one_time, kyber_one_time))
         }
-        let (registration_id, signed, kyber, one_time) =
+        let (registration_id, signed, kyber, one_time, kyber_one_time) =
             gen_keys(&prekey_manager, &identity_pair)?;
 
         // Identity-overwrite guard. If a local identity already exists,
@@ -633,10 +658,17 @@ impl LinkDeviceService {
         let signed_sig = signed
             .signature()
             .map_err(|e| CryptoError::Protocol(e.to_string()))?;
+        // Chatter-owned wire field is NANOSECONDS; libsignal stores millis.
+        // The server reads this with time.Unix(0, ts), so sending millis dated
+        // the linked device's signed prekey to 1970-01-01T00:29:44Z — ~56 years
+        // "old". Registration already converts (see auth_service.rs); this path
+        // did not, so every linked bundle was stored pre-aged and would be
+        // treated as long expired by any age check.
         let signed_ts = signed
             .timestamp()
             .map_err(|e| CryptoError::Protocol(e.to_string()))?
-            .epoch_millis();
+            .epoch_millis()
+            * 1_000_000;
 
         let kyber_id: u32 = kyber
             .id()
@@ -674,7 +706,17 @@ impl LinkDeviceService {
         let prekey_bundle = SignalPreKeyBundle {
             identity_key: identity_pub_full.clone(),
             registration_id,
-            device_id: 0, // server assigns
+            // Placeholder. The server assigns the real device_id in
+            // CreateLinkedDevice (MAX(device_id)+1) and ignores this field
+            // entirely — the new device cannot know its id before the server
+            // allocates it. This said 0, but the shared SignalPreKeyBundle
+            // contract requires device_id >= 1 (common.proto:167, correct for
+            // every other use of the message: a real device is never 0), so
+            // the server rejected every CompleteDeviceLinking with
+            // "prekey_bundle.device_id: must be greater than or equal to 1"
+            // and linking could never complete. 1 matches the placeholder
+            // already used for DeviceCredentials::generate above.
+            device_id: 1,
             signed_prekey: Some(ProtoSignedPreKey {
                 id: signed_id,
                 public_key: signed_pub,
@@ -686,9 +728,10 @@ impl LinkDeviceService {
                 id: kyber_id,
                 public_key: kyber_pub,
                 signature: kyber_sig,
+                // Nanoseconds, as above — this field had the same millis bug.
                 timestamp: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as u64)
+                    .map(|d| d.as_nanos() as u64)
                     .unwrap_or_default(),
             }),
             unidentified_access_key: Some(uak.to_vec()),
@@ -709,6 +752,40 @@ impl LinkDeviceService {
             initial_one_time.push(ProtoPreKey {
                 id,
                 public_key: pub_bytes,
+            });
+        }
+
+        // Build the PQOPK batch for the server. Unlike the classical OPK, every
+        // PQ prekey carries an XEdDSA signature over its public key (PQXDH §3.2);
+        // the server rejects the batch outright if it does not verify. None are
+        // held back for the bundle: the bundle's `kyber_prekey` field is the
+        // last-resort PQSPK, and the server picks a PQOPK from this pool at
+        // handout time.
+        let mut initial_kyber_one_time: Vec<ProtoKyberPreKey> = Vec::new();
+        for kpk in &kyber_one_time {
+            let id: u32 = kpk
+                .id()
+                .map_err(|e| CryptoError::Protocol(e.to_string()))?
+                .into();
+            let public = kpk
+                .public_key()
+                .map_err(|e| CryptoError::Protocol(e.to_string()))?
+                .serialize()
+                .to_vec();
+            let sig = kpk
+                .signature()
+                .map_err(|e| CryptoError::Protocol(e.to_string()))?;
+            // Chatter-owned wire field is nanoseconds; libsignal stores millis.
+            let ts = kpk
+                .timestamp()
+                .map_err(|e| CryptoError::Protocol(e.to_string()))?
+                .epoch_millis()
+                * 1_000_000;
+            initial_kyber_one_time.push(ProtoKyberPreKey {
+                id,
+                public_key: public,
+                signature: sig,
+                timestamp: ts,
             });
         }
 
@@ -767,10 +844,70 @@ impl LinkDeviceService {
         }
 
         // Configure auth interceptor for Basic auth.
+        //
+        // Rebind the credentials to the device_id the SERVER just assigned.
+        // `credentials` above was built with a placeholder of 1 because this
+        // device cannot know its own id until CompleteDeviceLinking returns, and
+        // auth_username() formats `{user_id}.{device_id}` — so authenticating
+        // with the placeholder claims to be device 1, the PRIMARY. The server
+        // verifies the token against (user_id, device_id), and this device's
+        // token is registered under its real id, so every authenticated request
+        // from a linked device was rejected. The auth token and UAK are
+        // unchanged; only the id they are presented under is corrected.
+        let credentials = DeviceCredentials::from_stored(
+            device_id,
+            *credentials.auth_token().as_bytes(),
+            uak,
+        );
         self.grpc_pool.auth().set_basic(
             credentials.auth_username(&user_id.to_string()),
             credentials.auth_token_base64(),
         );
+
+        // Seed this device's PQOPK pool on the server. Reuses the existing
+        // RefreshPreKeys RPC rather than adding a field to
+        // CompleteDeviceLinking, which also satisfies both ordering
+        // constraints for free:
+        //   - signal_kyber_one_time_prekeys has an FK on
+        //     signal_prekey_bundles(user_id, device_id), so this device's
+        //     bundle must already exist — i.e. after complete_device_linking.
+        //   - RefreshPreKeys is authenticated, so this must follow set_basic
+        //     directly above.
+        // The classical OPKs rode along inside CompleteDeviceLinkingRequest and
+        // are already uploaded by this point; only the PQ pool is sent here.
+        // This is the same shape as the registration-side seeding in
+        // `services/auth_service.rs::register`.
+        //
+        // A failure here is logged, not fatal: the device is already linked
+        // server-side, and PQXDH still succeeds against the last-resort PQSPK
+        // (spec-permitted). Failing the link outright — after the identity and
+        // auth state above are committed — would strand a half-linked device,
+        // a worse outcome than the degradation it avoids. The background
+        // replenisher refills both pools together on its next pass.
+        if !initial_kyber_one_time.is_empty() {
+            let pq_count = initial_kyber_one_time.len();
+            let mut auth_client = self.grpc_pool.auth_client();
+            match auth_client
+                .refresh_pre_keys_with_kyber_otpk(Vec::new(), initial_kyber_one_time)
+                .await
+            {
+                Ok(()) => {
+                    tracing::info!(
+                        device_id,
+                        pq_opk = pq_count,
+                        "Seeded PQOPK pool for linked device"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        device_id,
+                        error = %e,
+                        "Failed to seed PQOPK pool for linked device — PQXDH will fall back \
+                         to the last-resort PQSPK until the replenisher runs"
+                    );
+                }
+            }
+        }
 
         Ok(CompletedLink {
             user_id,

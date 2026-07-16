@@ -51,7 +51,7 @@ async fn test_friend_request_triggers_stream_event() {
         {
             let mut user1_client = UserClient::new(pool1.channel(), pool1.auth_clone());
             let send_result = user1_client
-                .send_friend_request(&user2_id, Some("Hey, let's be friends!"))
+                .send_friend_request(&user2_id, None)
                 .await;
 
             assert!(send_result.is_ok(), "User1 should be able to send friend request to User2");

@@ -132,8 +132,10 @@ libc = "0.2"
 # ============================================================================
 # WebRTC / LiveKit (desktop only, gated behind `desktop-media`)
 # ============================================================================
-livekit = { version = "0.7.37", default-features = false, features = ["tokio", "rustls-tls-webpki-roots"], optional = true }
-livekit-api = { version = "0.4.14", default-features = false, features = ["services-tokio", "access-token", "webhooks", "signal-client-tokio", "rustls-tls-webpki-roots"], optional = true }
+livekit = { version = "0.7.52", default-features = false, features = ["tokio", "rustls-tls-webpki-roots"], optional = true }
+# livekit-api dropped: the app never used it (server mints LiveKit tokens), and
+# its published version skews against livekit 0.7.52's livekit-protocol. The one
+# consumer (examples/screenshare_wire_bench) hand-mints its JWT via hmac+sha2.
 # lazy_static removed — migrated to std::sync::LazyLock
 async-stream = "0.3.6"
 
@@ -219,6 +221,11 @@ criterion = { version = "0.5", features = ["html_reports"] }
 mockall = "0.13"
 paste = "1.0"
 proptest = "1"
+# Needed by tests/validated.rs V14 (KT) to construct raw PQXDH prekey bundles
+# directly, mirroring the crate's own pinned libsignal + rand. Same source/rev
+# and version so Cargo unifies with the normal deps (no duplicate build).
+rand = { version = "0.9", features = ["os_rng"] }
+libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "c5edd3fa38bf5f13bc70a88c146cfbdd61865fe3" }
 
 [[bench]]
 name = "attachment_decrypt"
@@ -238,7 +245,7 @@ desktop-system = ["keyring/sync-secret-service", "keyring/windows-native"]
 # crate supports. Mobile bridges opt in via `--features media`; desktop pulls
 # it in transitively through `desktop-media`.
 media = [
-    "dep:livekit", "dep:livekit-api",
+    "dep:livekit",
 ]
 # GStreamer — inline video playback, avatar decode, etc. Desktop-only.
 desktop-gstreamer = [

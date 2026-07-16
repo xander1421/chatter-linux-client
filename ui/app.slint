@@ -26,7 +26,7 @@ import { MentionAutocomplete, MentionSuggestion } from "components/mention_autoc
 
 // Import modals
 import { CreateChannelModal, AIProviderOption, AIModelOption, CreateChannelConfig, PrivateGroupFriend } from "modals/create_channel.slint";
-import { UserProfileModal, EditProfileModal, RecoveryCodesModal, LinkDeviceApproveModal } from "modals/mod.slint";
+import { UserProfileModal, EditProfileModal, RecoveryCodesModal, SealedSenderIntroModal, LinkDeviceApproveModal } from "modals/mod.slint";
 import { FriendRequestsModal, FriendRequest } from "modals/friend_requests.slint";
 import { FriendsModal, FriendData, UserSearchResult, FriendRequestData, BlockedUserData } from "modals/friends.slint";
 import { ForwardMessageModal, ForwardTarget } from "modals/forward_message.slint";
@@ -172,6 +172,11 @@ export component App inherits Rectangle {
     in property <[string]> recovery-codes: [];
     callback recovery-codes-confirmed();
     callback recovery-codes-copy-all();
+
+    // Sealed sender onboarding explainer (shown after recovery codes).
+    // Fired when the user confirms; carries their initial "allow from anyone"
+    // choice so the caller can persist it to the server.
+    callback sealed-sender-intro-confirmed(bool);
 
     // ========== Account recovery page properties ==========
     in-out property <string> recovery-username: "";
@@ -1014,8 +1019,10 @@ export component App inherits Rectangle {
             HorizontalLayout {
                 vertical-stretch: 1;
 
-            // Sidebar (width controlled by collapsed state; mobile-mode for full-width)
-            Sidebar {
+            // Sidebar (width controlled by collapsed state; mobile-mode for full-width).
+            // Hidden entirely in call-fullscreen so the call view fills the whole
+            // window width — a landscape viewport for a landscape screen share.
+            if !root.active-call-fullscreen: Sidebar {
                 // Mobile treated as narrow desktop: always-visible split view
                 // with collapse toggle. No full-screen swap on conversation open.
                 mobile-mode: false;
@@ -1584,11 +1591,23 @@ export component App inherits Rectangle {
         codes: root.recovery-codes;
 
         confirmed => {
-            root.active-modal = "none";
+            // After recovery codes, show the sealed-sender explainer.
+            root.active-modal = "sealed-sender-intro";
             root.recovery-codes-confirmed();
         }
         copy-all => {
             root.recovery-codes-copy-all();
+        }
+    }
+
+    // Sealed Sender onboarding explainer (shown right after recovery codes)
+    if root.active-modal == "sealed-sender-intro": SealedSenderIntroModal {
+        show-modal: true;
+        allow-from-anyone <=> root.settings-sealed-sender-unrestricted;
+
+        confirmed => {
+            root.active-modal = "none";
+            root.sealed-sender-intro-confirmed(root.settings-sealed-sender-unrestricted);
         }
     }
 

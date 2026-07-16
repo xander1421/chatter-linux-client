@@ -210,11 +210,49 @@ impl MessageService {
         device_id: u32,
         proto_msg: crate::proto::chat_v1::Message,
     ) {
-        self.pending_group_decrypts
-            .lock()
+        // Bound the buffer so an SKDM that never arrives (kicked sender, lost
+        // device, malicious peer) can't leak memory. Messages older than TTL
+        // are dropped, and the whole map is capped at MAX_PENDING entries —
+        // oldest-first eviction. The recipient loses only messages whose key
+        // genuinely never came; anything whose SKDM lands within the window
+        // still self-heals.
+        const TTL: std::time::Duration = std::time::Duration::from_secs(300);
+        const MAX_PENDING: usize = 512;
+        let now = std::time::Instant::now();
+
+        let mut guard = self.pending_group_decrypts.lock();
+
+        // Expire stale entries first.
+        for msgs in guard.values_mut() {
+            msgs.retain(|(parked_at, _)| now.duration_since(*parked_at) < TTL);
+        }
+        guard.retain(|_, msgs| !msgs.is_empty());
+
+        guard
             .entry((channel_id, sender_id, device_id))
             .or_default()
-            .push(proto_msg);
+            .push((now, proto_msg));
+
+        // Enforce the global cap by evicting the globally-oldest parked message
+        // until back within budget.
+        let mut total: usize = guard.values().map(|v| v.len()).sum();
+        while total > MAX_PENDING {
+            let oldest_key = guard
+                .iter()
+                .filter(|(_, v)| !v.is_empty())
+                .min_by_key(|(_, v)| v[0].0)
+                .map(|(k, _)| *k);
+            match oldest_key {
+                Some(k) => {
+                    if let Some(v) = guard.get_mut(&k) {
+                        v.remove(0);
+                        total -= 1;
+                    }
+                }
+                None => break,
+            }
+        }
+        guard.retain(|_, msgs| !msgs.is_empty());
     }
 
     /// Drain deferred group messages for `(channel, sender, device)` and
@@ -233,7 +271,12 @@ impl MessageService {
 
         let pending: Vec<chat_v1::Message> = {
             let mut guard = self.pending_group_decrypts.lock();
-            guard.remove(&(channel_id, sender_id, device_id)).unwrap_or_default()
+            guard
+                .remove(&(channel_id, sender_id, device_id))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(_parked_at, msg)| msg)
+                .collect()
         };
 
         if pending.is_empty() {
@@ -265,19 +308,63 @@ impl MessageService {
             match self.signal_service.decrypt_from_group(&sender_id, device_id, &group_encrypted).await {
                 Ok(plaintext) => {
                     use prost::Message as ProstMessage;
-                    let decoded = match chat_v1::message::Content::decode(plaintext.as_slice()) {
-                        Ok(c) if c.r#type.is_some() => c,
+                    // The sender-key plaintext is a `content_v1::Content`
+                    // wrapping a `DataMessage` (see message/core.rs send path
+                    // and the streaming decrypt in client/channels.rs) — NOT a
+                    // `chat_v1::message::Content`. Decoding it as the wire
+                    // Content silently yielded r#type=None and dropped every
+                    // healed message; mirror the stream path exactly instead.
+                    let dm = match crate::proto::content_v1::Content::decode(plaintext.as_slice())
+                        .ok()
+                        .and_then(|c| c.content)
+                    {
+                        Some(crate::proto::content_v1::content::Content::DataMessage(dm)) => dm,
                         _ => {
                             tracing::warn!(
                                 sender_id = %sender_id,
                                 device_id,
-                                "Retry: decrypted plaintext is not a valid Content proto"
+                                "Retry: decrypted plaintext is not a valid DataMessage; dropping"
                             );
                             continue;
                         }
                     };
+
+                    // Persist incoming attachment pointers so the receiver can
+                    // download + decrypt (parity with the stream path).
+                    if !dm.attachments.is_empty() {
+                        let attachment_service = crate::services::attachment::AttachmentService::new_local(
+                            self.attachment_repo.clone(),
+                        );
+                        attachment_service.create_from_pointers(&dm.attachments);
+                    }
+
+                    // Rebuild the wire proto with the decrypted text +
+                    // attachment ids so `proto_to_domain_message_with_sender`
+                    // picks them up (Text or Mixed), exactly as the stream path.
+                    let files: Vec<chat_v1::FileMetadata> = dm
+                        .attachments
+                        .iter()
+                        .filter(|p| !p.cdn_key.is_empty())
+                        .map(|p| chat_v1::FileMetadata {
+                            id: crate::domain::AttachmentId::from_cdn_key(&p.cdn_key).to_string(),
+                            name: p.file_name.clone(),
+                            mime_type: p.content_type.clone(),
+                            size: p.plaintext_size,
+                            ..Default::default()
+                        })
+                        .collect();
+                    let new_type = if files.is_empty() {
+                        chat_v1::message::content::Type::Text(dm.body.clone())
+                    } else {
+                        chat_v1::message::content::Type::Mixed(chat_v1::message::MixedContent {
+                            text: dm.body.clone(),
+                            files,
+                        })
+                    };
                     let mut patched = proto_msg.clone();
-                    patched.content = Some(decoded);
+                    patched.content = Some(chat_v1::message::Content {
+                        r#type: Some(new_type),
+                    });
                     // Group decrypt retry path — channel_id is the
                     // current retry target. Derive ConversationType so
                     // identified groups stay tagged Channel.
@@ -287,6 +374,12 @@ impl MessageService {
                     );
                     match proto_to_domain_message_with_sender(&patched, Some(sender_id), conv_type) {
                         Ok(message) => {
+                            // Persist so the healed message survives a channel
+                            // switch, then surface it (parity with stream path).
+                            match self.get_message_local(&message.id) {
+                                Ok(Some(_)) => { let _ = self.update_message(&message); }
+                                _ => { let _ = self.store_message_local(&message); }
+                            }
                             let _ = self.event_bus.domain_sender().send(
                                 DomainEvent::MessageReceived { message },
                             );

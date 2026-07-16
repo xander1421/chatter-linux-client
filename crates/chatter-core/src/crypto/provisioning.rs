@@ -123,7 +123,18 @@ pub fn encrypt_envelope(
     let ephemeral_pub = PublicKey::from(&ephemeral).to_bytes();
 
     let peer = PublicKey::from(*recipient_pub);
-    let shared = Zeroizing::new(ephemeral.diffie_hellman(&peer).to_bytes());
+    let shared_secret = ephemeral.diffie_hellman(&peer);
+
+    // RFC 7748 §6.1: reject low-order recipient keys that collapse ECDH to a
+    // constant. Without this gate an attacker-supplied low-order key forces a
+    // predictable provisioning key.
+    if !shared_secret.was_contributory() {
+        return Err(CryptoError::KeyDerivationFailed(
+            "non-contributory ECDH (low-order public key)".into(),
+        ));
+    }
+
+    let shared = Zeroizing::new(shared_secret.to_bytes());
 
     let (aes_key, mac_key) = derive_keys(&shared)?;
 
@@ -199,7 +210,18 @@ pub fn decrypt_envelope(
     let mut peer_bytes = [0u8; PUB_LEN];
     peer_bytes.copy_from_slice(&envelope.public_key[1..]);
     let peer = PublicKey::from(peer_bytes);
-    let shared = Zeroizing::new(my_keypair.secret.diffie_hellman(&peer).to_bytes());
+    let shared_secret = my_keypair.secret.diffie_hellman(&peer);
+
+    // RFC 7748 §6.1: reject low-order sender keys that collapse ECDH to a
+    // constant. Without this gate an attacker can force a predictable
+    // decryption key with a low-order envelope public key.
+    if !shared_secret.was_contributory() {
+        return Err(CryptoError::DecryptionFailed(
+            "non-contributory ECDH (low-order public key)".into(),
+        ));
+    }
+
+    let shared = Zeroizing::new(shared_secret.to_bytes());
 
     let (aes_key, mac_key) = derive_keys(&shared)?;
 

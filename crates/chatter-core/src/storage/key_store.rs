@@ -448,13 +448,35 @@ impl KeyStore {
         Ok(rows > 0)
     }
 
-    /// Delete Kyber pre-keys older than `max_age_days` days.
+    /// Delete *spent* Kyber pre-keys older than `max_age_days` days.
     ///
-    /// Retains old Kyber pre-keys for a grace period (typically 30 days)
-    /// so in-flight PQXDH sessions referencing them can still complete.
-    /// After the grace period, they are safe to prune. The most recent
-    /// Kyber pre-key is always kept (it is the one currently published
-    /// on the server for new PQXDH handshakes).
+    /// Retains old Kyber pre-keys for a grace period (typically 30 days) so
+    /// in-flight PQXDH sessions referencing them can still complete. After the
+    /// grace period, a key that has already been used is safe to prune.
+    ///
+    /// A key is pruned only if it is BOTH older than the cutoff AND has a usage
+    /// record. An age check alone is not sufficient, and this is a correctness
+    /// requirement, not a tidiness one:
+    ///
+    /// Registration seeds a pool of ~100 one-time Kyber prekeys (PQOPKs) that
+    /// live on the server until some peer handshakes with them, and the server
+    /// hands them out OLDEST-FIRST (`signal_protocol.go`, `ORDER BY created_at
+    /// ASC`). Those keys are all created at registration, so ~30 days later the
+    /// whole unused remainder crosses the cutoff at once — while still published
+    /// and still first in line to be served. Deleting a private key whose public
+    /// half the server will hand out produces a PreKeySignalMessage this device
+    /// cannot decrypt: a silent, delayed, unrecoverable session failure.
+    ///
+    /// This function predates the PQOPK pool and its "keep only MAX(id)" rule
+    /// encoded the old assumption that exactly one Kyber prekey — the
+    /// medium-term last-resort PQSPK — is ever published. That assumption no
+    /// longer holds. MAX(id) is still retained unconditionally as a floor.
+    ///
+    /// The cost of the safer rule is that a rotated-away last-resort PQSPK that
+    /// was never used is now retained rather than pruned (locally it is
+    /// indistinguishable from an unused pool key). That is a bounded leak of a
+    /// ~1.5KB key a couple of times a week; serving an undecryptable handshake
+    /// is not bounded. Correctness wins.
     pub fn cleanup_expired_kyber_prekeys(&self, max_age_days: u64) -> Result<u32, StorageError> {
         let conn = self.db.connection()?;
         let cutoff = (Utc::now() - chrono::Duration::days(max_age_days as i64)).to_rfc3339();
@@ -463,19 +485,29 @@ impl KeyStore {
             conn.query_row("SELECT MAX(id) FROM kyber_prekeys", [], |row| row.get(0))?;
 
         let deleted = if let Some(current_id) = max_id {
-            // Remove usage records for the expired keys first (FK constraint).
-            conn.execute(
-                "DELETE FROM kyber_prekey_usage
-                 WHERE kyber_prekey_id IN (
-                     SELECT id FROM kyber_prekeys WHERE created_at < ?1 AND id != ?2
-                 )",
-                params![cutoff, current_id],
-            )?;
+            // Resolve the victims first: once the usage records are gone the
+            // "has been used" predicate can no longer be evaluated.
+            let ids: Vec<i64> = {
+                let mut stmt = conn.prepare(
+                    "SELECT id FROM kyber_prekeys
+                     WHERE created_at < ?1
+                       AND id != ?2
+                       AND id IN (SELECT kyber_prekey_id FROM kyber_prekey_usage)",
+                )?;
+                let rows = stmt.query_map(params![cutoff, current_id], |row| row.get(0))?;
+                rows.collect::<Result<Vec<i64>, _>>()?
+            };
 
-            conn.execute(
-                "DELETE FROM kyber_prekeys WHERE created_at < ?1 AND id != ?2",
-                params![cutoff, current_id],
-            )?
+            let mut deleted = 0usize;
+            for id in ids {
+                // Usage records first (FK constraint).
+                conn.execute(
+                    "DELETE FROM kyber_prekey_usage WHERE kyber_prekey_id = ?1",
+                    params![id],
+                )?;
+                deleted += conn.execute("DELETE FROM kyber_prekeys WHERE id = ?1", params![id])?;
+            }
+            deleted
         } else {
             0
         };

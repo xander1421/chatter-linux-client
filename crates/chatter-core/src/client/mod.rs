@@ -734,6 +734,41 @@ impl ChatterClient {
             .set_bool_setting("privacy.sealed_sender_unrestricted", unrestricted)
     }
 
+    /// Read the sealed-sender RECEIVING policy from the SERVER
+    /// (users.unrestricted_unidentified_access). This is a receiving policy:
+    /// `false` (default) = contacts-only (only holders of your UAK may reach
+    /// you sealed), `true` = anyone may. Sealed *sending* is always on and is
+    /// NOT affected by this. The value is also cached locally for offline
+    /// display.
+    pub async fn get_sealed_sender_policy(
+        &self,
+    ) -> Result<bool, crate::services::auth_service::AuthError> {
+        let allow = self.auth().get_sealed_sender_policy().await?;
+        // Best-effort local cache for display; failure to cache is non-fatal.
+        let _ = self
+            .sessions()
+            .set_bool_setting("privacy.sealed_sender_allow_from_anyone", allow);
+        Ok(allow)
+    }
+
+    /// Set the sealed-sender RECEIVING policy on the SERVER. Unlike a local
+    /// bool this changes what the server DOES on inbound sealed messages: with
+    /// `false` a non-contact's mismatched UAK is rejected; with `true` it is
+    /// accepted. Returns the value the server persisted.
+    pub async fn set_sealed_sender_policy(
+        &self,
+        allow_from_anyone: bool,
+    ) -> Result<bool, crate::services::auth_service::AuthError> {
+        let persisted = self
+            .auth()
+            .set_sealed_sender_policy(allow_from_anyone)
+            .await?;
+        let _ = self
+            .sessions()
+            .set_bool_setting("privacy.sealed_sender_allow_from_anyone", persisted);
+        Ok(persisted)
+    }
+
     /// Session-level current user id (None when logged out).
     pub fn session_current_user_id(&self) -> Option<crate::domain::ids::UserId> {
         self.sessions().current_user_id()

@@ -1160,7 +1160,32 @@ impl MessageService {
             }
         }
 
-        // Regular (non-encrypted) channel: content intentionally sent as-is.
+        // FAIL CLOSED (F14a): we are about to ship PLAINTEXT on a non-DM,
+        // non-encrypted channel. That is only legitimate for an explicitly
+        // PUBLIC channel (world-readable by design). A PRIVATE/group channel
+        // must never leave the client in cleartext — if one reached here with
+        // require_encryption=false (e.g. a channel row created before this fix,
+        // or a server that defaulted it to plaintext), REFUSE rather than
+        // silently downgrade. Unknown/not-locally-stored channels are treated
+        // as non-public and also refused: a plaintext downgrade must be
+        // impossible, not merely unlikely.
+        let is_public = self
+            .channel_repo
+            .get(channel_id)
+            .ok()
+            .flatten()
+            .map(|c| c.channel_type == crate::domain::channel::ChannelType::Public)
+            .unwrap_or(false);
+        if !is_public {
+            return Err(MessageError::EncryptionFailed(format!(
+                "refusing to send plaintext on non-public channel {channel_id}: \
+                 private/group channels must be end-to-end encrypted \
+                 (require_encryption=false). This channel is misconfigured; \
+                 recreate it so it is encrypted."
+            )));
+        }
+
+        // Explicitly PUBLIC channel: plaintext is the intended, visible property.
         Ok((original_content, None))
     }
 }

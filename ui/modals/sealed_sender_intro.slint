@@ -1,0 +1,153 @@
+// SealedSenderIntroModal — honest one-screen explainer shown after registration.
+//
+// It states the sealed-sender property WITHOUT overclaiming: the server
+// delivers messages without learning who you're talking to (sender privacy
+// FROM THE SERVER — not anonymity from your contacts), and the user chooses
+// whether non-contacts may reach them this way. Mirrors recovery_codes.slint.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Button } from "../components/button.slint";
+
+export component SealedSenderIntroModal inherits Rectangle {
+    in property <bool> show-modal: false;
+
+    // Whether "allow sealed messages from anyone" is enabled. Off (default) =
+    // contacts-only. Two-way bound so the choice made here is the initial
+    // server value the caller persists.
+    in-out property <bool> allow-from-anyone: false;
+
+    callback confirmed();
+    callback allow-from-anyone-changed(bool);
+
+    opacity: root.show-modal ? 1 : 0;
+    visible: root.show-modal;
+
+    background: Colors.overlay;
+
+    // Block backdrop clicks (no dismiss allowed — must acknowledge).
+    TouchArea {
+        width: 100%;
+        height: 100%;
+    }
+
+    Rectangle {
+        width: min(480px, parent.width - 32px);
+        height: max(200px, min(content-layout.preferred-height, min(640px, parent.height - 48px)));
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Colors.surface;
+        border-radius: Spacing.radius-lg;
+        clip: true;
+        drop-shadow-blur: 16px;
+        drop-shadow-color: Colors.shadow;
+
+        TouchArea {
+            width: 100%;
+            height: 100%;
+        }
+
+        content-layout := VerticalLayout {
+            padding: Spacing.lg;
+            spacing: Spacing.md;
+
+            Text {
+                text: "Sealed sender: private by default";
+                color: Colors.text-primary;
+                font-size: Typography.xl;
+                font-weight: Typography.semibold;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "Chatter delivers your messages without the server learning who you are talking to. Your messages are always sent this way — nothing to turn on.";
+                color: Colors.text-secondary;
+                font-size: Typography.sm;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            Text {
+                text: "This is privacy from the server. It is not anonymity from the person you message — they still see who you are.";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            Rectangle { height: Spacing.sm; }
+
+            // The one choice: who may reach you sealed.
+            Text {
+                text: "Who can message you this way?";
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+                horizontal-alignment: center;
+            }
+
+            HorizontalLayout {
+                alignment: center;
+                spacing: Spacing.sm;
+
+                Rectangle {
+                    width: 20px;
+                    height: 20px;
+                    border-radius: Spacing.radius-sm;
+                    border-width: 2px;
+                    border-color: root.allow-from-anyone ? Colors.primary : Colors.text-muted;
+                    background: root.allow-from-anyone ? Colors.primary : transparent;
+
+                    if root.allow-from-anyone: Text {
+                        text: "\u{2713}";
+                        color: Colors.text-primary;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
+
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.allow-from-anyone = !root.allow-from-anyone;
+                            root.allow-from-anyone-changed(root.allow-from-anyone);
+                        }
+                    }
+                }
+
+                Text {
+                    text: "Allow sealed messages from anyone";
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                }
+
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.allow-from-anyone = !root.allow-from-anyone;
+                        root.allow-from-anyone-changed(root.allow-from-anyone);
+                    }
+                }
+            }
+
+            Text {
+                text: "Off (recommended): only your contacts can reach you this way. On: anyone can. You can change this later in Settings.";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            Rectangle { height: Spacing.sm; }
+
+            Button {
+                text: "Got it";
+                variant: "primary";
+                clicked => { root.confirmed(); }
+            }
+        }
+    }
+}

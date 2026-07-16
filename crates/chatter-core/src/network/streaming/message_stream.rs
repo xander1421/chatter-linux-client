@@ -170,7 +170,6 @@ mod tests {
             parent_id: String::new(),
             content: None,
             timestamp: 1234567890000,
-            signature: vec![],
             ephemeral: false,
             ephemeral_ttl: None,
             pinned: false,

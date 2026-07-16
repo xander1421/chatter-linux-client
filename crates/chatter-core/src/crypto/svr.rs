@@ -170,6 +170,27 @@ pub fn derive_svr_secret(pin: &str, salt: &str) -> Result<[u8; 32], CryptoError>
     Ok(output)
 }
 
+/// Async wrapper for [`derive_svr_secret`] that runs the KDF on the blocking
+/// pool instead of the caller's async worker thread.
+///
+/// CORRECTNESS: [`derive_svr_secret`] burns ~450ms of uninterruptible CPU
+/// (128 MiB, t=8). Called directly from an `async fn` it blocks the whole
+/// tokio worker — and on a current-thread runtime (which is what
+/// `#[tokio::test]` builds, and what a UI embedding may use) that is the ONLY
+/// worker. Every other task on the runtime stops, including the HTTP/2
+/// connection task that must read the server's SETTINGS frame and answer
+/// pings. The connection then dies while the client is merely busy hashing,
+/// surfacing as a spurious "server unavailable" / "timeout waiting for
+/// SETTINGS frames" that looks exactly like server downtime. Always reach the
+/// KDF through this from async code.
+pub async fn derive_svr_secret_async(pin: &str, username: &str) -> Result<[u8; 32], CryptoError> {
+    let pin = pin.to_owned();
+    let username = username.to_owned();
+    tokio::task::spawn_blocking(move || derive_svr_secret(&pin, &username))
+        .await
+        .map_err(|e| CryptoError::KeyDerivationFailed(format!("svr kdf task failed: {e}")))?
+}
+
 /// Derive a local-only PIN fingerprint, used for in-memory PIN re-auth gates
 /// (e.g. authorising a new linked device via PIN instead of password). Never
 /// sent to the server. Computed as
@@ -179,15 +200,28 @@ pub fn derive_svr_secret(pin: &str, salt: &str) -> Result<[u8; 32], CryptoError>
 /// on register / change-pin; constant-time compare on verify.
 pub fn derive_pin_fingerprint(pin: &str, username: &str) -> Result<[u8; 32], CryptoError> {
     let mut svr_secret = derive_svr_secret(pin, username)?;
+    let fp = pin_fingerprint_from_secret(&svr_secret);
+    svr_secret.zeroize();
+    Ok(fp)
+}
+
+/// Same as [`derive_pin_fingerprint`] but takes an already-derived SVR secret.
+///
+/// PERF: [`derive_svr_secret`] is a deliberately expensive memory-hard KDF
+/// (~450ms, 128 MiB — see [`get_argon2_params`]). A caller that already holds
+/// the secret for `(pin, username)` must not pay for it again: the derivation
+/// is deterministic, so recomputing it yields bit-identical output for zero
+/// security benefit. Callers deriving several values from one PIN should call
+/// [`derive_svr_secret`] once and use the `*_from_secret` variants.
+pub fn pin_fingerprint_from_secret(svr_secret: &[u8; 32]) -> [u8; 32] {
     type HmacSha256 = Hmac<Sha256>;
-    let mut mac = HmacSha256::new_from_slice(&svr_secret)
+    let mut mac = HmacSha256::new_from_slice(svr_secret)
         .expect("HMAC can take key of any size");
     mac.update(b"Chatter Local PIN Fingerprint");
     let result = mac.finalize();
-    svr_secret.zeroize();
     let mut fp = [0u8; 32];
     fp.copy_from_slice(&result.into_bytes());
-    Ok(fp)
+    fp
 }
 
 /// Derive registration lock token from PIN.
@@ -195,18 +229,26 @@ pub fn derive_pin_fingerprint(pin: &str, username: &str) -> Result<[u8; 32], Cry
 /// Server stores the hash; future re-registrations must present matching token.
 pub fn derive_registration_lock(pin: &str, username: &str) -> Result<[u8; 32], CryptoError> {
     let mut svr_secret = derive_svr_secret(pin, username)?;
-    type HmacSha256 = Hmac<Sha256>;
-    let mut mac = HmacSha256::new_from_slice(&svr_secret)
-        .expect("HMAC can take key of any size");
-    mac.update(b"Registration Lock");
-    let result = mac.finalize();
+    let lock = registration_lock_from_secret(&svr_secret);
 
     // SECURITY: Zeroize intermediate secret immediately after HMAC computation
     svr_secret.zeroize();
 
+    Ok(lock)
+}
+
+/// Same as [`derive_registration_lock`] but takes an already-derived SVR secret.
+/// See [`pin_fingerprint_from_secret`] for why callers should prefer this.
+pub fn registration_lock_from_secret(svr_secret: &[u8; 32]) -> [u8; 32] {
+    type HmacSha256 = Hmac<Sha256>;
+    let mut mac = HmacSha256::new_from_slice(svr_secret)
+        .expect("HMAC can take key of any size");
+    mac.update(b"Registration Lock");
+    let result = mac.finalize();
+
     let mut lock = [0u8; 32];
     lock.copy_from_slice(&result.into_bytes());
-    Ok(lock)
+    lock
 }
 
 /// SVR Keypair for Secure Value Recovery.
@@ -232,13 +274,18 @@ impl SvrKeypair {
     /// Generate an SVR keypair from a PIN and username (used as salt).
     pub fn new_from_pin(pin: &str, username: &str) -> Result<Self, CryptoError> {
         let mut secret_bytes = derive_svr_secret(pin, username)?;
-        
-        let secret = StaticSecret::from(secret_bytes);
-        let public = PublicKey::from(&secret);
-        
+        let kp = Self::from_secret(&secret_bytes);
         secret_bytes.zeroize();
-        
-        Ok(Self { secret, public })
+        Ok(kp)
+    }
+
+    /// Same as [`SvrKeypair::new_from_pin`] but takes an already-derived SVR
+    /// secret. See [`pin_fingerprint_from_secret`] for why callers should
+    /// prefer this.
+    pub fn from_secret(svr_secret: &[u8; 32]) -> Self {
+        let secret = StaticSecret::from(*svr_secret);
+        let public = PublicKey::from(&secret);
+        Self { secret, public }
     }
 
     /// Get the public key bytes.
@@ -314,6 +361,46 @@ mod tests {
 
         let eq = kp1.with_secret_bytes(|a| kp2.with_secret_bytes(|b| a == b));
         assert!(eq, "same (pin, username) must produce the same secret bytes");
+    }
+
+    /// The `*_from_secret` variants exist so the registration/login paths can
+    /// pay for the 128 MiB Argon2id ONCE instead of once per derived value.
+    /// That is only sound if they are bit-identical to the `pin`-taking
+    /// originals. If this ever fails, the "derive once and reuse" callers in
+    /// `auth_service` are silently writing different key material than the
+    /// functions they replaced — so pin the equivalence here.
+    #[test]
+    fn from_secret_variants_match_the_pin_variants_exactly() {
+        let (pin, user) = ("12345678", "equivalence_user");
+        let secret = derive_svr_secret(pin, user).unwrap();
+
+        assert_eq!(
+            registration_lock_from_secret(&secret),
+            derive_registration_lock(pin, user).unwrap(),
+            "registration_lock_from_secret must equal derive_registration_lock"
+        );
+        assert_eq!(
+            pin_fingerprint_from_secret(&secret),
+            derive_pin_fingerprint(pin, user).unwrap(),
+            "pin_fingerprint_from_secret must equal derive_pin_fingerprint"
+        );
+        assert_eq!(
+            SvrKeypair::from_secret(&secret).public_key_bytes(),
+            SvrKeypair::new_from_pin(pin, user).unwrap().public_key_bytes(),
+            "SvrKeypair::from_secret must equal SvrKeypair::new_from_pin"
+        );
+    }
+
+    /// The async wrapper must not change the derived value — it only moves the
+    /// same computation onto the blocking pool.
+    #[tokio::test]
+    async fn derive_svr_secret_async_matches_sync() {
+        let (pin, user) = ("12345678", "async_user");
+        assert_eq!(
+            derive_svr_secret_async(pin, user).await.unwrap(),
+            derive_svr_secret(pin, user).unwrap(),
+            "async wrapper must produce the same secret as the sync KDF"
+        );
     }
 
     #[test]

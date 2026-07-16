@@ -194,11 +194,14 @@ pub struct MessageService {
     pub(crate) event_bus: crate::events::EventBus,
     /// Group messages queued waiting on a `SenderKeyDistribution`. Keyed by
     /// `(channel_id, sender_id, sender_device_id)`. Drained by
-    /// `retry_pending_group_decrypts` when the matching SKDM lands.
+    /// `retry_pending_group_decrypts` when the matching SKDM lands. Each entry
+    /// carries the time it was parked so a never-arriving SKDM can't grow this
+    /// map without bound (TTL + global cap enforced in
+    /// `defer_pending_group_decrypt`).
     pub(crate) pending_group_decrypts: Arc<parking_lot::Mutex<
         std::collections::HashMap<
             (crate::domain::ids::ChannelId, crate::domain::ids::UserId, u32),
-            Vec<crate::proto::chat_v1::Message>,
+            Vec<(std::time::Instant, crate::proto::chat_v1::Message)>,
         >,
     >>,
 }
@@ -516,6 +519,14 @@ impl MessageService {
     ) -> Result<bool, MessageError> {
         self.message_repo
             .update_delivery_status_by_timestamp(conversation_id, conversation_type, sent_at, status)
+            .map_err(MessageError::from)
+    }
+
+    /// Mark the message with the given sent-at timestamp as read (multi-device
+    /// read-sync). See `UnifiedMessageRepository::mark_read_by_timestamp`.
+    pub fn mark_read_by_timestamp(&self, sent_at: u64) -> Result<bool, MessageError> {
+        self.message_repo
+            .mark_read_by_timestamp(sent_at)
             .map_err(MessageError::from)
     }
 

@@ -119,10 +119,10 @@ fn test_ephemeral_call_key_ecdh_agreement() {
     let bob_key = EphemeralCallKey::generate();
 
     // Alice computes shared secret with Bob's public key
-    let alice_shared = alice_key.diffie_hellman(&bob_key.public_key_bytes());
+    let alice_shared = alice_key.diffie_hellman(&bob_key.public_key_bytes()).unwrap();
 
     // Bob computes shared secret with Alice's public key
-    let bob_shared = bob_key.diffie_hellman(&alice_key.public_key_bytes());
+    let bob_shared = bob_key.diffie_hellman(&alice_key.public_key_bytes()).unwrap();
 
     assert_eq!(alice_shared, bob_shared, "Both parties must derive identical shared secret");
     assert_ne!(alice_shared, [0u8; 32], "Shared secret should not be all zeros");

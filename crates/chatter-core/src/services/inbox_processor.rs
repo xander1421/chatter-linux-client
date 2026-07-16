@@ -712,23 +712,36 @@ impl InboxEventProcessor {
                     .ok()
                     .and_then(|mid| self.message_service.get_message_local(&mid).ok().flatten());
 
-                let is_dm = matches!(
-                    stored.as_ref().map(|m| &m.conversation_type),
-                    Some(crate::domain::message::ConversationType::ServerDm)
-                );
-                let receipt_conversation = if is_dm {
-                    ActiveConversation::ServerDm { peer_id: *sender_id }
-                } else {
-                    ActiveConversation::Channel(*channel_id)
-                };
+                // A self-synced OUTGOING message (SyncSent, F8 fix) is attributed
+                // to US: `sender_id` is our own id. You never send a delivery
+                // receipt for your own message, so skip the receipt entirely for
+                // it — otherwise our linked device would receipt back to our own
+                // devices.
+                let is_own_synced = self
+                    .message_service
+                    .current_user_id()
+                    .map(|me| me == *sender_id)
+                    .unwrap_or(false);
 
-                let handle = ConversationHandle::new(receipt_conversation, self.client.clone());
-                let ts = *timestamp;
-                tokio::spawn(async move {
-                    if let Err(e) = handle.send_delivery_receipt(&[ts]).await {
-                        tracing::warn!("Failed to send delivery receipt: {}", e);
-                    }
-                });
+                if !is_own_synced {
+                    let is_dm = matches!(
+                        stored.as_ref().map(|m| &m.conversation_type),
+                        Some(crate::domain::message::ConversationType::ServerDm)
+                    );
+                    let receipt_conversation = if is_dm {
+                        ActiveConversation::ServerDm { peer_id: *sender_id }
+                    } else {
+                        ActiveConversation::Channel(*channel_id)
+                    };
+
+                    let handle = ConversationHandle::new(receipt_conversation, self.client.clone());
+                    let ts = *timestamp;
+                    tokio::spawn(async move {
+                        if let Err(e) = handle.send_delivery_receipt(&[ts]).await {
+                            tracing::warn!("Failed to send delivery receipt: {}", e);
+                        }
+                    });
+                }
 
                 // Emit DomainEvent so domain_handler can display the message.
                 if let Some(message) = stored {
@@ -993,6 +1006,26 @@ impl InboxEventProcessor {
             // DM read/delivery receipt → update stored delivery_status, same as
             // the channel path above (ServerDm rows keyed by peer channel_id).
             InboxEvent::DmReceipt { peer_id, receipt_type, timestamps } => {
+                // Self-sync: a receipt whose sealed-sender identity is US is our
+                // OWN read receipt, synced from another of our devices (we read
+                // the peer's messages there). `peer_id` here is the sealed sender,
+                // so `peer_id == current_user` is the self-sync marker. Filing it
+                // as a delivery-status update on the A-self thread (ChannelId::from
+                // (current_user)) is exactly the F8 mis-routing: those rows don't
+                // exist there. Instead mark the peer's messages READ so the unread
+                // badge clears across our devices (Signal's read-sync). Messages
+                // are ns-timestamp-unique, so the timestamps pin the right rows in
+                // the peer's thread without needing the destination on the wire.
+                // (A self *delivery* receipt is dropped on the send side as noise,
+                // so only read/viewed reach here.)
+                if self.message_service.current_user_id().ok().as_ref() == Some(peer_id) {
+                    if *receipt_type == 2 || *receipt_type == 3 {
+                        for ts in timestamps {
+                            let _ = self.message_service.mark_read_by_timestamp(*ts);
+                        }
+                    }
+                    return false;
+                }
                 let status = match receipt_type {
                     1 => "delivered",
                     2 | 3 => "read", // read + viewed both surface as read

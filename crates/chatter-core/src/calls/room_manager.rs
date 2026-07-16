@@ -5,7 +5,9 @@
 
 use livekit::prelude::*;
 use livekit::e2ee::{E2eeOptions, EncryptionType, key_provider::{KeyProvider, KeyProviderOptions}};
-use livekit::options::{TrackPublishOptions, VideoCodec, VideoEncoding};
+use livekit::options::{
+    DegradationPreference, TrackPublishOptions, VideoCodec, VideoEncoderBackend, VideoEncoding,
+};
 use livekit::webrtc::audio_source::RtcAudioSource;
 use livekit::webrtc::video_source::RtcVideoSource;
 #[cfg(not(target_os = "android"))]
@@ -400,40 +402,45 @@ impl RoomManager {
         );
 
         // Screen-share track tuned for high-res content (e.g. 5120×1440
-        // ultrawides). Defaults (VP8, simulcast=true, 1080p30 preset cap)
-        // throttle the encoder to 3 Mbps and run THREE parallel VP8
-        // encoders.
+        // ultrawides). Settings validated by a live end-to-end wire sweep
+        // (examples/screenshare_wire_bench.rs). The headline result at 5120×1440:
+        //   default (MaintainResolution)      →  30 fps, 149 ms latency
+        //   THIS (Disabled + H265 + NVENC)    → 104 fps,  30-45 ms, PSNR ~44
+        // i.e. 3.5× the framerate at FULL native resolution, visually lossless.
         //
-        // Why H.265 specifically:
-        //   - H.264 NVENC advertises Baseline Level 3.1 in webrtc-sys
-        //     (`profile-level-id: 42e01f`), which maxes out at ~720p.
-        //     At 5120×1440 `nvEncInitializeEncoder` returns error 8
-        //     (invalid param) and the encoder is unusable.
-        //   - Even H.264 Level 5.2 caps at 4096×2304 — a 5120-wide frame
-        //     is physically out of spec.
-        //   - HEVC/H.265 supports up to 8K (8192×4320 at level 6.0),
-        //     which fits 5120×1440 cleanly, and the NVENC factory
-        //     already advertises it via the same encoder path.
+        // degradation_preference = MaintainFramerateAndResolution (== the old
+        // "Disabled") is the single most important knob. The SDK defaults a
+        // Screenshare source to MaintainResolution, which tells libwebrtc's
+        // CPU-overuse detector to hold resolution and DROP FRAMERATE under load —
+        // that was our hard ~30-35 fps wall, codec- and bitrate-independent
+        // (measured flat from 60→800 Mbps). Disabled throttles neither axis.
         //
-        // simulcast=false and an explicit `video_encoding` keep us off
-        // the SDK's hardcoded 1080p/30/3 Mbps screenshare preset.
+        // video_encoder = Nvenc forces the HW HEVC path (confirmed engaged via
+        // NVENC session-init logs). H.265 is the winner ONLY once the throttle is
+        // off: at the wall all codecs tied ~33 fps, but with Disabled+NVENC H.265
+        // holds 104 fps steady while SW VP8/VP9 manage 45-75 and thrash. Our
+        // earlier "H.265 = 36 fps regression" was MaintainResolution strangling
+        // it, not the codec. On non-NVIDIA hosts the SDK falls back (VAAPI/SW);
+        // per-GPU encoder selection is a follow-up.
         //
-        // Optimise for fat links (1 Gbps+ LAN/fibre): 60 Mbps is the *ceiling*,
-        // not a floor. At 5120x1440 this is ~0.13 bpp @144 fps — visually
-        // lossless for desktop/text content (the 25 Mbps prior cap softened
-        // small text under motion; 8 Mbps blocked badly). 60 Mbps is ~7.5 MB/s,
-        // trivial on 1 Gbps (125 MB/s) yet leaves headroom for audio + the
-        // peer's own upstream. WebRTC's congestion controller adapts the
-        // *actual* send rate down on constrained links, so capping high costs
-        // nothing on slow networks while letting fast ones run near-lossless.
-        // Per-link capability negotiation (advertise downlink, pick the tier)
-        // is the follow-up milestone; this is the high-net default.
+        // simulcast=false runs a single encoder and, with an explicit
+        // `video_encoding`, keeps us off the hardcoded 1080p/30/3 Mbps
+        // screenshare preset (which otherwise caps ~27 fps at any resolution).
+        //
+        // Bitrate CEILING scales with pixel count (~16 bits/px), clamped
+        // [10, 150] Mbps. The sweep showed H.265 is near-lossless (PSNR 44) even
+        // at 60 Mbps here, and fps is flat vs bitrate — this is just headroom, a
+        // ceiling the congestion controller stays under on constrained links.
+        let pixels = (width as u64) * (height as u64);
+        let max_bitrate = (pixels * 16).clamp(10_000_000, 150_000_000);
         let publish_options = TrackPublishOptions {
             source: TrackSource::Screenshare,
             video_codec: VideoCodec::H265,
+            video_encoder: VideoEncoderBackend::Nvenc,
+            degradation_preference: Some(DegradationPreference::MaintainFramerateAndResolution),
             simulcast: false,
             video_encoding: Some(VideoEncoding {
-                max_bitrate: 60_000_000,
+                max_bitrate,
                 max_framerate: target_fps as f64,
             }),
             ..Default::default()
@@ -448,8 +455,8 @@ impl RoomManager {
         *self.screen_share_track_sid.write() = Some(sid.clone());
 
         tracing::info!(
-            "Published screen share track (H.265 NVENC, simulcast off, {} fps cap, 60 Mbps, {}x{}, sid={})",
-            target_fps, width, height, sid
+            "Published screen share track (H.265/NVENC, degradation=disabled, simulcast off, {} fps cap, {} Mbps, {}x{}, sid={})",
+            target_fps, max_bitrate / 1_000_000, width, height, sid
         );
         Ok(())
     }

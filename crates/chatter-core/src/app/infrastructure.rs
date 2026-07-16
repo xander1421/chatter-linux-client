@@ -330,7 +330,9 @@ impl InfrastructureContainer {
 
             // Generate new passphrase
             let mut bytes = [0u8; 32];
-            rand::RngCore::fill_bytes(&mut rand::rng(), &mut bytes);
+            // OsRng for the DB master passphrase (highest-value key) — matches
+            // the crate's stated RNG policy, not the ThreadRng userspace CSPRNG.
+            { use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut bytes).expect("OS CSPRNG must not fail"); }
             let passphrase = hex::encode(bytes);
 
             // Store in app's private directory
@@ -373,7 +375,9 @@ impl InfrastructureContainer {
 
             // Generate new passphrase (32 random bytes as hex = 64 chars)
             let mut bytes = [0u8; 32];
-            rand::RngCore::fill_bytes(&mut rand::rng(), &mut bytes);
+            // OsRng for the DB master passphrase (highest-value key) — matches
+            // the crate's stated RNG policy, not the ThreadRng userspace CSPRNG.
+            { use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut bytes).expect("OS CSPRNG must not fail"); }
             let passphrase = hex::encode(bytes);
 
             // Store in keyring with retries

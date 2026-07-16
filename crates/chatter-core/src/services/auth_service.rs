@@ -276,6 +276,27 @@ impl AuthService {
         client.get_my_identity().await.map_err(AuthError::Network)
     }
 
+    /// Read the sealed-sender RECEIVING policy (allow_from_anyone) from the server.
+    pub async fn get_sealed_sender_policy(&self) -> Result<bool, AuthError> {
+        let mut client = self.try_auth_client().ok_or(AuthError::NotLoggedIn)?;
+        client
+            .get_sealed_sender_policy()
+            .await
+            .map(|r| r.allow_from_anyone)
+            .map_err(AuthError::Network)
+    }
+
+    /// Set the sealed-sender RECEIVING policy on the server. Returns the value
+    /// the server persisted (echoed back).
+    pub async fn set_sealed_sender_policy(&self, allow_from_anyone: bool) -> Result<bool, AuthError> {
+        let mut client = self.try_auth_client().ok_or(AuthError::NotLoggedIn)?;
+        client
+            .set_sealed_sender_policy(allow_from_anyone)
+            .await
+            .map(|r| r.allow_from_anyone)
+            .map_err(AuthError::Network)
+    }
+
     pub async fn login(
         &self,
         auth_client: &mut AuthClient,
@@ -306,11 +327,18 @@ impl AuthService {
             .and_then(|bytes| <[u8; 32]>::try_from(bytes.as_slice()).ok());
 
         // Derive SVR public key - required for registration
+        //
+        // PERF/CORRECTNESS: one Argon2id for both the keypair here and the PIN
+        // fingerprint refreshed further down — same (pin, username), same
+        // secret — and run off the async worker. See `derive_svr_secret_async`.
+        let mut svr_secret: [u8; 32];
         let svr_public_key = if let Some(p) = pin {
             crate::crypto::svr::validate_pin(p).map_err(|e| {
                 AuthError::RegistrationFailed(format!("invalid PIN: {e}"))
             })?;
-            let keypair = crate::crypto::svr::SvrKeypair::new_from_pin(p, username)?;
+            let secret = crate::crypto::svr::derive_svr_secret_async(p, username).await?;
+            let keypair = crate::crypto::svr::SvrKeypair::from_secret(&secret);
+            svr_secret = secret;
             keypair.public_key_bytes().to_vec()
         } else {
             return Err(AuthError::RegistrationFailed("PIN is required for account recovery".to_string()));
@@ -409,11 +437,15 @@ impl AuthService {
         self.settings_repo.set_bytes(keys::AUTH_LOOKUP_HASH, &auth_lookup_hash)?;
 
         // Refresh local PIN fingerprint (re-auth gate for linked-device approval).
-        if let Some(p) = pin {
-            let mut fp = crate::crypto::svr::derive_pin_fingerprint(p, username)?;
+        // Reuses the SVR secret already derived above.
+        if pin.is_some() {
+            let mut fp = crate::crypto::svr::pin_fingerprint_from_secret(&svr_secret);
             self.settings_repo.set_bytes(keys::PIN_FINGERPRINT, &fp)?;
             fp.zeroize();
         }
+
+        // SECURITY: done with the PIN-derived secret — drop it now.
+        svr_secret.zeroize();
 
         // Store identity public key for NDSS'21 private friend codes
         // This allows generating friend codes without accessing the SignalStore
@@ -517,13 +549,26 @@ impl AuthService {
             .ok_or_else(|| AuthError::RegistrationFailed("no username candidates".into()))?;
 
         // Derive SVR public key and registration lock - required for registration
+        //
+        // PERF: registration needs three PIN-derived values (SVR keypair,
+        // registration lock, and the local PIN fingerprint set further down).
+        // All three are HMAC/X25519 over the SAME Argon2id secret for the same
+        // (pin, username), so the ~450ms/128 MiB KDF runs ONCE here and the
+        // cheap derivations reuse it. It previously ran once per value —
+        // identical inputs, bit-identical output, ~900ms of pure waste — and,
+        // being called inline from async, it stalled the runtime's connection
+        // task hard enough to kill the not-yet-issued challenge request. See
+        // `derive_svr_secret_async` for that failure mode.
+        let mut svr_secret: [u8; 32];
         let (svr_public_key, mut registration_lock) = if let Some(p) = pin {
             crate::crypto::svr::validate_pin(p).map_err(|e| {
                 AuthError::RegistrationFailed(format!("invalid PIN: {e}"))
             })?;
-            let keypair = crate::crypto::svr::SvrKeypair::new_from_pin(p, username)?;
+            let secret = crate::crypto::svr::derive_svr_secret_async(p, username).await?;
+            let keypair = crate::crypto::svr::SvrKeypair::from_secret(&secret);
             // SECURITY: Registration lock prevents account takeover without PIN
-            let reg_lock = crate::crypto::svr::derive_registration_lock(p, username)?;
+            let reg_lock = crate::crypto::svr::registration_lock_from_secret(&secret);
+            svr_secret = secret;
             (keypair.public_key_bytes().to_vec(), reg_lock)
         } else {
             return Err(AuthError::RegistrationFailed("PIN is required for account recovery".to_string()));
@@ -538,13 +583,38 @@ impl AuthService {
             .prekey_manager
             .generate_signed_prekey(&mut rand::rngs::OsRng.unwrap_err(), 1, &identity_key_pair)?;
 
-        // Generate Kyber prekey for post-quantum resistance
+        // Generate Kyber prekey for post-quantum resistance. This is the
+        // medium-term LAST-RESORT PQSPK — it is reused across handshakes until
+        // rotated, so it is a floor, not the primary PQ key material.
         let kyber_prekey = self
             .prekey_manager
             .generate_kyber_prekey(1, &identity_key_pair)?;
 
         // Generate one-time prekeys (100 for initial batch)
         let one_time_prekeys = self.prekey_manager.generate_prekeys(&mut rand::rngs::OsRng.unwrap_err(), 1, 100)?;
+
+        // Generate the one-time Kyber prekey pool (PQOPK), same batch size as
+        // the classical OPKs above. Per PQXDH §3.2 the server pops one PQOPK
+        // for every classical OPK it hands out, so the two pools MUST be seeded
+        // and refilled in lockstep — exactly as `SignalService::refresh_prekeys`
+        // already does for the replenishment path.
+        //
+        // Seeding these at registration is what gives each session its OWN PQ
+        // key. Without them the server has nothing to pop and every PQXDH
+        // handshake falls back to the single last-resort PQSPK above, which is
+        // spec-permitted but reuses one PQ key across every session until
+        // rotation (see the warning at crypto/signal/identity.rs:38-42).
+        //
+        // IDs start at 2: the last-resort PQSPK holds id 1. `generate_kyber_prekey`
+        // persists each record to the key store, so `get_next_kyber_prekey_id`
+        // advances as we go — the same loop shape as the actor's
+        // RefreshKyberPrekeys handler.
+        let mut kyber_one_time_prekeys = Vec::with_capacity(100);
+        for _ in 0..100 {
+            let id = self.prekey_manager.get_next_kyber_prekey_id()?;
+            kyber_one_time_prekeys
+                .push(self.prekey_manager.generate_kyber_prekey(id, &identity_key_pair)?);
+        }
 
         // Store profile key locally (needed for profile encryption)
         // Stored in SQLCipher encrypted database
@@ -558,12 +628,17 @@ impl AuthService {
 
         // Store local-only PIN fingerprint so re-auth gates (e.g. linked-device
         // approval) can verify the PIN without a server round-trip. Derived
-        // from the same Argon2id SVR secret; never sent to the server.
-        if let Some(p) = pin {
-            let mut fp = crate::crypto::svr::derive_pin_fingerprint(p, username)?;
+        // from the same Argon2id SVR secret computed above (literally the same
+        // bytes, not a second identical derivation); never sent to the server.
+        if pin.is_some() {
+            let mut fp = crate::crypto::svr::pin_fingerprint_from_secret(&svr_secret);
             self.settings_repo.set_bytes(keys::PIN_FINGERPRINT, &fp)?;
             fp.zeroize();
         }
+
+        // SECURITY: the PIN-derived secret is done being used; drop it from
+        // memory rather than letting it live to the end of registration.
+        svr_secret.zeroize();
 
         // Store avatar locally if provided (raw bytes, encrypted when shared)
         // Avatar is NOT uploaded to server - only shared E2E encrypted during bootstraps
@@ -677,6 +752,28 @@ impl AuthService {
             });
         }
 
+        // Build the PQOPK batch for the server. Unlike the classical OPK, every
+        // PQ prekey carries an XEdDSA signature over its public key (PQXDH §3.2);
+        // the server verifies it via ValidatePreKeySignatures and rejects the
+        // batch outright if it does not check out. None are held back for the
+        // bundle: the bundle's `kyber_prekey` field is the last-resort PQSPK, and
+        // the server picks a PQOPK from this pool at handout time.
+        let mut initial_kyber_prekeys: Vec<ProtoKyberPreKey> = Vec::new();
+        for kpk in &kyber_one_time_prekeys {
+            let id: u32 = kpk.id().map_err(|e| CryptoError::Protocol(e.to_string()))?.into();
+            let public = kpk.public_key().map_err(|e| CryptoError::Protocol(e.to_string()))?.serialize();
+            let sig = kpk.signature().map_err(|e| CryptoError::Protocol(e.to_string()))?;
+            // Chatter-owned wire field is nanoseconds; libsignal stores millis.
+            let ts = kpk.timestamp().map_err(|e| CryptoError::Protocol(e.to_string()))?.epoch_millis()
+                * 1_000_000;
+            initial_kyber_prekeys.push(ProtoKyberPreKey {
+                id,
+                public_key: public.to_vec(),
+                signature: sig,
+                timestamp: ts,
+            });
+        }
+
         // Call server registration (wait for completion)
         // PRIVACY: Send username_hash, NOT plaintext username
         // SECURITY: Send UAK (16 bytes), NOT profile_key (32 bytes)
@@ -735,6 +832,40 @@ impl AuthService {
             credentials.auth_username(&user_id.to_string()),
             credentials.auth_token_base64(),
         );
+
+        // Seed the server's PQOPK pool. This reuses the existing RefreshPreKeys
+        // RPC rather than adding a registration field, which also fixes the
+        // ordering constraints for free:
+        //   - signal_kyber_one_time_prekeys has an FK on
+        //     signal_prekey_bundles(user_id, device_id), so the bundle must
+        //     already be stored — i.e. after register_and_wait.
+        //   - RefreshPreKeys is authenticated, so this must follow set_basic.
+        // The classical OPKs ride along inside RegisterRequest and are already
+        // uploaded by this point; only the PQ pool is sent here.
+        //
+        // A failure here is logged, not fatal: the account is already registered
+        // server-side, and PQXDH still succeeds against the last-resort PQSPK
+        // (spec-permitted). Failing registration outright would be a worse
+        // outcome than the degradation it avoids. The background replenisher
+        // (app/core_services.rs) refills both pools together on its next pass.
+        if !initial_kyber_prekeys.is_empty() {
+            let pq_count = initial_kyber_prekeys.len();
+            match auth_client
+                .refresh_pre_keys_with_kyber_otpk(Vec::new(), initial_kyber_prekeys)
+                .await
+            {
+                Ok(()) => {
+                    tracing::info!(pq_opk = pq_count, "Seeded PQOPK pool at registration");
+                }
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        "Failed to seed PQOPK pool at registration — PQXDH will fall back to \
+                         the last-resort PQSPK until the replenisher runs"
+                    );
+                }
+            }
+        }
 
         // Store user locally
         let user = User {

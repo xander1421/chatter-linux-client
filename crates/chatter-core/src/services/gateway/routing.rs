@@ -41,119 +41,6 @@ impl MessageGateway {
         encrypted_data.associated_data == b"sender_key_request"
     }
 
-    /// Process an incoming sender key distribution message.
-    ///
-    /// When a channel member sends their first encrypted message, they distribute
-    /// their SKDM so other members can decrypt future messages from them.
-    ///
-    /// # Arguments
-    ///
-    /// * `encrypted_data` - The EncryptedData containing serialized SenderKeyDistribution
-    /// * `sender_id` - The sender's user ID
-    /// * `sender_device_id` - The sender's device ID
-    pub async fn process_sender_key_distribution(
-        &self,
-        encrypted_data: &crate::proto::chat_v1::EncryptedData,
-        sender_id: &UserId,
-        sender_device_id: u32,
-    ) -> Result<(), ServiceError> {
-        use crate::proto::content_v1::SenderKeyDistribution;
-
-        tracing::info!(
-            sender_id = %sender_id,
-            sender_device_id = sender_device_id,
-            ciphertext_len = encrypted_data.ciphertext.len(),
-            "[SKDM_RECV] Received sender key distribution message"
-        );
-
-        // Check if this is a SKDM
-        if encrypted_data.associated_data != b"sender_key_distribution" {
-            tracing::warn!(
-                associated_data = ?String::from_utf8_lossy(&encrypted_data.associated_data),
-                "[SKDM_RECV] Not a sender key distribution message"
-            );
-            return Err(ServiceError::Validation(
-                "Not a sender key distribution message".into(),
-            ));
-        }
-
-        // Deserialize the SenderKeyDistribution proto
-        let skdm = SenderKeyDistribution::decode(encrypted_data.ciphertext.as_slice())
-            .map_err(|e| {
-                tracing::error!(
-                    sender_id = %sender_id,
-                    error = %e,
-                    "[SKDM_RECV] Failed to decode SenderKeyDistribution proto"
-                );
-                ServiceError::Validation(format!("Failed to decode SenderKeyDistribution: {}", e))
-            })?;
-
-        tracing::debug!(
-            sender_id = %sender_id,
-            channel_id = %skdm.channel_id,
-            distribution_message_len = skdm.distribution_message.len(),
-            timestamp = skdm.timestamp,
-            "[SKDM_RECV] Decoded SKDM, processing sender key"
-        );
-
-        // SECURITY: defense-in-depth — only install SKDMs from current
-        // channel members. Server-side `authz.CanSendMessage` already
-        // gates publishing and `authz.CanGetChannelMessages` /
-        // `CanStreamMessages` gate delivery, so a stored-but-unused SKDM
-        // from a non-member is benign at the protocol level. Still, we
-        // refuse to store keys for distributions we have no membership
-        // record for - it surfaces tampering early and matches Signal's
-        // pattern (Signal-Android `MessageContentProcessor` filters
-        // SKDMs through the `DecryptedGroup` member check before install).
-        if let Ok(channel_id) = skdm.channel_id.parse::<ChannelId>() {
-            match self.channel_repo.get_membership(&channel_id, sender_id) {
-                Ok(Some(_)) => {} // sender is a current member; proceed
-                Ok(None) => {
-                    tracing::warn!(
-                        sender_id = %sender_id,
-                        channel_id = %channel_id,
-                        "SECURITY: dropping SKDM from non-member sender"
-                    );
-                    return Err(ServiceError::Validation(
-                        "SKDM sender is not a current channel member".into(),
-                    ));
-                }
-                Err(e) => {
-                    tracing::error!(
-                        sender_id = %sender_id,
-                        channel_id = %channel_id,
-                        error = %e,
-                        "Failed to verify SKDM sender membership; failing closed"
-                    );
-                    return Err(ServiceError::Storage(e));
-                }
-            }
-        }
-
-        // Process the SKDM so we can decrypt future messages from this sender
-        self.signal_service
-            .process_sender_key(sender_id, sender_device_id, &skdm)
-            .await
-            .map_err(|e| {
-                tracing::error!(
-                    sender_id = %sender_id,
-                    channel_id = %skdm.channel_id,
-                    error = %e,
-                    "[SKDM_RECV] Failed to process sender key"
-                );
-                e
-            })?;
-
-        tracing::info!(
-            sender_id = %sender_id,
-            sender_device_id = sender_device_id,
-            channel_id = %skdm.channel_id,
-            "[SKDM_RECV] Successfully stored sender key from channel member"
-        );
-
-        Ok(())
-    }
-
     /// Route an incoming encrypted message to the appropriate handler.
     ///
     /// Checks the message type and delegates to the correct processing method.
@@ -180,15 +67,37 @@ impl MessageGateway {
         );
 
         // Check message type based on associated_data marker
+        //
+        // SECURITY (ponytail): a cleartext `EncryptedData` only reaches this
+        // function from the device-inbox plaintext path
+        // (inbox/polling/device.rs), where `sender_id` is parsed from the
+        // UNAUTHENTICATED, server-attested `DeviceMessage.source_user_id`.
+        // Installing a Sender Key *Distribution* Message (SKDM) — which binds a
+        // group signing key to (sender, channel) — off that identity would let
+        // a malicious/relaying server register ITS OWN signing key under a
+        // victim's identity and then forge group-message authorship.
+        //
+        // Honest clients ALWAYS transmit SKDMs wrapped in a `Content::SenderKey`
+        // proto over sealed sender (services/message/group.rs::
+        // distribute_sender_key / send_skdm_to_member), where the
+        // cryptographically-verified sender certificate drives installation
+        // (services/gateway/decryption.rs). That authenticated path is
+        // untouched and keeps working. The cleartext SKDM-install path is dead
+        // for honest clients, so it is refused here.
+        //
+        // NOTE: `is_sender_key_message` (group *content*, authenticated by the
+        // sender-key SIGNATURE, not by source_user_id) and
+        // `is_sender_key_request` are NOT this bug and are preserved below.
         if Self::is_sender_key_distribution(encrypted_data) {
-            tracing::info!(
+            tracing::warn!(
                 sender_id = %sender_id,
-                "[MSG_ROUTE] Detected SKDM (sender_key_distribution)"
+                sender_device_id = sender_device_id,
+                "SECURITY: refusing cleartext SKDM install from server-attested sender; \
+                 SKDMs are accepted only over sealed sender / pairwise ratchet"
             );
-            // Process SKDM - no plaintext returned
-            self.process_sender_key_distribution(encrypted_data, sender_id, sender_device_id)
-                .await?;
-            Ok(RouteResult::Processed)
+            Err(ServiceError::Validation(
+                "cleartext sender-key distribution refused (unauthenticated sender)".into(),
+            ))
         } else if Self::is_sender_key_message(encrypted_data) {
             tracing::info!(
                 sender_id = %sender_id,

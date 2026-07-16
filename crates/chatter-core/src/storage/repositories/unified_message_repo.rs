@@ -1071,6 +1071,26 @@ impl UnifiedMessageRepository {
         Ok(rows > 0)
     }
 
+    /// Mark the message with a given sent-at timestamp as read.
+    ///
+    /// Used for multi-device read-sync: when we read a peer's messages on one of
+    /// our devices, that device self-syncs a read receipt to our others, which
+    /// mark the same messages read here so the unread badge clears everywhere
+    /// (Signal's read-sync). Messages are identified Signal-style by
+    /// `(author, ns-timestamp)`, and the ns timestamp is unique, so the peer's
+    /// message is pinned by `sent_at` alone — no conversation context is needed,
+    /// and no A-self thread is ever touched (the row lives in the peer's thread).
+    ///
+    /// Returns `true` if a row was flipped from unread to read.
+    pub fn mark_read_by_timestamp(&self, sent_at: u64) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE messages SET is_read = 1, updated_at = ?1 WHERE sent_at = ?2 AND is_read = 0",
+            params![Utc::now().to_rfc3339(), sent_at as i64],
+        )?;
+        Ok(rows > 0)
+    }
+
     /// Update delivery status by timestamp with automatic conversation lookup.
     ///
     /// For callers that lack conversation context (e.g. cross-channel receipts),

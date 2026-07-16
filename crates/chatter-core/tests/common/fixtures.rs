@@ -201,10 +201,15 @@ pub async fn register_test_user(pool: &GrpcClientPool) -> Result<TestUser, Netwo
         .private_key()
         .calculate_signature(&signed_prekey_pair.public_key.serialize(), &mut rand::rng())
         .expect("Signature generation should succeed");
+    // NANOSECONDS: the server reads this field with time.Unix(0, ts). Sending
+    // millis dated every fixture bundle to 1970-01-01T00:29:44Z, which the
+    // registration workflow's prekey-age validation rejects outright ("signed
+    // prekey too old: age 495605h exceeds max 168h"), so every fixture-based
+    // registration against a current server failed before it began.
     let signed_prekey_timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_millis() as u64;
+        .as_nanos() as u64;
 
     // Generate one-time prekey
     let one_time_prekey_pair = KeyPair::generate(&mut rand::rng());
@@ -401,10 +406,15 @@ pub fn generate_prekey_bundle() -> (SignalPreKeyBundle, Vec<u8>) {
         .private_key()
         .calculate_signature(&signed_prekey_pair.public_key.serialize(), &mut rand::rng())
         .expect("Signature generation should succeed");
+    // NANOSECONDS: the server reads this field with time.Unix(0, ts). Sending
+    // millis dated every fixture bundle to 1970-01-01T00:29:44Z, which the
+    // registration workflow's prekey-age validation rejects outright ("signed
+    // prekey too old: age 495605h exceeds max 168h"), so every fixture-based
+    // registration against a current server failed before it began.
     let signed_prekey_timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_millis() as u64;
+        .as_nanos() as u64;
 
     // Generate one-time prekey
     let one_time_prekey_pair = KeyPair::generate(&mut rand::rng());

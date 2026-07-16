@@ -431,6 +431,19 @@ impl SignalActorHandle {
                             let peer_x25519_public = X25519PublicKey::from(peer_point);
 
                             let shared_secret = our_x25519_private.diffie_hellman(&peer_x25519_public);
+
+                            // RFC 7748 §6.1: reject low-order peer keys that collapse ECDH to a
+                            // constant. The peer public is server-relayed and untrusted, so a
+                            // low-order point would otherwise force a predictable call key.
+                            if !shared_secret.was_contributory() {
+                                let _ = response.send(Err(ServiceError::Crypto(
+                                    CryptoError::KeyDerivationFailed(
+                                        "non-contributory ECDH (low-order public key)".into(),
+                                    ),
+                                )));
+                                continue;
+                            }
+
                             let _ = response.send(Ok(*shared_secret.as_bytes()));
                         }
 
@@ -440,7 +453,10 @@ impl SignalActorHandle {
 
                             // ECDH: compute shared secret from ephemeral keys
                             let ephemeral = EphemeralCallKey::from_private_bytes(our_ephemeral_private);
-                            let ephemeral_shared = ephemeral.diffie_hellman(&peer_ephemeral_public);
+                            let ephemeral_shared = match ephemeral.diffie_hellman(&peer_ephemeral_public) {
+                                Ok(s) => s,
+                                Err(e) => { let _ = response.send(Err(ServiceError::Crypto(e))); continue; }
+                            };
 
                             let our_identity = match store.get_identity_key_pair().await
                                 .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string()))) {

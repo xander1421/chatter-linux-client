@@ -162,6 +162,12 @@ impl IdentityKeyStore for SignalStore {
         // Per-account keying (see save_identity): trust is evaluated against the
         // account's single pinned identity key, so a ghost device with a
         // divergent key is rejected regardless of its device id.
+        //
+        // LOAD-BEARING: `address.name()` (account) — NOT libsignal's default
+        // `address.to_string()` (account.device). Switching it silently lets a
+        // server-injected device TOFU-trust and receive fan-out. Compiles
+        // either way; guarded only by
+        // `tests/round3_security_e2e.rs::ghost_device_with_divergent_identity_is_untrusted`.
         let stored_key = self
             .key_store
             .get_identity(address.name())

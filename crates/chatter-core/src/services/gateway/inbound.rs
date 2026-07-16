@@ -89,6 +89,7 @@ pub fn content_type_name(content: &Option<content::Content>) -> &'static str {
         Some(content::Content::AnonDmProfileUpdate(_)) => "AnonDmProfileUpdate",
         Some(content::Content::SavedMessageSync(_)) => "SavedMessageSync",
         Some(content::Content::DmMailboxRotation(_)) => "DmMailboxRotation",
+        Some(content::Content::SyncSent(_)) => "SyncSent",
         None => "None",
     }
 }
@@ -349,6 +350,19 @@ pub enum SealedSenderResult {
     SenderKeyRequested {
         requester_id: UserId,
         channel_id: ChannelId,
+    },
+    /// A sender-key distribution message (SKDM) was received and the sender
+    /// key was installed. The caller MUST fire `DomainEvent::SenderKeyReceived`
+    /// so any group messages that arrived from this (sender, device, channel)
+    /// BEFORE the key — and were parked in `pending_group_decrypts` — get
+    /// re-decrypted. Without this signal the first message from a new speaker
+    /// is lost forever even after the key lands (finding F14c).
+    SenderKeyProcessed {
+        sender_id: UserId,
+        sender_device_id: u32,
+        channel_id: ChannelId,
+        distribution_message: Vec<u8>,
+        timestamp: u64,
     },
     /// Group mailbox announcement received (NDSS '21 paper bootstrap).
     MailboxAnnouncement {

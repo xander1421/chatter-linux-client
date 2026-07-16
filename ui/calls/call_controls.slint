@@ -10,25 +10,25 @@ component ControlButton inherits Rectangle {
     in property <image> icon;
     in property <image> icon-active;
     in property <bool> active: false;
-    in property <bool> danger: false;
 
     callback clicked();
 
     width: 48px;
     height: 48px;
     border-radius: 24px;
+    // Active (muted / camera-off / sharing) uses the brand teal, NOT red —
+    // red is reserved for the end-call button alone. The icon flips
+    // (mic → mic-off) so the specific state is still legible.
     background: {
-        if danger {
-            touch.has-hover ? Colors.error-hover : Colors.error
-        } else if active {
-            touch.has-hover ? Colors.error-hover : Colors.error
+        if active {
+            touch.has-hover ? Colors.primary-hover : Colors.primary
         } else {
             touch.has-hover ? Colors.surface-hover : Colors.surface
         }
     };
     border-width: 1px;
     border-color: {
-        if danger || active {
+        if active {
             transparent
         } else {
             touch.has-hover ? Colors.neo-highlight-strong : Colors.neo-highlight
@@ -37,15 +37,7 @@ component ControlButton inherits Rectangle {
     drop-shadow-blur: touch.has-hover ? Spacing.neo-blur-md : Spacing.neo-blur-sm;
     drop-shadow-offset-x: Spacing.neo-offset-sm;
     drop-shadow-offset-y: Spacing.neo-offset-sm;
-    drop-shadow-color: {
-        if danger {
-            Colors.error.with-alpha(0.3)
-        } else if active {
-            Colors.error.with-alpha(0.3)
-        } else {
-            Colors.neo-shadow
-        }
-    };
+    drop-shadow-color: active ? Colors.primary.with-alpha(0.3) : Colors.neo-shadow;
 
     touch := TouchArea {
         mouse-cursor: pointer;

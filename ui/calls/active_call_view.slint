@@ -1,9 +1,10 @@
 // Active call view as a dock on top of the chat pane (Discord-style).
 //
 // Renders a compact header strip (title + duration + verification), a bounded
-// video/avatar grid, and a floating control pill. Not full-screen. Hidden when
-// `show` is false — collapses to zero height so the surrounding chat layout
-// reclaims the space.
+// video/avatar grid, and a floating control pill. Defaults to a dock; the
+// maximize button grows it to fill the whole window (app.slint hides the
+// sidebar + chat while `fullscreen`). Hidden when `show` is false — collapses
+// to zero height so the surrounding chat layout reclaims the space.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -18,11 +19,6 @@ component ParticipantTile inherits Rectangle {
     in property <image> video-frame;
     in property <bool> is-local: false;
     in property <bool> show-video: true;
-    // When true, screen-share frames fill the tile (image-fit: cover) so an
-    // ultrawide capture isn't letterboxed inside a 16:9 viewport. The
-    // grid tiles leave this off so the overview stays uncropped; only the
-    // single maximized fullscreen tile sets it.
-    in property <bool> fill-mode: false;
     callback clicked();
 
     TouchArea {
@@ -48,18 +44,16 @@ component ParticipantTile inherits Rectangle {
     animate drop-shadow-blur { duration: 240ms; easing: ease-in-out; }
     animate drop-shadow-color { duration: 240ms; easing: ease-in-out; }
 
-    // Video frame or avatar placeholder. Screen-share streams use
-    // `contain` to preserve aspect (an ultrawide 5120x1440 capture gets
-    // letterboxed instead of crop-zoomed, otherwise huge regions of the
-    // shared desktop sit outside the tile). Camera tracks stay on `cover`
-    // so a 16:9 face video fills the tile cleanly without bars.
+    // Video frame or avatar placeholder. Screen-share streams ALWAYS use
+    // `contain` — never crop. Cropping a screen share hides content (the
+    // viewer sees only a slice of the shared desktop); letterbox bars are the
+    // correct tradeoff. Camera tracks stay on `cover` so a 16:9 face video
+    // fills the tile cleanly without bars.
     if show-video && participant.is-video-enabled: Image {
         source: video-frame;
         width: 100%;
         height: 100%;
-        image-fit: participant.is-screen-sharing
-            ? (fill-mode ? cover : contain)
-            : cover;
+        image-fit: participant.is-screen-sharing ? contain : cover;
     }
 
     if !show-video || !participant.is-video-enabled: Rectangle {
@@ -404,7 +398,6 @@ export component ActiveCallView inherits Rectangle {
                 participant: call-data.participants[maximized-index];
                 video-frame: maximized-video-frame;
                 is-local: maximized-is-local;
-                fill-mode: fullscreen;
                 clicked => { root.user-focus = -1; }
             }
 

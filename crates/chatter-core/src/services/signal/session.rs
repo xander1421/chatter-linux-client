@@ -43,6 +43,84 @@ impl SignalService {
         locks.entry(recipient_key.to_string()).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
     }
 
+    /// Key Transparency gate (Phase 2).
+    ///
+    /// Before trusting the identity key inside a peer's prekey bundle, fetch the
+    /// server's signed KT inclusion proof for that peer and verify that the
+    /// bundle's identity key is exactly the one committed in the append-only KT
+    /// log, under the client-pinned tree-head public key
+    /// (`config::KT_TREE_HEAD_PUBLIC_KEY_BYTES`).
+    ///
+    /// No-proof policy (deliberate, LOUD, not silent):
+    /// * peer HAS a leaf, key matches  -> Ok (verified).
+    /// * peer HAS a leaf, key differs   -> REJECT (F9 forged/MITM identity key).
+    /// * peer has NO leaf (NotFound)    -> TOFU fallback with a `warn!` naming the
+    ///   downgrade — the ~1500 pre-KT users have no leaf and would otherwise be
+    ///   unreachable; their keys are simply not transparency-verified yet.
+    /// * any other transport/server error -> REJECT (an error is not evidence of
+    ///   an absent leaf; a malicious server must not be able to error its way
+    ///   past the check).
+    async fn verify_peer_key_transparency(
+        &self,
+        auth_client: &mut AuthClient,
+        recipient_id: &str,
+        bundle: &libsignal_protocol::PreKeyBundle,
+    ) -> Result<(), ServiceError> {
+        let identity_key = bundle
+            .identity_key()
+            .map_err(|e| ServiceError::Validation(format!("bundle missing identity key: {e}")))?
+            .serialize();
+
+        match auth_client.get_key_transparency_proof(recipient_id).await {
+            Ok(Some(proof)) => {
+                match crate::crypto::verify_kt_proof(recipient_id, &identity_key, &proof) {
+                    Ok(()) => {
+                        let epoch = proof
+                            .signed_tree_head
+                            .as_ref()
+                            .map(|s| s.epoch)
+                            .unwrap_or_default();
+                        tracing::debug!(
+                            recipient = %recipient_id,
+                            epoch,
+                            "KT: peer identity key verified against the signed transparency log"
+                        );
+                        Ok(())
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            recipient = %recipient_id,
+                            error = %e,
+                            "KT REJECT: refusing session — bundle identity key is NOT the key \
+                             committed in the Key Transparency log (possible forged/MITM key, F9)"
+                        );
+                        Err(ServiceError::Validation(format!(
+                            "Key Transparency verification failed for {recipient_id}: {e}"
+                        )))
+                    }
+                }
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    recipient = %recipient_id,
+                    "KT DOWNGRADE (TOFU): peer has no leaf in the Key Transparency log (pre-KT \
+                     user); trusting the bundle identity key WITHOUT a KT proof — this key is \
+                     NOT transparency-verified"
+                );
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!(
+                    recipient = %recipient_id,
+                    error = %e,
+                    "KT: proof fetch failed (transport/server error, not NotFound) — refusing \
+                     session (an error is not evidence of an absent leaf)"
+                );
+                Err(ServiceError::Network(e))
+            }
+        }
+    }
+
     /// Establish a session with a remote recipient if one doesn't exist or is unusable.
     ///
     /// **Important**: This checks if a usable session already exists before fetching prekeys.
@@ -104,6 +182,10 @@ impl SignalService {
         };
 
         let bundle = Self::convert_prekey_bundle(proto_bundle)?;
+        // KT gate: verify the peer's identity key against the transparency log
+        // before establishing (rejects a server-forged identity key).
+        self.verify_peer_key_transparency(auth_client, recipient_id, &bundle)
+            .await?;
         self.actor.establish_session(address, bundle).await
     }
 
@@ -275,7 +357,36 @@ impl SignalService {
         auth_client: &mut AuthClient,
         recipient_id: &str,
     ) -> Result<Vec<u32>, ServiceError> {
+        Ok(self
+            .ensure_sessions_and_uak_all_devices(auth_client, recipient_id)
+            .await?
+            .0)
+    }
+
+    /// Same as [`Self::ensure_sessions_all_devices`], but also returns the
+    /// recipient's Unidentified Access Key as carried on their prekey bundle.
+    ///
+    /// The UAK rides along on the bundle the server already returns
+    /// (`SignalPreKeyBundle.unidentified_access_key`, set server-side in
+    /// `internal/services/auth/service/signal_protocol.go`). Harvesting it from
+    /// the fetch we are already making is deliberate: a second bundle fetch
+    /// purely to read the UAK would burn one of the recipient's one-time
+    /// prekeys per message and drain their OPK pool.
+    ///
+    /// Returns `None` for the UAK only if the server omitted it, which callers
+    /// must treat as a sealed-sender degradation rather than a normal outcome.
+    pub async fn ensure_sessions_and_uak_all_devices(
+        &self,
+        auth_client: &mut AuthClient,
+        recipient_id: &str,
+    ) -> Result<(Vec<u32>, Option<[u8; 16]>), ServiceError> {
         use crate::proto::chat_v1::get_pre_key_bundle_response;
+
+        /// The UAK is a fixed 16 bytes (`uakSize` in internal/middleware/auth.go).
+        /// Anything else is a malformed bundle, not a usable key.
+        fn uak_from_bundle(uak: &Option<Vec<u8>>) -> Option<[u8; 16]> {
+            uak.as_ref()?.as_slice().try_into().ok()
+        }
 
         // Fetch prekey bundles for ALL devices using wildcard
         let response = auth_client.get_pre_key_bundles_all_devices(recipient_id).await?;
@@ -294,6 +405,13 @@ impl SignalService {
                 }
 
                 let mut established_device_ids = Vec::with_capacity(device_list.bundles.len());
+
+                // Every bundle carries the same per-user UAK; take the first
+                // well-formed one.
+                let recipient_uak = device_list
+                    .bundles
+                    .iter()
+                    .find_map(|b| uak_from_bundle(&b.unidentified_access_key));
 
                 for proto_bundle in device_list.bundles {
                     let device_id = proto_bundle.device_id;
@@ -324,6 +442,22 @@ impl SignalService {
                     // Establish new session from bundle
                     match Self::convert_prekey_bundle(proto_bundle) {
                         Ok(bundle) => {
+                            // KT gate: a device whose identity key is not committed
+                            // in the transparency log is skipped (a forged key fails
+                            // for every device, leaving established_device_ids empty
+                            // -> the whole recipient is refused below).
+                            if let Err(e) = self
+                                .verify_peer_key_transparency(auth_client, recipient_id, &bundle)
+                                .await
+                            {
+                                tracing::warn!(
+                                    recipient = %recipient_id,
+                                    device_id,
+                                    error = %e,
+                                    "KT verification failed for device bundle, skipping device"
+                                );
+                                continue;
+                            }
                             match self.actor.establish_session(address, bundle).await {
                                 Ok(_) => {
                                     tracing::debug!(
@@ -367,14 +501,15 @@ impl SignalService {
                     "Established sessions with all devices"
                 );
 
-                Ok(established_device_ids)
+                Ok((established_device_ids, recipient_uak))
             }
 
             // Single device fallback (server doesn't support multi-device query)
             get_pre_key_bundle_response::Result::Bundle(single_bundle) => {
                 let device_id = single_bundle.device_id;
+                let recipient_uak = uak_from_bundle(&single_bundle.unidentified_access_key);
                 self.ensure_session(auth_client, recipient_id, device_id).await?;
-                Ok(vec![device_id])
+                Ok((vec![device_id], recipient_uak))
             }
         }
     }
@@ -395,8 +530,29 @@ impl SignalService {
         recipient_id: &str,
         plaintext: &[u8],
     ) -> Result<HashMap<u32, Vec<u8>>, ServiceError> {
+        Ok(self
+            .encrypt_message_all_devices_with_uak(auth_client, recipient_id, plaintext)
+            .await?
+            .0)
+    }
+
+    /// Same as [`Self::encrypt_message_all_devices`], but also returns the
+    /// recipient's UAK from their prekey bundle so the caller can authorize the
+    /// deposit with `Unidentified-Access-Key` instead of Basic auth — which is
+    /// what actually keeps the sender out of the server's delivery log.
+    ///
+    /// See [`Self::ensure_sessions_and_uak_all_devices`] for why the UAK is
+    /// harvested from the bundle fetch rather than fetched separately.
+    pub async fn encrypt_message_all_devices_with_uak(
+        &self,
+        auth_client: &mut AuthClient,
+        recipient_id: &str,
+        plaintext: &[u8],
+    ) -> Result<(HashMap<u32, Vec<u8>>, Option<[u8; 16]>), ServiceError> {
         // First ensure we have sessions with all devices
-        let device_ids = self.ensure_sessions_all_devices(auth_client, recipient_id).await?;
+        let (device_ids, recipient_uak) = self
+            .ensure_sessions_and_uak_all_devices(auth_client, recipient_id)
+            .await?;
 
         // Get sender certificate once (used for all encryptions). The
         // server picks the device id from the authenticated session.
@@ -451,19 +607,100 @@ impl SignalService {
             "Encrypted message for recipient's devices"
         );
 
-        Ok(ciphertexts)
+        Ok((ciphertexts, recipient_uak))
     }
 
     // =========================================================================
     // Anonymous Operations (for AnonDM - no authenticated requests)
     // =========================================================================
 
+    /// Key Transparency gate for the ANONYMOUS-DM path (Phase 3a).
+    ///
+    /// The anonymous analog of `verify_peer_key_transparency`. Same semantics
+    /// (verify the bundle's identity key is the one committed in the signed KT
+    /// log under the pinned tree-head key; REJECT a mismatch; REJECT a
+    /// transport/server error; TOFU-warn only on `NotFound`), but it fetches the
+    /// proof over the isolated ANONYMOUS channel via `AnonymousKtClient` — no
+    /// authenticated identity — because the anon path has none.
+    ///
+    /// This closes the anon-path MITM hole: before Phase 3a the anon path
+    /// trusted peer identity keys blindly (no KT call at all).
+    async fn verify_peer_key_transparency_anon(
+        &self,
+        anon_kt_client: &mut crate::network::grpc::AnonymousKtClient,
+        recipient_id: &str,
+        bundle: &libsignal_protocol::PreKeyBundle,
+    ) -> Result<(), ServiceError> {
+        let identity_key = bundle
+            .identity_key()
+            .map_err(|e| ServiceError::Validation(format!("bundle missing identity key: {e}")))?
+            .serialize();
+
+        match anon_kt_client.get_proof(recipient_id).await {
+            Ok(Some(proof)) => {
+                match crate::crypto::verify_kt_proof(recipient_id, &identity_key, &proof) {
+                    Ok(()) => {
+                        let epoch = proof
+                            .signed_tree_head
+                            .as_ref()
+                            .map(|s| s.epoch)
+                            .unwrap_or_default();
+                        tracing::debug!(
+                            recipient = %recipient_id,
+                            epoch,
+                            "KT(anon): peer identity key verified against the signed transparency log"
+                        );
+                        Ok(())
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            recipient = %recipient_id,
+                            error = %e,
+                            "KT(anon) REJECT: refusing anonymous session — bundle identity key is \
+                             NOT the key committed in the Key Transparency log (possible \
+                             forged/MITM key, F9 on the anon path)"
+                        );
+                        Err(ServiceError::Validation(format!(
+                            "Key Transparency verification failed for {recipient_id}: {e}"
+                        )))
+                    }
+                }
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    recipient = %recipient_id,
+                    "KT(anon) DOWNGRADE (TOFU): peer has no leaf in the Key Transparency log \
+                     (pre-KT user); trusting the bundle identity key WITHOUT a KT proof — this \
+                     key is NOT transparency-verified"
+                );
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!(
+                    recipient = %recipient_id,
+                    error = %e,
+                    "KT(anon): proof fetch failed (transport/server error, not NotFound) — \
+                     refusing session (an error is not evidence of an absent leaf)"
+                );
+                Err(ServiceError::Network(e))
+            }
+        }
+    }
+
     /// Establish a session using a pre-fetched prekey bundle.
     ///
     /// This allows establishing sessions without making an authenticated
     /// prekey fetch request (the bundle was fetched anonymously).
+    ///
+    /// KT gate (Phase 3a): before trusting the bundle's identity key, verify it
+    /// against the peer's signed Key Transparency proof, fetched over the
+    /// anonymous channel (`anon_kt_client`). A server-forged identity key is
+    /// REJECTED here, exactly as the identified path rejects it in
+    /// `ensure_session`. Without this the anon path was the last KT-ungated
+    /// session-establishment path — a MITM hole on the metadata-private path.
     pub async fn ensure_session_with_bundle(
         &self,
+        anon_kt_client: &mut crate::network::grpc::AnonymousKtClient,
         recipient_id: &str,
         device_id: u32,
         bundle_response: crate::proto::chat_v1::GetPreKeyBundleResponse,
@@ -491,6 +728,10 @@ impl SignalService {
         };
 
         let bundle = Self::convert_prekey_bundle(proto_bundle)?;
+        // KT gate (anon path): reject a forged peer identity key before it is
+        // ever trusted. Mirrors the identified path's verify_peer_key_transparency.
+        self.verify_peer_key_transparency_anon(anon_kt_client, recipient_id, &bundle)
+            .await?;
         self.actor.establish_session(address, bundle).await
     }
 

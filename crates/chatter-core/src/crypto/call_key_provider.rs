@@ -96,6 +96,15 @@ pub fn derive_call_shared_secret(
     // Compute ECDH shared secret
     let shared_secret = our_private.diffie_hellman(&peer_x25519_public);
 
+    // RFC 7748 §6.1: reject low-order peer keys that collapse ECDH to a
+    // constant. Without this gate a peer (or the server) can force a
+    // predictable call key with a low-order identity key.
+    if !shared_secret.was_contributory() {
+        return Err(CryptoError::KeyDerivationFailed(
+            "non-contributory ECDH (low-order public key)".into(),
+        ));
+    }
+
     Ok(*shared_secret.as_bytes())
 }
 
@@ -199,11 +208,22 @@ impl EphemeralCallKey {
     /// * `peer_public` - Peer's ephemeral public key (32 bytes from offer/answer)
     ///
     /// # Returns
-    /// 32-byte ECDH shared secret.
-    pub fn diffie_hellman(&self, peer_public: &[u8; 32]) -> [u8; 32] {
+    /// 32-byte ECDH shared secret, or [`CryptoError::KeyDerivationFailed`] if
+    /// the peer public key is low-order (non-contributory ECDH).
+    pub fn diffie_hellman(&self, peer_public: &[u8; 32]) -> Result<[u8; 32], CryptoError> {
         let peer_pk = X25519PublicKey::from(*peer_public);
         let shared = self.secret.diffie_hellman(&peer_pk);
-        *shared.as_bytes()
+
+        // RFC 7748 §6.1: reject low-order peer keys that collapse ECDH to a
+        // constant. Fail closed so a malicious offer/answer public key cannot
+        // force a predictable call key.
+        if !shared.was_contributory() {
+            return Err(CryptoError::KeyDerivationFailed(
+                "non-contributory ECDH (low-order public key)".into(),
+            ));
+        }
+
+        Ok(*shared.as_bytes())
     }
 }
 
@@ -645,8 +665,8 @@ mod tests {
         let callee_pk = callee_ephemeral.public_key_bytes();
 
         // Both sides compute ECDH
-        let caller_shared = caller_ephemeral.diffie_hellman(&callee_pk);
-        let callee_shared = callee_ephemeral.diffie_hellman(&caller_pk);
+        let caller_shared = caller_ephemeral.diffie_hellman(&callee_pk).unwrap();
+        let callee_shared = callee_ephemeral.diffie_hellman(&caller_pk).unwrap();
 
         // ECDH should produce same result on both sides
         assert_eq!(caller_shared, callee_shared, "ECDH should be symmetric");
@@ -667,8 +687,8 @@ mod tests {
         let callee_eph_pk = callee_ephemeral.public_key_bytes();
 
         // Both compute ECDH
-        let caller_shared = caller_ephemeral.diffie_hellman(&callee_eph_pk);
-        let callee_shared = callee_ephemeral.diffie_hellman(&caller_eph_pk);
+        let caller_shared = caller_ephemeral.diffie_hellman(&callee_eph_pk).unwrap();
+        let callee_shared = callee_ephemeral.diffie_hellman(&caller_eph_pk).unwrap();
 
         let call_id = "test-call-123";
 
@@ -703,7 +723,7 @@ mod tests {
         // Call 1
         let caller_eph1 = EphemeralCallKey::generate();
         let callee_eph1 = EphemeralCallKey::generate();
-        let shared1 = caller_eph1.diffie_hellman(&callee_eph1.public_key_bytes());
+        let shared1 = caller_eph1.diffie_hellman(&callee_eph1.public_key_bytes()).unwrap();
         let key1 = derive_call_key_ephemeral(
             &shared1,
             &caller_identity,
@@ -715,7 +735,7 @@ mod tests {
         // Call 2 (different ephemeral keys)
         let caller_eph2 = EphemeralCallKey::generate();
         let callee_eph2 = EphemeralCallKey::generate();
-        let shared2 = caller_eph2.diffie_hellman(&callee_eph2.public_key_bytes());
+        let shared2 = caller_eph2.diffie_hellman(&callee_eph2.public_key_bytes()).unwrap();
         let key2 = derive_call_key_ephemeral(
             &shared2,
             &caller_identity,

@@ -347,7 +347,6 @@ async fn t18_anon_mode_does_not_affect_message_delivery() {
     // ── Sender storage: the message MUST be in the local store. Anon
     //    mode does NOT drop persistence; it's UI-side only. ─────────────
     let a_stored = client_a
-        .messages()
         .get_messages_local_asc(&a_conv_id, &ConversationType::ServerDm, None, 50)
         .expect("A: query ServerDm bucket");
     assert_eq!(
@@ -365,7 +364,6 @@ async fn t18_anon_mode_does_not_affect_message_delivery() {
 
     // ── Receiver storage: B in normal mode also stores ────────────────
     let b_stored = client_b
-        .messages()
         .get_messages_local_asc(&b_conv_id, &ConversationType::ServerDm, None, 50)
         .expect("B: query ServerDm bucket");
     assert_eq!(

@@ -692,6 +692,36 @@ async fn process_identified_sender_message(
             });
             stats.write().messages_processed += 1;
         }
+        // SKDM via identified sender (unusual — SKDMs normally ride sealed
+        // sender — but drain parked group messages just the same, F14c).
+        Ok(SealedSenderResult::SenderKeyProcessed {
+            sender_id,
+            sender_device_id,
+            channel_id,
+            distribution_message,
+            timestamp,
+        }) => {
+            tracing::info!(
+                message_id = %msg.message_guid,
+                sender_id = %sender_id,
+                sender_device_id,
+                channel_id = %channel_id,
+                "[INBOX] SKDM processed via identified sender — emitting SenderKeyReceived"
+            );
+            if let Some(tx) = domain_tx {
+                let _ = tx.send(DomainEvent::SenderKeyReceived {
+                    sender_id,
+                    sender_device_id,
+                    channel_id,
+                    distribution_message,
+                    timestamp,
+                });
+            }
+            let _ = event_tx.send(InboxEvent::MessageProcessed {
+                message_id: msg.message_guid.clone(),
+            });
+            stats.write().messages_processed += 1;
+        }
         Ok(SealedSenderResult::MailboxAnnouncement { sender_id, channel_id, announcement }) => {
             // MailboxAnnouncement via identified sender (unusual - should use sealed sender)
             tracing::info!(
@@ -992,6 +1022,46 @@ async fn process_sealed_sender_message(
                 mailbox_pk: announcement.mailbox_pk.clone(),
                 timestamp: announcement.timestamp,
             });
+            let _ = event_tx.send(InboxEvent::MessageProcessed {
+                message_id: msg.message_guid.clone(),
+            });
+            stats.write().messages_processed += 1;
+        }
+        // SKDM installed. Fire SenderKeyReceived so the crypto-maintenance
+        // listener drains any group messages that arrived from this
+        // (sender, device, channel) BEFORE the key (the F14c first-message
+        // race). This is the trigger that was missing: the buffer +
+        // retry_pending_group_decrypts machinery already existed, but nothing
+        // ever emitted this event, so a parked first message stayed lost.
+        Ok(SealedSenderResult::SenderKeyProcessed {
+            sender_id,
+            sender_device_id,
+            channel_id,
+            distribution_message,
+            timestamp,
+        }) => {
+            tracing::info!(
+                message_id = %msg.message_guid,
+                sender_id = %sender_id,
+                sender_device_id,
+                channel_id = %channel_id,
+                "[INBOX] SKDM processed — emitting SenderKeyReceived to drain parked group messages"
+            );
+            if let Some(tx) = domain_tx {
+                let _ = tx.send(DomainEvent::SenderKeyReceived {
+                    sender_id,
+                    sender_device_id,
+                    channel_id,
+                    distribution_message,
+                    timestamp,
+                });
+            } else {
+                tracing::warn!(
+                    message_id = %msg.message_guid,
+                    "SKDM processed but no domain event sender configured; parked \
+                     group messages will not self-heal"
+                );
+            }
             let _ = event_tx.send(InboxEvent::MessageProcessed {
                 message_id: msg.message_guid.clone(),
             });

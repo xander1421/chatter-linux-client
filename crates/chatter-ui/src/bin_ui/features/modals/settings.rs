@@ -115,17 +115,43 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         });
     });
 
-    // Sealed sender toggle
+    // Sealed sender RECEIVING policy toggle.
+    // "Allow sealed sender from anyone" governs who may send sealed messages TO
+    // this user (users.unrestricted_unidentified_access on the server): off =
+    // contacts-only (only holders of your UAK), on = anyone. This hits the
+    // SERVER (SetSealedSenderPolicy RPC) — it changes server enforcement, not a
+    // local bool. Sealed *sending* is always on and unaffected. On failure we
+    // revert the toggle so the UI reflects the true server state.
     let ui_ctx_sealed = ui_ctx.clone();
-    window.on_settings_sealed_sender_changed(move |unrestricted: bool| {
-        if let Err(e) = ui_ctx_sealed.set_sealed_sender_unrestricted(unrestricted) {
-            tracing::error!("Failed to save sealed sender setting: {}", e);
-        } else {
-            tracing::debug!(
-                "Sealed sender unrestricted setting changed to: {}",
-                unrestricted
-            );
-        }
+    let weak_sealed = window.as_weak();
+    window.on_settings_sealed_sender_changed(move |allow_from_anyone: bool| {
+        let ui_ctx = ui_ctx_sealed.clone();
+        let weak = weak_sealed.clone();
+        tokio::spawn(async move {
+            match ui_ctx.set_sealed_sender_policy(allow_from_anyone).await {
+                Ok(persisted) => {
+                    tracing::info!(
+                        "Sealed sender receiving policy set on server: allow_from_anyone={}",
+                        persisted
+                    );
+                    // Reconcile the toggle with the server-persisted value.
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_settings_sealed_sender_unrestricted(persisted);
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to set sealed sender policy on server: {}", e);
+                    // Revert the toggle to the opposite of the attempted value.
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_settings_sealed_sender_unrestricted(!allow_from_anyone);
+                        }
+                    });
+                }
+            }
+        });
     });
 
     // Refresh prekeys
@@ -251,6 +277,27 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                 // Modal is already set to "none" by the Slint callback
                 // Just ensure we're in main view
                 w.set_current_view("main".into());
+            }
+        });
+    });
+
+    // Sealed sender onboarding explainer confirmed (after recovery codes).
+    // Persist the user's initial RECEIVING-policy choice to the server so the
+    // column matches what they saw. Default (false) is contacts-only; sending
+    // is always sealed regardless of this choice.
+    let ui_ctx_intro = ui_ctx.clone();
+    window.on_sealed_sender_intro_confirmed(move |allow_from_anyone: bool| {
+        let ui_ctx = ui_ctx_intro.clone();
+        tokio::spawn(async move {
+            match ui_ctx.set_sealed_sender_policy(allow_from_anyone).await {
+                Ok(persisted) => tracing::info!(
+                    "Sealed sender onboarding policy persisted: allow_from_anyone={}",
+                    persisted
+                ),
+                Err(e) => tracing::error!(
+                    "Failed to persist sealed sender onboarding policy: {}",
+                    e
+                ),
             }
         });
     });

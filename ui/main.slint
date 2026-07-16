@@ -76,6 +76,9 @@ export component MainWindow inherits Window {
     callback recovery-codes-confirmed <=> app.recovery-codes-confirmed;
     callback recovery-codes-copy-all <=> app.recovery-codes-copy-all;
 
+    // ========== Sealed sender onboarding explainer ==========
+    callback sealed-sender-intro-confirmed <=> app.sealed-sender-intro-confirmed;
+
     // ========== Account recovery page properties ==========
     in-out property <string> recovery-username <=> app.recovery-username;
     in-out property <string> recovery-code <=> app.recovery-code;

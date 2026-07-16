@@ -152,6 +152,17 @@ async fn process_sealed_sender_group_message(
                 "Group mailbox message stored (no UI event)"
             );
         }
+        // SKDMs ride the device inbox (sealed sender), not the group mailbox;
+        // if one lands here the key is still installed by the gateway. There is
+        // no domain_tx on this path to fire SenderKeyReceived, so just
+        // acknowledge it (the device-inbox path is where the drain happens).
+        Ok(SealedSenderResult::SenderKeyProcessed { channel_id, .. }) => {
+            tracing::debug!(
+                group_id = %group_id,
+                channel_id = %channel_id,
+                "SKDM processed via group mailbox path (key installed)"
+            );
+        }
         Ok(SealedSenderResult::DataMessageReceived {
             sender_id,
             channel_id,

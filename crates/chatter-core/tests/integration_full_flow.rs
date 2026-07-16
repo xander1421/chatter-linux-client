@@ -161,7 +161,7 @@ async fn test_friend_request_flow() {
     // User A sends friend request to User B (streaming API)
     let mut user_client_a = UserClient::new(pool_a.channel(), pool_a.auth_clone());
     let stream = user_client_a
-        .send_friend_request(&user_b.user_id, Some("Hey let's connect!"))
+        .send_friend_request(&user_b.user_id, None)
         .await;
 
     match stream {

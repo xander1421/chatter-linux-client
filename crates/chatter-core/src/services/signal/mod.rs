@@ -49,6 +49,17 @@ impl Clone for SignalService {
 }
 
 impl SignalService {
+    /// Raw key store access, for integration tests that must observe Signal
+    /// state directly (e.g. asserting the Double Ratchet advances per message).
+    ///
+    /// Gated on `testing` for the same reason as `client::service_accessor!` —
+    /// chatter-ui must not reach past the façade, but external integration
+    /// tests need real state to make falsifiable claims about it.
+    #[cfg(feature = "testing")]
+    pub fn key_store(&self) -> &Arc<KeyStore> {
+        &self.key_store
+    }
+
     /// Create a new SignalService.
     pub fn new(
         key_store: Arc<KeyStore>,
