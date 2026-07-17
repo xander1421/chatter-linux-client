@@ -2359,6 +2359,19 @@ impl ChatterClient {
                 }
             });
         }
+
+        // ── Identified presence ──────────────────────────────────────────
+        // Publish our REAL online/offline status to the server via the
+        // identified UserService.UpdatePresence RPC. The server fans this out
+        // to our friends (friend-scoped) so they see us come online / go
+        // offline. This is separate from the anon-DM E2E presence above, which
+        // stays as-is. Awaited (not spawned) so it completes reliably even
+        // during shutdown, before the gRPC connection is torn down.
+        let mut user_client = self.services.grpc_pool.user_client();
+        let proto = crate::services::presence_service::domain_presence_to_proto(presence);
+        if let Err(e) = user_client.update_presence(proto).await {
+            tracing::warn!("Failed to publish identified presence to server: {}", e);
+        }
     }
 
     /// Record user activity (resets idle timer).
@@ -2601,6 +2614,11 @@ impl ChatterClient {
         if let Some(handle) = self.notif_stream_handle.lock().take() {
             handle.abort();
         }
+
+        // Publish OFFLINE presence so our friends see us go offline. Best-effort
+        // and done BEFORE the gRPC disconnect below so the RPC can still reach the
+        // server (set_presence awaits the identified UpdatePresence internally).
+        self.set_presence(crate::domain::user::PresenceStatus::Offline).await;
 
         // Disconnect gRPC
         self.services.auth_service.disconnect();

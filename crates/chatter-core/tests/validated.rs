@@ -7512,3 +7512,135 @@ async fn v33_channel_mute_persists_to_membership() {
 
     println!("  V33 PASS — channel mute toggle persists to (and clears from) the local membership row.");
 }
+
+// ============================================================================
+// V34: PRESENCE reaches FRIENDS — and ONLY friends (privacy)
+//
+// Presence was dead client-side and leaky server-side:
+//   - The client's set_presence() only sent anon-DM E2E presence; it NEVER
+//     called the identified UserService.UpdatePresence RPC, so a user's real
+//     online status was never published.
+//   - The server's SetPresence published only to a single GLOBAL presence_updates
+//     firehose (no friend-scoping) consumed by a client StreamManager that is
+//     never instantiated. The live consumer, StreamUserEvents, listens on the
+//     friend-events channel, where presence was never published.
+//
+// THE WIRE (now):
+//   producer  — ChatterClient::set_presence() also calls UpdatePresence (identified)
+//   fan-out   — server publishes an EventTypeUserPresenceUpdated UserEvent to EACH
+//               of the updating user's friends (event.UserID = the friend), on the
+//               friend-events channel StreamUserEvents already consumes. NOT the
+//               global firehose.
+//   consumer  — StreamUserEvents maps PresenceChanged -> DomainEvent::UserPresenceChanged
+//
+// PROOF:
+//   - A and B are FRIENDS. A comes online -> B receives UserPresenceChanged{A, Online}.
+//     (Asserts on B's STATE / event, not on A's call return.)
+//   - PRIVACY: C is NOT a friend of A. C's event stream is ALIVE (positive control:
+//     C is a friend of B and receives B's presence). C must NOT receive A's presence.
+//     This proves the fan-out is friend-scoped, not a global firehose.
+//
+// MUTATION — in internal/services/user/repository/redis/repository.go, remove the
+// `r.publishPresenceToFriends(ctx, update)` call in SetPresence, rebuild + restart
+// server+worker: B never receives A's presence -> RED at the main assertion.
+// ============================================================================
+#[tokio::test]
+async fn v34_presence_reaches_friends_not_strangers() {
+    use chatter_core::domain::user::PresenceStatus;
+
+    skip_if_no_server!();
+    no_keyring_prompts();
+
+    // ---- A, B, C register and start -----------------------------------------
+    let dir_a = tempfile::tempdir().unwrap();
+    let client_a = build_client(dir_a.path());
+    let uid_a = register_and_start(&client_a, &unique_user("v34a"), "V34 Alice").await;
+
+    let dir_b = tempfile::tempdir().unwrap();
+    let client_b = build_client(dir_b.path());
+    let uid_b = register_and_start(&client_b, &unique_user("v34b"), "V34 Bob").await;
+
+    let dir_c = tempfile::tempdir().unwrap();
+    let client_c = build_client(dir_c.path());
+    let uid_c = register_and_start(&client_c, &unique_user("v34c"), "V34 Carol").await;
+
+    // ---- Friendship graph: A-B friends, B-C friends, A-C NOT friends --------
+    // A befriends B
+    client_a.send_friend_request(&uid_b, Some("validated")).await.expect("A->B friend request failed");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    client_b.respond_friend_request(&uid_a, true).await.expect("B accept A failed");
+    // B befriends C (gives C a live, meaningful event stream to observe)
+    client_b.send_friend_request(&uid_c, Some("validated")).await.expect("B->C friend request failed");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    client_c.respond_friend_request(&uid_b, true).await.expect("C accept B failed");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    println!("  graph: A-B friends, B-C friends, A-C strangers");
+
+    // ---- Subscribe to B's and C's event buses BEFORE the presence action ----
+    let mut events_b = client_b.subscribe_events();
+    let mut events_c = client_c.subscribe_events();
+
+    // ---- THE ACTION: A comes online -----------------------------------------
+    // Fires the identified UpdatePresence RPC -> server friend-scoped fan-out.
+    // (A's start already fired presence, but that was before the A-B friendship
+    // existed; this call is the one B must observe.)
+    client_a.set_presence(PresenceStatus::Online).await;
+    println!("  A published ONLINE via identified UpdatePresence");
+
+    // ---- MAIN ASSERTION: B (a friend) sees A online -------------------------
+    let seen_by_b = wait_for_event(&mut events_b, EVENT_TIMEOUT, |e| {
+        matches!(e,
+            DomainEvent::UserPresenceChanged { user_id, presence, .. }
+                if *user_id == uid_a && *presence == PresenceStatus::Online)
+    }).await;
+    assert!(
+        seen_by_b.is_some(),
+        "PRESENCE NOT DELIVERED TO FRIEND: A came online but B (A's friend) never received a \
+         UserPresenceChanged{{A, Online}}. Either the client producer never called the identified \
+         UpdatePresence RPC, or the server never fanned the presence out to A's friends on the \
+         friend-events channel StreamUserEvents consumes."
+    );
+    println!("  MAIN: B received UserPresenceChanged{{A, Online}} — friend delivery works");
+
+    // ---- POSITIVE CONTROL / C-liveness: C (friend of B) sees B online -------
+    // Proves C's event stream is ALIVE and would carry a presence event — so the
+    // privacy assertion below ("C gets nothing for A") is meaningful, not vacuous.
+    client_b.set_presence(PresenceStatus::Online).await;
+    let seen_by_c_for_b = wait_for_event(&mut events_c, EVENT_TIMEOUT, |e| {
+        matches!(e,
+            DomainEvent::UserPresenceChanged { user_id, .. } if *user_id == uid_b)
+    }).await;
+    assert!(
+        seen_by_c_for_b.is_some(),
+        "POSITIVE CONTROL FAILED: C never received its friend B's presence, so C's stream is not \
+         demonstrably alive — the privacy assertion below would be vacuous (a dead stream trivially \
+         'receives nothing')."
+    );
+    println!("  CONTROL: C received B's presence — C's stream is alive");
+
+    // ---- PRIVACY ASSERTION: the stranger C never sees A's presence ----------
+    // A published ONLINE again to give any (buggy) global firehose a fresh chance
+    // to leak to C. C is NOT A's friend, so a friend-scoped fan-out reaches B only.
+    client_a.set_presence(PresenceStatus::Online).await;
+    let leaked_to_c = wait_for_event(&mut events_c, Duration::from_secs(8), |e| {
+        matches!(e,
+            DomainEvent::UserPresenceChanged { user_id, .. } if *user_id == uid_a)
+    }).await;
+    assert!(
+        leaked_to_c.is_none(),
+        "PRIVACY LEAK: the stranger C received A's presence ({:?}). Presence fan-out is not \
+         friend-scoped — A's online status leaked to a non-friend. This is the global-firehose \
+         leak the fix closes.",
+        leaked_to_c
+    );
+    println!("  PRIVACY: C (a stranger to A) received NOTHING about A — fan-out is friend-scoped");
+
+    println!(
+        "V34 PASS — presence is wired end-to-end and friend-scoped: A's friend B sees A online, \
+         the stranger C does not.\n"
+    );
+
+    client_a.shutdown().await;
+    client_b.shutdown().await;
+    client_c.shutdown().await;
+}
