@@ -883,6 +883,7 @@ export component SettingsScreen inherits Rectangle {
                                     }
 
                                     Toggle {
+                                        accessible-text: "Read Receipts";
                                         checked: root.read-receipts-enabled;
                                         toggled(value) => {
                                             root.read-receipts-enabled = value;
@@ -927,6 +928,7 @@ export component SettingsScreen inherits Rectangle {
                                     }
 
                                     Toggle {
+                                        accessible-text: "Typing Indicators";
                                         checked: root.typing-indicators-enabled;
                                         toggled(value) => {
                                             root.typing-indicators-enabled = value;

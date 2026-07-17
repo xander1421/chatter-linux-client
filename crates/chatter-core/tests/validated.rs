@@ -6580,3 +6580,140 @@ async fn v26_first_group_message_self_heals_across_skdm_race() {
     client_b.shutdown().await;
     client_c.shutdown().await;
 }
+
+// ============================================================================
+// V25 — KEY TRANSPARENCY CONSISTENCY MONITORING: the client verifies the log is
+// APPEND-ONLY across epochs and REJECTS a forked/rewritten log (Phase 3b, (B)).
+//
+// STATUS: PASS. V14/V24 prove the client rejects a forged identity key at a
+// SINGLE tree head. But a single signed tree head says nothing about HISTORY: a
+// malicious server could sign a fresh tree that quietly REWROTE a user's
+// committed key (or DROPPED a leaf) between epochs — a fork of the transparency
+// log — and each individual inclusion proof would still verify. Consistency
+// monitoring closes that: given two tree heads the client verifies they are
+// consistent (every old leaf persists unchanged in the new tree) and alarms on a
+// fork.
+//
+// This drives the REAL server consistency endpoint
+// (`KeyTransparencyService/GetConsistencyProof`, public/unauthenticated, served
+// from the append-only log via the EXISTING `crypto.BuildConsistencyProof`) over
+// the ANONYMOUS channel, and the REAL client verifier
+// (`crypto::verify_kt_consistency_proof`) — so it proves byte-format interop of
+// the sparse-Merkle ROOT RECONSTRUCTION (the client independently rebuilds the
+// old root from the served old leaves and checks it equals the pinned-key-signed
+// old root) as well as the per-leaf persistence check.
+//
+// POSITIVE CONTROL: an honest consistency proof between two real epochs verifies
+// Ok. If this half failed, the rejects below would prove nothing.
+//
+// THE ATTACKS (both must be REJECTED):
+//   (A) FORK / REWRITE: tamper one old leaf's committed value (as a server that
+//       swapped a user's key would). The old leaf no longer reconstructs the
+//       signed old root AND no longer includes into the new root -> REJECT.
+//   (B) UNDER-REPORT: drop an old leaf from the proof (a server hiding a leaf it
+//       rewrote). The remaining leaves no longer reconstruct the signed old root
+//       -> REJECT (this is the soundness check beyond Go's VerifyConsistency).
+//
+// MUTATION (run it, observe RED, revert; source-hash the file in the submodule):
+// in `crypto/keytransparency.rs::verify_consistency_proof`, make the function
+// `return Ok(())` as its first statement. Both attack halves then ACCEPT the
+// forged/under-reported proof and this test FAILS at the "must be rejected"
+// assertions. Reverting restores GREEN.
+// ============================================================================
+#[tokio::test]
+async fn v25_consistency_proof_rejects_a_forked_log() {
+    use chatter_core::crypto::verify_kt_consistency_proof;
+
+    if std::env::var("INTEGRATION_TESTS").is_err() {
+        eprintln!("skipping v25: INTEGRATION_TESTS not set");
+        return;
+    }
+
+    let pool = common::create_test_pool().await.expect("pool connect failed");
+
+    // Two sequential registrations => two strictly increasing epochs (epoch =
+    // total appends; count(*) only grows). old_epoch < new_epoch <= current.
+    let _u1 = common::register_test_user(&pool)
+        .await
+        .expect("first registration failed");
+    let mut anon_kt = pool.anonymous_kt_client();
+    let p1 = anon_kt
+        .get_proof(&_u1.user_id)
+        .await
+        .expect("GetProof transport ok")
+        .expect("u1 has a KT leaf");
+    let old_epoch = p1.signed_tree_head.as_ref().unwrap().epoch;
+
+    let _u2 = common::register_test_user(&pool)
+        .await
+        .expect("second registration failed");
+    let p2 = anon_kt
+        .get_proof(&_u2.user_id)
+        .await
+        .expect("GetProof transport ok")
+        .expect("u2 has a KT leaf");
+    let new_epoch = p2.signed_tree_head.as_ref().unwrap().epoch;
+
+    assert!(
+        old_epoch >= 1 && old_epoch < new_epoch,
+        "need 1 <= old_epoch({old_epoch}) < new_epoch({new_epoch})"
+    );
+
+    // ---- Fetch the consistency proof over the ANONYMOUS channel (public method,
+    // no auth, no identity leaked). --------------------------------------------
+    let honest = anon_kt
+        .get_consistency_proof(old_epoch, new_epoch)
+        .await
+        .expect("anon GetConsistencyProof transport ok (public method reachable without auth)");
+
+    let old_leaf_count = honest.proof.as_ref().map(|p| p.old_leaf_proofs.len()).unwrap_or(0);
+    println!(
+        "  fetched consistency proof over the anonymous channel: old_epoch={old_epoch} \
+         new_epoch={new_epoch} old_leaves={old_leaf_count}"
+    );
+    assert!(old_leaf_count >= 1, "old tree must have at least one leaf to test consistency");
+
+    // ---- POSITIVE CONTROL: the honest proof verifies (log is append-only). ----
+    verify_kt_consistency_proof(&honest)
+        .expect("POSITIVE CONTROL FAILED: honest consistency proof between two real epochs must verify");
+    println!("  positive control: honest consistency proof VERIFIED (log is append-only across epochs)");
+
+    // ---- ATTACK (A): FORK — rewrite one old leaf's committed value. ----------
+    {
+        let mut forged = honest.clone();
+        let p = forged.proof.as_mut().unwrap();
+        // Flip a byte in the FIRST old leaf's value: simulates the server having
+        // swapped a user's committed identity key between the two epochs.
+        p.old_leaf_proofs[0].value[0] ^= 0xFF;
+
+        let verdict = verify_kt_consistency_proof(&forged);
+        assert!(
+            verdict.is_err(),
+            "CONSISTENCY MONITORING FAILED (fork accepted): a rewritten old-leaf value was \
+             accepted — a malicious server could rewrite the transparency log undetected."
+        );
+        println!("  attack (A) fork/rewrite REJECTED: {}", verdict.unwrap_err());
+    }
+
+    // ---- ATTACK (B): UNDER-REPORT — drop an old leaf from the proof. ----------
+    {
+        let mut forged = honest.clone();
+        let p = forged.proof.as_mut().unwrap();
+        let dropped = p.old_leaf_proofs.remove(0);
+        let _ = dropped;
+
+        let verdict = verify_kt_consistency_proof(&forged);
+        assert!(
+            verdict.is_err(),
+            "CONSISTENCY MONITORING FAILED (under-report accepted): dropping an old leaf was \
+             accepted — a server could hide a leaf it rewrote. The old root must not reconstruct."
+        );
+        println!("  attack (B) under-report REJECTED: {}", verdict.unwrap_err());
+    }
+
+    println!(
+        "  V25 PASS — consistency proof VERIFIED the append-only log across epochs \
+         (old={old_epoch} new={new_epoch}, {old_leaf_count} old leaves) and REJECTED both a \
+         rewritten leaf (fork) and a dropped leaf (under-report). Log-fork hole closed."
+    );
+}

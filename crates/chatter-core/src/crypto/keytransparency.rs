@@ -24,11 +24,13 @@
 //! A mismatch in any of these makes the verifier reject a genuine proof, so
 //! interop is proven live against a real server in the V14 validated test.
 
+use std::sync::LazyLock;
+
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use sha2::{Digest, Sha256};
 
 use crate::config::KT_TREE_HEAD_PUBLIC_KEY_BYTES;
-use crate::proto::chat_v1::GetProofResponse;
+use crate::proto::chat_v1::{GetConsistencyProofResponse, GetProofResponse, SignedTreeHead};
 
 /// Domain separator for deriving a user's sparse-Merkle tree key.
 /// Mirrors `keytransparency.leafKeyDomain` (log.go).
@@ -56,6 +58,19 @@ pub enum KtError {
     InclusionInvalid,
     /// The tree-head signature does not verify under the pinned public key.
     TreeHeadSignatureInvalid,
+    /// A consistency proof's epochs are out of order, or don't match the signed
+    /// tree heads.
+    ConsistencyEpochOrder,
+    /// A consistency proof's old/new root does not match the signed tree head it
+    /// claims to be for.
+    ConsistencyRootMismatch,
+    /// The provided old leaves do not reconstruct to the signed old root — the
+    /// server under-reported or altered the old leaf set (an attempt to hide a
+    /// rewritten/omitted leaf). REJECT: the log may have been forked.
+    ConsistencyOldRootUnreconstructable,
+    /// An old leaf is NOT present unchanged in the new tree — the log was
+    /// rewritten (not append-only). THIS is the fork being rejected.
+    ConsistencyLeafNotPreserved,
 }
 
 impl std::fmt::Display for KtError {
@@ -75,6 +90,20 @@ impl std::fmt::Display for KtError {
             KtError::TreeHeadSignatureInvalid => {
                 write!(f, "KT signed tree head signature is invalid under the pinned key")
             }
+            KtError::ConsistencyEpochOrder => {
+                write!(f, "KT consistency proof epochs are out of order or mismatched")
+            }
+            KtError::ConsistencyRootMismatch => {
+                write!(f, "KT consistency proof root does not match its signed tree head")
+            }
+            KtError::ConsistencyOldRootUnreconstructable => write!(
+                f,
+                "KT consistency proof old leaves do not reconstruct the signed old root (log may be forked)"
+            ),
+            KtError::ConsistencyLeafNotPreserved => write!(
+                f,
+                "KT consistency proof: an old leaf is not preserved in the new tree (log rewritten/forked)"
+            ),
         }
     }
 }
@@ -224,6 +253,177 @@ pub fn verify_proof(
     // (4) The tree head must be signed by the pinned KT key.
     if !verify_tree_head(sth.epoch, root, sth.tree_size, &sth.signature) {
         return Err(KtError::TreeHeadSignatureInvalid);
+    }
+
+    Ok(())
+}
+
+/// Default hashes for empty subtrees at each depth, port of `crypto.defaultHashes`
+/// (merkle.go): `dh[0]` = 32 zero bytes, `dh[d] = SHA-256(0x01 || dh[d-1] || dh[d-1])`.
+/// Index runs 0..=256 (TreeDepth = 256).
+static DEFAULT_HASHES: LazyLock<[[u8; 32]; 257]> = LazyLock::new(|| {
+    let mut dh = [[0u8; 32]; 257];
+    for d in 1..=256 {
+        dh[d] = interior_hash(&dh[d - 1], &dh[d - 1]);
+    }
+    dh
+});
+
+/// Bit `pos` of `key`, port of `crypto.getBit`: `pos=255` is the MSB of byte 0.
+fn get_bit(key: &[u8; 32], pos: usize) -> u8 {
+    let byte_idx = (256 - 1 - pos) / 8;
+    let bit_idx = 7 - ((256 - 1 - pos) % 8);
+    (key[byte_idx] >> bit_idx) & 1
+}
+
+/// Recompute a sparse-Merkle subtree root from the leaves that fall inside it,
+/// splitting on bit `depth`. Byte-exact port of the Go tree's root computation
+/// (merkle.go insert/split + nodeHash/defaultHashes):
+///   - empty subtree  -> DEFAULT_HASHES[depth + 1]
+///   - single leaf    -> its leaf hash (a lone leaf collapses, never padded down)
+///   - otherwise      -> H(0x01 || left_root || right_root), partitioning leaves
+///     by their bit at `depth`.
+///
+/// `leaves` are (tree_key, leaf_hash) pairs. Used to independently reconstruct
+/// the OLD root from a consistency proof's old leaves, so the server cannot
+/// omit/alter an old leaf without the reconstructed root diverging from the
+/// signed old root.
+fn sparse_subtree_root(leaves: &[([u8; 32], [u8; 32])], depth: usize) -> [u8; 32] {
+    match leaves.len() {
+        0 => DEFAULT_HASHES[depth + 1],
+        1 => leaves[0].1,
+        _ => {
+            let (mut left, mut right): (Vec<_>, Vec<_>) = (Vec::new(), Vec::new());
+            for &lf in leaves {
+                if get_bit(&lf.0, depth) == 0 {
+                    left.push(lf);
+                } else {
+                    right.push(lf);
+                }
+            }
+            // depth == 0 with >1 leaf would mean two identical keys; the Go tree
+            // cannot represent that (keys are unique), so recursion always makes
+            // progress before underflowing.
+            let lh = sparse_subtree_root(&left, depth.wrapping_sub(1));
+            let rh = sparse_subtree_root(&right, depth.wrapping_sub(1));
+            interior_hash(&lh, &rh)
+        }
+    }
+}
+
+/// Reconstruct the whole-tree root from a complete set of (key, value) leaves.
+/// Port of `SparseMerkleTree.Root()` for the leaves collected via `Leaves()`.
+fn sparse_root(kv_leaves: &[(&[u8; 32], &[u8])]) -> [u8; 32] {
+    if kv_leaves.is_empty() {
+        return DEFAULT_HASHES[256];
+    }
+    let leaves: Vec<([u8; 32], [u8; 32])> =
+        kv_leaves.iter().map(|(k, v)| (**k, leaf_hash(k, v))).collect();
+    sparse_subtree_root(&leaves, 255)
+}
+
+/// Verify a `SignedTreeHead` proto message under the pinned key. Returns the
+/// 32-byte root on success.
+fn verify_sth(sth: &SignedTreeHead) -> Result<[u8; 32], KtError> {
+    let root: [u8; 32] = sth
+        .root_hash
+        .as_slice()
+        .try_into()
+        .map_err(|_| KtError::Malformed("signed_tree_head.root_hash is not 32 bytes"))?;
+    if !verify_tree_head(sth.epoch, &root, sth.tree_size, &sth.signature) {
+        return Err(KtError::TreeHeadSignatureInvalid);
+    }
+    Ok(root)
+}
+
+/// Verify a consistency proof between two epochs. On `Ok(())` the client has
+/// cryptographic evidence that the KT log is APPEND-ONLY between `old_epoch` and
+/// `new_epoch`: every leaf committed in the old tree still exists, unchanged, in
+/// the new tree, under two tree heads both signed by the pinned key. Any `Err`
+/// means the log may have been FORKED/rewritten and the client must alarm.
+///
+/// Checks (all must hold):
+///   1. both tree-head signatures verify under the pinned key,
+///   2. epochs are ordered and match the signed heads (old < new),
+///   3. `proof.old_root` / `proof.new_root` equal the signed roots,
+///   4. the old leaves reconstruct EXACTLY to the signed old root (completeness —
+///      the server cannot omit or alter an old leaf),
+///   5. every old leaf has a valid inclusion proof against the new root
+///      (persistence — port of `crypto.VerifyConsistency`).
+pub fn verify_consistency_proof(response: &GetConsistencyProofResponse) -> Result<(), KtError> {
+    let proof = response
+        .proof
+        .as_ref()
+        .ok_or(KtError::Malformed("missing consistency proof"))?;
+    let old_sth = response
+        .old_signed_tree_head
+        .as_ref()
+        .ok_or(KtError::Malformed("missing old_signed_tree_head"))?;
+    let new_sth = response
+        .new_signed_tree_head
+        .as_ref()
+        .ok_or(KtError::Malformed("missing new_signed_tree_head"))?;
+
+    // (1) both heads signed by the pinned key.
+    let old_root = verify_sth(old_sth)?;
+    let new_root = verify_sth(new_sth)?;
+
+    // (2) epoch ordering + binding to the signed heads.
+    if proof.old_epoch >= proof.new_epoch
+        || proof.old_epoch != old_sth.epoch
+        || proof.new_epoch != new_sth.epoch
+    {
+        return Err(KtError::ConsistencyEpochOrder);
+    }
+
+    // (3) proof roots must equal the signed roots.
+    let proof_old_root: [u8; 32] = proof
+        .old_root
+        .as_slice()
+        .try_into()
+        .map_err(|_| KtError::Malformed("consistency old_root is not 32 bytes"))?;
+    let proof_new_root: [u8; 32] = proof
+        .new_root
+        .as_slice()
+        .try_into()
+        .map_err(|_| KtError::Malformed("consistency new_root is not 32 bytes"))?;
+    if proof_old_root != old_root || proof_new_root != new_root {
+        return Err(KtError::ConsistencyRootMismatch);
+    }
+
+    // (4) COMPLETENESS: reconstruct the old root from the provided old leaves.
+    // Every old_leaf_proof carries the old (key, value); rebuilding the sparse
+    // tree from them must yield exactly the signed old root, so the server cannot
+    // silently drop or rewrite an old leaf and still pass (5).
+    let kv: Vec<(&[u8; 32], &[u8])> = {
+        let mut v = Vec::with_capacity(proof.old_leaf_proofs.len());
+        for lp in &proof.old_leaf_proofs {
+            let key: &[u8; 32] = lp
+                .key
+                .as_slice()
+                .try_into()
+                .map_err(|_| KtError::Malformed("consistency old leaf key is not 32 bytes"))?;
+            v.push((key, lp.value.as_slice()));
+        }
+        v
+    };
+    if sparse_root(&kv) != old_root {
+        return Err(KtError::ConsistencyOldRootUnreconstructable);
+    }
+
+    // (5) PERSISTENCE: each old leaf must be included in the new tree with the
+    // same value (port of crypto.VerifyConsistency).
+    for lp in &proof.old_leaf_proofs {
+        let key: &[u8; 32] = lp
+            .key
+            .as_slice()
+            .try_into()
+            .map_err(|_| KtError::Malformed("consistency old leaf key is not 32 bytes"))?;
+        let recomputed = recompute_root(key, &lp.value, &lp.sibling_hashes, &lp.bits)
+            .ok_or(KtError::ConsistencyLeafNotPreserved)?;
+        if recomputed != new_root {
+            return Err(KtError::ConsistencyLeafNotPreserved);
+        }
     }
 
     Ok(())

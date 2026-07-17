@@ -2735,8 +2735,19 @@ pub mod key_transparency_service_client {
     use tonic::codegen::*;
     use tonic::codegen::http::Uri;
     /** KeyTransparencyService serves inclusion proofs for user identity keys.
- Authenticated (any logged-in user may look up any user's proof, exactly as
- they can already fetch that user's prekey bundle).
+
+ PUBLIC / UNAUTHENTICATED (Phase 3a). A KT inclusion proof + signed tree head
+ is public, auditable transparency data — it reveals only what fetching a
+ peer's prekey bundle already does (the committed identity key). GetProof is
+ unauthenticated so the ANONYMOUS-DM path (Tor/shield mode, which has no
+ authenticated identity) can fetch a peer's proof and KT-gate anonymous
+ session establishment, closing the anon-path MITM hole. The identified path
+ still works (its client attaches auth, which the server ignores for a public
+ method).
+
+ Phase 3b (query privacy): the lookup key is still the plaintext user_id, so
+ an anonymous GetProof reveals WHICH peer is queried. A VRF-indexed lookup
+ (crypto/vrf.go) is the remaining work to hide that.
 */
     #[derive(Debug, Clone)]
     pub struct KeyTransparencyServiceClient<T> {
@@ -2846,6 +2857,42 @@ pub mod key_transparency_service_client {
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("chat.v1.KeyTransparencyService", "GetProof"));
+            self.inner.unary(req, path, codec).await
+        }
+        /** GetConsistencyProof returns a proof that the log is append-only between two
+ epochs: every leaf in the old tree is unchanged in the new tree. The client
+ verifies successive tree heads are consistent and REJECTS/alarms on a fork
+ (a server that rewrote history). PUBLIC / UNAUTHENTICATED like GetProof —
+ consistency data is public transparency data.
+*/
+        pub async fn get_consistency_proof(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetConsistencyProofRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetConsistencyProofResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.KeyTransparencyService/GetConsistencyProof",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "chat.v1.KeyTransparencyService",
+                        "GetConsistencyProof",
+                    ),
+                );
             self.inner.unary(req, path, codec).await
         }
     }

@@ -91,6 +91,12 @@ ndk-context = "0.1"
 
 [dev-dependencies]
 tempfile = "3"
+# Headless GUI test backend for VALIDATED-UI.md (slint::testing analog).
+# Pinned to =1.16.1 to match the `slint` crate exactly — the testing backend
+# links i-slint-core, which must be the SAME version as the generated MainWindow's
+# i-slint-core or ElementHandle/Window types won't line up. default-features=false
+# keeps it lean (no mcp/protobuf/system-testing pulled in).
+i-slint-backend-testing = { version = "=1.16.1", default-features = false }
 
 [build-dependencies]
 slint-build = "1.15.1"

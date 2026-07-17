@@ -14,8 +14,9 @@ use crate::error::NetworkError;
 use crate::proto::chat_v1::{
     auth_service_client::AuthServiceClient,
     key_transparency_service_client::KeyTransparencyServiceClient,
-    message_service_client::MessageServiceClient, GetPreKeyBundleRequest, GetPreKeyBundleResponse,
-    GetProofRequest, GetProofResponse, SealedSenderMessage, SendSealedMessageRequest,
+    message_service_client::MessageServiceClient, GetConsistencyProofRequest,
+    GetConsistencyProofResponse, GetPreKeyBundleRequest, GetPreKeyBundleResponse, GetProofRequest,
+    GetProofResponse, SealedSenderMessage, SendSealedMessageRequest,
     SendSealedMessageResponse,
 };
 
@@ -345,6 +346,28 @@ impl AnonymousKtClient {
         match self.inner.get_proof(request).await {
             Ok(resp) => Ok(Some(resp.into_inner())),
             Err(status) if status.code() == tonic::Code::NotFound => Ok(None),
+            Err(status) => Err(NetworkError::from_status(&status)),
+        }
+    }
+
+    /// Fetch a consistency proof between two tree-head epochs.
+    ///
+    /// The client uses this to verify the log is APPEND-ONLY between an epoch it
+    /// previously trusted and a newer one, and to REJECT/alarm on a fork (a
+    /// server that rewrote history). Like `get_proof`, `GetConsistencyProof` is a
+    /// public method, so it works over the anonymous channel with no identity
+    /// leaked.
+    pub async fn get_consistency_proof(
+        &mut self,
+        old_epoch: u64,
+        new_epoch: u64,
+    ) -> Result<GetConsistencyProofResponse, NetworkError> {
+        let request = GetConsistencyProofRequest {
+            old_epoch,
+            new_epoch,
+        };
+        match self.inner.get_consistency_proof(request).await {
+            Ok(resp) => Ok(resp.into_inner()),
             Err(status) => Err(NetworkError::from_status(&status)),
         }
     }

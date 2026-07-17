@@ -37,7 +37,10 @@ pub use call_key_provider::{
     generate_group_call_key,
 };
 pub use device_credentials::{derive_uak, DeviceCredentials, DeviceToken};
-pub use keytransparency::{verify_proof as verify_kt_proof, KtError};
+pub use keytransparency::{
+    verify_consistency_proof as verify_kt_consistency_proof, verify_proof as verify_kt_proof,
+    KtError,
+};
 pub use dm_crypto::{decrypt_dm_bytes, decrypt_dm_message, encrypt_dm_bytes, encrypt_dm_message};
 pub use envelope_crypto::{decrypt_envelope, ed25519_to_x25519_public, encrypt_envelope};
 pub use secret_key::{SecretKey32, SecretKey64};

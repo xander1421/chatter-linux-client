@@ -14,7 +14,11 @@ mod join_channel;
 mod link_approve;
 mod profile;
 mod sessions;
-mod settings;
+// `pub` so the VALIDATED-UI headless harness can wire ONLY the settings
+// callbacks against a real offline ChatterClient, without invoking the full
+// `wire_all` (which spawns a call-orchestrator subscriber that needs a live
+// Slint event loop). Registration-only; no behavioural change to the app.
+pub mod settings;
 
 use std::sync::Arc;
 
