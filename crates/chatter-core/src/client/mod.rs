@@ -312,11 +312,6 @@ impl ChatterClient {
     // services against a live server.
     crate::service_accessor!(auth, AuthService, auth_service);
     crate::service_accessor!(messages, MessageService, message_service);
-    crate::service_accessor!(
-        ephemeral,
-        crate::services::ephemeral_service::EphemeralService,
-        ephemeral_service
-    );
     crate::service_accessor!(channels, ChannelService, channel_service);
     crate::service_accessor!(users, UserService, user_service);
     crate::service_accessor!(attachments, AttachmentService, attachment_service);
@@ -1600,9 +1595,10 @@ impl ChatterClient {
 
         // ── Disappearing-messages local reaper ───────────────────────
         // The local-expiry engine only matters if something drives it: this
-        // bounded periodic task calls `cleanup_expired`, which soft-deletes
+        // bounded periodic task calls `cleanup_expired`, which HARD-deletes
         // every locally-tracked message whose armed timer has elapsed (both
-        // our own sent copies and received copies). The first tick fires
+        // our own sent copies and received copies — content + FTS index purged,
+        // not a tombstone that leaves plaintext on disk). The first tick fires
         // immediately, so a message that expired while the app was closed is
         // reaped on the next boot too (expiry timestamps persist — v015).
         // Interval is bounded and overridable via `CHATTER_EPHEMERAL_REAP_SECS`;
