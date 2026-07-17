@@ -8474,3 +8474,303 @@ async fn v38_friend_fetches_and_decrypts_your_avatar_byte_exact() {
          (no key) could not. This is the round-trip V32 scoped out."
     );
 }
+
+// ============================================================================
+// V39: the "send read receipts" privacy toggle actually gates the send.
+//
+// CLAIM (Settings UI): a "Send read receipts" switch. Before this fix
+// (MISSING-FEATURES #5) `set_read_receipts_enabled` persisted a bool but the
+// getter had NO caller on any send path — so toggling it OFF changed nothing
+// and A's read receipts kept flowing. A privacy setting that lies.
+//
+// PROPERTY (assert on the RECIPIENT, B): A reads B's DM →
+//   - receipts ENABLED (shipped default): B's copy of the message it sent flips
+//     to delivery_status = "read" (the receipt reached B).
+//   - receipts DISABLED (set_read_receipts_enabled(false)): B's copy NEVER
+//     flips to "read" — the receipt is not sent.
+//
+// This also exercises finding #8: the receipt is sent on the 1:1 ServerDm path
+// (channel-free DM), i.e. DM read receipts DO round-trip, not only channels.
+//
+// MUTATION CHECK: delete the gate in ConversationHandle::send_read_receipt
+// (services/conversation.rs) → the disabled half sends anyway → B's second
+// message flips to "read" → this test FAILS (RED). That is what makes the
+// gate assertion non-vacuous.
+// ============================================================================
+
+/// Poll B's stored copy (keyed by the SENDER=peer channel) of the message it
+/// sent at `sent_at`, returning its delivery_status, until it equals `want` or
+/// the deadline passes. Returns the last-seen status.
+async fn poll_delivery_status(
+    client_b: &Arc<ChatterClient>,
+    conv_on_b: &ChannelId,
+    sent_at: u64,
+    want: &str,
+    max: Duration,
+) -> String {
+    use chatter_core::domain::message::ConversationType;
+    let start = Instant::now();
+    let mut last = String::from("<none>");
+    while start.elapsed() < max {
+        let msgs = client_b
+            .get_messages_local(conv_on_b, &ConversationType::ServerDm, None, 50)
+            .unwrap_or_default();
+        if let Some(m) = msgs.iter().find(|m| m.sent_at == sent_at) {
+            last = m.delivery_status.clone();
+            if last == want {
+                return last;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    last
+}
+
+/// A reads whatever B sent this run (finds B's message in A's local ServerDm
+/// store and sends a read receipt for it). Returns the receipted timestamp.
+async fn a_reads_bs_message(
+    client_a: &Arc<ChatterClient>,
+    uid_b: UserId,
+    conv_on_a: &ChannelId,
+    marker: &str,
+) -> u64 {
+    use chatter_core::domain::message::ConversationType;
+    // A must have STORED B's DM before it can read it.
+    let mut ts = None;
+    for _ in 0..40 {
+        let msgs = client_a
+            .get_messages_local(conv_on_a, &ConversationType::ServerDm, None, 50)
+            .unwrap_or_default();
+        if let Some(m) = msgs.iter().find(|m| m.as_text() == Some(marker)) {
+            ts = Some(m.sent_at);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    let ts = ts.expect(
+        "POSITIVE CONTROL FAILED: A never stored B's DM, so A cannot 'read' it — \
+         the receipt half below would be vacuous",
+    );
+    client_a
+        .conversation(ActiveConversation::ServerDm { peer_id: uid_b })
+        .send_read_receipt(&[ts])
+        .await
+        .expect("A send_read_receipt failed");
+    ts
+}
+
+#[tokio::test]
+async fn v39_read_receipt_toggle_gates_the_send() {
+    skip_if_no_server!();
+    no_keyring_prompts();
+
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let client_a = build_client(dir_a.path());
+    let client_b = build_client(dir_b.path());
+
+    let uid_a = register_and_start(&client_a, &unique_user("v39a"), "Alice").await;
+    let uid_b = register_and_start(&client_b, &unique_user("v39b"), "Bob").await;
+
+    client_a
+        .send_friend_request(&uid_b, Some("validated"))
+        .await
+        .expect("friend request failed");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    client_b
+        .respond_friend_request(&uid_a, true)
+        .await
+        .expect("accept friend request failed");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // B's view of A is keyed by A's id; A's view of B is keyed by B's id.
+    let conv_on_b = ChannelId::from(uid_a); // where B stores the msgs it SENT to A
+    let conv_on_a = ChannelId::from(uid_b); // where A stores the msgs it got from B
+
+    // ======================================================================
+    // POSITIVE CONTROL — receipts ENABLED (shipped default). The receipt must
+    // reach B (finding #8: this is the 1:1 ServerDm path, not a channel).
+    // ======================================================================
+    assert!(
+        client_a.read_receipts_enabled().unwrap(),
+        "precondition: shipped default for read receipts is ON"
+    );
+
+    let marker1 = unique_marker();
+    client_b
+        .send_text(ActiveConversation::ServerDm { peer_id: uid_a }, &marker1)
+        .await
+        .expect("B send_text 1 failed");
+
+    // Sanity: B stored its own sent message and it is NOT yet "read".
+    let ts1 = {
+        use chatter_core::domain::message::ConversationType;
+        let mut found = None;
+        for _ in 0..40 {
+            let msgs = client_b
+                .get_messages_local(&conv_on_b, &ConversationType::ServerDm, None, 50)
+                .unwrap_or_default();
+            if let Some(m) = msgs.iter().find(|m| m.as_text() == Some(marker1.as_str())) {
+                found = Some((m.sent_at, m.delivery_status.clone()));
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        let (ts, status) = found.expect("B never stored its own sent message 1");
+        assert_ne!(status, "read", "message 1 was 'read' before A ever read it");
+        ts
+    };
+
+    let read_ts = a_reads_bs_message(&client_a, uid_b, &conv_on_a, &marker1).await;
+    assert_eq!(read_ts, ts1, "A receipted a different timestamp than B stored");
+
+    let status1 = poll_delivery_status(&client_b, &conv_on_b, ts1, "read", Duration::from_secs(20)).await;
+    assert_eq!(
+        status1, "read",
+        "POSITIVE CONTROL FAILED (finding #8?): receipts are ENABLED and A read B's DM, \
+         but B's message never flipped to 'read' (last='{status1}'). Either the read \
+         receipt is not sent on the 1:1 ServerDm path, or the gate wrongly suppressed it."
+    );
+    println!("  positive control: receipts ENABLED → B's message flipped to 'read' (DM receipt round-trips)");
+
+    // ======================================================================
+    // THE FIX — receipts DISABLED. A reads B's next DM; the receipt must NOT
+    // be sent, so B's copy must NEVER become "read".
+    // ======================================================================
+    client_a
+        .set_read_receipts_enabled(false)
+        .expect("set_read_receipts_enabled(false) failed");
+    assert!(!client_a.read_receipts_enabled().unwrap(), "toggle did not persist OFF");
+
+    let marker2 = unique_marker();
+    client_b
+        .send_text(ActiveConversation::ServerDm { peer_id: uid_a }, &marker2)
+        .await
+        .expect("B send_text 2 failed");
+
+    let ts2 = a_reads_bs_message(&client_a, uid_b, &conv_on_a, &marker2).await;
+
+    // Give a generous window — the ENABLED case flipped within a few seconds,
+    // so ~12s of staying un-read is strong evidence the receipt was suppressed.
+    let status2 = poll_delivery_status(&client_b, &conv_on_b, ts2, "read", Duration::from_secs(12)).await;
+    assert_ne!(
+        status2, "read",
+        "PRIVACY TOGGLE LIES: read receipts are DISABLED, yet A reading B's DM still \
+         flipped B's message to 'read' (status='{status2}'). The gate did not stop the send."
+    );
+    println!("  the fix: receipts DISABLED → B's message stayed '{status2}' (receipt NOT sent)");
+
+    println!(
+        "  V39 PASS — the 'send read receipts' toggle gates the send: ENABLED → B sees 'read', \
+         DISABLED → B never does. Asserted on the RECIPIENT. DM (ServerDm) receipts round-trip."
+    );
+
+    client_a.shutdown().await;
+    client_b.shutdown().await;
+}
+
+// ============================================================================
+// V40: the "show typing indicators" privacy toggle actually gates the send.
+//
+// Mirror of V39 for typing. Before the fix `set_typing_indicators_enabled`
+// persisted a bool whose getter had no send-path caller — so disabling "show
+// typing" still transmitted typing to the peer.
+//
+// PROPERTY (assert on the RECIPIENT, B via its DomainEvent stream):
+//   - typing ENABLED (default): A typing → B receives DomainEvent::TypingStarted.
+//   - typing DISABLED: A typing → B receives NO TypingStarted for A.
+//
+// MUTATION CHECK: delete the gate in ConversationHandle::send_typing
+// (services/conversation.rs) → the disabled half emits typing → B gets
+// TypingStarted → this test FAILS (RED).
+// ============================================================================
+
+#[tokio::test]
+async fn v40_typing_toggle_gates_the_send() {
+    skip_if_no_server!();
+    no_keyring_prompts();
+
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let client_a = build_client(dir_a.path());
+    let client_b = build_client(dir_b.path());
+
+    let uid_a = register_and_start(&client_a, &unique_user("v40a"), "Alice").await;
+    let uid_b = register_and_start(&client_b, &unique_user("v40b"), "Bob").await;
+
+    client_a
+        .send_friend_request(&uid_b, Some("validated"))
+        .await
+        .expect("friend request failed");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    client_b
+        .respond_friend_request(&uid_a, true)
+        .await
+        .expect("accept friend request failed");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // ======================================================================
+    // POSITIVE CONTROL — typing ENABLED (default): A typing reaches B.
+    // ======================================================================
+    assert!(
+        client_a.typing_indicators_enabled().unwrap(),
+        "precondition: shipped default for typing indicators is ON"
+    );
+
+    let mut events_b = client_b.subscribe_events();
+    client_a
+        .conversation(ActiveConversation::ServerDm { peer_id: uid_b })
+        .send_typing(true)
+        .await
+        .expect("A send_typing(true) failed");
+
+    let got = wait_for_event(&mut events_b, Duration::from_secs(20), |e| {
+        matches!(e, DomainEvent::TypingStarted { user_id, .. } if *user_id == uid_a)
+    })
+    .await;
+    assert!(
+        got.is_some(),
+        "POSITIVE CONTROL FAILED: typing ENABLED and A is typing, but B never received \
+         DomainEvent::TypingStarted for A — the typing path is not wired, so the \
+         disabled-half assertion below would be vacuous."
+    );
+    println!("  positive control: typing ENABLED → B received TypingStarted from A");
+
+    // ======================================================================
+    // THE FIX — typing DISABLED: A typing must NOT reach B.
+    // ======================================================================
+    client_a
+        .set_typing_indicators_enabled(false)
+        .expect("set_typing_indicators_enabled(false) failed");
+    assert!(!client_a.typing_indicators_enabled().unwrap(), "toggle did not persist OFF");
+
+    // Fresh subscription so no stale STARTED from the positive half is in the
+    // buffer, then A "types" again.
+    let mut events_b2 = client_b.subscribe_events();
+    client_a
+        .conversation(ActiveConversation::ServerDm { peer_id: uid_b })
+        .send_typing(true)
+        .await
+        .expect("A send_typing(true) [disabled] returned an error (should be a silent no-op)");
+
+    // The ENABLED case arrived within a couple seconds; 8s of silence is strong
+    // evidence nothing was transmitted.
+    let leaked = wait_for_event(&mut events_b2, Duration::from_secs(8), |e| {
+        matches!(e, DomainEvent::TypingStarted { user_id, .. } if *user_id == uid_a)
+    })
+    .await;
+    assert!(
+        leaked.is_none(),
+        "PRIVACY TOGGLE LIES: typing indicators are DISABLED, yet A typing still reached \
+         B as TypingStarted. The gate did not stop the send."
+    );
+    println!("  the fix: typing DISABLED → B received NO TypingStarted (typing NOT sent)");
+
+    println!(
+        "  V40 PASS — the 'show typing indicators' toggle gates the send: ENABLED → B sees \
+         typing, DISABLED → B never does. Asserted on the RECIPIENT's event stream."
+    );
+
+    client_a.shutdown().await;
+    client_b.shutdown().await;
+}

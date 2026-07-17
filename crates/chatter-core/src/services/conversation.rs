@@ -157,7 +157,17 @@ impl ConversationHandle {
     }
 
     /// Send a typing indicator.
+    ///
+    /// Privacy gate: honours the local "show typing indicators" setting. When
+    /// the user has disabled it (`typing_indicators_enabled() == false`) we do
+    /// NOT emit typing to the peer. Fail-safe default is ON (the shipped
+    /// default and the getter's `unwrap_or(true)`), so a settings read error
+    /// keeps the current behaviour rather than silently muting a user who never
+    /// opted out.
     pub async fn send_typing(&self, started: bool) -> ConversationResult {
+        if !self.client.typing_indicators_enabled().unwrap_or(true) {
+            return Ok(());
+        }
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
                 self.client.anon_dms().send_typing_indicator(id, started).await?;
@@ -490,6 +500,13 @@ impl ConversationHandle {
 
     pub async fn send_read_receipt(&self, timestamps: &[u64]) -> ConversationResult {
         if timestamps.is_empty() { return Ok(()); }
+        // Privacy gate: honours the local "send read receipts" setting. When
+        // disabled (`read_receipts_enabled() == false`) we do NOT tell the peer
+        // we've read their message. Fail-safe default is ON (shipped default +
+        // getter `unwrap_or(true)`).
+        if !self.client.read_receipts_enabled().unwrap_or(true) {
+            return Ok(());
+        }
         match &self.conversation {
             ActiveConversation::AnonDm(dm_id) => {
                 self.client.anon_dms()
@@ -548,7 +565,11 @@ impl ConversationHandle {
                         .filter(|m| current_user.map(|uid| m.sender_id != Some(uid)).unwrap_or(true))
                         .map(|m| m.sent_at)
                         .collect();
-                    if !timestamps.is_empty() {
+                    // Same privacy gate as ConversationHandle::send_read_receipt
+                    // (this AnonDm branch calls the sub-service directly).
+                    if !timestamps.is_empty()
+                        && self.client.read_receipts_enabled().unwrap_or(true)
+                    {
                         let _ = self.client.anon_dms().send_read_receipt(id, timestamps).await;
                     }
                 }
