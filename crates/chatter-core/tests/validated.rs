@@ -8291,3 +8291,186 @@ async fn v37_kt_query_privacy_vrf_verified_and_forgery_still_rejected() {
          server it is not (GetProof still carries user_id — an OPRF is out of scope).\n"
     );
 }
+
+// ============================================================================
+// V38: A FRIEND ACTUALLY SEES YOUR NEW AVATAR (avatar friend-fetch round-trip)
+//
+// V32 proved avatar UPLOAD: changing your avatar encrypts it with YOUR profile
+// key and stores the ciphertext server-side (0 -> N bytes). V32 explicitly
+// SCOPED OUT the user-visible half — a FRIEND fetching your profile and
+// DECRYPTING your avatar — because you never decrypt your OWN avatar
+// (try_decrypt_avatar uses the *friend's* profile key; a self-fetch is None by
+// design; services/user/mod.rs:290). This test proves the scoped-out property:
+//
+//   A and B are FRIENDS, so B holds A's profile key (carried on the friend-
+//   request envelope + the post-accept profile-key handshake + any A->B DM via
+//   inject_profile_key_if_sharing; server_dm.rs:109). A changes its avatar to
+//   known random bytes. B fetches A's profile and B's get_user_profile ->
+//   try_decrypt_avatar decrypts A's `encrypted_avatar` with A's profile key.
+//   B's decrypted avatar must equal A's uploaded bytes BYTE-EXACT.
+//
+// POSITIVE CONTROL: the encrypted avatar is present server-side (V32's fact) —
+//   without this the friend-fetch would decrypt nothing and pass vacuously.
+// PRIVACY HALF: a STRANGER C (not A's friend, holds no profile key) fetching
+//   A's profile gets avatar_bytes = None — the ciphertext is on the server
+//   (octet_length > 0, asserted) yet C cannot decrypt it.
+//
+// MUTATION — RUN, RED, revert: change the byte-exact expectation below from
+//   `&avatar` to wrong bytes (e.g. `assert_eq!(got, vec![0u8; avatar.len()], ...)`)
+//   -> the "BYTE-EXACT" assertion goes RED, proving the equality has teeth
+//   (B genuinely decrypted A's real avatar, not a coincidental Some(...)).
+//   Verified RED: "assertion `left == right` failed ... left: [<A's bytes>]
+//   right: [0, 0, 0, ...]".
+// ============================================================================
+#[tokio::test]
+async fn v38_friend_fetches_and_decrypts_your_avatar_byte_exact() {
+    skip_if_no_server!();
+    no_keyring_prompts();
+
+    // ---- A and B register and start (inbox polling live on both) -----------
+    let dir_a = tempfile::tempdir().unwrap();
+    let client_a = build_client(dir_a.path());
+    let uid_a = register_and_start(&client_a, &unique_user("v38a"), "V38 Alice").await;
+
+    let dir_b = tempfile::tempdir().unwrap();
+    let client_b = build_client(dir_b.path());
+    let uid_b = register_and_start(&client_b, &unique_user("v38b"), "V38 Bob").await;
+
+    // ---- become FRIENDS: this is how B comes to hold A's profile key -------
+    // A's friend-request envelope carries A's profile key (ECIES to B), the
+    // post-accept handshake re-sends it, and the explicit A->B DM below carries
+    // it a third way. Any one suffices; we exercise the real friendship path.
+    client_a
+        .send_friend_request(&uid_b, Some("validated"))
+        .await
+        .expect("friend request failed");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    client_b
+        .respond_friend_request(&uid_a, true)
+        .await
+        .expect("accept friend request failed");
+    tokio::time::sleep(Duration::from_secs(4)).await;
+
+    // ---- A changes its avatar to KNOWN random bytes (small: no normalize) ---
+    // < 64 KB so the WebP normalizer never fires (services/user/mod.rs:377),
+    // hence what B decrypts must equal these bytes byte-for-byte.
+    let avatar: Vec<u8> = {
+        let mut v = b"V38-AVATARx".to_vec();
+        let mut r = [0u8; 512];
+        rand::RngCore::fill_bytes(&mut rand::rng(), &mut r);
+        v.extend_from_slice(&r);
+        v
+    };
+    client_a.set_avatar_bytes(&avatar).expect("set_avatar_bytes failed");
+    client_a
+        .update_user_profile(Some("V38 Alice".into()), None)
+        .await
+        .expect("update_user_profile failed");
+
+    // ---- POSITIVE CONTROL: the encrypted avatar is present server-side -----
+    // (V32's property; without ciphertext on the server every decrypt below is
+    // vacuous.) Also proves the byte-exact match later is NOT a plaintext leak.
+    let blob_sql = format!(
+        "select coalesce(octet_length(encrypted_avatar),0) from user_profiles where user_id='{uid_a}'"
+    );
+    let mut server_bytes = String::new();
+    let mut uploaded = false;
+    for _ in 0..15 {
+        server_bytes = psql(&blob_sql);
+        if server_bytes.parse::<i64>().unwrap_or(0) > 0 {
+            uploaded = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    assert!(
+        uploaded,
+        "POSITIVE CONTROL FAILED: A's encrypted_avatar is still {server_bytes:?} server-side — \
+         the upload never landed, so a friend-fetch would prove nothing."
+    );
+    println!("\n  positive control: A's encrypted_avatar on server = {server_bytes} bytes (ciphertext present)");
+
+    // ---- NEGATIVE HALF: the plaintext avatar is NOT in the server blob -----
+    // The random tail is unique enough to grep for. E2E means the server holds
+    // ciphertext only; B's byte-exact match must come from B's decrypt, not from
+    // the server handing out plaintext.
+    let hexbody: String = avatar[11..].iter().map(|b| format!("{b:02x}")).collect();
+    let leak = psql(&format!(
+        "select count(*) from user_profiles where user_id='{uid_a}' \
+         and position('\\x{hexbody}'::bytea in encrypted_avatar) > 0"
+    ));
+    assert_eq!(
+        leak.trim(),
+        "0",
+        "E2EE VIOLATED: A's plaintext avatar bytes appear inside the server's encrypted_avatar blob"
+    );
+    println!("  negative half: plaintext avatar body is NOT present in the server ciphertext");
+
+    // ---- A sends B a DM so B definitely holds A's profile key --------------
+    // Belt-and-suspenders on top of the friend-request envelope + handshake.
+    client_a
+        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, "v38 profile-key carrier")
+        .await
+        .expect("send_text failed");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // ---- THE PROPERTY: B fetches A's profile and DECRYPTS A's avatar -------
+    // Poll: B may need a moment to have persisted A's profile key from the
+    // envelope/handshake/DM. get_user_profile -> try_decrypt_avatar uses A's key.
+    let mut b_avatar: Option<Vec<u8>> = None;
+    for _ in 0..20 {
+        let prof = client_b
+            .get_user_profile(&uid_a)
+            .await
+            .expect("B get_user_profile(A) failed");
+        if let Some(bytes) = prof.avatar_bytes {
+            b_avatar = Some(bytes);
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    let got = b_avatar.expect(
+        "FRIEND CANNOT SEE AVATAR: B fetched A's profile but avatar_bytes was None — \
+         B never obtained A's profile key, or try_decrypt_avatar failed to decrypt. \
+         The avatar uploads (V32) but a friend can't decrypt it.",
+    );
+
+    // BYTE-EXACT — the whole point. B decrypted A's real avatar, not a stale or
+    // truncated blob. (MUTATION: replace `avatar` with wrong bytes -> RED.)
+    assert_eq!(
+        got, avatar,
+        "AVATAR MISMATCH: B decrypted {} bytes but A uploaded {} bytes; they differ. \
+         The friend-fetch round-trip is not byte-exact.",
+        got.len(),
+        avatar.len()
+    );
+    println!(
+        "  THE PROPERTY: B decrypted A's avatar byte-exact ({} bytes) using A's profile key",
+        got.len()
+    );
+
+    // ---- PRIVACY HALF: a STRANGER C (no profile key) gets avatar_bytes=None -
+    // C is registered but NOT A's friend, so C holds no A profile key. The
+    // ciphertext is on the server (octet_length asserted > 0 above), yet C's
+    // get_user_profile -> try_decrypt_avatar returns None (no key -> None).
+    let dir_c = tempfile::tempdir().unwrap();
+    let client_c = build_client(dir_c.path());
+    let _uid_c = register_and_start(&client_c, &unique_user("v38c"), "V38 Carol").await;
+
+    let c_prof = client_c
+        .get_user_profile(&uid_a)
+        .await
+        .expect("C get_user_profile(A) failed");
+    assert!(
+        c_prof.avatar_bytes.is_none(),
+        "PRIVACY LEAK: stranger C (not A's friend, no profile key) got avatar_bytes=Some — \
+         the encrypted avatar is on the server but C must NOT be able to decrypt it."
+    );
+    println!("  privacy half: stranger C (no profile key) gets avatar_bytes=None despite ciphertext on server");
+
+    println!(
+        "  V38 PASS — a friend actually SEES your new avatar: A changed avatar, B (friend) fetched \
+         A's profile and decrypted the avatar BYTE-EXACT with A's profile key, while stranger C \
+         (no key) could not. This is the round-trip V32 scoped out."
+    );
+}
