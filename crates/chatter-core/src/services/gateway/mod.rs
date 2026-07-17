@@ -102,6 +102,13 @@ pub struct MessageGateway {
     pub(crate) user_repo: Arc<crate::storage::repositories::UserRepository>,
     pub(crate) settings_repo: Arc<crate::storage::repositories::settings_repo::SettingsRepository>,
     pub(crate) sesame_manager: Option<Arc<SesameManager<SqliteSesameStore>>>,
+    /// Local disappearing-message TTL tracking. Set on the production gateway
+    /// so an INBOUND message that arrives with an armed `ephemeral_ttl`
+    /// (V29 wire marker) tracks the RECIPIENT's local copy for reaping. `None`
+    /// on gateways built without it (the plain `new` constructor / some tests)
+    /// — arming is simply skipped there.
+    pub(crate) ephemeral_repo:
+        Option<Arc<crate::storage::repositories::ephemeral_repo::EphemeralRepository>>,
 }
 
 impl MessageGateway {
@@ -120,6 +127,7 @@ impl MessageGateway {
             user_repo,
             settings_repo,
             sesame_manager: None,
+            ephemeral_repo: None,
         }
     }
 
@@ -131,6 +139,7 @@ impl MessageGateway {
         user_repo: Arc<crate::storage::repositories::UserRepository>,
         settings_repo: Arc<crate::storage::repositories::settings_repo::SettingsRepository>,
         sesame_manager: Arc<SesameManager<SqliteSesameStore>>,
+        ephemeral_repo: Arc<crate::storage::repositories::ephemeral_repo::EphemeralRepository>,
     ) -> Self {
         Self {
             signal_service,
@@ -139,6 +148,7 @@ impl MessageGateway {
             settings_repo,
             channel_repo,
             sesame_manager: Some(sesame_manager),
+            ephemeral_repo: Some(ephemeral_repo),
         }
     }
 
@@ -271,6 +281,34 @@ impl MessageGateway {
 
         // Store in repository
         self.message_repo.insert(&message)?;
+
+        // Disappearing messages — RECIPIENT local half. When the inbound
+        // DataMessage carries an armed ephemeral marker (V29 wire fields set by
+        // the sender), track the RECIPIENT's local copy so the periodic reaper
+        // removes it once the timer elapses — Signal's whole point is that the
+        // message vanishes from *both* devices, not just the server. Timer
+        // starts at receive time (send-time-start semantics; network latency is
+        // negligible against a disappearing window). Best-effort: a tracking
+        // failure must not drop an otherwise-good message.
+        if data_message.ephemeral && data_message.ephemeral_ttl_seconds > 0 {
+            if let Some(ephemeral_repo) = self.ephemeral_repo.as_ref() {
+                if let Err(e) =
+                    ephemeral_repo.insert_armed(&message.id, data_message.ephemeral_ttl_seconds)
+                {
+                    tracing::warn!(
+                        message_id = %message.id,
+                        error = %e,
+                        "failed to arm local disappearing timer for inbound message"
+                    );
+                } else {
+                    tracing::info!(
+                        message_id = %message.id,
+                        ttl_seconds = data_message.ephemeral_ttl_seconds,
+                        "armed local disappearing timer for inbound message"
+                    );
+                }
+            }
+        }
 
         tracing::info!(
             message_id = %message.id,

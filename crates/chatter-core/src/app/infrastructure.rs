@@ -16,8 +16,8 @@ use crate::mailbox::token_manager::TokenManager;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::storage::repositories::{
-    AnonDmRepository, AnonGroupRepository, SectionRepository, UnifiedConversationRepository,
-    VectorRepository,
+    AnonDmRepository, AnonGroupRepository, EphemeralRepository, SectionRepository,
+    UnifiedConversationRepository, VectorRepository,
 };
 #[cfg(feature = "jarvis")]
 use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
@@ -82,6 +82,8 @@ pub struct InfrastructureContainer {
     pub(crate) anon_group_repo: Arc<AnonGroupRepository>,
     /// Anonymous DM repository.
     pub(crate) anon_dm_repo: Arc<AnonDmRepository>,
+    /// Ephemeral (disappearing-message) TTL tracking repository.
+    pub(crate) ephemeral_repo: Arc<EphemeralRepository>,
     /// Unified conversation repository.
     pub(crate) unified_conversation_repo: Arc<UnifiedConversationRepository>,
     /// Jarvis memory repository.
@@ -219,6 +221,7 @@ impl InfrastructureContainer {
         let search_index = Arc::new(SearchIndex::new(database.clone()));
         let anon_group_repo = Arc::new(AnonGroupRepository::new(database.clone()));
         let anon_dm_repo = Arc::new(AnonDmRepository::new(database.clone()));
+        let ephemeral_repo = Arc::new(EphemeralRepository::new(database.clone()));
         let unified_conversation_repo = Arc::new(UnifiedConversationRepository::new(database.clone()));
         #[cfg(feature = "jarvis")]
         let jarvis_memory_repo = Arc::new(JarvisMemoryRepository::new(database.clone()));
@@ -298,6 +301,7 @@ impl InfrastructureContainer {
             token_manager,
             anon_group_repo,
             anon_dm_repo,
+            ephemeral_repo,
             unified_conversation_repo,
             #[cfg(feature = "jarvis")]
             jarvis_memory_repo,

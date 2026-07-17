@@ -7890,3 +7890,225 @@ async fn v35_blocking_stops_group_message_delivery() {
     client_c.shutdown().await;
     client_d.shutdown().await;
 }
+
+/// V36 — Disappearing messages: the LOCAL copies actually VANISH.
+///
+/// THE GAP (documented scope of V29): V29 proved a disappearing message arms
+/// its TTL on the wire and the SERVER's Temporal workflow deletes the server
+/// row. But the local-expiry engine (`services/ephemeral_service.rs`,
+/// migration v015) was NEVER instantiated in production — so the message kept
+/// living forever in the SENDER's and RECIPIENT's OWN SQLCipher stores. On a
+/// privacy messenger that is the important half: your own device still holds
+/// the "disappeared" message.
+///
+/// THE FIX (this test): the engine is now wired — a bounded periodic reaper
+/// (`ChatterClient::start`) calls `cleanup_expired`, and the send/receive
+/// paths `track_armed` any message that carries an armed `ephemeral_ttl`. This
+/// exercises the SEALED-DM path (`send_server_dm` → `store_data_message`),
+/// which ALSO closes the sealed-DM arming gap: the server can't schedule a
+/// delete for a sealed message it can't read, so sealed-DM disappearing is
+/// entirely local — exactly what this proves.
+///
+/// Semantics under test: the timer starts at message time (send-time-start),
+/// matching V29's channel semantics and the server's Temporal-from-receipt
+/// schedule; the recipient's clock starts at receive (negligible skew). This
+/// also gives cross-restart expiry for free: `expires_at` is persisted, so a
+/// message past its TTL is reaped on the next boot regardless of a "read".
+///
+/// Proof (asserts on the LOCAL store, scoped to this run):
+///   POSITIVE CONTROL — a message with NO timer stays in BOTH local stores.
+///   THE FIX — a message with a SHORT timer is present first (so "gone" is not
+///     vacuous), then GONE from the RECIPIENT's local store AND the SENDER's
+///     own local store after the TTL + a reaper tick, while the control
+///     survives (selective).
+///
+/// MUTATION (RED): remove the reaper spawn in `ChatterClient::start` (or the
+/// `track_armed` calls in `send_server_dm` / `store_data_message`) → the armed
+/// local copy survives past its TTL → the "GONE" assertions fail.
+#[tokio::test]
+async fn v36_disappearing_messages_expire_locally() {
+    use chatter_core::domain::message::ConversationType;
+
+    skip_if_no_server!();
+    no_keyring_prompts();
+
+    // NOTE: this leans on the REAL spawned reaper (default 10s cadence, see
+    // `ChatterClient::start`), NOT a test-driven cleanup — that is the point,
+    // so removing the reaper spawn makes this test RED. We deliberately do NOT
+    // mutate `CHATTER_EPHEMERAL_REAP_SECS` here: this suite runs multi-threaded,
+    // and `std::env::set_var` racing another thread's `getenv` is UB. The poll
+    // windows below (TTL + one reaper interval + slack) absorb the 10s cadence.
+
+    // ---- A and B register and befriend --------------------------------------
+    let dir_a = tempfile::tempdir().unwrap();
+    let client_a = build_client(dir_a.path());
+    let uid_a = register_and_start(&client_a, &unique_user("v36a"), "V36 Alice").await;
+
+    let dir_b = tempfile::tempdir().unwrap();
+    let client_b = build_client(dir_b.path());
+    let uid_b = register_and_start(&client_b, &unique_user("v36b"), "V36 Bob").await;
+
+    client_a
+        .send_friend_request(&uid_b, Some("validated"))
+        .await
+        .expect("friend request failed");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    client_b
+        .respond_friend_request(&uid_a, true)
+        .await
+        .expect("accept friend request failed");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // Local conversation keys: B buckets a channel-free ServerDm by the SENDER's
+    // id; A (sender) stores its own copy keyed by the RECIPIENT's id.
+    let conv_on_b = ChannelId::from(uid_a);
+    let conv_on_a = ChannelId::from(uid_b);
+
+    // "is a LIVE copy of `marker` present in B's / A's local message store?"
+    // The reaper HARD-deletes (purges) an expired message, so once reaped the
+    // row is gone from the store entirely — this reads it as absent, which is
+    // exactly the "the local copy vanished" property under proof.
+    let b_has = |marker: &str| -> bool {
+        client_b
+            .get_messages_local(&conv_on_b, &ConversationType::ServerDm, None, 200)
+            .unwrap_or_default()
+            .iter()
+            .any(|m| m.as_text() == Some(marker) && !m.is_deleted)
+    };
+    let a_has = |marker: &str| -> bool {
+        client_a
+            .get_messages_local(&conv_on_a, &ConversationType::ServerDm, None, 200)
+            .unwrap_or_default()
+            .iter()
+            .any(|m| m.as_text() == Some(marker) && !m.is_deleted)
+    };
+
+    // ========================================================================
+    // POSITIVE CONTROL — NO timer. The message must PERSIST locally on BOTH.
+    // ========================================================================
+    let control = format!("v36-control-{}", unique_marker());
+    println!("\n  control marker (no timer): {control}");
+    client_a
+        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &control)
+        .await
+        .expect("control send failed");
+
+    // A stores its own outgoing copy synchronously on send.
+    assert!(
+        a_has(&control),
+        "POSITIVE CONTROL FAILED: A did not store its own outgoing control DM."
+    );
+    // B receives + stores within a few seconds.
+    let mut ctrl_on_b = false;
+    for _ in 0..30 {
+        if b_has(&control) {
+            ctrl_on_b = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    assert!(
+        ctrl_on_b,
+        "POSITIVE CONTROL FAILED: B never stored A's (no-timer) DM — the 'gone' \
+         assertions below would be vacuous on a dead pipeline."
+    );
+    println!("  control stored on BOTH A and B (no timer → should persist)");
+
+    // ========================================================================
+    // THE FIX — set a SHORT timer, send. BOTH local copies must VANISH after
+    // the TTL + a reaper tick, while the control survives.
+    // ========================================================================
+    let ttl_secs: u32 = 5;
+    client_a
+        .set_disappearing_timer(ActiveConversation::ServerDm { peer_id: uid_b }, ttl_secs)
+        .expect("set_disappearing_timer failed");
+    println!("  set disappearing timer = {ttl_secs}s on the A→B DM conversation");
+
+    let vanish = format!("v36-vanish-{}", unique_marker());
+    println!("  disappearing marker: {vanish}");
+    client_a
+        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &vanish)
+        .await
+        .expect("armed send failed");
+
+    // A stored its OWN armed copy on send (tracked for reaping).
+    assert!(
+        a_has(&vanish),
+        "SEND-SIDE FAILED: A did not store its own outgoing armed DM."
+    );
+    // B receives + stores the armed message. We MUST observe it present first,
+    // otherwise a later 'absent' is vacuous ("never arrived" vs "reaped").
+    let mut vanish_on_b = false;
+    for _ in 0..30 {
+        if b_has(&vanish) {
+            vanish_on_b = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    assert!(
+        vanish_on_b,
+        "RECEIVE-SIDE FAILED: B never stored the armed DM ({vanish}) — cannot prove \
+         local expiry on a message that never landed."
+    );
+    println!("  armed message stored on BOTH A and B — now waiting for the reaper");
+
+    // LOAD-BEARING: the armed copy must vanish from the RECIPIENT's local store
+    // (TTL elapsed + a reaper tick soft-deleted it).
+    let mut gone_b = false;
+    for _ in 0..35 {
+        if !b_has(&vanish) {
+            gone_b = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    assert!(
+        gone_b,
+        "LOCAL EXPIRY FAILED (recipient): the armed DM ({vanish}) is STILL in B's \
+         local store well past its {ttl_secs}s TTL. The local-expiry engine / reaper \
+         did not remove the recipient's own copy — the message 'disappeared' \
+         everywhere except the device that received it."
+    );
+    println!("  RECIPIENT local copy GONE after TTL + reaper tick");
+
+    // LOAD-BEARING: the SENDER's own local copy must vanish too.
+    let mut gone_a = false;
+    for _ in 0..35 {
+        if !a_has(&vanish) {
+            gone_a = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    assert!(
+        gone_a,
+        "LOCAL EXPIRY FAILED (sender): the armed DM ({vanish}) is STILL in A's own \
+         local store past its {ttl_secs}s TTL. The sender's device kept the \
+         'disappeared' message."
+    );
+    println!("  SENDER local copy GONE after TTL + reaper tick");
+
+    // ---- SELECTIVITY: the no-timer control must STILL be present on both -----
+    assert!(
+        b_has(&control),
+        "SELECTIVITY FAILED: the no-timer control ({control}) also vanished from B's \
+         store — the reaper is deleting non-ephemeral messages."
+    );
+    assert!(
+        a_has(&control),
+        "SELECTIVITY FAILED: the no-timer control ({control}) also vanished from A's \
+         store — the reaper is deleting non-ephemeral messages."
+    );
+
+    println!(
+        "\n  V36 PASS — disappearing messages vanish LOCALLY: a short-TTL sealed DM was \
+         stored on both devices, then reaped from the RECIPIENT's and the SENDER's own \
+         local stores after its TTL, while the un-armed control survived on both. The \
+         local-expiry engine is wired (reaper + track-on-send/receive) and sealed-DM \
+         disappearing — which the server cannot schedule — works end to end.\n"
+    );
+
+    client_a.shutdown().await;
+    client_b.shutdown().await;
+}

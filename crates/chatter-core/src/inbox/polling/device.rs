@@ -25,6 +25,7 @@ use crate::proto::content_v1::{content, Content, DataMessage};
 use crate::proto::mailbox_v1::EnvelopeType;
 use crate::inbox::handlers::DomainEvent;
 use crate::services::gateway::{MessageGateway, RouteResult, SealedSenderResult};
+use crate::storage::repositories::ephemeral_repo::EphemeralRepository;
 use crate::storage::{ChannelRepository, MessageRepository};
 
 /// Process a single message through the validation pipeline.
@@ -43,6 +44,7 @@ pub async fn process_device_message(
     message_gateway: &Arc<MessageGateway>,
     message_repo: &Arc<MessageRepository>,
     channel_repo: &Arc<ChannelRepository>,
+    ephemeral_repo: &Arc<EphemeralRepository>,
     group_coordinator: &Arc<GroupCoordinator>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
 ) {
@@ -115,6 +117,7 @@ pub async fn process_device_message(
                 message_gateway,
                 message_repo,
                 channel_repo,
+                ephemeral_repo,
                 group_coordinator,
                 domain_tx,
             )
@@ -180,6 +183,7 @@ async fn process_sender_key_message(
     message_gateway: &Arc<MessageGateway>,
     message_repo: &Arc<MessageRepository>,
     channel_repo: &Arc<ChannelRepository>,
+    ephemeral_repo: &Arc<EphemeralRepository>,
     group_coordinator: &Arc<GroupCoordinator>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
 ) {
@@ -209,6 +213,7 @@ async fn process_sender_key_message(
                 stats,
                 message_repo,
                 channel_repo,
+                ephemeral_repo,
                 domain_tx,
             );
         }
@@ -346,6 +351,7 @@ fn process_decrypted_data_message(
     stats: &Arc<RwLock<InboxStats>>,
     message_repo: &Arc<MessageRepository>,
     channel_repo: &Arc<ChannelRepository>,
+    ephemeral_repo: &Arc<EphemeralRepository>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
 ) {
     tracing::debug!(
@@ -441,6 +447,22 @@ fn process_decrypted_data_message(
                         sender_id = %sender_id,
                         "Stored channel message locally"
                     );
+
+                    // Disappearing messages — RECIPIENT local half for
+                    // channel/group sender-key messages. If the sender armed
+                    // the E2E ttl marker (V29), track our local copy so the
+                    // reaper removes it once the timer elapses. Best-effort.
+                    if data_message.ephemeral && data_message.ephemeral_ttl_seconds > 0 {
+                        if let Err(e) =
+                            ephemeral_repo.insert_armed(&message.id, data_message.ephemeral_ttl_seconds)
+                        {
+                            tracing::warn!(
+                                message_id = %message.id,
+                                error = %e,
+                                "failed to arm local disappearing timer for inbound channel message"
+                            );
+                        }
+                    }
 
                     // Increment unread count
                     if let Ok(new_count) = channel_repo.increment_unread_count(&channel_id) {

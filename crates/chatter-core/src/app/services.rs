@@ -24,6 +24,7 @@ use crate::services::channel_bootstrap_service::ChannelBootstrapService;
 use crate::services::channel_event_service::ChannelEventService;
 use crate::services::dm_bootstrap_service::DmBootstrapService;
 use crate::services::draft_service::DraftService;
+use crate::services::ephemeral_service::EphemeralService;
 use crate::services::mailbox_manager::MailboxManager;
 use crate::services::message::MessageService;
 use crate::services::gateway::MessageGateway;
@@ -76,6 +77,8 @@ pub struct ServiceContainer {
     pub ai_service: Arc<AIService>,
     /// Draft service for message drafts.
     pub draft_service: Arc<DraftService>,
+    /// Ephemeral (disappearing-message) local-expiry engine.
+    pub ephemeral_service: Arc<EphemeralService>,
     /// Pin service for pinned messages.
     pub pin_service: Arc<PinService>,
     /// Channel bootstrap service for pending message flush.
@@ -124,6 +127,16 @@ impl ServiceContainer {
             infra.settings_repo.clone(),
         ));
 
+        // 2b. Ephemeral (disappearing-message) local-expiry engine. Shared by
+        // the send path (MessageService — arms the sender's copy), the receive
+        // path (MessageGateway — arms the recipient's copy), and the periodic
+        // reaper (ChatterClient::start — calls cleanup_expired).
+        let ephemeral_service = Arc::new(EphemeralService::new(
+            infra.settings_repo.clone(),
+            infra.ephemeral_repo.clone(),
+            infra.message_repo.clone(),
+        ));
+
         // 3. Message service with group mailbox support and Sesame
         let message_service = Arc::new(MessageService::new(
             infra.grpc_pool.clone(),
@@ -139,6 +152,7 @@ impl ServiceContainer {
             infra.search_index.clone(),
             infra.token_manager.clone(),
             infra.event_bus.clone(),
+            ephemeral_service.clone(),
         ));
 
         // 4. Message gateway with Sesame
@@ -149,6 +163,7 @@ impl ServiceContainer {
             infra.user_repo.clone(),
             infra.settings_repo.clone(),
             infra.sesame_manager.clone(),
+            infra.ephemeral_repo.clone(),
         ));
 
         // 5. DM bootstrap service
@@ -342,6 +357,7 @@ impl ServiceContainer {
             ai_service,
             draft_service,
             pin_service,
+            ephemeral_service,
             pairwise_service,
             anon_group_service,
             anon_dm_service,

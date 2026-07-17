@@ -108,6 +108,30 @@ impl MessageService {
         // send. Without this the peer only ever sees the "User <id>" fallback.
         let content = self.inject_profile_key_if_sharing(peer_id, content)?;
 
+        // Disappearing messages for SEALED DMs. The server can't schedule a
+        // Temporal delete for a sealed message (it can't read the envelope to
+        // learn the ttl), so sealed-DM disappearing is entirely local: read
+        // this conversation's timer (`conv.disappearing.server_dm.<peer>`,
+        // written by `set_disappearing_timer`) and ARM the E2E marker on the
+        // DataMessage so the RECIPIENT's `store_data_message` tracks + reaps
+        // their local copy — and track OUR OWN copy below. `0`/absent = off.
+        let disappearing_ttl_secs: Option<u32> = self
+            .settings_repo
+            .get::<Option<u32>>(&format!("conv.disappearing.server_dm.{}", peer_id))
+            .ok()
+            .flatten()
+            .flatten()
+            .filter(|s| *s > 0);
+        let mut content = content;
+        if let Some(secs) = disappearing_ttl_secs {
+            if let Some(crate::proto::content_v1::content::Content::DataMessage(dm)) =
+                content.content.as_mut()
+            {
+                dm.ephemeral = true;
+                dm.ephemeral_ttl_seconds = secs;
+            }
+        }
+
         self.send_sealed_dm_content(peer_id, content).await?;
 
         let current_user_id = self.settings_repo.current_user_id()?;
@@ -148,6 +172,15 @@ impl MessageService {
                 error = %e,
                 "Failed to store sent ServerDm locally"
             );
+        } else if let Some(secs) = disappearing_ttl_secs {
+            // SENDER local half for sealed DMs: arm our own copy for reaping.
+            if let Err(e) = self.ephemeral_service.track_armed(message.id, secs) {
+                tracing::warn!(
+                    peer_id = %peer_id,
+                    error = %e,
+                    "failed to arm local disappearing timer for sent ServerDm"
+                );
+            }
         }
 
         Ok(DmSendResult {

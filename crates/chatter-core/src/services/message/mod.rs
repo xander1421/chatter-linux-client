@@ -35,6 +35,7 @@ use crate::network::grpc::channel_client::ChannelClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::message_client::MessageClient;
 use crate::services::current_user::CurrentUserError;
+use crate::services::ephemeral_service::EphemeralService;
 use crate::services::mailbox_manager::MailboxManager;
 use crate::services::signal_service::SignalService;
 use crate::storage::Database;
@@ -192,6 +193,10 @@ pub struct MessageService {
     /// Event bus for emitting `DomainEvent::MessageReceived` after deferred
     /// group decrypt succeeds.
     pub(crate) event_bus: crate::events::EventBus,
+    /// Local disappearing-message engine. Arms a message's local TTL on send
+    /// (`track_armed`) so the SENDER's own copy is reaped once the timer
+    /// elapses — the recipient half is armed on receive in the gateway/inbox.
+    pub(crate) ephemeral_service: Arc<EphemeralService>,
     /// Group messages queued waiting on a `SenderKeyDistribution`. Keyed by
     /// `(channel_id, sender_id, sender_device_id)`. Drained by
     /// `retry_pending_group_decrypts` when the matching SKDM lands. Each entry
@@ -223,6 +228,7 @@ impl MessageService {
         search_index: Arc<SearchIndex>,
         token_manager: Arc<TokenManager>,
         event_bus: crate::events::EventBus,
+        ephemeral_service: Arc<EphemeralService>,
     ) -> Self {
         Self {
             grpc_pool,
@@ -238,6 +244,7 @@ impl MessageService {
             search_index,
             token_manager,
             event_bus,
+            ephemeral_service,
             pending_group_decrypts: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
         }
     }

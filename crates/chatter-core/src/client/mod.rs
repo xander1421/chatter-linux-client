@@ -312,6 +312,11 @@ impl ChatterClient {
     // services against a live server.
     crate::service_accessor!(auth, AuthService, auth_service);
     crate::service_accessor!(messages, MessageService, message_service);
+    crate::service_accessor!(
+        ephemeral,
+        crate::services::ephemeral_service::EphemeralService,
+        ephemeral_service
+    );
     crate::service_accessor!(channels, ChannelService, channel_service);
     crate::service_accessor!(users, UserService, user_service);
     crate::service_accessor!(attachments, AttachmentService, attachment_service);
@@ -1593,13 +1598,49 @@ impl ChatterClient {
         // ── DM mailbox key rolling (L4 anonymity rotation) ───────────
         let h_key_rolling = self.services.spawn_key_rolling();
 
+        // ── Disappearing-messages local reaper ───────────────────────
+        // The local-expiry engine only matters if something drives it: this
+        // bounded periodic task calls `cleanup_expired`, which soft-deletes
+        // every locally-tracked message whose armed timer has elapsed (both
+        // our own sent copies and received copies). The first tick fires
+        // immediately, so a message that expired while the app was closed is
+        // reaped on the next boot too (expiry timestamps persist — v015).
+        // Interval is bounded and overridable via `CHATTER_EPHEMERAL_REAP_SECS`;
+        // default 10s — a single indexed query (idx_ephemeral_expires), cheap
+        // enough to run often so a "disappeared" message doesn't linger locally
+        // for long after its timer, sane enough not to spin.
+        let h_ephemeral_reaper = {
+            let ephemeral = self.services.ephemeral_service.clone();
+            let interval_secs = std::env::var("CHATTER_EPHEMERAL_REAP_SECS")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .filter(|s| *s > 0)
+                .unwrap_or(10);
+            tokio::spawn(async move {
+                let mut ticker =
+                    tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+                loop {
+                    ticker.tick().await;
+                    match ephemeral.cleanup_expired() {
+                        Ok(ids) if !ids.is_empty() => tracing::info!(
+                            count = ids.len(),
+                            "ephemeral reaper: removed expired local messages"
+                        ),
+                        Ok(_) => {}
+                        // NotLoggedIn is expected before login completes — quiet.
+                        Err(e) => tracing::debug!(error = %e, "ephemeral reaper: cleanup skipped"),
+                    }
+                }
+            })
+        };
+
         // ── Presence ────────────────────────────────────────────────
         self.set_presence(crate::domain::user::PresenceStatus::Online).await;
         self.touch_activity();
 
         // ── Store handles for shutdown ───────────────────────────────
         let mut tasks = self.tasks.lock();
-        tasks.extend([h_events, h_inbox, h_skdm_retry, h_channel_stream, h_channel_bootstrap, h_dm_bootstrap, h_ai, h_prekey, h_key_rolling]);
+        tasks.extend([h_events, h_inbox, h_skdm_retry, h_channel_stream, h_channel_bootstrap, h_dm_bootstrap, h_ai, h_prekey, h_key_rolling, h_ephemeral_reaper]);
         #[cfg(feature = "jarvis")]
         {
             tasks.push(jarvis.maintenance);

@@ -41,6 +41,42 @@ impl EphemeralRepository {
         Ok(())
     }
 
+    /// Insert an already-armed ephemeral entry (send-time-start semantics).
+    ///
+    /// Unlike [`insert`](Self::insert) — which writes a *Pending* row
+    /// (`countdown_started = 0`) that the reaper never touches until a
+    /// separate `mark_read` starts the clock — this writes a row whose
+    /// countdown is ALREADY running from now: `expires_at = now + ttl_seconds`
+    /// and `countdown_started = 1`. That is exactly what the cleanup query
+    /// (`delete_all_expired`, which requires `countdown_started = 1`) reaps.
+    ///
+    /// Used by the send/receive arming paths where the disappearing timer
+    /// starts at message time (matching V29's channel semantics and the
+    /// server's Temporal-from-receipt scheduling), not at read time. Accepts
+    /// arbitrary `ttl_seconds` (the `MessageTTL` enum only models a fixed
+    /// menu; a conversation timer can be any value), so it bypasses the enum
+    /// and writes the seconds straight through.
+    ///
+    /// `INSERT OR REPLACE` so re-arming the same message (e.g. a retry, or a
+    /// self-sync copy landing after the primary) is idempotent.
+    pub fn insert_armed(&self, message_id: &MessageId, ttl_seconds: u32) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        let now = Utc::now();
+        let expires_at = now + chrono::Duration::seconds(i64::from(ttl_seconds));
+        conn.execute(
+            "INSERT OR REPLACE INTO ephemeral_messages
+                 (message_id, ttl_seconds, expires_at, read_at, countdown_started)
+             VALUES (?1, ?2, ?3, ?4, 1)",
+            params![
+                message_id.to_string(),
+                i64::from(ttl_seconds),
+                expires_at.to_rfc3339(),
+                now.to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Get ephemeral state for a message.
     pub fn get(&self, message_id: &MessageId) -> Result<Option<EphemeralMessage>, StorageError> {
         let conn = self.db.read_connection()?;

@@ -320,6 +320,32 @@ impl UnifiedMessageRepository {
         Ok(())
     }
 
+    /// Hard-delete multiple messages by ID (purge — row + content removed,
+    /// CASCADE clears dependents like `ephemeral_messages`/`unified_reactions`).
+    ///
+    /// Used by the disappearing-message reaper: a "disappeared" message must be
+    /// truly GONE from disk, not merely tombstoned (a soft delete leaves the
+    /// plaintext `content_json` in the DB and `list_for_channel` still returns
+    /// the row). This mirrors `delete_message_local` (the app's own local
+    /// delete), just batched. Returns the number of rows removed.
+    pub fn delete_batch(&self, ids: &[MessageId]) -> Result<usize, StorageError> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let conn = self.db.connection()?;
+        let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{}", i)).collect();
+        let query = format!(
+            "DELETE FROM messages WHERE id IN ({})",
+            placeholders.join(", ")
+        );
+        let params_vec: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
+        let rows = conn.execute(
+            &query,
+            rusqlite::params_from_iter(params_vec.iter()),
+        )?;
+        Ok(rows)
+    }
+
     /// Soft-delete multiple messages by ID.
     pub fn soft_delete_batch(&self, ids: &[MessageId]) -> Result<usize, StorageError> {
         if ids.is_empty() {

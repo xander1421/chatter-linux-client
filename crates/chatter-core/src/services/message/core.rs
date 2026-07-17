@@ -219,6 +219,23 @@ impl MessageService {
             "[SEND_MESSAGE] Message stored successfully"
         );
 
+        // Disappearing messages — SENDER local half. If this send armed a
+        // disappearing timer (V29 read the channel's `default_ttl_seconds`),
+        // track OUR OWN copy so the periodic reaper removes it once the timer
+        // elapses — otherwise the message vanishes from the server + recipient
+        // but lingers forever on the sender's device. Timer starts at send
+        // time (send-time-start semantics, matching V29 / the server's
+        // Temporal-from-receipt schedule). Best-effort; never fail the send.
+        if let Some(secs) = disappearing_ttl_secs {
+            if let Err(e) = self.ephemeral_service.track_armed(message.id, secs) {
+                tracing::warn!(
+                    message_id = %message.id,
+                    error = %e,
+                    "failed to arm local disappearing timer for sent message"
+                );
+            }
+        }
+
         Ok(message)
     }
 

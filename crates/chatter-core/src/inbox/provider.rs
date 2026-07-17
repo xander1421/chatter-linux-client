@@ -432,6 +432,9 @@ impl DeviceInboxProvider {
         let message_repo = Arc::new(MessageRepository::new(database.clone()));
         let channel_repo = Arc::new(ChannelRepository::new(database.clone()));
         let user_repo = Arc::new(UserRepository::new(database.clone()));
+        let ephemeral_repo = Arc::new(
+            crate::storage::repositories::ephemeral_repo::EphemeralRepository::new(database.clone()),
+        );
 
         // Create group mailbox infrastructure
         let group_mailbox_manager = Arc::new(GroupMailboxManager::new(database.clone()));
@@ -521,6 +524,7 @@ impl DeviceInboxProvider {
                             &message_gateway,
                             &message_repo,
                             &channel_repo,
+                            &ephemeral_repo,
                             &group_coordinator,
                             domain_tx.as_ref(),
                         )
