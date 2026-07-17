@@ -7644,3 +7644,249 @@ async fn v34_presence_reaches_friends_not_strangers() {
     client_b.shutdown().await;
     client_c.shutdown().await;
 }
+
+// ============================================================================
+// V35: BLOCKING IS ENFORCED ON GROUP / CHANNEL MESSAGES (SAFETY)
+//
+// V27 closed blocking on the DM path: a blocked sender cannot fetch the
+// recipient's prekey bundle, so a sealed DM never lands. But group / channel
+// messages use SENDER KEYS — one shared group session, not a per-recipient
+// prekey fetch — so that chokepoint does NOT cover them. The gap: a blocked
+// user could still post in a shared channel and the blocker would see it.
+//
+// Unlike sealed DMs, the server KNOWS the author of a channel message
+// (messages.author_id is the real sender for encrypted groups — see V21/F14b:
+// content is sealed, sender is NOT). So enforcement is tractable at the
+// per-subscriber DELIVERY point: each member receives channel content by
+// running their OWN StreamMessageEvents subscription (client/channels.rs
+// subscribe_channel_messages), the Signal-shaped place to filter — the message
+// still exists for everyone else; only the blocking pair is dropped.
+//
+// THE FIX: internal/services/message/service/block_filter.go +
+// streams.go — StreamMessages / StreamMessageEvents / StreamGlobalEvents each
+// wrap their delivery channel in a per-subscriber block filter that drops any
+// message whose author has a block relationship with the subscriber.
+// BIDIRECTIONAL (A blocked B OR B blocked A -> B does not receive A's message)
+// and FAIL-CLOSED (an authz backend error DROPS the message, never delivers).
+//
+// FOUR members prove both directions with a clean positive control:
+//   A  = author of the proof message
+//   D  = no block relationship with A  -> RECEIVES (positive control)
+//   B  = B blocked A (subscriber->author) -> does NOT receive
+//   C  = A blocked C (author->subscriber) -> does NOT receive
+// Sender keys are established (warm-up) BEFORE any block, so B, C and D all
+// hold A's sender key — the ONLY thing keeping B and C from decrypting A's
+// message is the server withholding the ciphertext event.
+//
+// MUTATION — RUN, RED, revert (source hash: Go = main repo): in
+// internal/services/message/service/streams.go, in StreamMessageEvents change
+// `return s.filterBlockedEvents(ctx, userID, eventChan), nil` back to
+// `return eventChan, nil` (remove the filter), rebuild + restart server+worker.
+// B and C then receive A's group message (they hold A's sender key) -> RED at
+// the "blocker did NOT receive" assertions. D is unaffected either way.
+// ============================================================================
+#[tokio::test]
+async fn v35_blocking_stops_group_message_delivery() {
+    use chatter_core::domain::channel::ChannelType;
+
+    skip_if_no_server!();
+    no_keyring_prompts();
+
+    // ---- A, B, C, D register + start ----------------------------------------
+    let dir_a = tempfile::tempdir().unwrap();
+    let client_a = build_client(dir_a.path());
+    let uid_a = register_and_start(&client_a, &unique_user("v35a"), "V35 Alice").await;
+
+    let dir_b = tempfile::tempdir().unwrap();
+    let client_b = build_client(dir_b.path());
+    let uid_b = register_and_start(&client_b, &unique_user("v35b"), "V35 Bob").await;
+
+    let dir_c = tempfile::tempdir().unwrap();
+    let client_c = build_client(dir_c.path());
+    let uid_c = register_and_start(&client_c, &unique_user("v35c"), "V35 Carol").await;
+
+    let dir_d = tempfile::tempdir().unwrap();
+    let client_d = build_client(dir_d.path());
+    let uid_d = register_and_start(&client_d, &unique_user("v35d"), "V35 Dave").await;
+
+    assert!(
+        [&uid_a, &uid_b, &uid_c, &uid_d]
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            == 4,
+        "POSITIVE CONTROL FAILED: four registrations did not yield four distinct users \
+         (A={uid_a} B={uid_b} C={uid_c} D={uid_d})."
+    );
+
+    // ---- A creates a DEFAULT Private (encrypted, Sender-Key) group ----------
+    let name_e = format!(
+        "v35-group-{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
+    );
+    let group_e = client_a
+        .create_channel(
+            &name_e,
+            ChannelType::Private,
+            None, // default -> encrypted (F14a), exactly what T6 / the codebase do
+            Some("V35 blocking-on-group-messages"),
+            None,
+            None,
+            vec![uid_b.clone(), uid_c.clone(), uid_d.clone()],
+        )
+        .await
+        .expect("create private group failed");
+    println!("\n  A created encrypted group {} ({})", group_e.name, group_e.id);
+
+    // POSITIVE CONTROL (membership): the server records A, B, C, D as members.
+    let mut member_set = std::collections::HashSet::new();
+    for _ in 0..15 {
+        member_set = psql(&format!(
+            "select user_id from channel_members where channel_id = '{}'",
+            group_e.id
+        ))
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect::<std::collections::HashSet<String>>();
+        if [&uid_a, &uid_b, &uid_c, &uid_d]
+            .iter()
+            .all(|u| member_set.contains(&u.to_string()))
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    for (label, uid) in [("A", &uid_a), ("B", &uid_b), ("C", &uid_c), ("D", &uid_d)] {
+        assert!(
+            member_set.contains(&uid.to_string()),
+            "POSITIVE CONTROL FAILED: {label} ({uid}) is not a server-side member of group {}. \
+             Delivery assertions would be vacuous.",
+            group_e.id
+        );
+    }
+    println!("  positive control: A, B, C, D are all server-side members");
+
+    // B, C, D subscribe to the group stream + events BEFORE any send.
+    client_b.subscribe_channel_messages(&group_e.id);
+    client_c.subscribe_channel_messages(&group_e.id);
+    client_d.subscribe_channel_messages(&group_e.id);
+    let mut events_b = client_b.subscribe_events();
+    let mut events_c = client_c.subscribe_events();
+    let mut events_d = client_d.subscribe_events();
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // ---- WARM-UP (NO BLOCKS YET): establish A's sender key on B, C, D --------
+    // The first send mints A's sender key and ships an SKDM to every member's
+    // device inbox. Done BEFORE any block so B, C and D all hold A's key — the
+    // block must be what withholds the CONTENT, not a missing key.
+    let db_before = row_ids(&uid_b).len();
+    let dc_before = row_ids(&uid_c).len();
+    let dd_before = row_ids(&uid_d).len();
+    client_a
+        .send_text(ActiveConversation::Channel(group_e.id.clone()), &unique_marker())
+        .await
+        .expect("A warm-up send failed");
+    let (mut skdm_b, mut skdm_c, mut skdm_d) = (false, false, false);
+    for _ in 0..40 {
+        skdm_b = row_ids(&uid_b).len() > db_before;
+        skdm_c = row_ids(&uid_c).len() > dc_before;
+        skdm_d = row_ids(&uid_d).len() > dd_before;
+        if skdm_b && skdm_c && skdm_d {
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    assert!(
+        skdm_b && skdm_c && skdm_d,
+        "SENDER-KEY DISTRIBUTION BROKEN: A's warm-up did not deliver an SKDM to B ({skdm_b}), \
+         C ({skdm_c}) and D ({skdm_d}) within 40s. Without the key the block assertions below \
+         would pass for the wrong reason (missing key, not enforced block)."
+    );
+    println!("  warm-up: A's SKDM landed in B's, C's and D's inboxes (key established for all)");
+    tokio::time::sleep(Duration::from_secs(6)).await; // let B, C, D PROCESS the SKDM
+
+    // ---- THE ACTIONS UNDER TEST: two block directions -----------------------
+    // B blocks A  -> subscriber-blocked-author direction.
+    client_b.block_user(&uid_a).await.expect("B failed to block A");
+    // A blocks C  -> author-blocked-subscriber direction (bidirectional proof).
+    client_a.block_user(&uid_c).await.expect("A failed to block C");
+    tokio::time::sleep(Duration::from_secs(3)).await; // SpiceDB read-after-write slack
+
+    // ---- A posts the PROOF message ------------------------------------------
+    let marker_e = unique_marker();
+    println!("  proof marker: {marker_e}");
+    client_a
+        .send_text(ActiveConversation::Channel(group_e.id.clone()), &marker_e)
+        .await
+        .expect("A proof send failed");
+
+    // D (no block) MUST receive; B and C (blocked pairs) MUST NOT. Run all three
+    // waits concurrently so the two negative waits don't serialize to 2x timeout.
+    let gid = group_e.id.clone();
+    let (m_d, m_b, m_c) = (marker_e.clone(), marker_e.clone(), marker_e.clone());
+    let g_d = gid.clone();
+    let g_b = gid.clone();
+    let g_c = gid.clone();
+    let (recv_d, recv_b, recv_c) = tokio::join!(
+        wait_for_event(&mut events_d, EVENT_TIMEOUT, move |e| matches!(
+            e, DomainEvent::MessageReceived { message }
+            if message.conversation_id == g_d && message.as_text() == Some(m_d.as_str())
+        )),
+        wait_for_event(&mut events_b, EVENT_TIMEOUT, move |e| matches!(
+            e, DomainEvent::MessageReceived { message }
+            if message.conversation_id == g_b && message.as_text() == Some(m_b.as_str())
+        )),
+        wait_for_event(&mut events_c, EVENT_TIMEOUT, move |e| matches!(
+            e, DomainEvent::MessageReceived { message }
+            if message.conversation_id == g_c && message.as_text() == Some(m_c.as_str())
+        )),
+    );
+
+    // POSITIVE CONTROL: D, who blocks nobody, decrypted A's group message.
+    let msg_d = match recv_d {
+        Some(DomainEvent::MessageReceived { message }) => message,
+        _ => panic!(
+            "POSITIVE CONTROL FAILED: D (no block relationship with A, holds A's sender key) \
+             never received A's group message ({marker_e}) within {EVENT_TIMEOUT:?}. The block \
+             assertions below would be vacuous — the group pipeline itself is dead."
+        ),
+    };
+    assert_eq!(
+        msg_d.as_text(),
+        Some(marker_e.as_str()),
+        "D decoded a group message but the bytes differ from what A sent"
+    );
+    assert_eq!(msg_d.sender_id.as_ref(), Some(&uid_a), "D attributed the message to the wrong sender");
+    println!("  positive control: D received + decrypted A's group message");
+
+    // LOAD-BEARING (subscriber-blocked-author): B blocked A -> B got NOTHING.
+    assert!(
+        recv_b.is_none(),
+        "GROUP BLOCK NOT ENFORCED (B blocked A): B received A's group message ({marker_e}) even \
+         though B blocked A. The per-subscriber block filter on the Sender-Key delivery path is \
+         not withholding the ciphertext event from the blocker."
+    );
+    println!("  B (blocked A) received NOTHING — subscriber->author direction enforced");
+
+    // LOAD-BEARING (author-blocked-subscriber): A blocked C -> C got NOTHING.
+    assert!(
+        recv_c.is_none(),
+        "GROUP BLOCK NOT ENFORCED (A blocked C): C received A's group message ({marker_e}) even \
+         though A blocked C. The block filter is not bidirectional on the group delivery path."
+    );
+    println!("  C (blocked by A) received NOTHING — author->subscriber direction enforced");
+
+    println!(
+        "\nV35 PASS — A posted ONE encrypted group message; D (no block) received + decrypted it \
+         while B (B blocked A) and C (A blocked C) received NOTHING. Blocking is enforced on the \
+         GROUP / CHANNEL Sender-Key delivery path, bidirectionally, at the per-subscriber \
+         StreamMessageEvents chokepoint — closing the gap V27 could not (DM prekey fetch does not \
+         cover Sender-Key groups). See VALIDATED.md.\n"
+    );
+
+    client_a.shutdown().await;
+    client_b.shutdown().await;
+    client_c.shutdown().await;
+    client_d.shutdown().await;
+}
