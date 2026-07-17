@@ -1,0 +1,223 @@
+   Compiling chatter-ui v0.1.0 (/home/alex/Documents/chatter/linux-client/crates/chatter-ui)
+    Finished `dev` profile [unoptimized] target(s) in 1m 51s
+     Running `target/debug/chatter-ui`
+[2m2026-07-17T04:00:42.963957Z[0m [32m INFO[0m [2mchatter_ui[0m[2m:[0m Chatter Client v0.1.0 (linux)
+[2m2026-07-17T04:00:44.199087Z[0m [32m INFO[0m [2mchatter_ui[0m[2m:[0m GStreamer initialized: GStreamer 1.28.5
+[2m2026-07-17T04:00:44.225365Z[0m [32m INFO[0m [2mchatter_ui[0m[2m:[0m Slint OpenGL ES backend selected for hardware-accelerated video
+[2m2026-07-17T04:00:44.225849Z[0m [32m INFO[0m [2mchatter_core::system::keyring[0m[2m:[0m Accessing system keyring... (please unlock if prompted)
+[2m2026-07-17T04:01:10.575153Z[0m [32m INFO[0m [2mchatter_core::app::infrastructure[0m[2m:[0m Retrieved existing passphrase from keyring
+[2m2026-07-17T04:01:10.676995Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m1 [3mdescription[0m[2m=[0m"Initial schema - settings and sync_state tables"
+[2m2026-07-17T04:01:10.677388Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m2 [3mdescription[0m[2m=[0m"User tables - users, profiles, devices, friendships"
+[2m2026-07-17T04:01:10.677694Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m3 [3mdescription[0m[2m=[0m"Channel tables - channels, memberships"
+[2m2026-07-17T04:01:10.678275Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m4 [3mdescription[0m[2m=[0m"Message tables - messages, threads"
+[2m2026-07-17T04:01:10.678610Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m5 [3mdescription[0m[2m=[0m"Create attachments and thumbnails tables"
+[2m2026-07-17T04:01:10.678841Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m6 [3mdescription[0m[2m=[0m"Create reactions table"
+[2m2026-07-17T04:01:10.679095Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m7 [3mdescription[0m[2m=[0m"Create drafts table"
+[2m2026-07-17T04:01:10.679644Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m9 [3mdescription[0m[2m=[0m"Create FTS5 search index for messages"
+[2m2026-07-17T04:01:10.680265Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m10 [3mdescription[0m[2m=[0m"Create Signal Protocol key store tables"
+[2m2026-07-17T04:01:10.680819Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m11 [3mdescription[0m[2m=[0m"Mailbox token tables - server keys, pending blinds, tokens, quota"
+[2m2026-07-17T04:01:10.681394Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m12 [3mdescription[0m[2m=[0m"DM conversation tables - mailboxes, peer mailboxes, conversation keys"
+[2m2026-07-17T04:01:10.681802Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m13 [3mdescription[0m[2m=[0m"Group mailbox tables - our mailboxes and member mailboxes"
+[2m2026-07-17T04:01:10.682089Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m15 [3mdescription[0m[2m=[0m"Ephemeral messages - TTL tracking table"
+[2m2026-07-17T04:01:10.682135Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m16 [3mdescription[0m[2m=[0m"Add sent_at column and unique index for Signal-style deduplication"
+[2m2026-07-17T04:01:10.682178Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m17 [3mdescription[0m[2m=[0m"Add encrypted content storage to attachments"
+[2m2026-07-17T04:01:10.683784Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m18 [3mdescription[0m[2m=[0m"Rename public_key to svr_public_key"
+[2m2026-07-17T04:01:10.684259Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m19 [3mdescription[0m[2m=[0m"Add file_path column for filesystem attachment storage"
+[2m2026-07-17T04:01:10.684832Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m20 [3mdescription[0m[2m=[0m"Anonymous groups - NDSS'21 style server-oblivious groups"
+[2m2026-07-17T04:01:10.685146Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m21 [3mdescription[0m[2m=[0m"Anonymous group messages storage"
+[2m2026-07-17T04:01:10.685602Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m22 [3mdescription[0m[2m=[0m"Add last_polled_at to anon_group_mailboxes"
+[2m2026-07-17T04:01:10.685846Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m23 [3mdescription[0m[2m=[0m"Add pending_channel_messages table for bootstrap queueing"
+[2m2026-07-17T04:01:10.686591Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m24 [3mdescription[0m[2m=[0m"Add friend_profile_key and profile_sharing to friendships"
+[2m2026-07-17T04:01:10.687173Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m25 [3mdescription[0m[2m=[0m"Anonymous DM tables for client-side managed conversations"
+[2m2026-07-17T04:01:10.688181Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m26 [3mdescription[0m[2m=[0m"Add blocking and rate limiting for anonymous messaging"
+[2m2026-07-17T04:01:10.688655Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m27 [3mdescription[0m[2m=[0m"Add peer_display_name to anonymous DM conversations"
+[2m2026-07-17T04:01:10.689169Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m28 [3mdescription[0m[2m=[0m"Add sent_at to anon_dm_messages for consistent ordering"
+[2m2026-07-17T04:01:10.689698Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m29 [3mdescription[0m[2m=[0m"Add sent_at to anon_group_messages for consistent ordering"
+[2m2026-07-17T04:01:10.690162Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m30 [3mdescription[0m[2m=[0m"Add peer_avatar to anonymous DM conversations"
+[2m2026-07-17T04:01:10.690689Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m31 [3mdescription[0m[2m=[0m"Create Jarvis AI memory tables"
+[2m2026-07-17T04:01:10.691352Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m32 [3mdescription[0m[2m=[0m"Create Jarvis knowledge graph tables"
+[2m2026-07-17T04:01:10.692654Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m33 [3mdescription[0m[2m=[0m"Anonymous message reactions and delivery status (relational)"
+[2m2026-07-17T04:01:10.694099Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m34 [3mdescription[0m[2m=[0m"Add profile fields to anonymous group members"
+[2m2026-07-17T04:01:10.694634Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m35 [3mdescription[0m[2m=[0m"Add delivery_status column to messages table"
+[2m2026-07-17T04:01:10.694998Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m36 [3mdescription[0m[2m=[0m"Call room token tables for anonymous calls"
+[2m2026-07-17T04:01:10.695198Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m37 [3mdescription[0m[2m=[0m"Add sender key rotation tracking metadata"
+[2m2026-07-17T04:01:10.695826Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m38 [3mdescription[0m[2m=[0m"Add owner_id to anon_groups for authoritative updates"
+[2m2026-07-17T04:01:10.696362Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m39 [3mdescription[0m[2m=[0m"Add is_pinned to anon_group_messages"
+[2m2026-07-17T04:01:10.697495Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m40 [3mdescription[0m[2m=[0m"Add is_pinned to anon_dm_messages and is_read to anon_group_messages"
+[2m2026-07-17T04:01:10.697642Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m41 [3mdescription[0m[2m=[0m"Add peer_verification table for safety number verification state"
+[2m2026-07-17T04:01:10.698673Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m42 [3mdescription[0m[2m=[0m"Add is_edited column to anon_dm_messages and anon_group_messages"
+[2m2026-07-17T04:01:10.698708Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m44 [3mdescription[0m[2m=[0m"No-op: unified_reactions created by v045"
+[2m2026-07-17T04:01:10.700187Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m45 [3mdescription[0m[2m=[0m"Unify message pipelines - DROP all message tables, CREATE unified messages"
+[2m2026-07-17T04:01:10.701093Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m46 [3mdescription[0m[2m=[0m"Add reply_to_author_id and reply_to_text columns to messages"
+[2m2026-07-17T04:01:10.701824Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m47 [3mdescription[0m[2m=[0m"Fix FTS5 search triggers for unified messages (channel_id -> conversation_id)"
+[2m2026-07-17T04:01:10.702099Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m48 [3mdescription[0m[2m=[0m"Add custom_sections and section_memberships tables for sidebar organization"
+[2m2026-07-17T04:01:10.702337Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m49 [3mdescription[0m[2m=[0m"Create vector embeddings table for local semantic search"
+[2m2026-07-17T04:01:10.702502Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m50 [3mdescription[0m[2m=[0m"Add pending_anon_group_messages table for JoinAck-delayed fanout"
+[2m2026-07-17T04:01:10.703220Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m51 [3mdescription[0m[2m=[0m"Fix FTS5 search JSON path and recreate table to store IDs"
+[2m2026-07-17T04:01:10.704259Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m52 [3mdescription[0m[2m=[0m"Add reply_to_thumbnail and reply_to_thumbnail_mime columns to messages"
+[2m2026-07-17T04:01:10.704571Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m53 [3mdescription[0m[2m=[0m"Create call_history table"
+[2m2026-07-17T04:01:10.707151Z[0m [32m INFO[0m [2mchatter_core::storage::migrations[0m[2m:[0m Applied migration [3mversion[0m[2m=[0m54 [3mdescription[0m[2m=[0m"Channel icon column: TEXT image_url → BLOB icon"
+[2m2026-07-17T04:01:10.707223Z[0m [32m INFO[0m [2mchatter_core::services::attachment[0m[2m:[0m Created attachments directory: /tmp/chatter-user1/chatter-linux/attachments
+[2m2026-07-17T04:01:10.707952Z[0m [32m INFO[0m [2mchatter_core::app::infrastructure[0m[2m:[0m pinned server .onion for anon-mode Tor transport
+[2m2026-07-17T04:01:10.707962Z[0m [32m INFO[0m [2mchatter_core::app::infrastructure[0m[2m:[0m Infrastructure initialized
+[2m2026-07-17T04:01:10.708137Z[0m [32m INFO[0m [2mchatter_core::app::services[0m[2m:[0m Services initialized
+[2m2026-07-17T04:01:10.805206Z[0m [32m INFO[0m [2mchatter_core::app::context[0m[2m:[0m GIF search enabled via server-side gRPC service
+[2m2026-07-17T04:01:10.816383Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::video::gl_linux[0m[2m:[0m GL video rendering initialized - waiting for first render to connect GL context
+[2m2026-07-17T04:01:10.816394Z[0m [32m INFO[0m [2mchatter_ui[0m[2m:[0m Hardware-accelerated video enabled
+[2m2026-07-17T04:01:10.816819Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::features::sidebar::navigation[0m[2m:[0m Loaded 0 pending message requests [3mcount[0m[2m=[0m0
+[2m2026-07-17T04:01:10.816839Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::features::sidebar::navigation[0m[2m:[0m Loaded 0 pending group invites [3mcount[0m[2m=[0m0
+[2m2026-07-17T04:01:10.817412Z[0m [32m INFO[0m [2mchatter_ui[0m[2m:[0m System tray initialized
+[2m2026-07-17T04:01:10.817520Z[0m [32m INFO[0m [2mchatter_ui[0m[2m:[0m DEV MODE: Auto-registering as dev20800 (Dev User 20800) against http://localhost:50051
+[2m2026-07-17T04:01:10.817531Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::features::auth::register[0m[2m:[0m REGISTER BUTTON TAPPED: user=dev20800, server=http://localhost:50051
+[2m2026-07-17T04:01:10.817595Z[0m [32m INFO[0m [2mchatter_core::network::grpc::client_pool[0m[2m:[0m gRPC pool URL updated to: http://localhost:50051
+[2m2026-07-17T04:01:10.819336Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::features::auth::register[0m[2m:[0m Register: connected! Calling register()...
+[2m2026-07-17T04:01:11.186450Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::video::gl_linux[0m[2m:[0m RenderingSetup callback fired - connecting GL context
+[2m2026-07-17T04:01:11.186462Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::video::gl_linux[0m[2m:[0m connect_gl_context called, already connected: false
+[2m2026-07-17T04:01:11.186464Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::video::gl_linux[0m[2m:[0m Graphics API is NativeOpenGL - loading EGL functions
+[2m2026-07-17T04:01:11.186514Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::video::gl_linux[0m[2m:[0m EGL display: 0x7fa1d0005bf0, context: 0x562aa3fad941
+[2m2026-07-17T04:01:11.186750Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::video::gl_linux[0m[2m:[0m Current GL API: (GLAPI(GLES2), 3, 2)
+[2m2026-07-17T04:01:11.187709Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::video::gl_linux[0m[2m:[0m GL context connected successfully - hardware video ready
+[2m2026-07-17T04:01:11.187727Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::video::gl_linux[0m[2m:[0m GL context connected for video rendering
+[2m2026-07-17T04:01:11.187771Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::video::gl_call[0m[2m:[0m gl_call: GL texture uploader initialized for call video
+[2m2026-07-17T04:01:11.300623Z[0m [32m INFO[0m [2mchatter_core::services::auth_service[0m[2m:[0m Requesting registration challenge - username_hash: ecb50b10188cd069771a571c218bd63d2ac8a8568c1c462dd583f9bd37b422ba, identity_key_len: 32
+[2m2026-07-17T04:01:12.288488Z[0m [32m INFO[0m [2mchatter_core::services::auth_service[0m[2m:[0m Seeded PQOPK pool at registration [3mpq_opk[0m[2m=[0m100
+[2m2026-07-17T04:01:12.767099Z[0m [32m INFO[0m [2mchatter_core::services::svr_backup_service[0m[2m:[0m SVR backup uploaded successfully [3mversion[0m[2m=[0m1
+[2m2026-07-17T04:01:12.767123Z[0m [32m INFO[0m [2mchatter_core::client::auth[0m[2m:[0m SVR backup created successfully after registration [3mversion[0m[2m=[0m1
+[2m2026-07-17T04:01:12.767327Z[0m [32m INFO[0m [2mchatter_core::services::call_worker[0m[2m:[0m Call orchestrator EventBus bridge started
+[2m2026-07-17T04:01:12.767352Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Spawning inbox provider task...
+[2m2026-07-17T04:01:12.767364Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Inbox provider started successfully
+[2m2026-07-17T04:01:12.767369Z[0m [32m INFO[0m [2mchatter_core::app::core_services[0m[2m:[0m Inbox provider started
+[2m2026-07-17T04:01:12.767372Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Inbox provider task started...
+[2m2026-07-17T04:01:12.767403Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Inbox provider run_loop started
+[2m2026-07-17T04:01:12.767410Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Checking for user ID to start user events stream...
+[2m2026-07-17T04:01:12.767411Z[0m [32m INFO[0m [2mchatter_core::inbox::streaming::dm_bootstrap_handler[0m[2m:[0m DM bootstrap handler started
+[2m2026-07-17T04:01:12.767529Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Starting user events stream [3muser_id[0m[2m=[0m7618638c-fa90-4210-bc54-5a5113ad0ec5
+[2m2026-07-17T04:01:12.767544Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m User events stream spawned
+[2m2026-07-17T04:01:12.767610Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Starting polling loop with timing obfuscation (NDSS '21) [3mdummy_poll_probability[0m[2m=[0m0.2
+[2m2026-07-17T04:01:12.767622Z[0m [32m INFO[0m [2mchatter_core::services::call_worker[0m[2m:[0m Call worker started
+[2m2026-07-17T04:01:12.767644Z[0m [32m INFO[0m [2mchatter_core::calls::audio_playback[0m[2m:[0m Audio playback manager created (stream will be initialized on first use)
+[2m2026-07-17T04:01:12.767656Z[0m [32m INFO[0m [2mchatter_core::calls::video_playback[0m[2m:[0m Video playback manager created with shared frames
+[2m2026-07-17T04:01:12.767691Z[0m [32m INFO[0m [2mchatter_core::services::call_worker[0m[2m:[0m Room events forwarder started
+[2m2026-07-17T04:01:12.769740Z[0m [32m INFO[0m [2mchatter_core::inbox::streaming::user_events[0m[2m:[0m Subscribed to user events stream
+[2m2026-07-17T04:01:12.774052Z[0m [32m INFO[0m [2mchatter_core::client[0m[2m:[0m Sender certificate pre-fetched
+[2m2026-07-17T04:01:12.778582Z[0m [32m INFO[0m [2mchatter_core::services::channel_event_service[0m[2m:[0m Channel event stream started
+[2m2026-07-17T04:01:12.836795Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::features::calls::room_events[0m[2m:[0m Started room events listener
+[2m2026-07-17T04:01:12.884366Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::features::calls::incoming[0m[2m:[0m Call orchestrator UI subscriber started
+[2m2026-07-17T04:01:12.966200Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::features::auth::register[0m[2m:[0m Registration successful!
+[2m2026-07-17T04:01:12.966230Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::features::auth::initial_data[0m[2m:[0m Loading initial data...
+[2m2026-07-17T04:01:12.966255Z[0m [32m INFO[0m [2mchatter_core::client::notification[0m[2m:[0m call → notification bridge started
+[2m2026-07-17T04:01:12.966268Z[0m [32m INFO[0m [2mchatter_core::services::notification_stream[0m[2m:[0m notification_stream: connecting [3muser_id[0m[2m=[0m7618638c-fa90-4210-bc54-5a5113ad0ec5
+[2m2026-07-17T04:01:12.966292Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::features::modals::anon_dm_request[0m[2m:[0m [ANON_DM_HANDLER] Started listening for anon DM request events
+[2m2026-07-17T04:01:12.969994Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::features::auth::initial_data[0m[2m:[0m Synced 1 channels from server
+[2m2026-07-17T04:01:12.970037Z[0m [32m INFO[0m [2mchatter_core::app::core_services[0m[2m:[0m Pre-fetching anonymous tokens (current: 0, target: 10)
+[2m2026-07-17T04:01:12.970045Z[0m [32m INFO[0m [2mchatter_core::mailbox::token_manager[0m[2m:[0m TokenManager: request_tokens called, count=10
+[2m2026-07-17T04:01:12.970047Z[0m [32m INFO[0m [2mchatter_core::mailbox::token_manager[0m[2m:[0m TokenManager: resetting quota if needed...
+[2m2026-07-17T04:01:12.970060Z[0m [32m INFO[0m [2mchatter_core::mailbox::token_manager[0m[2m:[0m TokenManager: getting quota status...
+[2m2026-07-17T04:01:12.970062Z[0m [32m INFO[0m [2mchatter_core::mailbox::token_manager[0m[2m:[0m TokenManager: get_quota_status - acquiring connection...
+[2m2026-07-17T04:01:12.970064Z[0m [32m INFO[0m [2mchatter_core::mailbox::token_manager[0m[2m:[0m TokenManager: get_quota_status - connection acquired, querying...
+[2m2026-07-17T04:01:12.970073Z[0m [32m INFO[0m [2mchatter_core::mailbox::token_manager[0m[2m:[0m TokenManager: get_quota_status - query complete, result=false
+[2m2026-07-17T04:01:12.970079Z[0m [32m INFO[0m [2mchatter_core::mailbox::token_manager[0m[2m:[0m TokenManager: initializing quota...
+[2m2026-07-17T04:01:12.970115Z[0m [32m INFO[0m [2mchatter_core::mailbox::token_manager[0m[2m:[0m TokenManager: quota initialized
+[2m2026-07-17T04:01:12.970118Z[0m [32m INFO[0m [2mchatter_core::mailbox::token_manager[0m[2m:[0m TokenManager: quota remaining=10
+[2m2026-07-17T04:01:12.970121Z[0m [32m INFO[0m [2mchatter_core::mailbox::token_manager[0m[2m:[0m TokenManager: will request 10 tokens
+[2m2026-07-17T04:01:12.970122Z[0m [32m INFO[0m [2mchatter_core::mailbox::token_manager[0m[2m:[0m TokenManager: refreshing server key...
+[2m2026-07-17T04:01:12.970125Z[0m [32m INFO[0m [2mchatter_core::mailbox::token_manager[0m[2m:[0m TokenManager: refresh_server_key called
+[2m2026-07-17T04:01:12.970127Z[0m [32m INFO[0m [2mchatter_core::mailbox::token_manager[0m[2m:[0m TokenManager: checking for cached server key...
+[2m2026-07-17T04:01:12.970153Z[0m [32m INFO[0m [2mchatter_core::mailbox::token_manager[0m[2m:[0m TokenManager: no cached key found
+[2m2026-07-17T04:01:12.970155Z[0m [32m INFO[0m [2mchatter_core::mailbox::token_manager[0m[2m:[0m TokenManager: calling get_blind_signature_public_key RPC...
+[2m2026-07-17T04:01:12.972668Z[0m [32m INFO[0m [2mchatter_core::mailbox::token_manager[0m[2m:[0m Got blind signature public key from server
+[2m2026-07-17T04:01:12.972785Z[0m [32m INFO[0m [2mchatter_core::mailbox::token_manager[0m[2m:[0m TokenManager: got server key, generating keypairs...
+[2m2026-07-17T04:01:12.975565Z[0m [32m INFO[0m [2mchatter_core::mailbox::token_manager[0m[2m:[0m TokenManager: generated 10 keypairs, storing pending blinds...
+[2m2026-07-17T04:01:12.977303Z[0m [32m INFO[0m [2mchatter_core::mailbox::token_manager[0m[2m:[0m TokenManager: requesting signatures from server...
+[2m2026-07-17T04:01:13.028538Z[0m [32m INFO[0m [2mchatter_core::mailbox::token_manager[0m[2m:[0m TokenManager: got 10 signatures from server
+[2m2026-07-17T04:01:13.032869Z[0m [32m INFO[0m [2mchatter_core::mailbox::token_manager[0m[2m:[0m TokenManager: request_tokens complete, got 10 tokens
+[2m2026-07-17T04:01:13.032885Z[0m [32m INFO[0m [2mchatter_core::app::core_services[0m[2m:[0m Pre-fetched 10 anonymous tokens
+[2m2026-07-17T04:01:13.034258Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::features::auth::initial_data[0m[2m:[0m Loaded user's own avatar from settings [3mavatar_size[0m[2m=[0m8456 [3mwidth[0m[2m=[0m223 [3mheight[0m[2m=[0m250
+[2m2026-07-17T04:01:13.034536Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::features::auth::initial_data[0m[2m:[0m Loaded 0 pending anon DM requests
+[2m2026-07-17T04:01:13.034574Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::features::auth::initial_data[0m[2m:[0m Loaded 0 private groups
+[2m2026-07-17T04:01:13.034597Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::features::auth::initial_data[0m[2m:[0m Loaded 0 blocked users
+[2m2026-07-17T04:01:13.058563Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Polling device inbox... [3mcycle[0m[2m=[0m1
+[2m2026-07-17T04:01:13.058579Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Acquiring message client lock... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:01:13.058587Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Calling GetDeviceMessages RPC... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:01:13.062226Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m GetDeviceMessages RPC completed [3mafter_id[0m[2m=[0m0 [3mmessage_count[0m[2m=[0m0 [3mhas_more[0m[2m=[0mfalse
+[2m2026-07-17T04:01:13.062244Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Device inbox: empty [3mcycle[0m[2m=[0m1
+[2m2026-07-17T04:01:13.062297Z[0m [32m INFO[0m [2mchatter_core::services::ai::local_service[0m[2m:[0m No model configured, using default: Qwen/Qwen2.5-7B-Instruct-GGUF
+[2m2026-07-17T04:01:13.062334Z[0m [32m INFO[0m [2mchatter_core::services::ai::local_actor[0m[2m:[0m Loading model (stub - local-ai feature disabled) [3mmodel_id[0m[2m=[0mQwen/Qwen2.5-7B-Instruct-GGUF [3mquantized[0m[2m=[0mNone
+[2m2026-07-17T04:01:13.062365Z[0m [32m INFO[0m [2mchatter_core::client[0m[2m:[0m Auto-loaded local AI model: Qwen/Qwen2.5-7B-Instruct-GGUF
+[2m2026-07-17T04:01:13.064757Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::features::auth::initial_data[0m[2m:[0m Initial data load complete
+[2m2026-07-17T04:01:16.874671Z[0m [32m INFO[0m [2mchatter_ui::bin_ui::features::modals::settings[0m[2m:[0m Sealed sender onboarding policy persisted: allow_from_anyone=false
+[2m2026-07-17T04:01:18.484741Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Polling device inbox... [3mcycle[0m[2m=[0m2
+[2m2026-07-17T04:01:18.484758Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Acquiring message client lock... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:01:18.484766Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Calling GetDeviceMessages RPC... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:01:18.488711Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m GetDeviceMessages RPC completed [3mafter_id[0m[2m=[0m0 [3mmessage_count[0m[2m=[0m0 [3mhas_more[0m[2m=[0mfalse
+[2m2026-07-17T04:01:18.488727Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Device inbox: empty [3mcycle[0m[2m=[0m2
+[2m2026-07-17T04:01:23.995160Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Polling device inbox... [3mcycle[0m[2m=[0m3
+[2m2026-07-17T04:01:23.995176Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Acquiring message client lock... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:01:23.995185Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Calling GetDeviceMessages RPC... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:01:23.996670Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m GetDeviceMessages RPC completed [3mafter_id[0m[2m=[0m0 [3mmessage_count[0m[2m=[0m0 [3mhas_more[0m[2m=[0mfalse
+[2m2026-07-17T04:01:23.996688Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Device inbox: empty [3mcycle[0m[2m=[0m3
+[2m2026-07-17T04:01:28.899035Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Polling device inbox... [3mcycle[0m[2m=[0m4
+[2m2026-07-17T04:01:28.899051Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Acquiring message client lock... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:01:28.899059Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Calling GetDeviceMessages RPC... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:01:28.900384Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m GetDeviceMessages RPC completed [3mafter_id[0m[2m=[0m0 [3mmessage_count[0m[2m=[0m0 [3mhas_more[0m[2m=[0mfalse
+[2m2026-07-17T04:01:28.900399Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Device inbox: empty [3mcycle[0m[2m=[0m4
+[2m2026-07-17T04:01:34.466685Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Polling device inbox... [3mcycle[0m[2m=[0m5
+[2m2026-07-17T04:01:34.466701Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Acquiring message client lock... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:01:34.466709Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Calling GetDeviceMessages RPC... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:01:34.468243Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m GetDeviceMessages RPC completed [3mafter_id[0m[2m=[0m0 [3mmessage_count[0m[2m=[0m0 [3mhas_more[0m[2m=[0mfalse
+[2m2026-07-17T04:01:34.468261Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Device inbox: empty [3mcycle[0m[2m=[0m5
+[2m2026-07-17T04:01:39.893157Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Polling device inbox... [3mcycle[0m[2m=[0m6
+[2m2026-07-17T04:01:39.893174Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Acquiring message client lock... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:01:39.893183Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Calling GetDeviceMessages RPC... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:01:39.894410Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m GetDeviceMessages RPC completed [3mafter_id[0m[2m=[0m0 [3mmessage_count[0m[2m=[0m0 [3mhas_more[0m[2m=[0mfalse
+[2m2026-07-17T04:01:39.894424Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Device inbox: empty [3mcycle[0m[2m=[0m6
+[2m2026-07-17T04:01:44.594802Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Polling device inbox... [3mcycle[0m[2m=[0m7
+[2m2026-07-17T04:01:44.594818Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Acquiring message client lock... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:01:44.594827Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Calling GetDeviceMessages RPC... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:01:44.596178Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m GetDeviceMessages RPC completed [3mafter_id[0m[2m=[0m0 [3mmessage_count[0m[2m=[0m0 [3mhas_more[0m[2m=[0mfalse
+[2m2026-07-17T04:01:44.596194Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Device inbox: empty [3mcycle[0m[2m=[0m7
+[2m2026-07-17T04:01:49.594817Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Polling device inbox... [3mcycle[0m[2m=[0m8
+[2m2026-07-17T04:01:49.594834Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Acquiring message client lock... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:01:49.594843Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Calling GetDeviceMessages RPC... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:01:49.597284Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m GetDeviceMessages RPC completed [3mafter_id[0m[2m=[0m0 [3mmessage_count[0m[2m=[0m0 [3mhas_more[0m[2m=[0mfalse
+[2m2026-07-17T04:01:49.597303Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Device inbox: empty [3mcycle[0m[2m=[0m8
+[2m2026-07-17T04:01:54.966253Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Polling device inbox... [3mcycle[0m[2m=[0m9
+[2m2026-07-17T04:01:54.966268Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Acquiring message client lock... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:01:54.966276Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Calling GetDeviceMessages RPC... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:01:54.967780Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m GetDeviceMessages RPC completed [3mafter_id[0m[2m=[0m0 [3mmessage_count[0m[2m=[0m0 [3mhas_more[0m[2m=[0mfalse
+[2m2026-07-17T04:01:54.967804Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Device inbox: empty [3mcycle[0m[2m=[0m9
+[2m2026-07-17T04:01:59.573825Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Polling device inbox... [3mcycle[0m[2m=[0m10
+[2m2026-07-17T04:01:59.573845Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Acquiring message client lock... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:01:59.573855Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Calling GetDeviceMessages RPC... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:01:59.575244Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m GetDeviceMessages RPC completed [3mafter_id[0m[2m=[0m0 [3mmessage_count[0m[2m=[0m0 [3mhas_more[0m[2m=[0mfalse
+[2m2026-07-17T04:01:59.575261Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Device inbox: empty [3mcycle[0m[2m=[0m10
+[2m2026-07-17T04:02:04.859190Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Polling device inbox... [3mcycle[0m[2m=[0m11
+[2m2026-07-17T04:02:04.859211Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Acquiring message client lock... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:02:04.859222Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Calling GetDeviceMessages RPC... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:02:04.861727Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m GetDeviceMessages RPC completed [3mafter_id[0m[2m=[0m0 [3mmessage_count[0m[2m=[0m0 [3mhas_more[0m[2m=[0mfalse
+[2m2026-07-17T04:02:04.861746Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Device inbox: empty [3mcycle[0m[2m=[0m11
+[2m2026-07-17T04:02:09.685411Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Polling device inbox... [3mcycle[0m[2m=[0m12
+[2m2026-07-17T04:02:09.685432Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Acquiring message client lock... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:02:09.685443Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Calling GetDeviceMessages RPC... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:02:09.687573Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m GetDeviceMessages RPC completed [3mafter_id[0m[2m=[0m0 [3mmessage_count[0m[2m=[0m0 [3mhas_more[0m[2m=[0mfalse
+[2m2026-07-17T04:02:09.687593Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Device inbox: empty [3mcycle[0m[2m=[0m12
+[2m2026-07-17T04:02:15.030307Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Polling device inbox... [3mcycle[0m[2m=[0m13
+[2m2026-07-17T04:02:15.030324Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Acquiring message client lock... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:02:15.030334Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Calling GetDeviceMessages RPC... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:02:15.031863Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m GetDeviceMessages RPC completed [3mafter_id[0m[2m=[0m0 [3mmessage_count[0m[2m=[0m0 [3mhas_more[0m[2m=[0mfalse
+[2m2026-07-17T04:02:15.031881Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Device inbox: empty [3mcycle[0m[2m=[0m13
+[2m2026-07-17T04:02:19.544141Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Polling device inbox... [3mcycle[0m[2m=[0m14
+[2m2026-07-17T04:02:19.544157Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Acquiring message client lock... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:02:19.544166Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Calling GetDeviceMessages RPC... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:02:19.545448Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m GetDeviceMessages RPC completed [3mafter_id[0m[2m=[0m0 [3mmessage_count[0m[2m=[0m0 [3mhas_more[0m[2m=[0mfalse
+[2m2026-07-17T04:02:19.545463Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Device inbox: empty [3mcycle[0m[2m=[0m14
+[2m2026-07-17T04:02:24.307570Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Polling device inbox... [3mcycle[0m[2m=[0m15
+[2m2026-07-17T04:02:24.307594Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Acquiring message client lock... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:02:24.307604Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Calling GetDeviceMessages RPC... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:02:24.309781Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m GetDeviceMessages RPC completed [3mafter_id[0m[2m=[0m0 [3mmessage_count[0m[2m=[0m0 [3mhas_more[0m[2m=[0mfalse
+[2m2026-07-17T04:02:24.309813Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Device inbox: empty [3mcycle[0m[2m=[0m15
+[2m2026-07-17T04:02:29.581737Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Polling device inbox... [3mcycle[0m[2m=[0m16
+[2m2026-07-17T04:02:29.581756Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Acquiring message client lock... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:02:29.581764Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m Calling GetDeviceMessages RPC... [3mafter_id[0m[2m=[0m0
+[2m2026-07-17T04:02:29.583041Z[0m [32m INFO[0m [2mchatter_core::inbox::poller[0m[2m:[0m GetDeviceMessages RPC completed [3mafter_id[0m[2m=[0m0 [3mmessage_count[0m[2m=[0m0 [3mhas_more[0m[2m=[0mfalse
+[2m2026-07-17T04:02:29.583056Z[0m [32m INFO[0m [2mchatter_core::inbox::provider[0m[2m:[0m Device inbox: empty [3mcycle[0m[2m=[0m16

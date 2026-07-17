@@ -376,15 +376,71 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         });
     });
 
-    // Delete account (placeholder)
+    // Delete account — first click. The Slint layer reveals an inline
+    // confirmation step (password field + "Delete Forever"); this handler does
+    // NOT delete. Actual deletion only happens via
+    // `on_settings_delete_account_confirmed` below, after explicit confirm.
     let weak_window = window.as_weak();
     window.on_settings_delete_account(move || {
         let weak = weak_window.clone();
-        tracing::info!("Delete account requested - showing confirmation would be needed");
-
+        tracing::info!("Delete account requested — showing confirmation step");
         let _ = slint::invoke_from_event_loop(move || {
-            if let Some(_w) = weak.upgrade() {
-                // Future: Show delete confirmation modal
+            if let Some(w) = weak.upgrade() {
+                // Clear any stale error from a previous attempt.
+                w.set_settings_delete_error("".into());
+            }
+        });
+    });
+
+    // Delete account — CONFIRMED (carries the password entered in the confirm
+    // step). Reaches the `ChatterClient::delete_account` wrapper. On success:
+    // clear local state and route to login. On failure: surface the error in the
+    // confirm panel (do not silently swallow).
+    let ui_ctx_del = ui_ctx.clone();
+    let weak_window = window.as_weak();
+    window.on_settings_delete_account_confirmed(move |password: SharedString| {
+        let ui_ctx = ui_ctx_del.clone();
+        let weak = weak_window.clone();
+        let password = password.to_string();
+
+        // Enter loading; clear prior error.
+        let weak_loading = weak.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak_loading.upgrade() {
+                w.set_settings_delete_loading(true);
+                w.set_settings_delete_error("".into());
+            }
+        });
+
+        tokio::spawn(async move {
+            match ui_ctx.delete_account(&password).await {
+                Ok(()) => {
+                    // Account is gone server-side and local auth state is cleared
+                    // by the wrapper. Reflect it in the UI and route to login.
+                    ui_ctx.auth_state().set_logged_out();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_settings_delete_loading(false);
+                            w.set_settings_delete_password("".into());
+                            w.set_settings_delete_error("".into());
+                            w.set_current_view("login".into());
+                            w.set_active_modal("none".into());
+                            w.set_login_username("".into());
+                            w.set_login_password("".into());
+                            w.set_login_error("".into());
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Account deletion failed: {e}");
+                    let msg = format!("Deletion failed: {e}");
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_settings_delete_loading(false);
+                            w.set_settings_delete_error(msg.into());
+                        }
+                    });
+                }
             }
         });
     });

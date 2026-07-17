@@ -23,8 +23,11 @@ use crate::MainWindow;
 
 /// Wire friends modal callbacks.
 pub fn wire_friends_modal(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    // NOTE: wire_search_users removed - username search disabled for privacy
-    // Users must use friend codes for discovery
+    // User search (F-UI-3): re-enabled with Signal-style EXACT-username lookup
+    // (the same privacy-preserving discovery the invite-member search uses).
+    // Display names are profile-key-encrypted, so only an exact
+    // `nickname.discriminator` resolves — no substring enumeration of accounts.
+    friends_list::wire_search_users(window, ui_ctx);
 
     // Friend requests (send, accept, decline, cancel)
     requests::wire_send_request(window, ui_ctx);

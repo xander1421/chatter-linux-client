@@ -63,6 +63,22 @@ impl MessageService {
             .get_channel_encryption_settings(channel_id, channel_client)
             .await?;
 
+        // Disappearing messages: READ this conversation's configured timer (the
+        // channel's `default_ttl_seconds`, written by `set_disappearing_timer`)
+        // and ARM the message with it. This is the load-bearing wire that was
+        // cut: every send used to hardcode `None`. Signal semantics — the timer
+        // starts at SEND time: the server schedules a Temporal delete workflow
+        // from receipt (see `scheduleEphemeralMessageCleanup`), and the E2E
+        // marker set on the DataMessage below lets recipients expire their own
+        // local copy. `0`/absent = disabled.
+        let disappearing_ttl_secs: Option<u32> = self
+            .channel_repo
+            .get(channel_id)
+            .ok()
+            .flatten()
+            .and_then(|c| c.config.default_ttl_seconds)
+            .filter(|s| *s > 0);
+
         // E2E plaintext that rides inside the sender-key ciphertext: use the
         // pairwise `content_v1::DataMessage` proto so attachment pointers
         // (CDN key + per-blob AES key) travel with the message and receivers
@@ -79,6 +95,10 @@ impl MessageService {
                     .map(|id| id.to_string())
                     .collect(),
                 targets_ai_bot,
+                // Arm the E2E disappearing marker so recipients (and our own
+                // linked devices) can expire their local copy on their own clock.
+                ephemeral: disappearing_ttl_secs.is_some(),
+                ephemeral_ttl_seconds: disappearing_ttl_secs.unwrap_or(0),
                 ..Default::default()
             };
             let wrap = crate::proto::content_v1::Content {
@@ -109,13 +129,22 @@ impl MessageService {
             text_len = trimmed_text.len(),
             "[SEND_MESSAGE] Sending message to server API"
         );
+        // Arm the server-side ephemeral pipeline: a non-None TTL makes the
+        // message handler schedule a Temporal delete workflow for it.
+        let (ephemeral, ephemeral_ttl) = match disappearing_ttl_secs {
+            Some(secs) => (
+                true,
+                Some(prost_types::Duration { seconds: i64::from(secs), nanos: 0 }),
+            ),
+            None => (false, None),
+        };
         let proto_message = message_client
             .send_message(
                 &channel_id.to_string(),
                 content_to_send.clone(),
                 thread_id.map(|id| id.to_string()).as_deref(),
-                false, // ephemeral (Phase 34)
-                None,  // ephemeral_ttl
+                ephemeral,
+                ephemeral_ttl,
                 None,  // crypto_options
                 mentioned_integrations.iter().map(|id| id.to_string()).collect(),
                 targets_ai_bot,

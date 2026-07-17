@@ -816,6 +816,17 @@ impl EventHandlers {
                 }
             }
 
+            // Channel metadata (name/icon) and member-role changes are persisted
+            // to the channel repo by ChannelEventService before this event fires;
+            // the UI reads channel name / member list from the repo, so there is
+            // no in-memory state to mutate here.
+            DomainEvent::ChannelUpdated { channel_id, name, .. } => {
+                trace!(?channel_id, %name, "Channel metadata updated");
+            }
+            DomainEvent::ChannelMemberRoleChanged { channel_id, user_id, role } => {
+                trace!(?channel_id, ?user_id, ?role, "Channel member role changed");
+            }
+
             // ================================================================
             // User Presence Events
             // ================================================================

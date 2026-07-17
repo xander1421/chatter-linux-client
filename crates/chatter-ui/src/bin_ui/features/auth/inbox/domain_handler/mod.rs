@@ -405,6 +405,30 @@ pub async fn handle_domain_event(
             messaging::update_active_channel_member_count(window, ui_ctx, channel_id);
         }
 
+        // Channel metadata (name/icon) was changed by an admin. Core already
+        // persisted the new values to the channel repo; live-refresh the header
+        // title if this is the active conversation.
+        DomainEvent::ChannelUpdated { channel_id, name, icon: _ } => {
+            let is_active = ui_ctx.chat_state().get().active_channel_id
+                .map(|id| id == channel_id)
+                .unwrap_or(false);
+            if is_active {
+                let weak = window.clone();
+                let new_name = name.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_channel_name(new_name.into());
+                    }
+                });
+            }
+        }
+
+        // A member's role changed. Core persisted the new role to the membership
+        // repo; refresh the member view so the new role is reflected.
+        DomainEvent::ChannelMemberRoleChanged { channel_id, user_id: _, role: _ } => {
+            messaging::update_active_channel_member_count(window, ui_ctx, channel_id);
+        }
+
         // =========================================================================
         // User Presence Updates
         // =========================================================================

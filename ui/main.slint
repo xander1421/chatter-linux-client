@@ -425,6 +425,9 @@ export component MainWindow inherits Window {
     in-out property <string> settings-confirm-password <=> app.settings-confirm-password;
     in property <bool> settings-password-changing <=> app.settings-password-changing;
     in property <string> settings-password-error <=> app.settings-password-error;
+    in-out property <string> settings-delete-password <=> app.settings-delete-password;
+    in property <bool> settings-delete-loading <=> app.settings-delete-loading;
+    in property <string> settings-delete-error <=> app.settings-delete-error;
     in-out property <bool> settings-read-receipts <=> app.settings-read-receipts;
     in-out property <bool> settings-typing-indicators <=> app.settings-typing-indicators;
     in property <string> settings-identity-fingerprint <=> app.settings-identity-fingerprint;
@@ -660,6 +663,7 @@ export component MainWindow inherits Window {
     callback settings-view-sessions <=> app.settings-view-sessions;
     callback settings-logout <=> app.settings-logout;
     callback settings-delete-account <=> app.settings-delete-account;
+    callback settings-delete-account-confirmed <=> app.settings-delete-account-confirmed;
     callback settings-read-receipts-changed <=> app.settings-read-receipts-changed;
     callback settings-typing-indicators-changed <=> app.settings-typing-indicators-changed;
     callback settings-search-shortcut-changed <=> app.settings-search-shortcut-changed;

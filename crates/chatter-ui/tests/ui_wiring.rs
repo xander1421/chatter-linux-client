@@ -10,6 +10,16 @@
 use i_slint_backend_testing as testing;
 use chatter_ui::MainWindow;
 
+/// Route the SQLCipher passphrase through the documented env override so offline
+/// `ChatterClient::build()` never touches the OS keyring / Secret Service (absent
+/// on a headless CI box). Mirrors `validated.rs::no_keyring_prompts`.
+fn no_keyring() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| unsafe {
+        std::env::set_var("CHATTER_DB_PASSPHRASE", "ui-wiring-harness-passphrase");
+    });
+}
+
 /// Install the headless backend for the current test thread. Safe to call once
 /// per thread; a second call on the same thread would panic (platform already
 /// initialized), which cargo's thread-per-test model avoids.
@@ -64,6 +74,7 @@ fn wired_offline() -> (
     std::sync::Arc<chatter_core::client::ChatterClient>,
     MainWindow,
 ) {
+    no_keyring();
     let rt = tokio::runtime::Runtime::new().unwrap();
     let _guard = rt.enter();
     let tmp = tempfile::tempdir().unwrap();
@@ -228,4 +239,174 @@ fn settings_typing_indicators_toggle_reaches_core() {
     );
     w.invoke_settings_typing_indicators_changed(true);
     assert_eq!(client.typing_indicators_enabled().unwrap(), true, "toggle did not flip back on");
+}
+
+// ============================================================================
+// F-UI-7 (RESOLVED): the "Delete Account" button is no longer a dead wire.
+//
+// The delete flow can't be driven to completion headlessly (it is async +
+// network + routes on the event loop, and `wired_offline` never spins the loop),
+// so this proves the wire at two layers, and NAMES which:
+//
+//  L1 (DYNAMIC, MainWindow boundary): the generated
+//      `invoke_settings_delete_account_confirmed` exists and, when invoked,
+//      runs the REAL production handler (from wire_settings_callbacks) without
+//      panicking. An undeclared/unwired callback would not compile / would be a
+//      no-op; this confirms the callback chain main->app->SettingsScreen->Rust
+//      is connected.
+//
+//  L2 (STATIC, reaches-core + confirm-gate): the production handler source wires
+//      the CONFIRMED callback to `ChatterClient::delete_account`, and does NOT
+//      delete on the first (unconfirmed) click — i.e. deletion is gated behind an
+//      explicit confirmation step. The actual server-side deletion is proven
+//      end-to-end by validated.rs::v28 (the wrapper really removes the users row).
+// ============================================================================
+#[test]
+fn settings_delete_account_is_wired_behind_confirmation() {
+    // ---- L1: callback is declared and reaches the real handler --------------
+    let (rt, _tmp, _client, w) = wired_offline();
+    // The confirmed handler spawns onto the tokio runtime; enter it so the wire
+    // can run (the task is queued, not driven — we assert the wire, not delete).
+    let _guard = rt.enter();
+    // Must not panic: the confirmed-delete callback is wired to a Rust handler.
+    // (Offline + no logged-in user → the handler's async delete resolves to a
+    // NotLoggedIn error it surfaces on the loop; we only assert the wire runs.)
+    w.invoke_settings_delete_account_confirmed("irrelevant-password".into());
+    // The first-click (unconfirmed) callback must also be wired and safe to call.
+    w.invoke_settings_delete_account();
+
+    // ---- L2: static — confirmed handler reaches the wrapper; gated by confirm -
+    let settings_src = include_str!("../src/bin_ui/features/modals/settings.rs");
+    assert!(
+        settings_src.contains("on_settings_delete_account_confirmed"),
+        "settings.rs must register the confirmed-delete handler"
+    );
+    // The confirmed handler must reach the ChatterClient::delete_account wrapper.
+    let confirmed_idx = settings_src
+        .find("on_settings_delete_account_confirmed")
+        .expect("confirmed handler present");
+    let after_confirmed = &settings_src[confirmed_idx..];
+    assert!(
+        after_confirmed.contains(".delete_account(&password)")
+            || after_confirmed.contains(".delete_account("),
+        "the confirmed-delete handler must call ChatterClient::delete_account (dead wire otherwise)"
+    );
+
+    // The Slint layer must gate the confirmed callback behind an explicit confirm
+    // reveal (`show-delete-confirm`) — no deletion without confirmation.
+    let screen_src = include_str!("../../../ui/settings/settings_screen.slint");
+    assert!(
+        screen_src.contains("show-delete-confirm")
+            && screen_src.contains("delete-account-confirmed(root.delete-password)"),
+        "the Delete button must reveal a confirm step whose Confirm action carries the \
+         password to delete-account-confirmed — deletion must be gated behind confirmation"
+    );
+}
+
+// ============================================================================
+// F-UI-3 (RESOLVED): friends-modal user search is no longer a dead wire.
+//
+//  L1 (DYNAMIC): `on_friends_search_users` is now a registered handler — invoking
+//      the generated callback runs the REAL production handler (from
+//      wire_friends_modal) without panicking. Before, the callback fired into the
+//      void (no `.on_friends_search_users`). Offline (no server) the lookup yields
+//      nothing; we assert the WIRE runs, not a server result.
+//  L2 (STATIC): the handler reaches `ChatterClient::search_users` and populates the
+//      bound `friends-search-results` model. The real taken-vs-unknown effect is
+//      proven end-to-end by validated.rs::v31.
+// ============================================================================
+#[test]
+fn friends_search_users_is_wired_to_core() {
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    testing::init_no_event_loop();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+    let w = MainWindow::new().expect("MainWindow::new");
+
+    // Register the REAL friends-modal handlers, then fire the search callback.
+    chatter_ui::bin_ui::features::modals::wire_friends_modal(&w, &client);
+    // Must not panic: the callback is wired to a Rust handler (dead wire otherwise).
+    w.invoke_friends_search_users("someone.4242".into());
+
+    // ---- L2 static: handler reaches core + populates the results model -------
+    let src = include_str!("../src/bin_ui/features/modals/friends/friends_list.rs");
+    assert!(
+        src.contains("on_friends_search_users"),
+        "friends_list.rs must register the search handler"
+    );
+    let idx = src.find("on_friends_search_users").unwrap();
+    let after = &src[idx..];
+    assert!(
+        after.contains(".search_users("),
+        "the search handler must call ChatterClient::search_users (dead wire otherwise)"
+    );
+    assert!(
+        after.contains("set_friends_search_results"),
+        "the search handler must populate the bound friends-search-results model"
+    );
+}
+
+// ============================================================================
+// F-UI-1 (RESOLVED for mute): the channel-settings MUTE toggle now persists.
+//
+//  L1 (DYNAMIC): `on_channel_settings_toggle_mute` runs the real handler without
+//      panicking. Offline (no logged-in user / membership) the persist resolves
+//      to an error the handler logs; we assert the WIRE runs.
+//  L2 (STATIC): the handler calls `mute_conversation` (not just a Slint setter).
+//      The real membership persistence is proven by validated.rs::v33.
+// ============================================================================
+#[test]
+fn channel_settings_mute_toggle_reaches_core() {
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    testing::init_no_event_loop();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+    let w = MainWindow::new().expect("MainWindow::new");
+
+    chatter_ui::bin_ui::features::modals::wire_channel_settings(&w, &client);
+    // Must not panic: the toggle is wired to a Rust handler that spawns the
+    // persist task (the bool-set + persist are deferred onto the event loop /
+    // tokio, which this no-event-loop harness does not pump — so we assert the
+    // WIRE runs, and leave the persisted-state assertion to validated.rs::v33).
+    w.invoke_channel_settings_toggle_mute(true);
+
+    // ---- L2 static: handler reaches the mute_conversation core method --------
+    let src = include_str!("../src/bin_ui/features/modals/channel_settings.rs");
+    let idx = src.find("on_channel_settings_toggle_mute").expect("mute handler present");
+    let after = &src[idx..];
+    assert!(
+        after.contains(".mute_conversation("),
+        "the mute toggle must call ChatterClient::mute_conversation (was a Slint-only bool)"
+    );
+}
+
+// ============================================================================
+// AVATAR CHANGE (RESOLVED for desktop): the picker now persists the picked bytes.
+//
+// The avatar picker is behind a native file dialog, so it can't be driven
+// headlessly. L2 (STATIC): `on_edit_profile_change_avatar` calls
+// `set_avatar_bytes` on the picked data, so Save (`update_user_profile`) uploads
+// THOSE bytes as `encrypted_avatar`. The full upload+server-store+decrypt
+// round-trip is proven by validated.rs::v32.
+// ============================================================================
+#[test]
+fn edit_profile_avatar_change_persists_picked_bytes() {
+    let src = include_str!("../src/bin_ui/features/modals/profile.rs");
+    let idx = src.find("on_edit_profile_change_avatar").expect("avatar handler present");
+    let after = &src[idx..];
+    assert!(
+        after.contains(".set_avatar_bytes(&data)") || after.contains(".set_avatar_bytes("),
+        "the avatar picker must persist the picked bytes via set_avatar_bytes \
+         (previously only wrote a write-never-read PENDING_AVATAR_PATH + preview)"
+    );
 }

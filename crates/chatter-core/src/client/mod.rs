@@ -24,6 +24,20 @@ mod jarvis;
 mod link_device;
 mod messaging;
 pub use messaging::{InviteCandidate, ReplyParentMedia};
+
+/// A user-search hit surfaced to the UI (friends modal search).
+///
+/// Privacy note: display names are profile-key-encrypted on the server, so the
+/// only server-side discovery that can resolve a stranger is an EXACT
+/// `nickname.discriminator` username lookup (Signal's model). This struct is
+/// what [`ChatterClient::search_users`] returns per hit.
+#[derive(Clone, Debug)]
+pub struct UserSearchResult {
+    pub user_id: crate::domain::ids::UserId,
+    pub display_name: String,
+    pub username: String,
+    pub is_friend: bool,
+}
 mod notification;
 mod pin;
 mod profile;
@@ -1747,6 +1761,16 @@ impl ChatterClient {
         self.conversation(conv).mute_conversation(muted)
     }
 
+    /// Read a conversation's persisted mute state (inverse of
+    /// [`Self::mute_conversation`]). Lets the UI reflect the real stored mute
+    /// state (e.g. when reopening channel settings) instead of a stale bool.
+    pub fn is_conversation_muted(
+        self: &Arc<Self>,
+        conv: ActiveConversation,
+    ) -> Result<bool, crate::services::conversation::ConversationError> {
+        self.conversation(conv).is_muted()
+    }
+
     /// Delete a conversation from local storage.
     pub fn delete_conversation(
         self: &Arc<Self>,
@@ -2157,6 +2181,32 @@ impl ChatterClient {
         self.auth().change_password(current, new).await
     }
 
+    /// Permanently delete the current user's account.
+    ///
+    /// IRREVERSIBLE. Hits `AuthService/DeleteAccount` on the server (verifying
+    /// the supplied password), consumes the deletion event stream to completion,
+    /// and on success clears local auth state (auth interceptor + current
+    /// user/device ids) so the app drops to a logged-out state. The UI MUST gate
+    /// this behind an explicit confirmation.
+    ///
+    /// Façade wrapper (feedback_service_layer_architecture): chatter-ui reaches
+    /// account deletion only through this method, never the raw AccountService.
+    /// The service is built on demand from the same components AuthService holds
+    /// (grpc pool, settings repo, auth interceptor) — mirroring the on-demand
+    /// construction used for `svr_backup()` / `call_signaling()`.
+    pub async fn delete_account(
+        &self,
+        password: &str,
+    ) -> Result<(), crate::services::account_service::AccountError> {
+        let auth = self.auth();
+        let account = crate::services::account_service::AccountService::new(
+            self.services.grpc_pool.clone(),
+            auth.settings_repo.clone(),
+            auth.auth_interceptor.clone(),
+        );
+        account.delete_acct(password).await
+    }
+
     /// Get a user's display name.
     pub fn get_display_name(&self, user_id: &crate::domain::ids::UserId) -> String {
         self.users().get_display_name(user_id)
@@ -2176,6 +2226,62 @@ impl ChatterClient {
         user_id: &crate::domain::ids::UserId,
     ) -> Result<crate::domain::Profile, crate::services::user::UserError> {
         self.users().get_user_profile(user_id).await
+    }
+
+    /// Search for users by exact `nickname.discriminator` username.
+    ///
+    /// Backs the friends-modal user search (F-UI-3). Because display names are
+    /// profile-key-encrypted server-side, only an EXACT username resolves to an
+    /// account — this mirrors the invite-member search (Signal's discovery
+    /// model). Returns at most one hit (the exact match), enriched with the
+    /// decrypted display name and whether they are already a friend. An empty
+    /// or no-match query yields an empty vec (never an error the UI must show).
+    pub async fn search_users(
+        &self,
+        query: &str,
+    ) -> Result<Vec<UserSearchResult>, crate::services::user::UserError> {
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let user_id = match self.lookup_by_username(trimmed).await? {
+            Some(id) => id,
+            None => return Ok(vec![]),
+        };
+
+        // Don't surface ourselves as a search hit.
+        if self.session_current_user_id().as_ref() == Some(&user_id) {
+            return Ok(vec![]);
+        }
+
+        // Best-effort profile fetch: a stranger found by exact username has no
+        // profile key exchanged yet, so the display name may not decrypt. Still
+        // surface the hit (fall back to the username) rather than dropping it.
+        let display_name = match self.get_user_profile(&user_id).await {
+            Ok(p) if !p.display_name.is_empty() => p.display_name,
+            _ => trimmed.to_string(),
+        };
+        let username = self
+            .get_user_local(&user_id)
+            .map(|u| u.username)
+            .unwrap_or_else(|| trimmed.to_string());
+
+        // is_friend: the peer id appears in any of our friendship rows.
+        let friend_ids: std::collections::HashSet<crate::domain::ids::UserId> = self
+            .list_friends(500, 0)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .flat_map(|f| [f.requester_id, f.addressee_id])
+            .collect();
+
+        Ok(vec![UserSearchResult {
+            is_friend: friend_ids.contains(&user_id),
+            user_id,
+            display_name,
+            username,
+        }])
     }
 
     // ── Message history ─────────────────────────────────────────────

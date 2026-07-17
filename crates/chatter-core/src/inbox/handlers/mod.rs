@@ -518,6 +518,24 @@ pub enum DomainEvent {
         message: Message,
     },
 
+    /// Channel metadata (name / description / icon) was changed by an admin.
+    /// Fanned out from the server's `ChannelUpdated` event so other members'
+    /// UIs live-refresh the channel header instead of showing the stale name.
+    ChannelUpdated {
+        channel_id: ChannelId,
+        name: String,
+        icon: Option<Vec<u8>>,
+    },
+
+    /// A member's role was changed (promote / demote) by an admin. Fanned out
+    /// from the server's `MemberUpdated` event so other members' UIs reflect
+    /// the new role in the member list.
+    ChannelMemberRoleChanged {
+        channel_id: ChannelId,
+        user_id: UserId,
+        role: crate::domain::channel::MemberRole,
+    },
+
     // ========================================================================
     // Jarvis AI Events
     // ========================================================================
@@ -630,6 +648,8 @@ impl DomainEvent {
             DomainEvent::MessageSendFailed { channel_id, .. } => Some(*channel_id),
             DomainEvent::ChannelMemberJoined { channel_id, .. } => Some(*channel_id),
             DomainEvent::ChannelMemberLeft { channel_id, .. } => Some(*channel_id),
+            DomainEvent::ChannelUpdated { channel_id, .. } => Some(*channel_id),
+            DomainEvent::ChannelMemberRoleChanged { channel_id, .. } => Some(*channel_id),
             DomainEvent::UserPresenceChanged { .. } => None,
             DomainEvent::AnonDmProfileUpdated { .. } => None,
             DomainEvent::UserProfileUpdated { .. } => None,

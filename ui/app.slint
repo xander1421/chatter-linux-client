@@ -539,6 +539,10 @@ export component App inherits Rectangle {
     in-out property <string> settings-confirm-password: "";
     in property <bool> settings-password-changing: false;
     in property <string> settings-password-error: "";
+    // Delete-account confirmation
+    in-out property <string> settings-delete-password: "";
+    in property <bool> settings-delete-loading: false;
+    in property <string> settings-delete-error: "";
     in-out property <bool> settings-read-receipts: true;
     in-out property <bool> settings-typing-indicators: true;
     in property <string> settings-identity-fingerprint: "";
@@ -756,6 +760,7 @@ export component App inherits Rectangle {
     callback settings-view-sessions();
     callback settings-logout();
     callback settings-delete-account();
+    callback settings-delete-account-confirmed(string);  // password
     callback settings-read-receipts-changed(bool);
     callback settings-typing-indicators-changed(bool);
     callback settings-search-shortcut-changed(string);
@@ -2068,6 +2073,10 @@ export component App inherits Rectangle {
         local-ai-loading: root.settings-local-ai-loading;
         local-ai-status: root.settings-local-ai-status;
         local-ai-error: root.settings-local-ai-error;
+        // Delete-account confirmation
+        delete-password <=> root.settings-delete-password;
+        delete-loading: root.settings-delete-loading;
+        delete-error: root.settings-delete-error;
 
         edit-profile-clicked => {
             root.settings-edit-profile();
@@ -2084,6 +2093,9 @@ export component App inherits Rectangle {
         }
         delete-account-clicked => {
             root.settings-delete-account();
+        }
+        delete-account-confirmed(password) => {
+            root.settings-delete-account-confirmed(password);
         }
         close-settings => {
             root.active-modal = "none";

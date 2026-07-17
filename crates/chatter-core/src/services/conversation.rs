@@ -656,6 +656,48 @@ impl ConversationHandle {
         }
     }
 
+    /// Read this conversation's persisted mute state (the inverse of
+    /// [`Self::mute_conversation`]). Reads exactly the same store the setter
+    /// wrote — the local membership `is_muted` flag for channels/DMs, the group
+    /// status for anon groups, or the per-peer settings key for channel-free
+    /// DMs. Defaults to `false` (unmuted) when nothing has been persisted.
+    pub fn is_muted(&self) -> Result<bool, ConversationError> {
+        match &self.conversation {
+            ActiveConversation::AnonDm(id) => {
+                let key = format!("conv.muted.anon_dm.{}", id);
+                Ok(self.client.channels().settings_repo
+                    .get_bool(&key)
+                    .map_err(|e| ConversationError::Other(e.to_string()))?
+                    .unwrap_or(false))
+            }
+            ActiveConversation::AnonGroup(id) => {
+                Ok(self.client.anon_groups()
+                    .get_group(id)
+                    .map_err(|e| ConversationError::Other(e.to_string()))?
+                    .map(|g| g.status == crate::domain::anon_group::AnonGroupStatus::Muted)
+                    .unwrap_or(false))
+            }
+            ActiveConversation::ServerDm { peer_id } => {
+                let key = format!("conv.muted.server_dm.{}", peer_id);
+                Ok(self.client.channels().settings_repo
+                    .get_bool(&key)
+                    .map_err(|e| ConversationError::Other(e.to_string()))?
+                    .unwrap_or(false))
+            }
+            ActiveConversation::MailboxDm { channel_id, .. }
+            | ActiveConversation::Channel(channel_id) => {
+                let user_id = self.client.auth_state().get().current_user_id
+                    .ok_or_else(|| ConversationError::Other("Not logged in".into()))?;
+                Ok(self.client.channels().channel_repo
+                    .get_membership(channel_id, &user_id)
+                    .map_err(|e| ConversationError::Other(e.to_string()))?
+                    .map(|m| m.is_muted)
+                    .unwrap_or(false))
+            }
+            ActiveConversation::None => Err(ConversationError::NoConversation),
+        }
+    }
+
     /// Delete this conversation from the local database.
     ///
     /// Removes messages, channel/membership data, and associated state.

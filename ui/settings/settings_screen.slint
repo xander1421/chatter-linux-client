@@ -55,11 +55,17 @@ export component SettingsScreen inherits Rectangle {
     in property <string> local-ai-status: "";  // "not loaded", "loading", "loaded: ModelName"
     in property <string> local-ai-error: "";
 
+    // Delete-account confirmation state
+    in-out property <string> delete-password: "";
+    in property <bool> delete-loading: false;
+    in property <string> delete-error: "";
+
     // Navigation state
     property <string> active-section: "account";  // "account", "privacy", "encryption", "appearance"
     property <bool> show-password-form: false;
     property <bool> show-pin-form: false;
     property <bool> show-backup-retry: false;
+    property <bool> show-delete-confirm: false;
 
     // Callbacks
     callback edit-profile-clicked();
@@ -67,6 +73,7 @@ export component SettingsScreen inherits Rectangle {
     callback view-sessions-clicked();
     callback logout-clicked();
     callback delete-account-clicked();
+    callback delete-account-confirmed(string);  // password — fired only after explicit confirm
     callback close-settings();
 
     // Privacy callbacks
@@ -820,10 +827,64 @@ export component SettingsScreen inherits Rectangle {
                                             }
                                         }
 
-                                        Button {
+                                        // First click reveals a confirmation step
+                                        // (with password) — never deletes directly.
+                                        if !show-delete-confirm: Button {
                                             text: "Delete Account";
                                             variant: "danger";
-                                            clicked => { root.delete-account-clicked(); }
+                                            clicked => {
+                                                root.delete-account-clicked();
+                                                show-delete-confirm = true;
+                                            }
+                                        }
+                                    }
+
+                                    // Inline delete confirmation (explicit confirm gate)
+                                    if show-delete-confirm: VerticalLayout {
+                                        spacing: Spacing.sm;
+
+                                        Rectangle {
+                                            height: 1px;
+                                            background: Colors.error.with-alpha(0.2);
+                                        }
+
+                                        Text {
+                                            text: "This permanently deletes your account and all associated data. This cannot be undone. Enter your password to confirm.";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            wrap: word-wrap;
+                                        }
+
+                                        Input {
+                                            placeholder: "Password";
+                                            password: true;
+                                            text <=> root.delete-password;
+                                            error: root.delete-error != "";
+                                            error-message: root.delete-error;
+                                        }
+
+                                        HorizontalLayout {
+                                            spacing: Spacing.sm;
+                                            alignment: end;
+
+                                            Button {
+                                                text: "Cancel";
+                                                variant: "ghost";
+                                                clicked => {
+                                                    show-delete-confirm = false;
+                                                    root.delete-password = "";
+                                                }
+                                            }
+
+                                            Button {
+                                                text: "Delete Forever";
+                                                variant: "danger";
+                                                loading: root.delete-loading;
+                                                disabled: root.delete-password == "";
+                                                clicked => {
+                                                    root.delete-account-confirmed(root.delete-password);
+                                                }
+                                            }
                                         }
                                     }
                                 }

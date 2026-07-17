@@ -505,6 +505,7 @@ impl ScreenCapture {
         // ── Phase 1: probe for first frame, negotiate source dims ──
         let probe_start = Instant::now();
         let mut dims_tx = Some(dims_tx);
+        let mut warned_30s = false;
         let (video_source, pending_first_frame): (NativeVideoSource, CapturedFrame) = 'probe: loop {
             if !running.load(Ordering::SeqCst) || permanent_error_flagged.load(Ordering::SeqCst) {
                 tracing::info!("Screen capture stopped before first frame was processed");
@@ -536,12 +537,13 @@ impl ScreenCapture {
                 }
             }
 
-            if use_portal && !first_frame_received.load(Ordering::SeqCst) {
+            if use_portal && !first_frame_received.load(Ordering::SeqCst) && !warned_30s {
                 let elapsed = probe_start.elapsed();
-                if elapsed > Duration::from_secs(30) && elapsed < Duration::from_secs(31) {
+                if elapsed > Duration::from_secs(30) {
                     tracing::warn!(
                         "Screen sharing: No frames received after 30s. Portal dialog may have been cancelled."
                     );
+                    warned_30s = true;
                 }
             }
         };

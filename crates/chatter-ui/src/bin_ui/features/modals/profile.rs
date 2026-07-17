@@ -641,10 +641,12 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     // Change avatar with file picker
     let weak_window = window.as_weak();
+    let ui_ctx_avatar = ui_ctx.clone();
     window.on_edit_profile_change_avatar(move || {
         #[cfg(not(target_os = "android"))]
         {
             let weak = weak_window.clone();
+            let ui_ctx = ui_ctx_avatar.clone();
 
             tokio::spawn(async move {
                 let config = chatter_core::media::FilePickerConfig::new()
@@ -654,6 +656,18 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 if let Some(path) = chatter_core::media::FilePicker::pick_file(config).await {
                     match std::fs::read(&path) {
                         Ok(data) => {
+                            // PERSIST the picked avatar into the local `keys::AVATAR`
+                            // store NOW (the F-UI / MISSING-FEATURES #3 fix). Before,
+                            // the picked file went ONLY into the write-never-read
+                            // PENDING_AVATAR_PATH + a Slint preview, so Save's
+                            // `update_user_profile` re-read the STALE avatar and the
+                            // change never uploaded. Writing keys::AVATAR here means
+                            // Save encrypts + uploads THESE bytes as `encrypted_avatar`
+                            // (and broadcasts to anon DMs), so the change actually
+                            // persists server-side and reaches friends.
+                            if let Err(e) = ui_ctx.set_avatar_bytes(&data) {
+                                tracing::error!(error = %e, "Failed to persist picked avatar bytes");
+                            }
                             // Store the path for later use
                             PENDING_AVATAR_PATH.with(|p| *p.borrow_mut() = Some(path.clone()));
 

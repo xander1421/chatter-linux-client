@@ -112,10 +112,18 @@ pub fn proto_config_to_domain(proto_config: Option<&chat_v1::channel::Config>) -
 pub fn domain_config_to_proto(config: &ChannelConfig) -> chat_v1::channel::Config {
     chat_v1::channel::Config {
         persistence: domain_persistence_to_proto(config.persistence) as i32,
-        ttl: config.default_ttl_seconds.map(|s| prost_types::Duration {
-            seconds: s as i64,
-            nanos: 0,
-        }),
+        // A 0-second TTL means "no expiry" (persistent channel). The proto rule
+        // requires `ttl` to be strictly `> 0s` WHEN PRESENT, so emit `None` rather
+        // than `Duration{0}` — otherwise every UpdateChannel on a non-ephemeral
+        // channel (which round-trips default_ttl_seconds=Some(0)) is rejected by
+        // protovalidate before it reaches the handler.
+        ttl: config
+            .default_ttl_seconds
+            .filter(|&s| s > 0)
+            .map(|s| prost_types::Duration {
+                seconds: s as i64,
+                nanos: 0,
+            }),
         // Proto requires 0 < max_members <= 10000; None means "no user-set limit" → cap at max.
         max_members: config.max_members.unwrap_or(10000),
         encrypted: config.require_encryption,

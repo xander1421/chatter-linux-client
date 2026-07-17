@@ -185,7 +185,12 @@ fn wire_toggle_setting(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
     });
 }
 
-fn wire_notification_settings(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
+fn wire_notification_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    // NOTE: `change_notification` (per-channel notification PREFERENCE — all /
+    // mentions / none) is intentionally still LOCAL-ONLY: chatter-core has no
+    // notification-preference persistence method and the proto channel Config
+    // carries no such field, so there is nothing to persist it to. Wiring it
+    // needs a server-side change (owner-scoped, tracked in VALIDATED-UI F-UI-1).
     let weak_window = window.as_weak();
     window.on_channel_settings_change_notification(move |preference| {
         let weak = weak_window.clone();
@@ -195,11 +200,33 @@ fn wire_notification_settings(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>)
         });
     });
 
+    // Mute DOES persist: `mute_conversation` flips the local membership's
+    // `is_muted` flag (channel-scoped) — the exact bug F-UI-1 documented (a
+    // toggle that only flipped a Slint bool). Build the ActiveConversation from
+    // the open channel-settings id, mirroring `change_member_role`.
     let weak_window = window.as_weak();
+    let ui_ctx_mute = ui_ctx.clone();
     window.on_channel_settings_toggle_mute(move |muted| {
         let weak = weak_window.clone();
+        let ui_ctx = ui_ctx_mute.clone();
+        // Reflect the toggle immediately, then persist off the UI thread.
+        let weak_ui = weak.clone();
         let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() { w.set_channel_settings_muted(muted); }
+            if let Some(w) = weak_ui.upgrade() { w.set_channel_settings_muted(muted); }
+        });
+        tokio::spawn(async move {
+            let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
+            if channel_id.is_empty() { return; }
+            let channel_uuid = match channel_id.parse::<uuid::Uuid>() {
+                Ok(id) => ChannelId::from(id),
+                Err(_) => return,
+            };
+            if let Err(e) = ui_ctx.mute_conversation(
+                chatter_core::state::ActiveConversation::Channel(channel_uuid),
+                muted,
+            ) {
+                tracing::error!(error = %e, "Failed to persist channel mute");
+            }
         });
     });
 }

@@ -176,6 +176,115 @@ impl ChannelEventService {
                     );
                 }
             }
+            Event::ChannelUpdated(proto_channel) => {
+                use crate::services::channel::converters::proto_to_domain_channel;
+
+                let updated = match proto_to_domain_channel(&proto_channel) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::error!("Failed to convert updated channel from proto: {}", e);
+                        return;
+                    }
+                };
+
+                // Merge server-authoritative metadata (name/description/icon/
+                // config/archived) into the local row, preserving local-only
+                // fields (unread_count, last_message_at). If the channel isn't
+                // cached locally, upsert the converted record wholesale.
+                match self.channel_repo.get(&channel_id) {
+                    Ok(Some(mut existing)) => {
+                        existing.name = updated.name.clone();
+                        existing.description = updated.description.clone();
+                        existing.icon = updated.icon.clone();
+                        existing.config = updated.config.clone();
+                        existing.archived = updated.archived;
+                        existing.updated_at = Utc::now();
+                        if let Err(e) = self.channel_repo.update(&existing) {
+                            tracing::warn!("Failed to persist channel update locally: {}", e);
+                            return;
+                        }
+                    }
+                    Ok(None) => {
+                        if let Err(e) = self.channel_repo.upsert(&updated) {
+                            tracing::warn!("Failed to upsert updated channel locally: {}", e);
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to read channel for update: {}", e);
+                        return;
+                    }
+                }
+
+                let event = DomainEvent::ChannelUpdated {
+                    channel_id,
+                    name: updated.name.clone(),
+                    icon: updated.icon.clone(),
+                };
+                if let Err(e) = self.event_bus.domain_sender().send(event) {
+                    tracing::warn!("Failed to publish ChannelUpdated event: {}", e);
+                }
+                tracing::info!("Channel updated: channel={}, name={}", channel_id, updated.name);
+            }
+            Event::MemberUpdated(proto_member) => {
+                use crate::services::channel::converters::proto_role_to_domain;
+
+                let user_id = match proto_member.user_id.parse::<uuid::Uuid>() {
+                    Ok(uuid) => UserId::from(uuid),
+                    Err(e) => {
+                        tracing::error!("Invalid user ID {}: {}", proto_member.user_id, e);
+                        return;
+                    }
+                };
+                let new_role = proto_role_to_domain(proto_member.role);
+
+                // Update the cached membership role. If we don't have the target
+                // member cached (e.g. an admin changed a THIRD user's role and we
+                // never fetched that membership), insert a minimal record so the
+                // member list reflects the new role.
+                match self.channel_repo.get_membership(&channel_id, &user_id) {
+                    Ok(Some(mut membership)) => {
+                        membership.role = new_role;
+                        if let Err(e) = self.channel_repo.update_membership(&membership) {
+                            tracing::warn!("Failed to persist member role change locally: {}", e);
+                            return;
+                        }
+                    }
+                    Ok(None) => {
+                        let membership = Membership {
+                            channel_id,
+                            user_id,
+                            role: new_role,
+                            notification_preference: NotificationPreference::All,
+                            joined_at: Utc::now(),
+                            last_read_message_id: None,
+                            is_muted: false,
+                            muted_until: None,
+                        };
+                        if let Err(e) = self.channel_repo.insert_membership(&membership) {
+                            tracing::warn!("Failed to insert member for role change locally: {}", e);
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to read membership for role change: {}", e);
+                        return;
+                    }
+                }
+
+                let event = DomainEvent::ChannelMemberRoleChanged {
+                    channel_id,
+                    user_id,
+                    role: new_role,
+                };
+                if let Err(e) = self.event_bus.domain_sender().send(event) {
+                    tracing::warn!("Failed to publish ChannelMemberRoleChanged event: {}", e);
+                }
+                tracing::info!(
+                    "Channel member role changed: channel={}, user={}, role={:?}",
+                    channel_id, user_id, new_role
+                );
+            }
             Event::MemberRemovedId(user_id_str) => {
                 let user_id = match user_id_str.parse::<uuid::Uuid>() {
                     Ok(uuid) => UserId::from(uuid),
