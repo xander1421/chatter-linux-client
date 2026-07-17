@@ -26,6 +26,7 @@ pub mod signal;
 pub mod streaming_decrypt;
 pub mod svr;
 pub mod svr_backup;
+pub mod vrf;
 
 pub use attachment_crypto::{AttachmentCrypto, EncryptedAttachment, StreamingEncryptResult, KEY_SET_LENGTH, INCREMENTAL_MAC_CHUNK_SIZE, max_attachment_size, set_max_attachment_size};
 pub use streaming_decrypt::IncrementalMacVerifier;

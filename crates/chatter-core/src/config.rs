@@ -142,6 +142,33 @@ pub const KT_TREE_HEAD_PUBLIC_KEY_BYTES: [u8; 32] = [
     0xd6, 0xbe, 0x7b, 0x0e, 0x40, 0x92, 0x6f, 0x72,
 ];
 
+// ─── KT query-privacy VRF public key (Phase 3b) ────────────────────────────
+//
+// The KT log's sparse-Merkle leaf key is now VRF_sk(user_id) — an ECVRF-
+// EDWARDS25519-SHA512-TAI output — instead of SHA-256(user_id). This hides the
+// user_id -> leaf-index mapping from an auditor scanning the public log while
+// keeping it committed and verifiable. The client PINS the server's VRF PUBLIC
+// key here and verifies the `vrf_proof` in every GetProofResponse under it, so a
+// malicious server cannot substitute a different VRF key (which would let it
+// answer with an arbitrary leaf). This is the raw 32-byte Ed25519-form VRF
+// public key.
+//
+// Development key: derived from the well-known dev VRF seed
+// SHA-256("chatter-dev-kt-vrf-v1") (keytransparency.LoadVRFKey). The server logs
+// "KT query-privacy VRF key loaded" with this public key at boot.
+//
+// PHASE 3b TODO (Vault prod VRF key): production must move this VRF seed into
+// Vault and replace the bytes below with the corresponding public key, mirroring
+// the tree-head signing key. Unlike the signing key the VRF key is a query-
+// privacy secret, not an integrity anchor: a leaked VRF key degrades unlinkability
+// but cannot forge identity keys.
+pub const KT_VRF_PUBLIC_KEY_BYTES: [u8; 32] = [
+    0x48, 0xaf, 0x97, 0x5f, 0xea, 0xba, 0x33, 0xea,
+    0x11, 0x0d, 0x4a, 0xb0, 0xc8, 0xf7, 0xa3, 0x8c,
+    0x5c, 0x71, 0x22, 0xdb, 0x18, 0x5f, 0xf9, 0x49,
+    0x9b, 0x81, 0xe5, 0xe7, 0x4d, 0xa6, 0xec, 0x47,
+];
+
 // ─── Shared constants ──────────────────────────────────────────────────────
 
 /// Trust root key ID (matches server's key_id in Vault).

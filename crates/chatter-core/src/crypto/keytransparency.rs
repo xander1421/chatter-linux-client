@@ -8,9 +8,11 @@
 //! Before the client trusts a peer's `bundle.identity_key()` (TOFU), it verifies
 //! that the key is the one committed in the log:
 //!
-//!   1. the proof's tree key equals `H("ChatterKT-leaf-v1" || user_id)` — binds
-//!      the proof to the *user_id* we asked about (a server cannot answer with
-//!      some other user's leaf),
+//!   1. the proof's tree key equals `VRF_sk(user_id)` — the server's ECVRF proof
+//!      (verified under the pinned VRF public key) binds the proof to the
+//!      *user_id* we asked about (a server cannot answer with some other user's
+//!      leaf, nor forge a VRF proof for a different index), while the log's leaf
+//!      keys stay unlinkable to usernames for a third-party auditor (Phase 3b),
 //!   2. the proof's committed value equals the identity key from the bundle —
 //!      binds the log to the *key we are about to trust*,
 //!   3. the Merkle inclusion proof recomputes to the tree head's `root_hash`,
@@ -29,7 +31,8 @@ use std::sync::LazyLock;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use sha2::{Digest, Sha256};
 
-use crate::config::KT_TREE_HEAD_PUBLIC_KEY_BYTES;
+use crate::config::{KT_TREE_HEAD_PUBLIC_KEY_BYTES, KT_VRF_PUBLIC_KEY_BYTES};
+use crate::crypto::vrf::vrf_verify;
 use crate::proto::chat_v1::{GetConsistencyProofResponse, GetProofResponse, SignedTreeHead};
 
 /// Domain separator for deriving a user's sparse-Merkle tree key.
@@ -48,9 +51,13 @@ const TREE_HEAD_DOMAIN: &[u8] = b"ChatterKT-v1";
 pub enum KtError {
     /// The proof or tree head was missing/structurally malformed.
     Malformed(&'static str),
-    /// `inclusion_proof.key` != `H(domain || user_id)`: the server answered with
-    /// a proof for a *different* leaf than the user we asked about.
+    /// `inclusion_proof.key` != `VRF_sk(user_id)`: the server answered with a
+    /// proof for a *different* leaf than the user we asked about.
     WrongLeafKey,
+    /// The query-privacy VRF proof is missing, malformed, or does not verify
+    /// under the pinned VRF public key — the server did not prove the served leaf
+    /// index really is `VRF_sk(user_id)`. REJECT: the leaf is unauthenticated.
+    VrfInvalid,
     /// The key committed in the log differs from the identity key in the bundle
     /// — i.e. a forged/MITM identity key. THIS is the F9 attack being rejected.
     IdentityKeyMismatch,
@@ -80,6 +87,10 @@ impl std::fmt::Display for KtError {
             KtError::WrongLeafKey => {
                 write!(f, "KT proof is for a different user's leaf (tree-key mismatch)")
             }
+            KtError::VrfInvalid => write!(
+                f,
+                "KT query-privacy VRF proof is missing or invalid under the pinned VRF key"
+            ),
             KtError::IdentityKeyMismatch => write!(
                 f,
                 "KT-committed identity key does not match the bundle's identity key (forged key)"
@@ -219,8 +230,15 @@ pub fn verify_proof(
         .as_ref()
         .ok_or(KtError::Malformed("missing signed_tree_head"))?;
 
-    // (1) The proof must be for THIS user's leaf.
-    let expected_key = leaf_key(user_id);
+    // (1) The proof must be for THIS user's leaf. The leaf key is now the
+    // query-privacy VRF index VRF_sk(user_id): verify the server's VRF proof under
+    // the PINNED VRF public key and recover the index, then require the inclusion
+    // proof's key to equal it. This binds the queried user_id to the served leaf
+    // WITHOUT the client having to know (or the log leaking) a username->leaf map,
+    // and a malicious server cannot answer with an arbitrary leaf — it cannot
+    // forge a VRF proof for a different index under the pinned key.
+    let expected_key = vrf_verify(&KT_VRF_PUBLIC_KEY_BYTES, user_id.as_bytes(), &response.vrf_proof)
+        .ok_or(KtError::VrfInvalid)?;
     let proof_key: &[u8; 32] = proof
         .key
         .as_slice()

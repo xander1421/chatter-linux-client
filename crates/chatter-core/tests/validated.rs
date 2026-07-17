@@ -8112,3 +8112,182 @@ async fn v36_disappearing_messages_expire_locally() {
     client_a.shutdown().await;
     client_b.shutdown().await;
 }
+
+// ============================================================================
+// V37 — KEY TRANSPARENCY QUERY-PRIVACY VRF: the served leaf key is VRF_sk(user_id),
+// the client verifies the VRF proof byte-exact against a LIVE server proof, the
+// recovered index IS the committed leaf, the anon path still REJECTS a forged
+// identity key (V24 property preserved under VRF), and a TAMPERED VRF proof is
+// REJECTED (the verifier is not decorative).
+//
+// STATUS: PASS. Phase 3b. Before this, the KT sparse-Merkle leaf key was
+// SHA-256("ChatterKT-leaf-v1" || user_id) — a value ANY auditor scanning the
+// public log could recompute, mapping every leaf back to its username. Now the
+// leaf key is VRF_sk(user_id), an ECVRF-EDWARDS25519-SHA512-TAI output the server
+// computes with a secret key; the server serves an 80-byte VRF proof binding the
+// queried user_id to that index, and the client verifies it under the PINNED VRF
+// public key (config::KT_VRF_PUBLIC_KEY_BYTES). The mapping stays committed and
+// publicly auditable, but the leaf keys are pseudorandom and unlinkable to
+// usernames without the server's VRF secret.
+//
+// WHAT THIS PROVES (live, not asserted):
+//   1. INTEROP: a REAL server VRF proof, fetched over the anonymous channel,
+//      verifies in the byte-exact Rust ECVRF verifier (crypto::vrf::vrf_verify),
+//      and the recovered 32-byte index EQUALS inclusion_proof.key. If any byte
+//      format diverged (suite tag 0x03, TAI hash-to-curve, 16-byte challenge
+//      encoding, cofactor-x8 output), this would fail against the live proof.
+//   2. LEAF-KEY IS PSEUDORANDOM: inclusion_proof.key != SHA-256(domain||user_id).
+//      The old, auditor-recomputable derivation no longer keys the tree.
+//   3. FORGERY STILL REJECTED (V24 under VRF): verify_kt_proof accepts Bob's real
+//      key and REJECTS a forged (Mallory) key — the F9 property is preserved now
+//      that the leaf key is VRF-derived and the VRF proof is LOAD-BEARING in
+//      verify_kt_proof (it derives the expected leaf key from the VRF proof).
+//   4. TAMPER -> REJECT (not decorative): flipping one byte of the VRF proof makes
+//      verify_kt_proof REJECT with VrfInvalid.
+//
+// HONEST SCOPE — PROVEN vs ASSERTED:
+//   * PROVEN: byte-exact Go<->Rust ECVRF interop against a live proof; tamper is
+//     rejected; the tree is VRF-keyed and V14/V24/V25 stay green under it.
+//   * NOT achieved (documented, not claimed): query privacy against the SERVING
+//     server. GetProof still carries the plaintext user_id because the server
+//     needs it to compute VRF_sk(user_id) — the VRF is server-side, not oblivious.
+//     Hiding the lookup from the server too needs an OPRF (out of scope). What VRF
+//     buys is unlinkability of leaf->username for a THIRD-PARTY AUDITOR of the log
+//     plus a committed, verifiable name->index mapping.
+//
+// MUTATION (RED test): in crypto/keytransparency.rs::verify_proof, replace the
+// VRF-derived `expected_key` with the old SHA-256 leaf_key(user_id): against the
+// VRF-keyed server the honest POSITIVE CONTROL then fails with WrongLeafKey -> RED.
+// Or make vrf_verify return Some(index) unconditionally (decorative verifier):
+// the TAMPER assertion then fails to reject -> RED. Reverting restores GREEN.
+// ============================================================================
+#[tokio::test]
+async fn v37_kt_query_privacy_vrf_verified_and_forgery_still_rejected() {
+    use chatter_core::config::KT_VRF_PUBLIC_KEY_BYTES;
+    use chatter_core::crypto::vrf::vrf_verify;
+    use chatter_core::crypto::{verify_kt_proof, KtError};
+    use libsignal_protocol::{IdentityKey, IdentityKeyPair};
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+    use sha2::{Digest, Sha256};
+
+    if std::env::var("INTEGRATION_TESTS").is_err() {
+        eprintln!("skipping v37: INTEGRATION_TESTS not set");
+        return;
+    }
+
+    let mut rng = StdRng::seed_from_u64(0x37_FEED);
+
+    // ---- Register a REAL Bob (Phase-1 producer appends his identity key under
+    // its VRF index). The pool is NOT authenticated: the anon channel must reach
+    // the public GetProof, which now carries the VRF proof. --------------------
+    let pool = common::create_test_pool().await.expect("pool connect failed");
+    let bob = common::register_test_user(&pool)
+        .await
+        .expect("Bob registration failed — no KT leaf to verify against");
+
+    let ik_bob = IdentityKey::decode(&bob.public_key).expect("Bob identity key decodes");
+    let mallory_kp = IdentityKeyPair::generate(&mut rng);
+    let ik_mallory = *mallory_kp.identity_key();
+    let mallory_serialized = ik_mallory.serialize();
+    assert_ne!(ik_bob, ik_mallory, "sanity: Bob and Mallory are distinct identities");
+
+    // ---- Fetch Bob's proof over the ANONYMOUS channel (public method, no auth).
+    let mut anon_kt = pool.anonymous_kt_client();
+    let proof = anon_kt
+        .get_proof(&bob.user_id)
+        .await
+        .expect("anon GetProof transport ok (public method reachable without auth)")
+        .expect("Bob must have a KT leaf (Phase-1 producer runs at registration)");
+
+    let incl = proof.inclusion_proof.as_ref().expect("inclusion proof present");
+    let leaf_key_on_wire: [u8; 32] =
+        incl.key.as_slice().try_into().expect("leaf key is 32 bytes");
+
+    assert!(!proof.vrf_proof.is_empty(), "server must serve a VRF proof (Phase 3b)");
+    assert_eq!(proof.vrf_proof.len(), 80, "ECVRF proof is 80 bytes (gamma||c||s)");
+    assert_eq!(
+        proof.vrf_public_key.as_slice(),
+        KT_VRF_PUBLIC_KEY_BYTES.as_slice(),
+        "advisory VRF pubkey the server names must match the client's PINNED key"
+    );
+
+    // (1) INTEROP: the LIVE server VRF proof verifies byte-exact in the Rust
+    // ECVRF verifier, and the recovered index IS the committed leaf key.
+    let index = vrf_verify(&KT_VRF_PUBLIC_KEY_BYTES, bob.user_id.as_bytes(), &proof.vrf_proof)
+        .expect("LIVE server VRF proof must verify in the byte-exact Rust ECVRF verifier");
+    assert_eq!(
+        index, leaf_key_on_wire,
+        "VRF index recovered from the proof must EQUAL inclusion_proof.key (the tree is VRF-keyed)"
+    );
+    assert_eq!(
+        &proof.vrf_output[..32],
+        index.as_slice(),
+        "the first 32 bytes of the 64-byte VRF output are the leaf index"
+    );
+    println!(
+        "  (1) INTEROP: live server VRF proof verified byte-exact; index={} == leaf key",
+        hex::encode(&index[..8])
+    );
+
+    // (2) LEAF-KEY IS PSEUDORANDOM: NOT the old, auditor-recomputable
+    // SHA-256("ChatterKT-leaf-v1" || user_id).
+    let old_sha_leaf: [u8; 32] = {
+        let mut h = Sha256::new();
+        h.update(b"ChatterKT-leaf-v1");
+        h.update(bob.user_id.as_bytes());
+        h.finalize().into()
+    };
+    assert_ne!(
+        leaf_key_on_wire, old_sha_leaf,
+        "QUERY-PRIVACY REGRESSION: the leaf key equals the guessable SHA-256(domain||user_id) — \
+         an auditor could map it back to the username. It must be the VRF index."
+    );
+    println!("  (2) leaf key is the VRF index, NOT the auditor-recomputable SHA-256(user_id)");
+
+    // (3) FORGERY STILL REJECTED (V24 under VRF): the VRF proof is load-bearing in
+    // verify_kt_proof. Honest key verifies; a forged (Mallory) key is rejected.
+    verify_kt_proof(&bob.user_id, &bob.public_key, &proof)
+        .expect("POSITIVE CONTROL: Bob's real key must verify against his VRF-keyed KT proof");
+
+    let forged_verdict = verify_kt_proof(&bob.user_id, &mallory_serialized, &proof);
+    assert!(
+        matches!(forged_verdict, Err(KtError::IdentityKeyMismatch)),
+        "F9 REGRESSION under VRF: a forged identity key ({ik_mallory:?}) must be REJECTED with \
+         IdentityKeyMismatch, got {forged_verdict:?}"
+    );
+    println!("  (3) forgery still rejected under VRF: {}", forged_verdict.unwrap_err());
+
+    // (4) TAMPER -> REJECT (verifier is not decorative): flip one byte of the VRF
+    // proof; verify_kt_proof must reject with VrfInvalid.
+    {
+        let mut tampered = proof.clone();
+        tampered.vrf_proof[10] ^= 0x01; // corrupt gamma byte
+        let verdict = verify_kt_proof(&bob.user_id, &bob.public_key, &tampered);
+        assert!(
+            matches!(verdict, Err(KtError::VrfInvalid)),
+            "DECORATIVE-VERIFIER TRAP: a tampered VRF proof must be REJECTED with VrfInvalid, \
+             got {verdict:?}. A verifier that accepts a broken proof is worse than none."
+        );
+        println!("  (4) tampered VRF proof REJECTED: {}", verdict.unwrap_err());
+    }
+
+    // Bonus: the VRF proof does not verify under a DIFFERENT user_id (wrong alpha)
+    // — it is bound to the exact user queried.
+    {
+        let wrong = vrf_verify(
+            &KT_VRF_PUBLIC_KEY_BYTES,
+            b"00000000-0000-0000-0000-000000000000",
+            &proof.vrf_proof,
+        );
+        assert!(wrong.is_none(), "VRF proof must not verify under a different user_id (alpha)");
+    }
+
+    println!(
+        "\n  V37 PASS — the KT leaf key is now VRF_sk(user_id); the client verified a LIVE server \
+         VRF proof byte-exact (Go go-ecvrf <-> Rust curve25519-dalek), the recovered index is the \
+         committed leaf, a forged identity key is STILL rejected (V24 under VRF), and a tampered \
+         VRF proof is rejected. Query privacy vs a THIRD-PARTY AUDITOR is achieved; vs the serving \
+         server it is not (GetProof still carries user_id — an OPRF is out of scope).\n"
+    );
+}
