@@ -35,6 +35,7 @@ tower = "0.5"
 # ============================================================================
 libsignal-protocol = { git = "https://github.com/signalapp/libsignal", branch = "main" }
 libsignal-core = { git = "https://github.com/signalapp/libsignal", branch = "main" }
+signal-media = { git = "https://github.com/signalapp/libsignal", branch = "main" }
 rand = "0.9"
 rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }
 blind-rsa-signatures = "0.14"

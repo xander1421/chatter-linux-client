@@ -51,6 +51,14 @@ impl AttachmentService {
             .await
             .map_err(|e| AttachmentError::FileError(format!("Failed to read file: {}", e)))?;
 
+        // Sanitize outgoing media (MP4 metadata strip/relocate, WebP validation).
+        // Malformed MP4/WebP is rejected; other formats pass through unchanged.
+        let file_content = match super::sanitize::sanitize_media(&file_content).await? {
+            super::sanitize::SanitizeOutcome::Rewritten(bytes) => bytes,
+            super::sanitize::SanitizeOutcome::Unchanged => file_content,
+        };
+        let file_size = file_content.len() as u64;
+
         // Generate a transfer_id UUID for this upload session
         let transfer_id = uuid::Uuid::new_v4().to_string();
         tracing::debug!("Starting upload with transfer_id={}", transfer_id);
@@ -247,6 +255,13 @@ impl AttachmentService {
             .await
             .map_err(|e| AttachmentError::FileError(format!("Failed to read file: {}", e)))?;
 
+        // Sanitize outgoing media (MP4 metadata strip/relocate, WebP validation).
+        // Malformed MP4/WebP is rejected; other formats pass through unchanged.
+        let file_content = match super::sanitize::sanitize_media(&file_content).await? {
+            super::sanitize::SanitizeOutcome::Rewritten(bytes) => bytes,
+            super::sanitize::SanitizeOutcome::Unchanged => file_content,
+        };
+
         let plaintext_size = file_content.len() as u64;
         let filename = file_path
             .file_name()
@@ -426,6 +441,15 @@ impl AttachmentService {
         filename: &str,
         mime_type: &str,
     ) -> Result<CdnUploadResult, AttachmentError> {
+        // Sanitize outgoing media (MP4 metadata strip/relocate, WebP validation).
+        // Malformed MP4/WebP is rejected; other formats pass through unchanged.
+        let content: std::borrow::Cow<'_, [u8]> =
+            match super::sanitize::sanitize_media(content).await? {
+                super::sanitize::SanitizeOutcome::Rewritten(bytes) => bytes.into(),
+                super::sanitize::SanitizeOutcome::Unchanged => content.into(),
+            };
+        let content = content.as_ref();
+
         let plaintext_size = content.len() as u64;
 
         tracing::debug!(

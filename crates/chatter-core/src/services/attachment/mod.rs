@@ -5,9 +5,11 @@
 mod crypto;
 mod download;
 mod media;
+mod sanitize;
 mod upload;
 
 pub use media::{GifDecodeResult, GifFullDecodeResult, ImageDecodeResult};
+pub use sanitize::{sanitize_media, validate_media, SanitizeOutcome};
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -353,6 +355,17 @@ impl AttachmentService {
         let thumbnail_bytes = attachment.metadata.thumbnail.as_ref()?;
 
         if thumbnail_bytes.is_empty() {
+            return None;
+        }
+
+        // Thumbnail bytes come from the sender's AttachmentPointer (untrusted).
+        // Reject malformed WebP before the image parser sees it.
+        if let Err(e) = sanitize::validate_media(thumbnail_bytes) {
+            tracing::warn!(
+                attachment_id = %attachment_id,
+                error = %e,
+                "Rejected malformed thumbnail"
+            );
             return None;
         }
 
