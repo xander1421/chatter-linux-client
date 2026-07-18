@@ -578,14 +578,21 @@ impl MessageService {
             .map_err(MessageError::Storage)?
             .ok_or(MessageError::NotLoggedIn)?;
 
-        // Always refresh membership from the server before fanning out.
-        // `channel_event_service` only streams member-added events for
-        // channels the user was already in; joiners that arrive later have
-        // no local row, so a stale cache would silently drop reactions,
-        // pins, etc. for them.
-        self.refresh_channel_members(channel_id).await;
-
-        let members = self.channel_repo.list_members(channel_id).unwrap_or_default();
+        // Fan out to the CURRENT server member list, not the local cache. The
+        // cache (`memberships`) has an FK to `channels`, so a member who never
+        // materialised a local channel row has an empty cache — which silently
+        // dropped reactions/pins/edits/typing before. The server list is the
+        // source of truth; fall back to the cache only if the RPC failed.
+        let mut members: Vec<crate::domain::UserId> = self.refresh_channel_members(channel_id).await;
+        if members.is_empty() {
+            members = self
+                .channel_repo
+                .list_members(channel_id)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|m| m.user_id)
+                .collect();
+        }
         if members.is_empty() {
             return Ok(());
         }
@@ -598,8 +605,8 @@ impl MessageService {
         let mut success = 0u32;
         let mut errors = 0u32;
 
-        for member in &members {
-            let member_id = member.user_id.to_string();
+        for member_uid in &members {
+            let member_id = member_uid.to_string();
             let is_self = member_id == our_user_id;
 
             let ciphertexts = match self.signal_service
@@ -677,7 +684,14 @@ impl MessageService {
     /// local `channel_memberships` table. Fire-and-forget: a failure to
     /// refresh doesn't block the outgoing control send — the fanout simply
     /// falls back to whatever the cache holds.
-    async fn refresh_channel_members(&self, channel_id: &ChannelId) {
+    /// Pull the current member list from the server. Returns the member ids so
+    /// the caller can fan out to them directly — the local `memberships` cache
+    /// is unreliable for this (its FK to `channels` means the best-effort upsert
+    /// below silently drops when the caller has no local channel row, e.g. a
+    /// member who never opened the channel — which previously made control
+    /// content like reactions/pins/edits vanish, since fanout keyed off the
+    /// empty cache). The server list is the source of truth for recipients.
+    async fn refresh_channel_members(&self, channel_id: &ChannelId) -> Vec<crate::domain::UserId> {
         let mut channel_client = self.grpc_pool.channel_client();
         let response = match channel_client
             .get_channel_members(&channel_id.to_string(), 100, 0)
@@ -690,15 +704,18 @@ impl MessageService {
                     error = %e,
                     "Skipping member refresh (RPC failed)"
                 );
-                return;
+                return Vec::new();
             }
         };
 
+        let mut ids = Vec::with_capacity(response.members.len());
         for pb_member in &response.members {
             let user_id = match pb_member.user_id.parse::<crate::domain::UserId>() {
                 Ok(id) => id,
                 Err(_) => continue,
             };
+            ids.push(user_id);
+            // Best-effort cache upsert (no-op / FK-ignored if no local channel row).
             let membership = crate::domain::channel::Membership {
                 channel_id: *channel_id,
                 user_id,
@@ -711,6 +728,7 @@ impl MessageService {
             };
             let _ = self.channel_repo.insert_or_ignore_membership(&membership);
         }
+        ids
     }
 
     /// Send an ephemeral (self-destructing) message to a channel.

@@ -9366,3 +9366,269 @@ async fn v44_thread_reply_groups_under_root_on_both_sides() {
     client_a.shutdown().await;
     client_b.shutdown().await;
 }
+
+/// V45 — reactions, edits, pins round-trip in a GROUP CHANNEL (Sender-Key
+/// control path). Was marked "Wired, not proven" in the feature set.
+///
+/// The control-content path (`dispatch_content` → `send_channel_content` →
+/// per-member device inbox → `inbox/polling/device.rs` decrypt → InboxEvent →
+/// inbox_processor apply) is the classic cut-wire risk: the action fires but
+/// the recipient never applies it. This proves all three APPLY on the OTHER
+/// party's local store.
+///
+/// All actions are performed by B and OBSERVED on A (A did not perform them, so
+/// the applied state can only have arrived over the wire):
+///   REACTION — B reacts to A's message → A's copy shows the emoji.
+///   EDIT     — B edits B's own message → A's copy shows the new text.
+///   PIN      — B pins B's message → A's copy is pinned.
+///
+/// MUTATION (RED): drop any apply arm in device.rs / inbox_processor → the
+/// matching assertion times out.
+#[tokio::test]
+async fn v45_reactions_edits_pins_roundtrip_in_channel() {
+    use chatter_core::domain::channel::ChannelType;
+
+    skip_if_no_server!();
+    no_keyring_prompts();
+
+    let dir_a = tempfile::tempdir().unwrap();
+    let client_a = build_client(dir_a.path());
+    let uid_a = register_and_start(&client_a, &unique_user("v45a"), "V45 Alice").await;
+    let dir_b = tempfile::tempdir().unwrap();
+    let client_b = build_client(dir_b.path());
+    let uid_b = register_and_start(&client_b, &unique_user("v45b"), "V45 Bob").await;
+
+    let name = format!(
+        "v45-chan-{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
+    );
+    let chan = client_a
+        .create_channel(&name, ChannelType::Private, None, Some("V45"), None, None, vec![uid_b.clone()])
+        .await
+        .expect("create channel failed");
+
+    let mut members = std::collections::HashSet::new();
+    for _ in 0..15 {
+        members = psql(&format!("select user_id from channel_members where channel_id = '{}'", chan.id))
+            .lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+        if members.contains(&uid_a.to_string()) && members.contains(&uid_b.to_string()) { break; }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    assert!(members.contains(&uid_a.to_string()) && members.contains(&uid_b.to_string()),
+        "POSITIVE CONTROL FAILED: A and B not both members");
+
+    client_a.subscribe_channel_messages(&chan.id);
+    client_b.subscribe_channel_messages(&chan.id);
+    let mut events_a = client_a.subscribe_events();
+    let mut events_b = client_b.subscribe_events();
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // A posts msgR (A's reaction/pin target); B must receive it (establishes A's key on B).
+    let r_text = unique_marker();
+    let msg_r = client_a
+        .send_channel_message(None, &chan.id, &r_text, vec![], vec![], None, vec![], false)
+        .await
+        .expect("A msgR send failed");
+    let r_id = msg_r.id;
+    let r_ts = msg_r.sent_at;
+    let g = chan.id.clone(); let t = r_text.clone();
+    assert!(
+        wait_for_event(&mut events_b, EVENT_TIMEOUT, move |e| matches!(
+            e, DomainEvent::MessageReceived { message } if message.conversation_id == g && message.as_text() == Some(t.as_str())
+        )).await.is_some(),
+        "POSITIVE CONTROL FAILED: B never received A's msgR"
+    );
+    tokio::time::sleep(Duration::from_secs(3)).await; // B processes A's SKDM
+
+    // WARM-UP: establish B's sender key on A before msgE (B's first real send
+    // races its own SKDM otherwise — the msgE positive control would flake).
+    let a_before = row_ids(&uid_a).len();
+    client_b
+        .send_channel_message(None, &chan.id, &unique_marker(), vec![], vec![], None, vec![], false)
+        .await
+        .expect("B warm-up send failed");
+    let mut skdm = false;
+    for _ in 0..40 {
+        if row_ids(&uid_a).len() > a_before { skdm = true; break; }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    assert!(skdm, "SENDER-KEY DISTRIBUTION BROKEN: B's warm-up SKDM never landed on A within 40s");
+    tokio::time::sleep(Duration::from_secs(6)).await; // A processes B's SKDM
+
+    // B posts msgE (B's edit/pin target); A must receive it (establishes B's key on A).
+    let e_text = unique_marker();
+    client_b
+        .send_channel_message(None, &chan.id, &e_text, vec![], vec![], None, vec![], false)
+        .await
+        .expect("B msgE send failed");
+    let g = chan.id.clone(); let t = e_text.clone();
+    let a_msg_e = match wait_for_event(&mut events_a, EVENT_TIMEOUT, move |e| matches!(
+        e, DomainEvent::MessageReceived { message } if message.conversation_id == g && message.as_text() == Some(t.as_str())
+    )).await {
+        Some(DomainEvent::MessageReceived { message }) => message,
+        _ => panic!("POSITIVE CONTROL FAILED: A never received B's msgE"),
+    };
+    let e_id = a_msg_e.id;
+    let e_ts = a_msg_e.sent_at;
+    tokio::time::sleep(Duration::from_secs(3)).await; // A processes B's SKDM
+
+    // ---- REACTION: B reacts to A's msgR; A's copy must show it -------------
+    client_b
+        .conversation(ActiveConversation::Channel(chan.id.clone()))
+        .send_reaction("\u{1F44D}", &uid_a, r_ts, false)
+        .await
+        .expect("B send_reaction failed");
+    let mut reacted = false;
+    for _ in 0..40 {
+        if let Some(m) = client_a.get_message_local(&r_id) {
+            if m.reaction_counts.iter().any(|rc| rc.emoji == "\u{1F44D}" && rc.count >= 1) { reacted = true; break; }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert!(reacted, "REACTION NOT APPLIED (channel): A's copy of msgR never showed B's 👍 reaction — \
+        the channel control-reaction wire (device.rs → inbox_processor) is cut.");
+
+    // ---- EDIT: B edits msgE; A's copy must show the new text ---------------
+    let edited = format!("EDITED-{}", unique_marker());
+    client_b
+        .conversation(ActiveConversation::Channel(chan.id.clone()))
+        .send_edit(e_ts, &edited)
+        .await
+        .expect("B send_edit failed");
+    let mut edit_ok = false;
+    for _ in 0..40 {
+        if let Some(m) = client_a.get_message_local(&e_id) {
+            if m.as_text() == Some(edited.as_str()) { edit_ok = true; break; }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert!(edit_ok, "EDIT NOT APPLIED (channel): A's copy of msgE never updated to the edited text — \
+        the channel edit wire is cut.");
+
+    // ---- PIN: B pins msgE; A's copy must be pinned -------------------------
+    client_b
+        .conversation(ActiveConversation::Channel(chan.id.clone()))
+        .send_pin(&uid_b, e_ts, false)
+        .await
+        .expect("B send_pin failed");
+    let mut pinned = false;
+    for _ in 0..40 {
+        if let Some(m) = client_a.get_message_local(&e_id) {
+            if m.is_pinned { pinned = true; break; }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert!(pinned, "PIN NOT APPLIED (channel): A's copy of msgE never became pinned — the channel pin wire is cut.");
+
+    println!("\n  V45 PASS — reactions, edits, pins all round-trip in a group channel: B's actions \
+        applied on A's local store (reaction 👍, edited text, pinned). Control-content path proven.\n");
+
+    client_a.shutdown().await;
+    client_b.shutdown().await;
+}
+
+/// V46 — reactions, edits, pins round-trip on a 1:1 DM (sealed ServerDm path).
+///
+/// Same three actions as V45 but over the channel-free ServerDm transport
+/// (`dispatch_content` → `send_server_dm_content` → sealed device inbox →
+/// `inbox/polling/dm.rs` DmContent apply). All actions by B, observed on A.
+///
+/// MUTATION (RED): drop a DmContent apply arm in dm.rs → the matching
+/// assertion times out.
+#[tokio::test]
+async fn v46_reactions_edits_pins_roundtrip_in_dm() {
+    skip_if_no_server!();
+    no_keyring_prompts();
+
+    let dir_a = tempfile::tempdir().unwrap();
+    let client_a = build_client(dir_a.path());
+    let uid_a = register_and_start(&client_a, &unique_user("v46a"), "V46 Alice").await;
+    let dir_b = tempfile::tempdir().unwrap();
+    let client_b = build_client(dir_b.path());
+    let uid_b = register_and_start(&client_b, &unique_user("v46b"), "V46 Bob").await;
+
+    client_a.send_friend_request(&uid_b, Some("validated")).await.expect("friend req");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    client_b.respond_friend_request(&uid_a, true).await.expect("accept");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let mut events_a = client_a.subscribe_events();
+    let conv_on_a = ChannelId::from(uid_b); // A's thread with B
+
+    // A DMs msgR to B (A's reaction target). Capture A's own stored copy id.
+    let r_text = unique_marker();
+    let r_res = client_a
+        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &r_text)
+        .await
+        .expect("A msgR DM failed");
+    let r_ts = r_res.sent_at;
+    let r_id = r_res.message.map(|m| m.id).expect("A stored its own msgR");
+
+    // B DMs msgE to A (B's edit/pin target). A must receive it.
+    let e_text = unique_marker();
+    let e_res = client_b
+        .send_text(ActiveConversation::ServerDm { peer_id: uid_a }, &e_text)
+        .await
+        .expect("B msgE DM failed");
+    let e_ts = e_res.sent_at;
+    let g = conv_on_a.clone(); let t = e_text.clone();
+    let a_msg_e = match wait_for_event(&mut events_a, EVENT_TIMEOUT, move |ev| matches!(
+        ev, DomainEvent::MessageReceived { message } if message.conversation_id == g && message.as_text() == Some(t.as_str())
+    )).await {
+        Some(DomainEvent::MessageReceived { message }) => message,
+        _ => panic!("POSITIVE CONTROL FAILED: A never received B's DM msgE"),
+    };
+    let e_id = a_msg_e.id;
+
+    // ---- REACTION: B reacts to A's msgR ----------------------------------
+    client_b
+        .conversation(ActiveConversation::ServerDm { peer_id: uid_a })
+        .send_reaction("\u{1F44D}", &uid_a, r_ts, false)
+        .await
+        .expect("B send_reaction failed");
+    let mut reacted = false;
+    for _ in 0..40 {
+        if let Some(m) = client_a.get_message_local(&r_id) {
+            if m.reaction_counts.iter().any(|rc| rc.emoji == "\u{1F44D}" && rc.count >= 1) { reacted = true; break; }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert!(reacted, "REACTION NOT APPLIED (DM): A's msgR never showed B's 👍 — the ServerDm reaction wire (dm.rs) is cut.");
+
+    // ---- EDIT: B edits msgE ----------------------------------------------
+    let edited = format!("EDITED-{}", unique_marker());
+    client_b
+        .conversation(ActiveConversation::ServerDm { peer_id: uid_a })
+        .send_edit(e_ts, &edited)
+        .await
+        .expect("B send_edit failed");
+    let mut edit_ok = false;
+    for _ in 0..40 {
+        if let Some(m) = client_a.get_message_local(&e_id) {
+            if m.as_text() == Some(edited.as_str()) { edit_ok = true; break; }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert!(edit_ok, "EDIT NOT APPLIED (DM): A's copy of msgE never updated to the edited text — the ServerDm edit wire is cut.");
+
+    // ---- PIN: B pins msgE ------------------------------------------------
+    client_b
+        .conversation(ActiveConversation::ServerDm { peer_id: uid_a })
+        .send_pin(&uid_b, e_ts, false)
+        .await
+        .expect("B send_pin failed");
+    let mut pinned = false;
+    for _ in 0..40 {
+        if let Some(m) = client_a.get_message_local(&e_id) {
+            if m.is_pinned { pinned = true; break; }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert!(pinned, "PIN NOT APPLIED (DM): A's copy of msgE never became pinned — the ServerDm pin wire is cut.");
+
+    println!("\n  V46 PASS — reactions, edits, pins all round-trip on a 1:1 sealed DM: B's actions \
+        applied on A's local store. ServerDm control-content path proven.\n");
+
+    client_a.shutdown().await;
+    client_b.shutdown().await;
+}
