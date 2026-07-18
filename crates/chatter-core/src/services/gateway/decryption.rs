@@ -1,13 +1,23 @@
 //! Decryption operations for the message gateway.
 
+use libsignal_protocol::{
+    extract_decryption_error_message_from_serialized_content, CiphertextMessageType,
+    DecryptionErrorMessage, PlaintextContent, Timestamp,
+};
 use prost::Message as ProstMessage;
 use zeroize::Zeroize;
 
 use crate::crypto::dm_crypto::decrypt_dm_bytes;
 use crate::crypto::signal::sesame::ConvergenceResult;
 use crate::domain::ids::UserId;
-use crate::error::ServiceError;
+use crate::error::{CryptoError, ServiceError};
 use crate::proto::content_v1::{Content, DataMessage, GroupEncrypted, content};
+
+/// First byte of a serialized `PlaintextContent` (libsignal's
+/// `PLAINTEXT_CONTEXT_IDENTIFIER_BYTE`). A decrypted sealed-sender "message"
+/// starting with this byte is not ratchet plaintext but a peer's
+/// DecryptionErrorMessage ride-along.
+const PLAINTEXT_CONTENT_IDENTIFIER_BYTE: u8 = 0xC0;
 
 use super::{CallHangupReason, DecryptResult, DmContent, MessageGateway, SealedSenderResult};
 use super::inbound::content_type_name;
@@ -22,11 +32,46 @@ impl MessageGateway {
         &self,
         envelope: crate::proto::chat_v1::SealedSenderMessage,
     ) -> Result<SealedSenderResult, ServiceError> {
-        // Decrypt the sealed sender envelope
-        let (sender_address, mut plaintext) = self
+        // Decrypt the sealed sender envelope. An INNER (ratchet) failure with
+        // an authenticated sender is the desynced-1:1-session wedge: turn it
+        // into a DecryptionErrorMessage report instead of a dead error, so the
+        // sender can archive its broken session and re-establish (Signal's
+        // 1:1 self-heal).
+        let (sender_address, mut plaintext) = match self
             .signal_service
             .decrypt_message(&envelope.sealed_body)
-            .await?;
+            .await
+        {
+            Ok(v) => v,
+            Err(ServiceError::Crypto(CryptoError::SessionDesync {
+                sender_uuid,
+                sender_device_id,
+                msg_type,
+                ciphertext,
+                reason,
+            })) => {
+                return self.build_decryption_error_report(
+                    &sender_uuid,
+                    sender_device_id,
+                    msg_type,
+                    &ciphertext,
+                    &reason,
+                    envelope.timestamp,
+                );
+            }
+            Err(e) => return Err(e),
+        };
+
+        // A `PlaintextContent` ride-along (0xC0-prefixed) is a peer's
+        // DecryptionErrorMessage about a message WE sent — handle the
+        // self-heal instead of parsing it as Content.
+        if plaintext.first() == Some(&PLAINTEXT_CONTENT_IDENTIFIER_BYTE) {
+            let result = self
+                .handle_decryption_error_report(&sender_address, &plaintext)
+                .await;
+            plaintext.zeroize();
+            return result;
+        }
 
         // Use a scope guard to ensure plaintext is always zeroized
         let result = self.process_incoming_message_inner(&sender_address, &plaintext).await;
@@ -35,6 +80,128 @@ impl MessageGateway {
         plaintext.zeroize();
 
         result
+    }
+
+    /// RECEIVER side of the 1:1 self-heal: we could not decrypt an inner
+    /// Whisper/PreKey message from an authenticated sender. Build a
+    /// `DecryptionErrorMessage` naming the failed ciphertext so the caller can
+    /// ship it back to the sender (sealed, session-less `PlaintextContent`).
+    fn build_decryption_error_report(
+        &self,
+        sender_uuid: &str,
+        sender_device_id: u32,
+        msg_type: u8,
+        failed_ciphertext: &[u8],
+        reason: &str,
+        envelope_timestamp: u64,
+    ) -> Result<SealedSenderResult, ServiceError> {
+        let sender_id: UserId = sender_uuid.parse().map_err(|e| {
+            ServiceError::Validation(format!("Invalid sender ID in desync report: {}", e))
+        })?;
+
+        // libsignal discriminants: 2 = Whisper, 3 = PreKey. Only those two can
+        // fail an inner decrypt (Plaintext has no ratchet; SenderKey never
+        // reaches the 1:1 sealed path).
+        let msg_type = match msg_type {
+            t if t == CiphertextMessageType::Whisper as u8 => CiphertextMessageType::Whisper,
+            t if t == CiphertextMessageType::PreKey as u8 => CiphertextMessageType::PreKey,
+            other => {
+                return Err(ServiceError::Validation(format!(
+                    "unexpected inner message type {} in desync report",
+                    other
+                )));
+            }
+        };
+
+        // Envelope timestamps are TimestampNanos on the deposit path; the DEM
+        // wire field is epoch millis. The timestamp only helps the sender
+        // locate the failed message — the ratchet key + device id do the
+        // actual session matching.
+        let ts_millis = envelope_timestamp / 1_000_000;
+        let dem = DecryptionErrorMessage::for_original(
+            failed_ciphertext,
+            msg_type,
+            Timestamp::from_epoch_millis(ts_millis),
+            sender_device_id,
+        )
+        .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?;
+
+        tracing::warn!(
+            sender_id = %sender_id,
+            sender_device_id,
+            reason = %reason,
+            "GATEWAY: 1:1 inner decrypt failed — reporting DecryptionErrorMessage to sender for session self-heal"
+        );
+
+        Ok(SealedSenderResult::DecryptionErrorNeedsReport {
+            sender_id,
+            sender_device_id,
+            dem_serialized: dem.serialized().to_vec(),
+        })
+    }
+
+    /// SENDER side of the 1:1 self-heal: a peer reported (via
+    /// `DecryptionErrorMessage`) that it could not decrypt a message WE sent.
+    /// If the report names this device and its ratchet key still matches our
+    /// current session with that peer device, archive the session so the next
+    /// send re-establishes via a fresh PreKeySignalMessage.
+    async fn handle_decryption_error_report(
+        &self,
+        sender_address: &libsignal_protocol::ProtocolAddress,
+        plaintext: &[u8],
+    ) -> Result<SealedSenderResult, ServiceError> {
+        let peer_id: UserId = sender_address.name().parse().map_err(|e| {
+            ServiceError::Validation(format!("Invalid sender ID in Signal address: {}", e))
+        })?;
+        let peer_device_id: u32 = sender_address.device_id().into();
+
+        let plaintext_content = PlaintextContent::try_from(plaintext)
+            .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?;
+        let dem =
+            extract_decryption_error_message_from_serialized_content(plaintext_content.body())
+                .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?;
+
+        // The DEM names the device that SENT the failed message. Only that
+        // device holds the broken sending session — a copy landing on any
+        // other of our devices is a no-op.
+        let our_device_id = self
+            .settings_repo
+            .get::<u32>(crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID)?
+            .ok_or(ServiceError::NotLoggedIn)?;
+        if dem.device_id() != our_device_id {
+            tracing::info!(
+                peer_id = %peer_id,
+                dem_device_id = dem.device_id(),
+                our_device_id,
+                "GATEWAY: DecryptionErrorMessage targets another of our devices — ignoring"
+            );
+            return Ok(SealedSenderResult::MessageStored);
+        }
+
+        let dem_ratchet_key = dem.ratchet_key().map(|k| k.serialize().to_vec());
+        let archived = self
+            .signal_service
+            .actor
+            .archive_session_for_resend(peer_id.to_string(), peer_device_id, dem_ratchet_key)
+            .await?;
+
+        tracing::warn!(
+            peer_id = %peer_id,
+            peer_device_id,
+            archived,
+            "GATEWAY: peer reported a decryption error on our message — session {}",
+            if archived {
+                "archived; next send re-establishes via PreKeySignalMessage"
+            } else {
+                "left untouched (no session or stale report)"
+            }
+        );
+
+        Ok(SealedSenderResult::SessionHealed {
+            peer_id,
+            peer_device_id,
+            archived,
+        })
     }
 
     /// Inner implementation that processes decrypted plaintext.

@@ -9,10 +9,13 @@
 //!   * `network::streaming::push_listener` — ntfy SSE wake-up hint. Push
 //!     has no typed metadata so it stays wake-only.
 //!
-//! The server emits three typed events the client must act on:
+//! The server emits two typed events the client must act on:
 //!   * `DEVICE_LINKED`          — toast + refresh device list UI.
-//!   * `SESSION_RESET`          — drop Signal ratchet with a named peer.
 //!   * `PEER_DEVICES_CHANGED`   — invalidate peer session cache + rekey groups.
+//!
+//! Desynced 1:1 ratchets self-heal E2E via Signal `DecryptionErrorMessage`
+//! (see `MessageGateway::process_incoming_message`) — there is no
+//! server-mediated session reset.
 //!
 //! Prekey rotation is client-driven by the `spawn_prekey_replenishment`
 //! background task (Signal X3DH §3.2 / PQXDH §3.2); the server does not
@@ -88,18 +91,6 @@ struct DeviceLinkedMeta {
     device_info: Option<String>,
     #[serde(default)]
     device_name: Option<String>,
-}
-
-/// Metadata payload for SESSION_RESET notifications.
-#[derive(Debug, Deserialize)]
-struct SessionResetMeta {
-    peer_user_id: String,
-    /// Server uses string form so either numeric or textual IDs round-trip.
-    #[serde(default)]
-    peer_device_id: Option<String>,
-    // requester_device_id is present in server payload but not used here —
-    // primary consumer is the Signal session drop, which doesn't care who
-    // requested it. Kept out of the struct to satisfy dead_code.
 }
 
 /// Metadata payload for PEER_DEVICES_CHANGED notifications.
@@ -208,27 +199,6 @@ fn dispatch_notification(event_bus: &EventBus, notif: Notification) {
                 // primary itself emits the event locally. Here we're on
                 // the receiving side of the fan-out; always false.
                 approved_by_self: false,
-            });
-        }
-        NotificationType::SessionReset => {
-            let meta: SessionResetMeta = match parse_meta(&notif) {
-                Some(m) => m,
-                None => return,
-            };
-            let peer_user_id = match meta.peer_user_id.parse::<UserId>() {
-                Ok(id) => id,
-                Err(e) => {
-                    warn!(error = %e, value = %meta.peer_user_id, "SESSION_RESET: invalid peer_user_id");
-                    return;
-                }
-            };
-            let peer_device_id = meta
-                .peer_device_id
-                .as_deref()
-                .and_then(|s| s.parse::<u32>().ok());
-            let _ = sender.send(DomainEvent::SessionResetRequested {
-                peer_user_id,
-                peer_device_id,
             });
         }
         NotificationType::PeerDevicesChanged => {
@@ -374,41 +344,6 @@ mod tests {
                 assert_eq!(peer_user_id.to_string(), peer);
                 assert_eq!(device_id, 3);
                 assert_eq!(change_type, "added");
-            }
-            other => panic!("wrong event variant: {:?}", other),
-        }
-    }
-
-    #[test]
-    fn dispatch_session_reset_with_device_id() {
-        let (bus, mut rx) = bus_with_receiver();
-        let peer = uuid::Uuid::new_v4().to_string();
-        let meta = format!(
-            r#"{{"peer_user_id":"{}","peer_device_id":"12","requester_device_id":1}}"#,
-            peer
-        );
-        dispatch_notification(&bus, notif(NotificationType::SessionReset, &meta));
-        match rx.try_recv().expect("event expected") {
-            DomainEvent::SessionResetRequested { peer_user_id, peer_device_id } => {
-                assert_eq!(peer_user_id.to_string(), peer);
-                assert_eq!(peer_device_id, Some(12));
-            }
-            other => panic!("wrong event variant: {:?}", other),
-        }
-    }
-
-    #[test]
-    fn dispatch_session_reset_without_device_id_drops_all() {
-        let (bus, mut rx) = bus_with_receiver();
-        let peer = uuid::Uuid::new_v4().to_string();
-        let meta = format!(
-            r#"{{"peer_user_id":"{}","requester_device_id":1}}"#,
-            peer
-        );
-        dispatch_notification(&bus, notif(NotificationType::SessionReset, &meta));
-        match rx.try_recv().expect("event expected") {
-            DomainEvent::SessionResetRequested { peer_device_id, .. } => {
-                assert_eq!(peer_device_id, None);
             }
             other => panic!("wrong event variant: {:?}", other),
         }

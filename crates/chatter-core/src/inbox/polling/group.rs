@@ -152,6 +152,27 @@ async fn process_sealed_sender_group_message(
                 "Group mailbox message stored (no UI event)"
             );
         }
+        // 1:1 self-heal results are dispatched on the DEVICE inbox path
+        // (polling/device.rs), which carries the event/domain senders. The
+        // anonymous group mailbox has neither — log and drop. (The sender-side
+        // archive in SessionHealed already happened inside the gateway.)
+        Ok(SealedSenderResult::DecryptionErrorNeedsReport { sender_id, .. }) => {
+            tracing::warn!(
+                group_id = %group_id,
+                message_id = %message_id,
+                sender_id = %sender_id,
+                "Session desync detected on group mailbox path — DEM report not dispatched here"
+            );
+        }
+        Ok(SealedSenderResult::SessionHealed { peer_id, archived, .. }) => {
+            tracing::info!(
+                group_id = %group_id,
+                message_id = %message_id,
+                peer_id = %peer_id,
+                archived,
+                "DecryptionErrorMessage processed via group mailbox path"
+            );
+        }
         // SKDMs ride the device inbox (sealed sender), not the group mailbox;
         // if one lands here the key is still installed by the gateway. There is
         // no domain_tx on this path to fire SenderKeyReceived, so just

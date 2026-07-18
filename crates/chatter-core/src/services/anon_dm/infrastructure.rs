@@ -117,7 +117,8 @@ impl AnonDmService {
 
         // Encrypt with Signal Protocol. If a session already exists, encrypt
         // locally (no server contact keyed to the peer). If it does NOT — e.g.
-        // after a SESSION_RESET — re-establishing via the authenticated prekey
+        // after a session was archived/invalidated — re-establishing via the
+        // authenticated prekey
         // fetch would leak this anon-DM's sender->recipient edge to the server.
         // Re-establish anonymously instead (blind token + anonymous fetch),
         // mirroring the anon-group path. Without this guard a reset silently

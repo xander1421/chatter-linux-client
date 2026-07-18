@@ -365,6 +365,85 @@ impl MessageService {
         Ok(())
     }
 
+    /// Ship a `DecryptionErrorMessage` back to the peer device whose message
+    /// we could not decrypt (receiver half of the 1:1 session self-heal).
+    ///
+    /// Unlike a normal DM this targets exactly ONE device — the one that sent
+    /// the wedged ciphertext (only its session with us is broken) — and the
+    /// DEM is sealed as session-LESS `PlaintextContent` (the ratchet is what's
+    /// broken; see `SignalService::encrypt_decryption_error_report`).
+    ///
+    /// UAK authorization is derived locally from the peer's stored profile key
+    /// (Signal's `ProfileKey.deriveAccessKey()`), so no prekey-bundle fetch —
+    /// and no one-time-prekey burn — is needed. Without a profile key we
+    /// degrade to identified (Basic auth) delivery, loudly, like
+    /// `deposit_sealed_to_all_devices` does.
+    pub async fn send_decryption_error_report(
+        &self,
+        peer_id: &UserId,
+        peer_device_id: u32,
+        dem_serialized: Vec<u8>,
+    ) -> Result<(), MessageError> {
+        let mut auth_client = self.auth_client();
+        let sealed_body = self
+            .signal_service
+            .encrypt_decryption_error_report(
+                &mut auth_client,
+                &peer_id.to_string(),
+                peer_device_id,
+                dem_serialized,
+            )
+            .await
+            .map_err(|e| {
+                MessageError::DmError(format!("failed to seal DecryptionErrorMessage: {e}"))
+            })?;
+
+        let sealed_message = SealedSenderMessage {
+            sealed_body,
+            server_key_id: self.signal_service.get_server_key_id(),
+            timestamp: crate::util::time::TimestampNanos::now().as_u64(),
+        };
+
+        let current_user_id = self.settings_repo.current_user_id()?;
+        let peer_uak = self
+            .user_repo
+            .get_friend_profile_key(&current_user_id, peer_id)
+            .ok()
+            .flatten()
+            .map(|pk| crate::crypto::derive_uak(&pk));
+
+        let peer_id_str = peer_id.to_string();
+        match peer_uak {
+            Some(uak) => {
+                let mut anon_client = self.grpc_pool.anonymous_message_client();
+                anon_client
+                    .send_sealed_message_with_uak(&peer_id_str, peer_device_id, sealed_message, &uak)
+                    .await
+                    .map_err(MessageError::Network)?;
+            }
+            None => {
+                tracing::warn!(
+                    peer_id = %peer_id,
+                    reason = "no stored profile key to derive the peer's UAK",
+                    "SEALED SENDER DEGRADED: DecryptionErrorMessage delivered identified \
+                     (Basic auth) — the server WILL record us as the sender"
+                );
+                let mut message_client = self.message_client();
+                message_client
+                    .send_sealed_message(&peer_id_str, peer_device_id, sealed_message)
+                    .await
+                    .map_err(MessageError::Network)?;
+            }
+        }
+
+        tracing::info!(
+            peer_id = %peer_id,
+            peer_device_id,
+            "DecryptionErrorMessage report delivered — peer will archive its session and re-establish"
+        );
+        Ok(())
+    }
+
     /// Encrypt `plaintext` for every device of `recipient_id` and deposit
     /// each ciphertext via `SendSealedMessage`, UAK-authorized. `skip_device_id`
     /// excludes a single device (used for self-sync to skip the sending device).

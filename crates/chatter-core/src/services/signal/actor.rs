@@ -95,10 +95,32 @@ pub enum SignalCommand {
     /// forces fresh prekey fetch + session rebuild on the next send to them.
     /// Returns the number of session rows deleted.
     InvalidatePeerSessions { peer_user_id: String, response: oneshot::Sender<Result<u32, ServiceError>> },
-    /// Delete the single Signal session for `(peer_user_id, device_id)`.
-    /// Used by SESSION_RESET when the server narrows the reset to one
-    /// device. Returns true if a session row existed + was removed.
-    InvalidatePeerDeviceSession { peer_user_id: String, device_id: u32, response: oneshot::Sender<Result<bool, ServiceError>> },
+    /// Archive (not delete) the session for `(peer_user_id, device_id)` in
+    /// response to a peer's DecryptionErrorMessage, so the next send
+    /// re-establishes via a fresh PreKeySignalMessage while in-flight
+    /// messages from the peer under the old ratchet still decrypt.
+    ///
+    /// If `dem_ratchet_key` is present it must match the session's CURRENT
+    /// sender ratchet key — a stale DEM about an already-rotated session is
+    /// ignored (Signal's guard against archiving a healthy new session).
+    /// Returns true if the session was archived.
+    ArchiveSessionForResend {
+        peer_user_id: String,
+        device_id: u32,
+        dem_ratchet_key: Option<Vec<u8>>,
+        response: oneshot::Sender<Result<bool, ServiceError>>,
+    },
+    /// Wrap a serialized DecryptionErrorMessage in `PlaintextContent` and
+    /// seal it for `recipient_address`. Deliberately session-LESS: the
+    /// ratchet with the recipient may be exactly what is broken, so the DEM
+    /// rides as a `CiphertextMessageType::Plaintext` USMC, which sealed
+    /// sender can encrypt with only the recipient's identity key.
+    EncryptDecryptionErrorSealed {
+        dem_serialized: Vec<u8>,
+        sender_cert: SenderCertificate,
+        recipient_address: ProtocolAddress,
+        response: oneshot::Sender<Result<Vec<u8>, ServiceError>>,
+    },
     ClearChannelSenderKeys { channel_id: ChannelId, response: oneshot::Sender<Result<(), ServiceError>> },
     MarkChannelForRotation { channel_id: ChannelId, response: oneshot::Sender<Result<(), ServiceError>> },
     /// Generate a Signal safety number for a peer (60-digit fingerprint).
@@ -280,7 +302,11 @@ impl SignalActorHandle {
                                 &mut store, &mut store2, &mut store3, &store6, &mut store4,
                             ).await {
                                 Ok(result) => Ok((ProtocolAddress::new(result.sender_uuid, result.device_id), result.message)),
-                                Err(e) => Err(ServiceError::Crypto(CryptoError::Protocol(e.to_string()))),
+                                // Preserve the STRUCTURED CryptoError (notably
+                                // SessionDesync, which carries the failed inner
+                                // ciphertext for the DecryptionErrorMessage
+                                // self-heal). Stringifying here would destroy it.
+                                Err(e) => Err(ServiceError::Crypto(e)),
                             };
                             let _ = response.send(res);
                         }
@@ -509,20 +535,76 @@ impl SignalActorHandle {
                             let _ = response.send(res);
                         }
 
-                        SignalCommand::InvalidatePeerDeviceSession { peer_user_id, device_id, response } => {
-                            // Single-device drop. Address layout matches
-                            // load_session format: "{user_id}:{device_id}".
-                            let address = format!("{}:{}", peer_user_id, device_id);
-                            let res = store.key_store()
-                                .delete_session(&address)
-                                .map_err(ServiceError::Storage);
-                            if let Ok(true) = &res {
+                        SignalCommand::ArchiveSessionForResend { peer_user_id, device_id, dem_ratchet_key, response } => {
+                            // Address layout matches load_session format:
+                            // "{user_id}:{device_id}".
+                            let session_key = format!("{}:{}", peer_user_id, device_id);
+                            let res = (|| -> Result<bool, ServiceError> {
+                                let Some(bytes) = store.key_store()
+                                    .load_session(&session_key)
+                                    .map_err(ServiceError::Storage)?
+                                else {
+                                    return Ok(false);
+                                };
+                                let mut record = SessionRecord::deserialize(&bytes)
+                                    .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?;
+
+                                // Stale-DEM guard: only archive if the DEM's ratchet
+                                // key names OUR current sender ratchet with this
+                                // device. A DEM about an old message must not nuke a
+                                // session that already rotated past the problem.
+                                if let Some(rk_bytes) = dem_ratchet_key {
+                                    let rk = PublicKey::deserialize(&rk_bytes)
+                                        .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?;
+                                    let matches = record.current_ratchet_key_matches(&rk)
+                                        .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?;
+                                    if !matches {
+                                        tracing::info!(
+                                            peer_user_id = %peer_user_id,
+                                            device_id,
+                                            "DEM ratchet key does not match current session — stale report, not archiving"
+                                        );
+                                        return Ok(false);
+                                    }
+                                }
+
+                                record.archive_current_state()
+                                    .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?;
+                                let serialized = record.serialize()
+                                    .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?;
+                                store.key_store()
+                                    .store_session(&session_key, &serialized)
+                                    .map_err(ServiceError::Storage)?;
                                 tracing::info!(
                                     peer_user_id = %peer_user_id,
                                     device_id,
-                                    "Invalidated single peer-device Signal session"
+                                    "Archived Signal session after peer's DecryptionErrorMessage — next send re-establishes via PreKeySignalMessage"
                                 );
-                            }
+                                Ok(true)
+                            })();
+                            let _ = response.send(res);
+                        }
+
+                        SignalCommand::EncryptDecryptionErrorSealed { dem_serialized, sender_cert, recipient_address, response } => {
+                            use libsignal_protocol::{ContentHint, DecryptionErrorMessage, PlaintextContent, UnidentifiedSenderMessageContent};
+                            let res = async {
+                                let dem = DecryptionErrorMessage::try_from(dem_serialized.as_slice())
+                                    .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?;
+                                let plaintext_content = PlaintextContent::from(dem);
+                                // Implicit hint: a DEM is a control ride-along — the
+                                // sender has nothing to "resend" if it is lost.
+                                let usmc = UnidentifiedSenderMessageContent::new(
+                                    CiphertextMessageType::Plaintext,
+                                    sender_cert,
+                                    plaintext_content.serialized().to_vec(),
+                                    ContentHint::Implicit,
+                                    None,
+                                )
+                                .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?;
+                                SealedSenderManager::encrypt_from_content(&usmc, &recipient_address, &store)
+                                    .await
+                                    .map_err(ServiceError::Crypto)
+                            }.await;
                             let _ = response.send(res);
                         }
 
@@ -554,9 +636,21 @@ impl SignalActorHandle {
                                 .map(|s| {
                                     match s {
                                         Some(bytes) => {
-                                            // Validate session is structurally intact
+                                            // Validate session is structurally intact AND
+                                            // usable for SENDING. An archived session (no
+                                            // current state — e.g. after a peer's
+                                            // DecryptionErrorMessage forced a reset)
+                                            // deserializes fine but cannot encrypt; it must
+                                            // read as "no session" here so ensure_session
+                                            // fetches a fresh prekey bundle and the next
+                                            // send goes out as a PreKeySignalMessage.
                                             match SessionRecord::deserialize(&bytes) {
-                                                Ok(_) => true,
+                                                Ok(record) => record
+                                                    .has_usable_sender_chain(
+                                                        std::time::SystemTime::now(),
+                                                        libsignal_protocol::SessionUsabilityRequirements::empty(),
+                                                    )
+                                                    .unwrap_or(false),
                                                 Err(e) => {
                                                     tracing::warn!(
                                                         address = %address,
@@ -789,12 +883,26 @@ impl SignalActorHandle {
         self.send(|tx| SignalCommand::InvalidatePeerSessions { peer_user_id, response: tx }).await?
     }
 
-    /// Delete the single Signal session for `(peer_user_id, device_id)`.
-    /// Narrower form of `invalidate_peer_sessions` — used when SESSION_RESET
-    /// carries a specific `peer_device_id`. Returns true when a session
-    /// row existed and was removed.
-    pub async fn invalidate_peer_device_session(&self, peer_user_id: String, device_id: u32) -> Result<bool, ServiceError> {
-        self.send(|tx| SignalCommand::InvalidatePeerDeviceSession { peer_user_id, device_id, response: tx }).await?
+    /// Archive the session for `(peer_user_id, device_id)` after receiving the
+    /// peer's DecryptionErrorMessage. See [`SignalCommand::ArchiveSessionForResend`].
+    pub async fn archive_session_for_resend(
+        &self,
+        peer_user_id: String,
+        device_id: u32,
+        dem_ratchet_key: Option<Vec<u8>>,
+    ) -> Result<bool, ServiceError> {
+        self.send(|tx| SignalCommand::ArchiveSessionForResend { peer_user_id, device_id, dem_ratchet_key, response: tx }).await?
+    }
+
+    /// Seal a serialized DecryptionErrorMessage (as `PlaintextContent`) for a
+    /// recipient device without touching the (possibly broken) session.
+    pub async fn encrypt_decryption_error_sealed(
+        &self,
+        dem_serialized: Vec<u8>,
+        sender_cert: SenderCertificate,
+        recipient_address: ProtocolAddress,
+    ) -> Result<Vec<u8>, ServiceError> {
+        self.send(|tx| SignalCommand::EncryptDecryptionErrorSealed { dem_serialized, sender_cert, recipient_address, response: tx }).await?
     }
 
     /// Rotate signed prekey + Kyber prekey (PQXDH pairing).

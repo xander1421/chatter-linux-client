@@ -801,6 +801,18 @@ async fn process_identified_sender_message(
                 );
             }
         }
+        // 1:1 self-heal results only arise on the SEALED path
+        // (process_incoming_message): the sender identity there is
+        // authenticated by the sealed-sender certificate. The identified
+        // path's sender is server-claimed, so no DEM is built for it.
+        Ok(SealedSenderResult::DecryptionErrorNeedsReport { .. })
+        | Ok(SealedSenderResult::SessionHealed { .. }) => {
+            tracing::warn!(
+                message_id = %msg.message_guid,
+                "[INBOX] Session self-heal result on identified path (unexpected)"
+            );
+            stats.write().messages_failed += 1;
+        }
         Err(e) => {
             tracing::error!(
                 message_id = %msg.message_guid,
@@ -1129,6 +1141,56 @@ async fn process_sealed_sender_message(
             let _ = event_tx.send(InboxEvent::MessageProcessed {
                 message_id: msg.message_guid.clone(),
             });
+        }
+        // RECEIVER half of the 1:1 self-heal: this sender's inner message
+        // could not be decrypted (desynced session). Ship the
+        // DecryptionErrorMessage back to them via the InboxEventProcessor
+        // (MessageService::send_decryption_error_report). The wedged
+        // ciphertext itself is unrecoverable (Signal semantics) — the heal
+        // applies to the SESSION so the next message decrypts.
+        Ok(SealedSenderResult::DecryptionErrorNeedsReport {
+            sender_id,
+            sender_device_id,
+            dem_serialized,
+        }) => {
+            tracing::warn!(
+                message_id = %msg.message_guid,
+                sender_id = %sender_id,
+                sender_device_id,
+                "[INBOX] 1:1 decrypt failed — dispatching DecryptionErrorMessage report to sender"
+            );
+            let _ = event_tx.send(InboxEvent::DmDecryptionErrorNeedsReport {
+                peer_id: sender_id,
+                peer_device_id: sender_device_id,
+                dem_serialized,
+            });
+            let _ = event_tx.send(InboxEvent::MessageFailed {
+                message_id: msg.message_guid.clone(),
+                error: "session desync — DecryptionErrorMessage reported to sender".to_string(),
+            });
+            let mut s = stats.write();
+            s.messages_received += 1;
+            s.messages_failed += 1;
+        }
+        // SENDER half of the 1:1 self-heal: a peer's DecryptionErrorMessage
+        // about a message we sent was processed (session archived when
+        // `archived`). Surface on the domain bus for observability.
+        Ok(SealedSenderResult::SessionHealed {
+            peer_id,
+            peer_device_id,
+            archived,
+        }) => {
+            if let Some(tx) = domain_tx {
+                let _ = tx.send(DomainEvent::DmSessionHealed {
+                    peer_user_id: peer_id,
+                    peer_device_id,
+                    archived,
+                });
+            }
+            let _ = event_tx.send(InboxEvent::MessageProcessed {
+                message_id: msg.message_guid.clone(),
+            });
+            stats.write().messages_processed += 1;
         }
         Ok(SealedSenderResult::DataMessageReceived {
             sender_id: msg_sender,

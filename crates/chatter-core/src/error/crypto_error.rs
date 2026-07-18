@@ -59,6 +59,25 @@ pub enum CryptoError {
     #[error("session expired for {0}")]
     SessionExpired(String),
 
+    /// A sealed-sender envelope opened cleanly (sender authenticated via the
+    /// certificate) but the INNER Whisper/PreKey message failed to decrypt —
+    /// the classic desynced-1:1-session wedge. Carries everything needed to
+    /// build a Signal `DecryptionErrorMessage` back to the sender so the
+    /// session self-heals (see `MessageGateway::process_incoming_message`).
+    #[error("session desync with {sender_uuid}:{sender_device_id}: {reason}")]
+    SessionDesync {
+        /// Authenticated sender user id (from the validated sender certificate).
+        sender_uuid: String,
+        /// Authenticated sender device id.
+        sender_device_id: u32,
+        /// Inner `CiphertextMessageType` discriminant (2 = Whisper, 3 = PreKey).
+        msg_type: u8,
+        /// The failed inner ciphertext (serialized Whisper/PreKey message).
+        ciphertext: Vec<u8>,
+        /// Underlying libsignal error string.
+        reason: String,
+    },
+
     /// Encryption operation failed.
     #[error("encryption failed: {0}")]
     EncryptionFailed(String),

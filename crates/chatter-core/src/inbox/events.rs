@@ -73,15 +73,18 @@ pub enum InboxEvent {
         /// Whether all sessions were tried (Sesame convergence failed).
         convergence_failed: bool,
     },
-    /// DM retry requested - all sessions failed, need sender to resend.
-    ///
-    /// This is emitted when Sesame convergence fails and we need the peer
-    /// to re-establish a session and resend the message.
-    DmRetryRequested {
-        /// Peer user ID (who should retry).
+    /// A 1:1 inner decrypt failed (desynced session) and a
+    /// `DecryptionErrorMessage` must be shipped back to the sender so their
+    /// session archives and re-establishes (Signal 1:1 self-heal, receiver
+    /// half). Handled by `InboxEventProcessor` →
+    /// `MessageService::send_decryption_error_report`.
+    DmDecryptionErrorNeedsReport {
+        /// Authenticated sender of the message we could not decrypt.
         peer_id: UserId,
-        /// Original message timestamp (for deduplication).
-        original_timestamp: u64,
+        /// Their sending device (the session that is desynced).
+        peer_device_id: u32,
+        /// Serialized libsignal `DecryptionErrorMessage`.
+        dem_serialized: Vec<u8>,
     },
     /// DM mailbox poll completed.
     DmPollCompleted {

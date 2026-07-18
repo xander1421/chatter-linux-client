@@ -934,7 +934,7 @@ impl EventHandlers {
             // ================================================================
             // Handled by the Signal service / inbox handlers that own the
             // ratchet + prekey stores. Nothing to mirror into UI state.
-            DomainEvent::SessionResetRequested { .. }
+            DomainEvent::DmSessionHealed { .. }
             | DomainEvent::PeerDevicesChanged { .. } => {}
 
             // IncomingCall surfaces as a desktop toast via

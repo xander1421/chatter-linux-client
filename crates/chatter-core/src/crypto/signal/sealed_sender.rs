@@ -20,10 +20,10 @@
 use std::time::{Duration, SystemTime};
 
 use libsignal_protocol::{
-    sealed_sender_decrypt, sealed_sender_decrypt_to_usmc, sealed_sender_encrypt,
-    sealed_sender_encrypt_from_usmc,
-    CiphertextMessageType, DeviceId, IdentityKeyStore, KyberPreKeyStore, PreKeyStore,
-    ProtocolAddress, PublicKey, SessionStore,
+    message_decrypt_prekey, message_decrypt_signal, sealed_sender_decrypt_to_usmc,
+    sealed_sender_encrypt, sealed_sender_encrypt_from_usmc,
+    CiphertextMessageType, DeviceId, IdentityKeyStore, KyberPreKeyStore, PreKeySignalMessage,
+    PreKeyStore, ProtocolAddress, PublicKey, SessionStore, SignalMessage,
     SignalProtocolError, SignedPreKeyStore, Timestamp,
 };
 // SECURITY: each ephemeral-key draw must hit the OS directly so a process
@@ -203,21 +203,16 @@ impl SealedSenderManager {
             "SealedSender: starting decryption"
         );
 
-        let result = sealed_sender_decrypt(
-            ciphertext,
-            trust_root,
-            timestamp,
-            local_e164,
-            local_uuid.clone(),
-            local_device_id,
-            identity_store,
-            session_store,
-            pre_key_store,
-            signed_pre_key_store,
-            kyber_pre_key_store,
-        )
-        .await
-        .map_err(|e| {
+        // Two-phase decrypt (mirrors libsignal's `sealed_sender_decrypt`, which
+        // we deliberately do NOT call one-shot). Splitting envelope-open from
+        // inner-decrypt is load-bearing for 1:1 session self-heal:
+        //   * an INNER failure must surface the authenticated sender + the
+        //     failed ciphertext so the gateway can build a
+        //     `DecryptionErrorMessage` back to them (`CryptoError::SessionDesync`);
+        //   * a `Plaintext`-type USMC (a peer's DecryptionErrorMessage wrapped
+        //     in `PlaintextContent`) carries no ratchet ciphertext at all and
+        //     must be returned as-is — the one-shot helper rejects it.
+        let map_envelope_err = |e: SignalProtocolError| {
             tracing::error!(
                 error = %e,
                 local_uuid = %local_uuid,
@@ -249,7 +244,111 @@ impl SealedSenderManager {
                 }
                 _ => CryptoError::InvalidSealedSenderMessage(e.to_string()),
             }
-        })?;
+        };
+
+        let usmc = sealed_sender_decrypt_to_usmc(ciphertext, identity_store)
+            .await
+            .map_err(map_envelope_err)?;
+
+        let sender_ok = (|| -> Result<(bool, String, Option<String>, DeviceId), SignalProtocolError> {
+            let sender = usmc.sender()?;
+            Ok((
+                sender.validate(trust_root, timestamp)?,
+                sender.sender_uuid()?.to_string(),
+                sender.sender_e164()?.map(|s| s.to_string()),
+                sender.sender_device_id()?,
+            ))
+        })()
+        .map_err(map_envelope_err)?;
+        let (cert_valid, sender_uuid, sender_e164, sender_device_id) = sender_ok;
+
+        if !cert_valid {
+            return Err(map_envelope_err(SignalProtocolError::InvalidSealedSenderMessage(
+                "trust root validation failed".to_string(),
+            )));
+        }
+
+        let is_local_uuid = local_uuid == sender_uuid;
+        let is_local_e164 = matches!(
+            (&local_e164, &sender_e164),
+            (Some(l), Some(s)) if l == s
+        );
+        if (is_local_e164 || is_local_uuid) && sender_device_id == local_device_id {
+            return Err(map_envelope_err(SignalProtocolError::SealedSenderSelfSend));
+        }
+
+        let remote_address = ProtocolAddress::new(sender_uuid.clone(), sender_device_id);
+        let msg_type = usmc.msg_type().map_err(map_envelope_err)?;
+        let contents = usmc.contents().map_err(map_envelope_err)?;
+
+        // Envelope opened and sender authenticated. From here on a failure is
+        // an INNER (session/ratchet) failure — surface it as SessionDesync so
+        // the caller can send a DecryptionErrorMessage back to the sender.
+        let map_inner_err = |e: SignalProtocolError| {
+            tracing::warn!(
+                target: "chatter::crypto::decrypt_failure",
+                kind = "sealed_sender_inner",
+                sender = %sender_uuid,
+                sender_device = ?sender_device_id,
+                error = %e,
+                "inner decryption failure (session desync candidate)"
+            );
+            CryptoError::SessionDesync {
+                sender_uuid: sender_uuid.clone(),
+                sender_device_id: sender_device_id.into(),
+                msg_type: msg_type as u8,
+                ciphertext: contents.to_vec(),
+                reason: e.to_string(),
+            }
+        };
+
+        let mut rng = OsRng.unwrap_err();
+        let message = match msg_type {
+            CiphertextMessageType::Whisper => {
+                let ctext = SignalMessage::try_from(contents).map_err(map_inner_err)?;
+                message_decrypt_signal(
+                    &ctext,
+                    &remote_address,
+                    session_store,
+                    identity_store,
+                    &mut rng,
+                )
+                .await
+                .map_err(map_inner_err)?
+            }
+            CiphertextMessageType::PreKey => {
+                let ctext = PreKeySignalMessage::try_from(contents).map_err(map_inner_err)?;
+                message_decrypt_prekey(
+                    &ctext,
+                    &remote_address,
+                    session_store,
+                    identity_store,
+                    pre_key_store,
+                    signed_pre_key_store,
+                    kyber_pre_key_store,
+                    &mut rng,
+                )
+                .await
+                .map_err(map_inner_err)?
+            }
+            // A DecryptionErrorMessage ride-along: the "message" is the
+            // serialized `PlaintextContent` (0xC0-prefixed), not ratchet
+            // ciphertext. Return it verbatim — the gateway extracts the DEM.
+            CiphertextMessageType::Plaintext => contents.to_vec(),
+            other => {
+                return Err(map_envelope_err(SignalProtocolError::InvalidMessage(
+                    other,
+                    "unexpected message type for sealed sender decrypt",
+                )));
+            }
+        };
+
+        let result = SealedSenderDecryptionResult {
+            sender_uuid,
+            sender_e164,
+            device_id: sender_device_id,
+            message,
+        };
 
         tracing::debug!(
             sender = %result.sender_uuid,

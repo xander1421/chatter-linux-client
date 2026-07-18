@@ -231,6 +231,29 @@ impl SignalService {
         self.actor.encrypt_identified(plaintext.to_vec(), address).await
     }
 
+    /// Seal a serialized `DecryptionErrorMessage` for one recipient device.
+    ///
+    /// The DEM rides as session-LESS `PlaintextContent` inside sealed sender —
+    /// deliberately not ratchet-encrypted, because the session with the
+    /// recipient is exactly what the report says is broken. Only the
+    /// recipient's identity key (already pinned) and our sender certificate
+    /// are needed.
+    pub async fn encrypt_decryption_error_report(
+        &self,
+        auth_client: &mut AuthClient,
+        recipient_id: &str,
+        device_id: u32,
+        dem_serialized: Vec<u8>,
+    ) -> Result<Vec<u8>, ServiceError> {
+        let device_id_struct = DeviceId::try_from(device_id)
+            .map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
+        let address = ProtocolAddress::new(recipient_id.to_string(), device_id_struct);
+        let sender_cert = self.get_or_request_sender_certificate(auth_client).await?;
+        self.actor
+            .encrypt_decryption_error_sealed(dem_serialized, sender_cert, address)
+            .await
+    }
+
     /// Decrypt an incoming Sealed Sender message.
     pub async fn decrypt_message(
         &self,

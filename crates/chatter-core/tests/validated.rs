@@ -9632,3 +9632,212 @@ async fn v46_reactions_edits_pins_roundtrip_in_dm() {
     client_a.shutdown().await;
     client_b.shutdown().await;
 }
+
+// ============================================================================
+// V47: A DESYNCED 1:1 SESSION SELF-HEALS VIA DecryptionErrorMessage
+//
+// THE GAP: the codebase had ZERO references to libsignal's
+// DecryptionErrorMessage / PlaintextContent. If a recipient loses or desyncs
+// its Signal session state while the sender's sending chain lives on, every
+// subsequent Whisper from the sender fails ratchet decrypt at the recipient
+// FOREVER — the conversation wedges permanently (group chats already
+// self-healed via the SKDM machinery, see V26; 1:1 had nothing).
+//
+// THE FIX (this test): Signal's 1:1 self-heal, end to end:
+//   * receiver half — B cannot inner-decrypt A's sealed message; the gateway
+//     builds a DecryptionErrorMessage naming the failed ciphertext
+//     (CryptoError::SessionDesync -> SealedSenderResult::DecryptionErrorNeedsReport)
+//     and ships it back to A's exact sending device, sealed as session-LESS
+//     PlaintextContent (MessageService::send_decryption_error_report).
+//   * sender half — A extracts the DEM
+//     (extract_decryption_error_message_from_serialized_content), checks it
+//     names THIS device and its CURRENT ratchet key, then ARCHIVES the broken
+//     session (SignalCommand::ArchiveSessionForResend). has_session reports an
+//     archived session as unusable, so A's next send re-establishes via a
+//     fresh PreKeySignalMessage that B can process from scratch.
+//
+// Proof:
+//   POSITIVE CONTROL 1 — a clean A→B DM delivers (pipeline alive).
+//   SABOTAGE + POSITIVE CONTROL 2 — B deletes its session record for A:1
+//     (the state loss). A's next message (m2, a Whisper under a session B no
+//     longer has) must NOT surface at B within the wedge window: proves the
+//     desync is real, so the heal below cannot pass vacuously.
+//   THE FIX (sender half) — A's domain bus surfaces
+//     DmSessionHealed { peer: B, archived: true } — B's DEM arrived, named
+//     this device + the live ratchet, and A archived the wedged session.
+//   THE FIX (round trip) — A sends m3; B surfaces it byte-exact. That is only
+//     possible if A re-keyed via PreKeySignalMessage (the old chain is one B
+//     cannot decrypt, as m2 just proved).
+//
+// MUTATION (RED): in services/signal/actor.rs, SignalCommand::ArchiveSessionForResend,
+// skip the archive (return Ok(false) instead of archive_current_state + store)
+// → A never leaves the wedged chain: the DmSessionHealed{archived:true} wait
+// times out AND m3 never decrypts at B → RED twice over.
+// ============================================================================
+#[tokio::test]
+async fn v47_desynced_dm_session_self_heals_via_decryption_error_message() {
+    skip_if_no_server!();
+    no_keyring_prompts();
+    // Opt-in tracing for debugging this test: V47_TRACE=1 to enable.
+    if std::env::var("V47_TRACE").is_ok() {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "chatter_core=debug".into()),
+            )
+            .try_init();
+    }
+
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let client_a = build_client(dir_a.path());
+    let client_b = build_client(dir_b.path());
+
+    let uid_a = register_and_start(&client_a, &unique_user("v47a"), "V47 Alice").await;
+    let uid_b = register_and_start(&client_b, &unique_user("v47b"), "V47 Bob").await;
+
+    client_a
+        .send_friend_request(&uid_b, Some("validated"))
+        .await
+        .expect("friend request failed");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    client_b
+        .respond_friend_request(&uid_a, true)
+        .await
+        .expect("accept friend request failed");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let mut events_a = client_a.subscribe_events();
+    let mut events_b = client_b.subscribe_events();
+    let conv_on_b = ChannelId::from(uid_a); // B's thread with A
+
+    // ---- POSITIVE CONTROL 1: the pipeline delivers at all ------------------
+    let m1 = unique_marker();
+    client_a
+        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &m1)
+        .await
+        .expect("baseline send failed");
+    let g1 = conv_on_b.clone();
+    let t1 = m1.clone();
+    let got1 = wait_for_event(&mut events_b, EVENT_TIMEOUT, move |e| {
+        matches!(e, DomainEvent::MessageReceived { message }
+                 if message.conversation_id == g1
+                 && message.as_text() == Some(t1.as_str()))
+    })
+    .await;
+    assert!(
+        got1.is_some(),
+        "POSITIVE CONTROL 1 FAILED: a clean A→B DM never arrived — every 'wedged' \
+         observation below would be meaningless"
+    );
+    println!("\n  control 1: clean A→B DM delivered — pipeline alive");
+
+    // Drain in-flight control traffic before sabotaging. B's automatic
+    // delivery receipt for m1 ratchets A's session when A processes it; if it
+    // lands between m2 and the DEM, A's current ratchet key no longer matches
+    // the one in the DEM and the (correct, Signal-mandated) stale-report guard
+    // skips the archive — a flaky red for a reason outside the property under
+    // test. Settling here pins A's ratchet for the whole wedge window: B can
+    // no longer produce ratchet-advancing traffic afterwards (it cannot
+    // decrypt, and the DEM itself is deliberately session-less).
+    tokio::time::sleep(Duration::from_secs(8)).await;
+
+    // ---- SABOTAGE: B loses its session state for A:1 -----------------------
+    // This is the desync this feature exists for: A's sending chain lives on,
+    // B has nothing to decrypt it with.
+    let addr_a_on_b = format!("{uid_a}:1");
+    assert!(
+        client_b
+            .signal()
+            .key_store()
+            .delete_session(&addr_a_on_b)
+            .expect("delete_session errored"),
+        "SABOTAGE FAILED: B had no session record for A:1 to lose"
+    );
+    println!("  sabotage: B deleted its Signal session record for {addr_a_on_b}");
+
+    // ---- POSITIVE CONTROL 2: the wedge is real -----------------------------
+    // m2 is a Whisper under a session B no longer has. It must NOT surface.
+    // (Signal semantics: the wedged ciphertext itself is unrecoverable — the
+    // heal applies to the SESSION so the NEXT message decrypts.)
+    let m2 = unique_marker();
+    client_a
+        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &m2)
+        .await
+        .expect("m2 send failed (send-side must succeed; the wedge is receive-side)");
+    let g2 = conv_on_b.clone();
+    let t2 = m2.clone();
+    let got2 = wait_for_event(&mut events_b, Duration::from_secs(10), move |e| {
+        matches!(e, DomainEvent::MessageReceived { message }
+                 if message.conversation_id == g2
+                 && message.as_text() == Some(t2.as_str()))
+    })
+    .await;
+    assert!(
+        got2.is_none(),
+        "POSITIVE CONTROL 2 FAILED: B decrypted m2 WITHOUT its session record — \
+         there is no desync, so 'self-heal' below would be proving nothing"
+    );
+    println!("  control 2: m2 did NOT decrypt at B — the 1:1 session is genuinely wedged");
+
+    // ---- THE FIX, sender half: B's DEM reaches A and archives the session --
+    let healed = wait_for_event(&mut events_a, EVENT_TIMEOUT, |e| {
+        matches!(e, DomainEvent::DmSessionHealed { peer_user_id, archived, .. }
+                 if *peer_user_id == uid_b && *archived)
+    })
+    .await;
+    assert!(
+        healed.is_some(),
+        "SELF-HEAL DID NOT FIRE: B failed to decrypt A's m2, but A never processed a \
+         DecryptionErrorMessage archiving its session with B (no \
+         DmSessionHealed{{archived:true}} within {EVENT_TIMEOUT:?}). The 1:1 \
+         conversation stays wedged forever — exactly the bug this feature removes."
+    );
+    println!("  the fix: A received B's DecryptionErrorMessage and ARCHIVED the wedged session");
+
+    // ---- THE FIX, round trip: the next message decrypts --------------------
+    let m3 = unique_marker();
+    client_a
+        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &m3)
+        .await
+        .expect("m3 send failed");
+    let g3 = conv_on_b.clone();
+    let t3 = m3.clone();
+    let got3 = wait_for_event(&mut events_b, EVENT_TIMEOUT, move |e| {
+        matches!(e, DomainEvent::MessageReceived { message }
+                 if message.conversation_id == g3
+                 && message.as_text() == Some(t3.as_str()))
+    })
+    .await;
+    assert!(
+        got3.is_some(),
+        "ROUND TRIP FAILED: A archived the session (DmSessionHealed fired) but B still \
+         cannot decrypt A's next message — the re-established PreKeySignalMessage path \
+         is broken, so the 'heal' is cosmetic"
+    );
+
+    // Byte-exact surface check on B's local store (not just the event).
+    let stored = client_b
+        .get_messages_local(
+            &conv_on_b,
+            &chatter_core::domain::message::ConversationType::ServerDm,
+            None,
+            50,
+        )
+        .unwrap_or_default();
+    assert!(
+        stored.iter().any(|m| m.as_text() == Some(m3.as_str())),
+        "ROUND TRIP FAILED: m3 event fired but B never stored the message text"
+    );
+
+    println!(
+        "\n  V47 PASS — a wedged 1:1 Signal session SELF-HEALS: B (desynced) reported the \
+         failure via DecryptionErrorMessage (sealed, session-less PlaintextContent), A \
+         archived the broken session and re-established via PreKeySignalMessage, and the \
+         next message decrypted byte-exact at B. Mirrors V26's group self-heal for the \
+         1:1 path.\n"
+    );
+
+    client_a.shutdown().await;
+    client_b.shutdown().await;
+}

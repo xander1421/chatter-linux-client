@@ -198,14 +198,16 @@ pub enum DomainEvent {
         approved_by_self: bool,
     },
 
-    /// Server-initiated Signal session reset. Client wipes its local
-    /// ratchet / chain-key state with `peer_user_id` (or a specific
-    /// `peer_device_id` if set) so the next send rebuilds via X3DH.
-    /// Emitted by the gRPC notification stream consumer on SESSION_RESET.
-    SessionResetRequested {
+    /// SENDER half of the 1:1 session self-heal completed: a peer's
+    /// `DecryptionErrorMessage` was processed for `(peer_user_id,
+    /// peer_device_id)`. `archived` is true when the broken session was
+    /// archived (next send re-establishes via PreKeySignalMessage); false
+    /// when the report was stale or no session existed. Emitted for
+    /// observability (logs/tests) — the archive already happened.
+    DmSessionHealed {
         peer_user_id: UserId,
-        /// When None, drop every session with every device of peer_user_id.
-        peer_device_id: Option<u32>,
+        peer_device_id: u32,
+        archived: bool,
     },
 
     /// A peer who shares a channel with the local user added or revoked a
@@ -658,7 +660,7 @@ impl DomainEvent {
             DomainEvent::JarvisCleared { .. } => None,
             DomainEvent::SyncComplete { .. } => None,
             DomainEvent::PushWakeup { .. } => None,
-            DomainEvent::SessionResetRequested { .. } => None,
+            DomainEvent::DmSessionHealed { .. } => None,
             DomainEvent::PeerDevicesChanged { .. } => None,
         }
     }

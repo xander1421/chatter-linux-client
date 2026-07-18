@@ -483,7 +483,7 @@ pub async fn handle_domain_event(
         // Events with no UI render — core handles the work, UI doesn't
         // surface anything to the user.
         DomainEvent::PushWakeup { .. } => {}
-        DomainEvent::SessionResetRequested { .. } => {}
+        DomainEvent::DmSessionHealed { .. } => {}
         DomainEvent::PeerDevicesChanged { .. } => {}
         // Server-managed profile updated. Core already upserted user_repo.
         // Refresh display_name + status across sidebar / header / profile

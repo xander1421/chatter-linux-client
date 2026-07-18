@@ -392,4 +392,24 @@ pub enum SealedSenderResult {
         sender_id: UserId,
         content: Box<crate::proto::content_v1::Content>,
     },
+    /// RECEIVER half of the 1:1 session self-heal: an inner Whisper/PreKey
+    /// message from an authenticated sender failed to decrypt (desynced
+    /// session). Carries a serialized `DecryptionErrorMessage` that the caller
+    /// must ship back to `(sender_id, sender_device_id)` sealed as
+    /// session-less `PlaintextContent`
+    /// (`MessageService::send_decryption_error_report`).
+    DecryptionErrorNeedsReport {
+        sender_id: UserId,
+        sender_device_id: u32,
+        dem_serialized: Vec<u8>,
+    },
+    /// SENDER half of the 1:1 session self-heal: a peer's
+    /// `DecryptionErrorMessage` about a message we sent was processed.
+    /// `archived` is true when our session with `(peer_id, peer_device_id)`
+    /// was archived — the next send re-establishes via PreKeySignalMessage.
+    SessionHealed {
+        peer_id: UserId,
+        peer_device_id: u32,
+        archived: bool,
+    },
 }

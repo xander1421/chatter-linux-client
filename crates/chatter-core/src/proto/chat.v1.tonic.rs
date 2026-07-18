@@ -657,31 +657,6 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "GetPreKeyStats"));
             self.inner.unary(req, path, codec).await
         }
-        pub async fn reset_session(
-            &mut self,
-            request: impl tonic::IntoRequest<super::ResetSessionRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::ResetSessionResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.AuthService/ResetSession",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.AuthService", "ResetSession"));
-            self.inner.unary(req, path, codec).await
-        }
     }
 }
 /// Generated client implementations.

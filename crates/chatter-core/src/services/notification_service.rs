@@ -389,48 +389,6 @@ pub fn spawn_notification_listener(
                     });
                 }
 
-                DomainEvent::SessionResetRequested { peer_user_id, peer_device_id } => {
-                    // User-initiated reset. Narrow to single device when
-                    // metadata carries peer_device_id, otherwise drop
-                    // every session with the peer. Narrower path
-                    // preserves established sessions with the user's
-                    // other devices — matters when only one device's
-                    // ratchet is suspected bad.
-                    let peer = peer_user_id.to_string();
-                    let signal = signal_service.clone();
-                    let specific = *peer_device_id;
-                    tokio::spawn(async move {
-                        match specific {
-                            Some(device_id) => match signal.actor.invalidate_peer_device_session(peer.clone(), device_id).await {
-                                Ok(existed) => tracing::info!(
-                                    peer = %peer,
-                                    device_id,
-                                    had_session = existed,
-                                    "dropped single-device Signal session on SESSION_RESET"
-                                ),
-                                Err(e) => tracing::warn!(
-                                    peer = %peer,
-                                    device_id,
-                                    error = %e,
-                                    "failed to drop single-device Signal session on SESSION_RESET"
-                                ),
-                            },
-                            None => match signal.actor.invalidate_peer_sessions(peer.clone()).await {
-                                Ok(n) => tracing::info!(
-                                    peer = %peer,
-                                    dropped_sessions = n,
-                                    "dropped all Signal sessions on SESSION_RESET (user-wide)"
-                                ),
-                                Err(e) => tracing::warn!(
-                                    peer = %peer,
-                                    error = %e,
-                                    "failed to drop Signal sessions on SESSION_RESET"
-                                ),
-                            },
-                        }
-                    });
-                }
-
                 _ => {}
             }
         }

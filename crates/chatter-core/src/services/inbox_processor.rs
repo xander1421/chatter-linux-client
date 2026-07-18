@@ -107,13 +107,29 @@ impl InboxEventProcessor {
                 true
             }
 
-            InboxEvent::DmRetryRequested { peer_id, original_timestamp } => {
-                tracing::info!(
+            InboxEvent::DmDecryptionErrorNeedsReport { peer_id, peer_device_id, dem_serialized } => {
+                tracing::warn!(
                     peer_id = %peer_id,
-                    original_timestamp,
-                    "DM retry requested - resetting session"
+                    peer_device_id,
+                    "1:1 session desync — sending DecryptionErrorMessage report to sender"
                 );
-                self.dm_bootstrap_service.handle_convergence_failure(*peer_id);
+                let message_service = self.message_service.clone();
+                let peer_id = *peer_id;
+                let peer_device_id = *peer_device_id;
+                let dem = dem_serialized.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = message_service
+                        .send_decryption_error_report(&peer_id, peer_device_id, dem)
+                        .await
+                    {
+                        tracing::error!(
+                            peer_id = %peer_id,
+                            peer_device_id,
+                            error = %e,
+                            "Failed to deliver DecryptionErrorMessage report — peer session stays wedged until their next message triggers another report"
+                        );
+                    }
+                });
                 true
             }
 
