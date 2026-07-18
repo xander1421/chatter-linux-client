@@ -592,3 +592,65 @@ fn message_reply_in_thread_button_is_wired() {
         "the Reply-in-thread button must fire thread-clicked with the message id"
     );
 }
+
+// ============================================================================
+// Reactions / edits / pins — the MESSAGE ACTION wires reach core.
+//
+// Core round-trip proven by validated.rs::v45 (channel) + v46 (DM). This proves
+// the UI side: the emoji picker, the composer edit, and the pin action are
+// wired to the ConversationHandle methods (not Slint-only no-ops).
+//
+//  L1 (DYNAMIC): each callback runs its real handler without panicking
+//    (offline: no active conversation, the spawned task logs + returns).
+//  L2 (STATIC, Rust): reaction -> toggle_reaction, edit -> send_edit,
+//    pin -> send_pin.
+//  L2 (STATIC, Slint): the picker invokes reaction-selected, the composer
+//    invokes send-edit, the message actions invoke edit-message + pin-message.
+// ============================================================================
+#[test]
+fn message_react_edit_pin_actions_are_wired() {
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    testing::init_no_event_loop();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+    let w = MainWindow::new().expect("MainWindow::new");
+    chatter_ui::bin_ui::features::chat::wire(&w, &client);
+
+    // L1 dynamic: the four action callbacks run their real handlers, no panic.
+    w.invoke_reaction_selected("s".into(), "1".into(), "m".into(), "\u{1F44D}".into());
+    w.invoke_edit_message("s".into(), "1".into());
+    w.invoke_send_edit("s|1".into(), "edited".into());
+    w.invoke_pin_message("s".into(), "1".into());
+
+    // L2 static (Rust): each handler reaches the ConversationHandle core method.
+    let react_src = include_str!("../src/bin_ui/features/chat/reactions.rs");
+    let ri = react_src.find("on_reaction_selected").expect("reaction handler present");
+    assert!(react_src[ri..].contains(".toggle_reaction("),
+        "the reaction picker must call ConversationHandle::toggle_reaction");
+
+    let edit_src = include_str!("../src/bin_ui/features/chat/edit.rs");
+    let ei = edit_src.find("on_send_edit").expect("send-edit handler present");
+    assert!(edit_src[ei..].contains(".send_edit("),
+        "the composer edit must call ConversationHandle::send_edit");
+
+    let pin_src = include_str!("../src/bin_ui/features/chat/pin.rs");
+    let pi = pin_src.find("on_pin_message").expect("pin handler present");
+    assert!(pin_src[pi..].contains(".send_pin("),
+        "the pin action must call ConversationHandle::send_pin");
+
+    // L2 static (Slint): the affordances actually invoke the callbacks.
+    let picker = include_str!("../../../ui/chat/reaction_picker.slint");
+    assert!(picker.contains("root.reaction-selected("),
+        "the reaction picker must invoke reaction-selected");
+    let composer = include_str!("../../../ui/chat/message_composer.slint");
+    assert!(composer.contains("root.send-edit("),
+        "the composer must invoke send-edit when editing");
+    let app = include_str!("../../../ui/app.slint");
+    assert!(app.contains("root.edit-message(") && app.contains("root.pin-message("),
+        "the message actions must invoke edit-message and pin-message");
+}
