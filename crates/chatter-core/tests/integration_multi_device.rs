@@ -8,7 +8,7 @@ use chatter_core::network::grpc::{AuthClient, ChannelClient, MessageClient};
 use chatter_core::proto::chat_v1::{
     message::content::Type as ContentType, message::Content, ChannelType, MessageSortDirection,
 };
-use libsignal_protocol::{IdentityKeyPair, KeyPair};
+use libsignal_protocol::{kem, IdentityKeyPair, KeyPair};
 use tokio_stream::StreamExt;
 
 use common::*;
@@ -152,7 +152,9 @@ async fn test_upload_prekeys_for_device() {
     // server enforces "all devices for a user share the same identity key"
     // (signal_protocol.go::StoreSignalPreKeyBundle), so a fresh keypair
     // would be rejected with an identity-key-mismatch error.
-    use chatter_core::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
+    use chatter_core::proto::chat_v1::signal_pre_key_bundle::{
+        KyberPreKeyRecord, PreKeyRecord, SignedPreKeyRecord,
+    };
     use chatter_core::proto::chat_v1::SignalPreKeyBundle;
 
     let identity_key_pair = IdentityKeyPair::try_from(user.identity_key_pair_bytes.as_slice())
@@ -167,6 +169,15 @@ async fn test_upload_prekeys_for_device() {
 
     let one_time_prekey = KeyPair::generate(&mut rand::rng());
 
+    // PQXDH is mandatory server-side: a bundle without a kyber prekey is
+    // rejected with InvalidRequest. Sign it with the identity key like the
+    // production path (services/signal/actor.rs) does.
+    let kyber_pair = kem::KeyPair::generate(kem::KeyType::Kyber1024, &mut rand::rng());
+    let kyber_signature = identity_key_pair
+        .private_key()
+        .calculate_signature(&kyber_pair.public_key.serialize(), &mut rand::rng())
+        .expect("kyber signature should succeed");
+
     let bundle = SignalPreKeyBundle {
         identity_key: identity_public_key.as_ref().to_vec(),
         registration_id: rand::random::<u32>() % 16380 + 1,
@@ -175,17 +186,26 @@ async fn test_upload_prekeys_for_device() {
             id: 10,
             public_key: signed_prekey_pair.public_key.serialize().to_vec(),
             signature: signed_prekey_signature.into_vec(),
-            // Server's UploadPreKeyBundle interprets this as Unix seconds.
+            // Chatter-owned wire field: nanoseconds (server does time.Unix(0, ts);
+            // see internal/utils/crypto/signal_validation.go::checkPreKeyTime).
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_secs(),
+                .as_nanos() as u64,
         }),
         one_time_prekey: Some(PreKeyRecord {
             id: 100,
             public_key: one_time_prekey.public_key.serialize().to_vec(),
         }),
-        kyber_prekey: None,
+        kyber_prekey: Some(KyberPreKeyRecord {
+            id: 1,
+            public_key: kyber_pair.public_key.serialize().to_vec(),
+            signature: kyber_signature.into_vec(),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as u64,
+        }),
         unidentified_access_key: Some(random_uak().to_vec()),
         unrestricted_unidentified_access: Some(false),
     };

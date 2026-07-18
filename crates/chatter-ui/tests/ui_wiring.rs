@@ -654,3 +654,59 @@ fn message_react_edit_pin_actions_are_wired() {
     assert!(app.contains("root.edit-message(") && app.contains("root.pin-message("),
         "the message actions must invoke edit-message and pin-message");
 }
+
+// ============================================================================
+// DEVICE-LINK WIRES — new-device page (ui/pages/link_device.slint) and the
+// primary-side approve modal (ui/modals/link_device_approve.slint). Offline:
+// the start callback's synchronous half (active/status flip), cancel routing,
+// and the paste→core parse round-trip (`prepare_link_from_url`) need no server.
+// The full linking round-trip against the live stack is proven server-side by
+// validated.rs V8/V9/V11 and tests/integration_provisioning.rs.
+// ============================================================================
+
+#[test]
+fn link_device_page_start_and_cancel_are_wired() {
+    let (rt, _tmp, client, w) = wired_offline();
+    chatter_ui::init_rt_handle(rt.handle().clone());
+    chatter_ui::bin_ui::features::auth::link_device::wire_link_device(&w, &client);
+
+    // Negative control: nothing active before the callback fires.
+    assert!(!w.get_link_device_active(), "precondition: link flow inactive");
+
+    // The "Generate QR" button fires start → the handler must flip the bound
+    // state synchronously (QR generation itself continues async and offline
+    // will error later — the wire is what's under test here).
+    w.invoke_link_device_start();
+    assert!(w.get_link_device_active(), "start did NOT reach the handler (dead wire)");
+    assert_eq!(w.get_link_device_status().as_str(), "Generating QR code…");
+
+    // Cancel routes back to login.
+    w.set_current_view("link-device".into());
+    w.invoke_link_device_cancel();
+    assert_eq!(w.get_current_view().as_str(), "login", "cancel did not route back to login");
+}
+
+#[test]
+fn link_approve_paste_reaches_core_parser() {
+    let (rt, _tmp, client, w) = wired_offline();
+    chatter_ui::init_rt_handle(rt.handle().clone());
+    chatter_ui::bin_ui::features::modals::link_approve::wire(&w, &client);
+
+    // Positive control: pre-set the preview flag so a dead wire cannot pass —
+    // only the real handler resets it.
+    w.set_link_approve_preview_ready(true);
+
+    // Garbage (>16 chars, per the handler's error threshold) → core's
+    // prepare_link_from_url must reject; the handler resets the preview and
+    // surfaces the parse error.
+    w.invoke_link_approve_paste_changed("chatter://not-a-real-provisioning-url".into());
+    assert!(
+        !w.get_link_approve_preview_ready(),
+        "paste did NOT reach the core parser (dead wire)"
+    );
+    assert!(!w.get_link_approve_error().is_empty(), "parse error was not surfaced");
+
+    // Clearing the box resets the error — the documented empty-string branch.
+    w.invoke_link_approve_paste_changed("".into());
+    assert!(w.get_link_approve_error().is_empty(), "clearing input did not clear error");
+}

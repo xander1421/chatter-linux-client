@@ -4,7 +4,7 @@
 
 pub mod inbox;
 pub(crate) mod initial_data;
-mod link_device;
+pub mod link_device;
 mod login;
 mod logout;
 pub mod presence_integration;

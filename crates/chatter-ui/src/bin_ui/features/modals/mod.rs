@@ -11,7 +11,7 @@ mod create_channel;
 mod friend_requests;
 mod friends;
 mod join_channel;
-mod link_approve;
+pub mod link_approve;
 mod profile;
 mod sessions;
 // `pub` so the VALIDATED-UI headless harness can wire ONLY the settings

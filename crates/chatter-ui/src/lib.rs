@@ -26,6 +26,12 @@ pub fn rt_handle() -> &'static tokio::runtime::Handle {
     RT_HANDLE.get().expect("tokio runtime not initialized")
 }
 
+/// Set the runtime handle explicitly. First call wins; later calls are no-ops.
+/// Used by the ui_wiring test harness, which has no `app_init` phase.
+pub fn init_rt_handle(handle: tokio::runtime::Handle) {
+    let _ = RT_HANDLE.set(handle);
+}
+
 /// Android: the app's internal data directory (`Context.getFilesDir()`),
 /// resolved from `AndroidApp::internal_data_path()` at `android_main` entry.
 /// Used by `app_init` to tell `ChatterClient` where to open the DB.
