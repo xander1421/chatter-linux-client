@@ -5,6 +5,7 @@
 //! catalog, embeddings and semantic-search plumbing.
 
 pub mod backend;
+pub mod hardware;
 pub mod ollama;
 pub mod openai_compat;
 pub mod providers;
