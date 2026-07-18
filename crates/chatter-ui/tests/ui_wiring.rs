@@ -491,7 +491,10 @@ fn channel_settings_save_reaches_core_and_drafts_are_wired() {
 //    (`get_channel_settings_icon_path`) and passes the bytes to update_channel.
 //  L2 (STATIC, Slint): the modal has a Change-Icon button invoking
 //    `pick-channel-icon`. Icon propagation to members proven by validated.rs::v30.
-// (The native file dialog itself can't run headless — same as the avatar picker.)
+//  L2 (STATIC, core): the facade `ChatterClient::update_channel` routes the
+//    icon through `fit_icon_bytes` (≤64KB inline-proto cap), same as creation.
+// (The native file dialog itself can't run headless — same as the avatar picker.
+//  The parallel dead `upload_channel_icon` CDN path was removed clean-break.)
 // ============================================================================
 #[test]
 fn channel_settings_icon_picker_is_wired() {
@@ -535,6 +538,17 @@ fn channel_settings_icon_picker_is_wired() {
     assert!(
         slint_src.contains("root.pick-channel-icon()"),
         "the modal must have a picker affordance invoking pick-channel-icon"
+    );
+
+    // L2 static (core): the facade fits oversized icons before the RPC, so a
+    // raw camera JPEG picked here can't blow the 64KB inline-proto cap.
+    let core_src = include_str!("../../chatter-core/src/client/channels.rs");
+    let upd_idx = core_src
+        .find("pub async fn update_channel")
+        .expect("facade update_channel present");
+    assert!(
+        core_src[upd_idx..].contains("fit_icon_bytes"),
+        "ChatterClient::update_channel must route picked icon bytes through fit_icon_bytes"
     );
 }
 

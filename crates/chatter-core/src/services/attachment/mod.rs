@@ -13,9 +13,8 @@ pub use media::{GifDecodeResult, GifFullDecodeResult, ImageDecodeResult};
 pub use sanitize::{sanitize_media, sanitize_media_file, validate_media, SanitizeOutcome};
 pub use range_decrypt::{CbcRangeDecryptor, CbcRangeReader};
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use thiserror::Error;
 
@@ -217,9 +216,6 @@ pub struct DecodedImagePixels {
 pub struct AttachmentService {
     pub(crate) attachment_repo: Arc<AttachmentRepository>,
     pub(crate) grpc_pool: Option<Arc<GrpcClientPool>>,
-    /// In-memory cache of decoded channel-icon pixels keyed by cdn_key.
-    /// Populated on upload (sender) and on future CDN download (peer).
-    pub(crate) channel_icon_cache: Arc<Mutex<HashMap<String, DecodedImagePixels>>>,
 }
 
 impl AttachmentService {
@@ -322,7 +318,6 @@ impl AttachmentService {
         Self {
             attachment_repo,
             grpc_pool: Some(grpc_pool),
-            channel_icon_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -333,42 +328,7 @@ impl AttachmentService {
         Self {
             attachment_repo,
             grpc_pool: None,
-            channel_icon_cache: Arc::new(Mutex::new(HashMap::new())),
         }
-    }
-
-    /// Upload a local image file as a channel icon.
-    ///
-    /// Encrypts + uploads to CDN, decodes bytes into the in-memory icon cache so
-    /// the UI can render the image without a round-trip, and returns the CDN key
-    /// to persist as the channel's `img_url`.
-    pub async fn upload_channel_icon(&self, path: &Path) -> Result<String, AttachmentError> {
-        let bytes = tokio::fs::read(path)
-            .await
-            .map_err(|e| AttachmentError::FileError(format!("read channel icon: {}", e)))?;
-        let upload = self.upload_to_cdn_encrypted(path).await?;
-        if let Err(e) = self.seed_channel_icon(&upload.cdn_key, &bytes) {
-            tracing::warn!(error = %e, "Failed to decode channel icon for cache");
-        }
-        Ok(upload.cdn_key)
-    }
-
-    /// Decode raw image bytes and cache the resulting pixels under `cdn_key`.
-    pub fn seed_channel_icon(&self, cdn_key: &str, image_bytes: &[u8]) -> Result<(), AttachmentError> {
-        let img = image::load_from_memory(image_bytes)
-            .map_err(|e| AttachmentError::InvalidAttachment(format!("decode channel icon: {}", e)))?;
-        let rgba = img.to_rgba8();
-        let (width, height) = rgba.dimensions();
-        let entry = DecodedImagePixels { width, height, rgba: rgba.into_raw() };
-        if let Ok(mut c) = self.channel_icon_cache.lock() {
-            c.insert(cdn_key.to_string(), entry);
-        }
-        Ok(())
-    }
-
-    /// Look up cached channel-icon pixels for a given `cdn_key`.
-    pub fn get_channel_icon_pixels(&self, cdn_key: &str) -> Option<DecodedImagePixels> {
-        self.channel_icon_cache.lock().ok()?.get(cdn_key).cloned()
     }
 
     /// Get an attachment by ID from local storage.
