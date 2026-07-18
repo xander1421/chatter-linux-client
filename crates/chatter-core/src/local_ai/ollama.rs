@@ -473,6 +473,42 @@ mod tests {
         assert!(p.total.is_none());
     }
 
+    /// Live end-to-end: streaming pull with progress, then a real chat
+    /// completion through the backend. Pulls the smallest catalog model.
+    /// `cargo test -p chatter-core --lib live_ -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "needs a running Ollama on localhost:11434; downloads ~400MB"]
+    async fn live_pull_and_chat() {
+        let backend = OllamaBackend::new("http://localhost:11434", Duration::from_secs(3600));
+        let mut progress_events = 0u32;
+        let mut saw_bytes = false;
+        backend
+            .pull_model_with_progress("qwen2.5:0.5b", |p| {
+                progress_events += 1;
+                if p.total.is_some() && p.completed.is_some() {
+                    saw_bytes = true;
+                }
+            })
+            .await
+            .expect("pull failed");
+        assert!(progress_events > 0, "no progress events");
+        assert!(saw_bytes, "no byte-level progress lines");
+
+        let models = backend.list_models().await.expect("list failed");
+        assert!(models.iter().any(|m| m.name.starts_with("qwen2.5:0.5b")));
+
+        let messages = vec![ChatMessage {
+            role: ChatRole::User,
+            content: "Reply with exactly one word: ping".into(),
+        }];
+        let resp = backend
+            .chat("qwen2.5:0.5b", &messages, &GenerateParams::default())
+            .await
+            .expect("chat failed");
+        println!("chat response: {:?}", resp.content);
+        assert!(!resp.content.trim().is_empty());
+    }
+
     #[test]
     fn test_role_str() {
         assert_eq!(OllamaBackend::role_str(&ChatRole::System), "system");

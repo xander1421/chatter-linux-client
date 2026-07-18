@@ -286,4 +286,15 @@ mod tests {
         let has_ollama = detected.iter().any(|p| p.kind == ProviderKind::Ollama);
         assert!(!has_ollama);
     }
+
+    /// Live check against a locally running Ollama. Run with:
+    /// `cargo test -p chatter-core --lib live_ -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "needs a running Ollama on localhost:11434"]
+    async fn live_detect_finds_local_ollama() {
+        let detected = detect_providers("http://localhost:11434").await;
+        let ollama = detected.iter().find(|p| p.kind == ProviderKind::Ollama);
+        assert!(ollama.is_some(), "Ollama not detected — is it running?");
+        println!("detected: {:?}", detected.iter().map(|p| (p.kind, p.models.len())).collect::<Vec<_>>());
+    }
 }
