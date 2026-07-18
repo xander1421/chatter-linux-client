@@ -511,6 +511,13 @@ export component App inherits Rectangle {
     in property <string> channel-settings-id: "";
     in property <string> channel-settings-name: "";
     in property <string> channel-settings-description: "";
+    // Editable drafts, reset by Rust on open (open_channel_settings).
+    in-out property <string> channel-settings-name-draft: "";
+    in-out property <string> channel-settings-description-draft: "";
+    // Icon picker state (Rust sets path+preview on pick; Save reads path).
+    in-out property <string> channel-settings-icon-path: "";
+    in-out property <image> channel-settings-icon-preview;
+    in-out property <bool> channel-settings-has-icon-preview: false;
     in property <string> channel-settings-type: "public";
     in property <bool> channel-settings-archived: false;
     in property <string> channel-settings-created-at: "";
@@ -777,6 +784,7 @@ export component App inherits Rectangle {
 
     // ========== Channel settings callbacks ==========
     callback channel-settings-save(string, string);  // name, description
+    callback channel-settings-pick-icon();  // opens native file picker for the channel icon
     callback channel-settings-toggle-setting(string, bool);  // setting-name, value
     callback channel-settings-change-notification(string);   // preference
     callback channel-settings-toggle-mute(bool);
@@ -1837,6 +1845,12 @@ export component App inherits Rectangle {
         channel-id: root.channel-settings-id;
         channel-name: root.channel-settings-name;
         channel-description: root.channel-settings-description;
+        channel-name-draft <=> root.channel-settings-name-draft;
+        channel-description-draft <=> root.channel-settings-description-draft;
+        channel-icon-path <=> root.channel-settings-icon-path;
+        channel-icon-preview <=> root.channel-settings-icon-preview;
+        channel-has-icon-preview <=> root.channel-settings-has-icon-preview;
+        pick-channel-icon => { root.channel-settings-pick-icon(); }
         channel-type: root.channel-settings-type;
         is-archived: root.channel-settings-archived;
         created-at: root.channel-settings-created-at;

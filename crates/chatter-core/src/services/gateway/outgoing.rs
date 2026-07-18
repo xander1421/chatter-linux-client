@@ -624,13 +624,13 @@ async fn route_channel(
             .collect();
         message_service.send_with_pointers(
             group_fanout, channel_id, text, attachment_pointers, attachment_ids,
-            thread_id.as_ref(), mentioned_integrations, targets_ai_bot,
+            thread_id.as_ref(), mentioned_integrations, targets_ai_bot, quote.as_ref(),
         ).await?
     } else {
         let path_refs: Vec<&std::path::Path> = file_paths.iter().map(|p| p.as_path()).collect();
         message_service.send_with_files(
             group_fanout, channel_id, text, path_refs,
-            thread_id.as_ref(), mentioned_integrations, targets_ai_bot,
+            thread_id.as_ref(), mentioned_integrations, targets_ai_bot, quote.as_ref(),
         ).await?
     };
 

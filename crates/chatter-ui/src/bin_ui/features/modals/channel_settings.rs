@@ -15,6 +15,7 @@ use crate::{ChannelMemberData, InviteUser, MainWindow, PrivateGroupFriend};
 /// Wire channel settings modal callbacks.
 pub fn wire_channel_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_save_settings(window, ui_ctx);
+    wire_pick_icon(window, ui_ctx);
     wire_toggle_setting(window, ui_ctx);
     wire_notification_settings(window, ui_ctx);
     wire_member_management(window, ui_ctx);
@@ -112,8 +113,15 @@ pub fn open_channel_settings(
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak_window.upgrade() {
                 w.set_channel_settings_id(channel_id_str.into());
-                w.set_channel_settings_name(channel_name.into());
-                w.set_channel_settings_description(channel_description.into());
+                w.set_channel_settings_name(channel_name.clone().into());
+                w.set_channel_settings_description(channel_description.clone().into());
+                // Reset the editable drafts to the stored values so reopening a
+                // different channel doesn't carry the previous edits.
+                w.set_channel_settings_name_draft(channel_name.into());
+                w.set_channel_settings_description_draft(channel_description.into());
+                // Clear any icon picked in a previous open.
+                w.set_channel_settings_icon_path("".into());
+                w.set_channel_settings_has_icon_preview(false);
                 w.set_channel_settings_type(channel_type_str.into());
                 w.set_channel_settings_archived(is_archived);
                 w.set_channel_settings_created_at(created_at.into());
@@ -149,8 +157,26 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Err(_) => return,
             };
 
+            // Read the picked icon file (if any) so Save uploads it alongside
+            // the name/description. Empty path = icon unchanged.
+            let icon_path = weak
+                .upgrade()
+                .map(|w| w.get_channel_settings_icon_path().to_string())
+                .unwrap_or_default();
+            let icon_bytes: Option<Vec<u8>> = if icon_path.is_empty() {
+                None
+            } else {
+                match std::fs::read(&icon_path) {
+                    Ok(b) => Some(b),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to read picked channel icon");
+                        None
+                    }
+                }
+            };
+
             let desc_opt = if desc_str.is_empty() { None } else { Some(desc_str.as_str()) };
-            match ui_ctx.update_channel(&channel_uuid, Some(&name_str), desc_opt).await {
+            match ui_ctx.update_channel(&channel_uuid, Some(&name_str), desc_opt, icon_bytes.as_deref()).await {
                 Ok(_) => {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() { w.set_active_modal("none".into()); }
@@ -164,6 +190,47 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             }
         });
+    });
+}
+
+// Native file picker for the channel icon. Mirrors create_channel's picker:
+// stash the chosen path on `channel-settings-icon-path` (Save reads it to
+// upload) and decode a preview for the modal. File dialogs can't run headless,
+// so this wire is proven statically (ui_wiring) + the upload round-trip by V30.
+fn wire_pick_icon(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
+    let weak_window = window.as_weak();
+    window.on_channel_settings_pick_icon(move || {
+        #[cfg(not(target_os = "android"))]
+        {
+            let weak = weak_window.clone();
+            tokio::spawn(async move {
+                let config = chatter_core::media::FilePickerConfig::new()
+                    .with_title("Select Channel Icon")
+                    .with_filter(chatter_core::media::FileFilter::images());
+                let Some(path) = chatter_core::media::FilePicker::pick_file(config).await else {
+                    return;
+                };
+                let data = match std::fs::read(&path) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        tracing::error!(error = %e, "failed to read picked channel icon");
+                        return;
+                    }
+                };
+                let path_string = path.to_string_lossy().to_string();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_channel_settings_icon_path(path_string.into());
+                        if let Ok(img) = crate::bin_ui::slint_conversions::memory_to_slint_image(&data) {
+                            w.set_channel_settings_icon_preview(img);
+                            w.set_channel_settings_has_icon_preview(true);
+                        }
+                    }
+                });
+            });
+        }
+        #[cfg(target_os = "android")]
+        tracing::warn!("File picker not supported on Android");
     });
 }
 

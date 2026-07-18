@@ -1037,6 +1037,28 @@ impl InboxEventProcessor {
                         &channel_id, &crate::domain::message::ConversationType::ServerDm, *ts, status,
                     );
                 }
+                // Live-refresh the sender's checkmark: emit the SAME DomainEvent
+                // the channel/anon receipt paths use so the UI updates the bubble
+                // without a re-query (#8 — the DB status flipped, but the live
+                // view didn't). Read/viewed → MessagesRead, delivery → Delivered.
+                match receipt_type {
+                    2 | 3 => {
+                        self.event_bus.emit_domain(DomainEvent::MessagesRead {
+                            reader_id: *peer_id,
+                            message_timestamps: timestamps.clone(),
+                            receipt_timestamp: 0,
+                            channel_id: Some(channel_id),
+                        });
+                    }
+                    1 => {
+                        self.event_bus.emit_domain(DomainEvent::MessagesDelivered {
+                            recipient_id: *peer_id,
+                            message_timestamps: timestamps.clone(),
+                            receipt_timestamp: 0,
+                        });
+                    }
+                    _ => {}
+                }
                 false
             }
 

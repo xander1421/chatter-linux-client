@@ -438,6 +438,17 @@ fn process_decrypted_data_message(
                 .map(|p| AttachmentId::from_cdn_key(&p.cdn_key))
                 .collect();
 
+            // Carry the reply quote (Signal-style) so the recipient's reply
+            // bubble renders. Channel/group sender-key deliveries used to drop
+            // it (MISSING-FEATURES #9) — the wire quote rode in the DataMessage
+            // but this store path never read it. Shared with the DM inbound
+            // paths (dm.rs / gateway::store_data_message).
+            crate::services::gateway::inbound::apply_inbound_quote(
+                &mut message,
+                data_message.quote.as_ref(),
+                message_repo,
+            );
+
             // Store message with deduplication
             match message_repo.insert_or_ignore(&message) {
                 Ok(true) => {

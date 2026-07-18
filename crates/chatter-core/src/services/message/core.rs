@@ -39,6 +39,7 @@ impl MessageService {
         thread_id: Option<&MessageId>,
         mentioned_integrations: Vec<IntegrationId>,
         targets_ai_bot: bool,
+        quote: Option<&crate::services::gateway::QuoteIntent>,
     ) -> Result<Message, MessageError> {
         // Check logged in
         let sender_id = self.settings_repo.current_user_id()?;
@@ -95,6 +96,11 @@ impl MessageService {
                     .map(|id| id.to_string())
                     .collect(),
                 targets_ai_bot,
+                // Carry the reply quote on the wire so the RECEIVER's reply
+                // bubble renders (channel replies used to drop this — the quote
+                // rode only the sender's local echo, so recipients saw plain
+                // text). Mirrors the DM path (build_reply_content).
+                quote: self.build_wire_quote(quote),
                 // Arm the E2E disappearing marker so recipients (and our own
                 // linked devices) can expire their local copy on their own clock.
                 ephemeral: disappearing_ttl_secs.is_some(),
@@ -375,6 +381,7 @@ impl MessageService {
         thread_id: Option<&MessageId>,
         mentioned_integrations: Vec<IntegrationId>,
         targets_ai_bot: bool,
+        quote: Option<&crate::services::gateway::QuoteIntent>,
     ) -> Result<Message, MessageError> {
         let mut message_client = self.message_client();
         let mut auth_client = self.auth_client();
@@ -392,6 +399,7 @@ impl MessageService {
             thread_id,
             mentioned_integrations,
             targets_ai_bot,
+            quote,
         )
         .await
     }
@@ -422,6 +430,7 @@ impl MessageService {
         thread_id: Option<&MessageId>,
         mentioned_integrations: Vec<IntegrationId>,
         targets_ai_bot: bool,
+        quote: Option<&crate::services::gateway::QuoteIntent>,
     ) -> Result<Message, MessageError> {
         // Upload attachments with encryption
         let attachment_service = AttachmentService::new(self.attachment_repo.clone(), self.grpc_pool.clone());
@@ -466,6 +475,7 @@ impl MessageService {
             thread_id,
             mentioned_integrations,
             targets_ai_bot,
+            quote,
         )
         .await
     }
@@ -483,6 +493,7 @@ impl MessageService {
         thread_id: Option<&MessageId>,
         mentioned_integrations: Vec<IntegrationId>,
         targets_ai_bot: bool,
+        quote: Option<&crate::services::gateway::QuoteIntent>,
     ) -> Result<Message, MessageError> {
         self.send(
             group_fanout,
@@ -493,6 +504,7 @@ impl MessageService {
             thread_id,
             mentioned_integrations,
             targets_ai_bot,
+            quote,
         )
         .await
     }
@@ -861,6 +873,48 @@ impl MessageService {
         Ok(())
     }
 
+    /// Build the Signal-style wire `Quote` for an outgoing reply so the
+    /// RECEIVER's reply bubble renders. Author + id come straight from the
+    /// intent (canonical, works even if the parent isn't local); preview text
+    /// and the thumbnail are best-effort from the locally-resolved parent.
+    /// Returns `None` when there is no quote.
+    fn build_wire_quote(
+        &self,
+        quote: Option<&crate::services::gateway::QuoteIntent>,
+    ) -> Option<crate::proto::content_v1::Quote> {
+        let quote = quote?;
+        let original = self
+            .message_repo
+            .get_by_sender_timestamp(&quote.target_author_id, quote.target_timestamp)
+            .ok()
+            .flatten();
+        let atts: Vec<_> = original
+            .as_ref()
+            .map(|m| {
+                m.attachments
+                    .iter()
+                    .filter_map(|id| self.attachment_repo.get(id).ok().flatten())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let preview = quote
+            .target_preview
+            .clone()
+            .filter(|t| !t.is_empty())
+            .or_else(|| {
+                original
+                    .as_ref()
+                    .map(|m| crate::services::gateway::shared::message_reply_preview(m, &atts))
+            })
+            .unwrap_or_default();
+        Some(crate::services::gateway::shared::build_quote_with_attachments(
+            &quote.target_author_id.to_string(),
+            quote.target_timestamp,
+            &preview,
+            crate::services::gateway::shared::build_quoted_attachments(&atts),
+        ))
+    }
+
     /// Patch an already-stored outgoing message with reply-quote context.
     ///
     /// Used by the outgoing router: channel sends (`send_with_pointers` /
@@ -925,178 +979,6 @@ impl MessageService {
             Ok(()) => Ok(message),
             Err(e) => Err((message, e)),
         }
-    }
-
-    /// Send a reply (quote) to an existing message.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn send_reply(
-        &self,
-        message_client: &mut MessageClient,
-        auth_client: &mut AuthClient,
-        channel_client: &mut ChannelClient,
-        channel_id: &ChannelId,
-        text: &str,
-        reply_to_id: &MessageId,
-        attachment_ids: Vec<AttachmentId>,
-        mentioned_integrations: Vec<IntegrationId>,
-        targets_ai_bot: bool,
-    ) -> Result<Message, MessageError> {
-        // Check logged in
-        let sender_id = self.settings_repo.current_user_id()?;
-
-        // Validate reply_to exists locally (informational - server validates)
-        if self.message_repo.get(reply_to_id)?.is_none() {
-            // Log but don't fail - server will validate
-            // The message might exist on server but not locally
-        }
-
-        // Validate content - must have text or attachments
-        let trimmed_text = text.trim();
-        if trimmed_text.is_empty() && attachment_ids.is_empty() {
-            return Err(MessageError::InvalidContent(
-                "reply must have text or attachments".to_string(),
-            ));
-        }
-
-        // Server-visible placeholder (E2E plaintext rides inside the
-        // sender-key ciphertext as content_v1::DataMessage below).
-        let content = chat_v1::message::Content {
-            r#type: Some(chat_v1::message::content::Type::Text(trimmed_text.to_string())),
-        };
-
-        let (is_dm, require_encryption) = self
-            .get_channel_encryption_settings(channel_id, channel_client)
-            .await?;
-
-        // Load attachment pointers from local repo so the E2E plaintext
-        // carries CDN keys + per-blob AES keys to the receiver.
-        let pointers: Vec<crate::proto::content_v1::AttachmentPointer> = attachment_ids
-            .iter()
-            .filter_map(|id| self.attachment_repo.get(id).ok().flatten())
-            .filter_map(|att| att.to_pointer())
-            .collect();
-
-        // Build the wire Quote from the local parent so the RECEIVER's reply
-        // bubble renders. Channel replies previously dropped this — the quote
-        // rode only the sender's local copy, so the receiver (and reload) saw
-        // plain text. Mirrors the DM path (build_reply_content).
-        let wire_quote = self.message_repo.get(reply_to_id).ok().flatten().map(|original| {
-            let atts: Vec<_> = original
-                .attachments
-                .iter()
-                .filter_map(|id| self.attachment_repo.get(id).ok().flatten())
-                .collect();
-            let preview = original
-                .as_text()
-                .filter(|t| !t.is_empty())
-                .map(crate::services::gateway::shared::truncate_preview)
-                .unwrap_or_else(|| {
-                    crate::services::gateway::shared::message_reply_preview(&original, &atts)
-                });
-            let author = original.sender_id.map(|s| s.to_string()).unwrap_or_default();
-            crate::services::gateway::shared::build_quote_with_attachments(
-                &author,
-                original.sent_at,
-                &preview,
-                crate::services::gateway::shared::build_quoted_attachments(&atts),
-            )
-        });
-
-        let plaintext_bytes = {
-            use prost::Message as _;
-            let dm = crate::proto::content_v1::DataMessage {
-                body: trimmed_text.to_string(),
-                attachments: pointers,
-                channel_id: channel_id.to_string(),
-                timestamp: crate::util::time::TimestampNanos::now().as_u64(),
-                mentioned_integrations: mentioned_integrations
-                    .iter()
-                    .map(|id| id.to_string())
-                    .collect(),
-                targets_ai_bot,
-                quote: wire_quote,
-                ..Default::default()
-            };
-            let wrap = crate::proto::content_v1::Content {
-                timestamp: dm.timestamp,
-                content: Some(crate::proto::content_v1::content::Content::DataMessage(dm)),
-                ..Default::default()
-            };
-            wrap.encode_to_vec()
-        };
-
-        let (content_to_send, skdm_opt) = self.prepare_encrypted_content(
-            auth_client,
-            channel_id,
-            &plaintext_bytes,
-            content,
-            is_dm,
-            require_encryption,
-        ).await?;
-
-        // If a new sender key was created, distribute SKDM to channel members
-        if let Some(skdm) = skdm_opt {
-            self.distribute_sender_key(auth_client, message_client, channel_id, &skdm).await?;
-        }
-
-        // Call server - note: reply_to is stored locally, not sent to server
-        // Server's parent_id is for threads, not quotes
-        let proto_message = message_client
-            .send_message(
-                &channel_id.to_string(),
-                content_to_send,
-                None,  // parent_id is for threads, not replies
-                false, // ephemeral
-                None,  // ephemeral_ttl
-                None,  // crypto_options
-                mentioned_integrations.iter().map(|id| id.to_string()).collect(),
-                targets_ai_bot,
-                attachment_ids.iter().map(|id| id.to_string()).collect(),
-            )
-            .await?;
-
-        // Convert to domain message and set reply_to + attachments
-        let conv_type = super::conversion::conversation_type_for_channel(&self.channel_repo, channel_id);
-        let mut message = proto_to_domain_message(&proto_message, sender_id, conv_type)?;
-        message.reply_to = Some(*reply_to_id);
-        message.attachments = attachment_ids;
-
-        // Populate reply quote context so reply bubbles survive reload
-        if let Ok(Some(original)) = self.message_repo.get(reply_to_id) {
-            message.reply_to_author_id = original.sender_id;
-            let atts: Vec<_> = original
-                .attachments
-                .iter()
-                .filter_map(|id| self.attachment_repo.get(id).ok().flatten())
-                .collect();
-            // Media-aware preview (📷 Photo / 🎬 Video / 🎵 …), not just text —
-            // `as_text()` is None for attachments, blanking the quote bubble.
-            let preview = crate::services::gateway::shared::message_reply_preview(&original, &atts);
-            message.reply_to_text = (!preview.is_empty()).then_some(preview);
-            let quote_atts = crate::services::gateway::shared::build_quoted_attachments(&atts);
-            if let Some(qa) = quote_atts.first() {
-                message.reply_to_thumbnail = (!qa.thumbnail.is_empty()).then(|| qa.thumbnail.clone());
-                message.reply_to_thumbnail_mime = (!qa.content_type.is_empty()).then(|| qa.content_type.clone());
-            }
-        }
-
-        // IMPORTANT: Ensure channel_id matches (server might return different format)
-        if message.conversation_id != *channel_id {
-            tracing::warn!(
-                input_channel_id = %channel_id,
-                server_channel_id = %message.conversation_id,
-                "[SEND_REPLY] CHANNEL_ID MISMATCH! Server returned different channel_id"
-            );
-            message.conversation_id = *channel_id;
-        }
-
-        // For sent messages, store original plaintext locally (not encrypted server response)
-        message.content = MessageContent::Text(trimmed_text.to_string());
-
-        // Store locally with reply_to set
-        self.message_repo.insert(&message)?;
-
-        Ok(message)
     }
 
     /// Helper to encrypt content based on channel type.

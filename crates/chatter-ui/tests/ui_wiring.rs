@@ -410,3 +410,130 @@ fn edit_profile_avatar_change_persists_picked_bytes() {
          (previously only wrote a write-never-read PENDING_AVATAR_PATH + preview)"
     );
 }
+
+// ============================================================================
+// F-UI-1 (RESOLVED for name/description): the channel-settings modal now has a
+// working Save. Was fully dead — the modal declared `save-settings` but NEVER
+// invoked it, and the name/description Inputs' `edited()` handlers were empty
+// stubs (`// Will be saved on explicit save action`), so editing persisted
+// nothing. The Rust `on_channel_settings_save` handler existed and reached
+// `update_channel` all along; only the Slint wire was cut.
+//
+//  Draft round-trip: the editable draft properties exist + bind (the Inputs
+//    write here, Save reads them).
+//  L1 (DYNAMIC): `on_channel_settings_save` runs the real handler without
+//    panicking (offline it early-returns on the empty channel-id).
+//  L2 (STATIC, Rust): the handler calls `update_channel` (real persistence,
+//    proven end-to-end by validated.rs::v30 rename propagation).
+//  L2 (STATIC, Slint): the Save button INVOKES `save-settings` with the drafts
+//    and both Inputs WRITE the drafts on edit — the exact wire that was dead.
+// ============================================================================
+#[test]
+fn channel_settings_save_reaches_core_and_drafts_are_wired() {
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    testing::init_no_event_loop();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+    let w = MainWindow::new().expect("MainWindow::new");
+    chatter_ui::bin_ui::features::modals::wire_channel_settings(&w, &client);
+
+    // Draft properties exist and round-trip (Inputs write here; Save reads).
+    w.set_channel_settings_name_draft("Renamed Channel".into());
+    w.set_channel_settings_description_draft("New description".into());
+    assert_eq!(w.get_channel_settings_name_draft().as_str(), "Renamed Channel");
+    assert_eq!(w.get_channel_settings_description_draft().as_str(), "New description");
+
+    // L1 dynamic: the save callback runs the real handler without panicking.
+    w.invoke_channel_settings_save(
+        w.get_channel_settings_name_draft(),
+        w.get_channel_settings_description_draft(),
+    );
+
+    // L2 static (Rust): the handler reaches ChatterClient::update_channel.
+    let src = include_str!("../src/bin_ui/features/modals/channel_settings.rs");
+    let idx = src.find("on_channel_settings_save").expect("save handler present");
+    assert!(
+        src[idx..].contains(".update_channel("),
+        "the save handler must call ChatterClient::update_channel (was Slint-only / dead)"
+    );
+
+    // L2 static (Slint): the Save button invokes save-settings with the drafts,
+    // and both Inputs write the drafts on edit (was an empty stub + no button).
+    let slint_src = include_str!("../../../ui/modals/channel_settings.slint");
+    assert!(
+        slint_src.contains("root.save-settings(root.channel-name-draft"),
+        "the Save button must invoke save-settings with the name/description drafts"
+    );
+    assert!(
+        slint_src.contains("root.channel-name-draft = value"),
+        "the name Input must write its draft on edit (was an empty stub)"
+    );
+    assert!(
+        slint_src.contains("root.channel-description-draft = value"),
+        "the description Input must write its draft on edit (was an empty stub)"
+    );
+}
+
+// ============================================================================
+// #3b (RESOLVED): the channel-settings modal now has a working ICON picker.
+// Was a triple-unwired scoped gap — facade hardcoded icon `None`,
+// `upload_channel_icon` had zero UI callers, and the modal had no picker.
+//
+//  Property round-trip: `channel-settings-icon-path` exists + binds.
+//  L1 (DYNAMIC): `on_channel_settings_pick_icon` runs without panicking.
+//  L2 (STATIC, Rust): the pick handler stashes the chosen path via
+//    `set_channel_settings_icon_path`, and Save reads it
+//    (`get_channel_settings_icon_path`) and passes the bytes to update_channel.
+//  L2 (STATIC, Slint): the modal has a Change-Icon button invoking
+//    `pick-channel-icon`. Icon propagation to members proven by validated.rs::v30.
+// (The native file dialog itself can't run headless — same as the avatar picker.)
+// ============================================================================
+#[test]
+fn channel_settings_icon_picker_is_wired() {
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    testing::init_no_event_loop();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+    let w = MainWindow::new().expect("MainWindow::new");
+    chatter_ui::bin_ui::features::modals::wire_channel_settings(&w, &client);
+
+    // The icon-path property exists and round-trips (Save reads it).
+    w.set_channel_settings_icon_path("/tmp/some-icon.png".into());
+    assert_eq!(w.get_channel_settings_icon_path().as_str(), "/tmp/some-icon.png");
+
+    // L1 dynamic: the pick callback runs without panicking (the native dialog is
+    // spawned; offline/headless it just resolves to no file).
+    w.invoke_channel_settings_pick_icon();
+
+    // L2 static (Rust): pick handler stashes the path; Save reads it + uploads.
+    let src = include_str!("../src/bin_ui/features/modals/channel_settings.rs");
+    let pick_idx = src.find("on_channel_settings_pick_icon").expect("pick-icon handler present");
+    assert!(
+        src[pick_idx..].contains(".set_channel_settings_icon_path("),
+        "the pick handler must stash the chosen path on channel-settings-icon-path"
+    );
+    let save_idx = src.find("on_channel_settings_save").expect("save handler present");
+    let save_body = &src[save_idx..];
+    assert!(
+        save_body.contains(".get_channel_settings_icon_path(")
+            && save_body.contains("icon_bytes.as_deref()"),
+        "Save must read the picked icon path and pass its bytes to update_channel"
+    );
+
+    // L2 static (Slint): the modal has a Change-Icon button invoking pick-channel-icon.
+    let slint_src = include_str!("../../../ui/modals/channel_settings.slint");
+    assert!(
+        slint_src.contains("root.pick-channel-icon()"),
+        "the modal must have a picker affordance invoking pick-channel-icon"
+    );
+}

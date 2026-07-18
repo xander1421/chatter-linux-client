@@ -82,6 +82,8 @@ impl ChatterClient {
         // Clone channel_repo so the spawned stream task can resolve
         // ConversationType per incoming message without borrowing self.
         let channel_repo_for_stream = self.services.channel_repo.clone();
+        // Same, for resolving a reply quote's parent id on inbound messages.
+        let message_repo_for_stream = messages.message_repo.clone();
 
         let handle = tokio::spawn(async move {
             let stream = match msg_client.stream_message_events(&channel_id_str, None).await {
@@ -128,6 +130,10 @@ impl ChatterClient {
                             // via SenderKeyManager before converting — otherwise
                             // `proto_content_to_domain` would dump the literal
                             // "[Encrypted message]" placeholder into the UI.
+                            // The sender-key DataMessage carries the reply quote,
+                            // but the proto rebuilt below (`patched`) only keeps
+                            // text/files — capture the quote here so it isn't lost.
+                            let mut inbound_quote: Option<crate::proto::content_v1::Quote> = None;
                             let decrypted_proto = if let Some(chat_v1::message::content::Type::Encrypted(enc)) =
                                 proto_msg.content.as_ref().and_then(|c| c.r#type.as_ref())
                             {
@@ -186,6 +192,11 @@ impl ChatterClient {
                                                 continue;
                                             }
                                         };
+
+                                        // Carry the reply quote out of the
+                                        // decrypted DataMessage (dropped by the
+                                        // patched proto below) — MISSING-FEATURES #9.
+                                        inbound_quote = dm.quote.clone();
 
                                         // Persist incoming attachment pointers
                                         // so the receiver can download + decrypt.
@@ -281,6 +292,15 @@ impl ChatterClient {
                             );
                             match proto_to_domain_message_with_sender(&decrypted_proto, sender_id, conv_type) {
                                 Ok(mut message) => {
+                                    // Populate reply_to_* from the wire quote so
+                                    // the recipient's reply bubble renders
+                                    // (MISSING-FEATURES #9). Shared with the DM
+                                    // inbound paths.
+                                    crate::services::gateway::inbound::apply_inbound_quote(
+                                        &mut message,
+                                        inbound_quote.as_ref(),
+                                        &message_repo_for_stream,
+                                    );
                                     // Persist to DB so the message survives a
                                     // channel switch (`load_channel_into_ui`
                                     // reads from `messages` table). Without
@@ -540,14 +560,18 @@ impl ChatterClient {
         self.channels().unmute_user(channel_id, user_id)
     }
 
-    /// Update a channel's name and/or description.
+    /// Update a channel's name, description and/or icon.
+    ///
+    /// `icon` is raw image bytes (fitted server-side/service-side to ≤64KB);
+    /// `None` leaves the current icon unchanged.
     pub async fn update_channel(
         &self,
         channel_id: &crate::domain::ids::ChannelId,
         name: Option<&str>,
         description: Option<&str>,
+        icon: Option<&[u8]>,
     ) -> Result<Channel, crate::services::channel::ChannelError> {
-        self.channels().update_channel(channel_id, name, description, None, None).await
+        self.channels().update_channel(channel_id, name, description, icon, None).await
     }
 
     /// Archive or unarchive a channel.

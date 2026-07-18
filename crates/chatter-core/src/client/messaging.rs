@@ -809,6 +809,7 @@ impl ChatterClient {
                 thread_id,
                 mentioned_integrations,
                 targets_ai_bot,
+                None, // thread replies use parent_id, not a reply quote
             )
             .await
     }

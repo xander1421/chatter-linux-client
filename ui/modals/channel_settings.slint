@@ -23,6 +23,16 @@ export component ChannelSettingsModal inherits Rectangle {
     in property <string> channel-id: "";
     in property <string> channel-name: "";
     in property <string> channel-description: "";
+    // Editable drafts for name/description. Reset by Rust on open (see
+    // open_channel_settings) so reopening a different channel starts clean;
+    // the name/description Inputs write here and Save reads them.
+    in-out property <string> channel-name-draft: "";
+    in-out property <string> channel-description-draft: "";
+    // Icon picker: Rust sets icon-path (chosen file) + icon-preview on pick;
+    // Save reads icon-path to upload. Reset by Rust on open.
+    in-out property <string> channel-icon-path: "";
+    in-out property <image> channel-icon-preview;
+    in-out property <bool> channel-has-icon-preview: false;
     in property <string> channel-type: "public";  // "public", "private", "dm"
     in property <bool> is-archived: false;
     in property <string> created-at: "";
@@ -56,6 +66,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
     callback close();
     callback save-settings(string, string);  // name, description
+    callback pick-channel-icon();  // opens native file picker for the channel icon
     callback toggle-setting(string, bool);  // setting-name, value
     callback change-notification(string);  // preference
     callback toggle-mute(bool);
@@ -289,11 +300,11 @@ export component ChannelSettingsModal inherits Rectangle {
                                 }
 
                                 if root.can-edit: Input {
-                                    text: root.channel-name;
+                                    text: root.channel-name-draft;
                                     placeholder: "Channel name";
 
                                     edited(value) => {
-                                        // Will be saved on explicit save action
+                                        root.channel-name-draft = value;
                                     }
                                 }
 
@@ -316,11 +327,11 @@ export component ChannelSettingsModal inherits Rectangle {
                                 }
 
                                 if root.can-edit: Input {
-                                    text: root.channel-description;
+                                    text: root.channel-description-draft;
                                     placeholder: "Add a description...";
 
                                     edited(value) => {
-                                        // Will be saved on explicit save action
+                                        root.channel-description-draft = value;
                                     }
                                 }
 
@@ -329,6 +340,55 @@ export component ChannelSettingsModal inherits Rectangle {
                                     color: root.channel-description != "" ? Colors.text-primary : Colors.text-muted;
                                     font-size: Typography.base;
                                     font-italic: root.channel-description == "";
+                                }
+                            }
+
+                            // Channel icon (editable if permitted). Native file
+                            // picker → Rust stashes bytes + preview; Save uploads.
+                            if root.can-edit: VerticalLayout {
+                                spacing: Spacing.xs;
+
+                                Text {
+                                    text: "Channel Icon";
+                                    color: Colors.text-secondary;
+                                    font-size: Typography.sm;
+                                    font-weight: Typography.medium;
+                                }
+
+                                HorizontalLayout {
+                                    spacing: Spacing.sm;
+                                    alignment: start;
+
+                                    if root.channel-has-icon-preview: Image {
+                                        source: root.channel-icon-preview;
+                                        width: 48px;
+                                        height: 48px;
+                                    }
+
+                                    Button {
+                                        text: "Change Icon";
+                                        variant: "secondary";
+                                        clicked => {
+                                            root.pick-channel-icon();
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Save name/description/icon edits. Disabled until a
+                            // draft differs or an icon was picked, so an
+                            // accidental click is a no-op.
+                            if root.can-edit: HorizontalLayout {
+                                alignment: end;
+                                Button {
+                                    text: "Save Changes";
+                                    variant: "primary";
+                                    disabled: root.channel-name-draft == root.channel-name
+                                        && root.channel-description-draft == root.channel-description
+                                        && !root.channel-has-icon-preview;
+                                    clicked => {
+                                        root.save-settings(root.channel-name-draft, root.channel-description-draft);
+                                    }
                                 }
                             }
 

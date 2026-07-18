@@ -7205,7 +7205,7 @@ async fn v30_group_management_changes_propagate() {
     let new_name = format!("v30-renamed-{}", unique_marker());
     println!("\n  [PART 1] A renames the channel to: {new_name}");
     client_a
-        .update_channel(&group.id, Some(&new_name), None)
+        .update_channel(&group.id, Some(&new_name), None, None)
         .await
         .expect("A update_channel (rename) failed");
 
@@ -8769,6 +8769,442 @@ async fn v40_typing_toggle_gates_the_send() {
     println!(
         "  V40 PASS — the 'show typing indicators' toggle gates the send: ENABLED → B sees \
          typing, DISABLED → B never does. Asserted on the RECIPIENT's event stream."
+    );
+
+    client_a.shutdown().await;
+    client_b.shutdown().await;
+}
+
+/// V41 — Group/channel replies carry the QUOTE to the RECIPIENT.
+///
+/// THE GAP (MISSING-FEATURES #9): the DM/anon reply paths carried the quote on
+/// the wire, but the group/channel send path (`route_channel` →
+/// `send_with_pointers`/`send_with_files` → `MessageService::send`) built the
+/// E2E `DataMessage` with `quote = None` and only PATCHED THE SENDER'S OWN
+/// local row (`persist_outgoing_reply_context`). So the sender saw their reply
+/// bubble, but every RECIPIENT got a message with no quote — a reply rendered
+/// as plain text. A fully-built `send_reply` that DID carry the wire quote sat
+/// dead (zero callers); the router never used it.
+///
+/// THE FIX (this test): the quote is threaded through the live chokepoint —
+/// `send`/`send_message` now build the wire `Quote` (`build_wire_quote`) from
+/// the reply intent and set it on the `DataMessage`, so it rides inside the
+/// Sender-Key ciphertext to every member. The receiver's `apply_inbound_quote`
+/// then populates `reply_to_author_id` / `reply_to_text` from the wire. (The
+/// dead `send_reply` was removed — its logic now lives on the one path.)
+///
+/// Proof (asserts on the RECIPIENT's decrypted message, scoped to this run):
+///   POSITIVE CONTROL — A's non-reply warm-up message arrives at B with NO
+///     quote (`reply_to_text` is None), so a populated quote below is not
+///     something the pipeline stamps on every message.
+///   THE FIX — B replies to A's message in the channel; A receives B's reply
+///     and it carries the quote: `reply_to_author_id == A` and
+///     `reply_to_text == <A's original text>`, decoded from the WIRE (A did not
+///     send the reply, so this cannot be the sender-local patch).
+///
+/// MUTATION (RED): set `quote: None` back on the `DataMessage` in
+/// `MessageService::send_message` → A's received reply has `reply_to_text ==
+/// None` / `reply_to_author_id == None` → the fix assertions fail.
+#[tokio::test]
+async fn v41_group_reply_carries_quote_to_recipient() {
+    use chatter_core::domain::channel::ChannelType;
+    use chatter_core::prelude::QuoteIntent;
+
+    skip_if_no_server!();
+    no_keyring_prompts();
+
+    // ---- A, B register + start ----------------------------------------------
+    let dir_a = tempfile::tempdir().unwrap();
+    let client_a = build_client(dir_a.path());
+    let uid_a = register_and_start(&client_a, &unique_user("v41a"), "V41 Alice").await;
+
+    let dir_b = tempfile::tempdir().unwrap();
+    let client_b = build_client(dir_b.path());
+    let uid_b = register_and_start(&client_b, &unique_user("v41b"), "V41 Bob").await;
+
+    assert_ne!(uid_a, uid_b, "POSITIVE CONTROL FAILED: A and B are the same user");
+
+    // ---- A creates a DEFAULT Private (encrypted, Sender-Key) channel --------
+    let name = format!(
+        "v41-chan-{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
+    );
+    let chan = client_a
+        .create_channel(
+            &name,
+            ChannelType::Private,
+            None, // default -> encrypted Sender-Key channel
+            Some("V41 group reply carries quote"),
+            None,
+            None,
+            vec![uid_b.clone()],
+        )
+        .await
+        .expect("create private channel failed");
+    println!("\n  A created encrypted channel {} ({})", chan.name, chan.id);
+
+    // POSITIVE CONTROL (membership): server records A and B.
+    let mut members = std::collections::HashSet::new();
+    for _ in 0..15 {
+        members = psql(&format!(
+            "select user_id from channel_members where channel_id = '{}'",
+            chan.id
+        ))
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect::<std::collections::HashSet<String>>();
+        if members.contains(&uid_a.to_string()) && members.contains(&uid_b.to_string()) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    assert!(
+        members.contains(&uid_a.to_string()) && members.contains(&uid_b.to_string()),
+        "POSITIVE CONTROL FAILED: A and B are not both server-side members of {}. \
+         Delivery assertions would be vacuous.",
+        chan.id
+    );
+    println!("  positive control: A and B are both server-side members");
+
+    client_a.subscribe_channel_messages(&chan.id);
+    client_b.subscribe_channel_messages(&chan.id);
+    let mut events_a = client_a.subscribe_events();
+    let mut events_b = client_b.subscribe_events();
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // ---- A sends the ORIGINAL message (the reply target) --------------------
+    // This also mints A's sender key + SKDM to B so B can decrypt it, and gives
+    // B a local copy of the parent. Capture A's sent_at to key the quote.
+    let original_text = unique_marker();
+    let r1 = client_a
+        .send_text(ActiveConversation::Channel(chan.id.clone()), &original_text)
+        .await
+        .expect("A original send failed");
+    let parent_ts = r1.sent_at;
+
+    let g = chan.id.clone();
+    let t1 = original_text.clone();
+    let got_original = wait_for_event(&mut events_b, EVENT_TIMEOUT, move |e| matches!(
+        e, DomainEvent::MessageReceived { message }
+        if message.conversation_id == g && message.as_text() == Some(t1.as_str())
+    )).await;
+    assert!(
+        got_original.is_some(),
+        "POSITIVE CONTROL FAILED: B never received A's original message ({original_text}) within \
+         {EVENT_TIMEOUT:?}. The reply assertion would be vacuous — the channel pipeline is dead."
+    );
+    println!("  positive control: B received A's original message (parent ts={parent_ts})");
+
+    // ---- WARM-UP: establish B's sender key on A -----------------------------
+    // B's first send mints B's sender key + ships an SKDM to A's device inbox.
+    // Wait for that SKDM to LAND (poll A's inbox rows, like V35) rather than for
+    // the decrypted text — the message itself races the SKDM and may arrive as
+    // an "[Encrypted message]" placeholder before A can decode it. Once the key
+    // is on A, the plain + reply sends below decode cleanly.
+    let a_before = row_ids(&uid_a).len();
+    let warm_text = unique_marker();
+    client_b
+        .send_text(ActiveConversation::Channel(chan.id.clone()), &warm_text)
+        .await
+        .expect("B warm-up send failed");
+    let mut skdm_landed = false;
+    for _ in 0..40 {
+        skdm_landed = row_ids(&uid_a).len() > a_before;
+        if skdm_landed {
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    assert!(
+        skdm_landed,
+        "SENDER-KEY DISTRIBUTION BROKEN: B's warm-up did not deliver an SKDM to A within 40s. \
+         The reply assertions would then fail for the wrong reason (missing key, not a dropped \
+         quote)."
+    );
+    println!("  warm-up: B's SKDM landed in A's inbox (B's key established on A)");
+    tokio::time::sleep(Duration::from_secs(6)).await; // let A PROCESS the SKDM
+
+    // ---- NEGATIVE CONTROL: a PLAIN (non-reply) message carries no quote -----
+    // Sent AFTER the key is warm so A decodes it directly.
+    let plain_text = unique_marker();
+    client_b
+        .send_text(ActiveConversation::Channel(chan.id.clone()), &plain_text)
+        .await
+        .expect("B plain send failed");
+    let g = chan.id.clone();
+    let tp = plain_text.clone();
+    let plain_recv = wait_for_event(&mut events_a, EVENT_TIMEOUT, move |e| matches!(
+        e, DomainEvent::MessageReceived { message }
+        if message.conversation_id == g && message.as_text() == Some(tp.as_str())
+    )).await;
+    let plain_msg = match plain_recv {
+        Some(DomainEvent::MessageReceived { message }) => message,
+        _ => panic!(
+            "POSITIVE CONTROL FAILED: A never received B's plain message ({plain_text}) within \
+             {EVENT_TIMEOUT:?} even after B's key was established. The reply proof would be vacuous."
+        ),
+    };
+    assert!(
+        plain_msg.reply_to_text.is_none() && plain_msg.reply_to_author_id.is_none(),
+        "NEGATIVE CONTROL FAILED: B's plain (non-reply) message arrived at A already carrying a \
+         quote (reply_to_text={:?}, reply_to_author_id={:?}). A populated quote on the reply below \
+         would then prove nothing.",
+        plain_msg.reply_to_text, plain_msg.reply_to_author_id
+    );
+    println!("  negative control: B's plain message reached A with NO quote");
+
+    // ---- THE ACTION UNDER TEST: B REPLIES to A's original message -----------
+    let reply_text = unique_marker();
+    client_b
+        .send_message(
+            ActiveConversation::Channel(chan.id.clone()),
+            &reply_text,
+            &[],
+            Some(QuoteIntent {
+                target_author_id: uid_a.clone(),
+                target_timestamp: parent_ts,
+                target_preview: Some(original_text.clone()),
+            }),
+            None,
+        )
+        .await
+        .expect("B reply send failed");
+
+    let g = chan.id.clone();
+    let tr = reply_text.clone();
+    let reply_recv = wait_for_event(&mut events_a, EVENT_TIMEOUT, move |e| matches!(
+        e, DomainEvent::MessageReceived { message }
+        if message.conversation_id == g && message.as_text() == Some(tr.as_str())
+    )).await;
+
+    // POSITIVE CONTROL: A received B's reply at all.
+    let reply_msg = match reply_recv {
+        Some(DomainEvent::MessageReceived { message }) => message,
+        _ => panic!(
+            "POSITIVE CONTROL FAILED: A never received B's reply ({reply_text}) within \
+             {EVENT_TIMEOUT:?}."
+        ),
+    };
+    assert_eq!(
+        reply_msg.as_text(),
+        Some(reply_text.as_str()),
+        "A decoded B's reply but the body differs from what B sent"
+    );
+
+    // LOAD-BEARING: the reply carries the quote, decoded from the WIRE. A is the
+    // RECIPIENT (B sent the reply), so these fields cannot be the sender-local
+    // patch — they can only come from the quote riding inside the ciphertext.
+    assert_eq!(
+        reply_msg.reply_to_author_id.as_ref(),
+        Some(&uid_a),
+        "GROUP REPLY QUOTE DROPPED: A received B's reply but reply_to_author_id is {:?}, not A \
+         ({uid_a}). The quote did not ride on the wire — recipients see the reply as plain text.",
+        reply_msg.reply_to_author_id
+    );
+    assert_eq!(
+        reply_msg.reply_to_text.as_deref(),
+        Some(original_text.as_str()),
+        "GROUP REPLY QUOTE DROPPED: A received B's reply but reply_to_text is {:?}, not the quoted \
+         original ({original_text:?}). The wire quote is missing or empty.",
+        reply_msg.reply_to_text
+    );
+    println!("  the fix: A received B's reply WITH the quote (author=A, text=original) from the wire");
+
+    println!(
+        "\n  V41 PASS — a reply sent into an encrypted CHANNEL carries the quote to the RECIPIENT: \
+         A (who did NOT send the reply) decoded B's reply and it references A's original message \
+         (reply_to_author_id=A, reply_to_text=<original>), while B's plain warm-up carried no \
+         quote. Closes MISSING-FEATURES #9 (group replies rendered as plain text). See VALIDATED.md.\n"
+    );
+
+    client_a.shutdown().await;
+    client_b.shutdown().await;
+}
+
+/// V42 — 1:1 DM read receipt LIVE-REFRESHES the sender (emits a DomainEvent).
+///
+/// THE GAP (MISSING-FEATURES #8, live-refresh half): V39 proved the DB
+/// `delivery_status` flips to "read" on the 1:1 ServerDm path. But the
+/// `InboxEvent::DmReceipt` handler (`inbox_processor.rs`) updated the row
+/// SILENTLY — it emitted no `DomainEvent`, so a live UI kept showing the old
+/// checkmark until a manual re-query. The channel and anon receipt paths emit
+/// `DomainEvent::MessagesRead`; the ServerDm path did not.
+///
+/// THE FIX (this test): the DmReceipt handler now emits the SAME
+/// `DomainEvent::MessagesRead` (read/viewed) / `MessagesDelivered` (delivery)
+/// the other paths do, so the sender's bubble refreshes live.
+///
+/// Proof (asserts on the SENDER's live event stream, scoped to this run):
+///   POSITIVE CONTROL — A sends B a DM and B stores it (so the read below is
+///     not vacuous).
+///   THE FIX — B reads A's DM; A (the SENDER) receives a
+///     `DomainEvent::MessagesRead` naming B as the reader, on A's live bus —
+///     NOT from a re-query.
+///
+/// MUTATION (RED): delete the `emit_domain(MessagesRead)` in the DmReceipt
+/// handler → A's stream never sees the event → the wait times out → RED.
+#[tokio::test]
+async fn v42_dm_read_receipt_live_refreshes_sender() {
+    skip_if_no_server!();
+    no_keyring_prompts();
+
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let client_a = build_client(dir_a.path());
+    let client_b = build_client(dir_b.path());
+
+    let uid_a = register_and_start(&client_a, &unique_user("v42a"), "V42 Alice").await;
+    let uid_b = register_and_start(&client_b, &unique_user("v42b"), "V42 Bob").await;
+
+    client_a
+        .send_friend_request(&uid_b, Some("validated"))
+        .await
+        .expect("friend request failed");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    client_b
+        .respond_friend_request(&uid_a, true)
+        .await
+        .expect("accept friend request failed");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // A subscribes to its own event bus BEFORE sending, so the read-receipt
+    // DomainEvent can't fire before we're listening.
+    let mut events_a = client_a.subscribe_events();
+
+    // A → B DM. B's copy is stored under ChannelId::from(uid_a) (B's thread w/ A).
+    let marker = unique_marker();
+    client_a
+        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &marker)
+        .await
+        .expect("A send_text failed");
+
+    // POSITIVE CONTROL + action: B reads A's DM (stores it, then sends the read
+    // receipt back to A). a_reads_bs_message panics if B never stored it.
+    let conv_on_b = ChannelId::from(uid_a);
+    let read_ts = a_reads_bs_message(&client_b, uid_a, &conv_on_b, &marker).await;
+    println!("  positive control: B stored + read A's DM (ts={read_ts})");
+
+    // THE FIX: A (the SENDER) receives a live MessagesRead naming B as reader.
+    let reader = uid_b;
+    let got = wait_for_event(&mut events_a, EVENT_TIMEOUT, move |e| matches!(
+        e, DomainEvent::MessagesRead { reader_id, .. } if *reader_id == reader
+    )).await;
+    assert!(
+        got.is_some(),
+        "DM READ RECEIPT DID NOT LIVE-REFRESH: B read A's DM, but A's event bus never saw a \
+         DomainEvent::MessagesRead naming B within {EVENT_TIMEOUT:?}. The DmReceipt handler \
+         updated the DB silently (finding #8 live-refresh half) — the sender's checkmark would \
+         only update on a manual re-query."
+    );
+    println!("  the fix: A received a live DomainEvent::MessagesRead naming B as reader");
+
+    println!(
+        "\n  V42 PASS — a 1:1 DM read receipt now LIVE-REFRESHES the sender: B reading A's DM \
+         emits DomainEvent::MessagesRead on A's bus (not just a silent DB flip). Closes the \
+         live-refresh half of MISSING-FEATURES #8. See VALIDATED.md.\n"
+    );
+
+    client_a.shutdown().await;
+    client_b.shutdown().await;
+}
+
+/// V43 — a profile display-name change LIVE-PUSHES to friends.
+///
+/// THE GAP (MISSING-FEATURES #12): `EventTypeUserProfileUpdated` was CONSUMED
+/// (server `stream_events.go`, client `user_events.rs` → `UserProfileUpdated`)
+/// but had NO PUBLISHER — `UpdateUserProfile` only echoed the change back to the
+/// updater's OWN stream. So a friend saw a name change only on the next
+/// `GetUserProfile` pull, never live. A second latent bug: the fan-out proto
+/// conversion dropped the ENCRYPTED name fields, so even a published event was
+/// undecryptable.
+///
+/// THE FIX (this test): `Repository.UpdateUserProfile` now fans a
+/// `UserProfileUpdated` event out to every friend (new `publishProfileToFriends`,
+/// mirroring the presence fan-out), and the fan-out conversion uses
+/// `protoUserProfileFromInternal` so the encrypted name rides along. The friend
+/// decrypts it with A's profile key (already shared via the friend handshake,
+/// see V38).
+///
+/// Proof (asserts on the FRIEND's live event stream, scoped to this run):
+///   POSITIVE CONTROL — A and B are friends (so B holds A's profile key and is
+///     on A's friend fan-out list).
+///   THE FIX — A changes its display name; B receives a live
+///     `DomainEvent::UserProfileUpdated` naming A, carrying the NEW name
+///     decrypted byte-exact (proving both the publisher AND that the encrypted
+///     field survived the fan-out).
+///
+/// MUTATION (RED): delete the `publishProfileToFriends` call in
+/// `Repository.UpdateUserProfile` → B's stream never sees the event → RED.
+#[tokio::test]
+async fn v43_profile_name_change_live_pushes_to_friends() {
+    skip_if_no_server!();
+    no_keyring_prompts();
+
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let client_a = build_client(dir_a.path());
+    let client_b = build_client(dir_b.path());
+
+    let uid_a = register_and_start(&client_a, &unique_user("v43a"), "V43 Alice").await;
+    let uid_b = register_and_start(&client_b, &unique_user("v43b"), "V43 Bob").await;
+
+    // Friend them so B holds A's profile key (friend handshake) AND is on A's
+    // fan-out list. (Key sharing proven by V38.)
+    client_a
+        .send_friend_request(&uid_b, Some("validated"))
+        .await
+        .expect("friend request failed");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    client_b
+        .respond_friend_request(&uid_a, true)
+        .await
+        .expect("accept friend request failed");
+    tokio::time::sleep(Duration::from_secs(4)).await;
+
+    // POSITIVE CONTROL: B fetches A's profile once — proves B can resolve A's
+    // name at all (holds A's key) before we assert the LIVE push below.
+    let a_seen = client_b.get_user_profile(&uid_a).await;
+    assert!(
+        a_seen.is_ok(),
+        "POSITIVE CONTROL FAILED: B cannot fetch A's profile ({a_seen:?}); the live-push \
+         assertion would be vacuous."
+    );
+
+    // B subscribes BEFORE A's update so the push can't fire before we listen.
+    let mut events_b = client_b.subscribe_events();
+
+    // THE ACTION: A changes its display name to a short unique marker. Short so
+    // the encrypted+base64 name stays under the server's 300-char display_name
+    // cap (the ciphertext pads to buckets — a long name would overflow it).
+    let new_name = format!("V43-{}", &unique_marker()[17..25]);
+    client_a
+        .update_user_profile(Some(new_name.clone()), None)
+        .await
+        .expect("A update_user_profile failed");
+
+    // THE FIX: B receives a live UserProfileUpdated naming A with the NEW name.
+    let target = uid_a;
+    let want = new_name.clone();
+    let got = wait_for_event(&mut events_b, EVENT_TIMEOUT, move |e| matches!(
+        e, DomainEvent::UserProfileUpdated { user_id, display_name, .. }
+        if *user_id == target && display_name == &want
+    )).await;
+    assert!(
+        got.is_some(),
+        "PROFILE UPDATE DID NOT LIVE-PUSH: A changed its name to {new_name:?}, but B's event bus \
+         never saw a DomainEvent::UserProfileUpdated naming A with that name within \
+         {EVENT_TIMEOUT:?}. Either the server never fanned the update out to friends \
+         (CONSUMER-NO-PRODUCER, #12) or the fan-out dropped the encrypted name so B couldn't \
+         decrypt it."
+    );
+    println!("  the fix: B received a live UserProfileUpdated naming A with the new name ({new_name})");
+
+    println!(
+        "\n  V43 PASS — a profile display-name change LIVE-PUSHES to friends: A renaming itself \
+         emits DomainEvent::UserProfileUpdated on B's bus with the new name decrypted byte-exact \
+         (was CONSUMER-NO-PRODUCER + an encrypted-field-dropping fan-out). Closes \
+         MISSING-FEATURES #12. See VALIDATED.md.\n"
     );
 
     client_a.shutdown().await;
