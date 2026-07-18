@@ -13,7 +13,7 @@
 //! # Architecture
 //!
 //! ```text
-//! Self-hosted ntfy ──[SSE]──> PushListener ──> wake StreamManager
+//! Self-hosted ntfy ──[SSE]──> PushListener ──> wake gRPC streams / inbox poll
 //!                                           ──> show desktop notification
 //! ```
 
@@ -136,7 +136,7 @@ impl PushListener {
     /// Subscribe to push wake-up events.
     ///
     /// Returns a broadcast receiver that fires when a push notification arrives.
-    /// The StreamManager can use this to reconnect its gRPC streams.
+    /// Consumers use this to reconnect gRPC streams / trigger an inbox poll.
     pub fn subscribe(&self) -> broadcast::Receiver<PushEvent> {
         self.wake_tx.subscribe()
     }

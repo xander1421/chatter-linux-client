@@ -1,19 +1,15 @@
 //! Real-time streaming layer.
 //!
-//! Manages long-lived gRPC streams for real-time updates including:
-//! - Message events (new, edit, delete)
-//! - Reactions (added, removed)
-//! - Presence updates
+//! - `push_listener` — self-hosted ntfy SSE wake-up hints (Android background push).
+//! - `reaction_stream` — reaction aggregation for efficient UI updates.
+//!
+//! Presence delivery does NOT live here: friend presence arrives as
+//! `EventTypeUserPresenceUpdated` on the `StreamUserEvents` gRPC stream
+//! (see `inbox::streaming::user_events`), friend-scoped by the server.
 
-pub mod message_stream;
-pub mod presence_stream;
 pub mod push_listener;
 pub mod reaction_stream;
-pub mod stream_manager;
 
 // Re-exports for convenience
-pub use message_stream::{MessageDeleted, MessageEventRouter, SubscriberCounts};
-pub use presence_stream::{CachedPresence, PresenceRouter};
 pub use push_listener::{PushEvent, PushListener, PushListenerConfig};
 pub use reaction_stream::{ReactionAggregator, ReactionEvent};
-pub use stream_manager::{StreamConfig, StreamHandle, StreamManager};

@@ -16,7 +16,7 @@ use crate::proto::chat_v1::{
     GetUserProfileRequest, ListBlockedUsersRequest, ListBlockedUsersResponse,
     ListFriendRequestsRequest, ListFriendRequestsResponse, ListFriendsRequest, ListFriendsResponse,
     LookupUsernameRequest, LookupUsernameResponse, PinChannelRequest, PinChannelResponse,
-    PresenceUpdate, RemoveFriendRequest, ReorderPinnedChannelsRequest, StreamPresenceRequest,
+    RemoveFriendRequest, ReorderPinnedChannelsRequest,
     TrackChannelVisitRequest, UnblockUserRequest, UnpinChannelRequest, UnpinChannelResponse,
     UpdatePresenceRequest, UpdateUserProfileRequest, UserEvent, UserEventRequest, UserPresence,
     UserProfile,
@@ -124,25 +124,6 @@ impl UserClient {
             .await
             .map(|_| ())
             .map_err(|s| NetworkError::from_status(&s))
-    }
-
-    /// Stream presence updates for all friends.
-    ///
-    /// Returns a long-lived stream of presence changes.
-    pub async fn stream_presence(
-        &mut self,
-    ) -> Result<impl Stream<Item = Result<PresenceUpdate, NetworkError>>, NetworkError> {
-        let request = StreamPresenceRequest {};
-
-        let response = self
-            .inner
-            .stream_presence(request)
-            .await
-            .map_err(|s| NetworkError::from_status(&s))?;
-
-        Ok(response
-            .into_inner()
-            .map(|r| r.map_err(|s| NetworkError::from_status(&s))))
     }
 
     // ==================== Friend Management RPCs ====================

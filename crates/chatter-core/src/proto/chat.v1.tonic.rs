@@ -4240,7 +4240,9 @@ pub mod user_service_client {
                 .insert(GrpcMethod::new("chat.v1.UserService", "LookupUsername"));
             self.inner.unary(req, path, codec).await
         }
-        /** User Presence
+        /** User Presence. Delivery to friends rides on StreamUserEvents
+ (EventTypeUserPresenceUpdated), friend-scoped — there is no global
+ presence stream by design (privacy).
 */
         pub async fn update_presence(
             &mut self,
@@ -4263,32 +4265,6 @@ pub mod user_service_client {
             req.extensions_mut()
                 .insert(GrpcMethod::new("chat.v1.UserService", "UpdatePresence"));
             self.inner.unary(req, path, codec).await
-        }
-        ///
-        pub async fn stream_presence(
-            &mut self,
-            request: impl tonic::IntoRequest<super::StreamPresenceRequest>,
-        ) -> std::result::Result<
-            tonic::Response<tonic::codec::Streaming<super::PresenceUpdate>>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.UserService/StreamPresence",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.UserService", "StreamPresence"));
-            self.inner.server_streaming(req, path, codec).await
         }
         /** Friendship Management
 */
