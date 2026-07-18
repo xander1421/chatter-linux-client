@@ -19,6 +19,8 @@ mod sessions;
 // `wire_all` (which spawns a call-orchestrator subscriber that needs a live
 // Slint event loop). Registration-only; no behavioural change to the app.
 pub mod settings;
+#[cfg(feature = "jarvis")]
+pub mod local_ai;
 
 use std::sync::Arc;
 
@@ -42,6 +44,8 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     friend_requests::wire_friend_requests(window, ui_ctx);
     friends::wire_friends_modal(window, ui_ctx);
     settings::wire_settings_callbacks(window, ui_ctx);
+    #[cfg(feature = "jarvis")]
+    local_ai::wire(window, ui_ctx);
     sessions::wire_session_callbacks(window, ui_ctx);
     channel_settings::wire_channel_settings(window, ui_ctx);
     anon_group_invite::wire_group_invite_callbacks(window, ui_ctx);

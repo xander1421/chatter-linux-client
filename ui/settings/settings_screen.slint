@@ -10,6 +10,27 @@ import { Toggle } from "../components/toggle.slint";
 import { NeoActionToggle } from "../components/neo_action_toggle.slint";
 import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 
+// A local AI provider found running on this machine.
+export struct LocalAIProviderData {
+    kind: string,          // "ollama" | "lm-studio" | "llama-cpp" | "vllm" | "mistralrs"
+    display-name: string,
+    detail: string,        // "12 models · localhost:11434" or "in-process GPU engine"
+    is-active: bool,
+}
+
+// One row of the downloadable-model catalog.
+export struct CatalogModelData {
+    name: string,
+    tag: string,           // ollama tag — the download key
+    detail: string,        // "7.6B params · 4.7 GB"
+    fit: string,           // "gpu" | "cpu" | "big"
+    fit-label: string,     // "Fits GPU" | "CPU only (slow)" | "Too big"
+    installed: bool,
+    downloading: bool,
+    progress: float,       // 0..1 while downloading
+    error: string,
+}
+
 export component SettingsScreen inherits Rectangle {
     // User profile data
     in property <string> display-name: "";
@@ -54,6 +75,13 @@ export component SettingsScreen inherits Rectangle {
     in property <bool> local-ai-loading: false;
     in property <string> local-ai-status: "";  // "not loaded", "loading", "loaded: ModelName"
     in property <string> local-ai-error: "";
+    in property <string> local-ai-hardware-summary: "";
+    in property <bool> local-ai-detecting: false;
+    in property <[LocalAIProviderData]> local-ai-providers: [];
+    in property <string> local-ai-active-provider: "";
+    in property <[string]> local-ai-models: [];
+    in property <string> local-ai-active-model: "";
+    in property <[CatalogModelData]> local-ai-catalog: [];
 
     // Delete-account confirmation state
     in-out property <string> delete-password: "";
@@ -94,6 +122,10 @@ export component SettingsScreen inherits Rectangle {
     callback local-ai-enabled-changed(bool);
     callback local-ai-load-model(string);  // model_id
     callback local-ai-unload-model();
+    callback local-ai-refresh();                 // re-probe providers + hardware
+    callback local-ai-select-provider(string);   // provider kind
+    callback local-ai-select-model(string);      // chat model name
+    callback local-ai-download(string);          // ollama tag
 
     background: Colors.background;
 
@@ -1330,7 +1362,8 @@ export component SettingsScreen inherits Rectangle {
                             }
 
                             if JarvisGlobal.enabled : Text {
-                                text: "Configure local AI for Jarvis assistant (requires GPU)";
+                                init => { root.local-ai-refresh(); }
+                                text: "Chat with a local model in the Jarvis (AI) channel. Everything runs on this machine — nothing leaves your device.";
                                 color: Colors.text-muted;
                                 font-size: Typography.sm;
                                 wrap: word-wrap;
@@ -1381,8 +1414,236 @@ export component SettingsScreen inherits Rectangle {
                                 }
                             }
 
-                            // Model configuration (only show if enabled)
+                            // Hardware summary
+                            if root.local-ai-enabled && root.local-ai-hardware-summary != "": Text {
+                                text: "Hardware: " + root.local-ai-hardware-summary;
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
+                                wrap: word-wrap;
+                            }
+
+                            // Detected providers
                             if root.local-ai-enabled: Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+                                border-width: 1px;
+                                border-color: Colors.neo-highlight;
+
+                                VerticalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.sm;
+
+                                    HorizontalLayout {
+                                        spacing: Spacing.sm;
+                                        Text {
+                                            horizontal-stretch: 1;
+                                            text: "Detected Providers";
+                                            color: Colors.text-primary;
+                                            font-size: Typography.lg;
+                                            font-weight: Typography.medium;
+                                        }
+                                        Button {
+                                            text: root.local-ai-detecting ? "Scanning..." : "Rescan";
+                                            variant: "ghost";
+                                            disabled: root.local-ai-detecting;
+                                            clicked => { root.local-ai-refresh(); }
+                                        }
+                                    }
+
+                                    if root.local-ai-providers.length == 0 && !root.local-ai-detecting: Text {
+                                        text: "No local AI providers found. Start Ollama (ollama.com), LM Studio, llama.cpp server, or vLLM and rescan.";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                    }
+
+                                    for provider in root.local-ai-providers: Rectangle {
+                                        height: 44px;
+                                        border-radius: Spacing.radius-md;
+                                        background: provider.is-active ? Colors.surface-hover : transparent;
+                                        provider-touch := TouchArea {
+                                            clicked => { root.local-ai-select-provider(provider.kind); }
+                                        }
+                                        HorizontalLayout {
+                                            padding-left: Spacing.sm;
+                                            padding-right: Spacing.sm;
+                                            spacing: Spacing.sm;
+                                            // health dot: listed == reachable
+                                            Rectangle {
+                                                width: 8px; height: 8px;
+                                                y: (parent.height - self.height) / 2;
+                                                border-radius: 4px;
+                                                background: Colors.success;
+                                            }
+                                            VerticalLayout {
+                                                horizontal-stretch: 1;
+                                                alignment: center;
+                                                Text {
+                                                    text: provider.display-name;
+                                                    color: Colors.text-primary;
+                                                    font-size: Typography.sm;
+                                                    font-weight: provider.is-active ? Typography.semibold : Typography.medium;
+                                                }
+                                                Text {
+                                                    text: provider.detail;
+                                                    color: Colors.text-muted;
+                                                    font-size: Typography.xs;
+                                                }
+                                            }
+                                            if provider.is-active: Text {
+                                                text: "Active";
+                                                color: Colors.primary;
+                                                font-size: Typography.xs;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Chat model of the active provider
+                            if root.local-ai-enabled && root.local-ai-models.length > 0: Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+                                border-width: 1px;
+                                border-color: Colors.neo-highlight;
+
+                                VerticalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.sm;
+
+                                    Text {
+                                        text: "Chat Model";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.lg;
+                                        font-weight: Typography.medium;
+                                    }
+
+                                    for model in root.local-ai-models: Rectangle {
+                                        height: 32px;
+                                        border-radius: Spacing.radius-md;
+                                        background: model == root.local-ai-active-model ? Colors.surface-hover : transparent;
+                                        model-touch := TouchArea {
+                                            clicked => { root.local-ai-select-model(model); }
+                                        }
+                                        HorizontalLayout {
+                                            padding-left: Spacing.sm;
+                                            padding-right: Spacing.sm;
+                                            Text {
+                                                horizontal-stretch: 1;
+                                                text: model;
+                                                color: Colors.text-primary;
+                                                font-size: Typography.sm;
+                                                vertical-alignment: center;
+                                            }
+                                            if model == root.local-ai-active-model: Text {
+                                                text: "✓";
+                                                color: Colors.primary;
+                                                font-size: Typography.sm;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Downloadable model catalog (hardware-fit tagged)
+                            if root.local-ai-enabled && root.local-ai-catalog.length > 0: Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+                                border-width: 1px;
+                                border-color: Colors.neo-highlight;
+
+                                VerticalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.sm;
+
+                                    Text {
+                                        text: "Popular Models";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.lg;
+                                        font-weight: Typography.medium;
+                                    }
+                                    Text {
+                                        text: "Downloads go through Ollama — no account needed. Suggestions are filtered by your hardware.";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                    }
+
+                                    for entry in root.local-ai-catalog: Rectangle {
+                                        height: entry.error != "" ? 64px : 48px;
+                                        border-radius: Spacing.radius-md;
+
+                                        VerticalLayout {
+                                            padding-left: Spacing.sm;
+                                            padding-right: Spacing.sm;
+                                            spacing: 2px;
+
+                                            HorizontalLayout {
+                                                spacing: Spacing.sm;
+                                                VerticalLayout {
+                                                    horizontal-stretch: 1;
+                                                    alignment: center;
+                                                    Text {
+                                                        text: entry.name;
+                                                        color: entry.fit == "big" ? Colors.text-muted : Colors.text-primary;
+                                                        font-size: Typography.sm;
+                                                        font-weight: Typography.medium;
+                                                    }
+                                                    Text {
+                                                        text: entry.detail + " · " + entry.fit-label;
+                                                        color: entry.fit == "gpu" ? Colors.success : (entry.fit == "cpu" ? Colors.warning : Colors.text-muted);
+                                                        font-size: Typography.xs;
+                                                    }
+                                                }
+                                                if entry.installed: Text {
+                                                    text: "Installed";
+                                                    color: Colors.success;
+                                                    font-size: Typography.xs;
+                                                    vertical-alignment: center;
+                                                }
+                                                if !entry.installed && entry.downloading: Text {
+                                                    text: floor(entry.progress * 100) + "%";
+                                                    color: Colors.text-secondary;
+                                                    font-size: Typography.xs;
+                                                    vertical-alignment: center;
+                                                }
+                                                if !entry.installed && !entry.downloading: Button {
+                                                    text: entry.error != "" ? "Retry" : "Download";
+                                                    variant: "secondary";
+                                                    disabled: entry.fit == "big";
+                                                    clicked => { root.local-ai-download(entry.tag); }
+                                                }
+                                            }
+
+                                            // Download progress bar
+                                            if entry.downloading: Rectangle {
+                                                height: 4px;
+                                                border-radius: 2px;
+                                                background: Colors.background;
+                                                Rectangle {
+                                                    x: 0;
+                                                    width: parent.width * entry.progress;
+                                                    height: parent.height;
+                                                    border-radius: 2px;
+                                                    background: Colors.primary;
+                                                }
+                                            }
+
+                                            if entry.error != "": Text {
+                                                text: entry.error;
+                                                color: Colors.error;
+                                                font-size: Typography.xs;
+                                                wrap: word-wrap;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // In-process (mistralrs) model configuration
+                            if root.local-ai-enabled && root.local-ai-active-provider == "mistralrs": Rectangle {
                                 background: Colors.surface;
                                 border-radius: Spacing.radius-lg;
                                 border-width: 1px;
@@ -1477,36 +1738,6 @@ export component SettingsScreen inherits Rectangle {
                                 }
                             }
 
-                            // Recommended models
-                            Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-                                drop-shadow-blur: Spacing.neo-blur-sm;
-                                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                drop-shadow-color: Colors.neo-shadow;
-
-                                VerticalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.sm;
-
-                                    Text {
-                                        text: "Recommended Models";
-                                        color: Colors.text-primary;
-                                        font-size: Typography.sm;
-                                        font-weight: Typography.medium;
-                                    }
-
-                                    Text {
-                                        text: "• lmstudio-community/Qwen2.5-7B-Instruct-GGUF (default, 4.4GB)\n• Qwen/Qwen2.5-3B-Instruct (faster, 5.8GB)\n• Qwen/Qwen2.5-7B-Instruct (best quality, 15GB)";
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xs;
-                                        wrap: word-wrap;
-                                    }
-                                }
-                            }
                         }
 
                         // Appearance section

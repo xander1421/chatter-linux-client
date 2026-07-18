@@ -1,14 +1,14 @@
 // Chatter Linux Client - Main UI
 // Root component for the application
 
-import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem } from "app.slint";
+import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem } from "app.slint";
 import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 import { TextFormat } from "chat/message_composer.slint";
 import { AnonMode, TorStatus } from "anon_mode/anon_mode_global.slint";
 import { Typography } from "theme/typography.slint";
 
 // Re-export all types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem }
 export { JarvisGlobal }
 export { TextFormat }
 export { AnonMode }
@@ -452,6 +452,13 @@ export component MainWindow inherits Window {
     in property <bool> settings-local-ai-loading <=> app.settings-local-ai-loading;
     in property <string> settings-local-ai-status <=> app.settings-local-ai-status;
     in property <string> settings-local-ai-error <=> app.settings-local-ai-error;
+    in property <string> settings-local-ai-hardware-summary <=> app.settings-local-ai-hardware-summary;
+    in property <bool> settings-local-ai-detecting <=> app.settings-local-ai-detecting;
+    in property <[LocalAIProviderData]> settings-local-ai-providers <=> app.settings-local-ai-providers;
+    in property <string> settings-local-ai-active-provider <=> app.settings-local-ai-active-provider;
+    in property <[string]> settings-local-ai-models <=> app.settings-local-ai-models;
+    in property <string> settings-local-ai-active-model <=> app.settings-local-ai-active-model;
+    in property <[CatalogModelData]> settings-local-ai-catalog <=> app.settings-local-ai-catalog;
 
     // ========== Channel Settings Modal properties ==========
     in property <string> channel-settings-id <=> app.channel-settings-id;
@@ -676,6 +683,10 @@ export component MainWindow inherits Window {
     callback settings-local-ai-enabled-changed <=> app.settings-local-ai-enabled-changed;
     callback settings-local-ai-load-model <=> app.settings-local-ai-load-model;
     callback settings-local-ai-unload-model <=> app.settings-local-ai-unload-model;
+    callback settings-local-ai-refresh <=> app.settings-local-ai-refresh;
+    callback settings-local-ai-select-provider <=> app.settings-local-ai-select-provider;
+    callback settings-local-ai-select-model <=> app.settings-local-ai-select-model;
+    callback settings-local-ai-download <=> app.settings-local-ai-download;
 
     // ========== Channel Settings callbacks ==========
     callback channel-settings-save <=> app.channel-settings-save;

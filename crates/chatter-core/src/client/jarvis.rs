@@ -105,6 +105,81 @@ impl ChatterClient {
             .get_conversation_history(&crate::domain::jarvis::JarvisContext::general(), limit)
     }
 
+    // ── Local AI settings façade ─────────────────────────────────────────
+
+    /// Probe local providers (Ollama / LM Studio / llama.cpp / vLLM +
+    /// compiled-in mistralrs) and list their installed models.
+    pub async fn local_ai_detect_providers(
+        &self,
+    ) -> Vec<crate::local_ai::providers::DetectedProvider> {
+        let ollama_url = self.http_local_ai().settings().ollama_url.clone();
+        crate::local_ai::providers::detect_providers(&ollama_url).await
+    }
+
+    /// Current hardware profile (blocking probes — call off the UI thread).
+    pub fn local_ai_hardware_profile(&self) -> crate::local_ai::hardware::HardwareProfile {
+        crate::local_ai::hardware::HardwareProfile::detect()
+    }
+
+    /// The active provider's settings identifier ("ollama", "mistralrs", …).
+    pub fn local_ai_active_provider(&self) -> String {
+        self.http_local_ai()
+            .fresh_settings()
+            .active_provider
+            .as_str()
+            .to_string()
+    }
+
+    /// Currently configured chat model.
+    pub fn local_ai_chat_model(&self) -> String {
+        self.http_local_ai().fresh_settings().chat_model
+    }
+
+    /// Persist a provider choice and hot-swap the Jarvis engine.
+    pub fn local_ai_apply_provider(&self, kind_str: &str) -> Result<(), String> {
+        let kind = crate::local_ai::providers::ProviderKind::parse(kind_str)
+            .ok_or_else(|| format!("unknown provider: {kind_str}"))?;
+        self.http_local_ai()
+            .set_active_provider(kind)
+            .map_err(|e| e.to_string())?;
+        self.rebuild_jarvis_engine();
+        Ok(())
+    }
+
+    /// Persist a chat-model choice and hot-swap the Jarvis engine.
+    pub fn local_ai_apply_chat_model(&self, model: &str) -> Result<(), String> {
+        self.http_local_ai()
+            .set_chat_model(model)
+            .map_err(|e| e.to_string())?;
+        self.rebuild_jarvis_engine();
+        Ok(())
+    }
+
+    fn rebuild_jarvis_engine(&self) {
+        let settings = self.http_local_ai().fresh_settings();
+        self.services.jarvis_engine.set(
+            crate::services::jarvis::JarvisEngine::from_settings(
+                &settings,
+                self.local_ai().actor(),
+            ),
+        );
+        tracing::info!(engine = %self.services.jarvis_engine.describe(), "jarvis engine rebuilt");
+    }
+
+    /// Pull a model through Ollama with streaming progress.
+    pub async fn local_ai_pull_model(
+        &self,
+        tag: &str,
+        on_progress: impl FnMut(crate::local_ai::ollama::PullProgress),
+    ) -> Result<(), crate::local_ai::backend::BackendError> {
+        let settings = self.http_local_ai().fresh_settings();
+        let backend = crate::local_ai::ollama::OllamaBackend::new(
+            &settings.ollama_url,
+            settings.request_timeout.max(std::time::Duration::from_secs(3600)),
+        );
+        backend.pull_model_with_progress(tag, on_progress).await
+    }
+
     pub async fn jarvis_ask(
         &self,
         context: &crate::domain::jarvis::JarvisContext,

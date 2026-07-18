@@ -29,6 +29,11 @@ impl LocalAIService {
         Self { actor, settings_repo }
     }
 
+    /// Handle to the underlying inference actor (for engine rebuilds).
+    pub fn actor(&self) -> LocalAIActorHandle {
+        self.actor.clone()
+    }
+
     /// Check if local AI is available and enabled.
     ///
     /// This checks both the compile-time feature flag and the user's preference.

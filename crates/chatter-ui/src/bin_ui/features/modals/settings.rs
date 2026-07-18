@@ -447,11 +447,23 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
 
     // Local AI enabled toggle
     let ui_ctx_ai = ui_ctx.clone();
+    let weak_ai_toggle = window.as_weak();
     window.on_settings_local_ai_enabled_changed(move |enabled: bool| {
         if let Err(e) = ui_ctx_ai.set_local_ai_enabled(enabled) {
             tracing::error!("Failed to save local AI enabled setting: {}", e);
-        } else {
-            tracing::debug!("Local AI enabled setting changed to: {}", enabled);
+            return;
+        }
+        tracing::debug!("Local AI enabled setting changed to: {}", enabled);
+        // The AI channel's sidebar visibility follows this setting — rebuild
+        // the channel list live.
+        #[cfg(feature = "jarvis")]
+        if let Some(w) = weak_ai_toggle.upgrade() {
+            let channels: Vec<_> = ui_ctx_ai
+                .sidebar_channels()
+                .iter()
+                .map(|c| crate::bin_ui::converters::channel_to_slint(c, &ui_ctx_ai))
+                .collect();
+            w.set_channels(slint::ModelRc::new(slint::VecModel::from(channels)));
         }
     });
 

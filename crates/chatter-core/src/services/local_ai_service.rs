@@ -259,6 +259,25 @@ impl HttpLocalAIService {
         &self.semantic_search
     }
 
+    /// Persist the active provider choice.
+    pub fn set_active_provider(
+        &self,
+        kind: crate::local_ai::providers::ProviderKind,
+    ) -> Result<(), crate::error::StorageError> {
+        self.settings_repo
+            .set_string("local_ai.active_provider", kind.as_str())
+    }
+
+    /// Persist the chat model choice.
+    pub fn set_chat_model(&self, model: &str) -> Result<(), crate::error::StorageError> {
+        self.settings_repo.set_string("local_ai.chat_model", model)
+    }
+
+    /// Re-read settings from the repository (post-change snapshot).
+    pub fn fresh_settings(&self) -> LocalAISettings {
+        Self::load_settings(&self.settings_repo)
+    }
+
     // ==================== Internal ====================
 
     fn check_enabled(&self) -> Result<(), HttpLocalAIError> {

@@ -39,7 +39,7 @@ import { CreateSectionModal } from "modals/create_section.slint";
 import { UnifiedSearch, QuickSwitcherItem, SearchResult } from "components/unified_search.slint";
 
 // Import settings
-import { SettingsScreen } from "settings/settings_screen.slint";
+import { SettingsScreen, LocalAIProviderData, CatalogModelData } from "settings/settings_screen.slint";
 
 // Import components
 import { ImageViewer, EmojiData } from "components/mod.slint";
@@ -61,7 +61,7 @@ import { AnonMode } from "anon_mode/anon_mode_global.slint";
 import { AnonModePinModal } from "modals/anon_mode_pin.slint";
 
 // Re-export types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, CustomSectionData, SectionConversationData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, InviteUser, ReactionEntry, QuickSwitcherItem }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, CustomSectionData, SectionConversationData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, InviteUser, ReactionEntry, QuickSwitcherItem }
 
 export component App inherits Rectangle {
     // ========== Safe area insets (set by Rust on Android) ==========
@@ -570,6 +570,13 @@ export component App inherits Rectangle {
     in property <bool> settings-local-ai-loading: false;
     in property <string> settings-local-ai-status: "";
     in property <string> settings-local-ai-error: "";
+    in property <string> settings-local-ai-hardware-summary: "";
+    in property <bool> settings-local-ai-detecting: false;
+    in property <[LocalAIProviderData]> settings-local-ai-providers: [];
+    in property <string> settings-local-ai-active-provider: "";
+    in property <[string]> settings-local-ai-models: [];
+    in property <string> settings-local-ai-active-model: "";
+    in property <[CatalogModelData]> settings-local-ai-catalog: [];
 
     // ========== Call properties ==========
     in-out property <bool> incoming-call-visible: false;
@@ -774,6 +781,10 @@ export component App inherits Rectangle {
     callback settings-local-ai-enabled-changed(bool);
     callback settings-local-ai-load-model(string);
     callback settings-local-ai-unload-model();
+    callback settings-local-ai-refresh();
+    callback settings-local-ai-select-provider(string);
+    callback settings-local-ai-select-model(string);
+    callback settings-local-ai-download(string);
 
     // ========== Channel settings callbacks ==========
     callback channel-settings-save(string, string);  // name, description
@@ -2034,6 +2045,13 @@ export component App inherits Rectangle {
         local-ai-loading: root.settings-local-ai-loading;
         local-ai-status: root.settings-local-ai-status;
         local-ai-error: root.settings-local-ai-error;
+        local-ai-hardware-summary: root.settings-local-ai-hardware-summary;
+        local-ai-detecting: root.settings-local-ai-detecting;
+        local-ai-providers: root.settings-local-ai-providers;
+        local-ai-active-provider: root.settings-local-ai-active-provider;
+        local-ai-models: root.settings-local-ai-models;
+        local-ai-active-model: root.settings-local-ai-active-model;
+        local-ai-catalog: root.settings-local-ai-catalog;
         // Delete-account confirmation
         delete-password <=> root.settings-delete-password;
         delete-loading: root.settings-delete-loading;
@@ -2094,6 +2112,18 @@ export component App inherits Rectangle {
         }
         local-ai-unload-model => {
             root.settings-local-ai-unload-model();
+        }
+        local-ai-refresh => {
+            root.settings-local-ai-refresh();
+        }
+        local-ai-select-provider(kind) => {
+            root.settings-local-ai-select-provider(kind);
+        }
+        local-ai-select-model(model) => {
+            root.settings-local-ai-select-model(model);
+        }
+        local-ai-download(tag) => {
+            root.settings-local-ai-download(tag);
         }
     }
 
