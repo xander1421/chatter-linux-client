@@ -104,6 +104,17 @@ struct OllamaPullRequest<'a> {
     stream: bool,
 }
 
+/// One NDJSON progress line from a streaming `/api/pull`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PullProgress {
+    #[serde(default)]
+    pub status: String,
+    pub total: Option<u64>,
+    pub completed: Option<u64>,
+    /// Ollama reports failures mid-stream as `{"error": "..."}`.
+    pub error: Option<String>,
+}
+
 #[derive(Serialize)]
 struct OllamaDeleteRequest<'a> {
     name: &'a str,
@@ -139,6 +150,71 @@ impl OllamaBackend {
             ChatRole::User => "user",
             ChatRole::Assistant => "assistant",
         }
+    }
+
+    /// Pull a model with streaming NDJSON progress. `on_progress` fires for
+    /// every progress line Ollama emits (status text, byte totals per layer).
+    pub async fn pull_model_with_progress(
+        &self,
+        name: &str,
+        mut on_progress: impl FnMut(PullProgress),
+    ) -> Result<(), BackendError> {
+        use futures::StreamExt;
+
+        let request = OllamaPullRequest { name, stream: true };
+
+        let resp = self
+            .client
+            .post(self.url("/api/pull"))
+            .json(&request)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(BackendError::ModelNotFound(format!(
+                "Failed to pull {}: {}",
+                name, body
+            )));
+        }
+
+        let mut stream = resp.bytes_stream();
+        let mut buf = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            buf.extend_from_slice(&chunk?);
+            while let Some(newline) = buf.iter().position(|&b| b == b'\n') {
+                let line: Vec<u8> = buf.drain(..=newline).collect();
+                if let Some(progress) = Self::parse_pull_line(&line) {
+                    if let Some(err) = progress.error {
+                        return Err(BackendError::InferenceFailed(format!(
+                            "pull {} failed: {}",
+                            name, err
+                        )));
+                    }
+                    on_progress(progress);
+                }
+            }
+        }
+        // Trailing line without newline.
+        if let Some(progress) = Self::parse_pull_line(&buf) {
+            if let Some(err) = progress.error {
+                return Err(BackendError::InferenceFailed(format!(
+                    "pull {} failed: {}",
+                    name, err
+                )));
+            }
+            on_progress(progress);
+        }
+
+        Ok(())
+    }
+
+    fn parse_pull_line(line: &[u8]) -> Option<PullProgress> {
+        let line = std::str::from_utf8(line).ok()?.trim();
+        if line.is_empty() {
+            return None;
+        }
+        serde_json::from_str(line).ok()
     }
 }
 
@@ -366,6 +442,35 @@ mod tests {
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"role\":\"user\""));
         assert!(json.contains("\"content\":\"Hello\""));
+    }
+
+    #[test]
+    fn test_parse_pull_progress_line() {
+        let line = br#"{"status":"pulling 8934d96d3f08","digest":"sha256:8934","total":4661211808,"completed":1234567}"#;
+        let p = OllamaBackend::parse_pull_line(line).unwrap();
+        assert_eq!(p.status, "pulling 8934d96d3f08");
+        assert_eq!(p.total, Some(4661211808));
+        assert_eq!(p.completed, Some(1234567));
+        assert!(p.error.is_none());
+    }
+
+    #[test]
+    fn test_parse_pull_error_line() {
+        let p = OllamaBackend::parse_pull_line(br#"{"error":"pull model manifest: file does not exist"}"#).unwrap();
+        assert!(p.error.is_some());
+    }
+
+    #[test]
+    fn test_parse_pull_line_skips_blank_and_garbage() {
+        assert!(OllamaBackend::parse_pull_line(b"  \n").is_none());
+        assert!(OllamaBackend::parse_pull_line(b"not json").is_none());
+    }
+
+    #[test]
+    fn test_parse_pull_success_line() {
+        let p = OllamaBackend::parse_pull_line(br#"{"status":"success"}"#).unwrap();
+        assert_eq!(p.status, "success");
+        assert!(p.total.is_none());
     }
 
     #[test]
