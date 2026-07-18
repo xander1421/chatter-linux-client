@@ -21,9 +21,9 @@ use std::time::{Duration, SystemTime};
 
 use libsignal_protocol::{
     sealed_sender_decrypt, sealed_sender_decrypt_to_usmc, sealed_sender_encrypt,
-    sealed_sender_encrypt_from_usmc, sealed_sender_multi_recipient_encrypt,
+    sealed_sender_encrypt_from_usmc,
     CiphertextMessageType, DeviceId, IdentityKeyStore, KyberPreKeyStore, PreKeyStore,
-    ProtocolAddress, PublicKey, ServiceId, SessionRecord, SessionStore,
+    ProtocolAddress, PublicKey, SessionStore,
     SignalProtocolError, SignedPreKeyStore, Timestamp,
 };
 // SECURITY: each ephemeral-key draw must hit the OS directly so a process
@@ -314,64 +314,6 @@ impl SealedSenderManager {
         sealed_sender_encrypt_from_usmc(destination, usmc, identity_store, &mut rng)
             .await
             .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))
-    }
-
-    /// Encrypt a message for multiple recipients using sealed sender v2.
-    ///
-    /// This produces a single blob that the server can fan out to each
-    /// recipient's device inbox.  Each recipient can independently decrypt
-    /// their portion.  The sender encrypts once instead of N times.
-    ///
-    /// # Arguments
-    ///
-    /// * `destinations` - Protocol addresses for all recipient devices
-    /// * `destination_sessions` - Session records for each destination (same order)
-    /// * `excluded_recipients` - Service IDs to exclude (e.g., self)
-    /// * `usmc` - Pre-built UnidentifiedSenderMessageContent
-    /// * `identity_store` - Identity key storage
-    ///
-    /// # Returns
-    ///
-    /// The multi-recipient sealed sender blob (libsignal v2 wire format).
-    pub async fn multi_recipient_encrypt(
-        destinations: &[&ProtocolAddress],
-        destination_sessions: &[&SessionRecord],
-        excluded_recipients: Vec<ServiceId>,
-        usmc: &UnidentifiedSenderMessageContent,
-        identity_store: &dyn IdentityKeyStore,
-    ) -> Result<Vec<u8>, CryptoError> {
-        tracing::debug!(
-            destination_count = destinations.len(),
-            excluded_count = excluded_recipients.len(),
-            "SealedSender: starting multi-recipient encryption"
-        );
-
-        let mut rng = OsRng.unwrap_err();
-
-        let result = sealed_sender_multi_recipient_encrypt(
-            destinations,
-            destination_sessions,
-            excluded_recipients,
-            usmc,
-            identity_store,
-            &mut rng,
-        )
-        .await
-        .map_err(|e| {
-            tracing::error!(
-                error = %e,
-                "SealedSender: multi-recipient encryption failed"
-            );
-            CryptoError::EncryptionFailed(e.to_string())
-        })?;
-
-        tracing::debug!(
-            blob_len = result.len(),
-            destination_count = destinations.len(),
-            "SealedSender: multi-recipient encryption complete"
-        );
-
-        Ok(result)
     }
 
     /// Decrypt sealed sender message to USMC without inner decryption.
