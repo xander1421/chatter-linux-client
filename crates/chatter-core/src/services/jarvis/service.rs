@@ -10,13 +10,14 @@ use crate::domain::jarvis::{
     JarvisFact, JarvisRelationship,
 };
 use crate::domain::UserId;
-use crate::services::ai::{LocalAIActorHandle, SampleParams};
+use crate::services::ai::SampleParams;
 use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
 
 use crate::events::EventBus;
 use crate::inbox::handlers::DomainEvent;
 
 use super::context_builder::ContextBuilder;
+use super::engine::SharedJarvisEngine;
 use super::entity_extractor::{EntityExtractor, ExtractedEntity};
 use super::error::JarvisError;
 use super::memory_manager::{CompressionConfig, MemoryManager, MemoryStats};
@@ -30,8 +31,8 @@ pub struct JarvisService {
     memory_repo: Arc<JarvisMemoryRepository>,
     /// Graph repository.
     graph_repo: Arc<JarvisGraphRepository>,
-    /// Local AI actor handle.
-    ai: LocalAIActorHandle,
+    /// Inference engine (active provider or in-process actor).
+    ai: SharedJarvisEngine,
     /// Event bus for emitting events.
     event_bus: EventBus,
     /// Entity extractor.
@@ -47,7 +48,7 @@ impl JarvisService {
     pub fn new(
         memory_repo: Arc<JarvisMemoryRepository>,
         graph_repo: Arc<JarvisGraphRepository>,
-        ai: LocalAIActorHandle,
+        ai: SharedJarvisEngine,
         event_bus: EventBus,
     ) -> Self {
         let extractor = EntityExtractor::new(ai.clone());

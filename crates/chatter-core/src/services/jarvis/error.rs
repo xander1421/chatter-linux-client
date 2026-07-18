@@ -13,6 +13,10 @@ pub enum JarvisError {
     #[error("local AI error: {0}")]
     LocalAI(#[from] crate::services::ai::LocalAIError),
 
+    /// HTTP provider backend error.
+    #[error("provider error: {0}")]
+    Backend(#[from] crate::local_ai::backend::BackendError),
+
     /// Entity extraction failed.
     #[error("entity extraction failed: {0}")]
     EntityExtraction(String),

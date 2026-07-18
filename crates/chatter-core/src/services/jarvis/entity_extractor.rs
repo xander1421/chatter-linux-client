@@ -4,13 +4,14 @@
 //! message text using the local LLM.
 
 use crate::domain::jarvis::{EntityType, JarvisEntity};
-use crate::services::ai::{LocalAIActorHandle, SampleParams};
+use crate::services::ai::SampleParams;
 
+use super::engine::SharedJarvisEngine;
 use super::error::JarvisError;
 
 /// Entity extractor using local AI.
 pub struct EntityExtractor {
-    ai: LocalAIActorHandle,
+    ai: SharedJarvisEngine,
 }
 
 /// An extracted entity from a message.
@@ -33,7 +34,7 @@ impl ExtractedEntity {
 
 impl EntityExtractor {
     /// Create a new entity extractor.
-    pub fn new(ai: LocalAIActorHandle) -> Self {
+    pub fn new(ai: SharedJarvisEngine) -> Self {
         Self { ai }
     }
 

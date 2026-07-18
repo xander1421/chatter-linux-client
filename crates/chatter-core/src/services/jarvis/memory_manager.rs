@@ -11,16 +11,17 @@ use crate::domain::jarvis::{
     JarvisContext, JarvisConversation, JarvisFact, JarvisSummary, Role,
 };
 use crate::domain::UserId;
-use crate::services::ai::{LocalAIActorHandle, SampleParams};
+use crate::services::ai::SampleParams;
 use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
 
+use super::engine::SharedJarvisEngine;
 use super::error::JarvisError;
 
 /// Memory manager for Jarvis.
 pub struct MemoryManager {
     memory_repo: Arc<JarvisMemoryRepository>,
     graph_repo: Arc<JarvisGraphRepository>,
-    ai: LocalAIActorHandle,
+    ai: SharedJarvisEngine,
 }
 
 /// Configuration for memory compression.
@@ -49,7 +50,7 @@ impl MemoryManager {
     pub fn new(
         memory_repo: Arc<JarvisMemoryRepository>,
         graph_repo: Arc<JarvisGraphRepository>,
-        ai: LocalAIActorHandle,
+        ai: SharedJarvisEngine,
     ) -> Self {
         Self {
             memory_repo,

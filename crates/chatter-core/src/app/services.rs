@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::services::ai::{LocalAIActorHandle, LocalAIService};
 #[cfg(feature = "jarvis")]
-use crate::services::jarvis::JarvisService;
+use crate::services::jarvis::{JarvisEngine, JarvisService, SharedJarvisEngine};
 use crate::services::ai_service::AIService;
 use crate::services::local_ai_service::HttpLocalAIService;
 use crate::services::semantic_search::SemanticSearchService;
@@ -93,6 +93,9 @@ pub struct ServiceContainer {
     /// Jarvis AI assistant service.
     #[cfg(feature = "jarvis")]
     pub jarvis_service: Arc<JarvisService>,
+    /// Jarvis inference engine (hot-swappable on provider change).
+    #[cfg(feature = "jarvis")]
+    pub jarvis_engine: SharedJarvisEngine,
     /// Section service for custom sidebar sections.
     pub section_service: Arc<SectionService>,
     /// HTTP-backed local AI service (Ollama/OpenAI-compat chat, models, semantic search).
@@ -299,12 +302,17 @@ impl ServiceContainer {
             // Note: _indexer_handle is detached — runs until the event bus closes.
         }
 
-        // 20. Jarvis AI assistant service
+        // 20. Jarvis AI assistant service, driven by the active local AI provider
+        #[cfg(feature = "jarvis")]
+        let jarvis_engine = SharedJarvisEngine::new(JarvisEngine::from_settings(
+            http_local_ai_service.settings(),
+            local_ai.clone(),
+        ));
         #[cfg(feature = "jarvis")]
         let jarvis_service = Arc::new(JarvisService::new(
             infra.jarvis_memory_repo.clone(),
             infra.jarvis_graph_repo.clone(),
-            local_ai.clone(),
+            jarvis_engine.clone(),
             infra.event_bus.clone(),
         ));
 
@@ -357,6 +365,8 @@ impl ServiceContainer {
             local_ai_service,
             #[cfg(feature = "jarvis")]
             jarvis_service,
+            #[cfg(feature = "jarvis")]
+            jarvis_engine,
             channel_bootstrap_service,
             section_service,
             http_local_ai_service,

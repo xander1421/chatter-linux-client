@@ -275,6 +275,11 @@ impl HttpLocalAIService {
         if let Ok(Some(url)) = repo.get_string("local_ai.ollama_url") {
             settings.ollama_url = url;
         }
+        if let Ok(Some(provider)) = repo.get_string("local_ai.active_provider") {
+            if let Some(kind) = crate::local_ai::providers::ProviderKind::parse(&provider) {
+                settings.active_provider = kind;
+            }
+        }
         if let Ok(Some(model)) = repo.get_string("local_ai.chat_model") {
             settings.chat_model = model;
         }
