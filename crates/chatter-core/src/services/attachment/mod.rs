@@ -6,9 +6,11 @@ mod crypto;
 mod download;
 mod media;
 mod range_decrypt;
+mod sanitize;
 mod upload;
 
 pub use media::{GifDecodeResult, GifFullDecodeResult, ImageDecodeResult};
+pub use sanitize::{sanitize_media, sanitize_media_file, validate_media, SanitizeOutcome};
 pub use range_decrypt::{CbcRangeDecryptor, CbcRangeReader};
 
 use std::collections::HashMap;
@@ -518,6 +520,17 @@ impl AttachmentService {
         let thumbnail_bytes = attachment.metadata.thumbnail.as_ref()?;
 
         if thumbnail_bytes.is_empty() {
+            return None;
+        }
+
+        // Thumbnail bytes come from the sender's AttachmentPointer (untrusted).
+        // Reject malformed WebP before the image parser sees it.
+        if let Err(e) = sanitize::validate_media(thumbnail_bytes) {
+            tracing::warn!(
+                attachment_id = %attachment_id,
+                error = %e,
+                "Rejected malformed thumbnail"
+            );
             return None;
         }
 

@@ -98,6 +98,29 @@ impl AttachmentService {
             ));
         }
 
+        // Sanitize outgoing media before encryption (MP4 metadata strip/relocate,
+        // WebP validation). File-streaming variant — never loads the attachment
+        // into memory. Malformed MP4/WebP is rejected; other formats untouched.
+        let sanitized_temp = {
+            let p = file_path.to_path_buf();
+            tokio::task::spawn_blocking(move || super::sanitize::sanitize_media_file(&p))
+                .await
+                .map_err(|e| AttachmentError::FileError(format!("Sanitize task failed: {e}")))??
+        };
+        let plaintext_path: &Path = sanitized_temp
+            .as_ref()
+            .map(|t| t.path())
+            .unwrap_or(file_path);
+        let plaintext_size = match &sanitized_temp {
+            Some(t) => tokio::fs::metadata(t.path())
+                .await
+                .map_err(|e| {
+                    AttachmentError::FileError(format!("Failed to stat sanitized file: {}", e))
+                })?
+                .len(),
+            None => plaintext_size,
+        };
+
         let filename = file_path
             .file_name()
             .and_then(|n| n.to_str())
@@ -123,7 +146,7 @@ impl AttachmentService {
         let temp_file = tempfile::NamedTempFile::new_in(attachments_dir())
             .map_err(|e| AttachmentError::FileError(format!("Failed to create temp file: {}", e)))?;
 
-        let input_path = file_path.to_path_buf();
+        let input_path = plaintext_path.to_path_buf();
         let output_path = temp_file.path().to_path_buf();
 
         let encrypt_start = std::time::Instant::now();
@@ -481,6 +504,16 @@ impl AttachmentService {
                 CryptoError::AttachmentTooLarge { size: plaintext_size, max: max_size }.to_string(),
             ));
         }
+
+        // Sanitize outgoing media (MP4 metadata strip/relocate, WebP validation).
+        // Malformed MP4/WebP is rejected; other formats pass through unchanged.
+        let content: std::borrow::Cow<'_, [u8]> =
+            match super::sanitize::sanitize_media(content)? {
+                super::sanitize::SanitizeOutcome::Rewritten(bytes) => bytes.into(),
+                super::sanitize::SanitizeOutcome::Unchanged => content.into(),
+            };
+        let content = content.as_ref();
+        let plaintext_size = content.len() as u64;
 
         tracing::debug!(
             filename = %filename,

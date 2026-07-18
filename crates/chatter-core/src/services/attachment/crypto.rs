@@ -117,7 +117,12 @@ impl AttachmentService {
             "Decrypted attachment to secure buffer"
         );
 
-        Ok(SecureBuffer::new(plaintext))
+        // Validate incoming media (MP4/WebP structure) before renderers parse it.
+        // Buffer is wrapped first so the plaintext is zeroized on the error path.
+        let buffer = SecureBuffer::new(plaintext);
+        super::sanitize::validate_media(buffer.as_slice())?;
+
+        Ok(buffer)
     }
 
     /// Export a decrypted attachment to a file.
@@ -296,7 +301,11 @@ impl AttachmentService {
             "Decrypted attachment via streaming (single-pass)"
         );
 
-        Ok(SecureBuffer::new(plaintext))
+        // Validate incoming media (MP4/WebP structure) before renderers parse it.
+        let buffer = SecureBuffer::new(plaintext);
+        super::sanitize::validate_media(buffer.as_slice())?;
+
+        Ok(buffer)
     }
 
     /// Open a random-access decryptor for streaming playback (e.g. video).
