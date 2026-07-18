@@ -73,8 +73,6 @@ pub mod keys {
     pub const SIDEBAR_WIDTH: &str = "ui.sidebar_width";
     pub const SIDEBAR_COLLAPSED: &str = "ui.sidebar_collapsed";
     pub const FONT_SIZE: &str = "ui.font_size";
-    pub const MESSAGE_FONT_SIZE: &str = "ui.message_font_size";
-    pub const COMPACT_MODE: &str = "ui.compact_mode";
     pub const SEARCH_SHORTCUT: &str = "ui.search_shortcut";
 
     // Notification privacy settings
@@ -83,11 +81,6 @@ pub mod keys {
     /// Notification detail level: "none", "name_only", "name_and_message"
     /// Default: "none" (just "Chatter: New message" — no sender, no content)
     pub const NOTIFICATION_DETAIL_LEVEL: &str = "notification.detail_level";
-    /// Whether to show notifications for sealed sender / anonymous messages.
-    /// Even with detail_level = "name_and_message", sealed sender notifications
-    /// will never show the sender (server doesn't know it).
-    /// Default: true (show "New message" without sender)
-    pub const NOTIFICATION_SHOW_FOR_SEALED: &str = "notification.show_for_sealed";
 
     // Local AI settings
     pub const LOCAL_AI_ENABLED: &str = "local_ai.enabled";

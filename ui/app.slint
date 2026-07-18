@@ -527,9 +527,6 @@ export component App inherits Rectangle {
     in property <bool> channel-settings-can-archive: false;
     in property <bool> channel-settings-can-delete: false;
     in property <bool> channel-settings-is-owner: false;
-    in-out property <bool> channel-settings-allow-reactions: true;
-    in-out property <bool> channel-settings-allow-threads: true;
-    in-out property <bool> channel-settings-allow-attachments: true;
     in-out property <string> channel-settings-notification-pref: "all";
     in-out property <bool> channel-settings-muted: false;
     in property <[ChannelMemberData]> channel-settings-members: [];
@@ -785,7 +782,6 @@ export component App inherits Rectangle {
     // ========== Channel settings callbacks ==========
     callback channel-settings-save(string, string);  // name, description
     callback channel-settings-pick-icon();  // opens native file picker for the channel icon
-    callback channel-settings-toggle-setting(string, bool);  // setting-name, value
     callback channel-settings-change-notification(string);   // preference
     callback channel-settings-toggle-mute(bool);
     callback channel-settings-change-member-role(string, string);  // user-id, new-role
@@ -1860,9 +1856,6 @@ export component App inherits Rectangle {
         can-archive: root.channel-settings-can-archive;
         can-delete: root.channel-settings-can-delete;
         is-owner: root.channel-settings-is-owner;
-        allow-reactions <=> root.channel-settings-allow-reactions;
-        allow-threads <=> root.channel-settings-allow-threads;
-        allow-attachments <=> root.channel-settings-allow-attachments;
         notification-preference <=> root.channel-settings-notification-pref;
         is-muted <=> root.channel-settings-muted;
         members: root.channel-settings-members;
@@ -1874,9 +1867,6 @@ export component App inherits Rectangle {
         }
         save-settings(name, description) => {
             root.channel-settings-save(name, description);
-        }
-        toggle-setting(setting-name, value) => {
-            root.channel-settings-toggle-setting(setting-name, value);
         }
         change-notification(level) => {
             root.channel-settings-change-notification(level);

@@ -16,7 +16,6 @@ use crate::{ChannelMemberData, InviteUser, MainWindow, PrivateGroupFriend};
 pub fn wire_channel_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_save_settings(window, ui_ctx);
     wire_pick_icon(window, ui_ctx);
-    wire_toggle_setting(window, ui_ctx);
     wire_notification_settings(window, ui_ctx);
     wire_member_management(window, ui_ctx);
     wire_channel_actions(window, ui_ctx);
@@ -231,24 +230,6 @@ fn wire_pick_icon(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
         }
         #[cfg(target_os = "android")]
         tracing::warn!("File picker not supported on Android");
-    });
-}
-
-fn wire_toggle_setting(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
-    let weak_window = window.as_weak();
-    window.on_channel_settings_toggle_setting(move |setting, value| {
-        let weak = weak_window.clone();
-        let setting_str = setting.to_string();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                match setting_str.as_str() {
-                    "reactions" => w.set_channel_settings_allow_reactions(value),
-                    "threads" => w.set_channel_settings_allow_threads(value),
-                    "attachments" => w.set_channel_settings_allow_attachments(value),
-                    _ => {}
-                }
-            }
-        });
     });
 }
 

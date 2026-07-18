@@ -45,11 +45,6 @@ export component ChannelSettingsModal inherits Rectangle {
     in property <bool> can-delete: false;
     in property <bool> is-owner: false;
 
-    // Channel configuration
-    in-out property <bool> allow-reactions: true;
-    in-out property <bool> allow-threads: true;
-    in-out property <bool> allow-attachments: true;
-
     // Notification settings (per user)
     in-out property <string> notification-preference: "all";  // "all", "mentions", "none"
     in-out property <bool> is-muted: false;
@@ -67,7 +62,6 @@ export component ChannelSettingsModal inherits Rectangle {
     callback close();
     callback save-settings(string, string);  // name, description
     callback pick-channel-icon();  // opens native file picker for the channel icon
-    callback toggle-setting(string, bool);  // setting-name, value
     callback change-notification(string);  // preference
     callback toggle-mute(bool);
     callback change-member-role(string, string);  // user-id, new-role
@@ -392,103 +386,6 @@ export component ChannelSettingsModal inherits Rectangle {
                                 }
                             }
 
-                            // Channel settings toggles (if can edit)
-                            if root.can-edit: VerticalLayout {
-                                spacing: Spacing.sm;
-
-                                Rectangle {
-                                    height: 1px;
-                                    background: Colors.surface-hover;
-                                }
-
-                                Text {
-                                    text: "Channel Features";
-                                    color: Colors.text-secondary;
-                                    font-size: Typography.sm;
-                                    font-weight: Typography.medium;
-                                }
-
-                                // Allow reactions
-                                HorizontalLayout {
-                                    spacing: Spacing.sm;
-
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-
-                                        Text {
-                                            text: "Allow Reactions";
-                                            color: Colors.text-primary;
-                                            font-size: Typography.sm;
-                                        }
-                                        Text {
-                                            text: "Members can react to messages with emoji";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                        }
-                                    }
-
-                                    Toggle {
-                                        checked: root.allow-reactions;
-                                        toggled(value) => {
-                                            root.toggle-setting("reactions", value);
-                                        }
-                                    }
-                                }
-
-                                // Allow threads
-                                HorizontalLayout {
-                                    spacing: Spacing.sm;
-
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-
-                                        Text {
-                                            text: "Allow Threads";
-                                            color: Colors.text-primary;
-                                            font-size: Typography.sm;
-                                        }
-                                        Text {
-                                            text: "Members can reply in threads";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                        }
-                                    }
-
-                                    Toggle {
-                                        checked: root.allow-threads;
-                                        toggled(value) => {
-                                            root.toggle-setting("threads", value);
-                                        }
-                                    }
-                                }
-
-                                // Allow attachments
-                                HorizontalLayout {
-                                    spacing: Spacing.sm;
-
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-
-                                        Text {
-                                            text: "Allow Attachments";
-                                            color: Colors.text-primary;
-                                            font-size: Typography.sm;
-                                        }
-                                        Text {
-                                            text: "Members can share files and images";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                        }
-                                    }
-
-                                    Toggle {
-                                        checked: root.allow-attachments;
-                                        toggled(value) => {
-                                            root.toggle-setting("attachments", value);
-                                        }
-                                    }
-                                }
-                            }
                         }
 
                         // ========== Notifications Section ==========
