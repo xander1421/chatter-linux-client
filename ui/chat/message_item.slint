@@ -1139,7 +1139,7 @@ export component MessageItem inherits Rectangle {
 
                     action-btns := Rectangle {
                         height: 28px;
-                        width: 80px;
+                        width: 106px;
                         background: Colors.surface;
                         border-radius: Spacing.radius-md;
                         border-width: 1px;
@@ -1204,6 +1204,35 @@ export component MessageItem inherits Rectangle {
                                         root.react-clicked(root.sender-id, root.timestamp-ns,
                                             react-btn.absolute-position.x,
                                             react-btn.absolute-position.y + react-btn.height);
+                                    }
+                                }
+                            }
+
+                            // Reply-in-thread button — opens/starts a thread on
+                            // this message. Previously the ONLY thread entry was
+                            // the "N replies" badge (rendered `if reply-count > 0`),
+                            // so a message with no replies could never START a thread.
+                            thread-btn := Rectangle {
+                                height: 24px;
+                                width: 24px;
+                                background: thread-btn-touch.has-hover ? Colors.surface-hover : transparent;
+                                border-radius: Spacing.radius-sm;
+                                accessible-role: button;
+                                accessible-label: "Reply in thread";
+
+                                Image {
+                                    width: 14px;
+                                    height: 14px;
+                                    source: Icons.message-circle;
+                                    colorize: Colors.text-secondary;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                }
+
+                                thread-btn-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.thread-clicked(root.message-id);
                                     }
                                 }
                             }

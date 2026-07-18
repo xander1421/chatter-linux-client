@@ -537,3 +537,58 @@ fn channel_settings_icon_picker_is_wired() {
         "the modal must have a picker affordance invoking pick-channel-icon"
     );
 }
+
+// ============================================================================
+// THREAD REPLY (RESOLVED): you can now START a thread from any message.
+//
+// Was: the only thread entry was the "N replies" badge rendered
+// `if reply-count > 0`, so a message with zero replies had NO way to open a
+// thread — the send-into-thread handler + panel existed but were unreachable
+// (reported: "channel reply works but no option to reply in thread").
+//
+//  L1 (DYNAMIC): `on_thread_clicked` runs the real handler without panicking
+//    (offline it warns "no active channel" and returns).
+//  L2 (STATIC, Rust): the handler opens the thread (`open_thread` +
+//    `load_thread_data`) — proven to persist/round-trip by validated.rs::v44.
+//  L2 (STATIC, Slint): a "Reply in thread" button lives in the message hover
+//    action row (NOT gated behind reply-count>0) and fires thread-clicked.
+// ============================================================================
+#[test]
+fn message_reply_in_thread_button_is_wired() {
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    testing::init_no_event_loop();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+    let w = MainWindow::new().expect("MainWindow::new");
+    chatter_ui::bin_ui::features::chat_actions::wire(&w, &client);
+
+    // L1 dynamic: firing the thread callback runs the real handler (offline:
+    // no active channel → warns + returns), no panic.
+    w.invoke_thread_clicked("00000000-0000-0000-0000-000000000000".into());
+
+    // L2 static (Rust): the handler opens a thread (state + panel load).
+    let src = include_str!("../src/bin_ui/features/chat_actions/message_actions.rs");
+    let idx = src.find("on_thread_clicked").expect("thread handler present");
+    assert!(
+        src[idx..].contains(".open_thread(") && src[idx..].contains("load_thread_data"),
+        "the thread handler must open the thread state + load the thread panel"
+    );
+
+    // L2 static (Slint): a "Reply in thread" affordance exists in the message
+    // action row (so ANY message can start a thread), firing thread-clicked.
+    let slint_src = include_str!("../../../ui/chat/message_item.slint");
+    assert!(
+        slint_src.contains(r#"accessible-label: "Reply in thread""#),
+        "the message hover actions must include a Reply-in-thread button so a \
+         message with zero replies can still START a thread"
+    );
+    assert!(
+        slint_src.contains("root.thread-clicked(root.message-id)"),
+        "the Reply-in-thread button must fire thread-clicked with the message id"
+    );
+}

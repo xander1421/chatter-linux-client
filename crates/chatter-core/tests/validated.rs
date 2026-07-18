@@ -9210,3 +9210,159 @@ async fn v43_profile_name_change_live_pushes_to_friends() {
     client_a.shutdown().await;
     client_b.shutdown().await;
 }
+
+/// V44 — thread replies actually thread: a reply sent with a thread parent is
+/// grouped under the root on BOTH the sender and the recipient.
+///
+/// THE GAP (reported): the UI could quote-reply in a channel but had "no option
+/// to reply in thread" — the only thread entry was the "N replies" badge shown
+/// `if reply-count > 0`, so a message with no replies could never START a
+/// thread. The send-into-thread path (`send_channel_message(..., Some(root),
+/// ...)` → parent_id on the wire) + the thread panel existed but were
+/// unreachable. Fixed by a Reply-in-thread button in the message hover actions
+/// (proven wired by ui_wiring::message_reply_in_thread_button_is_wired).
+///
+/// THIS TEST proves the wire the button drives is REAL end to end — not just a
+/// callback that fires: a reply sent with `thread_id = root` is stored under
+/// that root (`list_thread_replies(root)`) on the sender AND round-trips to the
+/// recipient's thread, while a plain sibling message is NOT in the thread.
+///
+/// Proof (asserts on the LOCAL thread grouping of both parties, scoped to run):
+///   POSITIVE CONTROL — B receives A's root + the threaded reply (pipeline alive).
+///   THE FIX — the threaded reply appears under the root via
+///     `list_thread_replies(root)` on A (sender) and B (recipient); the plain
+///     sibling message does NOT.
+///
+/// MUTATION (RED): drop `thread_id`/parent_id on the send or inbound conversion
+/// → the reply's `thread_id` is unset → it's absent from `list_thread_replies`
+/// → the fix assertions fail.
+#[tokio::test]
+async fn v44_thread_reply_groups_under_root_on_both_sides() {
+    use chatter_core::domain::channel::ChannelType;
+
+    skip_if_no_server!();
+    no_keyring_prompts();
+
+    let dir_a = tempfile::tempdir().unwrap();
+    let client_a = build_client(dir_a.path());
+    let uid_a = register_and_start(&client_a, &unique_user("v44a"), "V44 Alice").await;
+    let dir_b = tempfile::tempdir().unwrap();
+    let client_b = build_client(dir_b.path());
+    let uid_b = register_and_start(&client_b, &unique_user("v44b"), "V44 Bob").await;
+
+    let name = format!(
+        "v44-chan-{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
+    );
+    let chan = client_a
+        .create_channel(&name, ChannelType::Private, None, Some("V44 threads"), None, None, vec![uid_b.clone()])
+        .await
+        .expect("create channel failed");
+
+    // membership
+    let mut members = std::collections::HashSet::new();
+    for _ in 0..15 {
+        members = psql(&format!("select user_id from channel_members where channel_id = '{}'", chan.id))
+            .lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+        if members.contains(&uid_a.to_string()) && members.contains(&uid_b.to_string()) { break; }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    assert!(
+        members.contains(&uid_a.to_string()) && members.contains(&uid_b.to_string()),
+        "POSITIVE CONTROL FAILED: A and B not both members of {}", chan.id
+    );
+
+    client_a.subscribe_channel_messages(&chan.id);
+    client_b.subscribe_channel_messages(&chan.id);
+    let mut events_b = client_b.subscribe_events();
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // A posts the ROOT (also mints A's sender key + SKDM to B).
+    let root_text = unique_marker();
+    let root = client_a
+        .send_channel_message(None, &chan.id, &root_text, vec![], vec![], None, vec![], false)
+        .await
+        .expect("A root send failed");
+    let root_id = root.id;
+
+    let g = chan.id.clone();
+    let rt = root_text.clone();
+    let got_root = wait_for_event(&mut events_b, EVENT_TIMEOUT, move |e| matches!(
+        e, DomainEvent::MessageReceived { message }
+        if message.conversation_id == g && message.as_text() == Some(rt.as_str())
+    )).await;
+    assert!(
+        got_root.is_some(),
+        "POSITIVE CONTROL FAILED: B never received A's root ({root_text}) within {EVENT_TIMEOUT:?}."
+    );
+    tokio::time::sleep(Duration::from_secs(4)).await; // let B process A's SKDM
+
+    // A posts a PLAIN sibling (negative control — same channel, NOT in the thread).
+    let plain_text = unique_marker();
+    client_a
+        .send_channel_message(None, &chan.id, &plain_text, vec![], vec![], None, vec![], false)
+        .await
+        .expect("A plain send failed");
+
+    // A posts a THREAD REPLY under root (thread_id = root_id) — the wire the
+    // Reply-in-thread button drives.
+    let reply_text = unique_marker();
+    client_a
+        .send_channel_message(None, &chan.id, &reply_text, vec![], vec![], Some(&root_id), vec![], false)
+        .await
+        .expect("A thread reply send failed");
+
+    // B must receive the threaded reply.
+    let g = chan.id.clone();
+    let rt = reply_text.clone();
+    let got_reply = wait_for_event(&mut events_b, EVENT_TIMEOUT, move |e| matches!(
+        e, DomainEvent::MessageReceived { message }
+        if message.conversation_id == g && message.as_text() == Some(rt.as_str())
+    )).await;
+    assert!(
+        got_reply.is_some(),
+        "POSITIVE CONTROL FAILED: B never received A's thread reply ({reply_text}) within {EVENT_TIMEOUT:?}."
+    );
+    tokio::time::sleep(Duration::from_secs(2)).await; // let stores settle
+
+    // THE FIX — thread grouping on the SENDER (A).
+    let a_thread = client_a.list_thread_replies(&root_id, None, 50).unwrap_or_default();
+    let a_has_reply = a_thread.iter().any(|m| m.as_text() == Some(reply_text.as_str()));
+    let a_has_plain = a_thread.iter().any(|m| m.as_text() == Some(plain_text.as_str()));
+    assert!(
+        a_has_reply,
+        "THREAD REPLY NOT GROUPED (sender): A's list_thread_replies(root) does not contain the \
+         reply ({reply_text}). The send path did not set thread_id=root on A's local copy — the \
+         sender wouldn't even see their own thread reply."
+    );
+    assert!(
+        !a_has_plain,
+        "THREAD GROUPING WRONG (sender): the PLAIN sibling ({plain_text}) is under the root's \
+         thread on A — thread_id filtering is not actually scoping to the root."
+    );
+
+    // THE FIX — thread grouping on the RECIPIENT (B): parent_id rode the wire.
+    let b_thread = client_b.list_thread_replies(&root_id, None, 50).unwrap_or_default();
+    let b_has_reply = b_thread.iter().any(|m| m.as_text() == Some(reply_text.as_str()));
+    let b_has_plain = b_thread.iter().any(|m| m.as_text() == Some(plain_text.as_str()));
+    assert!(
+        b_has_reply,
+        "THREAD REPLY DID NOT FEDERATE: B's list_thread_replies(root) does not contain the reply \
+         ({reply_text}). parent_id did not ride the wire to B (or B's inbound conversion dropped \
+         thread_id) — the recipient sees the reply as a flat channel message, not in the thread."
+    );
+    assert!(
+        !b_has_plain,
+        "THREAD GROUPING WRONG (recipient): the PLAIN sibling ({plain_text}) is under the root's \
+         thread on B."
+    );
+
+    println!(
+        "\n  V44 PASS — thread replies actually thread: a reply sent with thread_id=root is \
+         grouped under the root on BOTH the sender (A) and the recipient (B), while a plain \
+         sibling is not. The Reply-in-thread button now drives a real end-to-end thread.\n"
+    );
+
+    client_a.shutdown().await;
+    client_b.shutdown().await;
+}
