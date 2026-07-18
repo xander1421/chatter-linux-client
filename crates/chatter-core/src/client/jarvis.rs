@@ -51,8 +51,59 @@ use crate::storage::settings_keys;
 use crate::system::Directories;
 use super::{ChatterClient, ClientError};
 
+/// Display name of the local AI channel.
+pub const JARVIS_CHANNEL_NAME: &str = "Jarvis (AI)";
+
+/// The local AI channel's fixed id: the nil UUID. Matches the
+/// `JarvisContext::general()` context key, so channel history and Jarvis
+/// memory share one identity. Never collides with server channels (v4 UUIDs).
+pub fn jarvis_channel_id() -> crate::domain::ids::ChannelId {
+    crate::domain::ids::ChannelId::from_uuid(uuid::Uuid::nil())
+}
+
+/// Whether an id refers to the local AI channel.
+pub fn is_jarvis_channel(id: &crate::domain::ids::ChannelId) -> bool {
+    id.0.is_nil()
+}
+
 impl ChatterClient {
     // ── Jarvis façade ────────────────────────────────────────────────────
+
+    /// Whether the local AI channel should appear in the sidebar.
+    ///
+    /// Follows the local-AI enabled setting; a missing provider surfaces as
+    /// a helpful error inside the channel rather than hiding it, so users
+    /// can discover the feature and be pointed at settings.
+    pub fn jarvis_channel_enabled(&self) -> bool {
+        self.http_local_ai().is_enabled()
+    }
+
+    /// The virtual (client-side only) channel entry for the sidebar.
+    pub fn jarvis_virtual_channel(&self) -> Channel {
+        let mut channel = Channel::new(
+            jarvis_channel_id(),
+            JARVIS_CHANNEL_NAME.to_string(),
+            ChannelType::Private,
+            crate::domain::ids::UserId::from_uuid(uuid::Uuid::nil()),
+        );
+        channel.description = Some("Local AI assistant — never leaves this device".to_string());
+        channel
+    }
+
+    /// Human-readable description of the active Jarvis engine ("ollama (llama3.2:3b)").
+    pub fn jarvis_engine_description(&self) -> String {
+        self.services.jarvis_engine.describe()
+    }
+
+    /// Persisted AI-channel conversation history (chronological).
+    pub fn jarvis_channel_history(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<crate::domain::jarvis::JarvisConversation>, crate::services::jarvis::JarvisError>
+    {
+        self.jarvis()
+            .get_conversation_history(&crate::domain::jarvis::JarvisContext::general(), limit)
+    }
 
     pub async fn jarvis_ask(
         &self,

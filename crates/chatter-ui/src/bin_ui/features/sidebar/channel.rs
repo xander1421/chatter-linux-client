@@ -29,6 +29,27 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         // Clear inline GIF animations to free memory
         crate::bin_ui::gif_state::clear_inline_gifs();
 
+        // Local AI channel: no network, no pins, no read-marks — load Jarvis
+        // history and stop.
+        #[cfg(feature = "jarvis")]
+        if crate::bin_ui::features::jarvis::is_jarvis_channel_str(&channel_id_str) {
+            if let Ok(parsed) = channel_id_str.parse::<ChannelId>() {
+                ui_ctx.chat_state().set_active_channel(parsed);
+                ui_ctx.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::Channel(parsed));
+            }
+            let ui_ctx_for_sel = ui_ctx.clone();
+            run_ui!(weak, |w| {
+                w.set_loading_messages(true);
+                super::refresh_selection(&w, &ui_ctx_for_sel);
+            });
+            let weak = weak.clone();
+            let ui_ctx = ui_ctx.clone();
+            tokio::spawn(async move {
+                crate::bin_ui::features::jarvis::load_jarvis_channel_into_ui(weak, ui_ctx).await;
+            });
+            return;
+        }
+
         // Commit active-conversation state SYNCHRONOUSLY on the UI thread
         // (same race fix as dm.rs — see comment there).
         if let Ok(parsed) = channel_id_str.parse::<ChannelId>() {

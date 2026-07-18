@@ -49,8 +49,6 @@ pub fn wire_all(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     thread::wire(window, ui_ctx);
     #[cfg(feature = "call-ui")]
     calls::wire(window, ui_ctx);
-    #[cfg(feature = "jarvis")]
-    jarvis::wire_jarvis_panel(window, ui_ctx);
     status::wire(window, ui_ctx);
     connection::wire(window, ui_ctx);
     unified_search::wire(window, ui_ctx);

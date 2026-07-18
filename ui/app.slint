@@ -53,8 +53,7 @@ import { MobileBottomNav } from "components/mobile_bottom_nav.slint";
 // Import call UI
 import { IncomingCallModal, ActiveCallView, DevicePicker, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData } from "calls/mod.slint";
 
-// Import Jarvis AI assistant
-import { JarvisPanel, JarvisMessageData } from "jarvis/mod.slint";
+// Jarvis AI: feature-gate global (the AI channel is the Jarvis surface)
 import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 
 // Import anon mode global + PIN modal
@@ -62,7 +61,7 @@ import { AnonMode } from "anon_mode/anon_mode_global.slint";
 import { AnonModePinModal } from "modals/anon_mode_pin.slint";
 
 // Re-export types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, CustomSectionData, SectionConversationData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, QuickSwitcherItem }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, CustomSectionData, SectionConversationData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, InviteUser, ReactionEntry, QuickSwitcherItem }
 
 export component App inherits Rectangle {
     // ========== Safe area insets (set by Rust on Android) ==========
@@ -600,10 +599,7 @@ export component App inherits Rectangle {
     in-out property <string> selected-screen-source-id: "";
 
     // ========== Jarvis AI Assistant properties ==========
-    in-out property <bool> jarvis-panel-visible: false;
     in-out property <bool> jarvis-thinking: false;
-    in property <string> jarvis-response: "";
-    in property <[JarvisMessageData]> jarvis-messages: [];
 
     // ========== Auth callbacks ==========
     callback login(string, string, string, string);  // username, password, server_url, pin
@@ -812,11 +808,6 @@ export component App inherits Rectangle {
     callback audio-output-selected(string);   // device_id
     callback screen-source-selected(string);  // source_id
 
-    // ========== Jarvis callbacks ==========
-    callback jarvis-panel-close();
-    callback jarvis-send(string);
-    callback jarvis-clear();
-    callback toggle-jarvis-panel();
 
     // ========== Anon mode (PIN modal + toggle) ==========
     in-out property <string> anon-mode-pin: "";
@@ -856,9 +847,9 @@ export component App inherits Rectangle {
         enabled: root.current-view == "main";
 
         key-pressed(event) => {
-            // Ctrl+J: Toggle Jarvis panel
+            // Ctrl+J: open the local AI channel
             if (JarvisGlobal.enabled && event.modifiers.control && event.text == "j") {
-                root.jarvis-panel-visible = !root.jarvis-panel-visible;
+                root.channel-selected("00000000-0000-0000-0000-000000000000");
                 return accept;
             }
             // Ctrl+K / Ctrl+F: open unified search (which combo depends on pref)
@@ -1153,10 +1144,7 @@ export component App inherits Rectangle {
                 }
                 jarvis-clicked => {
                     if (JarvisGlobal.enabled) {
-                        root.jarvis-panel-visible = !root.jarvis-panel-visible;
-                        if !root.jarvis-panel-visible {
-                            root.jarvis-panel-close();
-                        }
+                        root.channel-selected("00000000-0000-0000-0000-000000000000");
                     }
                 }
                 settings-clicked => {
@@ -1376,37 +1364,6 @@ export component App inherits Rectangle {
     // Mobile bottom navigation removed — the single-tab bar that remained after
     // dropping Calls / Contacts / Settings served no purpose and clipped the
     // sidebar profile button. Navigation now goes through the sidebar only.
-
-    // ========== Jarvis AI floating panel ==========
-    // Floating panel that appears on top of chat when toggled
-    if JarvisGlobal.enabled && root.jarvis-panel-visible: Rectangle {
-        x: parent.width - min(380px, parent.width - 16px);
-        y: 60px;
-        width: min(360px, parent.width - 32px);
-        height: parent.height - 120px;
-        background: Colors.surface;
-        border-radius: Spacing.radius-lg;
-        drop-shadow-blur: 20px;
-        drop-shadow-color: Colors.background.with-alpha(0.5);
-        drop-shadow-offset-x: -4px;
-        drop-shadow-offset-y: 4px;
-
-        JarvisPanel {
-            width: 100%;
-            height: 100%;
-            panel-visible: root.jarvis-panel-visible;
-            thinking: root.jarvis-thinking;
-            messages: root.jarvis-messages;
-            current-response: root.jarvis-response;
-
-            close => {
-                root.jarvis-panel-visible = false;
-                root.jarvis-panel-close();
-            }
-            send(text) => { root.jarvis-send(text); }
-            clear => { root.jarvis-clear(); }
-        }
-    }
 
     // ========== Modal overlay layer ==========
     // Semi-transparent backdrop when any modal is active

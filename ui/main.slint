@@ -1,14 +1,14 @@
 // Chatter Linux Client - Main UI
 // Root component for the application
 
-import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem } from "app.slint";
+import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem } from "app.slint";
 import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 import { TextFormat } from "chat/message_composer.slint";
 import { AnonMode, TorStatus } from "anon_mode/anon_mode_global.slint";
 import { Typography } from "theme/typography.slint";
 
 // Re-export all types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem }
 export { JarvisGlobal }
 export { TextFormat }
 export { AnonMode }
@@ -500,10 +500,7 @@ export component MainWindow inherits Window {
     in-out property <string> selected-screen-source-id <=> app.selected-screen-source-id;
 
     // ========== Jarvis AI Assistant properties ==========
-    in-out property <bool> jarvis-panel-visible <=> app.jarvis-panel-visible;
     in-out property <bool> jarvis-thinking <=> app.jarvis-thinking;
-    in property <string> jarvis-response <=> app.jarvis-response;
-    in property <[JarvisMessageData]> jarvis-messages <=> app.jarvis-messages;
 
     // ========== Auth callbacks ==========
     callback login <=> app.login;
@@ -713,11 +710,6 @@ export component MainWindow inherits Window {
     callback audio-output-selected <=> app.audio-output-selected;
     callback screen-source-selected <=> app.screen-source-selected;
 
-    // ========== Jarvis callbacks ==========
-    callback jarvis-panel-close <=> app.jarvis-panel-close;
-    callback jarvis-send <=> app.jarvis-send;
-    callback jarvis-clear <=> app.jarvis-clear;
-    callback toggle-jarvis-panel <=> app.toggle-jarvis-panel;
 
     // ========== Anon mode (PIN gate + toggle) ==========
     in-out property <string> anon-mode-pin <=> app.anon-mode-pin;

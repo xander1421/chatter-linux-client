@@ -34,6 +34,20 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
         if text.trim().is_empty() && !has_attachments { return; }
 
+        // Local AI channel: every send routes to Jarvis, nothing networks.
+        #[cfg(feature = "jarvis")]
+        if let Some(id) = chat_state.get().active_channel_id {
+            if chatter_core::client::is_jarvis_channel(&id) {
+                if text.trim().is_empty() { return; }
+                let ui_ctx = ui_ctx_jarvis.clone();
+                let weak = weak_window.clone();
+                tokio::spawn(async move {
+                    crate::bin_ui::features::jarvis::handle_jarvis_channel_send(ui_ctx, text, weak).await;
+                });
+                return;
+            }
+        }
+
         // Check for Jarvis slash commands first (/ask, /summarize, /knowledge, /remember)
         #[cfg(feature = "jarvis")]
         if let Some(cmd) = crate::bin_ui::features::jarvis::parse_slash_command(&text) {

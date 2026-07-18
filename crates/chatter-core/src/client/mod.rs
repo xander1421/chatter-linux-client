@@ -21,6 +21,8 @@ pub mod channels;
 pub mod events;
 #[cfg(feature = "jarvis")]
 mod jarvis;
+#[cfg(feature = "jarvis")]
+pub use jarvis::{is_jarvis_channel, jarvis_channel_id, JARVIS_CHANNEL_NAME};
 mod link_device;
 mod messaging;
 pub use messaging::{InviteCandidate, ReplyParentMedia};
@@ -325,6 +327,16 @@ impl ChatterClient {
     crate::service_accessor!(jarvis, JarvisService, jarvis_service);
     crate::service_accessor!(mailbox_manager, MailboxManager, mailbox_manager);
     crate::service_accessor!(local_ai, LocalAIService, local_ai_service);
+    crate::service_accessor!(
+        http_local_ai,
+        crate::services::local_ai_service::HttpLocalAIService,
+        http_local_ai_service
+    );
+    crate::service_accessor!(
+        semantic_search,
+        crate::services::semantic_search::SemanticSearchService,
+        semantic_search_service
+    );
     crate::service_accessor!(dm_bootstrap, DmBootstrapService, dm_bootstrap_service);
     crate::service_accessor!(
         notifications,
@@ -961,10 +973,23 @@ impl ChatterClient {
             return Vec::new();
         }
         use crate::domain::channel::ChannelType;
-        self.get_channels_mru()
+        let channels: Vec<_> = self
+            .get_channels_mru()
             .into_iter()
             .filter(|c| matches!(c.channel_type, ChannelType::Public | ChannelType::Private))
-            .collect()
+            .collect();
+
+        // The local AI channel is pinned to the top when local AI is on.
+        #[cfg(feature = "jarvis")]
+        {
+            let mut channels = channels;
+            if self.jarvis_channel_enabled() {
+                channels.insert(0, self.jarvis_virtual_channel());
+            }
+            return channels;
+        }
+        #[cfg(not(feature = "jarvis"))]
+        channels
     }
 
     /// The channel to select on load: first non-DM, non-SavedMessages channel
@@ -973,6 +998,7 @@ impl ChatterClient {
         use crate::domain::channel::ChannelType;
         self.get_channels_mru()
             .iter()
+            .filter(|c| !c.id.0.is_nil()) // never auto-select the local AI channel
             .find(|c| !matches!(c.channel_type, ChannelType::DirectMessage | ChannelType::SavedMessages))
             .map(|c| c.id)
     }

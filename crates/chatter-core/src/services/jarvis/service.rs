@@ -237,6 +237,17 @@ impl JarvisService {
         Ok(())
     }
 
+    /// Get persisted conversation history for a context (chronological).
+    pub fn get_conversation_history(
+        &self,
+        context: &JarvisContext,
+        limit: u32,
+    ) -> Result<Vec<crate::domain::jarvis::JarvisConversation>, JarvisError> {
+        self.memory_repo
+            .get_recent_conversations(context, limit)
+            .map_err(JarvisError::from)
+    }
+
     /// Get what Jarvis knows about an entity.
     pub fn get_entity_knowledge(&self, entity_name: &str) -> Result<EntityKnowledge, JarvisError> {
         self.graph_repo
