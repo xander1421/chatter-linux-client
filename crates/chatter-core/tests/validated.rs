@@ -7539,6 +7539,8 @@ async fn v33_channel_mute_persists_to_membership() {
 //   - PRIVACY: C is NOT a friend of A. C's event stream is ALIVE (positive control:
 //     C is a friend of B and receives B's presence). C must NOT receive A's presence.
 //     This proves the fan-out is friend-scoped, not a global firehose.
+//   - OFFLINE: A goes offline -> B receives UserPresenceChanged{A, Offline}. Proves
+//     the full lifecycle both directions, not just the online edge.
 //
 // MUTATION — in internal/services/user/repository/redis/repository.go, remove the
 // `r.publishPresenceToFriends(ctx, update)` call in SetPresence, rebuild + restart
@@ -7635,9 +7637,26 @@ async fn v34_presence_reaches_friends_not_strangers() {
     );
     println!("  PRIVACY: C (a stranger to A) received NOTHING about A — fan-out is friend-scoped");
 
+    // ---- OFFLINE HALF: A goes offline -> B (a friend) sees it ---------------
+    // Same wire as shutdown(): set_presence(Offline) awaits the identified
+    // UpdatePresence RPC, so the offline edge is exactly what a clean shutdown
+    // publishes.
+    client_a.set_presence(PresenceStatus::Offline).await;
+    let offline_seen_by_b = wait_for_event(&mut events_b, EVENT_TIMEOUT, |e| {
+        matches!(e,
+            DomainEvent::UserPresenceChanged { user_id, presence, .. }
+                if *user_id == uid_a && *presence == PresenceStatus::Offline)
+    }).await;
+    assert!(
+        offline_seen_by_b.is_some(),
+        "OFFLINE NOT DELIVERED TO FRIEND: A went offline but B (A's friend) never received a \
+         UserPresenceChanged{{A, Offline}}. Friends would see A as online forever after A quits."
+    );
+    println!("  OFFLINE: B received UserPresenceChanged{{A, Offline}} — full lifecycle delivered");
+
     println!(
-        "V34 PASS — presence is wired end-to-end and friend-scoped: A's friend B sees A online, \
-         the stranger C does not.\n"
+        "V34 PASS — presence is wired end-to-end and friend-scoped: A's friend B sees A come \
+         online AND go offline, the stranger C sees neither.\n"
     );
 
     client_a.shutdown().await;

@@ -24,12 +24,10 @@ pub mod call_verification;
 pub mod notification_service;
 pub mod notification_stream;
 pub mod search_service;
-#[cfg(feature = "local-ai")]
 pub mod semantic_search;
 pub mod sync_service;
 pub mod moderation_service;
 pub mod ai_service;
-#[cfg(feature = "local-ai")]
 pub mod local_ai_service;
 pub mod ai_summarize;
 pub mod draft_service;

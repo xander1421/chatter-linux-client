@@ -98,32 +98,9 @@ async fn test_update_presence() {
     );
 }
 
-#[tokio::test]
-async fn test_stream_presence() {
-    skip_if_no_server!();
-
-    // Use streaming pool (no request timeout) for streaming endpoints
-    let pool = assert_ok(create_streaming_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
-
-    let mut user_client = UserClient::new(pool.channel(), pool.auth_clone());
-
-    // Start streaming presence with a short timeout
-    // We just want to verify the stream can be established, not wait for data
-    let stream_result = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        user_client.stream_presence(),
-    )
-    .await;
-
-    // If we timeout, that's OK - it means the stream was established but no data came
-    // If we get an error immediately, that's the failure we want to catch
-    match stream_result {
-        Ok(Ok(_)) => {} // Stream established successfully
-        Ok(Err(e)) => panic!("Failed to establish presence stream: {:?}", e),
-        Err(_) => {} // Timeout is OK - stream established but no data
-    }
-}
+// NOTE: the StreamPresence RPC was removed — presence now reaches friends via
+// StreamUserEvents (EventTypeUserPresenceUpdated), proven end-to-end by
+// validated.rs::v34_presence_reaches_friends_not_strangers.
 
 // ============================================================================
 // Friend Management Tests

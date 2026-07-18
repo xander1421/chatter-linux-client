@@ -95,8 +95,6 @@ pub struct InfrastructureContainer {
     /// Custom sidebar section repository.
     pub(crate) section_repo: Arc<SectionRepository>,
     /// Vector embedding repository for semantic search.
-    /// Used by `HttpLocalAIService` and `SemanticSearchService` when `local-ai` is enabled.
-    #[cfg_attr(not(feature = "local-ai"), allow(dead_code))]
     pub(crate) vector_repo: Arc<VectorRepository>,
 
     // Crypto managers - pub(crate)

@@ -9,11 +9,8 @@ use crate::services::ai::{LocalAIActorHandle, LocalAIService};
 #[cfg(feature = "jarvis")]
 use crate::services::jarvis::JarvisService;
 use crate::services::ai_service::AIService;
-#[cfg(feature = "local-ai")]
 use crate::services::local_ai_service::HttpLocalAIService;
-#[cfg(feature = "local-ai")]
 use crate::services::semantic_search::SemanticSearchService;
-#[cfg(feature = "local-ai")]
 use crate::local_ai::indexer::MessageIndexer;
 use crate::services::anon_dm::AnonDmService;
 use crate::services::anon_group::AnonGroupService;
@@ -98,11 +95,9 @@ pub struct ServiceContainer {
     pub jarvis_service: Arc<JarvisService>,
     /// Section service for custom sidebar sections.
     pub section_service: Arc<SectionService>,
-    /// HTTP-backed local AI service (Ollama/vLLM chat, models, semantic search).
-    #[cfg(feature = "local-ai")]
+    /// HTTP-backed local AI service (Ollama/OpenAI-compat chat, models, semantic search).
     pub http_local_ai_service: Arc<HttpLocalAIService>,
     /// Semantic search service for E2E encrypted channel search.
-    #[cfg(feature = "local-ai")]
     pub semantic_search_service: Arc<SemanticSearchService>,
     /// Device service for multi-device management.
     pub device_service: Arc<DeviceService>,
@@ -285,12 +280,10 @@ impl ServiceContainer {
         ));
 
         // 19c. HTTP local AI service (Ollama backend + semantic search)
-        #[cfg(feature = "local-ai")]
         let http_local_ai_service = Arc::new(HttpLocalAIService::new(
             infra.settings_repo.clone(),
             infra.vector_repo.clone(),
         ));
-        #[cfg(feature = "local-ai")]
         let semantic_search_service = Arc::new(SemanticSearchService::new(
             infra.vector_repo.clone(),
             Arc::new(crate::local_ai::embeddings::EmbeddingGenerator::new(
@@ -300,7 +293,6 @@ impl ServiceContainer {
         ));
 
         // 19d. Message indexer — auto-index decrypted messages for semantic search
-        #[cfg(feature = "local-ai")]
         if http_local_ai_service.is_auto_index_enabled() {
             let (indexer, _indexer_handle) = MessageIndexer::spawn(semantic_search_service.clone());
             indexer.subscribe_events(infra.event_bus.subscribe_domain());
@@ -367,9 +359,7 @@ impl ServiceContainer {
             jarvis_service,
             channel_bootstrap_service,
             section_service,
-            #[cfg(feature = "local-ai")]
             http_local_ai_service,
-            #[cfg(feature = "local-ai")]
             semantic_search_service,
             device_service,
             conversation_repo,

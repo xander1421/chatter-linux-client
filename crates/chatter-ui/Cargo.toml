@@ -107,7 +107,7 @@ slint-build = "1.15.1"
 webrtc-sys-build = "0.3.16"
 
 [features]
-default = ["desktop"]
+default = ["desktop", "jarvis"]
 desktop = [
     "dep:i-slint-backend-winit", "dep:winit", "dep:arboard", "slint/backend-winit", 
     "slint/renderer-skia", "chatter-core/desktop-system", "chatter-core/desktop-media", 

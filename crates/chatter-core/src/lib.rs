@@ -59,7 +59,6 @@ pub mod inbox;
 pub mod mailbox;
 #[doc(hidden)]
 pub mod ui;
-#[cfg(feature = "local-ai")]
 #[doc(hidden)]
 pub mod local_ai;
 #[doc(hidden)]

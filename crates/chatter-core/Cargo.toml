@@ -237,7 +237,7 @@ name = "attachment_decrypt"
 harness = false
 
 [features]
-default = ["desktop-system", "desktop-media"]
+default = ["desktop-system", "desktop-media", "jarvis"]
 # Tor v3 onion transport for anon mode. Off by default — pulls a heavy Tor
 # dependency (arti-client, added in Stage 2). Without it, switching to onion
 # transport returns an error and anon mode stays UI-filter-only.

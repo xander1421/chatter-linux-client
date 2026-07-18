@@ -273,11 +273,14 @@ async fn test_user_event_stream() {
 }
 
 // ============================================================================
-// Presence Stream Tests
+// Presence
 // ============================================================================
+// The StreamPresence RPC was removed — presence now reaches friends via
+// StreamUserEvents (EventTypeUserPresenceUpdated), proven end-to-end by
+// validated.rs::v34_presence_reaches_friends_not_strangers.
 
 #[tokio::test]
-async fn test_presence_stream() {
+async fn test_presence_update() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_streaming_test_pool().await);
@@ -285,53 +288,9 @@ async fn test_presence_stream() {
 
     let mut user_client = UserClient::new(pool.channel(), pool.auth_clone());
 
-    // Start presence stream
-    let stream_result = tokio::time::timeout(
-        Duration::from_secs(5),
-        user_client.stream_presence(),
-    )
-    .await;
-
-    match stream_result {
-        Ok(Ok(_stream)) => {
-            // Stream established
-        }
-        Ok(Err(e)) => {
-            // Some error
-            eprintln!("Presence stream error: {:?}", e);
-        }
-        Err(_) => {
-            // Timeout - stream established but blocking
-        }
-    }
-}
-
-#[tokio::test]
-async fn test_presence_update_then_stream() {
-    skip_if_no_server!();
-
-    let pool = assert_ok(create_streaming_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
-
-    let mut user_client = UserClient::new(pool.channel(), pool.auth_clone());
-
-    // Update presence first
+    // The identified presence producer RPC must accept an update.
     let update_result = user_client.update_presence(UserPresence::Online).await;
     assert!(update_result.is_ok(), "Should update presence");
-
-    // Then try streaming
-    let stream_result = tokio::time::timeout(
-        Duration::from_secs(3),
-        user_client.stream_presence(),
-    )
-    .await;
-
-    // Stream should be establishable
-    match stream_result {
-        Ok(Ok(_)) => {}    // Good
-        Ok(Err(e)) => eprintln!("Presence stream error after update: {:?}", e),
-        Err(_) => {}       // Timeout is acceptable
-    }
 }
 
 // ============================================================================
