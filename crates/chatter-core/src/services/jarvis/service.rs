@@ -50,9 +50,10 @@ impl JarvisService {
         graph_repo: Arc<JarvisGraphRepository>,
         ai: SharedJarvisEngine,
         event_bus: EventBus,
+        semantic: Option<Arc<crate::services::semantic_search::SemanticSearchService>>,
     ) -> Self {
         let extractor = EntityExtractor::new(ai.clone());
-        let context_builder = ContextBuilder::new(memory_repo.clone(), graph_repo.clone());
+        let context_builder = ContextBuilder::new(memory_repo.clone(), graph_repo.clone(), semantic);
         let memory_manager = MemoryManager::new(memory_repo.clone(), graph_repo.clone(), ai.clone());
 
         Self {
@@ -171,8 +172,11 @@ impl JarvisService {
         query: &str,
         author_id: Option<&UserId>,
     ) -> Result<String, JarvisError> {
-        // 1. Build enriched context
-        let built_context = self.context_builder.build(context, query, author_id)?;
+        // 1. Build enriched context (keyword + entity graph + semantic recall)
+        let built_context = self
+            .context_builder
+            .build_with_semantic(context, query, author_id)
+            .await?;
 
         // 2. Store the user's query
         self.memory_manager.store_user_message(context, query, author_id)?;

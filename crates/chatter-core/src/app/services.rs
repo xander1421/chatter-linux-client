@@ -314,6 +314,7 @@ impl ServiceContainer {
             infra.jarvis_graph_repo.clone(),
             jarvis_engine.clone(),
             infra.event_bus.clone(),
+            Some(semantic_search_service.clone()),
         ));
 
         // 22. Channel bootstrap service for pending message flush

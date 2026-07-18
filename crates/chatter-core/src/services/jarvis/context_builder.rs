@@ -13,6 +13,8 @@ use crate::domain::jarvis::{
     SubjectType,
 };
 use crate::domain::UserId;
+use crate::local_ai::vector_store::VectorSearchResult;
+use crate::services::semantic_search::SemanticSearchService;
 use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
 
 use super::error::JarvisError;
@@ -21,6 +23,10 @@ use super::error::JarvisError;
 pub struct ContextBuilder {
     memory_repo: Arc<JarvisMemoryRepository>,
     graph_repo: Arc<JarvisGraphRepository>,
+    /// Embedding-based recall over indexed channel messages. `None` when the
+    /// active provider has no embedding support (e.g. mistralrs-only setup) —
+    /// retrieval then degrades to keyword facts + entity graph.
+    semantic: Option<Arc<SemanticSearchService>>,
 }
 
 /// Built context for a Jarvis query.
@@ -36,6 +42,8 @@ pub struct BuiltContext {
     pub entity_knowledge: Vec<EntityKnowledge>,
     /// Conversation summaries.
     pub summaries: Vec<JarvisSummary>,
+    /// Semantically similar past messages (embedding recall).
+    pub semantic_messages: Vec<VectorSearchResult>,
 }
 
 impl BuiltContext {
@@ -87,6 +95,14 @@ impl BuiltContext {
             }
         }
 
+        // Add semantically similar past messages
+        if !self.semantic_messages.is_empty() {
+            parts.push("\n## Related Past Messages".to_string());
+            for hit in &self.semantic_messages {
+                parts.push(format!("- {}", hit.content_preview));
+            }
+        }
+
         // Add summaries
         if !self.summaries.is_empty() {
             parts.push("\n## Previous Conversation Summaries".to_string());
@@ -109,6 +125,7 @@ impl BuiltContext {
             && self.query_facts.is_empty()
             && self.entity_knowledge.is_empty()
             && self.summaries.is_empty()
+            && self.semantic_messages.is_empty()
     }
 
     /// Get the total token estimate for this context.
@@ -125,10 +142,12 @@ impl ContextBuilder {
     pub fn new(
         memory_repo: Arc<JarvisMemoryRepository>,
         graph_repo: Arc<JarvisGraphRepository>,
+        semantic: Option<Arc<SemanticSearchService>>,
     ) -> Self {
         Self {
             memory_repo,
             graph_repo,
+            semantic,
         }
     }
 
@@ -171,6 +190,26 @@ impl ContextBuilder {
         // 5. Get conversation summaries
         built.summaries = self.memory_repo.get_summaries(context, 5)?;
 
+        Ok(built)
+    }
+
+    /// `build` plus embedding-based recall of similar past messages.
+    ///
+    /// A semantic-search failure (provider down, no embedding model) is
+    /// logged and skipped — memory retrieval must never fail an ask.
+    pub async fn build_with_semantic(
+        &self,
+        context: &JarvisContext,
+        query: &str,
+        author_id: Option<&UserId>,
+    ) -> Result<BuiltContext, JarvisError> {
+        let mut built = self.build(context, query, author_id)?;
+        if let Some(semantic) = &self.semantic {
+            match semantic.search_global(query, 5).await {
+                Ok(hits) => built.semantic_messages = hits,
+                Err(e) => tracing::debug!("semantic recall skipped: {e}"),
+            }
+        }
         Ok(built)
     }
 
@@ -241,6 +280,26 @@ mod tests {
         let prompt = context.to_system_prompt();
         assert!(prompt.contains("Recent Conversation"));
         assert!(prompt.contains("User: Hello"));
+    }
+
+    #[test]
+    fn test_semantic_hits_render_in_prompt() {
+        use crate::local_ai::vector_store::VectorSearchResult;
+        use crate::storage::repositories::vector_repo::EmbeddingSourceType;
+        let context = BuiltContext {
+            semantic_messages: vec![VectorSearchResult {
+                source_id: "m1".into(),
+                source_type: EmbeddingSourceType::Message,
+                channel_id: Some("c1".into()),
+                content_preview: "we agreed to ship Friday".into(),
+                score: 0.82,
+            }],
+            ..Default::default()
+        };
+        assert!(!context.is_empty());
+        let prompt = context.to_system_prompt();
+        assert!(prompt.contains("Related Past Messages"));
+        assert!(prompt.contains("we agreed to ship Friday"));
     }
 
     #[test]
