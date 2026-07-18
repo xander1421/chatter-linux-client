@@ -6,35 +6,17 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-/// Which backend to use for local AI inference.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum BackendType {
-    /// Ollama (default) - easiest to set up, good for most use cases.
-    Ollama,
-    /// vLLM - high-performance serving for production workloads.
-    Vllm,
-    /// MLC-LLM - compiled models for maximum efficiency.
-    MlcLlm,
-}
-
-impl Default for BackendType {
-    fn default() -> Self {
-        Self::Ollama
-    }
-}
+use super::providers::ProviderKind;
 
 /// Local AI configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalAISettings {
     /// Whether local AI is enabled.
     pub enabled: bool,
-    /// Backend type to use.
-    pub backend: BackendType,
-    /// Ollama API URL.
+    /// Which detected provider drives chat/embeddings.
+    pub active_provider: ProviderKind,
+    /// Ollama API URL (user-overridable; other providers use default ports).
     pub ollama_url: String,
-    /// vLLM API URL.
-    pub vllm_url: String,
     /// Chat/completion model ID.
     pub chat_model: String,
     /// Embedding model ID.
@@ -56,9 +38,8 @@ impl Default for LocalAISettings {
     fn default() -> Self {
         Self {
             enabled: true,
-            backend: BackendType::Ollama,
+            active_provider: ProviderKind::Ollama,
             ollama_url: "http://localhost:11434".to_string(),
-            vllm_url: "http://localhost:8000".to_string(),
             chat_model: "llama3.2:3b".to_string(),
             embedding_model: "nomic-embed-text".to_string(),
             embedding_dimension: 768,

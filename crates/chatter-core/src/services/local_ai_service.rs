@@ -17,7 +17,7 @@ use crate::local_ai::backend::{
 use crate::local_ai::embeddings::EmbeddingGenerator;
 use crate::local_ai::model_manager::ModelManager;
 use crate::local_ai::ollama::OllamaBackend;
-use crate::local_ai::settings::{BackendType, LocalAISettings};
+use crate::local_ai::settings::LocalAISettings;
 use crate::local_ai::vector_store::VectorSearchResult;
 use crate::services::semantic_search::SemanticSearchService;
 use crate::storage::repositories::settings_repo::SettingsRepository;
@@ -48,8 +48,6 @@ pub enum HttpLocalAIError {
     Service(#[from] ServiceError),
     #[error("local AI is disabled")]
     Disabled,
-    #[error("unsupported backend: {0:?}")]
-    UnsupportedBackend(BackendType),
 }
 
 impl HttpLocalAIService {

@@ -20,6 +20,8 @@ pub enum BackendError {
     InferenceFailed(String),
     #[error("invalid response: {0}")]
     InvalidResponse(String),
+    #[error("operation not supported by {0}")]
+    Unsupported(&'static str),
 }
 
 /// A chat message for the completion API.
