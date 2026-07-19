@@ -158,3 +158,11 @@ V-AI-1 detection · V-AI-3 memory round-trip · V-AI-4 multi-turn coherence ·
 V-AI-5 LLM write path + consolidation · V-AI-7 app-context grounding.
 (V-AI-2 self-heal and V-AI-6 temporal supersede live beside their units in
 `engine.rs` / `integration_jarvis.rs`.) Serialized on one Ollama instance.
+
+### Memory browser
+
+Settings → AI Assistant → **View Memory** (`ui/modals/jarvis_memory.slint`,
+wired by `features/jarvis/memory_view.rs`): every stored fact with decayed
+confidence and temporal range (superseded rows grayed), the top
+knowledge-graph entities, and a radial connection map for the selected
+entity. Empty until conversations create facts/entities.
