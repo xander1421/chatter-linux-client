@@ -781,6 +781,12 @@ fn ai_channel_select_and_send_are_wired_to_jarvis() {
     );
     // The floating panel is gone.
     assert!(!app_src.contains("JarvisPanel"), "the Jarvis floating panel must stay deleted");
+
+    // The spawned Jarvis task parks on invoke_from_event_loop (this harness
+    // never pumps the loop), so a plain Runtime::drop would hang waiting for
+    // it. Shut down without waiting — production has a real event loop.
+    drop(_guard);
+    rt.shutdown_background();
 }
 
 /// Settings local-AI section: refresh/select/download callbacks are wired to
