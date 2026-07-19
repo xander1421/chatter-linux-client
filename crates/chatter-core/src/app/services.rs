@@ -287,13 +287,17 @@ impl ServiceContainer {
             infra.settings_repo.clone(),
             infra.vector_repo.clone(),
         ));
-        let semantic_search_service = Arc::new(SemanticSearchService::new(
-            infra.vector_repo.clone(),
-            Arc::new(crate::local_ai::embeddings::EmbeddingGenerator::new(
-                crate::local_ai::ollama::OllamaBackend::default_local(),
-                &crate::local_ai::settings::LocalAISettings::default(),
-            )),
-        ));
+        let semantic_search_service = Arc::new(
+            SemanticSearchService::new(
+                infra.vector_repo.clone(),
+                Arc::new(crate::local_ai::embeddings::EmbeddingGenerator::new(
+                    crate::local_ai::ollama::OllamaBackend::default_local(),
+                    &crate::local_ai::settings::LocalAISettings::default(),
+                )),
+            )
+            // Hybrid retrieval: BM25 over messages_fts fused with vectors.
+            .with_keyword_index(infra.search_index.clone(), infra.message_repo.clone()),
+        );
 
         // 19d. Message indexer — auto-index decrypted messages for semantic search
         if http_local_ai_service.is_auto_index_enabled() {

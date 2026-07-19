@@ -203,9 +203,9 @@ impl ContextBuilder {
     ) -> Result<BuiltContext, JarvisError> {
         let mut built = self.build(context, query, author_id)?;
         if let Some(semantic) = &self.semantic {
-            match semantic.search_global(query, 5).await {
+            match semantic.search_hybrid(query, 5).await {
                 Ok(hits) => built.semantic_messages = hits,
-                Err(e) => tracing::debug!("semantic recall skipped: {e}"),
+                Err(e) => tracing::debug!("hybrid recall skipped: {e}"),
             }
         }
         Ok(built)
