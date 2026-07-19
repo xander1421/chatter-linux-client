@@ -24,6 +24,11 @@ export global Typography {
     // Inline code / code blocks lose fixed-width alignment by design.
     out property <string> font-family-mono: "Inter, sans-serif";
 
+    // Emoji-only Text elements pin this so color glyphs win. Without it,
+    // fontconfig fallback can pick a monochrome symbol font (e.g. Font Awesome
+    // covers U+1F600+) and emoji render as white outlines.
+    out property <string> font-family-emoji: "Noto Color Emoji";
+
     // Font sizes
     out property <length> xxs: 10px;
     out property <length> xs2: 11px;

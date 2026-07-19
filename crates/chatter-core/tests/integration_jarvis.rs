@@ -282,3 +282,55 @@ fn test_jarvis_entities_by_type() {
 }
 
 // Domain type tests are in src/domain/jarvis.rs (no database needed)
+
+// ============================================================================
+// LIVE memory round-trip through the real JarvisService (needs local Ollama).
+// Proves: fact harvest on ask ("my name is…") + system-prompted completion +
+// recall on a follow-up ask. Run:
+//   cargo test -p chatter-core --test integration_jarvis live_ -- --ignored --nocapture
+// ============================================================================
+#[tokio::test]
+#[ignore = "needs a running Ollama on localhost:11434 with a chat model"]
+async fn live_memory_roundtrip_through_service() {
+    use chatter_core::events::EventBus;
+    use chatter_core::local_ai::settings::LocalAISettings;
+    use chatter_core::services::ai::LocalAIActorHandle;
+    use chatter_core::services::jarvis::{JarvisEngine, JarvisService, SharedJarvisEngine};
+
+    let (db, _temp) = create_test_db();
+    let memory = Arc::new(JarvisMemoryRepository::new(db.clone()));
+    let graph = Arc::new(JarvisGraphRepository::new(db));
+    let engine = SharedJarvisEngine::new(JarvisEngine::from_settings(
+        &LocalAISettings::default(),
+        LocalAIActorHandle::spawn(),
+    ));
+    let svc = JarvisService::new(memory.clone(), graph, engine, EventBus::new(), None);
+
+    let ctx = JarvisContext::general();
+    let user = UserId::new();
+
+    let r1 = svc
+        .ask(&ctx, "Remember this: my name is Alex.", Some(&user))
+        .await
+        .expect("first ask failed");
+    println!("reply 1: {r1:?}");
+
+    // The regex fact harvest must have stored the name regardless of the LLM.
+    let facts = memory
+        .get_facts_about(SubjectType::User, &user.to_string())
+        .expect("fact read failed");
+    assert!(
+        facts.iter().any(|f| f.predicate == "is_named" && f.object.to_lowercase().contains("alex")),
+        "is_named fact missing: {facts:?}"
+    );
+
+    let r2 = svc
+        .ask(&ctx, "What is my name?", Some(&user))
+        .await
+        .expect("second ask failed");
+    println!("reply 2: {r2:?}");
+    assert!(
+        r2.to_lowercase().contains("alex"),
+        "model failed to recall the name from memory context: {r2}"
+    );
+}

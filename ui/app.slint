@@ -1153,11 +1153,6 @@ export component App inherits Rectangle {
                 remove-from-section(conv-id) => {
                     root.remove-from-section(conv-id);
                 }
-                jarvis-clicked => {
-                    if (JarvisGlobal.enabled) {
-                        root.channel-selected("00000000-0000-0000-0000-000000000000");
-                    }
-                }
                 settings-clicked => {
                     root.active-modal = "settings";
                     root.settings-clicked();

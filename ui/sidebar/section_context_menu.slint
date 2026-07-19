@@ -32,6 +32,7 @@ component MenuItem inherits Rectangle {
         // Emoji takes priority over icon
         if root.emoji != "": Text {
             text: root.emoji;
+            font-family: Typography.font-family-emoji;
             font-size: Typography.sm;
             vertical-alignment: center;
             width: 20px;

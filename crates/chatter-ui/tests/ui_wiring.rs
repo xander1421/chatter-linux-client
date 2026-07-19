@@ -686,6 +686,160 @@ fn link_device_page_start_and_cancel_are_wired() {
     assert_eq!(w.get_current_view().as_str(), "login", "cancel did not route back to login");
 }
 
+// ============================================================================
+// LOCAL AI — the AI channel + settings wires (feature `jarvis`, default-on).
+//
+// Core round-trip (detect → pull with progress → chat) is proven live by
+// chatter-core `live_detect_finds_local_ollama` / `live_pull_and_chat`
+// (--ignored, needs Ollama). These prove the UI side.
+// ============================================================================
+
+/// The sidebar injects the virtual AI channel (nil-UUID) at the top when
+/// local AI is enabled — pure core logic, provable offline.
+#[cfg(feature = "jarvis")]
+#[test]
+fn sidebar_injects_ai_channel_and_never_autoselects_it() {
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+
+    let channels = client.sidebar_channels();
+    assert!(!channels.is_empty(), "AI channel missing from sidebar (local AI defaults on)");
+    let first = &channels[0];
+    assert!(
+        chatter_core::client::is_jarvis_channel(&first.id),
+        "first sidebar channel must be the AI channel, got {:?}",
+        first.id
+    );
+    assert_eq!(first.name, chatter_core::client::JARVIS_CHANNEL_NAME);
+
+    // Never auto-selected on load.
+    assert!(
+        client.first_selectable_channel_id().is_none(),
+        "the AI channel must be excluded from auto-select"
+    );
+}
+
+/// Selecting the AI channel routes to the Jarvis loader (not the network
+/// channel loader), and sending in it routes to Jarvis (not send_message_ui).
+#[cfg(feature = "jarvis")]
+#[test]
+fn ai_channel_select_and_send_are_wired_to_jarvis() {
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    testing::init_no_event_loop();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+    let w = MainWindow::new().expect("MainWindow::new");
+    chatter_ui::bin_ui::features::chat::wire(&w, &client);
+
+    // L1 dynamic: with the AI channel active, firing `send` runs the intercept
+    // (spawns the Jarvis task; offline it errors later — the WIRE is under test).
+    let nil: chatter_core::domain::ids::ChannelId = uuid::Uuid::nil().into();
+    client.chat_state().set_active_channel(nil);
+    client
+        .chat_state()
+        .set_active_conversation(chatter_core::state::ActiveConversation::Channel(nil));
+    w.invoke_send("hello jarvis".into());
+
+    // L2 static (Rust): the send handler branches on the AI channel BEFORE the
+    // network pipeline and routes to the Jarvis channel handler.
+    let send_src = include_str!("../src/bin_ui/features/chat/send_message.rs");
+    let idx = send_src.find("is_jarvis_channel").expect("send must branch on the AI channel");
+    assert!(
+        send_src[idx..].contains("handle_jarvis_channel_send"),
+        "AI-channel sends must route to handle_jarvis_channel_send, not send_message_ui"
+    );
+    assert!(
+        idx < send_src.find("send_message_ui").unwrap(),
+        "the AI-channel branch must come before the network send"
+    );
+
+    // L2 static (Rust): channel selection branches to the Jarvis history loader.
+    let sel_src = include_str!("../src/bin_ui/features/sidebar/channel.rs");
+    let sidx = sel_src.find("is_jarvis_channel_str").expect("selection must branch on the AI channel");
+    assert!(
+        sel_src[sidx..].contains("load_jarvis_channel_into_ui"),
+        "selecting the AI channel must load Jarvis history, not the network channel loader"
+    );
+
+    // L2 static (Slint): Ctrl+J opens the channel (the old sidebar Jarvis
+    // button is deleted — the channel-list row is the entry point).
+    let app_src = include_str!("../../../ui/app.slint");
+    assert!(
+        app_src.contains(r#"root.channel-selected("00000000-0000-0000-0000-000000000000")"#),
+        "Ctrl+J must open the AI channel"
+    );
+    // The floating panel is gone.
+    assert!(!app_src.contains("JarvisPanel"), "the Jarvis floating panel must stay deleted");
+}
+
+/// Settings local-AI section: refresh/select/download callbacks are wired to
+/// the real handlers, which reach the core façade.
+#[cfg(feature = "jarvis")]
+#[test]
+fn settings_local_ai_section_is_wired_to_core() {
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    testing::init_no_event_loop();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+    let w = MainWindow::new().expect("MainWindow::new");
+    chatter_ui::bin_ui::features::modals::local_ai::wire(&w, &client);
+
+    // L1 dynamic: callbacks run their real handlers without panicking
+    // (refresh spawns the probe; select-model persists synchronously).
+    w.invoke_settings_local_ai_refresh();
+    w.invoke_settings_local_ai_select_model("llama3.2:3b".into());
+    assert_eq!(
+        w.get_settings_local_ai_active_model().as_str(),
+        "llama3.2:3b",
+        "select-model did not update the bound active-model property"
+    );
+    // ...and the choice reached core persistence (real settings row).
+    assert_eq!(
+        client.local_ai_chat_model(),
+        "llama3.2:3b",
+        "select-model did NOT persist through the core façade (dead/stub wire)"
+    );
+
+    // L2 static (Rust): handlers reach the core façade methods.
+    let src = include_str!("../src/bin_ui/features/modals/local_ai.rs");
+    for needle in [
+        "local_ai_detect_providers",
+        "local_ai_apply_provider",
+        "local_ai_apply_chat_model",
+        "local_ai_pull_model",
+        "local_ai_hardware_profile",
+    ] {
+        assert!(src.contains(needle), "local_ai.rs must call ChatterClient::{needle}");
+    }
+
+    // L2 static (Slint): the section fires the callbacks.
+    let slint_src = include_str!("../../../ui/settings/settings_screen.slint");
+    for needle in [
+        "root.local-ai-refresh()",
+        "root.local-ai-select-provider(",
+        "root.local-ai-select-model(",
+        "root.local-ai-download(",
+    ] {
+        assert!(slint_src.contains(needle), "settings screen must invoke {needle}");
+    }
+}
+
 #[test]
 fn link_approve_paste_reaches_core_parser() {
     let (rt, _tmp, client, w) = wired_offline();

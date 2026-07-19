@@ -178,18 +178,24 @@ impl JarvisService {
             .build_with_semantic(context, query, author_id)
             .await?;
 
-        // 2. Store the user's query
+        // 2. Store the user's query + harvest cheap facts from it ("my name
+        //    is…", "I work on…"). Regex-only — no extra LLM call on the ask path.
         self.memory_manager.store_user_message(context, query, author_id)?;
+        if let Some(user_id) = author_id {
+            let _ = self.extract_user_facts(user_id, query, context);
+        }
 
-        // 3. Build the full prompt
+        // 3. Build the system message: persona + retrieved memory
+        let persona = "You are Jarvis, the user's personal AI assistant running \
+            locally on their device. You have persistent memory: facts the user \
+            shares are stored automatically, so when asked to remember something, \
+            simply confirm it. Answer directly and use the context below when \
+            relevant.";
         let system_context = built_context.to_system_prompt();
-        let prompt = if system_context.is_empty() {
-            format!("User: {}\n\nJarvis:", query)
+        let system = if system_context.is_empty() {
+            persona.to_string()
         } else {
-            format!(
-                "You are Jarvis, a helpful AI assistant. Use the following context to inform your response.\n\n{}\n\n---\n\nUser: {}\n\nJarvis:",
-                system_context, query
-            )
+            format!("{persona}\n\n{system_context}")
         };
 
         // 4. Generate response
@@ -201,7 +207,10 @@ impl JarvisService {
             repeat_penalty: 1.1,
         };
 
-        let response = self.ai.complete(prompt, params).await?;
+        let response = self
+            .ai
+            .complete_chat(Some(system), query.to_string(), params)
+            .await?;
         let response = response.trim().to_string();
 
         // 5. Store the response
@@ -429,6 +438,14 @@ Summary:"#,
 
         // Look for "I work on/at/with X" patterns
         let lowercase = message.to_lowercase();
+
+        if lowercase.contains("my name is") || lowercase.contains("call me") {
+            if let Some(name) = Self::extract_after_phrase(message, &["my name is", "call me"]) {
+                let fact = JarvisFact::about_user(user_id, "is_named", &name)
+                    .with_source(&context.context_id);
+                self.memory_repo.upsert_fact(&fact)?;
+            }
+        }
 
         if lowercase.contains("i work on") || lowercase.contains("i'm working on") {
             if let Some(project) = Self::extract_after_phrase(message, &["work on", "working on"]) {

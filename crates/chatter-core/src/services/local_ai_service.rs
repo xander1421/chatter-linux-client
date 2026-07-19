@@ -34,7 +34,6 @@ pub struct HttpLocalAIService {
     backend: Arc<OllamaBackend>,
     model_manager: ModelManager<OllamaBackend>,
     semantic_search: SemanticSearchService,
-    embedding_gen: Arc<EmbeddingGenerator<OllamaBackend>>,
     settings: LocalAISettings,
     settings_repo: Arc<SettingsRepository>,
 }
@@ -77,13 +76,12 @@ impl HttpLocalAIService {
             &settings,
         ));
 
-        let semantic_search = SemanticSearchService::new(vector_repo, embedding_gen.clone());
+        let semantic_search = SemanticSearchService::new(vector_repo, embedding_gen);
 
         Self {
             backend,
             model_manager,
             semantic_search,
-            embedding_gen,
             settings,
             settings_repo,
         }

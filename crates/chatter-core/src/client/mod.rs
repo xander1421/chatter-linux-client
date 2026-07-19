@@ -332,11 +332,6 @@ impl ChatterClient {
         crate::services::local_ai_service::HttpLocalAIService,
         http_local_ai_service
     );
-    crate::service_accessor!(
-        semantic_search,
-        crate::services::semantic_search::SemanticSearchService,
-        semantic_search_service
-    );
     crate::service_accessor!(dm_bootstrap, DmBootstrapService, dm_bootstrap_service);
     crate::service_accessor!(
         notifications,

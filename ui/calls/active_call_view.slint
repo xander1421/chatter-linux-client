@@ -61,6 +61,9 @@ component ParticipantTile inherits Rectangle {
         height: 100%;
         background: Colors.surface-hover;
 
+        // Avatar scales with the tile instead of a fixed thumbnail.
+        property <length> avatar-size: clamp(min(root.width, root.height) * 36%, 45px, 144px);
+
         VerticalLayout {
             alignment: center;
             spacing: Spacing.sm;
@@ -69,17 +72,15 @@ component ParticipantTile inherits Rectangle {
                 alignment: center;
 
                 Avatar {
-                    width: 56px;
-                    height: 56px;
-                    size: 56px;
+                    size: avatar-size;
                     source: participant.avatar-source;
                     fallback-text: participant.initials;
                 }
             }
 
             Text {
-                text: participant.display-name;
-                font-size: Typography.xs;
+                text: is-local ? "You" : participant.display-name;
+                font-size: Typography.sm;
                 color: Colors.text-primary;
                 horizontal-alignment: center;
                 overflow: elide;
@@ -126,8 +127,9 @@ component ParticipantTile inherits Rectangle {
         }
     }
 
-    // Name label (bottom-right)
-    Rectangle {
+    // Name label (bottom-right) — only over live video; the avatar branch
+    // already shows the name under the avatar.
+    if show-video && participant.is-video-enabled: Rectangle {
         x: parent.width - self.width - Spacing.xs;
         y: parent.height - self.height - Spacing.xs;
         width: name-text.preferred-width + Spacing.md;
@@ -160,9 +162,6 @@ export component ActiveCallView inherits Rectangle {
     // Window height, passed from app.slint so the non-fullscreen dock can
     // scale with the viewport instead of a fixed band.
     in property <length> viewport-height: 720px;
-    // Vertical space reserved at the bottom of the grid for the floating
-    // control pill. Single source so every tile branch stays in sync.
-    property <length> controls-reserve: 56px;
     // The user's explicit focus choice: -2 = auto (follow any screen share),
     // -1 = user chose the grid, 0..n = user maximized that tile.
     property <int> user-focus: -2;
@@ -232,78 +231,6 @@ export component ActiveCallView inherits Rectangle {
     drop-shadow-color: Colors.neo-shadow;
 
     if show: VerticalLayout {
-        // Compact header strip
-        Rectangle {
-            height: 32px;
-            background: Colors.surface.with-alpha(0.9);
-            border-width: 1px;
-            border-color: Colors.neo-highlight;
-
-            HorizontalLayout {
-                padding-left: Spacing.md;
-                padding-right: Spacing.md;
-                spacing: Spacing.sm;
-                alignment: start;
-
-                Text {
-                    text: call-data.title;
-                    font-size: Typography.sm;
-                    font-weight: Typography.semibold;
-                    color: Colors.text-primary;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-
-                Text {
-                    text: format-duration(call-data.duration-seconds);
-                    font-size: Typography.xs;
-                    color: Colors.text-secondary;
-                    vertical-alignment: center;
-                }
-
-                if call-data.participant-count > 2: Text {
-                    text: "• " + call-data.participant-count + " participants";
-                    font-size: Typography.xs;
-                    color: Colors.text-secondary;
-                    vertical-alignment: center;
-                }
-
-                Rectangle { horizontal-stretch: 1; }
-
-                // Security indicator — single pill on the right.
-                // If verification emojis are available, show the emoji SAS (implies encrypted).
-                // Otherwise show a plain lock glyph when encrypted.
-                if call-data.is-encrypted && call-data.verification-emoji-1 != "": Rectangle {
-                    width: verification-emojis.preferred-width + Spacing.md;
-                    height: 20px;
-                    border-radius: 10px;
-                    background: Colors.primary.with-alpha(0.15);
-                    border-width: 1px;
-                    border-color: Colors.primary.with-alpha(0.3);
-                    y: (parent.height - self.height) / 2;
-
-                    verification-emojis := HorizontalLayout {
-                        padding-left: 6px;
-                        padding-right: 6px;
-                        spacing: 2px;
-
-                        Text { text: call-data.verification-emoji-1; font-size: Typography.xs; vertical-alignment: center; }
-                        Text { text: call-data.verification-emoji-2; font-size: Typography.xs; vertical-alignment: center; }
-                        Text { text: call-data.verification-emoji-3; font-size: Typography.xs; vertical-alignment: center; }
-                        Text { text: call-data.verification-emoji-4; font-size: Typography.xs; vertical-alignment: center; }
-                    }
-                }
-
-                if call-data.is-encrypted && call-data.verification-emoji-1 == "": Image {
-                    source: Icons.lock;
-                    width: 12px;
-                    height: 12px;
-                    colorize: Colors.primary.with-alpha(0.7);
-                    y: (parent.height - self.height) / 2;
-                }
-            }
-        }
-
         // Video grid area — bounded, tiles scale to fit
         Rectangle {
             vertical-stretch: 1;
@@ -313,7 +240,7 @@ export component ActiveCallView inherits Rectangle {
                 x: Spacing.sm;
                 y: Spacing.sm;
                 width: parent.width - 2 * Spacing.sm;
-                height: parent.height - 2 * Spacing.sm - controls-reserve; // leave room for floating controls
+                height: parent.height - 2 * Spacing.sm;
                 participant: call-data.participants[0];
                 video-frame: local-video-frame;
                 is-local: true;
@@ -322,7 +249,6 @@ export component ActiveCallView inherits Rectangle {
 
             if maximized-index < 0 && call-data.participant-count == 2: HorizontalLayout {
                 padding: Spacing.sm;
-                padding-bottom: controls-reserve; // leave room for floating controls
                 spacing: Spacing.sm;
 
                 ParticipantTile {
@@ -343,7 +269,6 @@ export component ActiveCallView inherits Rectangle {
 
             if maximized-index < 0 && call-data.participant-count >= 3 && call-data.participant-count <= 4: VerticalLayout {
                 padding: Spacing.sm;
-                padding-bottom: controls-reserve;
                 spacing: Spacing.sm;
 
                 HorizontalLayout {
@@ -394,7 +319,7 @@ export component ActiveCallView inherits Rectangle {
                 x: Spacing.sm;
                 y: Spacing.sm;
                 width: parent.width - 2 * Spacing.sm;
-                height: parent.height - 2 * Spacing.sm - controls-reserve;
+                height: parent.height - 2 * Spacing.sm;
                 participant: call-data.participants[maximized-index];
                 video-frame: maximized-video-frame;
                 is-local: maximized-is-local;
@@ -473,6 +398,54 @@ export component ActiveCallView inherits Rectangle {
                 }
             }
 
+            // Call info overlay — top-left: duration, participant count, and
+            // the security indicator (SAS emojis when available, else lock).
+            Rectangle {
+                x: Spacing.sm + Spacing.xs;
+                y: Spacing.sm + Spacing.xs;
+                width: info-row.preferred-width + Spacing.md;
+                height: 24px;
+                border-radius: 12px;
+                background: Colors.overlay-heavy;
+
+                info-row := HorizontalLayout {
+                    padding-left: Spacing.sm;
+                    padding-right: Spacing.sm;
+                    spacing: Spacing.sm;
+
+                    Text {
+                        text: format-duration(call-data.duration-seconds);
+                        font-size: Typography.xs;
+                        color: Colors.text-secondary;
+                        vertical-alignment: center;
+                    }
+
+                    if call-data.participant-count > 2: Text {
+                        text: "• " + call-data.participant-count;
+                        font-size: Typography.xs;
+                        color: Colors.text-secondary;
+                        vertical-alignment: center;
+                    }
+
+                    if call-data.is-encrypted && call-data.verification-emoji-1 != "": HorizontalLayout {
+                        spacing: 2px;
+
+                        Text { font-family: Typography.font-family-emoji; text: call-data.verification-emoji-1; font-size: Typography.xs; vertical-alignment: center; }
+                        Text { font-family: Typography.font-family-emoji; text: call-data.verification-emoji-2; font-size: Typography.xs; vertical-alignment: center; }
+                        Text { font-family: Typography.font-family-emoji; text: call-data.verification-emoji-3; font-size: Typography.xs; vertical-alignment: center; }
+                        Text { font-family: Typography.font-family-emoji; text: call-data.verification-emoji-4; font-size: Typography.xs; vertical-alignment: center; }
+                    }
+
+                    if call-data.is-encrypted && call-data.verification-emoji-1 == "": Image {
+                        source: Icons.lock;
+                        width: 12px;
+                        height: 12px;
+                        colorize: Colors.primary.with-alpha(0.7);
+                        y: (parent.height - self.height) / 2;
+                    }
+                }
+            }
+
             // Fullscreen toggle — top-right of the call dock. Visible in both
             // grid and maximized modes. Asks the parent layout to expand the
             // dock to cover the chat area.
@@ -498,12 +471,13 @@ export component ActiveCallView inherits Rectangle {
                 }
             }
 
-            // Floating control pill overlay — centered horizontally, bottom
+            // Floating control pill overlay — centered horizontally, floats
+            // over the bottom edge of the tiles instead of reserving a band.
             CallControls {
                 x: (parent.width - self.width) / 2;
-                y: parent.height - self.height - Spacing.sm;
-                width: min(320px, parent.width - 2 * Spacing.md);
-                height: 48px;
+                y: parent.height - self.height - Spacing.md;
+                width: min(256px, parent.width - 2 * Spacing.md);
+                height: 40px;
                 is-muted: is-muted;
                 is-video-enabled: is-video-enabled;
                 is-screen-sharing: is-screen-sharing;

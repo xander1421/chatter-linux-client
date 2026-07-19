@@ -13,9 +13,9 @@ component ControlButton inherits Rectangle {
 
     callback clicked();
 
-    width: 48px;
-    height: 48px;
-    border-radius: 24px;
+    width: 34px;
+    height: 34px;
+    border-radius: 17px;
     // Active (muted / camera-off / sharing) uses the brand teal, NOT red —
     // red is reserved for the end-call button alone. The icon flips
     // (mic → mic-off) so the specific state is still legible.
@@ -46,8 +46,8 @@ component ControlButton inherits Rectangle {
 
     Image {
         source: active ? icon-active : icon;
-        width: 22px;
-        height: 22px;
+        width: 17px;
+        height: 17px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         colorize: Colors.text-primary;
@@ -66,9 +66,9 @@ export component CallControls inherits Rectangle {
     callback end-call();
     callback show-audio-settings();
 
-    height: 72px;
+    height: 36px;
     background: Colors.surface;
-    border-radius: 36px;
+    border-radius: self.height / 2;
     border-width: 1px;
     border-color: Colors.neo-highlight;
     drop-shadow-blur: Spacing.neo-blur-md;
@@ -78,11 +78,11 @@ export component CallControls inherits Rectangle {
 
     HorizontalLayout {
         alignment: center;
-        spacing: Spacing.lg;
-        padding-left: Spacing.xl;
-        padding-right: Spacing.xl;
-        padding-top: (root.height - 48px) / 2;
-        padding-bottom: (root.height - 48px) / 2;
+        spacing: Spacing.sm;
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        padding-top: (root.height - 34px) / 2;
+        padding-bottom: (root.height - 34px) / 2;
 
         // Audio settings button (device picker)
         ControlButton {
@@ -119,15 +119,15 @@ export component CallControls inherits Rectangle {
 
         // Spacer
         Rectangle {
-            width: Spacing.lg;
+            width: Spacing.sm;
             background: transparent;
         }
 
         // End call button (larger, always red) — Neo glow
         Rectangle {
-            width: 56px;
-            height: 48px;
-            border-radius: 24px;
+            width: 40px;
+            height: 34px;
+            border-radius: 17px;
             background: end-touch.has-hover ? Colors.error-hover : Colors.error;
             drop-shadow-blur: end-touch.has-hover ? Spacing.neo-blur-md : Spacing.neo-blur-sm;
             drop-shadow-offset-x: Spacing.neo-offset-sm;
@@ -141,8 +141,8 @@ export component CallControls inherits Rectangle {
 
             Image {
                 source: Icons.phone-off;
-                width: 24px;
-                height: 24px;
+                width: 17px;
+                height: 17px;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 colorize: Colors.text-primary;

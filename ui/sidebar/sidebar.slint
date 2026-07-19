@@ -20,7 +20,6 @@ import { CustomSectionList, CustomSectionData, SectionConversationData } from "c
 import { SectionContextMenu, SectionHeaderContextMenu } from "section_context_menu.slint";
 import { Avatar } from "../components/avatar.slint";
 import { TooltipArea } from "../components/tooltip.slint";
-import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 import { AnonMode, TorStatus } from "../anon_mode/anon_mode_global.slint";
 
 export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, CustomSectionData, SectionConversationData }
@@ -67,7 +66,6 @@ export component Sidebar inherits Rectangle {
     callback group-invites-clicked();
     callback channel-invites-clicked();
     callback toggle-collapsed();
-    callback jarvis-clicked();
     callback settings-clicked();
     callback anon-mode-clicked();
     callback create-section-clicked();
@@ -781,14 +779,6 @@ export component Sidebar inherits Rectangle {
                         Text { text: root.user-display-name; color: Colors.text-secondary; font-size: Typography.xs; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                     }
                 }
-                if JarvisGlobal.enabled : VerticalLayout { alignment: center; horizontal-stretch: 0;
-                    Rectangle {
-                        width: 24px; height: 24px; border-radius: 4px;
-                        background: jarvis-touch.has-hover ? Colors.surface-hover : transparent;
-                        Image { source: Icons.jarvis; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.primary; }
-                        jarvis-touch := TouchArea { clicked => { root.jarvis-clicked(); } }
-                    }
-                }
                 // Anon mode toggle — shield icon, glows when active
                 VerticalLayout { alignment: center; horizontal-stretch: 0;
                     Rectangle {
@@ -829,13 +819,6 @@ export component Sidebar inherits Rectangle {
             // Collapsed view: Vertical stack of icons
             if root.collapsed: VerticalLayout {
                 alignment: end; spacing: 8px; padding-bottom: 8px;
-                if JarvisGlobal.enabled : TooltipArea {
-                    height: 32px; width: 44px; x: (parent.width - self.width) / 2; tooltip-text: "Jarvis AI"; tooltip-enabled: true; placement: "right";
-                    HorizontalLayout { alignment: center; Rectangle { width: 32px; height: 32px; border-radius: 16px; background: Colors.surface;
-                        Image { source: Icons.jarvis; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.primary; }
-                        TouchArea { clicked => { root.jarvis-clicked(); } }
-                    } }
-                }
                 TooltipArea {
                     height: 32px; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: AnonMode.enabled ? "Anon Mode (active) - tap to disable" : "Anon Mode";
