@@ -1164,24 +1164,34 @@ export component App inherits Rectangle {
 
             // Right side area (Chat + Panels)
             // On mobile: hidden when sidebar is showing full-width (chat list view)
-            Rectangle {
+            chat-panel-area := Rectangle {
                 horizontal-stretch: 1;
                 vertical-stretch: 1;
                 visible: true;
                 // Clip this area to prevent inner panels from overflowing the whole app
                 clip: true;
-
-                HorizontalLayout {
-                    width: 100%;
-                    height: 100%;
+                // Space the thread panel occupies. Both row children are sized
+                // from this ONE expression so chat column + panel always sum to
+                // exactly the row width — the layout solver never gets to give
+                // the chat column 100% and push the panel past the clipped edge
+                // (the "thread opens but never appears" bug, 2026-07-19).
+                property <length> thread-panel-w: !root.thread-panel-visible ? 0px
+                    : root.is-small-screen ? self.width
+                    : 320px;
 
                     // Chat column: call dock (when active) on top of ChatLayout.
                     // The dock collapses to 0px when no call is active so the chat
                     // layout fills the full space. On mobile, hide the whole column
                     // when a side panel (members/thread) is open.
+                    // Manually placed (not a HorizontalLayout child): explicit
+                    // geometry doesn't feed the constraint solver, which both
+                    // avoids a binding loop and guarantees column + panel tile
+                    // the row exactly.
                     VerticalLayout {
-                        horizontal-stretch: 1;
-                        vertical-stretch: 1;
+                        x: 0;
+                        y: 0;
+                        width: parent.width - chat-panel-area.thread-panel-w;
+                        height: 100%;
                         visible: !(root.is-small-screen && root.thread-panel-visible);
 
                         ActiveCallView {
@@ -1334,10 +1344,15 @@ export component App inherits Rectangle {
                 }
                     } // end VerticalLayout (call dock + ChatLayout)
 
-                // Thread panel (side panel on desktop, full-screen overlay on mobile)
-                if root.thread-panel-visible: ThreadPanel {
-                    horizontal-stretch: root.is-small-screen ? 1 : 0;
-                    width: root.is-small-screen ? 0px : 320px;
+                // Thread panel (side panel on desktop, full-screen overlay on mobile).
+                // Always in the layout, width-driven — NOT an `if` conditional, and
+                // sized from the same `thread-panel-w` expression as the chat column
+                // (see chat-panel-area) so the two always sum to the row width.
+                ThreadPanel {
+                    visible: root.thread-panel-visible;
+                    x: parent.width - self.width;
+                    y: 0;
+                    width: chat-panel-area.thread-panel-w;
                     height: 100%;
                     root-message-id: root.thread-root-message-id;
                     root-sender-name: root.thread-root-sender-name;
@@ -1362,8 +1377,7 @@ export component App inherits Rectangle {
                     }
                 }
 
-            }
-        }
+            } // end chat-panel-area Rectangle
         } // end inner HorizontalLayout (sidebar + chat)
         } // end VerticalLayout (banner + chat area)
 

@@ -217,6 +217,8 @@ Summary:"#,
             top_p: 0.9,
             top_k: 40,
             repeat_penalty: 1.0,
+            disable_thinking: true,
+            json_schema: None,
         };
 
         let summary = self.ai.complete(prompt, params).await?;

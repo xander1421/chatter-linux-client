@@ -61,6 +61,16 @@ pub struct GenerateParams {
     /// Stop sequences.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub stop: Vec<String>,
+    /// Ask thinking models (qwen3, deepseek-r1) to skip their reasoning
+    /// phase — for structured tasks (extraction) where latency matters and
+    /// the scratchpad wastes the token budget.
+    #[serde(default)]
+    pub disable_thinking: bool,
+    /// Constrain output to this JSON schema (grammar-constrained decoding).
+    /// Supported by Ollama's `format` field; other providers ignore it and
+    /// extraction degrades to prompt-guided JSON.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub json_schema: Option<serde_json::Value>,
 }
 
 impl Default for GenerateParams {
@@ -72,6 +82,8 @@ impl Default for GenerateParams {
             top_k: 40,
             repeat_penalty: 1.1,
             stop: Vec::new(),
+            disable_thinking: false,
+            json_schema: None,
         }
     }
 }

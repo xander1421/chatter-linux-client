@@ -29,6 +29,10 @@ struct OllamaChatRequest<'a> {
     model: &'a str,
     messages: Vec<OllamaChatMessage<'a>>,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    think: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    format: Option<serde_json::Value>,
     options: OllamaOptions,
 }
 
@@ -247,6 +251,12 @@ impl LocalAIBackend for OllamaBackend {
             model,
             messages: ollama_messages,
             stream: false,
+            think: if params.disable_thinking || params.json_schema.is_some() {
+                Some(false)
+            } else {
+                None
+            },
+            format: params.json_schema.clone(),
             options: OllamaOptions {
                 num_predict: Some(params.max_tokens),
                 temperature: Some(params.temperature),

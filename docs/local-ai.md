@@ -126,3 +126,35 @@ The Ollama URL is user-overridable; other providers use default ports.
   completion through the exact code paths the app uses.
 - UI: `cargo run -p chatter-ui` — Jarvis (AI) channel in the sidebar,
   Settings → AI Assistant for detection/catalog/downloads.
+
+## Chatter Mind (2026 memory architecture)
+
+Shipped on top of the base stack:
+
+- **Write path**: `FactExtractor` runs a background LLM pass per exchange —
+  grammar-constrained JSON on Ollama (`format` schema + `think:false`), so
+  thinking models (qwen3, deepseek-r1) can't ramble past it. Facts flow
+  through the consolidating `upsert_fact`: ADD / REINFORCE / SUPERSEDE.
+- **Temporal facts** (v055): contradictions never overwrite — the old fact
+  keeps `valid_until` + `superseded_by`; `get_fact_history` answers "when
+  was X true". Prompts render "(since date)".
+- **Hybrid retrieval**: BM25 (existing `messages_fts`) + vector cosine,
+  merged by reciprocal rank fusion (k=60). Works keyword-only without an
+  embedding model.
+- **App-context bridge**: live channel + friend names in the system prompt
+  ground "what did alex say" / "summarize general".
+- **Thinking-model compatibility**: `<think>` blocks stripped from replies;
+  structured tasks (extraction, summaries) disable thinking; budgets sized
+  for reasoning spend.
+
+### VALIDATE-AI
+
+`crates/chatter-core/tests/validated_ai.rs` — the empirical suite. Real
+Ollama, real DB, real service, zero mocks:
+
+    cargo test -p chatter-core --test validated_ai -- --ignored --nocapture
+
+V-AI-1 detection · V-AI-3 memory round-trip · V-AI-4 multi-turn coherence ·
+V-AI-5 LLM write path + consolidation · V-AI-7 app-context grounding.
+(V-AI-2 self-heal and V-AI-6 temporal supersede live beside their units in
+`engine.rs` / `integration_jarvis.rs`.) Serialized on one Ollama instance.

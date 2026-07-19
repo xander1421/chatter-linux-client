@@ -308,7 +308,10 @@ export component ThreadPanel inherits Rectangle {
                         has-reactions: item.has-reactions;
                         reaction-summary: item.reaction-summary;
                         reply-count: 0;
-                        is-thread-reply: true;
+                        // Inside the thread panel the context is obvious —
+                        // false suppresses the "Thread reply" chip the main
+                        // list uses to mark thread messages.
+                        is-thread-reply: false;
                         show-sender: item.show-sender;
 
                         message-clicked(id) => {

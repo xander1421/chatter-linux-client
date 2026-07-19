@@ -59,6 +59,8 @@ impl EntityExtractor {
             top_p: 0.9,
             top_k: 40,
             repeat_penalty: 1.0,
+            disable_thinking: true,
+            json_schema: None,
         };
 
         let response = self.ai.complete(prompt, params).await?;

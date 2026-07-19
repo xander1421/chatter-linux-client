@@ -50,12 +50,37 @@ impl FactExtractor {
         }
 
         let prompt = Self::build_prompt(message);
+        // Thinking models (qwen3, deepseek-r1) spend most of the budget in
+        // their <think> block before the JSON — 256 tokens truncates mid-think
+        // and yields nothing after stripping.
         let params = SampleParams {
-            max_tokens: 256,
+            max_tokens: 1024,
             temperature: 0.1, // deterministic extraction
             top_p: 0.9,
             top_k: 40,
             repeat_penalty: 1.0,
+            disable_thinking: true,
+            // Grammar-constrained on Ollama: prose is impossible, only the
+            // schema can come out. Other providers ignore this and rely on
+            // the prompt.
+            json_schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "facts": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "predicate": {"type": "string"},
+                                "object": {"type": "string"},
+                                "confidence": {"type": "number"}
+                            },
+                            "required": ["predicate", "object"]
+                        }
+                    }
+                },
+                "required": ["facts"]
+            })),
         };
 
         let response = self.ai.complete(prompt, params).await?;
@@ -93,15 +118,31 @@ JSON:"#,
     }
 
     /// Parse the LLM response; garbage yields an empty list, never an error.
+    /// Accepts the schema-constrained object form `{"facts": [...]}` and the
+    /// bare-array form (unconstrained providers).
     fn parse_response(response: &str) -> Vec<ExtractedFact> {
+        // Schema-constrained object form first.
+        if let Ok(obj) = serde_json::from_str::<serde_json::Value>(response.trim()) {
+            if let Some(facts) = obj.get("facts").and_then(|f| f.as_array()) {
+                return Self::items_to_facts(facts.clone());
+            }
+            if let Some(arr) = obj.as_array() {
+                return Self::items_to_facts(arr.clone());
+            }
+        }
+
+        // Fallback: first [...] span in prose.
         let json_str = match (response.find('['), response.rfind(']')) {
             (Some(start), Some(end)) if end > start => &response[start..=end],
             _ => return Vec::new(),
         };
-
         let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(json_str) else {
             return Vec::new();
         };
+        Self::items_to_facts(items)
+    }
+
+    fn items_to_facts(items: Vec<serde_json::Value>) -> Vec<ExtractedFact> {
 
         items
             .into_iter()
@@ -109,6 +150,13 @@ JSON:"#,
                 let predicate = item.get("predicate")?.as_str()?.trim().to_lowercase();
                 let object = item.get("object")?.as_str()?.trim().to_string();
                 if predicate.is_empty() || object.is_empty() || object.len() > 200 {
+                    return None;
+                }
+                // Junk filter: tiny models pad with non-facts.
+                let o = object.to_lowercase();
+                if o == "unknown" || o == "none" || o == "n/a" || o == "work"
+                    || o.starts_with("no ") || o.starts_with("not ")
+                {
                     return None;
                 }
                 let confidence = item
@@ -129,6 +177,16 @@ JSON:"#,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_schema_constrained_object_form() {
+        let facts = FactExtractor::parse_response(
+            r#"{"facts": [{"predicate": "is_named", "object": "Alex"}, {"predicate": "works_on", "object": "Chatter app", "confidence": 0.9}]}"#,
+        );
+        assert_eq!(facts.len(), 2);
+        assert_eq!(facts[0].predicate, "is_named");
+        assert_eq!(facts[1].object, "Chatter app");
+    }
 
     #[test]
     fn parses_clean_json() {

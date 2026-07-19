@@ -18,17 +18,22 @@ use slint::ComponentHandle;
 const WIN_W: f32 = 1400.0;
 const WIN_H: f32 = 900.0;
 
-/// Force a real layout pass: resize to a desktop-sized window and spin the
-/// event loop briefly so conditional sub-trees materialize and get geometry.
-fn pump(w: &MainWindow) {
+/// Force a real layout pass: resize to the given size and spin the event loop
+/// briefly so conditional sub-trees materialize and get geometry. Varying the
+/// size between pumps forces a full relayout (a same-size event is a no-op).
+fn pump_at(w: &MainWindow, width: f32, height: f32) {
     let scale = w.window().scale_factor();
     w.window().dispatch_event(slint::platform::WindowEvent::Resized {
-        size: slint::LogicalSize::new(WIN_W, WIN_H).to_physical(scale).to_logical(scale),
+        size: slint::LogicalSize::new(width, height).to_physical(scale).to_logical(scale),
     });
     slint::Timer::single_shot(std::time::Duration::from_millis(80), || {
         slint::quit_event_loop().unwrap();
     });
     w.run().unwrap();
+}
+
+fn pump(w: &MainWindow) {
+    pump_at(w, WIN_W, WIN_H);
 }
 
 #[test]
@@ -53,10 +58,17 @@ fn thread_panel_lands_inside_the_normal_desktop_layout() {
 
     let panel = testing::ElementHandle::find_by_element_type_name(&w, "ThreadPanel")
         .next()
-        .expect("thread-panel-visible=true did not instantiate ThreadPanel — routing wire dead");
+        .expect("thread-panel-visible=true did not surface a visible ThreadPanel");
 
     let pos = panel.absolute_position();
     let size = panel.size();
+    // NOTE: the testing backend ignores Resized events — assert against the
+    // ACTUAL window width, not the requested one.
+    let win = w.window().size().to_logical(w.window().scale_factor());
+    println!(
+        "window={}x{} panel: x={} y={} w={} h={}",
+        win.width, win.height, pos.x, pos.y, size.width, size.height
+    );
 
     // The panel must occupy real width…
     assert!(
@@ -67,17 +79,18 @@ fn thread_panel_lands_inside_the_normal_desktop_layout() {
     // …and sit fully INSIDE the window (the reported bug: panel pushed past the
     // right edge and clipped invisible while the chat column kept full width).
     assert!(
-        pos.x >= 0.0 && pos.x + size.width <= WIN_W + 0.5,
+        pos.x >= 0.0 && pos.x + size.width <= win.width + 0.5,
         "ThreadPanel laid out OFF-WINDOW: x={} width={} window-width={}",
         pos.x,
         size.width,
-        WIN_W
+        win.width
     );
     // Desktop layout: panel docks at the right edge.
     assert!(
-        (pos.x + size.width) >= WIN_W - 40.0,
-        "ThreadPanel not docked at the right edge: x={} width={}",
+        (pos.x + size.width) >= win.width - 40.0,
+        "ThreadPanel not docked at the right edge: x={} width={} window-width={}",
         pos.x,
-        size.width
+        size.width,
+        win.width
     );
 }

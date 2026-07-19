@@ -235,7 +235,11 @@ impl JarvisService {
         if let Some(app_context) = &self.app_context {
             let app = app_context();
             if !app.is_empty() {
-                system.push_str("\n\n## App Context\n");
+                system.push_str(
+                    "\n\n## App Context\nLive data from the user's Chatter app. \
+                     Answer questions about their channels and friends directly \
+                     from this data:\n",
+                );
                 system.push_str(&app);
             }
         }
@@ -260,13 +264,15 @@ impl JarvisService {
             content: query.to_string(),
         });
 
-        // 4. Generate response
+        // 4. Generate response (budget covers thinking models' <think> spend)
         let params = SampleParams {
-            max_tokens: 512,
+            max_tokens: 1024,
             temperature: 0.7,
             top_p: 0.9,
             top_k: 40,
             repeat_penalty: 1.1,
+            disable_thinking: false,
+            json_schema: None,
         };
 
         let response = self.ai.complete_conversation(messages, params).await?;
@@ -369,6 +375,8 @@ Summary:"#,
             top_p: 0.9,
             top_k: 40,
             repeat_penalty: 1.0,
+            disable_thinking: true,
+            json_schema: None,
         };
 
         self.ai.complete(prompt, params).await.map_err(JarvisError::from)

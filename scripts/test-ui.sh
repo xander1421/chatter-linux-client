@@ -37,13 +37,24 @@ TEST_RC=${PIPESTATUS[0]}
 
 echo
 echo "=================================================================="
+echo " VALIDATED-UI  ·  LAYER 1 — geometry/layout suite"
+echo "=================================================================="
+# Separate binary: the integration testing backend (real layout passes) is
+# once-per-process and ui_wiring already claims it.
+SLINT_EMIT_DEBUG_INFO=1 cargo test -p chatter-ui --test ui_layout 2>&1 \
+    | grep -v 'requires the presence of debug info'
+LAYOUT_RC=${PIPESTATUS[0]}
+
+echo
+echo "=================================================================="
 echo " RESULT"
 echo "=================================================================="
 echo "  static wiring lint : $([ $LINT_RC -eq 0 ] && echo PASS || echo 'FAIL (stub/dead wire)')"
 echo "  headless UI suite  : $([ $TEST_RC -eq 0 ] && echo PASS || echo FAIL)"
+echo "  layout suite       : $([ $LAYOUT_RC -eq 0 ] && echo PASS || echo FAIL)"
 
 # The lint currently reports the 3 KNOWN-intentional code-preview no-ops as
 # STUBs (documented in VALIDATED-UI.md, allowlisted in the lint). If you have
 # not allowlisted them, LINT_RC will be 1 by design — that is the positive
 # control proving the gate can see a dead wire.
-[ $TEST_RC -eq 0 ] && [ $LINT_RC -eq 0 ]
+[ $TEST_RC -eq 0 ] && [ $LINT_RC -eq 0 ] && [ $LAYOUT_RC -eq 0 ]

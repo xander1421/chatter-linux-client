@@ -50,6 +50,19 @@ impl JarvisEngine {
         }
     }
 
+    /// Strip `<think>…</think>` reasoning blocks (qwen3, deepseek-r1 emit
+    /// them by default) — callers want the answer, not the scratchpad.
+    fn strip_reasoning(mut text: String) -> String {
+        while let Some(start) = text.find("<think>") {
+            match text[start..].find("</think>") {
+                Some(rel_end) => text.replace_range(start..start + rel_end + "</think>".len(), ""),
+                // Unterminated block (truncated generation): drop the tail.
+                None => text.truncate(start),
+            }
+        }
+        text.trim().to_string()
+    }
+
     /// First installed model that looks like a chat model (skip embedders).
     fn pick_chat_model(models: &[crate::local_ai::backend::AvailableModel]) -> Option<String> {
         models
@@ -91,10 +104,12 @@ impl JarvisEngine {
                     top_k: params.top_k as u32,
                     repeat_penalty: params.repeat_penalty,
                     stop: Vec::new(),
+                    disable_thinking: params.disable_thinking,
+                    json_schema: params.json_schema.clone(),
                 };
                 let current = model.read().expect("model lock").clone();
                 match backend.chat(&current, &messages, &gen_params).await {
-                    Ok(resp) => Ok(resp.content),
+                    Ok(resp) => Ok(Self::strip_reasoning(resp.content)),
                     // Configured model not installed (e.g. fresh setup where
                     // the default isn't pulled yet): fall back to the first
                     // installed chat model and remember it.
@@ -109,7 +124,7 @@ impl JarvisEngine {
                         );
                         let resp = backend.chat(&fallback, &messages, &gen_params).await?;
                         *model.write().expect("model lock") = fallback;
-                        Ok(resp.content)
+                        Ok(Self::strip_reasoning(resp.content))
                     }
                     Err(e) => Err(JarvisError::Backend(e)),
                 }
@@ -210,6 +225,21 @@ mod tests {
         println!("self-healed reply: {reply:?}; engine now {}", shared.describe());
         assert!(!reply.trim().is_empty());
         assert!(!shared.describe().contains("definitely-not-installed"));
+    }
+
+    #[test]
+    fn reasoning_blocks_are_stripped() {
+        assert_eq!(
+            JarvisEngine::strip_reasoning("<think>ponder ponder</think>\nThe answer is 4.".into()),
+            "The answer is 4."
+        );
+        assert_eq!(
+            JarvisEngine::strip_reasoning("a<think>1</think>b<think>2</think>c".into()),
+            "abc"
+        );
+        // Truncated generation: unterminated block dropped.
+        assert_eq!(JarvisEngine::strip_reasoning("ok<think>trailing junk".into()), "ok");
+        assert_eq!(JarvisEngine::strip_reasoning("no tags at all".into()), "no tags at all");
     }
 
     #[test]
