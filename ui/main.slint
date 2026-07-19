@@ -1,14 +1,14 @@
 // Chatter Linux Client - Main UI
 // Root component for the application
 
-import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem } from "app.slint";
+import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem } from "app.slint";
 import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 import { TextFormat } from "chat/message_composer.slint";
 import { AnonMode, TorStatus } from "anon_mode/anon_mode_global.slint";
 import { Typography } from "theme/typography.slint";
 
 // Re-export all types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem }
 export { JarvisGlobal }
 export { TextFormat }
 export { AnonMode }
@@ -99,7 +99,6 @@ export component MainWindow inherits Window {
     in property <image> user-avatar-source <=> app.user-avatar-source;
     in property <string> user-initials <=> app.user-initials;
     in property <string> user-presence-status <=> app.user-presence-status;
-    in property <string> user-custom-status <=> app.user-custom-status;
     in-out property <bool> sidebar-collapsed <=> app.sidebar-collapsed;
 
     // ========== Custom sections properties ==========
@@ -112,7 +111,6 @@ export component MainWindow inherits Window {
     in property <string> channel-type <=> app.channel-type;
     in property <int> member-count <=> app.member-count;
     in property <string> topic <=> app.topic;
-    in property <bool> is-archived <=> app.is-archived;
     in-out property <bool> is-dm <=> app.is-dm;
     in property <string> typing-indicator <=> app.typing-indicator;
     in property <string> header-presence-status <=> app.header-presence-status;
@@ -354,10 +352,6 @@ export component MainWindow inherits Window {
     in property <string> edit-profile-error <=> app.edit-profile-error;
 
     // Friend requests modal properties (legacy)
-    in property <string> friend-requests-tab <=> app.friend-requests-tab;
-    in property <[FriendRequest]> received-friend-requests <=> app.received-friend-requests;
-    in property <[FriendRequest]> sent-friend-requests <=> app.sent-friend-requests;
-    in property <bool> friend-requests-loading <=> app.friend-requests-loading;
 
     // Friends modal properties (comprehensive)
     in-out property <string> friends-modal-tab <=> app.friends-modal-tab;
@@ -564,7 +558,6 @@ export component MainWindow inherits Window {
     // ========== Custom sections callbacks ==========
     in-out property <string> create-section-name <=> app.create-section-name;
     in-out property <string> create-section-emoji <=> app.create-section-emoji;
-    callback create-section-clicked <=> app.create-section-clicked;
     callback create-section <=> app.create-section;
     callback rename-section <=> app.rename-section;
     callback section-toggle-expanded <=> app.section-toggle-expanded;
@@ -627,10 +620,6 @@ export component MainWindow inherits Window {
     callback profile-reset-share-link <=> app.profile-reset-share-link;
     callback edit-profile-save <=> app.edit-profile-save;
     callback edit-profile-change-avatar <=> app.edit-profile-change-avatar;
-    callback friend-requests-switch-tab <=> app.friend-requests-switch-tab;
-    callback friend-request-accept <=> app.friend-request-accept;
-    callback friend-request-decline <=> app.friend-request-decline;
-    callback friend-request-cancel <=> app.friend-request-cancel;
     // Friends modal callbacks
     callback friends-modal-switch-tab <=> app.friends-modal-switch-tab;
 

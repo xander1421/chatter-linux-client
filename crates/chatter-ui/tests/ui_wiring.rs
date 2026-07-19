@@ -862,11 +862,11 @@ fn friends_modal_tab_switch_is_wired() {
 fn forward_message_confirm_is_wired_to_core() {
     let (_rt, _tmp, client, w) = wired_offline();
     let _guard = _rt.enter();
-    chatter_ui::bin_ui::features::modals::wire_friend_requests(&w, &client);
+    chatter_ui::bin_ui::features::modals::wire_forward_message(&w, &client);
 
     // The old handler closed the modal and logged "not yet implemented" —
     // regression-proof its absence.
-    let src = include_str!("../src/bin_ui/features/modals/friend_requests.rs");
+    let src = include_str!("../src/bin_ui/features/modals/forward.rs");
     assert!(
         !src.contains("not yet implemented"),
         "forward-message confirm handler is still a no-op stub"

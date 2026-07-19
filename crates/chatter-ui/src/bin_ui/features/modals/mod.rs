@@ -8,7 +8,7 @@ mod anon_group_invite;
 mod channel_invites;
 mod channel_settings;
 mod create_channel;
-mod friend_requests;
+mod forward;
 mod friends;
 mod join_channel;
 pub mod link_approve;
@@ -33,7 +33,7 @@ pub use anon_group_invite::{spawn_anon_group_invite_handler, wire_group_invite_c
 pub use channel_invites::load_channel_invites;
 pub use channel_settings::{open_channel_settings, open_invite_member_modal, wire_channel_settings};
 pub use friends::wire_friends_modal;
-pub use friend_requests::wire_friend_requests;
+pub use forward::wire_forward_message;
 pub use profile::open_user_profile;
 
 /// Wire modal callbacks.
@@ -42,7 +42,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     create_channel::wire_invite_to_private_group(window, ui_ctx);
     join_channel::wire_join_channel(window, ui_ctx);
     profile::wire_profile_actions(window, ui_ctx);
-    friend_requests::wire_friend_requests(window, ui_ctx);
+    forward::wire_forward_message(window, ui_ctx);
     friends::wire_friends_modal(window, ui_ctx);
     settings::wire_settings_callbacks(window, ui_ctx);
     sessions::wire_session_callbacks(window, ui_ctx);
