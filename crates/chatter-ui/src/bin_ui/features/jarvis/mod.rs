@@ -5,6 +5,7 @@
 //! pre-send and answered locally.
 
 pub mod channel_view;
+pub mod memory_view;
 mod local_messages;
 pub mod mention_handler;
 

@@ -180,6 +180,32 @@ impl ChatterClient {
         backend.pull_model_with_progress(tag, on_progress).await
     }
 
+    // ── Memory browser façade ────────────────────────────────────────────
+
+    /// All facts about the current user (current + superseded history).
+    pub fn jarvis_memory_facts(&self) -> Vec<crate::domain::jarvis::JarvisFact> {
+        let Some(user_id) = self.auth_state().get().current_user_id else {
+            return Vec::new();
+        };
+        self.jarvis().list_user_facts(&user_id).unwrap_or_default()
+    }
+
+    /// Most-mentioned entities in the knowledge graph.
+    pub fn jarvis_top_entities(&self, limit: u32) -> Vec<crate::domain::jarvis::JarvisEntity> {
+        self.jarvis().get_top_entities(limit).unwrap_or_default()
+    }
+
+    /// Entities connected to one entity (with graph distance).
+    pub fn jarvis_entity_connections(
+        &self,
+        entity_id: &str,
+    ) -> Vec<(crate::domain::jarvis::JarvisEntity, u32)> {
+        let id = crate::domain::jarvis::JarvisEntityId::from_string(entity_id.to_string());
+        self.jarvis()
+            .get_connected_entities(&id, 1)
+            .unwrap_or_default()
+    }
+
     pub async fn jarvis_ask(
         &self,
         context: &crate::domain::jarvis::JarvisContext,

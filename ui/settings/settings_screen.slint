@@ -123,6 +123,7 @@ export component SettingsScreen inherits Rectangle {
     callback local-ai-load-model(string);  // model_id
     callback local-ai-unload-model();
     callback local-ai-refresh();                 // re-probe providers + hardware
+    callback local-ai-open-memory();             // open the memory browser
     callback local-ai-select-provider(string);   // provider kind
     callback local-ai-select-model(string);      // chat model name
     callback local-ai-download(string);          // ollama tag
@@ -1411,6 +1412,16 @@ export component SettingsScreen inherits Rectangle {
                                             root.local-ai-enabled-changed(value);
                                         }
                                     }
+                                }
+                            }
+
+                            // Memory browser entry
+                            if root.local-ai-enabled: HorizontalLayout {
+                                alignment: start;
+                                Button {
+                                    text: "View Memory";
+                                    variant: "secondary";
+                                    clicked => { root.local-ai-open-memory(); }
                                 }
                             }
 

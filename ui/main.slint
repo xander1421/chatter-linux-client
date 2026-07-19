@@ -1,14 +1,14 @@
 // Chatter Linux Client - Main UI
 // Root component for the application
 
-import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem } from "app.slint";
+import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem } from "app.slint";
 import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 import { TextFormat } from "chat/message_composer.slint";
 import { AnonMode, TorStatus } from "anon_mode/anon_mode_global.slint";
 import { Typography } from "theme/typography.slint";
 
 // Re-export all types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem }
 export { JarvisGlobal }
 export { TextFormat }
 export { AnonMode }
@@ -508,6 +508,13 @@ export component MainWindow inherits Window {
 
     // ========== Jarvis AI Assistant properties ==========
     in-out property <bool> jarvis-thinking <=> app.jarvis-thinking;
+    in property <[MemoryFactData]> jarvis-memory-facts <=> app.jarvis-memory-facts;
+    in property <[MemoryEntityData]> jarvis-memory-entities <=> app.jarvis-memory-entities;
+    in property <[MemoryGraphNodeData]> jarvis-memory-graph-nodes <=> app.jarvis-memory-graph-nodes;
+    in property <[MemoryGraphEdgeData]> jarvis-memory-graph-edges <=> app.jarvis-memory-graph-edges;
+    in property <string> jarvis-memory-stats <=> app.jarvis-memory-stats;
+    callback jarvis-memory-refresh <=> app.jarvis-memory-refresh;
+    callback jarvis-memory-select-entity <=> app.jarvis-memory-select-entity;
 
     // ========== Auth callbacks ==========
     callback login <=> app.login;

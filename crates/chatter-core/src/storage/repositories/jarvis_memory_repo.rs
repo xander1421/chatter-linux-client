@@ -239,6 +239,28 @@ impl JarvisMemoryRepository {
         Ok(())
     }
 
+    /// Every fact for a subject, superseded rows included — memory browser.
+    /// Current facts first (valid_until NULL), then history, newest first.
+    pub fn list_facts_for_subject(
+        &self,
+        subject_type: SubjectType,
+        subject_id: &str,
+    ) -> Result<Vec<JarvisFact>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, subject_type, subject_id, predicate, object, confidence, source_context_id, last_reinforced_at, decay_rate, created_at, valid_from, valid_until, superseded_by
+             FROM jarvis_facts
+             WHERE subject_type = ?1 AND subject_id = ?2
+             ORDER BY (valid_until IS NOT NULL), created_at DESC",
+        )?;
+        let mut rows = stmt.query(params![subject_type.to_i32(), subject_id])?;
+        let mut facts = Vec::new();
+        while let Some(row) = rows.next()? {
+            facts.push(row_to_fact(row)?);
+        }
+        Ok(facts)
+    }
+
     /// Full history for one (subject, predicate) — superseded rows included,
     /// oldest first. Answers "when was X true".
     pub fn get_fact_history(

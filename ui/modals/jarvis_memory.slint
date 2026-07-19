@@ -1,0 +1,269 @@
+// Jarvis memory browser — what the local AI knows and how it connects.
+//
+// Left: typed facts (current + superseded history with temporal info).
+// Right: knowledge-graph entities; selecting one draws a radial map of its
+// connections (positions precomputed in Rust).
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Button } from "../components/button.slint";
+
+// One fact row.
+export struct MemoryFactData {
+    predicate: string,
+    object: string,
+    confidence-label: string,  // "90%"
+    since-label: string,       // "since 2026-07-19" or "2026-05-01 → 2026-07-19"
+    is-current: bool,
+}
+
+// One entity row.
+export struct MemoryEntityData {
+    entity-id: string,
+    name: string,
+    kind: string,              // person / project / topic / technology / organization
+    mention-label: string,     // "12 mentions"
+    is-selected: bool,
+}
+
+// A node in the radial connection map (positions in px within the pane).
+export struct MemoryGraphNodeData {
+    name: string,
+    kind: string,
+    x: float,
+    y: float,
+    is-center: bool,
+}
+
+// An edge line in the map.
+export struct MemoryGraphEdgeData {
+    x1: float, y1: float, x2: float, y2: float,
+}
+
+export component JarvisMemoryModal inherits Rectangle {
+    in property <[MemoryFactData]> facts: [];
+    in property <[MemoryEntityData]> entities: [];
+    in property <[MemoryGraphNodeData]> graph-nodes: [];
+    in property <[MemoryGraphEdgeData]> graph-edges: [];
+    in property <string> stats-label: "";
+
+    callback close();
+    callback select-entity(string);   // entity-id
+    callback refresh();
+
+    // Instantiation site clamps to the window; these are just defaults.
+    width: 860px;
+    height: 560px;
+    background: Colors.surface;
+    border-radius: Spacing.radius-lg;
+    border-width: 1px;
+    border-color: Colors.neo-highlight;
+    drop-shadow-blur: 24px;
+    drop-shadow-color: Colors.background.with-alpha(0.6);
+
+    VerticalLayout {
+        padding: Spacing.lg;
+        spacing: Spacing.md;
+
+        // Header
+        HorizontalLayout {
+            spacing: Spacing.sm;
+            Text {
+                horizontal-stretch: 1;
+                text: "Jarvis Memory";
+                color: Colors.text-primary;
+                font-size: Typography.xl;
+                font-weight: Typography.semibold;
+            }
+            Text {
+                text: root.stats-label;
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                vertical-alignment: center;
+            }
+            Button { text: "Refresh"; variant: "ghost"; clicked => { root.refresh(); } }
+            Button { text: "Close"; variant: "secondary"; clicked => { root.close(); } }
+        }
+
+        HorizontalLayout {
+            spacing: Spacing.md;
+
+            // ── Facts column ────────────────────────────────────────────
+            Rectangle {
+                horizontal-stretch: 1;
+                background: Colors.background;
+                border-radius: Spacing.radius-md;
+
+                VerticalLayout {
+                    padding: Spacing.md;
+                    spacing: Spacing.sm;
+
+                    Text {
+                        text: "Facts";
+                        color: Colors.text-primary;
+                        font-size: Typography.lg;
+                        font-weight: Typography.medium;
+                    }
+                    if root.facts.length == 0: Text {
+                        text: "Nothing yet — chat with Jarvis and durable facts land here automatically.";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        wrap: word-wrap;
+                    }
+
+                    Flickable {
+                        vertical-stretch: 1;
+                        viewport-height: facts-column.preferred-height;
+                        facts-column := VerticalLayout {
+                            spacing: 6px;
+                            for fact in root.facts: Rectangle {
+                                border-radius: Spacing.radius-md;
+                                background: fact.is-current ? Colors.surface : transparent;
+                                opacity: fact.is-current ? 1.0 : 0.55;
+                                VerticalLayout {
+                                    padding: Spacing.sm;
+                                    spacing: 2px;
+                                    HorizontalLayout {
+                                        spacing: Spacing.sm;
+                                        Text {
+                                            horizontal-stretch: 1;
+                                            text: fact.predicate + " → " + fact.object;
+                                            color: Colors.text-primary;
+                                            font-size: Typography.sm;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            text: fact.confidence-label;
+                                            color: fact.is-current ? Colors.success : Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                    Text {
+                                        text: fact.since-label;
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── Entities + graph column ─────────────────────────────────
+            Rectangle {
+                horizontal-stretch: 1;
+                background: Colors.background;
+                border-radius: Spacing.radius-md;
+
+                VerticalLayout {
+                    padding: Spacing.md;
+                    spacing: Spacing.sm;
+
+                    Text {
+                        text: "Knowledge Graph";
+                        color: Colors.text-primary;
+                        font-size: Typography.lg;
+                        font-weight: Typography.medium;
+                    }
+                    if root.entities.length == 0: Text {
+                        text: "No entities yet — Jarvis learns people, projects, and topics from conversations.";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        wrap: word-wrap;
+                    }
+
+                    // Entity chips (click → radial map)
+                    Flickable {
+                        height: 92px;
+                        viewport-height: chips.preferred-height;
+                        chips := VerticalLayout {
+                            spacing: 4px;
+                            for row in root.entities: Rectangle {
+                                height: 26px;
+                                border-radius: Spacing.radius-md;
+                                background: row.is-selected ? Colors.surface-hover : transparent;
+                                TouchArea { clicked => { root.select-entity(row.entity-id); } }
+                                HorizontalLayout {
+                                    padding-left: Spacing.sm;
+                                    padding-right: Spacing.sm;
+                                    spacing: Spacing.sm;
+                                    Text {
+                                        horizontal-stretch: 1;
+                                        text: row.name;
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: row.kind + " · " + row.mention-label;
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Radial connection map
+                    graph-pane := Rectangle {
+                        vertical-stretch: 1;
+                        border-radius: Spacing.radius-md;
+                        background: Colors.surface;
+                        clip: true;
+
+                        // Coordinates live in a virtual 400x300 space; the
+                        // Path viewbox and node positioning both scale it to
+                        // the pane, so the map is resolution-independent.
+                        for edge in root.graph-edges: Path {
+                            width: 100%;
+                            height: 100%;
+                            viewbox-width: 400;
+                            viewbox-height: 300;
+                            stroke: Colors.neo-highlight;
+                            stroke-width: 1px;
+                            MoveTo { x: edge.x1; y: edge.y1; }
+                            LineTo { x: edge.x2; y: edge.y2; }
+                        }
+
+                        for node in root.graph-nodes: Rectangle {
+                            x: (node.x / 400) * parent.width - self.width / 2;
+                            y: (node.y / 300) * parent.height - self.height / 2;
+                            width: node.is-center ? 120px : 96px;
+                            height: 24px;
+                            border-radius: 12px;
+                            background: node.is-center ? Colors.primary : Colors.background;
+                            border-width: 1px;
+                            border-color: node.is-center ? Colors.primary : Colors.neo-highlight;
+                            Text {
+                                width: parent.width - 8px;
+                                x: 4px;
+                                height: 100%;
+                                text: node.name;
+                                color: node.is-center ? Colors.background : Colors.text-primary;
+                                font-size: Typography.xs;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+
+                        if root.graph-nodes.length == 0: Text {
+                            width: 100%;
+                            height: 100%;
+                            text: "Select an entity to map its connections";
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

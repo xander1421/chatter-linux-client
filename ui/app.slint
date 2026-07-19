@@ -40,6 +40,7 @@ import { UnifiedSearch, QuickSwitcherItem, SearchResult } from "components/unifi
 
 // Import settings
 import { SettingsScreen, LocalAIProviderData, CatalogModelData } from "settings/settings_screen.slint";
+import { JarvisMemoryModal, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData } from "modals/jarvis_memory.slint";
 
 // Import components
 import { ImageViewer, EmojiData } from "components/mod.slint";
@@ -61,7 +62,7 @@ import { AnonMode } from "anon_mode/anon_mode_global.slint";
 import { AnonModePinModal } from "modals/anon_mode_pin.slint";
 
 // Re-export types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, CustomSectionData, SectionConversationData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, InviteUser, ReactionEntry, QuickSwitcherItem }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, CustomSectionData, SectionConversationData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, QuickSwitcherItem }
 
 export component App inherits Rectangle {
     // ========== Safe area insets (set by Rust on Android) ==========
@@ -607,6 +608,13 @@ export component App inherits Rectangle {
 
     // ========== Jarvis AI Assistant properties ==========
     in-out property <bool> jarvis-thinking: false;
+    in property <[MemoryFactData]> jarvis-memory-facts: [];
+    in property <[MemoryEntityData]> jarvis-memory-entities: [];
+    in property <[MemoryGraphNodeData]> jarvis-memory-graph-nodes: [];
+    in property <[MemoryGraphEdgeData]> jarvis-memory-graph-edges: [];
+    in property <string> jarvis-memory-stats: "";
+    callback jarvis-memory-refresh();
+    callback jarvis-memory-select-entity(string);
 
     // ========== Auth callbacks ==========
     callback login(string, string, string, string);  // username, password, server_url, pin
@@ -2020,6 +2028,22 @@ export component App inherits Rectangle {
         }
     }
 
+    // Jarvis memory browser (centered modal over the backdrop)
+    if active-modal == "jarvis-memory": JarvisMemoryModal {
+        width: min(860px, parent.width - 32px);
+        height: min(560px, parent.height - 48px);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        facts: root.jarvis-memory-facts;
+        entities: root.jarvis-memory-entities;
+        graph-nodes: root.jarvis-memory-graph-nodes;
+        graph-edges: root.jarvis-memory-graph-edges;
+        stats-label: root.jarvis-memory-stats;
+        close => { root.active-modal = "none"; }
+        select-entity(id) => { root.jarvis-memory-select-entity(id); }
+        refresh => { root.jarvis-memory-refresh(); }
+    }
+
     // Settings screen (full screen overlay)
     if active-modal == "settings": SettingsScreen {
         display-name: root.settings-display-name;
@@ -2124,6 +2148,10 @@ export component App inherits Rectangle {
         }
         local-ai-refresh => {
             root.settings-local-ai-refresh();
+        }
+        local-ai-open-memory => {
+            root.active-modal = "jarvis-memory";
+            root.jarvis-memory-refresh();
         }
         local-ai-select-provider(kind) => {
             root.settings-local-ai-select-provider(kind);

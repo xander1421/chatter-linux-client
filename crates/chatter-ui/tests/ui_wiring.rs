@@ -846,6 +846,52 @@ fn settings_local_ai_section_is_wired_to_core() {
     }
 }
 
+/// Memory browser: callbacks reach the real handlers, which reach the Jarvis
+/// memory façade; the settings entry + modal routing exist in Slint.
+#[cfg(feature = "jarvis")]
+#[test]
+fn jarvis_memory_browser_is_wired() {
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    testing::init_no_event_loop();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+    let w = MainWindow::new().expect("MainWindow::new");
+    chatter_ui::bin_ui::features::jarvis::memory_view::wire(&w, &client);
+
+    // L1 dynamic: both callbacks run their real handlers without panicking
+    // (offline: empty facts/entities; the refresh task queues a UI update).
+    w.invoke_jarvis_memory_refresh();
+    w.invoke_jarvis_memory_select_entity("nonexistent-entity".into());
+
+    // L2 static (Rust): handlers reach the memory façade.
+    let src = include_str!("../src/bin_ui/features/jarvis/memory_view.rs");
+    for needle in ["jarvis_memory_facts", "jarvis_top_entities", "jarvis_entity_connections"] {
+        assert!(src.contains(needle), "memory_view.rs must call ChatterClient::{needle}");
+    }
+
+    // L2 static (Slint): settings entry opens the modal; modal is routed.
+    let settings_src = include_str!("../../../ui/settings/settings_screen.slint");
+    assert!(
+        settings_src.contains("root.local-ai-open-memory()"),
+        "settings must have a View Memory button"
+    );
+    let app_src = include_str!("../../../ui/app.slint");
+    assert!(
+        app_src.contains(r#"if active-modal == "jarvis-memory": JarvisMemoryModal"#),
+        "app must route active-modal='jarvis-memory' to the modal"
+    );
+    assert!(
+        app_src.contains("root.jarvis-memory-select-entity(id)"),
+        "modal entity clicks must reach the Rust handler"
+    );
+    rt.shutdown_background();
+}
+
 #[test]
 fn link_approve_paste_reaches_core_parser() {
     let (rt, _tmp, client, w) = wired_offline();

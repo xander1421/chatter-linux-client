@@ -315,6 +315,19 @@ impl JarvisService {
         Ok(())
     }
 
+    /// All facts about a user, superseded history included (memory browser).
+    pub fn list_user_facts(
+        &self,
+        user_id: &UserId,
+    ) -> Result<Vec<crate::domain::jarvis::JarvisFact>, JarvisError> {
+        self.memory_repo
+            .list_facts_for_subject(
+                crate::domain::jarvis::SubjectType::User,
+                &user_id.to_string(),
+            )
+            .map_err(JarvisError::from)
+    }
+
     /// Get persisted conversation history for a context (chronological).
     pub fn get_conversation_history(
         &self,
