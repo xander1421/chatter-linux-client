@@ -25,8 +25,17 @@ export component UserProfileModal inherits Rectangle {
     in property <bool> is-verified: false;
     in property <string> safety-number: "";
     in-out property <bool> show-safety-number: false;
+    // Username link (self view): shareable chatter://u/… URL + QR that
+    // resolves to our username without the server learning it.
+    in property <string> share-link: "";
+    in property <image> share-qr;
+    in property <string> share-status: "";
 
     callback close();
+    // Username link actions (self view)
+    callback generate-share-link();  // create link (first time) / re-show
+    callback copy-share-link();
+    callback reset-share-link();     // rotate: old URLs stop resolving
     callback send-message();  // open DM
     callback edit-profile();   // open edit profile modal
     callback add-friend();
@@ -229,6 +238,114 @@ export component UserProfileModal inherits Rectangle {
                     wrap: word-wrap;
                     max-height: Typography.sm * 5;
                     overflow: elide;
+                }
+            }
+
+            // Username link section (self view only): QR + URL that shares
+            // our username privately (entropy rides the URL fragment).
+            if root.is-self: VerticalLayout {
+                padding-left: Spacing.lg;
+                padding-right: Spacing.lg;
+                padding-top: Spacing.md;
+                spacing: Spacing.sm;
+
+                Rectangle {
+                    height: 1px;
+                    background: Colors.neo-inset-shadow;
+                }
+
+                Text {
+                    text: "USERNAME LINK";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs2;
+                    font-weight: Typography.bold;
+                    letter-spacing: 0.5px;
+                }
+
+                if root.share-link == "": VerticalLayout {
+                    spacing: Spacing.sm;
+
+                    Text {
+                        text: "Create a link and QR code that lets others find you by username — without revealing it to the server.";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        wrap: word-wrap;
+                    }
+
+                    Button {
+                        text: "Create username link";
+                        variant: "secondary";
+                        clicked => { root.generate-share-link(); }
+                    }
+                }
+
+                if root.share-link != "": VerticalLayout {
+                    spacing: Spacing.sm;
+
+                    // QR code
+                    HorizontalLayout {
+                        alignment: center;
+
+                        Rectangle {
+                            width: 150px;
+                            height: 150px;
+                            background: white;
+                            border-radius: Spacing.radius-md;
+
+                            Image {
+                                width: 142px;
+                                height: 142px;
+                                x: 4px;
+                                y: 4px;
+                                source: root.share-qr;
+                            }
+                        }
+                    }
+
+                    // The link itself — Neo inset
+                    Rectangle {
+                        background: Colors.neo-inset-bg;
+                        border-radius: Spacing.radius-md;
+                        border-width: 1px;
+                        border-color: Colors.neo-inset-shadow;
+                        height: share-link-text.preferred-height + Spacing.sm * 2;
+
+                        share-link-text := Text {
+                            x: Spacing.sm;
+                            y: Spacing.sm;
+                            width: parent.width - Spacing.sm * 2;
+                            text: root.share-link;
+                            color: Colors.text-secondary;
+                            font-size: Typography.xs;
+                            wrap: char-wrap;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: Spacing.sm;
+
+                        Button {
+                            text: "Copy Link";
+                            variant: "secondary";
+                            horizontal-stretch: 1;
+                            clicked => { root.copy-share-link(); }
+                        }
+
+                        Button {
+                            text: "Reset Link";
+                            variant: "secondary";
+                            horizontal-stretch: 1;
+                            clicked => { root.reset-share-link(); }
+                        }
+                    }
+                }
+
+                if root.share-status != "": Text {
+                    text: root.share-status;
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
                 }
             }
 

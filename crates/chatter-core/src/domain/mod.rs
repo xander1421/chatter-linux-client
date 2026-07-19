@@ -22,6 +22,7 @@ pub mod anon_group;
 pub mod anon_dm;
 pub mod anon_dm_init;
 pub mod private_friend_code;
+pub mod username_link;
 #[cfg(feature = "jarvis")]
 pub mod jarvis;
 pub mod section;
@@ -70,6 +71,7 @@ pub use anon_dm::{
 };
 pub use anon_dm_init::{AnonDmInitMessage, InitMessageError};
 pub use private_friend_code::{PrivateFriendCode, PrivateFriendCodeError};
+pub use username_link::{UsernameLink, UsernameLinkParseError};
 pub use section::{CustomSection, SectionConversation};
 #[cfg(feature = "jarvis")]
 pub use jarvis::{

@@ -13,10 +13,12 @@ use crate::proto::chat_v1::{
     friend_requests_filter, user_service_client::UserServiceClient, BlockUserRequest,
     ClearNavigationHistoryRequest, FriendRequest, FriendRequestsFilter, FriendResponse,
     FriendStatus, GetNavigationHistoryRequest, GetNavigationHistoryResponse,
-    GetUserProfileRequest, ListBlockedUsersRequest, ListBlockedUsersResponse,
+    DeleteUsernameLinkRequest, GetUserProfileRequest, GetUsernameLinkRequest,
+    GetUsernameLinkResponse, ListBlockedUsersRequest, ListBlockedUsersResponse,
     ListFriendRequestsRequest, ListFriendRequestsResponse, ListFriendsRequest, ListFriendsResponse,
     LookupUsernameRequest, LookupUsernameResponse, PinChannelRequest, PinChannelResponse,
-    RemoveFriendRequest, ReorderPinnedChannelsRequest,
+    RemoveFriendRequest, ReorderPinnedChannelsRequest, SetUsernameLinkRequest,
+    SetUsernameLinkResponse,
     TrackChannelVisitRequest, UnblockUserRequest, UnpinChannelRequest, UnpinChannelResponse,
     UpdatePresenceRequest, UpdateUserProfileRequest, UserEvent, UserEventRequest, UserPresence,
     UserProfile,
@@ -108,6 +110,54 @@ impl UserClient {
         } else {
             Ok(Some(user_id))
         }
+    }
+
+    // ==================== Username-link RPCs ====================
+
+    /// Upload (or rotate) the caller's username-link ciphertext blob. Returns
+    /// the server-generated opaque link id. The decryption entropy stays
+    /// client-side (URL fragment) — the server only ever sees ciphertext.
+    pub async fn set_username_link(
+        &mut self,
+        encrypted_username: Vec<u8>,
+    ) -> Result<String, NetworkError> {
+        let request = SetUsernameLinkRequest { encrypted_username };
+        let SetUsernameLinkResponse { link_id } = self
+            .inner
+            .set_username_link(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))?;
+        Ok(link_id)
+    }
+
+    /// Fetch the ciphertext blob stored under a link id. `Ok(None)` when the
+    /// link doesn't exist (deleted or rotated away).
+    pub async fn get_username_link(
+        &mut self,
+        link_id: &str,
+    ) -> Result<Option<Vec<u8>>, NetworkError> {
+        let request = GetUsernameLinkRequest {
+            link_id: link_id.to_string(),
+        };
+        match self.inner.get_username_link(request).await {
+            Ok(r) => {
+                let GetUsernameLinkResponse { encrypted_username } = r.into_inner();
+                Ok(Some(encrypted_username))
+            }
+            Err(s) if s.code() == tonic::Code::NotFound => Ok(None),
+            Err(s) => Err(NetworkError::from_status(&s)),
+        }
+    }
+
+    /// Delete the caller's username link. Idempotent.
+    pub async fn delete_username_link(&mut self) -> Result<(), NetworkError> {
+        let request = DeleteUsernameLinkRequest {};
+        self.inner
+            .delete_username_link(request)
+            .await
+            .map_err(|s| NetworkError::from_status(&s))?;
+        Ok(())
     }
 
     // ==================== Presence RPCs ====================

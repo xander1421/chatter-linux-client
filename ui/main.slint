@@ -342,6 +342,9 @@ export component MainWindow inherits Window {
     in property <bool> profile-is-verified <=> app.profile-is-verified;
     in property <string> profile-safety-number <=> app.profile-safety-number;
     in-out property <bool> profile-show-safety-number <=> app.profile-show-safety-number;
+    in property <string> profile-share-link <=> app.profile-share-link;
+    in property <image> profile-share-qr <=> app.profile-share-qr;
+    in property <string> profile-share-status <=> app.profile-share-status;
 
     // Edit Profile data
     in-out property <string> edit-profile-display-name <=> app.edit-profile-display-name;
@@ -617,6 +620,9 @@ export component MainWindow inherits Window {
     callback profile-edit-profile <=> app.profile-edit-profile;
     callback profile-view-safety-number <=> app.profile-view-safety-number;
     callback profile-toggle-verified <=> app.profile-toggle-verified;
+    callback profile-generate-share-link <=> app.profile-generate-share-link;
+    callback profile-copy-share-link <=> app.profile-copy-share-link;
+    callback profile-reset-share-link <=> app.profile-reset-share-link;
     callback edit-profile-save <=> app.edit-profile-save;
     callback edit-profile-change-avatar <=> app.edit-profile-change-avatar;
     callback friend-requests-switch-tab <=> app.friend-requests-switch-tab;

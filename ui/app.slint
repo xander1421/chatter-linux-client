@@ -454,6 +454,10 @@ export component App inherits Rectangle {
     in property <bool> profile-is-verified: false;
     in property <string> profile-safety-number: "";
     in-out property <bool> profile-show-safety-number: false;
+    // Username link (self view)
+    in property <string> profile-share-link: "";
+    in property <image> profile-share-qr;
+    in property <string> profile-share-status: "";
 
     // Edit Profile data
     in-out property <string> edit-profile-display-name: "";
@@ -702,6 +706,9 @@ export component App inherits Rectangle {
     callback profile-edit-profile();
     callback profile-view-safety-number();
     callback profile-toggle-verified();
+    callback profile-generate-share-link();
+    callback profile-copy-share-link();
+    callback profile-reset-share-link();
     callback edit-profile-save(string, string);
     callback edit-profile-change-avatar();
 
@@ -1543,10 +1550,22 @@ export component App inherits Rectangle {
         is-verified: root.profile-is-verified;
         safety-number: root.profile-safety-number;
         show-safety-number <=> root.profile-show-safety-number;
+        share-link: root.profile-share-link;
+        share-qr: root.profile-share-qr;
+        share-status: root.profile-share-status;
 
         close => {
             root.active-modal = "none";
             root.profile-show-safety-number = false;
+        }
+        generate-share-link => {
+            root.profile-generate-share-link();
+        }
+        copy-share-link => {
+            root.profile-copy-share-link();
+        }
+        reset-share-link => {
+            root.profile-reset-share-link();
         }
         send-message => {
             root.profile-send-message();

@@ -36,6 +36,12 @@ fn looks_like_handle(q: &str) -> bool {
     }
 }
 
+/// True when `q` is resolvable to a person: a full handle OR a pasted
+/// `chatter://u/…` username link (shape check lives in core).
+fn resolvable_person_query(q: &str) -> bool {
+    looks_like_handle(q) || chatter_core::domain::UsernameLink::is_username_link(q)
+}
+
 /// On open: populate conversations (empty query → recent), clear messages.
 fn wire_opened(window: &MainWindow) {
     let weak = window.as_weak();
@@ -58,7 +64,7 @@ fn wire_changed(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         // People: flag handle-shaped queries (enables the resolve-on-Enter
         // prompt) and invalidate any prior resolution for the new query.
         if let Some(w) = weak.upgrade() {
-            w.set_unified_search_query_is_handle(looks_like_handle(&query_str));
+            w.set_unified_search_query_is_handle(resolvable_person_query(&query_str));
             w.set_unified_search_person_status("".into());
         }
 
@@ -94,14 +100,16 @@ fn wire_changed(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 }
 
-/// On Enter over a `nickname.discriminator` query: exact-handle lookup.
-/// Privacy: exact-match only (no enumeration); resolves to a single user or none.
+/// On Enter over a `nickname.discriminator` query or a pasted
+/// `chatter://u/…` username link: exact resolution to a single account.
+/// Privacy: exact-match only (no enumeration); a username link decrypts
+/// LOCALLY (core `resolve_username_link`) before the hashed lookup.
 fn wire_resolve(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
     window.on_unified_search_resolve(move |query: SharedString| {
         let handle = query.to_string();
-        if !looks_like_handle(&handle) {
+        if !resolvable_person_query(&handle) {
             return;
         }
         if let Some(w) = weak.upgrade() {
@@ -111,14 +119,25 @@ fn wire_resolve(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak_bg = weak.clone();
         let ui_ctx = ui_ctx.clone();
         tokio::spawn(async move {
-            let (status, id, name) = match ui_ctx.lookup_by_username(&handle).await {
+            // Username link → (decrypted handle, maybe account); plain handle
+            // → hashed lookup directly. Both end at the same lookup path.
+            let is_link = chatter_core::domain::UsernameLink::is_username_link(&handle);
+            let (shown_handle, looked_up) = if is_link {
+                match ui_ctx.resolve_username_link(&handle).await {
+                    Ok((username, uid)) => (username, Ok(uid)),
+                    Err(e) => (handle.clone(), Err(e)),
+                }
+            } else {
+                (handle.clone(), ui_ctx.lookup_by_username(&handle).await)
+            };
+            let (status, id, name) = match looked_up {
                 Ok(Some(uid)) => {
                     let display = ui_ctx
                         .get_user_profile(&uid)
                         .await
                         .map(|p| p.display_name)
                         .unwrap_or_default();
-                    let name = if display.is_empty() { handle.clone() } else { display };
+                    let name = if display.is_empty() { shown_handle.clone() } else { display };
                     ("found".to_string(), uid.to_string(), name)
                 }
                 _ => ("notfound".to_string(), String::new(), String::new()),

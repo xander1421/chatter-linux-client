@@ -9860,3 +9860,164 @@ async fn v47_desynced_dm_session_self_heals_via_decryption_error_message() {
     client_a.shutdown().await;
     client_b.shutdown().await;
 }
+
+/// V48 — username links (L6): a shareable `chatter://u/{link_id}#{entropy}`
+/// URL resolves to the owner's username end-to-end WITHOUT the server ever
+/// learning that username.
+///
+/// THE DESIGN (libsignal `usernames` crate, Signal's username-link model): A
+/// encrypts its own full `nickname.discriminator` username with keys HKDF'd
+/// from 32 bytes of entropy (`create_for_username`, AES-256-CBC + HMAC-SHA256)
+/// and uploads ONLY the ciphertext; the server files it under an opaque UUID
+/// link id. The entropy rides the URL FRAGMENT, which is never transmitted.
+/// B parses the URL, fetches the blob by link id, decrypts LOCALLY, then
+/// discovers the account via the existing hashed LookupUsername path.
+///
+/// Proof:
+///   POSITIVE CONTROL — the `user_username_links` row for A's link id EXISTS
+///     and is non-empty (the absence greps below are not vacuous), and B's
+///     resolve returns A's exact username + account id (full round trip).
+///   NEGATIVE HALF (the server's-eye view) — the stored blob's hex does NOT
+///     contain hex(username); the logical dump of the row carries no
+///     plaintext; and resolving with WRONG entropy (all a server or DB thief
+///     can ever try — they never see the fragment) FAILS on HMAC.
+///   ROTATION — A creates a second link: previously shared URLs stop
+///     resolving (old link id dead), the new URL resolves. One active link
+///     per user, enforced by the user_id-PK upsert.
+///   DELETE — after A deletes the link, the last URL stops resolving too.
+///
+/// MUTATION (RED): zero out `link.entropy` before decrypt in
+/// `UserService::resolve_username_link` (chatter-core/src/services/user/mod.rs)
+/// → every decrypt is an HMAC mismatch → B's resolve fails → "THE FIX"
+/// assertion dies. Proven RED 2026-07-19, restored GREEN (see task log).
+#[tokio::test]
+async fn v48_username_link_resolves_privately_end_to_end() {
+    skip_if_no_server!();
+    no_keyring_prompts();
+
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let client_a = build_client(dir_a.path());
+    let client_b = build_client(dir_b.path());
+
+    let uid_a = register_and_start(&client_a, &unique_user("v48a"), "V48 Alice").await;
+    let _uid_b = register_and_start(&client_b, &unique_user("v48b"), "V48 Bob").await;
+
+    let full_username = client_a
+        .full_username()
+        .expect("A must have a nickname.discriminator username after registration");
+
+    // THE ACTION: A creates a username link.
+    let url = client_a
+        .create_username_link()
+        .await
+        .expect("create_username_link failed");
+    println!("  A's username link: {url}");
+    let link = chatter_core::domain::UsernameLink::parse(&url).expect("A's own URL must parse");
+
+    // POSITIVE CONTROL: the ciphertext blob is actually IN the server store.
+    let blob_hex = psql(&format!(
+        "SELECT encode(encrypted_username,'hex') FROM user_username_links WHERE link_id = '{}'",
+        link.link_id
+    ));
+    assert!(
+        blob_hex.len() >= 2 * (16 + 32),
+        "POSITIVE CONTROL FAILED: no/short user_username_links row for A's link id \
+         (got {blob_hex:?}) — every absence grep below would be vacuous"
+    );
+    println!("  positive control: server stores {} ciphertext bytes under link id {}", blob_hex.len() / 2, link.link_id);
+
+    // NEGATIVE HALF 1: the stored blob does not contain the plaintext
+    // username bytes (hex-on-hex substring check).
+    let username_hex: String = full_username.bytes().map(|b| format!("{b:02x}")).collect();
+    assert!(
+        !blob_hex.contains(&username_hex),
+        "SERVER LEARNED THE USERNAME: stored blob contains plaintext username bytes"
+    );
+
+    // NEGATIVE HALF 2: the logical dump of A's row carries no plaintext
+    // username either (catches a hypothetical second cleartext column).
+    let row_dump = psql(&format!(
+        "SELECT * FROM user_username_links WHERE link_id = '{}'",
+        link.link_id
+    ));
+    assert!(
+        !row_dump.contains(&full_username),
+        "SERVER LEARNED THE USERNAME: user_username_links row contains it in cleartext"
+    );
+
+    // THE FIX: B resolves A's URL end-to-end — fetch blob, decrypt with the
+    // fragment entropy, hashed-lookup to the account.
+    let (resolved_username, resolved_id) = client_b
+        .resolve_username_link(&url)
+        .await
+        .expect("B failed to resolve A's username link");
+    assert_eq!(
+        resolved_username, full_username,
+        "B decrypted a DIFFERENT username than A encrypted"
+    );
+    assert_eq!(
+        resolved_id,
+        Some(uid_a),
+        "resolved username did not discover A's account id"
+    );
+    println!("  the fix: B resolved the link to @{resolved_username} = {uid_a}");
+
+    // NEGATIVE HALF 3: wrong entropy — the server's-eye view. Same link id,
+    // zeroed fragment: decryption MUST fail (HMAC mismatch), so an actor
+    // without the fragment (server, DB thief, or a stranger holding only the
+    // link id) cannot learn the username.
+    let wrong_url = chatter_core::domain::UsernameLink {
+        link_id: link.link_id.clone(),
+        entropy: [0u8; 32],
+    }
+    .to_url();
+    assert!(
+        client_b.resolve_username_link(&wrong_url).await.is_err(),
+        "resolve with WRONG entropy must fail — otherwise the fragment is decorative \
+         and the server could decrypt the blob"
+    );
+    println!("  negative half: wrong-entropy resolve failed (HMAC), blob is ciphertext-only server-side");
+
+    // ROTATION: creating a new link kills the old URL.
+    let url2 = client_a
+        .create_username_link()
+        .await
+        .expect("rotating username link failed");
+    assert_ne!(url2, url, "rotation must mint a new link id + entropy");
+    assert!(
+        client_b.resolve_username_link(&url).await.is_err(),
+        "OLD link URL still resolves after rotation — reset button is a no-op"
+    );
+    let (u2, id2) = client_b
+        .resolve_username_link(&url2)
+        .await
+        .expect("rotated link must resolve");
+    assert_eq!((u2, id2), (full_username.clone(), Some(uid_a)));
+    let n_rows = psql(&format!(
+        "SELECT COUNT(*) FROM user_username_links WHERE user_id = '{uid_a}'"
+    ));
+    assert_eq!(n_rows, "1", "one active link per user (found {n_rows} rows)");
+    println!("  rotation: old URL dead, new URL live, exactly 1 row for A");
+
+    // DELETE: the last URL stops resolving.
+    client_a
+        .delete_username_link()
+        .await
+        .expect("delete_username_link failed");
+    assert!(
+        client_b.resolve_username_link(&url2).await.is_err(),
+        "link still resolves after delete"
+    );
+
+    println!(
+        "\n  V48 PASS — username links work end-to-end and privately: B resolved A's \
+         chatter://u/ URL to A's exact username + account id via local decryption, while \
+         the server stored only AES-CBC+HMAC ciphertext (no plaintext in blob or row, \
+         wrong-entropy decrypt fails), rotation kills old URLs, delete kills the link. \
+         See VALIDATED.md.\n"
+    );
+
+    client_a.shutdown().await;
+    client_b.shutdown().await;
+}

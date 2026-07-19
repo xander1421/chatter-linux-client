@@ -2257,6 +2257,48 @@ impl ChatterClient {
         self.users().lookup_by_username(username).await
     }
 
+    // ==================== Username links (Signal-style, L6) ====================
+
+    /// Create (or rotate) this account's username link; returns the shareable
+    /// `chatter://u/{link_id}#{entropy}` URL. Rotation kills old URLs.
+    pub async fn create_username_link(
+        &self,
+    ) -> Result<String, crate::services::user::UserError> {
+        self.users().create_username_link().await
+    }
+
+    /// The locally stored username-link URL, if one exists on this device.
+    pub fn username_link_local(
+        &self,
+    ) -> Result<Option<String>, crate::services::user::UserError> {
+        self.users().username_link_local()
+    }
+
+    /// Render a username-link URL as a square PNG QR code.
+    pub fn username_link_qr(
+        &self,
+        url: &str,
+        size: u32,
+    ) -> Result<Vec<u8>, crate::services::user::UserError> {
+        crate::services::user::UserService::username_link_qr(url, size)
+    }
+
+    /// Resolve someone's username link to their (decrypted username, account
+    /// id). The decryption happens locally with the URL-fragment entropy —
+    /// the server never learns the username.
+    pub async fn resolve_username_link(
+        &self,
+        url: &str,
+    ) -> Result<(String, Option<crate::domain::ids::UserId>), crate::services::user::UserError>
+    {
+        self.users().resolve_username_link(url).await
+    }
+
+    /// Delete this account's username link (server + local).
+    pub async fn delete_username_link(&self) -> Result<(), crate::services::user::UserError> {
+        self.users().delete_username_link().await
+    }
+
     /// Get a user's profile.
     pub async fn get_user_profile(
         &self,

@@ -724,3 +724,70 @@ fn link_approve_paste_reaches_core_parser() {
     w.invoke_link_approve_paste_changed("".into());
     assert!(w.get_link_approve_error().is_empty(), "clearing input did not clear error");
 }
+
+// ============================================================================
+// USERNAME LINK (L6) — share-link modal wire.
+//
+// The full create→upload→resolve loop needs the live server (validated.rs
+// V48). Offline, this proves the modal wiring at two layers, and NAMES which:
+//
+//  L1 (DYNAMIC, MainWindow boundary): the generate/reset/copy callbacks are
+//     declared, wired by the REAL `wire_profile_actions`, and safe to invoke;
+//     and the share-link display properties round-trip through the
+//     main.slint <=> app.slint aliases (a dead alias would read back empty).
+//
+//  L2 (STATIC, reaches-core): the production handlers wire generate/reset to
+//     `create_username_link` (core) and the Slint modal fires the callbacks
+//     from the self-view section.
+// ============================================================================
+#[test]
+fn profile_share_username_link_is_wired() {
+    // ---- L1: callbacks wired + property aliases live ------------------------
+    let (rt, _tmp, client, w) = wired_offline();
+    chatter_ui::bin_ui::features::modals::profile::wire_profile_actions(&w, &client);
+    let _guard = rt.enter();
+
+    // Property alias liveness: set through MainWindow, read back.
+    w.set_profile_share_link("chatter://u/test-id#AAAA".into());
+    assert_eq!(
+        w.get_profile_share_link().as_str(),
+        "chatter://u/test-id#AAAA",
+        "profile-share-link alias is dead (main.slint <=> app.slint)"
+    );
+    w.set_profile_share_status("status-probe".into());
+    assert_eq!(w.get_profile_share_status().as_str(), "status-probe");
+
+    // The three wires must run the real handlers without panicking. (Offline +
+    // unregistered → the async create resolves to an error surfaced on the
+    // loop; we assert the wire runs, like the delete-account test.)
+    w.invoke_profile_generate_share_link();
+    w.invoke_profile_reset_share_link();
+    // Copy with a non-empty link set: handler reads the property and sets the
+    // "copied" status synchronously on the UI thread — assert THAT hop.
+    w.set_profile_share_status("".into());
+    w.invoke_profile_copy_share_link();
+    assert!(
+        !w.get_profile_share_status().is_empty(),
+        "copy-share-link did NOT run the real handler (status not set)"
+    );
+
+    // ---- L2: static — handlers reach core; Slint fires the callbacks --------
+    let profile_src = include_str!("../src/bin_ui/features/modals/profile.rs");
+    assert!(
+        profile_src.contains("on_profile_generate_share_link")
+            && profile_src.contains("on_profile_reset_share_link")
+            && profile_src.contains("on_profile_copy_share_link"),
+        "profile.rs must register all three share-link handlers"
+    );
+    assert!(
+        profile_src.contains(".create_username_link()"),
+        "generate/reset handlers must reach ChatterClient::create_username_link (dead wire otherwise)"
+    );
+    let modal_src = include_str!("../../../ui/modals/user_profile.slint");
+    assert!(
+        modal_src.contains("root.generate-share-link()")
+            && modal_src.contains("root.copy-share-link()")
+            && modal_src.contains("root.reset-share-link()"),
+        "user_profile.slint self-view section must fire the share-link callbacks"
+    );
+}

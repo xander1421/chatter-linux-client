@@ -42,6 +42,10 @@ pub mod keys {
     pub const FULL_USERNAME: &str = "auth.full_username";
     /// Current user's avatar (raw image bytes, stored locally, encrypted when shared)
     pub const AVATAR: &str = "profile.avatar";
+    /// The user's active username-link URL (`chatter://u/{id}#{entropy}`).
+    /// Local convenience copy so the share modal can re-show it without a new
+    /// upload; the authoritative blob lives server-side under the link id.
+    pub const USERNAME_LINK_URL: &str = "profile.username_link_url";
 
     // Crypto keys
     /// Profile key for encrypting saved messages (32 bytes, base64 encoded)
