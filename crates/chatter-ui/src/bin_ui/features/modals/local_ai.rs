@@ -89,12 +89,21 @@ pub async fn refresh_all(ui_ctx: Arc<ChatterClient>, weak: slint::Weak<MainWindo
     let active_provider = ui_ctx.local_ai_active_provider();
     let active_model = ui_ctx.local_ai_chat_model();
 
-    // Installed model names on the active provider (Ollama names may carry
-    // a ":latest" suffix, so match on the base tag too).
+    // Installed CHAT models on the active provider (embedders are not
+    // pickable chat models; Ollama names may carry ":latest").
     let active_models: Vec<String> = providers
         .iter()
         .find(|p| p.kind.as_str() == active_provider)
-        .map(|p| p.models.iter().map(|m| m.name.clone()).collect())
+        .map(|p| {
+            p.models
+                .iter()
+                .map(|m| m.name.clone())
+                .filter(|name| {
+                    let n = name.to_lowercase();
+                    !n.contains("embed") && !n.contains("minilm") && !n.contains("bge")
+                })
+                .collect()
+        })
         .unwrap_or_default();
     let ollama_models: Vec<String> = providers
         .iter()
