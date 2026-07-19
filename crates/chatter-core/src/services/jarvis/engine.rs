@@ -177,7 +177,7 @@ mod tests {
         let engine = JarvisEngine::from_settings(&settings, LocalAIActorHandle::spawn());
         assert!(matches!(engine, JarvisEngine::Http { .. }));
         let shared = SharedJarvisEngine::new(engine);
-        assert_eq!(shared.describe(), "ollama (llama3.2:3b)");
+        assert_eq!(shared.describe(), "ollama (qwen3:4b)");
     }
 
     #[test]
@@ -219,7 +219,7 @@ mod tests {
             &settings,
             LocalAIActorHandle::spawn(),
         ));
-        assert_eq!(shared.describe(), "ollama (llama3.2:3b)");
+        assert_eq!(shared.describe(), "ollama (qwen3:4b)");
 
         let lm = LocalAISettings {
             active_provider: ProviderKind::LmStudio,

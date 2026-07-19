@@ -90,7 +90,7 @@ impl ChatterClient {
         channel
     }
 
-    /// Human-readable description of the active Jarvis engine ("ollama (llama3.2:3b)").
+    /// Human-readable description of the active Jarvis engine ("ollama (qwen3:4b)").
     pub fn jarvis_engine_description(&self) -> String {
         self.services.jarvis_engine.describe()
     }

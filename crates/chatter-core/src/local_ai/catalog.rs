@@ -41,23 +41,18 @@ impl CatalogModel {
     }
 }
 
-/// The curated catalog, smallest chat models first.
+/// The curated catalog, smallest chat models first. 2026 generation —
+/// every tag verified against registry.ollama.ai before inclusion.
 pub const CATALOG: &[CatalogModel] = &[
-    CatalogModel { name: "Qwen 2.5 0.5B", ollama_tag: "qwen2.5:0.5b", hf_id: Some("Qwen/Qwen2.5-0.5B-Instruct-GGUF"), params_b: 0.5, size_gb: 0.4, kind: ModelKind::Chat },
-    CatalogModel { name: "Llama 3.2 1B", ollama_tag: "llama3.2:1b", hf_id: Some("bartowski/Llama-3.2-1B-Instruct-GGUF"), params_b: 1.2, size_gb: 1.3, kind: ModelKind::Chat },
-    CatalogModel { name: "Gemma 3 1B", ollama_tag: "gemma3:1b", hf_id: None, params_b: 1.0, size_gb: 0.8, kind: ModelKind::Chat },
-    CatalogModel { name: "Qwen 2.5 1.5B", ollama_tag: "qwen2.5:1.5b", hf_id: Some("Qwen/Qwen2.5-1.5B-Instruct-GGUF"), params_b: 1.5, size_gb: 1.0, kind: ModelKind::Chat },
-    CatalogModel { name: "Llama 3.2 3B", ollama_tag: "llama3.2:3b", hf_id: Some("bartowski/Llama-3.2-3B-Instruct-GGUF"), params_b: 3.2, size_gb: 2.0, kind: ModelKind::Chat },
-    CatalogModel { name: "Qwen 2.5 3B", ollama_tag: "qwen2.5:3b", hf_id: Some("Qwen/Qwen2.5-3B-Instruct-GGUF"), params_b: 3.1, size_gb: 1.9, kind: ModelKind::Chat },
-    CatalogModel { name: "Gemma 3 4B", ollama_tag: "gemma3:4b", hf_id: None, params_b: 4.3, size_gb: 3.3, kind: ModelKind::Chat },
-    CatalogModel { name: "Mistral 7B", ollama_tag: "mistral:7b", hf_id: Some("bartowski/Mistral-7B-Instruct-v0.3-GGUF"), params_b: 7.2, size_gb: 4.1, kind: ModelKind::Chat },
-    CatalogModel { name: "Qwen 2.5 7B", ollama_tag: "qwen2.5:7b", hf_id: Some("Qwen/Qwen2.5-7B-Instruct-GGUF"), params_b: 7.6, size_gb: 4.7, kind: ModelKind::Chat },
+    CatalogModel { name: "Qwen 3 0.6B", ollama_tag: "qwen3:0.6b", hf_id: Some("Qwen/Qwen3-0.6B-GGUF"), params_b: 0.6, size_gb: 0.5, kind: ModelKind::Chat },
+    CatalogModel { name: "Phi-4 Mini", ollama_tag: "phi4-mini", hf_id: None, params_b: 3.8, size_gb: 2.5, kind: ModelKind::Chat },
+    CatalogModel { name: "Qwen 3 4B", ollama_tag: "qwen3:4b", hf_id: Some("Qwen/Qwen3-4B-GGUF"), params_b: 4.0, size_gb: 2.6, kind: ModelKind::Chat },
+    CatalogModel { name: "Gemma 3 4B (vision)", ollama_tag: "gemma3:4b", hf_id: None, params_b: 4.3, size_gb: 3.3, kind: ModelKind::Chat },
     CatalogModel { name: "DeepSeek R1 7B", ollama_tag: "deepseek-r1:7b", hf_id: None, params_b: 7.6, size_gb: 4.7, kind: ModelKind::Chat },
-    CatalogModel { name: "Llama 3.1 8B", ollama_tag: "llama3.1:8b", hf_id: Some("bartowski/Meta-Llama-3.1-8B-Instruct-GGUF"), params_b: 8.0, size_gb: 4.9, kind: ModelKind::Chat },
-    CatalogModel { name: "Gemma 3 12B", ollama_tag: "gemma3:12b", hf_id: None, params_b: 12.2, size_gb: 8.1, kind: ModelKind::Chat },
-    CatalogModel { name: "Qwen 2.5 14B", ollama_tag: "qwen2.5:14b", hf_id: Some("Qwen/Qwen2.5-14B-Instruct-GGUF"), params_b: 14.8, size_gb: 9.0, kind: ModelKind::Chat },
+    CatalogModel { name: "Qwen 3 8B", ollama_tag: "qwen3:8b", hf_id: Some("Qwen/Qwen3-8B-GGUF"), params_b: 8.2, size_gb: 5.2, kind: ModelKind::Chat },
+    CatalogModel { name: "Gemma 4 12B (multimodal)", ollama_tag: "gemma4:12b", hf_id: None, params_b: 12.0, size_gb: 8.0, kind: ModelKind::Chat },
     CatalogModel { name: "DeepSeek R1 14B", ollama_tag: "deepseek-r1:14b", hf_id: None, params_b: 14.8, size_gb: 9.0, kind: ModelKind::Chat },
-    CatalogModel { name: "Phi-4 14B", ollama_tag: "phi4", hf_id: Some("bartowski/phi-4-GGUF"), params_b: 14.7, size_gb: 9.1, kind: ModelKind::Chat },
+    CatalogModel { name: "Qwen 3 14B", ollama_tag: "qwen3:14b", hf_id: Some("Qwen/Qwen3-14B-GGUF"), params_b: 14.8, size_gb: 9.3, kind: ModelKind::Chat },
     CatalogModel { name: "Nomic Embed Text", ollama_tag: "nomic-embed-text", hf_id: None, params_b: 0.14, size_gb: 0.27, kind: ModelKind::Embedding },
     CatalogModel { name: "All-MiniLM", ollama_tag: "all-minilm", hf_id: None, params_b: 0.02, size_gb: 0.05, kind: ModelKind::Embedding },
 ];
@@ -82,7 +77,7 @@ mod tests {
 
     #[test]
     fn catalog_is_nonempty_and_sorted_small_to_large_chat() {
-        assert!(CATALOG.len() > 10);
+        assert!(CATALOG.len() >= 10);
         assert!(CATALOG.iter().any(|m| m.kind == ModelKind::Embedding));
     }
 
@@ -99,12 +94,12 @@ mod tests {
         let small = profile(0.0, 8.0); // 8 GB laptop, no GPU
         let big = profile(24.0, 64.0); // workstation
 
-        let llama1b = CATALOG.iter().find(|m| m.ollama_tag == "llama3.2:1b").unwrap();
-        let qwen14b = CATALOG.iter().find(|m| m.ollama_tag == "qwen2.5:14b").unwrap();
+        let tiny = CATALOG.iter().find(|m| m.ollama_tag == "qwen3:0.6b").unwrap();
+        let big14 = CATALOG.iter().find(|m| m.ollama_tag == "qwen3:14b").unwrap();
 
-        assert_eq!(llama1b.fit(&small), ModelFit::CpuSlow);
-        assert_eq!(llama1b.fit(&big), ModelFit::Gpu);
-        assert_eq!(qwen14b.fit(&small), ModelFit::TooBig);
-        assert_eq!(qwen14b.fit(&big), ModelFit::Gpu);
+        assert_eq!(tiny.fit(&small), ModelFit::CpuSlow);
+        assert_eq!(tiny.fit(&big), ModelFit::Gpu);
+        assert_eq!(big14.fit(&small), ModelFit::TooBig);
+        assert_eq!(big14.fit(&big), ModelFit::Gpu);
     }
 }

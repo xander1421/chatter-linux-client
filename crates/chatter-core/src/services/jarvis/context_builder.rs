@@ -153,8 +153,16 @@ impl ContextBuilder {
     ) -> Result<BuiltContext, JarvisError> {
         let mut built = BuiltContext::default();
 
-        // 1. Get recent conversation history
-        built.history = self.memory_repo.get_recent_conversations(context, 20)?;
+        // 1. Recent conversation history, budgeted by size rather than a fixed
+        //    turn count: fetch generously, then trim oldest-first to ~8K tokens
+        //    (~4 chars/token) so long chats never blow the model context.
+        const HISTORY_CHAR_BUDGET: usize = 32_000;
+        let mut history = self.memory_repo.get_recent_conversations(context, 60)?;
+        let mut total: usize = history.iter().map(|c| c.content.len()).sum();
+        while total > HISTORY_CHAR_BUDGET && history.len() > 2 {
+            total -= history.remove(0).content.len();
+        }
+        built.history = history;
 
         // 2. Get facts about the user
         if let Some(user_id) = author_id {

@@ -809,16 +809,16 @@ fn settings_local_ai_section_is_wired_to_core() {
     // L1 dynamic: callbacks run their real handlers without panicking
     // (refresh spawns the probe; select-model persists synchronously).
     w.invoke_settings_local_ai_refresh();
-    w.invoke_settings_local_ai_select_model("llama3.2:3b".into());
+    w.invoke_settings_local_ai_select_model("qwen3:4b".into());
     assert_eq!(
         w.get_settings_local_ai_active_model().as_str(),
-        "llama3.2:3b",
+        "qwen3:4b",
         "select-model did not update the bound active-model property"
     );
     // ...and the choice reached core persistence (real settings row).
     assert_eq!(
         client.local_ai_chat_model(),
-        "llama3.2:3b",
+        "qwen3:4b",
         "select-model did NOT persist through the core façade (dead/stub wire)"
     );
 

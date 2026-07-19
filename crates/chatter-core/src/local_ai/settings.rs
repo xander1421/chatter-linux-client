@@ -40,7 +40,7 @@ impl Default for LocalAISettings {
             enabled: true,
             active_provider: ProviderKind::Ollama,
             ollama_url: "http://localhost:11434".to_string(),
-            chat_model: "llama3.2:3b".to_string(),
+            chat_model: "qwen3:4b".to_string(),
             embedding_model: "nomic-embed-text".to_string(),
             embedding_dimension: 768,
             auto_index: true,

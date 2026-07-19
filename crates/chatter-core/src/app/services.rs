@@ -300,6 +300,20 @@ impl ServiceContainer {
             let (indexer, _indexer_handle) = MessageIndexer::spawn(semantic_search_service.clone());
             indexer.subscribe_events(infra.event_bus.subscribe_domain());
             // Note: _indexer_handle is detached — runs until the event bus closes.
+
+            // Ensure the embedding model exists so semantic memory is never
+            // silently off: background pull-if-missing when Ollama is up.
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                let svc = http_local_ai_service.clone();
+                handle.spawn(async move {
+                    if svc.health_check().await {
+                        match svc.ensure_embedding_model().await {
+                            Ok(m) => tracing::info!(model = %m.name, "embedding model ready"),
+                            Err(e) => tracing::debug!("embedding model auto-pull skipped: {e}"),
+                        }
+                    }
+                });
+            }
         }
 
         // 20. Jarvis AI assistant service, driven by the active local AI provider
