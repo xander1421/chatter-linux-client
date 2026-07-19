@@ -137,7 +137,11 @@ libc = "0.2"
 # ============================================================================
 # WebRTC / LiveKit (desktop only, gated behind `desktop-media`)
 # ============================================================================
-livekit = { version = "0.7.52", default-features = false, features = ["tokio", "rustls-tls-webpki-roots"], optional = true }
+# glib-main-loop: on Wayland, webrtc's PipeWire capturer drives the
+# xdg-desktop-portal ScreenCast DBus flow via gio callbacks on the default
+# GMainContext — without this feature nothing iterates it and the system
+# screen picker never appears.
+livekit = { version = "0.7.52", default-features = false, features = ["tokio", "rustls-tls-webpki-roots", "glib-main-loop"], optional = true }
 # livekit-api dropped: the app never used it (server mints LiveKit tokens), and
 # its published version skews against livekit 0.7.52's livekit-protocol. The one
 # consumer (examples/screenshare_wire_bench) hand-mints its JWT via hmac+sha2.

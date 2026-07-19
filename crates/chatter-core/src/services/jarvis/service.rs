@@ -19,6 +19,7 @@ use crate::inbox::handlers::DomainEvent;
 use super::context_builder::ContextBuilder;
 use super::engine::SharedJarvisEngine;
 use super::entity_extractor::{EntityExtractor, ExtractedEntity};
+use super::fact_extractor::FactExtractor;
 use super::error::JarvisError;
 use super::memory_manager::{CompressionConfig, MemoryManager, MemoryStats};
 
@@ -37,6 +38,8 @@ pub struct JarvisService {
     event_bus: EventBus,
     /// Entity extractor.
     extractor: EntityExtractor,
+    /// LLM fact extractor (background write path).
+    fact_extractor: Arc<FactExtractor>,
     /// Context builder.
     context_builder: ContextBuilder,
     /// Memory manager.
@@ -53,6 +56,7 @@ impl JarvisService {
         semantic: Option<Arc<crate::services::semantic_search::SemanticSearchService>>,
     ) -> Self {
         let extractor = EntityExtractor::new(ai.clone());
+        let fact_extractor = Arc::new(FactExtractor::new(ai.clone(), memory_repo.clone()));
         let context_builder = ContextBuilder::new(memory_repo.clone(), graph_repo.clone(), semantic);
         let memory_manager = MemoryManager::new(memory_repo.clone(), graph_repo.clone(), ai.clone());
 
@@ -62,6 +66,7 @@ impl JarvisService {
             ai,
             event_bus,
             extractor,
+            fact_extractor,
             context_builder,
             memory_manager,
         }
@@ -178,11 +183,23 @@ impl JarvisService {
             .build_with_semantic(context, query, author_id)
             .await?;
 
-        // 2. Store the user's query + harvest cheap facts from it ("my name
-        //    is…", "I work on…"). Regex-only — no extra LLM call on the ask path.
+        // 2. Store the user's query + write-path fact harvest: regex fast-path
+        //    synchronously (deterministic, free), LLM extraction+consolidation
+        //    in the background so the reply is never delayed.
         self.memory_manager.store_user_message(context, query, author_id)?;
         if let Some(user_id) = author_id {
             let _ = self.extract_user_facts(user_id, query, context);
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                let extractor = self.fact_extractor.clone();
+                let (q, uid, ctx) = (query.to_string(), *user_id, context.clone());
+                handle.spawn(async move {
+                    match extractor.extract_and_store(&q, &uid, &ctx).await {
+                        Ok(n) if n > 0 => tracing::debug!(facts = n, "LLM write path stored facts"),
+                        Ok(_) => {}
+                        Err(e) => tracing::debug!("LLM fact extraction skipped: {e}"),
+                    }
+                });
+            }
         }
 
         // 3. Build the real chat-turn array: system (persona + memory), then

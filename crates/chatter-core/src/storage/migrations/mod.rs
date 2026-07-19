@@ -53,6 +53,7 @@ pub mod v051_fix_search_json_path;
 pub mod v052_reply_thumbnail;
 pub mod v053_call_history;
 pub mod v054_channel_icon_blob;
+pub mod v055_temporal_facts;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -109,6 +110,7 @@ pub use v051_fix_search_json_path::V051FixSearchJsonPath;
 pub use v052_reply_thumbnail::V052ReplyThumbnail;
 pub use v053_call_history::V053CallHistory;
 pub use v054_channel_icon_blob::V054ChannelIconBlob;
+pub use v055_temporal_facts::V055TemporalFacts;
 
 /// Trait for database migrations.
 ///
@@ -280,4 +282,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V052ReplyThumbnail)
         .register(V053CallHistory)
         .register(V054ChannelIconBlob)
+        .register(V055TemporalFacts)
 }

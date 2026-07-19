@@ -379,3 +379,44 @@ async fn live_multi_turn_coherence() {
     }
     panic!("multi-turn context lost — expected 'John' in: {last}");
 }
+
+// ============================================================================
+// Temporal consolidation (P3/P4): contradiction supersedes, history preserved.
+// ============================================================================
+#[test]
+fn fact_contradiction_supersedes_and_preserves_history() {
+    let (db, _temp) = create_test_db();
+    let repo = JarvisMemoryRepository::new(db);
+    let user = UserId::new();
+
+    // ADD
+    repo.upsert_fact(&JarvisFact::about_user(&user, "works_on", "the Chatter app"))
+        .unwrap();
+    // REINFORCE (same object, case-insensitive)
+    repo.upsert_fact(&JarvisFact::about_user(&user, "works_on", "The Chatter App"))
+        .unwrap();
+    let current = repo.get_facts_about(SubjectType::User, &user.to_string()).unwrap();
+    assert_eq!(current.len(), 1, "reinforce must not duplicate");
+    assert!(current[0].confidence > 1.0 - 1e-9, "reinforce must bump confidence");
+
+    // SUPERSEDE (contradiction)
+    repo.upsert_fact(&JarvisFact::about_user(&user, "works_on", "a new game engine"))
+        .unwrap();
+
+    let current = repo.get_facts_about(SubjectType::User, &user.to_string()).unwrap();
+    assert_eq!(current.len(), 1, "only the new fact is current");
+    assert_eq!(current[0].object, "a new game engine");
+    assert!(current[0].valid_until.is_none());
+
+    let history = repo
+        .get_fact_history(SubjectType::User, &user.to_string(), "works_on")
+        .unwrap();
+    assert_eq!(history.len(), 2, "superseded fact must keep its row");
+    let old = history.iter().find(|f| f.object == "the Chatter app").unwrap();
+    assert!(old.valid_until.is_some(), "old fact must carry valid_until");
+    assert_eq!(
+        old.superseded_by.as_deref(),
+        Some(current[0].id.as_str()),
+        "old fact must point at its replacement"
+    );
+}

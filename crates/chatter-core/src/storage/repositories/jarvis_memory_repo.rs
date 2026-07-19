@@ -166,49 +166,100 @@ impl JarvisMemoryRepository {
     /// Insert or update a fact.
     ///
     /// If a fact with the same subject and predicate exists, reinforces it.
+    /// Consolidating upsert (mem0-style ADD / REINFORCE / SUPERSEDE):
+    /// - no current fact for (subject, predicate) → ADD
+    /// - same object                              → REINFORCE (confidence up)
+    /// - different object (contradiction)        → SUPERSEDE: the old fact
+    ///   keeps its row with `valid_until = now` + `superseded_by`, preserving
+    ///   *when* it was true; the new fact becomes current.
     pub fn upsert_fact(&self, fact: &JarvisFact) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
 
-        // Check for existing fact with same subject and predicate
-        let existing: Option<String> = conn
+        // Current (non-superseded) fact for this subject+predicate.
+        let existing: Option<(String, String)> = conn
             .query_row(
-                "SELECT id FROM jarvis_facts WHERE subject_type = ?1 AND subject_id = ?2 AND predicate = ?3",
+                "SELECT id, object FROM jarvis_facts
+                 WHERE subject_type = ?1 AND subject_id = ?2 AND predicate = ?3
+                   AND valid_until IS NULL",
                 params![fact.subject_type.to_i32(), fact.subject_id, fact.predicate],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .ok();
 
-        if let Some(existing_id) = existing {
-            // Reinforce existing fact
-            let now = Utc::now().to_rfc3339();
-            conn.execute(
-                "UPDATE jarvis_facts SET
-                    object = ?1,
-                    confidence = MIN(confidence + 0.2, 1.0),
-                    last_reinforced_at = ?2
-                 WHERE id = ?3",
-                params![fact.object, now, existing_id],
-            )?;
-        } else {
-            // Insert new fact
-            conn.execute(
-                "INSERT INTO jarvis_facts (id, subject_type, subject_id, predicate, object, confidence, source_context_id, last_reinforced_at, decay_rate, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                params![
-                    fact.id.as_str(),
-                    fact.subject_type.to_i32(),
-                    fact.subject_id,
-                    fact.predicate,
-                    fact.object,
-                    fact.confidence,
-                    fact.source_context_id,
-                    fact.last_reinforced_at.to_rfc3339(),
-                    fact.decay_rate,
-                    fact.created_at.to_rfc3339(),
-                ],
-            )?;
+        let now = Utc::now().to_rfc3339();
+        match existing {
+            Some((existing_id, existing_object))
+                if existing_object.trim().eq_ignore_ascii_case(fact.object.trim()) =>
+            {
+                // REINFORCE
+                conn.execute(
+                    "UPDATE jarvis_facts SET
+                        confidence = MIN(confidence + 0.2, 1.0),
+                        last_reinforced_at = ?1
+                     WHERE id = ?2",
+                    params![now, existing_id],
+                )?;
+                Ok(())
+            }
+            Some((existing_id, _)) => {
+                // SUPERSEDE, then ADD the replacement.
+                conn.execute(
+                    "UPDATE jarvis_facts SET valid_until = ?1, superseded_by = ?2 WHERE id = ?3",
+                    params![now, fact.id.as_str(), existing_id],
+                )?;
+                Self::insert_fact_row(&conn, fact)
+            }
+            None => Self::insert_fact_row(&conn, fact),
         }
+    }
+
+    fn insert_fact_row(
+        conn: &rusqlite::Connection,
+        fact: &JarvisFact,
+    ) -> Result<(), StorageError> {
+        conn.execute(
+            "INSERT INTO jarvis_facts (id, subject_type, subject_id, predicate, object, confidence, source_context_id, last_reinforced_at, decay_rate, created_at, valid_from, valid_until, superseded_by)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![
+                fact.id.as_str(),
+                fact.subject_type.to_i32(),
+                fact.subject_id,
+                fact.predicate,
+                fact.object,
+                fact.confidence,
+                fact.source_context_id,
+                fact.last_reinforced_at.to_rfc3339(),
+                fact.decay_rate,
+                fact.created_at.to_rfc3339(),
+                fact.valid_from.map(|d| d.to_rfc3339()),
+                fact.valid_until.map(|d| d.to_rfc3339()),
+                fact.superseded_by,
+            ],
+        )?;
         Ok(())
+    }
+
+    /// Full history for one (subject, predicate) — superseded rows included,
+    /// oldest first. Answers "when was X true".
+    pub fn get_fact_history(
+        &self,
+        subject_type: SubjectType,
+        subject_id: &str,
+        predicate: &str,
+    ) -> Result<Vec<JarvisFact>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, subject_type, subject_id, predicate, object, confidence, source_context_id, last_reinforced_at, decay_rate, created_at, valid_from, valid_until, superseded_by
+             FROM jarvis_facts
+             WHERE subject_type = ?1 AND subject_id = ?2 AND predicate = ?3
+             ORDER BY created_at ASC",
+        )?;
+        let mut rows = stmt.query(params![subject_type.to_i32(), subject_id, predicate])?;
+        let mut facts = Vec::new();
+        while let Some(row) = rows.next()? {
+            facts.push(row_to_fact(row)?);
+        }
+        Ok(facts)
     }
 
     /// Get facts about a subject.
@@ -219,9 +270,9 @@ impl JarvisMemoryRepository {
     ) -> Result<Vec<JarvisFact>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, subject_type, subject_id, predicate, object, confidence, source_context_id, last_reinforced_at, decay_rate, created_at
+            "SELECT id, subject_type, subject_id, predicate, object, confidence, source_context_id, last_reinforced_at, decay_rate, created_at, valid_from, valid_until, superseded_by
              FROM jarvis_facts
-             WHERE subject_type = ?1 AND subject_id = ?2
+             WHERE subject_type = ?1 AND subject_id = ?2 AND valid_until IS NULL
              ORDER BY last_reinforced_at DESC",
         )?;
 
@@ -239,9 +290,9 @@ impl JarvisMemoryRepository {
     pub fn get_facts_by_predicate(&self, predicate: &str) -> Result<Vec<JarvisFact>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, subject_type, subject_id, predicate, object, confidence, source_context_id, last_reinforced_at, decay_rate, created_at
+            "SELECT id, subject_type, subject_id, predicate, object, confidence, source_context_id, last_reinforced_at, decay_rate, created_at, valid_from, valid_until, superseded_by
              FROM jarvis_facts
-             WHERE predicate = ?1
+             WHERE predicate = ?1 AND valid_until IS NULL
              ORDER BY confidence DESC",
         )?;
 
@@ -260,9 +311,9 @@ impl JarvisMemoryRepository {
         let conn = self.db.read_connection()?;
         let pattern = format!("%{}%", query);
         let mut stmt = conn.prepare(
-            "SELECT id, subject_type, subject_id, predicate, object, confidence, source_context_id, last_reinforced_at, decay_rate, created_at
+            "SELECT id, subject_type, subject_id, predicate, object, confidence, source_context_id, last_reinforced_at, decay_rate, created_at, valid_from, valid_until, superseded_by
              FROM jarvis_facts
-             WHERE object LIKE ?1 OR predicate LIKE ?1
+             WHERE (object LIKE ?1 OR predicate LIKE ?1) AND valid_until IS NULL
              ORDER BY confidence DESC
              LIMIT ?2",
         )?;
@@ -433,6 +484,9 @@ fn row_to_fact(row: &rusqlite::Row) -> Result<JarvisFact, rusqlite::Error> {
     let last_reinforced_at_str: String = row.get(7)?;
     let decay_rate: f64 = row.get(8)?;
     let created_at_str: String = row.get(9)?;
+    let valid_from_str: Option<String> = row.get(10)?;
+    let valid_until_str: Option<String> = row.get(11)?;
+    let superseded_by: Option<String> = row.get(12)?;
 
     Ok(JarvisFact {
         id: JarvisFactId::from_string(id),
@@ -445,6 +499,9 @@ fn row_to_fact(row: &rusqlite::Row) -> Result<JarvisFact, rusqlite::Error> {
         last_reinforced_at: parse_datetime(&last_reinforced_at_str),
         decay_rate,
         created_at: parse_datetime(&created_at_str),
+        valid_from: valid_from_str.as_deref().map(parse_datetime),
+        valid_until: valid_until_str.as_deref().map(parse_datetime),
+        superseded_by,
     })
 }
 

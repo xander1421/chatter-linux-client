@@ -54,12 +54,21 @@ impl BuiltContext {
     pub fn to_system_prompt(&self) -> String {
         let mut parts = Vec::new();
 
-        // Add user facts
+        // Add user facts (temporally current — superseded facts are filtered
+        // at the repository; render since-when for context)
         if !self.user_facts.is_empty() {
             parts.push("\n## About the User".to_string());
             for fact in &self.user_facts {
                 if fact.decayed_confidence() > 0.3 {
-                    parts.push(format!("- {}: {}", fact.predicate, fact.object));
+                    match fact.valid_from {
+                        Some(from) => parts.push(format!(
+                            "- {}: {} (since {})",
+                            fact.predicate,
+                            fact.object,
+                            from.format("%Y-%m-%d")
+                        )),
+                        None => parts.push(format!("- {}: {}", fact.predicate, fact.object)),
+                    }
                 }
             }
         }

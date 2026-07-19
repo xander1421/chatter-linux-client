@@ -532,6 +532,12 @@ pub struct JarvisFact {
     pub decay_rate: f64,
     /// When this fact was first learned.
     pub created_at: DateTime<Utc>,
+    /// When this fact became true (defaults to when it was learned).
+    pub valid_from: Option<DateTime<Utc>>,
+    /// When this fact stopped being true (None = currently true).
+    pub valid_until: Option<DateTime<Utc>>,
+    /// Id of the fact that superseded this one.
+    pub superseded_by: Option<String>,
 }
 
 impl JarvisFact {
@@ -549,6 +555,9 @@ impl JarvisFact {
             last_reinforced_at: now,
             decay_rate: 0.01,
             created_at: now,
+            valid_from: Some(now),
+            valid_until: None,
+            superseded_by: None,
         }
     }
 
@@ -566,6 +575,9 @@ impl JarvisFact {
             last_reinforced_at: now,
             decay_rate: 0.01,
             created_at: now,
+            valid_from: Some(now),
+            valid_until: None,
+            superseded_by: None,
         }
     }
 

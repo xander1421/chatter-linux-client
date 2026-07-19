@@ -482,6 +482,13 @@ pub async fn app_init() -> AppState {
 /// Phase 2: Sync event loop (runs OUTSIDE block_on — rt.enter() keeps reactor accessible).
 /// Slint owns the thread. Tokio worker threads handle async I/O.
 fn app_run(state: AppState) {
+    // TEMP DEBUG: force thread panel visible to test layout rendering
+    if std::env::var("CHATTER_DEBUG_THREAD_PANEL").is_ok() {
+        state.window.set_thread_panel_visible(true);
+        state.window.set_thread_root_sender_name("Debug Sender".into());
+        state.window.set_thread_root_content_preview("debug root message preview".into());
+        state.window.set_thread_channel_name("debug".into());
+    }
     // Run Slint event loop (blocks until window closes)
     state.window.run().expect("Failed to run application");
 
