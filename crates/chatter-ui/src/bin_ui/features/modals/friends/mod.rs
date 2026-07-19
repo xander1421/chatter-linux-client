@@ -18,11 +18,16 @@ pub(crate) use private_requests::refresh_blocked_users;
 use std::sync::Arc;
 
 use chatter_core::client::ChatterClient;
+use slint::ComponentHandle;
 
 use crate::MainWindow;
 
 /// Wire friends modal callbacks.
 pub fn wire_friends_modal(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    // Tab switch → refresh that tab's data (push events keep lists fresh too;
+    // this covers anything missed while the modal was closed).
+    wire_switch_tab(window, ui_ctx);
+
     // User search (F-UI-3): re-enabled with Signal-style EXACT-username lookup
     // (the same privacy-preserving discovery the invite-member search uses).
     // Display names are profile-key-encrypted, so only an exact
@@ -50,4 +55,31 @@ pub fn wire_friends_modal(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     private_requests::wire_accept_private_request(window, ui_ctx);
     private_requests::wire_decline_private_request(window, ui_ctx);
     private_requests::wire_block_private_request(window, ui_ctx);
+}
+
+fn wire_switch_tab(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
+    window.on_friends_modal_switch_tab(move |tab| {
+        match tab.as_str() {
+            "friends" => {
+                crate::bin_ui::features::auth::initial_data::refresh_friends_list(
+                    weak.clone(),
+                    ui_ctx.clone(),
+                );
+            }
+            "requests" => {
+                let ui_ctx = ui_ctx.clone();
+                tokio::spawn(async move {
+                    // Emits FriendRequestsUpdated; the domain handler rebuilds
+                    // the Received/Sent rows.
+                    ui_ctx.refresh_friend_requests().await;
+                });
+            }
+            "blocked" => {
+                private_requests::refresh_blocked_users(weak.clone(), &ui_ctx);
+            }
+            _ => {} // "find" is input-driven, nothing to preload
+        }
+    });
 }

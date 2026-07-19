@@ -720,7 +720,6 @@ export component App inherits Rectangle {
 
     // Friends modal (comprehensive)
     callback friends-modal-switch-tab(string);
-    callback friends-modal-switch-requests-sub-tab(string);
     callback friends-view-profile(string);
     callback friends-start-dm(string);
     callback friends-remove-friend(string);
@@ -1714,9 +1713,6 @@ export component App inherits Rectangle {
         }
         switch-tab(tab) => {
             root.friends-modal-switch-tab(tab);
-        }
-        switch-requests-sub-tab(tab) => {
-            root.friends-modal-switch-requests-sub-tab(tab);
         }
         view-profile(user-id) => {
             root.friends-view-profile(user-id);

@@ -17,6 +17,35 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_go_to_recovery(window);
     wire_go_to_link_device(window);
     wire_calls_tab(window, ui_ctx);
+    wire_welcome(window);
+}
+
+/// Welcome page (shown after first registration): all three buttons land in
+/// the main view, two of them with a modal already open.
+fn wire_welcome(window: &MainWindow) {
+    let weak = window.as_weak();
+    window.on_welcome_get_started(move || {
+        if let Some(w) = weak.upgrade() {
+            w.set_current_view("main".into());
+        }
+    });
+
+    let weak = window.as_weak();
+    window.on_welcome_add_friends(move || {
+        if let Some(w) = weak.upgrade() {
+            w.set_current_view("main".into());
+            w.set_friends_modal_tab("find".into());
+            w.set_active_modal("friends".into());
+        }
+    });
+
+    let weak = window.as_weak();
+    window.on_welcome_browse_channels(move || {
+        if let Some(w) = weak.upgrade() {
+            w.set_current_view("main".into());
+            w.set_active_modal("create-channel".into());
+        }
+    });
 }
 
 fn wire_go_to_link_device(window: &MainWindow) {
