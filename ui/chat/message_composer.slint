@@ -110,8 +110,9 @@ export component MessageComposer inherits Rectangle {
         );
     }
 
-    // Formatting toolbar always visible
-    property <bool> show-formatting: true;
+    // Formatting toolbar only while composing (focused or draft present) —
+    // persistent chrome for a rare action wastes a row otherwise.
+    property <bool> show-formatting: text-input.has-focus || root.text != "";
 
     // Formatting bar height
     property <length> format-bar-height: show-formatting ? 32px : 0px;

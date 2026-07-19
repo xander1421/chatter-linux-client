@@ -185,7 +185,12 @@ impl JarvisService {
             let _ = self.extract_user_facts(user_id, query, context);
         }
 
-        // 3. Build the system message: persona + retrieved memory
+        // 3. Build the real chat-turn array: system (persona + memory), then
+        //    the stored conversation as genuine user/assistant turns, then the
+        //    new query. Chat models are trained on this shape — history-as-a-
+        //    text-blob loses multi-turn coherence.
+        use crate::local_ai::backend::{ChatMessage, ChatRole};
+
         let persona = "You are Jarvis, the user's personal AI assistant running \
             locally on their device. You have persistent memory: facts the user \
             shares are stored automatically, so when asked to remember something, \
@@ -198,6 +203,26 @@ impl JarvisService {
             format!("{persona}\n\n{system_context}")
         };
 
+        let mut messages = Vec::with_capacity(built_context.history.len() + 2);
+        messages.push(ChatMessage {
+            role: ChatRole::System,
+            content: system,
+        });
+        for turn in &built_context.history {
+            messages.push(ChatMessage {
+                role: match turn.role {
+                    crate::domain::jarvis::Role::User => ChatRole::User,
+                    crate::domain::jarvis::Role::Assistant => ChatRole::Assistant,
+                    crate::domain::jarvis::Role::System => ChatRole::System,
+                },
+                content: turn.content.clone(),
+            });
+        }
+        messages.push(ChatMessage {
+            role: ChatRole::User,
+            content: query.to_string(),
+        });
+
         // 4. Generate response
         let params = SampleParams {
             max_tokens: 512,
@@ -207,10 +232,7 @@ impl JarvisService {
             repeat_penalty: 1.1,
         };
 
-        let response = self
-            .ai
-            .complete_chat(Some(system), query.to_string(), params)
-            .await?;
+        let response = self.ai.complete_conversation(messages, params).await?;
         let response = response.trim().to_string();
 
         // 5. Store the response

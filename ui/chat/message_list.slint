@@ -217,6 +217,9 @@ export component MessageList inherits Rectangle {
             // Explicit width from parent for proper text wrapping
             width: parent.width;
             padding: Spacing.md;
+            // Extra bottom clearance so the scroll-to-bottom FAB (44px, docked
+            // bottom-right) never covers the last message's corner.
+            padding-bottom: Spacing.md + 48px;
             spacing: 2px;
 
             // Load more trigger at top (for infinite scroll)

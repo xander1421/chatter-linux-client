@@ -47,22 +47,12 @@ pub struct BuiltContext {
 }
 
 impl BuiltContext {
-    /// Format context as a system prompt prefix.
+    /// Format the retrieved memory (facts, entities, semantic hits, summaries)
+    /// as a system-prompt section. Conversation history is deliberately NOT
+    /// rendered here — it goes to the model as real chat turns instead
+    /// (`JarvisService::ask` builds the message array).
     pub fn to_system_prompt(&self) -> String {
         let mut parts = Vec::new();
-
-        // Add conversation history
-        if !self.history.is_empty() {
-            parts.push("## Recent Conversation".to_string());
-            for conv in &self.history {
-                let role = match conv.role {
-                    Role::User => "User",
-                    Role::Assistant => "Jarvis",
-                    Role::System => "System",
-                };
-                parts.push(format!("{}: {}", role, conv.content));
-            }
-        }
 
         // Add user facts
         if !self.user_facts.is_empty() {
@@ -260,7 +250,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_built_context_to_system_prompt() {
+    fn test_history_is_not_rendered_into_system_prompt() {
+        // History goes to the model as real chat turns (JarvisService::ask),
+        // never as system-prompt text.
         let context = BuiltContext {
             history: vec![
                 JarvisConversation {
@@ -277,9 +269,9 @@ mod tests {
             ..Default::default()
         };
 
+        assert!(!context.is_empty(), "history still counts as context");
         let prompt = context.to_system_prompt();
-        assert!(prompt.contains("Recent Conversation"));
-        assert!(prompt.contains("User: Hello"));
+        assert!(!prompt.contains("Hello"), "history leaked into the system prompt");
     }
 
     #[test]
@@ -311,16 +303,15 @@ mod tests {
 
     #[test]
     fn test_estimated_tokens() {
+        use crate::local_ai::vector_store::VectorSearchResult;
+        use crate::storage::repositories::vector_repo::EmbeddingSourceType;
         let mut context = BuiltContext::default();
-        context.history.push(JarvisConversation {
-            id: crate::domain::JarvisConversationId::new(),
-            context_type: crate::domain::ContextType::Channel,
-            context_id: "test".to_string(),
-            role: Role::User,
-            content: "A".repeat(400), // ~100 tokens
-            timestamp: 0,
-            metadata_json: None,
-            created_at: chrono::Utc::now(),
+        context.semantic_messages.push(VectorSearchResult {
+            source_id: "m1".into(),
+            source_type: EmbeddingSourceType::Message,
+            channel_id: None,
+            content_preview: "A".repeat(400), // ~100 tokens
+            score: 0.9,
         });
 
         let tokens = context.estimated_tokens();

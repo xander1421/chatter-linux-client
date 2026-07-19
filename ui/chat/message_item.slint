@@ -990,10 +990,10 @@ export component MessageItem inherits Rectangle {
                             }
                         }
 
-                        // Timestamp row
+                        // Timestamp row — bottom-right for all messages (messenger convention)
                         HorizontalLayout {
                             spacing: 4px;
-                            alignment: root.is-own ? start : end;
+                            alignment: end;
 
                             // Own messages: timestamp+status
                             if root.is-own: HorizontalLayout {

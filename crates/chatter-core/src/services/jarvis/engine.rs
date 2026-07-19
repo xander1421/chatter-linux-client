@@ -63,31 +63,27 @@ impl JarvisEngine {
 
     async fn complete(
         &self,
-        system: Option<String>,
-        prompt: String,
+        messages: Vec<ChatMessage>,
         params: SampleParams,
     ) -> Result<String, JarvisError> {
         match self {
             Self::InProcess(actor) => {
-                // The actor takes one flat prompt; prepend the system context.
-                let full = match system {
-                    Some(s) => format!("{s}\n\n{prompt}"),
-                    None => prompt,
-                };
+                // The actor takes one flat prompt; render the turns as text.
+                let mut full = String::new();
+                for m in &messages {
+                    let label = match m.role {
+                        ChatRole::System => "",
+                        ChatRole::User => "User: ",
+                        ChatRole::Assistant => "Assistant: ",
+                    };
+                    full.push_str(label);
+                    full.push_str(&m.content);
+                    full.push_str("\n\n");
+                }
+                full.push_str("Assistant:");
                 actor.complete(full, params).await.map_err(JarvisError::from)
             }
             Self::Http { backend, model } => {
-                let mut messages = Vec::with_capacity(2);
-                if let Some(s) = system {
-                    messages.push(ChatMessage {
-                        role: ChatRole::System,
-                        content: s,
-                    });
-                }
-                messages.push(ChatMessage {
-                    role: ChatRole::User,
-                    content: prompt,
-                });
                 let gen_params = GenerateParams {
                     max_tokens: params.max_tokens as u32,
                     temperature: params.temperature,
@@ -136,23 +132,28 @@ impl SharedJarvisEngine {
         *self.0.write().expect("engine lock poisoned") = Arc::new(engine);
     }
 
-    /// Run a completion on the current engine.
+    /// Single-shot completion (entity extraction, summaries).
     pub async fn complete(&self, prompt: String, params: SampleParams) -> Result<String, JarvisError> {
-        let engine = self.0.read().expect("engine lock poisoned").clone();
-        engine.complete(None, prompt, params).await
+        self.complete_conversation(
+            vec![ChatMessage {
+                role: ChatRole::User,
+                content: prompt,
+            }],
+            params,
+        )
+        .await
     }
 
-    /// Completion with a separate system message (persona + memory context).
-    /// HTTP providers get a real `system` role; the in-process actor gets it
-    /// prepended to the prompt.
-    pub async fn complete_chat(
+    /// Full multi-turn completion: `[system, user, assistant, …, user]`.
+    /// HTTP providers get real roles (what chat models are trained on); the
+    /// in-process actor gets the turns rendered as text.
+    pub async fn complete_conversation(
         &self,
-        system: Option<String>,
-        prompt: String,
+        messages: Vec<ChatMessage>,
         params: SampleParams,
     ) -> Result<String, JarvisError> {
         let engine = self.0.read().expect("engine lock poisoned").clone();
-        engine.complete(system, prompt, params).await
+        engine.complete(messages, params).await
     }
 
     /// Provider description for logging/UI ("ollama", "built-in", …).

@@ -334,3 +334,48 @@ async fn live_memory_roundtrip_through_service() {
         "model failed to recall the name from memory context: {r2}"
     );
 }
+
+/// Live multi-turn coherence — the exact failure from user testing: give a
+/// name mid-conversation, then reference it indirectly. Real role turns
+/// (not history-as-text) make this work even on tiny models.
+#[tokio::test]
+#[ignore = "needs a running Ollama on localhost:11434 with a chat model"]
+async fn live_multi_turn_coherence() {
+    use chatter_core::events::EventBus;
+    use chatter_core::local_ai::settings::LocalAISettings;
+    use chatter_core::services::ai::LocalAIActorHandle;
+    use chatter_core::services::jarvis::{JarvisEngine, JarvisService, SharedJarvisEngine};
+
+    let (db, _temp) = create_test_db();
+    let memory = Arc::new(JarvisMemoryRepository::new(db.clone()));
+    let graph = Arc::new(JarvisGraphRepository::new(db));
+    let engine = SharedJarvisEngine::new(JarvisEngine::from_settings(
+        &LocalAISettings::default(),
+        LocalAIActorHandle::spawn(),
+    ));
+    let svc = JarvisService::new(memory, graph, engine, EventBus::new(), None);
+
+    let ctx = JarvisContext::general();
+    let user = UserId::new();
+
+    let r1 = svc.ask(&ctx, "I want to write a message to a friend.", Some(&user)).await.unwrap();
+    println!("turn 1: {r1:?}");
+    let r2 = svc.ask(&ctx, "His name is John.", Some(&user)).await.unwrap();
+    println!("turn 2: {r2:?}");
+    // qwen2.5:0.5b at temp 0.7 occasionally flubs the recall; one retry keeps
+    // the test about the WIRING (real role turns), not sampling luck. On ≥3b
+    // models this passes first try.
+    let mut last = String::new();
+    for attempt in 0..2 {
+        let r3 = svc
+            .ask(&ctx, "Who is the message for? Answer with just the name.", Some(&user))
+            .await
+            .unwrap();
+        println!("turn 3 (attempt {attempt}): {r3:?}");
+        if r3.to_lowercase().contains("john") {
+            return;
+        }
+        last = r3;
+    }
+    panic!("multi-turn context lost — expected 'John' in: {last}");
+}

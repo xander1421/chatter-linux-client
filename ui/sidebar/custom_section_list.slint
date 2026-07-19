@@ -391,6 +391,12 @@ export component CustomSectionList inherits Rectangle {
             height: 28px;
             background: new-sec-touch.has-hover ? Colors.surface-hover : transparent;
             border-radius: Spacing.radius-sm;
+            // Ghost-button affordance — a bare text row reads as a list item,
+            // not an action; the border on hover marks it clickable.
+            border-width: 1px;
+            border-color: new-sec-touch.has-hover ? Colors.border : transparent;
+            accessible-role: button;
+            accessible-label: "New Section";
 
             HorizontalLayout {
                 padding-left: Spacing.sm;
@@ -404,12 +410,12 @@ export component CustomSectionList inherits Rectangle {
                         source: Icons.plus;
                         width: 12px;
                         height: 12px;
-                        colorize: Colors.text-muted;
+                        colorize: new-sec-touch.has-hover ? Colors.primary : Colors.text-muted;
                     }
                 }
                 Text {
                     text: "New Section";
-                    color: Colors.text-muted;
+                    color: new-sec-touch.has-hover ? Colors.text-secondary : Colors.text-muted;
                     font-size: Typography.xs2;
                     font-weight: 500;
                     vertical-alignment: center;

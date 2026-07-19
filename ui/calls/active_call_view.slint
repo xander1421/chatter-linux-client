@@ -127,10 +127,10 @@ component ParticipantTile inherits Rectangle {
         }
     }
 
-    // Name label (bottom-right) — only over live video; the avatar branch
-    // already shows the name under the avatar.
+    // Name label (bottom-center, clear of the control buttons) — only over
+    // live video; the avatar branch already shows the name under the avatar.
     if show-video && participant.is-video-enabled: Rectangle {
-        x: parent.width - self.width - Spacing.xs;
+        x: (parent.width - self.width) / 2;
         y: parent.height - self.height - Spacing.xs;
         width: name-text.preferred-width + Spacing.md;
         height: 18px;
@@ -184,6 +184,21 @@ export component ActiveCallView inherits Rectangle {
     // A new/changed screen share re-arms auto-focus even if the user had dropped
     // back to the grid, so the share always surfaces.
     changed screen-share-index => { user-focus = -2; }
+    // True while dialling a DM/anon peer: the pending path leaves the duration
+    // timer stopped and only the local participant present (group calls start
+    // their timer immediately, so this flips off within the first tick).
+    property <bool> is-connecting: call-data.participant-count <= 1
+        && call-data.duration-seconds == 0;
+    // Any live video (camera or screen) in the call? Voice-only calls collapse
+    // to a compact dock instead of a tall grid of empty avatar tiles.
+    // ponytail: bounded 6-tile scan, same cap as screen-share-index above.
+    property <bool> any-video: is-video-enabled || is-screen-sharing
+        || (call-data.participants.length > 0 && (call-data.participants[0].is-video-enabled || call-data.participants[0].is-screen-sharing))
+        || (call-data.participants.length > 1 && (call-data.participants[1].is-video-enabled || call-data.participants[1].is-screen-sharing))
+        || (call-data.participants.length > 2 && (call-data.participants[2].is-video-enabled || call-data.participants[2].is-screen-sharing))
+        || (call-data.participants.length > 3 && (call-data.participants[3].is-video-enabled || call-data.participants[3].is-screen-sharing))
+        || (call-data.participants.length > 4 && (call-data.participants[4].is-video-enabled || call-data.participants[4].is-screen-sharing))
+        || (call-data.participants.length > 5 && (call-data.participants[5].is-video-enabled || call-data.participants[5].is-screen-sharing));
     // Derived properties only evaluate meaningfully when maximized-index >= 0;
     // the explicit guard avoids `remote-video-frames[-1]` (Slint indexes the
     // array eagerly and a negative index aborts the per-frame property
@@ -218,7 +233,11 @@ export component ActiveCallView inherits Rectangle {
     // window height, clamped so chat stays visible on tall screens and the
     // dock isn't oversized on short/mobile ones (was a fixed 280px band that
     // ignored the viewport).
-    property <length> dock-height: clamp(viewport-height * 0.45, 240px, 560px);
+    // Voice-only calls (no camera, no screen share anywhere) collapse to a
+    // compact strip — a tall grid of empty avatar tiles wastes the chat area.
+    property <length> dock-height: any-video
+        ? clamp(viewport-height * 0.45, 240px, 560px)
+        : 140px;
     visible: show;
     min-height: show ? (fullscreen ? 0px : dock-height) : 0px;
     max-height: show ? (fullscreen ? 100000px : dock-height) : 0px;
@@ -247,7 +266,40 @@ export component ActiveCallView inherits Rectangle {
                 clicked => { root.user-focus = 0; }
             }
 
-            if maximized-index < 0 && call-data.participant-count == 2: HorizontalLayout {
+            // 1:1 call — remote party dominates the stage, self is a small
+            // picture-in-picture thumbnail (messenger convention: you watch
+            // them, not yourself). Voice-only compact dock keeps the side-by-
+            // side split since there's no video to prioritize.
+            if maximized-index < 0 && call-data.participant-count == 2 && any-video: Rectangle {
+                x: Spacing.sm;
+                y: Spacing.sm;
+                width: parent.width - 2 * Spacing.sm;
+                height: parent.height - 2 * Spacing.sm;
+                background: transparent;
+
+                ParticipantTile {
+                    width: 100%;
+                    height: 100%;
+                    participant: call-data.participants[0];
+                    video-frame: remote-video-frames.length > 0 ? remote-video-frames[0] : local-video-frame;
+                    clicked => { root.user-focus = 0; }
+                }
+
+                ParticipantTile {
+                    property <length> pip-width: clamp(parent.width * 0.24, 120px, 200px);
+                    width: pip-width;
+                    height: pip-width * 0.62;
+                    x: parent.width - self.width - Spacing.sm;
+                    // Clear of the floating control pill (40px + margin).
+                    y: parent.height - self.height - 40px - Spacing.md - Spacing.sm;
+                    participant: call-data.participants.length > 1 ? call-data.participants[1] : call-data.participants[0];
+                    video-frame: local-video-frame;
+                    is-local: true;
+                    clicked => { root.user-focus = 1; }
+                }
+            }
+
+            if maximized-index < 0 && call-data.participant-count == 2 && !any-video: HorizontalLayout {
                 padding: Spacing.sm;
                 spacing: Spacing.sm;
 
@@ -347,6 +399,10 @@ export component ActiveCallView inherits Rectangle {
                         width: 36px;
                         height: 36px;
                         border-radius: 18px;
+                        accessible-role: button;
+                        accessible-label: (call-data.participants[maximized-index].is-audio-muted-locally
+                            ? "Unmute " : "Mute ")
+                            + call-data.participants[maximized-index].display-name + " for you";
                         background: call-data.participants[maximized-index].is-audio-muted-locally
                             ? Colors.error.with-alpha(0.85)
                             : Colors.surface-hover;
@@ -374,6 +430,10 @@ export component ActiveCallView inherits Rectangle {
                         width: 36px;
                         height: 36px;
                         border-radius: 18px;
+                        accessible-role: button;
+                        accessible-label: (call-data.participants[maximized-index].is-video-paused-locally
+                            ? "Resume " : "Pause ")
+                            + call-data.participants[maximized-index].display-name + "'s video for you";
                         background: call-data.participants[maximized-index].is-video-paused-locally
                             ? Colors.error.with-alpha(0.85)
                             : Colors.surface-hover;
@@ -414,22 +474,44 @@ export component ActiveCallView inherits Rectangle {
                     spacing: Spacing.sm;
 
                     Text {
-                        text: format-duration(call-data.duration-seconds);
+                        // Dialling a DM/anon peer: timer hasn't started yet, so
+                        // "0:00" would read as a stuck call — say what's happening.
+                        text: root.is-connecting ? "Calling…" : format-duration(call-data.duration-seconds);
                         font-size: Typography.xs;
                         color: Colors.text-secondary;
                         vertical-alignment: center;
                     }
 
-                    if call-data.participant-count > 2: Text {
-                        text: "• " + call-data.participant-count;
-                        font-size: Typography.xs;
-                        color: Colors.text-secondary;
-                        vertical-alignment: center;
+                    if call-data.participant-count > 2: HorizontalLayout {
+                        spacing: 3px;
+
+                        Image {
+                            source: Icons.users;
+                            width: 11px;
+                            height: 11px;
+                            colorize: Colors.text-secondary;
+                            y: (parent.height - self.height) / 2;
+                        }
+                        Text {
+                            text: call-data.participant-count;
+                            font-size: Typography.xs;
+                            color: Colors.text-secondary;
+                            vertical-alignment: center;
+                        }
                     }
 
                     if call-data.is-encrypted && call-data.verification-emoji-1 != "": HorizontalLayout {
                         spacing: 2px;
 
+                        // Lock prefix — marks the emoji cluster as the E2EE
+                        // verification code (SAS), not reactions.
+                        Image {
+                            source: Icons.lock;
+                            width: 11px;
+                            height: 11px;
+                            colorize: Colors.primary;
+                            y: (parent.height - self.height) / 2;
+                        }
                         Text { font-family: Typography.font-family-emoji; text: call-data.verification-emoji-1; font-size: Typography.xs; vertical-alignment: center; }
                         Text { font-family: Typography.font-family-emoji; text: call-data.verification-emoji-2; font-size: Typography.xs; vertical-alignment: center; }
                         Text { font-family: Typography.font-family-emoji; text: call-data.verification-emoji-3; font-size: Typography.xs; vertical-alignment: center; }
@@ -468,6 +550,64 @@ export component ActiveCallView inherits Rectangle {
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
                     colorize: Colors.text-primary;
+                }
+            }
+
+            // Persistent "you are sharing" banner — sits just above the control
+            // pill. The toggled toolbar icon alone is too easy to forget; a
+            // live share needs an always-visible state + one-click stop.
+            if root.is-screen-sharing: Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: parent.height - 40px - Spacing.md - Spacing.sm - self.height;
+                width: share-banner-row.preferred-width + Spacing.md * 2;
+                height: 28px;
+                border-radius: 14px;
+                background: Colors.overlay-heavy;
+                border-width: 1px;
+                border-color: Colors.glow-cyan.with-alpha(0.6);
+
+                share-banner-row := HorizontalLayout {
+                    padding-left: Spacing.md;
+                    padding-right: Spacing.md;
+                    spacing: Spacing.sm;
+                    alignment: center;
+
+                    Image {
+                        source: Icons.monitor;
+                        width: 13px;
+                        height: 13px;
+                        colorize: Colors.glow-cyan;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    Text {
+                        text: "Sharing your screen";
+                        font-size: Typography.xs;
+                        color: Colors.text-primary;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        width: stop-text.preferred-width + Spacing.sm * 2;
+                        height: 20px;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: 10px;
+                        background: stop-touch.has-hover ? Colors.error-hover : Colors.error;
+
+                        stop-text := Text {
+                            x: Spacing.sm;
+                            text: "Stop";
+                            font-size: Typography.xs;
+                            font-weight: Typography.semibold;
+                            color: Colors.text-primary;
+                            vertical-alignment: center;
+                        }
+
+                        stop-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.toggle-screen-share(); }
+                        }
+                    }
                 }
             }
 
