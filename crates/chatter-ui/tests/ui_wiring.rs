@@ -897,3 +897,25 @@ fn forward_message_confirm_is_wired_to_core() {
         "modal must stay open until the async send reports success"
     );
 }
+
+// ============================================================================
+// SESSIONS — revoke paths must rotate sender keys (V52)
+// ============================================================================
+
+#[test]
+fn session_revoke_routes_through_sender_key_rotation() {
+    // The UI's revoke buttons call client.revoke_session / revoke_all_other_sessions.
+    // Historical bug: those routed to a server-only revoke that skipped sender-key
+    // rotation, while the rotating path (revoke_and_rotate) was unreachable.
+    let core_src = include_str!("../../chatter-core/src/client/mod.rs");
+    let revoke_fn = core_src
+        .split("pub async fn revoke_session")
+        .nth(1)
+        .expect("revoke_session facade exists");
+    assert!(
+        revoke_fn[..revoke_fn.find("pub async fn").unwrap_or(revoke_fn.len())]
+            .contains("revoke_and_rotate"),
+        "revoke_session no longer routes through revoke_and_rotate — revoked \
+         devices would keep working sender keys"
+    );
+}

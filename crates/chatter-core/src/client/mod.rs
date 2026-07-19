@@ -794,17 +794,36 @@ impl ChatterClient {
         self.sessions().list_sessions().await
     }
 
+    /// Revoke a session AND mark sender-key rotation for every owned channel,
+    /// so the revoked device's cached sender keys cannot read future messages
+    /// (rotation happens lazily on next send per channel).
     pub async fn revoke_session(
         &self,
         device_id: u32,
     ) -> Result<(), crate::services::session_service::SessionError> {
-        self.sessions().revoke_session(device_id).await
+        let mut auth_client = self.services.grpc_pool.auth_client();
+        self.devices()
+            .revoke_and_rotate(&mut auth_client, device_id)
+            .await
+            .map_err(crate::services::session_service::SessionError::Device)
     }
 
+    /// Revoke every session except the current one, with sender-key rotation
+    /// per revoked device. Primary-device revokes are rejected server-side
+    /// (`CannotRevokePrimary`) and skipped with a warning.
     pub async fn revoke_all_other_sessions(
         &self,
     ) -> Result<(), crate::services::session_service::SessionError> {
-        self.sessions().revoke_all_other_sessions().await
+        let sessions = self.list_sessions().await?;
+        for session in sessions {
+            if session.is_current {
+                continue;
+            }
+            if let Err(e) = self.revoke_session(session.device_id).await {
+                tracing::warn!(device_id = session.device_id, error = %e, "failed to revoke session");
+            }
+        }
+        Ok(())
     }
 
     // ── Mailbox / DM bootstrapping façade ────────────────────────────────
@@ -2480,87 +2499,6 @@ impl ChatterClient {
             .get_thread_messages(&mut msg_client, channel_id, thread_root_id, limit, before)
             .await
             .map_err(|e| ClientError::Inbox(e.to_string()))
-    }
-
-    // ── Message forwarding ─────────────────────────────────────────
-
-    /// Forward a message to another channel.
-    pub async fn forward_message(
-        &self,
-        source_message_id: &crate::domain::ids::MessageId,
-        target_channel_id: &crate::domain::ids::ChannelId,
-        comment: Option<&str>,
-    ) -> Result<Message, ClientError> {
-        let mut msg_client = self.services.grpc_pool.message_client();
-        let mut auth_client = self.services.grpc_pool.auth_client();
-        let mut ch_client = self.services.grpc_pool.channel_client();
-        self.messages()
-            .forward_message(&mut msg_client, &mut auth_client, &mut ch_client, source_message_id, target_channel_id, comment)
-            .await
-            .map_err(|e| ClientError::Inbox(e.to_string()))
-    }
-
-    // ── Device management ─────────────────────────────────────────
-
-    /// List all linked devices for the current user.
-    pub async fn list_devices(&self) -> Result<Vec<crate::services::device_service::Device>, ClientError> {
-        let mut auth_client = self.services.grpc_pool.auth_client();
-        let response = auth_client.list_devices().await
-            .map_err(|e| ClientError::Inbox(e.to_string()))?;
-
-        let mut devices: Vec<crate::services::device_service::Device> = response
-            .devices
-            .into_iter()
-            .map(|d| crate::services::device_service::Device {
-                device_id: d.device_id,
-                name: d.device_name,
-                info: d.device_info,
-                created_at: chrono::DateTime::from_timestamp_millis(d.created_at as i64)
-                    .unwrap_or(chrono::DateTime::UNIX_EPOCH),
-                last_active: chrono::DateTime::from_timestamp_millis(d.last_active as i64)
-                    .unwrap_or(chrono::DateTime::UNIX_EPOCH),
-                is_primary: d.is_primary,
-                is_current: d.is_current,
-            })
-            .collect();
-
-        devices.sort_by_key(|d| d.device_id);
-        Ok(devices)
-    }
-
-    /// Unlink (revoke) a specific device.
-    ///
-    /// After a successful revoke, every encrypted channel we own is marked for
-    /// sender-key rotation so the revoked device's cached sender key cannot be
-    /// used to read messages going forward. Rotation happens on next send per
-    /// channel (new SenderKey generated → SKDM redistributed to remaining
-    /// members' remaining devices, never to the revoked device).
-    pub async fn unlink_device(&self, device_id: u32) -> Result<(), ClientError> {
-        let mut auth_client = self.services.grpc_pool.auth_client();
-        self.devices()
-            .revoke_and_rotate(&mut auth_client, device_id)
-            .await
-            .map_err(|e| ClientError::Inbox(e.to_string()))
-    }
-
-    /// Unlink all devices except the current one.
-    pub async fn unlink_all_other_devices(&self) -> Result<(), ClientError> {
-        let devices = self.list_devices().await?;
-        let current_device_id = self.sessions().current_device_id();
-
-        for device in devices {
-            if device.is_current || Some(device.device_id) == current_device_id {
-                continue;
-            }
-            if device.is_primary {
-                continue; // Cannot revoke primary device
-            }
-            if let Err(e) = self.unlink_device(device.device_id).await {
-                tracing::warn!(device_id = device.device_id, error = %e, "Failed to unlink device");
-            }
-        }
-
-        Ok(())
     }
 
     // ── AI Integration ─────────────────────────────────────────────
