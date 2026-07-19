@@ -23,6 +23,10 @@ use super::fact_extractor::FactExtractor;
 use super::error::JarvisError;
 use super::memory_manager::{CompressionConfig, MemoryManager, MemoryStats};
 
+/// Supplies live app state (channel names, friends) for the system prompt.
+/// A closure so Jarvis needs no dependency on channel/user services.
+pub type AppContextFn = Arc<dyn Fn() -> String + Send + Sync>;
+
 /// Jarvis AI assistant service.
 ///
 /// Provides a persistent AI assistant with memory and knowledge graph
@@ -44,6 +48,8 @@ pub struct JarvisService {
     context_builder: ContextBuilder,
     /// Memory manager.
     memory_manager: MemoryManager,
+    /// App-context bridge (channels, friends) for grounded answers.
+    app_context: Option<AppContextFn>,
 }
 
 impl JarvisService {
@@ -69,7 +75,14 @@ impl JarvisService {
             fact_extractor,
             context_builder,
             memory_manager,
+            app_context: None,
         }
+    }
+
+    /// Attach the app-context bridge (builder style).
+    pub fn with_app_context(mut self, f: AppContextFn) -> Self {
+        self.app_context = Some(f);
+        self
     }
 
     // ========================================================================
@@ -214,11 +227,18 @@ impl JarvisService {
             simply confirm it. Answer directly and use the context below when \
             relevant.";
         let system_context = built_context.to_system_prompt();
-        let system = if system_context.is_empty() {
+        let mut system = if system_context.is_empty() {
             persona.to_string()
         } else {
             format!("{persona}\n\n{system_context}")
         };
+        if let Some(app_context) = &self.app_context {
+            let app = app_context();
+            if !app.is_empty() {
+                system.push_str("\n\n## App Context\n");
+                system.push_str(&app);
+            }
+        }
 
         let mut messages = Vec::with_capacity(built_context.history.len() + 2);
         messages.push(ChatMessage {

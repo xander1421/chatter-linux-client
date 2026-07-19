@@ -866,6 +866,30 @@ impl UserService {
             .map_err(UserError::Storage)
     }
 
+    /// Usernames of accepted friends, best effort (local data only).
+    /// Feeds the Jarvis app-context bridge.
+    pub fn friend_usernames_local(&self) -> Vec<String> {
+        let Ok(current) = self.settings_repo.current_user_id() else {
+            return Vec::new();
+        };
+        let Ok(friends) = self.get_friends_local() else {
+            return Vec::new();
+        };
+        friends
+            .iter()
+            .filter(|f| matches!(f.status, FriendshipStatus::Accepted))
+            .filter_map(|f| {
+                let other = if f.requester_id == current {
+                    f.addressee_id
+                } else {
+                    f.requester_id
+                };
+                self.user_repo.get(&other).ok().flatten().map(|u| u.username)
+            })
+            .take(20)
+            .collect()
+    }
+
     /// Persist an accepted friendship locally with us as the requester.
     ///
     /// The accepter records the friendship inline in `respond_friend_request`,

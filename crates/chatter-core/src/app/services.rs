@@ -327,13 +327,46 @@ impl ServiceContainer {
             local_ai.clone(),
         ));
         #[cfg(feature = "jarvis")]
-        let jarvis_service = Arc::new(JarvisService::new(
-            infra.jarvis_memory_repo.clone(),
-            infra.jarvis_graph_repo.clone(),
-            jarvis_engine.clone(),
-            infra.event_bus.clone(),
-            Some(semantic_search_service.clone()),
-        ));
+        let jarvis_service = {
+            // App-context bridge: live channel + friend names ground Jarvis
+            // answers ("what did alex say", "summarize general").
+            let ctx_channels = channel_service.clone();
+            let ctx_users = user_service.clone();
+            let app_context: crate::services::jarvis::service::AppContextFn =
+                Arc::new(move || {
+                    use crate::domain::channel::ChannelType;
+                    let mut s = String::new();
+                    if let Ok(channels) = ctx_channels.get_channels_mru() {
+                        let names: Vec<_> = channels
+                            .iter()
+                            .filter(|c| {
+                                matches!(c.channel_type, ChannelType::Public | ChannelType::Private)
+                                    && !c.id.0.is_nil()
+                            })
+                            .take(15)
+                            .map(|c| c.name.clone())
+                            .collect();
+                        if !names.is_empty() {
+                            s.push_str(&format!("User's channels: {}.\n", names.join(", ")));
+                        }
+                    }
+                    let friends = ctx_users.friend_usernames_local();
+                    if !friends.is_empty() {
+                        s.push_str(&format!("User's friends: {}.\n", friends.join(", ")));
+                    }
+                    s
+                });
+            Arc::new(
+                JarvisService::new(
+                    infra.jarvis_memory_repo.clone(),
+                    infra.jarvis_graph_repo.clone(),
+                    jarvis_engine.clone(),
+                    infra.event_bus.clone(),
+                    Some(semantic_search_service.clone()),
+                )
+                .with_app_context(app_context),
+            )
+        };
 
         // 22. Channel bootstrap service for pending message flush
         let channel_bootstrap_service = Arc::new(ChannelBootstrapService::new(
