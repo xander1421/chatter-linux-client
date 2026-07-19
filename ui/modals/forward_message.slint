@@ -12,7 +12,7 @@ import { Avatar } from "../components/avatar.slint";
 export struct ForwardTarget {
     id: string,
     name: string,
-    target-type: string,  // "channel" or "dm"
+    target-type: string,  // "channel", "group", "dm", or "anon-dm"
 }
 
 export component ForwardMessageModal inherits Rectangle {
@@ -134,13 +134,13 @@ export component ForwardMessageModal inherits Rectangle {
                                 Rectangle {
                                     width: type-text.width + Spacing.sm * 2;
                                     height: 20px;
-                                    background: target.target-type == "channel" ? Colors.primary.with-alpha(0.2) : Colors.success.with-alpha(0.2);
+                                    background: target.target-type == "channel" || target.target-type == "group" ? Colors.primary.with-alpha(0.2) : Colors.success.with-alpha(0.2);
                                     border-radius: Spacing.radius-sm;
 
                                     type-text := Text {
                                         x: Spacing.sm;
-                                        text: target.target-type == "channel" ? "#channel" : "DM";
-                                        color: target.target-type == "channel" ? Colors.primary : Colors.success;
+                                        text: target.target-type == "channel" ? "#channel" : target.target-type == "group" ? "#group" : "DM";
+                                        color: target.target-type == "channel" || target.target-type == "group" ? Colors.primary : Colors.success;
                                         font-size: Typography.xs;
                                         font-weight: Typography.medium;
                                         vertical-alignment: center;

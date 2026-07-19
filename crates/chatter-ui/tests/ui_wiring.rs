@@ -853,3 +853,47 @@ fn friends_modal_tab_switch_is_wired() {
         w.invoke_friends_modal_switch_tab(tab.into());
     }
 }
+
+// ============================================================================
+// FORWARD MESSAGE — confirm handler reaches core (V51)
+// ============================================================================
+
+#[test]
+fn forward_message_confirm_is_wired_to_core() {
+    let (_rt, _tmp, client, w) = wired_offline();
+    let _guard = _rt.enter();
+    chatter_ui::bin_ui::features::modals::wire_friend_requests(&w, &client);
+
+    // The old handler closed the modal and logged "not yet implemented" —
+    // regression-proof its absence.
+    let src = include_str!("../src/bin_ui/features/modals/friend_requests.rs");
+    assert!(
+        !src.contains("not yet implemented"),
+        "forward-message confirm handler is still a no-op stub"
+    );
+    assert!(
+        src.contains("forward_to"),
+        "forward-message confirm no longer calls ConversationHandle::forward_to"
+    );
+
+    // Dynamic: populate a target + source identity, fire confirm. Offline the
+    // send fails (no session), but the handler must parse, dispatch, and leave
+    // the modal OPEN on failure (only success closes it).
+    use slint::{ModelRc, VecModel};
+    let peer = "3f2c8a90-1111-2222-3333-444455556666";
+    let targets = vec![chatter_ui::ForwardTarget {
+        id: peer.into(),
+        name: "Test Peer".into(),
+        target_type: "dm".into(),
+    }];
+    w.set_forward_targets(ModelRc::new(VecModel::from(targets)));
+    w.set_forward_source_sender_id(peer.into());
+    w.set_forward_source_timestamp("123456789".into());
+    w.set_active_modal("forward-message".into());
+    w.invoke_forward_message(peer.into());
+    assert_eq!(
+        w.get_active_modal().as_str(),
+        "forward-message",
+        "modal must stay open until the async send reports success"
+    );
+}

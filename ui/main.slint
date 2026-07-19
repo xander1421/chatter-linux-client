@@ -389,6 +389,8 @@ export component MainWindow inherits Window {
 
     // Forward message modal properties
     in property <string> forward-message-preview <=> app.forward-message-preview;
+    in-out property <string> forward-source-sender-id <=> app.forward-source-sender-id;
+    in-out property <string> forward-source-timestamp <=> app.forward-source-timestamp;
     in-out property <string> forward-search-text <=> app.forward-search-text;
     in property <[ForwardTarget]> forward-targets <=> app.forward-targets;
     in property <bool> forward-loading <=> app.forward-loading;

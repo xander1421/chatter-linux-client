@@ -502,6 +502,9 @@ export component App inherits Rectangle {
 
     // Forward message modal properties
     in property <string> forward-message-preview: "";
+    // Source-message identity, stashed at modal-open, read by the confirm handler.
+    in-out property <string> forward-source-sender-id: "";
+    in-out property <string> forward-source-timestamp: "";
     in-out property <string> forward-search-text: "";
     in property <[ForwardTarget]> forward-targets: [];
     in property <bool> forward-loading: false;

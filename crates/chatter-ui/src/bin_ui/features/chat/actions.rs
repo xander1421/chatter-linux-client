@@ -105,18 +105,25 @@ pub fn wire_forward_message_action(window: &MainWindow, ui_ctx: &Arc<ChatterClie
 
             run_ui!(weak, |w| {
                 w.set_forward_message_preview(preview.into());
+                // Stash the source-message identity for the confirm handler
+                // (modal blocks conversation switches, but confirm runs later).
+                w.set_forward_source_sender_id(sender_id_str.clone().into());
+                w.set_forward_source_timestamp(timestamp_ns_str.clone().into());
 
                 // Populate forward targets from sidebar data
                 let mut targets: Vec<ForwardTarget> = Vec::new();
 
-                // Add DM conversations
+                // Add DM conversations. Regular DM rows are keyed by the peer
+                // UserId (ChannelId::from(peer) is byte-identical); anon rows
+                // carry an AnonDmId — the type tag tells the confirm handler
+                // which way to parse.
                 let dms = w.get_dm_conversations();
                 for i in 0..dms.row_count() {
                     if let Some(dm) = dms.row_data(i) {
                         targets.push(ForwardTarget {
                             id: dm.channel_id.clone(),
                             name: dm.display_name.clone(),
-                            target_type: "dm".into(),
+                            target_type: if dm.is_anon { "anon-dm".into() } else { "dm".into() },
                         });
                     }
                 }
@@ -140,7 +147,7 @@ pub fn wire_forward_message_action(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                         targets.push(ForwardTarget {
                             id: g.group_id.clone(),
                             name: g.name.clone(),
-                            target_type: "channel".into(),
+                            target_type: "group".into(),
                         });
                     }
                 }
