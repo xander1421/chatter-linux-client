@@ -405,6 +405,24 @@ impl AuthService {
         })?;
         let device_id = session.device_id;
 
+        // LATENT BUG FIX (surfaced by validated.rs V51's fresh-install flow):
+        // on a fresh device we generate credentials with a guessed device_id
+        // (1), but the server binds the auth token to the device id it
+        // actually ASSIGNS (e.g. 2 when the primary registration still holds
+        // device 1). Basic auth is "{user_id}.{device_id}:{token}" — with the
+        // stale id every authenticated RPC after login fails device auth.
+        // Rebind the same token/UAK to the server-assigned id before
+        // persisting or configuring the interceptor.
+        let credentials = if credentials.device_id() != device_id {
+            DeviceCredentials::from_stored(
+                device_id,
+                *credentials.auth_token().as_bytes(),
+                *credentials.unidentified_access_key(),
+            )
+        } else {
+            credentials
+        };
+
         // PRIVACY: decrypt display_name with the locally-known profile_key.
         // Fresh-device case has no profile_key yet; the post-login SVR
         // restore plus a follow-up profile fetch will populate display_name.
@@ -424,6 +442,8 @@ impl AuthService {
         self.settings_repo.set_string(keys::CURRENT_USER_ID, &user_id.to_string())?;
         self.settings_repo.set(keys::CURRENT_DEVICE_ID, &device_id)?;
         self.settings_repo.set_string(keys::DISPLAY_NAME, &display_name)?;
+        // Salt for later PIN-derived flows (server message-backup from settings).
+        self.settings_repo.set_string(keys::SVR_SALT_USERNAME, username)?;
         // Server-issued opaque push topic (empty when push is disabled).
         // configure_push subscribes to this instead of deriving it locally.
         self.settings_repo.set_string(keys::PUSH_TOPIC, &response.push_topic)?;
@@ -817,6 +837,8 @@ impl AuthService {
         self.settings_repo.set_string(keys::CURRENT_USER_ID, &user_id.to_string())?;
         self.settings_repo.set(keys::CURRENT_DEVICE_ID, &result.device_id)?;
         self.settings_repo.set_string(keys::DISPLAY_NAME, display_name)?;
+        // Salt for later PIN-derived flows (server message-backup from settings).
+        self.settings_repo.set_string(keys::SVR_SALT_USERNAME, username)?;
         
         // SECURITY: Store auth token in encrypted settings
         self.settings_repo.set_bytes(keys::DEVICE_AUTH_TOKEN, credentials.auth_token().as_bytes())?;

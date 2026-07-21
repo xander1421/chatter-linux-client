@@ -4046,6 +4046,85 @@ pub mod svr_service_client {
                 .insert(GrpcMethod::new("chat.v1.SvrService", "ChangePinBackup"));
             self.inner.unary(req, path, codec).await
         }
+        /** Register/replace the encrypted message-history backup; returns a presigned
+ PUT URL for the blob. One per user — a new Set rotates the old object out.
+*/
+        pub async fn set_message_backup(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SetMessageBackupRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::SetMessageBackupResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.SvrService/SetMessageBackup",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("chat.v1.SvrService", "SetMessageBackup"));
+            self.inner.unary(req, path, codec).await
+        }
+        /** Fetch a presigned GET URL for the encrypted message-history backup.
+*/
+        pub async fn get_message_backup(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetMessageBackupRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetMessageBackupResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.SvrService/GetMessageBackup",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("chat.v1.SvrService", "GetMessageBackup"));
+            self.inner.unary(req, path, codec).await
+        }
+        /** Remove the encrypted message-history backup (row + object).
+*/
+        pub async fn delete_message_backup(
+            &mut self,
+            request: impl tonic::IntoRequest<super::DeleteMessageBackupRequest>,
+        ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.SvrService/DeleteMessageBackup",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("chat.v1.SvrService", "DeleteMessageBackup"));
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated client implementations.

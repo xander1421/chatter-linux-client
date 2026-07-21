@@ -177,6 +177,7 @@ impl ClientBuilder {
             push_shutdown: Mutex::new(None),
             call_signaling: std::sync::OnceLock::new(),
             svr_backup_service: std::sync::OnceLock::new(),
+            message_backup_service: std::sync::OnceLock::new(),
             outgoing_typing: crate::services::outgoing_typing::OutgoingTypingManager::new(),
             link_device_service: std::sync::OnceLock::new(),
             anon_mode: AtomicBool::new(false),
@@ -264,6 +265,9 @@ pub struct ChatterClient {
     outgoing_typing: crate::services::outgoing_typing::OutgoingTypingManager,
     /// Cached SVR backup service.
     svr_backup_service: std::sync::OnceLock<crate::services::svr_backup_service::SvrBackupService>,
+    /// Cached message-history backup service (L7 message-backup).
+    message_backup_service:
+        std::sync::OnceLock<crate::services::message_backup_service::MessageBackupService>,
     /// Cached device-linking service (lazy because deps are read-only and only
     /// touched when the user opens the link-device flow).
     link_device_service: std::sync::OnceLock<Arc<crate::services::link_device_service::LinkDeviceService>>,
@@ -351,6 +355,74 @@ impl ChatterClient {
                 self.signal().clone(),
             )
         })
+    }
+
+    /// Get the message-history backup service (lazy-initialized, persistent).
+    pub fn message_backup(&self) -> &crate::services::message_backup_service::MessageBackupService {
+        self.message_backup_service.get_or_init(|| {
+            let settings = Arc::new(
+                crate::storage::repositories::settings_repo::SettingsRepository::new(
+                    self.services.database.clone(),
+                ),
+            );
+            crate::services::message_backup_service::MessageBackupService::new(
+                self.services.database.clone(),
+                settings,
+                self.services.grpc_pool.clone(),
+            )
+        })
+    }
+
+    // ── Message-history backup façade (UI entry points) ─────────────
+
+    /// Export an encrypted message-history backup to `path` (local mode,
+    /// works offline). Passphrase must clear the SVR PIN entropy floor.
+    pub async fn export_message_backup(
+        &self,
+        path: &std::path::Path,
+        passphrase: &str,
+    ) -> Result<crate::services::message_backup_service::BackupStats, ClientError> {
+        self.message_backup()
+            .export_to_file(path, passphrase)
+            .await
+            .map_err(|e| ClientError::Validation(format!("backup export failed: {e}")))
+    }
+
+    /// Restore message history from an encrypted backup file. Idempotent
+    /// (skip-if-exists) — never clobbers newer local rows.
+    pub async fn import_message_backup(
+        &self,
+        path: &std::path::Path,
+        passphrase: &str,
+    ) -> Result<crate::storage::backup_data::ImportSummary, ClientError> {
+        self.message_backup()
+            .import_from_file(path, passphrase)
+            .await
+            .map_err(|e| ClientError::Validation(format!("backup restore failed: {e}")))
+    }
+
+    /// Create/refresh the server-side encrypted message backup (PIN-keyed,
+    /// server never sees content).
+    pub async fn enable_server_message_backup(
+        &self,
+        pin: &str,
+    ) -> Result<crate::services::message_backup_service::BackupStats, ClientError> {
+        self.message_backup()
+            .upload_to_server(pin)
+            .await
+            .map_err(|e| ClientError::Validation(format!("server backup failed: {e}")))
+    }
+
+    /// Restore message history from the server-side backup (fresh install
+    /// after login + PIN).
+    pub async fn restore_server_message_backup(
+        &self,
+        pin: &str,
+    ) -> Result<crate::storage::backup_data::ImportSummary, ClientError> {
+        self.message_backup()
+            .restore_from_server(pin)
+            .await
+            .map_err(|e| ClientError::Validation(format!("server restore failed: {e}")))
     }
 
     /// Get the call signaling service (persistent instance for pending state).

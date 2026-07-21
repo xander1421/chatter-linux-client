@@ -791,3 +791,67 @@ fn profile_share_username_link_is_wired() {
         "user_profile.slint self-view section must fire the share-link callbacks"
     );
 }
+
+// ============================================================================
+// MESSAGE BACKUP (L7) — settings wires.
+//
+// The full encrypted round-trips are proven against the live stack by
+// validated.rs V50 (local file) / V51 (server, PIN). Offline this proves the
+// modal wiring at two layers, and NAMES which:
+//
+//  L1 (DYNAMIC, MainWindow boundary): the status property alias survives the
+//     main.slint <=> app.slint hop, and the two server-mode callbacks are
+//     declared, wired by the REAL wire_settings_callbacks, and safe to invoke
+//     (their async half errors offline into the status property). The two
+//     file-mode callbacks are NOT invoked here — their handlers open a native
+//     file picker dialog, which must never pop during a test run — L2 pins
+//     their wiring statically instead.
+//
+//  L2 (STATIC): each of the four handlers reaches its ChatterClient façade
+//     method, and the settings screen fires all four callbacks.
+// ============================================================================
+#[test]
+fn settings_message_backup_wires_reach_core() {
+    let (rt, _tmp, _client, w) = wired_offline();
+    let _guard = rt.enter(); // handlers tokio::spawn their async half
+
+    // L1: status alias liveness through MainWindow.
+    w.set_settings_message_backup_status("status-probe".into());
+    assert_eq!(
+        w.get_settings_message_backup_status().as_str(),
+        "status-probe",
+        "settings-message-backup-status alias is dead (main.slint <=> app.slint)"
+    );
+
+    // L1: server-mode wires run their real handlers without panicking.
+    w.invoke_settings_server_message_backup("Va1idPin!x9".into());
+    w.invoke_settings_restore_message_backup("Va1idPin!x9".into());
+
+    // L2 static (Rust): every handler reaches the core façade.
+    let src = include_str!("../src/bin_ui/features/modals/settings.rs");
+    for (handler, core_call) in [
+        ("on_settings_export_message_backup", ".export_message_backup("),
+        ("on_settings_import_message_backup", ".import_message_backup("),
+        ("on_settings_server_message_backup", ".enable_server_message_backup("),
+        ("on_settings_restore_message_backup", ".restore_server_message_backup("),
+    ] {
+        let i = src
+            .find(handler)
+            .unwrap_or_else(|| panic!("{handler} not registered in settings.rs"));
+        assert!(
+            src[i..].contains(core_call),
+            "{handler} must reach ChatterClient::{core_call} (dead/stub wire)"
+        );
+    }
+
+    // L2 static (Slint): the settings screen fires all four callbacks.
+    let screen = include_str!("../../../ui/settings/settings_screen.slint");
+    for cb in [
+        "root.export-message-backup(",
+        "root.import-message-backup(",
+        "root.server-message-backup(",
+        "root.restore-message-backup(",
+    ] {
+        assert!(screen.contains(cb), "settings screen must fire {cb}");
+    }
+}

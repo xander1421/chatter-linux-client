@@ -781,6 +781,13 @@ export component App inherits Rectangle {
     callback settings-change-pin(string, string);  // current_pin, new_pin
     callback settings-retry-backup(string);  // pin
 
+    // Message-history backup
+    callback settings-export-message-backup(string);   // passphrase
+    callback settings-import-message-backup(string);   // passphrase
+    callback settings-server-message-backup(string);   // pin
+    callback settings-restore-message-backup(string);  // pin
+    in-out property <string> settings-message-backup-status: "";
+
     // AI settings callbacks
     callback settings-local-ai-enabled-changed(bool);
     callback settings-local-ai-load-model(string);
@@ -2146,6 +2153,19 @@ export component App inherits Rectangle {
         }
         retry-backup(pin) => {
             root.settings-retry-backup(pin);
+        }
+        message-backup-status: root.settings-message-backup-status;
+        export-message-backup(passphrase) => {
+            root.settings-export-message-backup(passphrase);
+        }
+        import-message-backup(passphrase) => {
+            root.settings-import-message-backup(passphrase);
+        }
+        server-message-backup(pin) => {
+            root.settings-server-message-backup(pin);
+        }
+        restore-message-backup(pin) => {
+            root.settings-restore-message-backup(pin);
         }
         // AI callbacks
         local-ai-enabled-changed(value) => {

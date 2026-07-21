@@ -10021,3 +10021,323 @@ async fn v48_username_link_resolves_privately_end_to_end() {
     client_a.shutdown().await;
     client_b.shutdown().await;
 }
+
+// ============================================================================
+// V50: Encrypted message-history backup — LOCAL mode (file export/restore)
+//
+// CLAIM (MISSING-FEATURES L7): encrypted history export to a file that a fresh
+// install can restore, fully offline, unreadable without the passphrase.
+//
+// POSITIVE: B receives a real DM (server round-trip data setup), exports an
+// encrypted backup file, a FRESH client dir (never connected) imports it, and
+// the marker message row is byte-exact identical between the two SQLCipher
+// stores.
+// NEGATIVE: the backup file contains no plaintext (grep with a proven
+// detector), and restore with the wrong passphrase fails, importing nothing.
+//
+// MUTATION CHECK: make `derive_passphrase_kek` ignore its passphrase argument
+// (derive from a constant) — the wrong-passphrase restore then succeeds and
+// the negative half goes RED. Proven RED 2026-07-19, restored GREEN.
+// ============================================================================
+
+/// One SELECT tuple of the marker row — the byte-exactness witness.
+fn marker_message_row(db_path: &std::path::Path, marker: &str) -> Vec<String> {
+    let db = chatter_core::storage::Database::open(db_path, "validated-harness-passphrase")
+        .expect("open sqlcipher db for verification");
+    let conn = db.connection().expect("db conn");
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, conversation_type, conversation_id, sender_id, content_type, \
+             content_json, is_pinned, is_edited, sent_at, created_at \
+             FROM messages WHERE content_json LIKE ?1",
+        )
+        .expect("prepare");
+    let rows: Vec<Vec<String>> = stmt
+        .query_map([format!("%{marker}%")], |r| {
+            let mut v = Vec::new();
+            for i in 0..10 {
+                let val: rusqlite::types::Value = r.get(i)?;
+                v.push(format!("{val:?}"));
+            }
+            Ok(v)
+        })
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("collect");
+    assert_eq!(rows.len(), 1, "expected exactly one marker message row in {db_path:?}");
+    rows.into_iter().next().unwrap()
+}
+
+#[tokio::test]
+async fn v50_local_message_backup_round_trips_encrypted() {
+    skip_if_no_server!();
+    no_keyring_prompts();
+
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let client_a = build_client(dir_a.path());
+    let client_b = build_client(dir_b.path());
+
+    let uid_a = register_and_start(&client_a, &unique_user("v50a"), "Alice").await;
+    let uid_b = register_and_start(&client_b, &unique_user("v50b"), "Bob").await;
+
+    client_a
+        .send_friend_request(&uid_b, Some("validated"))
+        .await
+        .expect("friend request failed");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    client_b
+        .respond_friend_request(&uid_a, true)
+        .await
+        .expect("accept friend request failed");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // Real DM round-trip as data setup: the row we back up arrived over the wire.
+    let marker = unique_marker();
+    let mut events_b = client_b.subscribe_events();
+    client_a
+        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &marker)
+        .await
+        .expect("send_text failed");
+    let expected_conv = ChannelId::from(uid_a);
+    let received = wait_for_event(&mut events_b, EVENT_TIMEOUT, |e| {
+        matches!(e, DomainEvent::MessageReceived { message } if message.conversation_id == expected_conv)
+    })
+    .await;
+    assert!(received.is_some(), "B never received the DM — nothing to back up");
+    println!("  data setup: B received marker DM over the wire");
+
+    // ---- EXPORT ------------------------------------------------------------
+    let passphrase = "Backup!Pass99";
+    let backup_path = dir_b.path().join("history.chbk");
+    let stats = client_b
+        .export_message_backup(&backup_path, passphrase)
+        .await
+        .expect("export failed");
+    println!("  exported {} rows, {} bytes", stats.rows, stats.bytes);
+    assert!(stats.rows > 0, "export serialized zero rows — vacuous backup");
+
+    // ---- NEGATIVE HALF 1: no plaintext in the file -------------------------
+    // Detector control first: prove the grep CAN find the marker.
+    let control = dir_b.path().join("detector_control");
+    std::fs::write(&control, format!("xx{marker}yy")).unwrap();
+    let control_bytes = std::fs::read(&control).unwrap();
+    assert!(
+        control_bytes.windows(marker.len()).any(|w| w == marker.as_bytes()),
+        "DETECTOR BROKEN: planted marker not found in control file"
+    );
+
+    let file_bytes = std::fs::read(&backup_path).unwrap();
+    assert_eq!(&file_bytes[..8], b"CHTRBKP1", "backup file missing container magic");
+    assert!(
+        !file_bytes.windows(marker.len()).any(|w| w == marker.as_bytes()),
+        "PLAINTEXT LEAK: marker found inside the encrypted backup file"
+    );
+    println!("  backup file: magic OK, {} bytes, zero plaintext marker hits", file_bytes.len());
+
+    // ---- RESTORE into a truly fresh, OFFLINE client dir --------------------
+    // Never connected, never logged in — local restore must not need a server.
+    let dir_fresh = tempfile::tempdir().unwrap();
+    let client_fresh = build_client(dir_fresh.path());
+    let summary = client_fresh
+        .import_message_backup(&backup_path, passphrase)
+        .await
+        .expect("restore failed");
+    println!(
+        "  fresh restore: {} of {} rows inserted",
+        summary.rows_inserted, summary.rows_seen
+    );
+    assert!(summary.rows_inserted > 0, "restore inserted nothing");
+
+    // Byte-exact: the marker row is identical column-for-column.
+    let src_row = marker_message_row(&dir_b.path().join("data/chatter.db"), &marker);
+    let dst_row = marker_message_row(&dir_fresh.path().join("data/chatter.db"), &marker);
+    assert_eq!(src_row, dst_row, "restored message row differs from the original");
+    println!("  byte-exact: marker row identical across stores ({} columns)", src_row.len());
+
+    // ---- NEGATIVE HALF 2: wrong passphrase restores nothing ----------------
+    let dir_wrong = tempfile::tempdir().unwrap();
+    let client_wrong = build_client(dir_wrong.path());
+    let err = client_wrong
+        .import_message_backup(&backup_path, "Wr0ng!Pass77")
+        .await;
+    assert!(err.is_err(), "restore with WRONG passphrase must fail");
+    let wrong_db = chatter_core::storage::Database::open(
+        &dir_wrong.path().join("data/chatter.db"),
+        "validated-harness-passphrase",
+    )
+    .unwrap();
+    let n: i64 = wrong_db
+        .connection()
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 0, "wrong-passphrase restore must import zero rows");
+    println!("  wrong passphrase: restore rejected, 0 rows imported");
+
+    println!("\nV50 PASS — local encrypted backup round-trips byte-exact into a fresh offline client; file holds no plaintext; wrong passphrase gets nothing\n");
+
+    client_a.shutdown().await;
+    client_b.shutdown().await;
+}
+
+// ============================================================================
+// V51: Encrypted message-history backup — SERVER mode (PIN-keyed)
+//
+// CLAIM (MISSING-FEATURES L7): the same encrypted blob stored server-side
+// (RustFS), restorable on a fresh install after login + SVR PIN; the server
+// can never read message content.
+//
+// POSITIVE: A receives a real DM, uploads the server backup, a FRESH install
+// logs in with the PIN and restores the byte-exact history.
+// NEGATIVE: the raw object fetched straight from RustFS (curl SigV4 with the
+// docker-compose S3 creds — no chatter server in the path) contains no
+// plaintext; nor does pg_dump; a wrong PIN cannot restore (derives a backup id
+// the server does not know; the wrong-KEK-on-right-blob half is pinned by the
+// crypto unit tests).
+//
+// MUTATION CHECK: make `upload_to_server` upload the raw frame payload
+// instead of the encrypted container (skip `encrypt_backup_file`) — the
+// raw-object grep finds the marker and goes RED. Proven RED 2026-07-19,
+// restored GREEN.
+// ============================================================================
+
+#[tokio::test]
+async fn v51_server_message_backup_restores_on_fresh_install_via_pin() {
+    skip_if_no_server!();
+    no_keyring_prompts();
+
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let client_a = build_client(dir_a.path());
+    let client_b = build_client(dir_b.path());
+
+    let user_a_name = unique_user("v51a");
+    let uid_a = register_and_start(&client_a, &user_a_name, "Alice").await;
+    let uid_b = register_and_start(&client_b, &unique_user("v51b"), "Bob").await;
+
+    client_a
+        .send_friend_request(&uid_b, Some("validated"))
+        .await
+        .expect("friend request failed");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    client_b
+        .respond_friend_request(&uid_a, true)
+        .await
+        .expect("accept friend request failed");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let marker = unique_marker();
+    let mut events_a = client_a.subscribe_events();
+    client_b
+        .send_text(ActiveConversation::ServerDm { peer_id: uid_a }, &marker)
+        .await
+        .expect("send_text failed");
+    let expected_conv = ChannelId::from(uid_b);
+    let received = wait_for_event(&mut events_a, EVENT_TIMEOUT, |e| {
+        matches!(e, DomainEvent::MessageReceived { message } if message.conversation_id == expected_conv)
+    })
+    .await;
+    assert!(received.is_some(), "A never received the DM — nothing to back up");
+    let src_row = marker_message_row(&dir_a.path().join("data/chatter.db"), &marker);
+    println!("  data setup: A received marker DM; source row captured");
+
+    // ---- UPLOAD ------------------------------------------------------------
+    let stats = client_a
+        .enable_server_message_backup(PIN)
+        .await
+        .expect("server backup upload failed");
+    println!("  uploaded server backup: {} rows, {} bytes", stats.rows, stats.bytes);
+
+    // ---- POSITIVE CONTROL: metadata row exists, object key known -----------
+    let object_key = psql(&format!(
+        "SELECT object_key FROM message_backups WHERE user_id = '{uid_a}'"
+    ));
+    assert!(
+        object_key.starts_with("message-backups/"),
+        "POSITIVE CONTROL FAILED: no message_backups row for A (got {object_key:?})"
+    );
+    println!("  server metadata row: {object_key}");
+
+    // ---- NEGATIVE HALF: raw object in RustFS holds no plaintext ------------
+    // Straight S3 GET against RustFS with the docker-compose creds
+    // (docker-compose.yml `rustfs` service) — the chatter server is not in
+    // this path, so these are the exact bytes the storage operator sees.
+    let blob = {
+        let out = std::process::Command::new("curl")
+            .args([
+                "-s",
+                "--aws-sigv4",
+                "aws:amz:us-east-1:s3",
+                "--user",
+                "rustfs_54f7cd2abf5e9ead:ugEo8pd2oCwa2GXuaiBTfmA2rZ86SDNVpk7mFR4XcLc=",
+                &format!("http://127.0.0.1:9000/chatter-files/{object_key}"),
+            ])
+            .output()
+            .expect("curl spawn failed");
+        out.stdout
+    };
+    assert_eq!(
+        blob.len(),
+        stats.bytes,
+        "POSITIVE CONTROL FAILED: raw RustFS object size != uploaded container size"
+    );
+    assert_eq!(&blob[..8], b"CHTRBKP1", "stored object is not the backup container");
+    assert!(
+        !blob.windows(marker.len()).any(|w| w == marker.as_bytes()),
+        "PLAINTEXT LEAK: marker found in the raw RustFS object"
+    );
+    println!("  raw RustFS object: {} bytes, magic OK, zero plaintext hits", blob.len());
+
+    let dump = pg_dump_all();
+    assert!(dump.len() > 10_000, "pg_dump suspiciously small");
+    assert_eq!(
+        dump.matches(&marker).count(),
+        0,
+        "PLAINTEXT LEAK: marker found in Postgres dump"
+    );
+    println!("  pg_dump: zero plaintext hits");
+
+    // ---- FRESH INSTALL: login + PIN → restore ------------------------------
+    client_a.shutdown().await;
+    drop(client_a);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    let dir_fresh = tempfile::tempdir().unwrap();
+    let client_fresh = build_client(dir_fresh.path());
+    client_fresh.connect().await.expect("fresh connect failed");
+    let login = client_fresh
+        .login(&user_a_name, PASSWORD, "validated", Some(PIN))
+        .await
+        .expect("fresh-install login failed");
+    println!(
+        "  fresh install logged in (keys_restored={}, keys_missing={})",
+        login.keys_restored, login.keys_missing
+    );
+
+    // NEGATIVE: wrong PIN first — it derives a different backup_id, the server
+    // knows no such backup, nothing restores. (Strike counters don't apply:
+    // the blob is useless without the PIN-derived KEK.)
+    let wrong = client_fresh.restore_server_message_backup("Wr0ngPin!x7").await;
+    assert!(wrong.is_err(), "restore with WRONG PIN must fail");
+    println!("  wrong PIN: restore rejected ({})", wrong.err().unwrap());
+
+    let summary = client_fresh
+        .restore_server_message_backup(PIN)
+        .await
+        .expect("server restore failed");
+    println!(
+        "  fresh restore: {} of {} rows inserted",
+        summary.rows_inserted, summary.rows_seen
+    );
+    assert!(summary.rows_inserted > 0, "server restore inserted nothing");
+
+    let dst_row = marker_message_row(&dir_fresh.path().join("data/chatter.db"), &marker);
+    assert_eq!(src_row, dst_row, "restored message row differs from the original");
+    println!("  byte-exact: marker row identical across installs");
+
+    println!("\nV51 PASS — server-side encrypted backup restores byte-exact on a fresh install via PIN; raw RustFS object + Postgres hold no plaintext; wrong PIN gets nothing\n");
+
+    client_fresh.shutdown().await;
+    client_b.shutdown().await;
+}

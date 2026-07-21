@@ -681,6 +681,13 @@ export component MainWindow inherits Window {
     callback settings-change-pin <=> app.settings-change-pin;
     callback settings-retry-backup <=> app.settings-retry-backup;
 
+    // Message-history backup
+    callback settings-export-message-backup <=> app.settings-export-message-backup;
+    callback settings-import-message-backup <=> app.settings-import-message-backup;
+    callback settings-server-message-backup <=> app.settings-server-message-backup;
+    callback settings-restore-message-backup <=> app.settings-restore-message-backup;
+    in-out property <string> settings-message-backup-status <=> app.settings-message-backup-status;
+
     // AI settings callbacks
     callback settings-local-ai-enabled-changed <=> app.settings-local-ai-enabled-changed;
     callback settings-local-ai-load-model <=> app.settings-local-ai-load-model;

@@ -40,6 +40,13 @@ pub mod keys {
     /// raw nickname alone is insufficient (Signal's lookup hash binds the
     /// random discriminator to defeat wordlist enumeration).
     pub const FULL_USERNAME: &str = "auth.full_username";
+    /// The exact username string the user typed at register/login — the salt
+    /// for every PIN → Argon2id derivation (`derive_svr_secret`). Persisted so
+    /// PIN-gated flows launched from settings (server message-backup
+    /// enable/restore) can re-derive the SVR secret without asking the user to
+    /// retype their username. NOT the same as [`FULL_USERNAME`], which carries
+    /// the server-assigned `.discriminator` suffix.
+    pub const SVR_SALT_USERNAME: &str = "auth.svr_salt_username";
     /// Current user's avatar (raw image bytes, stored locally, encrypted when shared)
     pub const AVATAR: &str = "profile.avatar";
     /// The user's active username-link URL (`chatter://u/{id}#{entropy}`).
