@@ -31,7 +31,12 @@ export component UserProfileModal inherits Rectangle {
     in property <image> share-qr;
     in property <string> share-status: "";
 
+    // Manual presence mode (self view): "auto" | "online" | "away" | "dnd" | "invisible"
+    in property <string> status-mode: "auto";
+
     callback close();
+    // Presence picker (self view)
+    callback change-status(string /* mode */);
     // Username link actions (self view)
     callback generate-share-link();  // create link (first time) / re-show
     callback copy-share-link();
@@ -248,6 +253,56 @@ export component UserProfileModal inherits Rectangle {
                 padding-right: Spacing.lg;
                 padding-top: Spacing.md;
                 spacing: Spacing.sm;
+
+                Rectangle {
+                    height: 1px;
+                    background: Colors.neo-inset-shadow;
+                }
+
+                Text {
+                    text: "STATUS";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs2;
+                    font-weight: Typography.bold;
+                    letter-spacing: 0.5px;
+                }
+
+                HorizontalLayout {
+                    spacing: Spacing.xs;
+                    for opt in [
+                        { mode: "auto", label: "Auto", dot: Colors.online },
+                        { mode: "online", label: "Online", dot: Colors.online },
+                        { mode: "away", label: "Away", dot: Colors.away },
+                        { mode: "dnd", label: "DND", dot: Colors.dnd },
+                        { mode: "invisible", label: "Invisible", dot: Colors.text-muted },
+                    ]: Rectangle {
+                        height: 28px;
+                        horizontal-stretch: 1;
+                        border-radius: 6px;
+                        border-width: root.status-mode == opt.mode ? 1.5px : 1px;
+                        border-color: root.status-mode == opt.mode ? Colors.primary : Colors.neo-inset-shadow;
+                        background: status-touch.has-hover ? Colors.surface-hover : transparent;
+                        accessible-role: button;
+                        accessible-label: "status-" + opt.mode;
+                        status-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.change-status(opt.mode); }
+                        }
+                        HorizontalLayout {
+                            alignment: center;
+                            spacing: 4px;
+                            VerticalLayout { alignment: center;
+                                Rectangle { width: 8px; height: 8px; border-radius: 4px; background: opt.dot; }
+                            }
+                            Text {
+                                text: opt.label;
+                                vertical-alignment: center;
+                                color: root.status-mode == opt.mode ? Colors.text-primary : Colors.text-muted;
+                                font-size: Typography.xs;
+                            }
+                        }
+                    }
+                }
 
                 Rectangle {
                     height: 1px;

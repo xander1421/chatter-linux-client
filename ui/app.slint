@@ -200,6 +200,8 @@ export component App inherits Rectangle {
     in property <image> user-avatar-source;
     in property <string> user-initials: "";
     in property <string> user-presence-status: "online";
+    // Manual presence mode chosen in the status picker ("auto" default).
+    in-out property <string> user-presence-mode: "auto";
     in property <string> user-custom-status: "";
     in-out property <bool> sidebar-collapsed: false;
     in-out property <bool> sidebar-hidden: false;
@@ -1553,6 +1555,7 @@ export component App inherits Rectangle {
         is-friend: root.profile-is-friend;
         is-blocked: root.profile-is-blocked;
         is-self: root.profile-is-self;
+        status-mode: root.user-presence-mode;
         loading: root.profile-loading;
         is-verified: root.profile-is-verified;
         safety-number: root.profile-safety-number;
@@ -1564,6 +1567,10 @@ export component App inherits Rectangle {
         close => {
             root.active-modal = "none";
             root.profile-show-safety-number = false;
+        }
+        change-status(mode) => {
+            root.user-presence-mode = mode;
+            root.change-user-status(mode);
         }
         generate-share-link => {
             root.profile-generate-share-link();

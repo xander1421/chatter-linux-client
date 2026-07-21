@@ -855,3 +855,67 @@ fn settings_message_backup_wires_reach_core() {
         assert!(screen.contains(cb), "settings screen must fire {cb}");
     }
 }
+
+// ============================================================================
+// PRESENCE PICKER — the status row in the self-view profile modal
+// (ui/modals/user_profile.slint STATUS section) fires `change-user-status`,
+// which must reach the production handler chain
+// (features/status.rs → presence_integration::set_user_status): the manual
+// mode persists to core settings (survives restart) and pins the wire status.
+// Offline: settings write + in-process presence state need no server.
+// ============================================================================
+
+#[test]
+fn presence_status_picker_reaches_core() {
+    let (rt, _tmp, client, w) = wired_offline();
+    chatter_ui::init_rt_handle(rt.handle().clone());
+    chatter_ui::bin_ui::features::status::wire(&w, &client);
+
+    // Negative control: nothing persisted before the callback fires.
+    assert_eq!(
+        client.presence_mode().unwrap(),
+        None,
+        "precondition: no presence mode persisted"
+    );
+
+    // The picker's Away pill fires change-user-status("away").
+    w.invoke_change_user_status("away".into());
+    // Handler persists synchronously-adjacent on a spawned task; give it a beat.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let got = client.presence_mode().unwrap();
+        if got.as_deref() == Some("away") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "picker did NOT reach core: presence mode never persisted (dead wire), got {got:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    // Auto clears the manual override and persists as "auto".
+    w.invoke_change_user_status("auto".into());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if client.presence_mode().unwrap().as_deref()
+            == Some("auto")
+        {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "auto mode did not persist");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    // Static half: the picker row actually invokes the callback chain.
+    let modal = include_str!("../../../ui/modals/user_profile.slint");
+    assert!(
+        modal.contains("root.change-status(opt.mode)"),
+        "STATUS pills must fire change-status"
+    );
+    let app = include_str!("../../../ui/app.slint");
+    assert!(
+        app.contains("root.change-user-status(mode)"),
+        "app must forward modal change-status into change-user-status"
+    );
+}

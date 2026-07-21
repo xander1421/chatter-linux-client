@@ -24,6 +24,9 @@ pub mod keys {
     // Privacy settings
     pub const SEND_READ_RECEIPTS: &str = "privacy.send_read_receipts";
     pub const SHOW_TYPING_INDICATORS: &str = "privacy.show_typing_indicators";
+    /// Manual presence override: "auto" | "online" | "away" | "dnd" | "invisible".
+    /// "auto" (default) = start online, idle detector may set away.
+    pub const PRESENCE_MODE: &str = "presence.mode";
 
     // Sync settings
     pub const LAST_SYNC_TIMESTAMP: &str = "sync.last_timestamp";

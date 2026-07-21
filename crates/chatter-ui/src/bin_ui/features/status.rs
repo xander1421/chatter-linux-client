@@ -12,6 +12,17 @@ use crate::MainWindow;
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_status_change(window, ui_ctx);
     wire_status_getter(window);
+    init_mode(window, ui_ctx);
+}
+
+/// Reflect the persisted manual presence mode into the picker on startup.
+fn init_mode(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let mode = ui_ctx
+        .presence_mode()
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "auto".to_string());
+    window.set_user_presence_mode(mode.into());
 }
 
 /// Wire the status change callback.
@@ -24,7 +35,7 @@ fn wire_status_change(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let ui_ctx = ui_ctx.clone();
         let weak = weak_window.clone();
         
-        tokio::spawn(async move {
+        crate::rt_handle().spawn(async move {
             // Change the status
             super::auth::presence_integration::set_user_status(&ui_ctx, &status).await;
             
@@ -52,7 +63,7 @@ fn wire_status_getter(window: &MainWindow) {
     
     // Set initial status on startup
     let weak = weak_window.clone();
-    tokio::spawn(async move {
+    crate::rt_handle().spawn(async move {
         let status = super::auth::presence_integration::get_current_status().await;
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {

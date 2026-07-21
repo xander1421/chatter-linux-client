@@ -811,6 +811,24 @@ impl ChatterClient {
         self.local_ai().unload_model().await
     }
 
+    /// Persisted manual presence mode ("auto" | "online" | "away" | "dnd" |
+    /// "invisible"). `None` = never set, treat as "auto".
+    pub fn presence_mode(
+        &self,
+    ) -> Result<Option<String>, crate::services::session_service::SessionError> {
+        self.sessions()
+            .get_string_setting(crate::storage::repositories::settings_repo::keys::PRESENCE_MODE)
+    }
+
+    /// Persist the manual presence mode chosen in the status picker.
+    pub fn set_presence_mode(
+        &self,
+        mode: &str,
+    ) -> Result<(), crate::services::session_service::SessionError> {
+        self.sessions()
+            .set_string_setting(crate::storage::repositories::settings_repo::keys::PRESENCE_MODE, mode)
+    }
+
     /// Toggle the "send sealed-sender messages unrestricted" privacy setting.
     pub fn set_sealed_sender_unrestricted(
         &self,
