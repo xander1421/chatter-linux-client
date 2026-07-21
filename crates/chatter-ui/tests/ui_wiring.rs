@@ -68,14 +68,26 @@ fn smoke_can_query_elements() {
 /// Build an offline client + wired window sharing one temp data dir.
 /// A current-thread tokio runtime is entered so any `sessions()` DB access that
 /// expects a reactor context has one (we never spin the loop).
+/// One PROCESS-WIDE test runtime. `chatter_ui::rt_handle` is a global
+/// OnceLock — the first test to set it wins, and a per-test Runtime would be
+/// DROPPED when that test returns, leaving every later test spawning onto a
+/// dead runtime (observed as order-dependent "never persisted" failures under
+/// the full suite while passing standalone). A static runtime lives for the
+/// whole test process, so the handle is always valid regardless of order.
+fn test_rt() -> &'static tokio::runtime::Runtime {
+    static RT: std::sync::LazyLock<tokio::runtime::Runtime> =
+        std::sync::LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
+    &RT
+}
+
 fn wired_offline() -> (
-    tokio::runtime::Runtime,
+    &'static tokio::runtime::Runtime,
     tempfile::TempDir,
     std::sync::Arc<chatter_core::client::ChatterClient>,
     MainWindow,
 ) {
     no_keyring();
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = test_rt();
     let _guard = rt.enter();
     let tmp = tempfile::tempdir().unwrap();
     testing::init_no_event_loop();
