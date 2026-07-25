@@ -1,0 +1,41 @@
+[package]
+name = "chatter-mesh-android"
+version = "0.1.0"
+edition = "2024"
+authors = ["xander1421"]
+description = "Android (JNI) implementation of MeshLink for the bitchat mesh"
+license = "GPL-3.0"
+repository = "https://github.com/xander1421/chatter"
+rust-version = "1.85"
+
+[lib]
+name = "chatter_mesh_android"
+path = "src/lib.rs"
+# cdylib so JNI_OnLoad is exported and the Kotlin side can System.loadLibrary it;
+# rlib so the Slint app can link it in-process as a normal dependency.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+chatter-mesh-link = { path = "../chatter-mesh-link" }
+
+# Android-only by construction. Everything here is pure Rust, so this crate
+# cross-compiles without a C toolchain — unlike chatter-mesh-nostr, which pulls
+# secp256k1-sys.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+ndk-context = "0.1"
+# Channels only. Bluetooth callbacks arrive on binder threads and must hand off
+# without blocking: a blocked binder callback stalls the whole Bluetooth stack.
+tokio = { version = "1", features = ["rt", "sync"] }
+
+# Unconditional dev-dependencies so the logic tests run on the host.
+#
+# The modules are `cfg(any(target_os = "android", test))`, so under `cargo test`
+# they compile here too and their 60-odd tests actually execute in CI. Without
+# this the whole crate is invisible to a desktop test run and the tests exist
+# only in principle. These stay dev-only rather than being un-gated above, so a
+# normal desktop build still pulls none of them.
+[dev-dependencies]
+jni = "0.21"
+ndk-context = "0.1"
+tokio = { version = "1", features = ["rt", "sync"] }

@@ -2,6 +2,7 @@
 members = [
     "crates/chatter-core",
     "crates/chatter-mesh",
+    "crates/chatter-mesh-android",
     "crates/chatter-mesh-ble",
     "crates/chatter-mesh-link",
     "crates/chatter-mesh-noise",

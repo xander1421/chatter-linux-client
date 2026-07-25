@@ -16,7 +16,27 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
+    <!-- Mesh transport (Bluetooth LE). Two permission eras, both required:
+         minSdk 26 means the legacy model is live on real devices. -->
+    <!-- Android 11 and below. -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <!-- Scanning counted as location before 12; without this, scans silently
+         return nothing, which is indistinguishable from "no peers nearby". -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+    <!-- Android 12+. neverForLocation is load-bearing: we derive no location from
+         BLE scans, and saying so keeps the mesh out of the location prompt. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+                     android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- The mesh radio's foreground service (MeshService). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- Not required: without BLE the app still installs and the Nostr transport
+         works fine; only the mesh is unavailable. -->
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
 
     <application
         android:label="@string/app_name"
@@ -48,5 +68,13 @@
         <receiver
             android:name=".CallActionReceiver"
             android:exported="false" />
+
+        <!-- Keeps the BLE mesh radio running while the app is backgrounded.
+             Started and stopped by MeshBleBridge; nothing binds to it. The
+             runtime type passed to startForeground must match this one. -->
+        <service
+            android:name=".MeshService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
     </application>
 </manifest>

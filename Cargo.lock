@@ -1969,6 +1969,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "chatter-mesh-android"
+version = "0.1.0"
+dependencies = [
+ "chatter-mesh-link",
+ "jni 0.21.1",
+ "ndk-context",
+ "tokio",
+]
+
+[[package]]
 name = "chatter-mesh-ble"
 version = "0.1.0"
 dependencies = [
