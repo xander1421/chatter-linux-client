@@ -1,0 +1,297 @@
+{
+  "area": "Relay-to-client frame parsing (NIP-01)",
+  "source": "bitchat/Nostr/NostrRelayManager.swift (private enum ParsedInbound)",
+  "note": "bitchat's ParsedInbound handles EVENT, EOSE, OK and NOTICE and returns nil for everything else - including CLOSED, which it silently drops. The CLOSED vector is therefore marked tolerant: a parser may surface it or ignore it, but must not panic and must not mistake it for another frame.",
+  "well_formed": [
+    {
+      "name": "event",
+      "kind": "event",
+      "frame": "[\"EVENT\",\"sub1\",{\"id\":\"aa2c5f2a045ba3fb2deef15c1af4467755989b117089a038949270ec564bba91\",\"pubkey\":\"007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01\",\"created_at\":1700000000,\"kind\":20000,\"tags\":[[\"g\",\"u4pru\"]],\"content\":\"hello mesh\",\"sig\":\"7066b0d94037d73aa38da340377ffeb6d44a513f2e08d29365550955977ca5a61ed8914ae738bafd4040b47f12459b31e547c8485ecf1686301d3cb41e3b6c11\"}]",
+      "subscription_id": "sub1",
+      "event_id": "aa2c5f2a045ba3fb2deef15c1af4467755989b117089a038949270ec564bba91",
+      "derivation": "Frame shape transcribed from ParsedInbound; the embedded event is events.json/geohash_chat_minimal, signature included."
+    },
+    {
+      "name": "eose",
+      "kind": "eose",
+      "frame": "[\"EOSE\",\"sub1\"]",
+      "subscription_id": "sub1",
+      "derivation": "Transcribed from ParsedInbound: array.count >= 2 with a string at index 1."
+    },
+    {
+      "name": "ok_accepted",
+      "kind": "ok",
+      "frame": "[\"OK\",\"aa2c5f2a045ba3fb2deef15c1af4467755989b117089a038949270ec564bba91\",true,\"\"]",
+      "event_id": "aa2c5f2a045ba3fb2deef15c1af4467755989b117089a038949270ec564bba91",
+      "accepted": true,
+      "message": "",
+      "derivation": "Transcribed from ParsedInbound."
+    },
+    {
+      "name": "ok_rejected",
+      "kind": "ok",
+      "frame": "[\"OK\",\"aa2c5f2a045ba3fb2deef15c1af4467755989b117089a038949270ec564bba91\",false,\"blocked: pubkey not allowed\"]",
+      "event_id": "aa2c5f2a045ba3fb2deef15c1af4467755989b117089a038949270ec564bba91",
+      "accepted": false,
+      "message": "blocked: pubkey not allowed",
+      "derivation": "Transcribed from ParsedInbound."
+    },
+    {
+      "name": "ok_without_reason",
+      "kind": "ok",
+      "frame": "[\"OK\",\"aa2c5f2a045ba3fb2deef15c1af4467755989b117089a038949270ec564bba91\",true]",
+      "event_id": "aa2c5f2a045ba3fb2deef15c1af4467755989b117089a038949270ec564bba91",
+      "accepted": true,
+      "message": null,
+      "derivation": "ParsedInbound accepts a 3-element OK and substitutes \"no reason given\"."
+    },
+    {
+      "name": "notice",
+      "kind": "notice",
+      "frame": "[\"NOTICE\",\"rate limited\"]",
+      "message": "rate limited",
+      "derivation": "Transcribed from ParsedInbound."
+    },
+    {
+      "name": "closed",
+      "kind": "closed",
+      "frame": "[\"CLOSED\",\"sub1\",\"error: bad filter\"]",
+      "subscription_id": "sub1",
+      "message": "error: bad filter",
+      "tolerant": true,
+      "derivation": "NIP-01 CLOSED. bitchat's parser has no case for it and drops it."
+    }
+  ],
+  "malformed": [
+    {
+      "name": "empty_string",
+      "frame": "",
+      "why": "not JSON"
+    },
+    {
+      "name": "empty_array",
+      "frame": "[]",
+      "why": "array.count >= 2 fails"
+    },
+    {
+      "name": "single_element",
+      "frame": "[\"EOSE\"]",
+      "why": "array.count >= 2 fails"
+    },
+    {
+      "name": "not_an_array",
+      "frame": "{\"type\":\"EVENT\"}",
+      "why": "the top level must be an array"
+    },
+    {
+      "name": "type_not_a_string",
+      "frame": "[1,\"sub1\"]",
+      "why": "array[0] as? String fails"
+    },
+    {
+      "name": "unknown_verb",
+      "frame": "[\"AUTH\",\"challenge-string\"]",
+      "why": "the default case returns nil"
+    },
+    {
+      "name": "event_missing_payload",
+      "frame": "[\"EVENT\",\"sub1\"]",
+      "why": "EVENT needs count >= 3"
+    },
+    {
+      "name": "event_payload_not_object",
+      "frame": "[\"EVENT\",\"sub1\",\"nope\"]",
+      "why": "array[2] must be a dictionary"
+    },
+    {
+      "name": "event_missing_created_at",
+      "frame": "[\"EVENT\",\"sub1\",{\"id\":\"aa\",\"pubkey\":\"bb\",\"kind\":1,\"tags\":[],\"content\":\"\"}]",
+      "why": "NostrEvent(from:) requires created_at"
+    },
+    {
+      "name": "event_kind_is_a_string",
+      "frame": "[\"EVENT\",\"sub1\",{\"id\":\"aa\",\"pubkey\":\"bb\",\"created_at\":1,\"kind\":\"1\",\"tags\":[],\"content\":\"\"}]",
+      "why": "kind must be an integer"
+    },
+    {
+      "name": "event_tags_not_nested_arrays",
+      "frame": "[\"EVENT\",\"sub1\",{\"id\":\"aa\",\"pubkey\":\"bb\",\"created_at\":1,\"kind\":1,\"tags\":[\"g\",\"u4pru\"],\"content\":\"\"}]",
+      "why": "tags must be [[String]], not [String]"
+    },
+    {
+      "name": "eose_subid_not_a_string",
+      "frame": "[\"EOSE\",42]",
+      "why": "the subscription id must be a string"
+    },
+    {
+      "name": "ok_success_not_a_bool",
+      "frame": "[\"OK\",\"abc\",\"true\"]",
+      "why": "array[2] must be a Bool"
+    },
+    {
+      "name": "notice_message_not_a_string",
+      "frame": "[\"NOTICE\",{}]",
+      "why": "the message must be a string"
+    },
+    {
+      "name": "truncated_json",
+      "frame": "[\"EVENT\",\"sub1\",{\"id\":",
+      "why": "invalid JSON"
+    },
+    {
+      "name": "deeply_nested",
+      "frame": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+      "why": "must be rejected without blowing the stack"
+    },
+    {
+      "name": "lowercase_verb",
+      "frame": "[\"event\",\"sub1\",{}]",
+      "why": "verbs are case-sensitive"
+    }
+  ],
+  "relay_urls": {
+    "source": "bitchat/Nostr/NostrRelayURL.swift (normalized / directoryAddress)",
+    "note": "`directory_address` is what GeoRelayDirectory.parseCSV stores as the host for each CSV row, so these govern how the bundled relay list is read. The `:443` cases matter: the default port for the wss scheme is dropped, so a CSV row written as host:443 is stored WITHOUT the port and must compare equal to the same host written bare.",
+    "derivation": "Hand-evaluated from NostrRelayURL.swift: scheme lowercased and mapped (wss/https -> wss, ws/http -> ws), host lowercased, the scheme's default port dropped, a bare \"/\" path emptied, fragment dropped. The raw values with :443 are transcribed from relays/online_relays_gps.csv.",
+    "normalize": [
+      {
+        "raw": "wss://relay.damus.io",
+        "default_scheme": "wss",
+        "expected": "wss://relay.damus.io"
+      },
+      {
+        "raw": "relay.damus.io",
+        "default_scheme": "wss",
+        "expected": "wss://relay.damus.io"
+      },
+      {
+        "raw": "relay.damus.io",
+        "default_scheme": null,
+        "expected": null,
+        "why": "no scheme in the input and no default supplied"
+      },
+      {
+        "raw": "https://relay.damus.io",
+        "default_scheme": "wss",
+        "expected": "wss://relay.damus.io",
+        "why": "https is mapped onto wss"
+      },
+      {
+        "raw": "http://relay.damus.io",
+        "default_scheme": "wss",
+        "expected": "ws://relay.damus.io",
+        "why": "http is mapped onto ws"
+      },
+      {
+        "raw": "WSS://Relay.Damus.IO",
+        "default_scheme": "wss",
+        "expected": "wss://relay.damus.io",
+        "why": "scheme and host are lowercased"
+      },
+      {
+        "raw": "wss://relay.damus.io:443",
+        "default_scheme": "wss",
+        "expected": "wss://relay.damus.io",
+        "why": "443 is the default port for wss and is dropped"
+      },
+      {
+        "raw": "ws://relay.damus.io:80",
+        "default_scheme": "wss",
+        "expected": "ws://relay.damus.io",
+        "why": "80 is the default port for ws and is dropped"
+      },
+      {
+        "raw": "wss://relay.damus.io:7777",
+        "default_scheme": "wss",
+        "expected": "wss://relay.damus.io:7777",
+        "why": "a non-default port is kept"
+      },
+      {
+        "raw": "wss://relay.damus.io/",
+        "default_scheme": "wss",
+        "expected": "wss://relay.damus.io",
+        "why": "a bare / path is emptied"
+      },
+      {
+        "raw": "wss://relay.damus.io/nostr",
+        "default_scheme": "wss",
+        "expected": "wss://relay.damus.io/nostr",
+        "why": "a real path is kept"
+      },
+      {
+        "raw": "wss://relay.damus.io#frag",
+        "default_scheme": "wss",
+        "expected": "wss://relay.damus.io",
+        "why": "the fragment never reaches the wire"
+      },
+      {
+        "raw": "  relay.damus.io  ",
+        "default_scheme": "wss",
+        "expected": "wss://relay.damus.io",
+        "why": "surrounding whitespace is trimmed"
+      },
+      {
+        "raw": "",
+        "default_scheme": "wss",
+        "expected": null,
+        "why": "empty"
+      },
+      {
+        "raw": "   ",
+        "default_scheme": "wss",
+        "expected": null,
+        "why": "whitespace only"
+      },
+      {
+        "raw": "ftp://relay.damus.io",
+        "default_scheme": "wss",
+        "expected": null,
+        "why": "only ws/wss/http/https are accepted"
+      },
+      {
+        "raw": "wss://",
+        "default_scheme": "wss",
+        "expected": null,
+        "why": "no host"
+      }
+    ],
+    "directory_address": [
+      {
+        "raw": "relay.lab.rytswd.com",
+        "expected": "relay.lab.rytswd.com",
+        "source": "relays/online_relays_gps.csv row 1"
+      },
+      {
+        "raw": "relay.paulstephenborile.com:443",
+        "expected": "relay.paulstephenborile.com",
+        "source": "relays/online_relays_gps.csv row 2",
+        "why": "the explicit :443 is the wss default and is stripped"
+      },
+      {
+        "raw": "relay.binaryrobot.com",
+        "expected": "relay.binaryrobot.com",
+        "source": "relays/online_relays_gps.csv row 3"
+      },
+      {
+        "raw": "nostr-2.21crypto.ch",
+        "expected": "nostr-2.21crypto.ch",
+        "source": "relays/online_relays_gps.csv row 4"
+      },
+      {
+        "raw": "spookstr2.nostr1.com:443",
+        "expected": "spookstr2.nostr1.com",
+        "source": "relays/online_relays_gps.csv row 5"
+      },
+      {
+        "raw": "wss://relay.zone667.com",
+        "expected": "relay.zone667.com",
+        "source": "Derived: an explicit scheme is stripped back off."
+      },
+      {
+        "raw": "not a host",
+        "expected": null,
+        "source": "Derived: spaces are not valid in a host."
+      }
+    ]
+  }
+}

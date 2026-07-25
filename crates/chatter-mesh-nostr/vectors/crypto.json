@@ -1,0 +1,128 @@
+{
+  "area": "bitchat's DM crypto: ECDH, HKDF, and the \"v2:\" payload framing",
+  "source": "bitchat/Nostr/NostrProtocol.swift (encrypt / decrypt / deriveSharedSecret / deriveNIP44V2Key); bitchat/Nostr/Base64URLCoding.swift",
+  "warning": "This is NOT the published NIP-44 v2. The HKDF salt is empty and the info is \"nip44-v2\" - the published spec uses them the other way round. Swapping them yields a key that silently decrypts nothing bitchat ever sent.",
+  "ecdh": [
+    {
+      "name": "compressed_point_shared_secret",
+      "source": "NostrProtocol.deriveSharedSecret -> P256K sharedSecretFromKeyAgreement(with:format:.compressed)",
+      "derivation": "swift-secp256k1 0.21.1 Sources/ZKP/ECDH.swift replaces libsecp256k1's default ECDH hash function with hashClosure(), which writes ((y & 1) | 0x02) followed by x - the 33-byte COMPRESSED POINT. Not SHA-256 of the point, and not the 32-byte x coordinate. Point multiplication done with a pure-python secp256k1 validated against the generator multiples G and 2G and against all 8 signing vectors in BIP-340's CSV. Both keys were chosen to have even Y (scanning sha256(label + i)) so that the x-only wire form reconstructs to the real point and the two sides agree on the first attempt; the odd-Y case is parity_retry below.",
+      "alice_secret_hex": "67bb55f522a68e70650cba8f0bf7486aaf14362b92d050a2e41b19d90d8572b5",
+      "bob_secret_hex": "5f1521a3221e777c2e4dd9375750767d65383fd5894b8bfba9123f4dfa997f4e",
+      "alice_pubkey_xonly_hex": "d600c98e8d91c3d30d98c5e501c86d15b5156424c20dca8381e43c9769f30b7b",
+      "bob_pubkey_xonly_hex": "e57cb92afca82a18b41f18de9b5e39d9d033da3f238ae879210d1c2a396a63b6",
+      "shared_secret_hex": "020868197c944ab4cef36bb7f687f20394ae07fb0140a6bae0c9b7b12cc00e0ce7",
+      "wrong_x_only_shared_secret_hex": "0868197c944ab4cef36bb7f687f20394ae07fb0140a6bae0c9b7b12cc00e0ce7",
+      "wrong_sha256_shared_secret_hex": "53bf31db53db574d2569310e12e63dc529ecac1c0c413b61cedd0d283ae9d84c",
+      "note": "33 bytes, and identical in both directions. The two wrong_ fields are the two plausible mistakes: dropping the prefix byte, or leaving libsecp256k1's default SHA-256 hash function in place. Both must differ from shared_secret_hex."
+    }
+  ],
+  "parity_retry": [
+    {
+      "name": "odd_y_sender_pubkey",
+      "source": "NostrProtocol.decrypt (attemptDecrypt with 0x02 prefix, then 0x03 on failure)",
+      "derivation": "A sender secret whose public point has odd Y, found by scanning sha256(\"chatter-mesh-nostr odd-y \" + i) for the first i whose compressed prefix is 0x03; the recipient is the even-Y bob from the ecdh vector. shared_secret_odd_y is what the SENDER computes (it holds the recipient's real point); shared_secret_even_y_guess is what the RECIPIENT computes on its first attempt, reconstructing the sender's x-only key as even-Y - which is the negated point, so the x coordinate is identical and only the parity byte differs. Both computed with the validated pure-python secp256k1.",
+      "sender_secret_hex": "05f041e068d88a272cbf11b1bc302b6d36d7d23435f741332aac530a74ea44b1",
+      "sender_pubkey_xonly_hex": "758e38f636453979306a68171f3808cb5efdf4d08aef03fa8f11edaae4d8bf02",
+      "sender_pubkey_compressed_hex": "03758e38f636453979306a68171f3808cb5efdf4d08aef03fa8f11edaae4d8bf02",
+      "recipient_secret_hex": "5f1521a3221e777c2e4dd9375750767d65383fd5894b8bfba9123f4dfa997f4e",
+      "recipient_pubkey_xonly_hex": "e57cb92afca82a18b41f18de9b5e39d9d033da3f238ae879210d1c2a396a63b6",
+      "shared_secret_odd_y_hex": "0309423005360d28fbed03556e32e13891e03b8a08de282e1cb7d57c98f2244c19",
+      "shared_secret_even_y_guess_hex": "0209423005360d28fbed03556e32e13891e03b8a08de282e1cb7d57c98f2244c19",
+      "conversation_key_odd_y_hex": "7d127c3b25660ad6ffa59c988a5634cd136abcf5de570b442d89c4d909feff28",
+      "conversation_key_even_y_guess_hex": "04d445509a4be545ff1b4ee9fe10d801085e1af348a66f8405ba79245e25e5df",
+      "note": "The event's pubkey field is x-only, so parity is lost on the wire. A recipient that only ever tries the even-Y reconstruction cannot decrypt from this sender at all - roughly half of all senders. That is what the 0x03 retry exists for."
+    }
+  ],
+  "hkdf": [
+    {
+      "name": "conversation_key_from_shared_secret",
+      "source": "NostrProtocol.deriveNIP44V2Key",
+      "derivation": "HKDF-SHA256(ikm = the 33-byte compressed ECDH point, salt = empty, info = \"nip44-v2\", L = 32). CryptoKit's HKDF.deriveKey with an empty salt feeds HMAC a 32-byte all-zero key, which is what RFC 5869 specifies for an absent salt; the HKDF here was validated against RFC 5869 test cases 1 and 3, the latter covering exactly that empty-salt path.",
+      "ikm_hex": "020868197c944ab4cef36bb7f687f20394ae07fb0140a6bae0c9b7b12cc00e0ce7",
+      "salt_hex": "",
+      "info_utf8": "nip44-v2",
+      "conversation_key_hex": "d5630ddf9b44d28560f49966a292183bfaa1dfd06de8ec33e3ba38e7d4cf3214",
+      "swapped_salt_and_info_key_hex": "d07a485b51c97c2c101b9c4d6cca85ab3e7f28ca11685219cf10e70f326a5305",
+      "xonly_ikm_key_hex": "b5cddbcc25d59de253a4679b79c511494ea55ea35d2c3d2dd505ea4e854738fd",
+      "sha256_ikm_key_hex": "a80c00978a17e6486b5c11af75b82587e8c6cdf32153b8d8b666c2e2f021655e",
+      "note": "The last three are traps, each the output of one plausible wrong implementation (published-NIP-44 orientation, x-only ikm, hashed ikm). None may equal conversation_key_hex."
+    }
+  ],
+  "payload": [
+    {
+      "name": "v2_framing_roundtrip",
+      "source": "NostrProtocol.encrypt / NostrProtocol.decrypt",
+      "derivation": "payload = \"v2:\" + base64url_nopad(nonce24 || ciphertext || tag16), with ciphertext and tag from the validated XChaCha20-Poly1305 above. base64url per Base64URLCoding.encode: standard base64 with + -> -, / -> _, and '=' stripped.",
+      "conversation_key_hex": "d5630ddf9b44d28560f49966a292183bfaa1dfd06de8ec33e3ba38e7d4cf3214",
+      "nonce24_hex": "000102030405060708090a0b0c0d0e0f1011121314151617",
+      "plaintext_utf8": "{\"id\":\"\",\"pubkey\":\"\",\"created_at\":0,\"kind\":14,\"tags\":[],\"content\":\"hi\"}",
+      "ciphertext_hex": "b4c5c6cc6feb59b3d0b652448169692ca2b3977363c1263bd01446c6f6b4b09487bf1ffa922e754d08c447ef374a2f31423b043dedddc076203f3902e557606a143e5ce43612f3",
+      "tag_hex": "0ba11033d2e19b961c21f99cb013a65e",
+      "payload": "v2:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXtMXGzG_rWbPQtlJEgWlpLKKzl3NjwSY70BRGxva0sJSHvx_6ki51TQjER-83Si8xQjsEPe3dwHYgPzkC5VdgahQ-XOQ2EvMLoRAz0uGblhwh-ZywE6Ze",
+      "sender_secret_hex": "67bb55f522a68e70650cba8f0bf7486aaf14362b92d050a2e41b19d90d8572b5",
+      "sender_pubkey_xonly_hex": "d600c98e8d91c3d30d98c5e501c86d15b5156424c20dca8381e43c9769f30b7b",
+      "recipient_secret_hex": "5f1521a3221e777c2e4dd9375750767d65383fd5894b8bfba9123f4dfa997f4e",
+      "recipient_pubkey_xonly_hex": "e57cb92afca82a18b41f18de9b5e39d9d033da3f238ae879210d1c2a396a63b6",
+      "note": "Both directions: sealing plaintext_utf8 under this key and nonce must produce this payload, and opening this payload as the recipient must produce plaintext_utf8. The conversation key is HKDF over ECDH(sender, recipient), so the keypairs are given too."
+    },
+    {
+      "name": "v2_payload_from_odd_y_sender",
+      "source": "NostrProtocol.decrypt (the 0x03 fallback branch)",
+      "derivation": "Same construction as v2_framing_roundtrip, but the conversation key comes from the odd-Y sender in parity_retry above.",
+      "conversation_key_hex": "7d127c3b25660ad6ffa59c988a5634cd136abcf5de570b442d89c4d909feff28",
+      "nonce24_hex": "ffeeddccbbaa99887766554433221100ffeeddccbbaa9988",
+      "plaintext_utf8": "sent by an odd-Y key",
+      "ciphertext_hex": "e7b75b15f0ec3c1009e6eed816677c70605ca2d9",
+      "tag_hex": "def19184592ab3efd817975f2603324f",
+      "payload": "v2:_-7dzLuqmYh3ZlVEMyIRAP_u3cy7qpmI57dbFfDsPBAJ5u7YFmd8cGBcotne8ZGEWSqz79gXl18mAzJP",
+      "sender_secret_hex": "05f041e068d88a272cbf11b1bc302b6d36d7d23435f741332aac530a74ea44b1",
+      "sender_pubkey_xonly_hex": "758e38f636453979306a68171f3808cb5efdf4d08aef03fa8f11edaae4d8bf02",
+      "recipient_secret_hex": "5f1521a3221e777c2e4dd9375750767d65383fd5894b8bfba9123f4dfa997f4e",
+      "recipient_pubkey_xonly_hex": "e57cb92afca82a18b41f18de9b5e39d9d033da3f238ae879210d1c2a396a63b6",
+      "note": "This one only opens if the even-Y attempt is retried with 0x03. An implementation missing the retry fails here and nowhere else, then fails silently against half of all real senders."
+    }
+  ],
+  "malformed_payloads": [
+    {
+      "name": "missing_v2_prefix",
+      "payload": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXtMXGzG_rWbPQtlJEgWlpLKKzl3NjwSY70BRGxva0sJSHvx_6ki51TQjER-83Si8xQjsEPe3dwHYgPzkC5VdgahQ-XOQ2EvMLoRAz0uGblhwh-ZywE6Ze",
+      "why": "decrypt requires the literal \"v2:\" prefix."
+    },
+    {
+      "name": "wrong_version_prefix",
+      "payload": "v1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXtMXGzG_rWbPQtlJEgWlpLKKzl3NjwSY70BRGxva0sJSHvx_6ki51TQjER-83Si8xQjsEPe3dwHYgPzkC5VdgahQ-XOQ2EvMLoRAz0uGblhwh-ZywE6Ze",
+      "why": "Only v2 exists; anything else is rejected rather than guessed at."
+    },
+    {
+      "name": "not_base64url",
+      "payload": "v2:!!!! not base64 !!!!",
+      "why": "Base64URLCoding.decode returns nil."
+    },
+    {
+      "name": "exactly_nonce_plus_tag",
+      "payload": "v2:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "why": "decrypt requires count > 24 + 16 strictly, so a zero-length ciphertext is rejected."
+    },
+    {
+      "name": "shorter_than_nonce",
+      "payload": "v2:AAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "why": "Too short to even contain the nonce."
+    },
+    {
+      "name": "empty_after_prefix",
+      "payload": "v2:",
+      "why": "Empty payload."
+    },
+    {
+      "name": "tampered_tag",
+      "payload": "v2:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXtMXGzG_rWbPQtlJEgWlpLKKzl3NjwSY70BRGxva0sJSHvx_6ki51TQjER-83Si8xQjsEPe3dwHYgPzkC5VdgahQ-XOQ2EvP0oRAz0uGblhwh-ZywE6Ze",
+      "why": "Well-formed framing, forged tag: must fail authentication, not return garbage."
+    },
+    {
+      "name": "tampered_ciphertext",
+      "payload": "v2:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXS8XGzG_rWbPQtlJEgWlpLKKzl3NjwSY70BRGxva0sJSHvx_6ki51TQjER-83Si8xQjsEPe3dwHYgPzkC5VdgahQ-XOQ2EvMLoRAz0uGblhwh-ZywE6Ze",
+      "why": "Flipped ciphertext byte must fail the Poly1305 check."
+    }
+  ]
+}

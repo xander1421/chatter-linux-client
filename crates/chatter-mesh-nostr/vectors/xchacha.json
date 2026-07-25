@@ -1,0 +1,149 @@
+{
+  "area": "XChaCha20-Poly1305 (bitchat's DM AEAD)",
+  "source": "bitchatTests/XChaCha20Poly1305CompatTests.swift; bitchat/Nostr/XChaCha20Poly1305Compat.swift",
+  "note": "The Swift test file hardcodes no ciphertext: every test there is a round-trip or an error case. The key/nonce/plaintext/aad inputs below are transcribed from it verbatim; the ciphertext and tag are derived (see each vector's derivation). One published vector from the XChaCha draft is included so a broken port fails against the standard, not only against us.",
+  "seal": [
+    {
+      "name": "draft_xchacha_a_3_1",
+      "source": "draft-irtf-cfrg-xchacha-03 section A.3.1 (published)",
+      "derivation": "Transcribed from the draft, then reproduced byte for byte by the script that emitted this file.",
+      "key_hex": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "nonce24_hex": "404142434445464748494a4b4c4d4e4f5051525354555657",
+      "aad_hex": "50515253c0c1c2c3c4c5c6c7",
+      "plaintext_hex": "4c616469657320616e642047656e746c656d656e206f662074686520636c617373206f66202739393a204966204920636f756c64206f6666657220796f75206f6e6c79206f6e652074697020666f7220746865206675747572652c2073756e73637265656e20776f756c642062652069742e",
+      "ciphertext_hex": "bd6d179d3e83d43b9576579493c0e939572a1700252bfaccbed2902c21396cbb731c7f1b0b4aa6440bf3a82f4eda7e39ae64c6708c54c216cb96b72e1213b4522f8c9ba40db5d945b11b69b982c1bb9e3f3fac2bc369488f76b2383565d3fff921f9664c97637da9768812f615c68b13b52e",
+      "tag_hex": "c0875924c1c7987947deafd8780acf49",
+      "note": "The unambiguous one: if this fails, the port is not XChaCha20-Poly1305 at all."
+    },
+    {
+      "name": "bitchat_seal_and_open_roundtrip",
+      "source": "XChaCha20Poly1305CompatTests.sealAndOpenRoundtrip (key/nonce/plaintext transcribed)",
+      "derivation": "Computed with a pure-python XChaCha20-Poly1305 written from RFC 8439 plus draft-irtf-cfrg-xchacha-03 and validated, before use, against RFC 8439 section 2.8.2 and draft-irtf-cfrg-xchacha-03 sections 2.2.1 and A.3.1. Construction transcribed from bitchat/Nostr/XChaCha20Poly1305Compat.swift: subkey = HChaCha20(key, nonce24[0..16]), nonce12 = 00000000 || nonce24[16..24], then IETF ChaCha20-Poly1305.",
+      "key_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+      "nonce24_hex": "242424242424242424242424242424242424242424242424",
+      "aad_hex": "",
+      "plaintext_hex": "48656c6c6f2c205843686143686132302d506f6c793133303521",
+      "ciphertext_hex": "ed3bbb0901086cfee1475e7966e93ffa1fa1e1d6052e47ad1440",
+      "tag_hex": "5b05afc9767e60018a3b7c5add73d481",
+      "note": "Their round-trip test, pinned to concrete output bytes."
+    },
+    {
+      "name": "bitchat_seal_and_open_with_aad",
+      "source": "XChaCha20Poly1305CompatTests.sealAndOpenWithAAD (inputs transcribed)",
+      "derivation": "Computed with a pure-python XChaCha20-Poly1305 written from RFC 8439 plus draft-irtf-cfrg-xchacha-03 and validated, before use, against RFC 8439 section 2.8.2 and draft-irtf-cfrg-xchacha-03 sections 2.2.1 and A.3.1. Construction transcribed from bitchat/Nostr/XChaCha20Poly1305Compat.swift: subkey = HChaCha20(key, nonce24[0..16]), nonce12 = 00000000 || nonce24[16..24], then IETF ChaCha20-Poly1305.",
+      "key_hex": "abababababababababababababababababababababababababababababababab",
+      "nonce24_hex": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "aad_hex": "6164646974696f6e616c2061757468656e746963617465642064617461",
+      "plaintext_hex": "536563726574206d657373616765",
+      "ciphertext_hex": "493198b6630bc17916ddf5f3285f",
+      "tag_hex": "36427400cf12097bdb243ec0980dd7eb",
+      "note": "AAD is authenticated, not encrypted: ciphertext length equals plaintext length. bitchat's DM path always passes an empty AAD, so this vector exists to prove the AAD is wired to the MAC and not silently dropped."
+    },
+    {
+      "name": "bitchat_same_plaintext_nonce_01",
+      "source": "XChaCha20Poly1305CompatTests.sealProducesDifferentCiphertextWithDifferentNonces",
+      "derivation": "Computed with a pure-python XChaCha20-Poly1305 written from RFC 8439 plus draft-irtf-cfrg-xchacha-03 and validated, before use, against RFC 8439 section 2.8.2 and draft-irtf-cfrg-xchacha-03 sections 2.2.1 and A.3.1. Construction transcribed from bitchat/Nostr/XChaCha20Poly1305Compat.swift: subkey = HChaCha20(key, nonce24[0..16]), nonce12 = 00000000 || nonce24[16..24], then IETF ChaCha20-Poly1305.",
+      "key_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+      "nonce24_hex": "010101010101010101010101010101010101010101010101",
+      "aad_hex": "",
+      "plaintext_hex": "53616d6520706c61696e74657874",
+      "ciphertext_hex": "348949d3407056f14b41847a19aa",
+      "tag_hex": "637737740c47f0bbcb0078892686d5b1",
+      "note": "Pairs with bitchat_same_plaintext_nonce_02; the two ciphertexts must differ."
+    },
+    {
+      "name": "bitchat_same_plaintext_nonce_02",
+      "source": "XChaCha20Poly1305CompatTests.sealProducesDifferentCiphertextWithDifferentNonces",
+      "derivation": "Computed with a pure-python XChaCha20-Poly1305 written from RFC 8439 plus draft-irtf-cfrg-xchacha-03 and validated, before use, against RFC 8439 section 2.8.2 and draft-irtf-cfrg-xchacha-03 sections 2.2.1 and A.3.1. Construction transcribed from bitchat/Nostr/XChaCha20Poly1305Compat.swift: subkey = HChaCha20(key, nonce24[0..16]), nonce12 = 00000000 || nonce24[16..24], then IETF ChaCha20-Poly1305.",
+      "key_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+      "nonce24_hex": "020202020202020202020202020202020202020202020202",
+      "aad_hex": "",
+      "plaintext_hex": "53616d6520706c61696e74657874",
+      "ciphertext_hex": "dfdd2c612caf554e73cfb4b04754",
+      "tag_hex": "bc8bd464ddb8f75b2f18b37ad356005f",
+      "note": "Pairs with bitchat_same_plaintext_nonce_01."
+    },
+    {
+      "name": "empty_plaintext",
+      "source": "Derived: no Swift test covers it, but an empty DM body must still authenticate.",
+      "derivation": "Computed with a pure-python XChaCha20-Poly1305 written from RFC 8439 plus draft-irtf-cfrg-xchacha-03 and validated, before use, against RFC 8439 section 2.8.2 and draft-irtf-cfrg-xchacha-03 sections 2.2.1 and A.3.1. Construction transcribed from bitchat/Nostr/XChaCha20Poly1305Compat.swift: subkey = HChaCha20(key, nonce24[0..16]), nonce12 = 00000000 || nonce24[16..24], then IETF ChaCha20-Poly1305.",
+      "key_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+      "nonce24_hex": "242424242424242424242424242424242424242424242424",
+      "aad_hex": "",
+      "plaintext_hex": "",
+      "ciphertext_hex": "",
+      "tag_hex": "360d9a282f4280b2b351ec579d919f1f",
+      "note": "Zero-length plaintext still produces a 16-byte tag."
+    },
+    {
+      "name": "multi_block_plaintext",
+      "source": "Derived: crosses the 64-byte ChaCha block boundary, which the Swift tests never do.",
+      "derivation": "Computed with a pure-python XChaCha20-Poly1305 written from RFC 8439 plus draft-irtf-cfrg-xchacha-03 and validated, before use, against RFC 8439 section 2.8.2 and draft-irtf-cfrg-xchacha-03 sections 2.2.1 and A.3.1. Construction transcribed from bitchat/Nostr/XChaCha20Poly1305Compat.swift: subkey = HChaCha20(key, nonce24[0..16]), nonce12 = 00000000 || nonce24[16..24], then IETF ChaCha20-Poly1305.",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "nonce24_hex": "000102030405060708090a0b0c0d0e0f1011121314151617",
+      "aad_hex": "",
+      "plaintext_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+      "ciphertext_hex": "9ec30d7c94d78ba93b4d2cc5c75fa6e75b563ab6e9c30bfc670325ad21b0eb467e2794c765422f43fdbc8472e30c7d4d418bd06a7341cd2e3fa2a906b3da7acbf261bdf04cdc22c264166c8a172847ed09514ec9e7506bce0ec9672ced4c2d130e65172f737516ac8d6457bc5f6c3333404ebd88922e0d13b10824541bf4a7969224e0ce4f32cd5d0a11bdd88a3c730c66d5fb139e01b9963e2b97e1157a517f80102eb108b865523fd0f2e8f80c2bb6641b5a4ce738e980b76aca15b180ef6d3aa0576e39dedb25bbca54d9e80672c46aa20fbb7900fc68c077bbcada3226e37be83d76e3f5e6fceb71ee4de3c7b16851ac6afa6bab063da710422d91186f2d",
+      "tag_hex": "1afec093f2039135392d6b122b77a2f7",
+      "note": "256 bytes spans four ChaCha20 blocks and a multi-block Poly1305 accumulation."
+    }
+  ],
+  "errors": [
+    {
+      "name": "seal_rejects_short_key",
+      "source": "XChaCha20Poly1305CompatTests.sealThrowsOnShortKey",
+      "op": "seal",
+      "key_len": 16,
+      "nonce_len": 24
+    },
+    {
+      "name": "seal_rejects_long_key",
+      "source": "XChaCha20Poly1305CompatTests.sealThrowsOnLongKey",
+      "op": "seal",
+      "key_len": 64,
+      "nonce_len": 24
+    },
+    {
+      "name": "seal_rejects_empty_key",
+      "source": "XChaCha20Poly1305CompatTests.sealThrowsOnEmptyKey",
+      "op": "seal",
+      "key_len": 0,
+      "nonce_len": 24
+    },
+    {
+      "name": "open_rejects_invalid_key_length",
+      "source": "XChaCha20Poly1305CompatTests.openThrowsOnInvalidKeyLength",
+      "op": "open",
+      "key_len": 31,
+      "nonce_len": 24
+    },
+    {
+      "name": "seal_rejects_short_nonce",
+      "source": "XChaCha20Poly1305CompatTests.sealThrowsOnShortNonce",
+      "op": "seal",
+      "key_len": 32,
+      "nonce_len": 12
+    },
+    {
+      "name": "seal_rejects_long_nonce",
+      "source": "XChaCha20Poly1305CompatTests.sealThrowsOnLongNonce",
+      "op": "seal",
+      "key_len": 32,
+      "nonce_len": 32
+    },
+    {
+      "name": "seal_rejects_empty_nonce",
+      "source": "XChaCha20Poly1305CompatTests.sealThrowsOnEmptyNonce",
+      "op": "seal",
+      "key_len": 32,
+      "nonce_len": 0
+    },
+    {
+      "name": "open_rejects_invalid_nonce_length",
+      "source": "XChaCha20Poly1305CompatTests.openThrowsOnInvalidNonceLength",
+      "op": "open",
+      "key_len": 32,
+      "nonce_len": 23
+    }
+  ]
+}

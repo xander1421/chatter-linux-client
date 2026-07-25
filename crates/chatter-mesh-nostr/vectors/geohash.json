@@ -1,0 +1,292 @@
+{
+  "area": "Geohash encode/decode and the base32 alphabet",
+  "source": "bitchat/Protocols/Geohash.swift; bitchatTests/LocationChannelsTests.swift",
+  "alphabet": "0123456789bcdefghjkmnpqrstuvwxyz",
+  "alphabet_note": "No 'a', 'i', 'l' or 'o' - they are visually confusable with 4, 1, 1 and 0.",
+  "prefix_chain": {
+    "note": "Encoding one coordinate at descending precision must yield a prefix chain.",
+    "source": "bitchatTests/LocationChannelsTests.swift geohashEncoderPrecisionMapping",
+    "lat": 40.6892,
+    "lon": -74.0445,
+    "levels": [
+      {
+        "precision": 7,
+        "geohash": "dr5r7p4"
+      },
+      {
+        "precision": 6,
+        "geohash": "dr5r7p"
+      },
+      {
+        "precision": 5,
+        "geohash": "dr5r7"
+      },
+      {
+        "precision": 4,
+        "geohash": "dr5r"
+      },
+      {
+        "precision": 2,
+        "geohash": "dr"
+      }
+    ]
+  },
+  "invalid_geohashes": [
+    {
+      "value": "",
+      "why": "empty"
+    },
+    {
+      "value": "abc",
+      "why": "'a' is not in the base32 alphabet"
+    },
+    {
+      "value": "u4pri",
+      "why": "'i' is not in the alphabet"
+    },
+    {
+      "value": "u4prl",
+      "why": "'l' is not in the alphabet"
+    },
+    {
+      "value": "u4pro",
+      "why": "'o' is not in the alphabet"
+    },
+    {
+      "value": "u4pru!",
+      "why": "punctuation"
+    },
+    {
+      "value": "u4pruydqqvjkm",
+      "why": "13 characters, over the 12-character maximum"
+    },
+    {
+      "value": "u4pr u",
+      "why": "embedded space"
+    },
+    {
+      "value": "u4prü",
+      "why": "non-ASCII"
+    }
+  ],
+  "valid_geohashes": [
+    "u",
+    "u4",
+    "u4pru",
+    "u4pruydqqvj",
+    "u4pruydqqvjk",
+    "0",
+    "z",
+    "U4PRU",
+    "0123456789bc"
+  ],
+  "presence_precision": {
+    "source": "bitchat/docs/GeohashPresenceSpec.md; P4 design section 4.7",
+    "max_precision": 5,
+    "allowed": [
+      "u4",
+      "u4pr",
+      "u4pru"
+    ],
+    "denied": [
+      "u4pru9",
+      "u4pru9d",
+      "u4pru9dq"
+    ],
+    "note": "Precision <= 5 (region, province, city) may broadcast presence; 6 and finer (neighbourhood, block, building) must be refused by the builder itself, not by the call site."
+  },
+  "vectors": [
+    {
+      "name": "canonical_reference",
+      "source": "Published reference coordinate",
+      "derivation": "Computed with a python transcription of bitchat/Protocols/Geohash.swift (encode and decodeBounds), cross-checked against the canonical published geohash u4pruydqqvj for (57.64911, 10.40744).",
+      "lat": 57.64911,
+      "lon": 10.40744,
+      "precision": 11,
+      "geohash": "u4pruydqqvj",
+      "center_lat": 57.64911063015461,
+      "center_lon": 10.407439693808556,
+      "lat_min": 57.649109959602356,
+      "lat_max": 57.64911130070686,
+      "lon_min": 10.407439023256302,
+      "lon_max": 10.40744036436081,
+      "note": "The textbook geohash example (Jutland, Denmark). If this is wrong, everything is."
+    },
+    {
+      "name": "statue_of_liberty_block",
+      "source": "bitchatTests/LocationChannelsTests.swift geohashEncoderPrecisionMapping",
+      "derivation": "Computed with a python transcription of bitchat/Protocols/Geohash.swift (encode and decodeBounds), cross-checked against the canonical published geohash u4pruydqqvj for (57.64911, 10.40744).",
+      "lat": 40.6892,
+      "lon": -74.0445,
+      "precision": 7,
+      "geohash": "dr5r7p4",
+      "center_lat": 40.68855285644531,
+      "center_lon": -74.04441833496094,
+      "lat_min": 40.6878662109375,
+      "lat_max": 40.689239501953125,
+      "lon_min": -74.04510498046875,
+      "lon_max": -74.04373168945312,
+      "note": "GeohashChannelLevel.block is precision 7."
+    },
+    {
+      "name": "statue_of_liberty_neighborhood",
+      "source": "bitchatTests/LocationChannelsTests.swift geohashEncoderPrecisionMapping",
+      "derivation": "Computed with a python transcription of bitchat/Protocols/Geohash.swift (encode and decodeBounds), cross-checked against the canonical published geohash u4pruydqqvj for (57.64911, 10.40744).",
+      "lat": 40.6892,
+      "lon": -74.0445,
+      "precision": 6,
+      "geohash": "dr5r7p",
+      "center_lat": 40.69061279296875,
+      "center_lon": -74.0423583984375,
+      "lat_min": 40.6878662109375,
+      "lat_max": 40.693359375,
+      "lon_min": -74.0478515625,
+      "lon_max": -74.036865234375,
+      "note": "Precision 6 - presence broadcast is FORBIDDEN at this level."
+    },
+    {
+      "name": "statue_of_liberty_city",
+      "source": "bitchatTests/LocationChannelsTests.swift geohashEncoderPrecisionMapping",
+      "derivation": "Computed with a python transcription of bitchat/Protocols/Geohash.swift (encode and decodeBounds), cross-checked against the canonical published geohash u4pruydqqvj for (57.64911, 10.40744).",
+      "lat": 40.6892,
+      "lon": -74.0445,
+      "precision": 5,
+      "geohash": "dr5r7",
+      "center_lat": 40.67138671875,
+      "center_lon": -74.02587890625,
+      "lat_min": 40.6494140625,
+      "lat_max": 40.693359375,
+      "lon_min": -74.0478515625,
+      "lon_max": -74.00390625,
+      "note": "Precision 5 - the finest level presence may be broadcast at."
+    },
+    {
+      "name": "statue_of_liberty_province",
+      "source": "bitchatTests/LocationChannelsTests.swift geohashEncoderPrecisionMapping",
+      "derivation": "Computed with a python transcription of bitchat/Protocols/Geohash.swift (encode and decodeBounds), cross-checked against the canonical published geohash u4pruydqqvj for (57.64911, 10.40744).",
+      "lat": 40.6892,
+      "lon": -74.0445,
+      "precision": 4,
+      "geohash": "dr5r",
+      "center_lat": 40.693359375,
+      "center_lon": -74.00390625,
+      "lat_min": 40.60546875,
+      "lat_max": 40.78125,
+      "lon_min": -74.1796875,
+      "lon_max": -73.828125,
+      "note": "Precision 4."
+    },
+    {
+      "name": "statue_of_liberty_region",
+      "source": "bitchatTests/LocationChannelsTests.swift geohashEncoderPrecisionMapping",
+      "derivation": "Computed with a python transcription of bitchat/Protocols/Geohash.swift (encode and decodeBounds), cross-checked against the canonical published geohash u4pruydqqvj for (57.64911, 10.40744).",
+      "lat": 40.6892,
+      "lon": -74.0445,
+      "precision": 2,
+      "geohash": "dr",
+      "center_lat": 42.1875,
+      "center_lon": -73.125,
+      "lat_min": 39.375,
+      "lat_max": 45.0,
+      "lon_min": -78.75,
+      "lon_max": -67.5,
+      "note": "Precision 2. Every shorter geohash must be a prefix of the longer ones."
+    },
+    {
+      "name": "origin",
+      "source": "Derived",
+      "derivation": "Computed with a python transcription of bitchat/Protocols/Geohash.swift (encode and decodeBounds), cross-checked against the canonical published geohash u4pruydqqvj for (57.64911, 10.40744).",
+      "lat": 0.0,
+      "lon": 0.0,
+      "precision": 9,
+      "geohash": "s00000000",
+      "center_lat": 2.1457672119140625e-05,
+      "center_lon": 2.1457672119140625e-05,
+      "lat_min": 0.0,
+      "lat_max": 4.291534423828125e-05,
+      "lon_min": 0.0,
+      "lon_max": 4.291534423828125e-05,
+      "note": "Null Island sits on every interval midpoint, which is where a >= versus > mistake shows up immediately."
+    },
+    {
+      "name": "south_west_corner",
+      "source": "Derived from the Swift clamp",
+      "derivation": "Computed with a python transcription of bitchat/Protocols/Geohash.swift (encode and decodeBounds), cross-checked against the canonical published geohash u4pruydqqvj for (57.64911, 10.40744).",
+      "lat": -90.0,
+      "lon": -180.0,
+      "precision": 8,
+      "geohash": "00000000",
+      "center_lat": -89.99991416931152,
+      "center_lon": -179.99982833862305,
+      "lat_min": -90.0,
+      "lat_max": -89.99982833862305,
+      "lon_min": -180.0,
+      "lon_max": -179.9996566772461,
+      "note": "Clamped extreme: all-zero bits."
+    },
+    {
+      "name": "north_east_corner",
+      "source": "Derived from the Swift clamp",
+      "derivation": "Computed with a python transcription of bitchat/Protocols/Geohash.swift (encode and decodeBounds), cross-checked against the canonical published geohash u4pruydqqvj for (57.64911, 10.40744).",
+      "lat": 90.0,
+      "lon": 180.0,
+      "precision": 8,
+      "geohash": "zzzzzzzz",
+      "center_lat": 89.99991416931152,
+      "center_lon": 179.99982833862305,
+      "lat_min": 89.99982833862305,
+      "lat_max": 90.0,
+      "lon_min": 179.9996566772461,
+      "lon_max": 180.0,
+      "note": "Clamped extreme: all-one bits."
+    },
+    {
+      "name": "out_of_range_is_clamped",
+      "source": "bitchat Geohash.encode (max/min clamp)",
+      "derivation": "Computed with a python transcription of bitchat/Protocols/Geohash.swift (encode and decodeBounds), cross-checked against the canonical published geohash u4pruydqqvj for (57.64911, 10.40744).",
+      "lat": 91.0,
+      "lon": 181.0,
+      "precision": 8,
+      "geohash": "zzzzzzzz",
+      "center_lat": 89.99991416931152,
+      "center_lon": 179.99982833862305,
+      "lat_min": 89.99982833862305,
+      "lat_max": 90.0,
+      "lon_min": 179.9996566772461,
+      "lon_max": 180.0,
+      "note": "Swift clamps rather than rejecting, so this must equal north_east_corner."
+    },
+    {
+      "name": "near_pole",
+      "source": "bitchatTests/LocationChannelsTests.swift geohashNeighborsNearPoleSkipOutOfBoundsCells",
+      "derivation": "Computed with a python transcription of bitchat/Protocols/Geohash.swift (encode and decodeBounds), cross-checked against the canonical published geohash u4pruydqqvj for (57.64911, 10.40744).",
+      "lat": 89.9999,
+      "lon": 0.0,
+      "precision": 8,
+      "geohash": "upbpbpbp",
+      "center_lat": 89.99991416931152,
+      "center_lon": 0.000171661376953125,
+      "lat_min": 89.99982833862305,
+      "lat_max": 90.0,
+      "lon_min": 0.0,
+      "lon_max": 0.00034332275390625,
+      "note": "The coordinate their neighbour test uses; encoding must still succeed."
+    },
+    {
+      "name": "southern_eastern_hemisphere",
+      "source": "Derived",
+      "derivation": "Computed with a python transcription of bitchat/Protocols/Geohash.swift (encode and decodeBounds), cross-checked against the canonical published geohash u4pruydqqvj for (57.64911, 10.40744).",
+      "lat": -33.8688,
+      "lon": 151.2093,
+      "precision": 9,
+      "geohash": "r3gx2f77b",
+      "center_lat": -33.86881113052368,
+      "center_lon": 151.2093186378479,
+      "lat_min": -33.8688325881958,
+      "lat_max": -33.86878967285156,
+      "lon_min": 151.20929718017578,
+      "lon_max": 151.20934009552002,
+      "note": "Negative latitude with positive longitude."
+    }
+  ]
+}

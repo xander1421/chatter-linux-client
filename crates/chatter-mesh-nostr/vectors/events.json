@@ -1,0 +1,418 @@
+{
+  "area": "Nostr event id computation, JSON serialization, and signature verification",
+  "source": "bitchat/Nostr/NostrProtocol.swift (NostrEvent.calculateEventId / sign / isValidSignature)",
+  "note": "No signed event with a hardcoded id or sig exists anywhere in bitchat's test suite - every test there generates a fresh random identity at runtime. The ids here are therefore derived, not transcribed. Each vector carries the exact `serialized` byte string that was hashed, so the escaping rules are auditable by eye without re-running anything.",
+  "vectors": [
+    {
+      "name": "geohash_chat_minimal",
+      "source": "bitchat NostrProtocol.createEphemeralGeohashEvent",
+      "derivation": "id = SHA-256 over the compact JSON array [0, pubkey, created_at, kind, tags, content]. The `serialized` field is the exact byte string that was hashed, emitted by python json.dumps(ensure_ascii=False, separators=(',',':')), which agrees with Foundation's JSONSerialization(.withoutEscapingSlashes) - the encoder bitchat uses - on every rule that matters here: no whitespace, '/' NOT escaped, '\"' and '\\' escaped, \\b \\t \\n \\f \\r as short escapes, other C0 controls as \\u00XX, and non-ASCII emitted as raw UTF-8 rather than \\u escapes.",
+      "pubkey": "007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01",
+      "created_at": 1700000000,
+      "kind": 20000,
+      "tags": [
+        [
+          "g",
+          "u4pru"
+        ]
+      ],
+      "content": "hello mesh",
+      "serialized": "[0,\"007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01\",1700000000,20000,[[\"g\",\"u4pru\"]],\"hello mesh\"]",
+      "id": "aa2c5f2a045ba3fb2deef15c1af4467755989b117089a038949270ec564bba91",
+      "note": "Baseline kind 20000 with only the g tag.",
+      "sig": "7066b0d94037d73aa38da340377ffeb6d44a513f2e08d29365550955977ca5a61ed8914ae738bafd4040b47f12459b31e547c8485ecf1686301d3cb41e3b6c11",
+      "sig_derivation": "BIP-340 Schnorr over the raw 32-byte event id with aux_rand = 32 zero bytes, by the secret behind `pubkey` (identity.json/u4pru). bitchat signs with random aux, so a correct implementation will NOT reproduce these bytes - it must VERIFY them."
+    },
+    {
+      "name": "geohash_chat_with_nickname",
+      "source": "bitchat NostrProtocol.ephemeralGeohashTags",
+      "derivation": "id = SHA-256 over the compact JSON array [0, pubkey, created_at, kind, tags, content]. The `serialized` field is the exact byte string that was hashed, emitted by python json.dumps(ensure_ascii=False, separators=(',',':')), which agrees with Foundation's JSONSerialization(.withoutEscapingSlashes) - the encoder bitchat uses - on every rule that matters here: no whitespace, '/' NOT escaped, '\"' and '\\' escaped, \\b \\t \\n \\f \\r as short escapes, other C0 controls as \\u00XX, and non-ASCII emitted as raw UTF-8 rather than \\u escapes.",
+      "pubkey": "007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01",
+      "created_at": 1700000000,
+      "kind": 20000,
+      "tags": [
+        [
+          "g",
+          "u4pru"
+        ],
+        [
+          "n",
+          "alice"
+        ]
+      ],
+      "content": "hello mesh",
+      "serialized": "[0,\"007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01\",1700000000,20000,[[\"g\",\"u4pru\"],[\"n\",\"alice\"]],\"hello mesh\"]",
+      "id": "7f63bcbd9d90199b223080bd9e7b0ddc4cdce3ac4cfc011e942c1093f60d6356",
+      "note": "The n tag follows the g tag. Tag order is inside the hash."
+    },
+    {
+      "name": "geohash_chat_teleported",
+      "source": "bitchat NostrProtocol.ephemeralGeohashTags",
+      "derivation": "id = SHA-256 over the compact JSON array [0, pubkey, created_at, kind, tags, content]. The `serialized` field is the exact byte string that was hashed, emitted by python json.dumps(ensure_ascii=False, separators=(',',':')), which agrees with Foundation's JSONSerialization(.withoutEscapingSlashes) - the encoder bitchat uses - on every rule that matters here: no whitespace, '/' NOT escaped, '\"' and '\\' escaped, \\b \\t \\n \\f \\r as short escapes, other C0 controls as \\u00XX, and non-ASCII emitted as raw UTF-8 rather than \\u escapes.",
+      "pubkey": "007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01",
+      "created_at": 1700000000,
+      "kind": 20000,
+      "tags": [
+        [
+          "g",
+          "u4pru"
+        ],
+        [
+          "n",
+          "alice"
+        ],
+        [
+          "t",
+          "teleport"
+        ]
+      ],
+      "content": "hello mesh",
+      "serialized": "[0,\"007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01\",1700000000,20000,[[\"g\",\"u4pru\"],[\"n\",\"alice\"],[\"t\",\"teleport\"]],\"hello mesh\"]",
+      "id": "c423027992518d243bdc0ca56e8d4650702619d96d054cf9ab3449e272a86164",
+      "note": "g, then n, then t. The teleport marker is last and present only when teleported."
+    },
+    {
+      "name": "geohash_chat_teleported_no_nickname",
+      "source": "bitchat NostrProtocol.ephemeralGeohashTags (nickname?.trimmedOrNilIfEmpty)",
+      "derivation": "id = SHA-256 over the compact JSON array [0, pubkey, created_at, kind, tags, content]. The `serialized` field is the exact byte string that was hashed, emitted by python json.dumps(ensure_ascii=False, separators=(',',':')), which agrees with Foundation's JSONSerialization(.withoutEscapingSlashes) - the encoder bitchat uses - on every rule that matters here: no whitespace, '/' NOT escaped, '\"' and '\\' escaped, \\b \\t \\n \\f \\r as short escapes, other C0 controls as \\u00XX, and non-ASCII emitted as raw UTF-8 rather than \\u escapes.",
+      "pubkey": "007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01",
+      "created_at": 1700000000,
+      "kind": 20000,
+      "tags": [
+        [
+          "g",
+          "u4pru"
+        ],
+        [
+          "t",
+          "teleport"
+        ]
+      ],
+      "content": "hello mesh",
+      "serialized": "[0,\"007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01\",1700000000,20000,[[\"g\",\"u4pru\"],[\"t\",\"teleport\"]],\"hello mesh\"]",
+      "id": "66ecc483ecb3eba0c80d314cd7837374c9e3a931ba83dc2d1e06cc5b2b3eb32c",
+      "note": "A blank nickname is omitted entirely rather than sent as an empty n tag, so t moves to index 1 and the id changes."
+    },
+    {
+      "name": "geohash_presence",
+      "source": "bitchat NostrProtocol.createGeohashPresenceEvent; docs/GeohashPresenceSpec.md",
+      "derivation": "id = SHA-256 over the compact JSON array [0, pubkey, created_at, kind, tags, content]. The `serialized` field is the exact byte string that was hashed, emitted by python json.dumps(ensure_ascii=False, separators=(',',':')), which agrees with Foundation's JSONSerialization(.withoutEscapingSlashes) - the encoder bitchat uses - on every rule that matters here: no whitespace, '/' NOT escaped, '\"' and '\\' escaped, \\b \\t \\n \\f \\r as short escapes, other C0 controls as \\u00XX, and non-ASCII emitted as raw UTF-8 rather than \\u escapes.",
+      "pubkey": "007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01",
+      "created_at": 1700000000,
+      "kind": 20001,
+      "tags": [
+        [
+          "g",
+          "u4pru"
+        ]
+      ],
+      "content": "",
+      "serialized": "[0,\"007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01\",1700000000,20001,[[\"g\",\"u4pru\"]],\"\"]",
+      "id": "be6903fa106e88de17c216a006b6dc00ac51495b471b7300a16a0cabf3e9d33d",
+      "note": "Kind 20001: empty content, g tag only, never an n tag.",
+      "sig": "6af18a3c52289ca6cf3253f4b92a2a96d170cd1239ce37fb91ff094c264f76782dc6e8195135452f70ebf333dbd9904c1fd94e30a313d430f098214cd345a841",
+      "sig_derivation": "BIP-340 Schnorr over the raw 32-byte event id with aux_rand = 32 zero bytes, by the secret behind `pubkey` (identity.json/u4pru). bitchat signs with random aux, so a correct implementation will NOT reproduce these bytes - it must VERIFY them."
+    },
+    {
+      "name": "location_note",
+      "source": "bitchat NostrProtocol.createGeohashTextNote",
+      "derivation": "id = SHA-256 over the compact JSON array [0, pubkey, created_at, kind, tags, content]. The `serialized` field is the exact byte string that was hashed, emitted by python json.dumps(ensure_ascii=False, separators=(',',':')), which agrees with Foundation's JSONSerialization(.withoutEscapingSlashes) - the encoder bitchat uses - on every rule that matters here: no whitespace, '/' NOT escaped, '\"' and '\\' escaped, \\b \\t \\n \\f \\r as short escapes, other C0 controls as \\u00XX, and non-ASCII emitted as raw UTF-8 rather than \\u escapes.",
+      "pubkey": "007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01",
+      "created_at": 1700000000,
+      "kind": 1,
+      "tags": [
+        [
+          "g",
+          "u4pruydqqvj"
+        ]
+      ],
+      "content": "meet at the north gate",
+      "serialized": "[0,\"007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01\",1700000000,1,[[\"g\",\"u4pruydqqvj\"]],\"meet at the north gate\"]",
+      "id": "4838e8e6171b6992643cecd99ddecdc3d491c2d8f360e82661bb9caec25b3fac",
+      "note": "Kind 1 is stored by relays, unlike 20000."
+    },
+    {
+      "name": "deletion_request",
+      "source": "bitchat NostrProtocol.createDeleteEvent",
+      "derivation": "id = SHA-256 over the compact JSON array [0, pubkey, created_at, kind, tags, content]. The `serialized` field is the exact byte string that was hashed, emitted by python json.dumps(ensure_ascii=False, separators=(',',':')), which agrees with Foundation's JSONSerialization(.withoutEscapingSlashes) - the encoder bitchat uses - on every rule that matters here: no whitespace, '/' NOT escaped, '\"' and '\\' escaped, \\b \\t \\n \\f \\r as short escapes, other C0 controls as \\u00XX, and non-ASCII emitted as raw UTF-8 rather than \\u escapes.",
+      "pubkey": "007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01",
+      "created_at": 1700000000,
+      "kind": 5,
+      "tags": [
+        [
+          "e",
+          "5f6f81d1b4f3b0c0d29e6cb35b2b7e1c9a5e6f0d2a3b4c5d6e7f8091a2b3c4d5"
+        ]
+      ],
+      "content": "",
+      "serialized": "[0,\"007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01\",1700000000,5,[[\"e\",\"5f6f81d1b4f3b0c0d29e6cb35b2b7e1c9a5e6f0d2a3b4c5d6e7f8091a2b3c4d5\"]],\"\"]",
+      "id": "d059a51c380f53ea018ea585b65f857601c6df64bb20d7d641b6ada9b0cf9c13",
+      "note": "Kind 5 references its target by e tag."
+    },
+    {
+      "name": "gift_wrap_shape",
+      "source": "bitchat NostrProtocol.createGiftWrap",
+      "derivation": "id = SHA-256 over the compact JSON array [0, pubkey, created_at, kind, tags, content]. The `serialized` field is the exact byte string that was hashed, emitted by python json.dumps(ensure_ascii=False, separators=(',',':')), which agrees with Foundation's JSONSerialization(.withoutEscapingSlashes) - the encoder bitchat uses - on every rule that matters here: no whitespace, '/' NOT escaped, '\"' and '\\' escaped, \\b \\t \\n \\f \\r as short escapes, other C0 controls as \\u00XX, and non-ASCII emitted as raw UTF-8 rather than \\u escapes.",
+      "pubkey": "007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01",
+      "created_at": 1700000000,
+      "kind": 1059,
+      "tags": [
+        [
+          "p",
+          "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d"
+        ]
+      ],
+      "content": "v2:AAECAwQFBgcICQoLDA0ODxAREhMUFRYX",
+      "serialized": "[0,\"007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01\",1700000000,1059,[[\"p\",\"3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d\"]],\"v2:AAECAwQFBgcICQoLDA0ODxAREhMUFRYX\"]",
+      "id": "b6e8301950c2ac9080d2006c9c607c6b17583bfaf98ae12e4a0c959426e8575d",
+      "note": "Kind 1059 carries the recipient in a p tag and the v2: payload as content."
+    },
+    {
+      "name": "courier_drop_bitchat_tags",
+      "source": "bitchat NostrProtocol.createCourierDropEvent",
+      "derivation": "id = SHA-256 over the compact JSON array [0, pubkey, created_at, kind, tags, content]. The `serialized` field is the exact byte string that was hashed, emitted by python json.dumps(ensure_ascii=False, separators=(',',':')), which agrees with Foundation's JSONSerialization(.withoutEscapingSlashes) - the encoder bitchat uses - on every rule that matters here: no whitespace, '/' NOT escaped, '\"' and '\\' escaped, \\b \\t \\n \\f \\r as short escapes, other C0 controls as \\u00XX, and non-ASCII emitted as raw UTF-8 rather than \\u escapes.",
+      "pubkey": "007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01",
+      "created_at": 1700000000,
+      "kind": 1401,
+      "tags": [
+        [
+          "x",
+          "00112233445566778899aabbccddeeff"
+        ],
+        [
+          "expiration",
+          "1700003600"
+        ]
+      ],
+      "content": "AAECAwQFBgcICQoLDA0ODw==",
+      "serialized": "[0,\"007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01\",1700000000,1401,[[\"x\",\"00112233445566778899aabbccddeeff\"],[\"expiration\",\"1700003600\"]],\"AAECAwQFBgcICQoLDA0ODw==\"]",
+      "id": "48a39efe2af9bae43470df961e9e1ac3a09e96262ff59869c6ba0e73c33e836a",
+      "note": "bitchat emits BOTH the x tag and a NIP-40 expiration tag, in that order. Recorded because the tag list is inside the id: a drop published without the expiration tag has a different id and is never garbage-collected by honouring relays."
+    },
+    {
+      "name": "escaping_forward_slash",
+      "source": "bitchat NostrEvent.calculateEventId (JSONSerialization, .withoutEscapingSlashes)",
+      "derivation": "id = SHA-256 over the compact JSON array [0, pubkey, created_at, kind, tags, content]. The `serialized` field is the exact byte string that was hashed, emitted by python json.dumps(ensure_ascii=False, separators=(',',':')), which agrees with Foundation's JSONSerialization(.withoutEscapingSlashes) - the encoder bitchat uses - on every rule that matters here: no whitespace, '/' NOT escaped, '\"' and '\\' escaped, \\b \\t \\n \\f \\r as short escapes, other C0 controls as \\u00XX, and non-ASCII emitted as raw UTF-8 rather than \\u escapes.",
+      "pubkey": "007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01",
+      "created_at": 1700000000,
+      "kind": 20000,
+      "tags": [
+        [
+          "g",
+          "u4pru"
+        ]
+      ],
+      "content": "https://example.com/a/b?c=d",
+      "serialized": "[0,\"007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01\",1700000000,20000,[[\"g\",\"u4pru\"]],\"https://example.com/a/b?c=d\"]",
+      "id": "50b90061cbea54bceb57feca28d95fe9b89cc079951d9b19eda5b473675a081c",
+      "note": "Forward slashes must NOT be escaped - .withoutEscapingSlashes is set. Escaping them changes the id and invalidates every signature."
+    },
+    {
+      "name": "escaping_quote_and_backslash",
+      "source": "bitchat NostrEvent.calculateEventId (JSONSerialization, .withoutEscapingSlashes)",
+      "derivation": "id = SHA-256 over the compact JSON array [0, pubkey, created_at, kind, tags, content]. The `serialized` field is the exact byte string that was hashed, emitted by python json.dumps(ensure_ascii=False, separators=(',',':')), which agrees with Foundation's JSONSerialization(.withoutEscapingSlashes) - the encoder bitchat uses - on every rule that matters here: no whitespace, '/' NOT escaped, '\"' and '\\' escaped, \\b \\t \\n \\f \\r as short escapes, other C0 controls as \\u00XX, and non-ASCII emitted as raw UTF-8 rather than \\u escapes.",
+      "pubkey": "007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01",
+      "created_at": 1700000000,
+      "kind": 20000,
+      "tags": [
+        [
+          "g",
+          "u4pru"
+        ]
+      ],
+      "content": "she said \"hi\" and \\ then left",
+      "serialized": "[0,\"007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01\",1700000000,20000,[[\"g\",\"u4pru\"]],\"she said \\\"hi\\\" and \\\\ then left\"]",
+      "id": "0642b365eb80f1a62bcd519fbda9f6e77c68949f61eaeedc467a2b1e97c625bf",
+      "note": "Only the quote and the backslash get backslash escapes."
+    },
+    {
+      "name": "escaping_newline_tab_cr",
+      "source": "bitchat NostrEvent.calculateEventId (JSONSerialization, .withoutEscapingSlashes)",
+      "derivation": "id = SHA-256 over the compact JSON array [0, pubkey, created_at, kind, tags, content]. The `serialized` field is the exact byte string that was hashed, emitted by python json.dumps(ensure_ascii=False, separators=(',',':')), which agrees with Foundation's JSONSerialization(.withoutEscapingSlashes) - the encoder bitchat uses - on every rule that matters here: no whitespace, '/' NOT escaped, '\"' and '\\' escaped, \\b \\t \\n \\f \\r as short escapes, other C0 controls as \\u00XX, and non-ASCII emitted as raw UTF-8 rather than \\u escapes.",
+      "pubkey": "007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01",
+      "created_at": 1700000000,
+      "kind": 20000,
+      "tags": [
+        [
+          "g",
+          "u4pru"
+        ]
+      ],
+      "content": "line1\nline2\ttabbed\r\nend",
+      "serialized": "[0,\"007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01\",1700000000,20000,[[\"g\",\"u4pru\"]],\"line1\\nline2\\ttabbed\\r\\nend\"]",
+      "id": "f6d4a55e8268565b074a2af681387d11e1e87d5ddf85d6fd9542208364ff4938",
+      "note": "\\n, \\t and \\r are short escapes, not \\u000a style."
+    },
+    {
+      "name": "escaping_control_chars",
+      "source": "bitchat NostrEvent.calculateEventId (JSONSerialization, .withoutEscapingSlashes)",
+      "derivation": "id = SHA-256 over the compact JSON array [0, pubkey, created_at, kind, tags, content]. The `serialized` field is the exact byte string that was hashed, emitted by python json.dumps(ensure_ascii=False, separators=(',',':')), which agrees with Foundation's JSONSerialization(.withoutEscapingSlashes) - the encoder bitchat uses - on every rule that matters here: no whitespace, '/' NOT escaped, '\"' and '\\' escaped, \\b \\t \\n \\f \\r as short escapes, other C0 controls as \\u00XX, and non-ASCII emitted as raw UTF-8 rather than \\u escapes.",
+      "pubkey": "007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01",
+      "created_at": 1700000000,
+      "kind": 20000,
+      "tags": [
+        [
+          "g",
+          "u4pru"
+        ]
+      ],
+      "content": "nul\u0000soh\u0001bell\u0007backspace\bformfeed\fvtab\u000bescape\u001b",
+      "serialized": "[0,\"007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01\",1700000000,20000,[[\"g\",\"u4pru\"]],\"nul\\u0000soh\\u0001bell\\u0007backspace\\bformfeed\\fvtab\\u000bescape\\u001b\"]",
+      "id": "ea565c2fe434c1823b131943428f6c7e53303f3f17a12030ba175671c34b4cf0",
+      "note": "C0 controls without a short escape become \\u00XX with lowercase hex digits; backspace and form feed do have short escapes. A NUL inside content is legal JSON and must survive the round trip."
+    },
+    {
+      "name": "escaping_emoji_and_rtl",
+      "source": "bitchat NostrEvent.calculateEventId (JSONSerialization, .withoutEscapingSlashes)",
+      "derivation": "id = SHA-256 over the compact JSON array [0, pubkey, created_at, kind, tags, content]. The `serialized` field is the exact byte string that was hashed, emitted by python json.dumps(ensure_ascii=False, separators=(',',':')), which agrees with Foundation's JSONSerialization(.withoutEscapingSlashes) - the encoder bitchat uses - on every rule that matters here: no whitespace, '/' NOT escaped, '\"' and '\\' escaped, \\b \\t \\n \\f \\r as short escapes, other C0 controls as \\u00XX, and non-ASCII emitted as raw UTF-8 rather than \\u escapes.",
+      "pubkey": "007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01",
+      "created_at": 1700000000,
+      "kind": 20000,
+      "tags": [
+        [
+          "g",
+          "u4pru"
+        ]
+      ],
+      "content": "fire 🔥 and rtl مرحبا‏ done",
+      "serialized": "[0,\"007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01\",1700000000,20000,[[\"g\",\"u4pru\"]],\"fire 🔥 and rtl مرحبا‏ done\"]",
+      "id": "982aff1d168c9a7d217e05d1dd582a9f1dddfbb00e777b5ab58a05fcc6260d77",
+      "note": "Non-ASCII is emitted as raw UTF-8, never as \\uXXXX. Includes an astral-plane emoji (surrogate-pair territory for any UTF-16 encoder) and the RTL mark U+200F."
+    },
+    {
+      "name": "escaping_del",
+      "source": "bitchat NostrEvent.calculateEventId (JSONSerialization, .withoutEscapingSlashes)",
+      "derivation": "id = SHA-256 over the compact JSON array [0, pubkey, created_at, kind, tags, content]. The `serialized` field is the exact byte string that was hashed, emitted by python json.dumps(ensure_ascii=False, separators=(',',':')), which agrees with Foundation's JSONSerialization(.withoutEscapingSlashes) - the encoder bitchat uses - on every rule that matters here: no whitespace, '/' NOT escaped, '\"' and '\\' escaped, \\b \\t \\n \\f \\r as short escapes, other C0 controls as \\u00XX, and non-ASCII emitted as raw UTF-8 rather than \\u escapes.",
+      "pubkey": "007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01",
+      "created_at": 1700000000,
+      "kind": 20000,
+      "tags": [
+        [
+          "g",
+          "u4pru"
+        ]
+      ],
+      "content": "del end",
+      "serialized": "[0,\"007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01\",1700000000,20000,[[\"g\",\"u4pru\"]],\"del end\"]",
+      "id": "5112f41d06e99726bc91ad4884a9ea6dd8193972ffaca4e7c4847891578baead",
+      "note": "DEL (0x7f) is above the C0 range, so JSON does not require escaping it and neither Foundation nor serde_json escapes it. It goes out as a raw byte."
+    },
+    {
+      "name": "escaping_in_tag_value",
+      "source": "bitchat NostrEvent.calculateEventId (JSONSerialization, .withoutEscapingSlashes)",
+      "derivation": "id = SHA-256 over the compact JSON array [0, pubkey, created_at, kind, tags, content]. The `serialized` field is the exact byte string that was hashed, emitted by python json.dumps(ensure_ascii=False, separators=(',',':')), which agrees with Foundation's JSONSerialization(.withoutEscapingSlashes) - the encoder bitchat uses - on every rule that matters here: no whitespace, '/' NOT escaped, '\"' and '\\' escaped, \\b \\t \\n \\f \\r as short escapes, other C0 controls as \\u00XX, and non-ASCII emitted as raw UTF-8 rather than \\u escapes.",
+      "pubkey": "007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01",
+      "created_at": 1700000000,
+      "kind": 20000,
+      "tags": [
+        [
+          "g",
+          "u4pru"
+        ],
+        [
+          "n",
+          "a\"b\\c/d"
+        ]
+      ],
+      "content": "tagged",
+      "serialized": "[0,\"007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01\",1700000000,20000,[[\"g\",\"u4pru\"],[\"n\",\"a\\\"b\\\\c/d\"]],\"tagged\"]",
+      "id": "a73d55f388b8a7bb9aaf34911f667ed5a0dd77ad6464fa22d9e5b9baf1369ad9",
+      "note": "Tag values are escaped by the same rules as content."
+    },
+    {
+      "name": "empty_everything",
+      "source": "bitchat NostrEvent.calculateEventId (JSONSerialization, .withoutEscapingSlashes)",
+      "derivation": "id = SHA-256 over the compact JSON array [0, pubkey, created_at, kind, tags, content]. The `serialized` field is the exact byte string that was hashed, emitted by python json.dumps(ensure_ascii=False, separators=(',',':')), which agrees with Foundation's JSONSerialization(.withoutEscapingSlashes) - the encoder bitchat uses - on every rule that matters here: no whitespace, '/' NOT escaped, '\"' and '\\' escaped, \\b \\t \\n \\f \\r as short escapes, other C0 controls as \\u00XX, and non-ASCII emitted as raw UTF-8 rather than \\u escapes.",
+      "pubkey": "007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01",
+      "created_at": 1700000000,
+      "kind": 20000,
+      "tags": [],
+      "content": "",
+      "serialized": "[0,\"007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01\",1700000000,20000,[],\"\"]",
+      "id": "a7cfb9f280733ba3e2693a722af7e3df976725b8f4c3f2159d871c972d35f97f",
+      "note": "An empty tag list serializes as [] and empty content as \"\"."
+    },
+    {
+      "name": "unicode_nickname",
+      "source": "bitchat NostrEvent.calculateEventId (JSONSerialization, .withoutEscapingSlashes)",
+      "derivation": "id = SHA-256 over the compact JSON array [0, pubkey, created_at, kind, tags, content]. The `serialized` field is the exact byte string that was hashed, emitted by python json.dumps(ensure_ascii=False, separators=(',',':')), which agrees with Foundation's JSONSerialization(.withoutEscapingSlashes) - the encoder bitchat uses - on every rule that matters here: no whitespace, '/' NOT escaped, '\"' and '\\' escaped, \\b \\t \\n \\f \\r as short escapes, other C0 controls as \\u00XX, and non-ASCII emitted as raw UTF-8 rather than \\u escapes.",
+      "pubkey": "007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01",
+      "created_at": 1700000000,
+      "kind": 20000,
+      "tags": [
+        [
+          "g",
+          "u4pru"
+        ],
+        [
+          "n",
+          "élèveさん"
+        ]
+      ],
+      "content": "accents and kana",
+      "serialized": "[0,\"007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01\",1700000000,20000,[[\"g\",\"u4pru\"],[\"n\",\"élèveさん\"]],\"accents and kana\"]",
+      "id": "941e4a2452f1eb6acf3e47993febd0f1c5fa854ceb42bc5a9448d304871154ce",
+      "note": "Non-ASCII inside a tag value."
+    },
+    {
+      "name": "three_element_tag",
+      "source": "bitchat NostrProtocol.createBridgeMeshEvent",
+      "derivation": "id = SHA-256 over the compact JSON array [0, pubkey, created_at, kind, tags, content]. The `serialized` field is the exact byte string that was hashed, emitted by python json.dumps(ensure_ascii=False, separators=(',',':')), which agrees with Foundation's JSONSerialization(.withoutEscapingSlashes) - the encoder bitchat uses - on every rule that matters here: no whitespace, '/' NOT escaped, '\"' and '\\' escaped, \\b \\t \\n \\f \\r as short escapes, other C0 controls as \\u00XX, and non-ASCII emitted as raw UTF-8 rather than \\u escapes.",
+      "pubkey": "007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01",
+      "created_at": 1700000000,
+      "kind": 20000,
+      "tags": [
+        [
+          "g",
+          "u4pru"
+        ],
+        [
+          "m",
+          "stable-id",
+          "0123456789abcdef",
+          "1700000000000"
+        ]
+      ],
+      "content": "bridged",
+      "serialized": "[0,\"007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01\",1700000000,20000,[[\"g\",\"u4pru\"],[\"m\",\"stable-id\",\"0123456789abcdef\",\"1700000000000\"]],\"bridged\"]",
+      "id": "4f8c744a522307da5d8a01bc1372c36de7106dc63db11bb1aa45605ef9aa0e11",
+      "note": "Tags are variable-length arrays, not pairs: the mesh-bridge m tag has four elements."
+    },
+    {
+      "name": "large_created_at",
+      "source": "bitchat NostrEvent.calculateEventId (JSONSerialization, .withoutEscapingSlashes)",
+      "derivation": "id = SHA-256 over the compact JSON array [0, pubkey, created_at, kind, tags, content]. The `serialized` field is the exact byte string that was hashed, emitted by python json.dumps(ensure_ascii=False, separators=(',',':')), which agrees with Foundation's JSONSerialization(.withoutEscapingSlashes) - the encoder bitchat uses - on every rule that matters here: no whitespace, '/' NOT escaped, '\"' and '\\' escaped, \\b \\t \\n \\f \\r as short escapes, other C0 controls as \\u00XX, and non-ASCII emitted as raw UTF-8 rather than \\u escapes.",
+      "pubkey": "007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01",
+      "created_at": 2147483648,
+      "kind": 20000,
+      "tags": [
+        [
+          "g",
+          "u4pru"
+        ]
+      ],
+      "content": "y2038",
+      "serialized": "[0,\"007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01\",2147483648,20000,[[\"g\",\"u4pru\"]],\"y2038\"]",
+      "id": "8f52d8eb58ce5912e36675f1fcdcb7c8c555c984bfb19005c7869455a80a051c",
+      "note": "created_at is a plain JSON integer - no quoting, no exponent form."
+    },
+    {
+      "name": "zero_created_at",
+      "source": "bitchat NostrEvent.calculateEventId (JSONSerialization, .withoutEscapingSlashes)",
+      "derivation": "id = SHA-256 over the compact JSON array [0, pubkey, created_at, kind, tags, content]. The `serialized` field is the exact byte string that was hashed, emitted by python json.dumps(ensure_ascii=False, separators=(',',':')), which agrees with Foundation's JSONSerialization(.withoutEscapingSlashes) - the encoder bitchat uses - on every rule that matters here: no whitespace, '/' NOT escaped, '\"' and '\\' escaped, \\b \\t \\n \\f \\r as short escapes, other C0 controls as \\u00XX, and non-ASCII emitted as raw UTF-8 rather than \\u escapes.",
+      "pubkey": "007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01",
+      "created_at": 0,
+      "kind": 20000,
+      "tags": [
+        [
+          "g",
+          "u4pru"
+        ]
+      ],
+      "content": "epoch",
+      "serialized": "[0,\"007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01\",0,20000,[[\"g\",\"u4pru\"]],\"epoch\"]",
+      "id": "709d5a2c852bf360e359a7496ccc7232b9481dc77d9dc5053938a076d1155677",
+      "note": "Zero must serialize as 0, not -0 or 0.0."
+    }
+  ]
+}

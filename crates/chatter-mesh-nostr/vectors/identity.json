@@ -1,0 +1,96 @@
+{
+  "area": "Per-geohash derived identities and NIP-19 bech32",
+  "source": "bitchat/Nostr/NostrIdentityBridge.swift; bitchat/Nostr/NostrIdentity.swift; bitchat/Nostr/Bech32.swift",
+  "derivation": "HMAC-SHA256(key = device_seed, msg = utf8(label) || big-endian u32 iteration), iteration starting at 0, transcribed from NostrIdentityBridge.deriveIdentity(forGeohash:). The x-only public key is d*G computed with a pure-python secp256k1 validated against the generator multiples and BIP-340's official signing vectors; npub/nsec are bech32 with hrp \"npub\" / \"nsec\" over the 32 raw bytes, validated against the NIP-19 example keys.",
+  "device_seed_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "bridge_label_prefix": "bridge|",
+  "note": "The iteration counter is appended even on the first attempt: the message is utf8(label) followed by four zero bytes, NOT the bare label. Omitting it produces a different key for every cell and silently breaks identity continuity with bitchat.",
+  "identities": [
+    {
+      "label": "u4pru",
+      "secret_hex": "9ce9938a6f04c00050540c83837f1787255fa8613c31936cf2f98c1de5813517",
+      "pubkey_hex": "007e6b733d0044dd63e6f110079b9ff53ebce38712b17e755e97ced9a3cdfb01",
+      "npub": "npub1qplxkueaqpzd6clx7ygq0xul75ltecu8z2chua27jl8dng7dlvqsw6js0l",
+      "nsec": "nsec1nn5e8zn0qnqqq5z5pjpcxlchsuj4l2rp8scexm8jlxxpmevpx5tsuxdatf",
+      "note": "The chat identity for cell u4pru."
+    },
+    {
+      "label": "u4prv",
+      "secret_hex": "3cfb8a05304fff86eb28c9c9725d2477e35321630c14391430dfc8a7f692101a",
+      "pubkey_hex": "21f97404fa8306cd7208b046d98e7d8e6f22de1509b878055bf7edb6d1d12ff8",
+      "npub": "npub1y8uhgp86svrv6usgkprdnrna3ehj9hs4pxu8sp2m7lkmd5w39luqjzd8tq",
+      "nsec": "nsec18nac5pfsfllcd6ege8yhyhfywl34xgtrps2rj9psmly20a5jzqdqckqhte",
+      "note": "A neighbouring cell: must produce a completely different key."
+    },
+    {
+      "label": "u4",
+      "secret_hex": "dd231b46572f77e5a67a082d1fb3471ecc6a829733c60cd66fa93bc7658b4dcb",
+      "pubkey_hex": "e731b3ab95c458880f66fe326b671bef4e09072f693dc407bee3c919b2c90017",
+      "npub": "npub1uucm82u4c3vgsrmxlcexkecmaa8qjpe0dy7ugpa7u0y3nvkfqqts2s65wf",
+      "nsec": "nsec1m533k3jh9am7tfn6pqk3lv68rmxx4q5hx0rqe4n04yauwevtfh9serk8uz",
+      "note": "A coarser cell: prefix relationships must not survive into the keys."
+    },
+    {
+      "label": "bridge|u4pru",
+      "secret_hex": "bbf7235391132271ad02f6a9021753309bbee2126e1113805e1e2c06b5b7fd03",
+      "pubkey_hex": "372d87458636ff44cd8c949a203d964c797a2c68c746d92f57d116d17579604f",
+      "npub": "npub1xukcw3vxxml5fnvvjjdzq0vkf3uh5trgcardjt6h6ytdzatevp8sudt73d",
+      "nsec": "nsec1h0mjx5u3zv38rtgz765sy96nxzdmacsjdcg38qz7rckqdddhl5psxe89yp",
+      "note": "The bridge identity for the same cell - must differ from 'u4pru'."
+    },
+    {
+      "label": "",
+      "secret_hex": "a86acbcbc29b8fa83c83582d56a892d0f06f0e487df5277680b0635c3927e3c5",
+      "pubkey_hex": "71b0fe9bddd990bf365956cb73e140b93546f0ce9f2b0983cd0da2a48c61c167",
+      "npub": "npub1wxc0ax7amxgt7dje2m9h8c2qhy65duxwnu4snq7dpk32frrpc9nskf2hca",
+      "nsec": "nsec14p4vhj7znw86s0yrtqk4d2yj6rcx7rjg0h6jwa5qkp34cwf8u0zsj3m3pk",
+      "note": "Empty label. bitchat's HMAC accepts it, so the port must not panic."
+    },
+    {
+      "label": "u4pru🔥",
+      "secret_hex": "daefade3904706ef2730506f6cb70a7ed752baa063e8bc21b6d1765bbaf2c114",
+      "pubkey_hex": "7491c8577be76607d59cc016d306ae21d913f14c0d89b1603e27b3eadaf98887",
+      "npub": "npub1wjgus4mmuanq04vucqtdxp4wy8v38u2vpkymzcp7y7e74khe3zrss7dngl",
+      "nsec": "nsec1mth6mcusgurw7fes2phkedc20mt49w4qv05tcgdk69m9hwhjcy2qxvwm4f",
+      "note": "Non-ASCII label, hashed as UTF-8 bytes."
+    }
+  ],
+  "nip19": [
+    {
+      "name": "npub_reference",
+      "pubkey_hex": "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d",
+      "npub": "npub180cvv07tjdrrgpa0j7j7tmnyl2yr6yr7l8j4s3evf6u64th6gkwsyjh6w6",
+      "source": "NIP-19 specification example",
+      "derivation": "Transcribed from NIP-19, then reproduced by this script's bech32 encoder."
+    },
+    {
+      "name": "nsec_reference",
+      "secret_hex": "67dea2ed018072d675f5415ecfaed7d2597555e202d85b3d65ea4e58d2d92ffa",
+      "nsec": "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5",
+      "source": "NIP-19 specification example",
+      "derivation": "Transcribed from NIP-19, then reproduced by this script's bech32 encoder."
+    }
+  ],
+  "invalid_npub": [
+    {
+      "value": "npub180cvv07tjdrrgpa0j7j7tmnyl2yr6yr7l8j4s3evf6u64th6gkwsyjh6w7",
+      "why": "checksum corrupted (last character changed)"
+    },
+    {
+      "value": "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5",
+      "why": "valid bech32 but the wrong hrp for an npub"
+    },
+    {
+      "value": "npub1",
+      "why": "no data part"
+    },
+    {
+      "value": "not-bech32-at-all",
+      "why": "no separator"
+    },
+    {
+      "value": "",
+      "why": "empty"
+    }
+  ]
+}

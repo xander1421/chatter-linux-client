@@ -1,0 +1,64 @@
+[package]
+name = "chatter-mesh-noise"
+version = "0.1.0"
+edition = "2024"
+authors = ["xander1421"]
+description = "Noise XX sessions, one-way seals, and Ed25519 signing for the bitchat mesh"
+license = "GPL-3.0"
+repository = "https://github.com/xander1421/chatter"
+rust-version = "1.85"
+
+[lib]
+name = "chatter_mesh_noise"
+path = "src/lib.rs"
+
+[features]
+# Exposes constructors that pin the Noise ephemeral, so the integration test can
+# drive the canonical specification vectors. Never enable in a shipped build: a
+# predictable ephemeral is a handshake an observer can decrypt.
+vectors = []
+
+[dependencies]
+chatter-mesh = { path = "../chatter-mesh" }
+
+# Noise Protocol Framework. bitchat hand-rolls Noise but validates against the
+# canonical specification vectors (bitchatTests/Noise/NoiseTestVectors.json is
+# the cacophony set), so a spec-conformant implementation interoperates with it
+# by construction. Reimplementing a handshake by hand would buy nothing and risk
+# everything.
+# Feature set matters more than it looks.
+#
+# `use-getrandom` is not optional in practice: without it snow's DefaultResolver
+# returns no RNG and every build_initiator/build_responder fails outright. The
+# DH feature is `use-curve25519` — there is no `use-x25519-dalek`.
+#
+# `std` is deliberately NOT enabled. snow declares that feature as
+# `std = ["getrandom/std", "subtle/std", "ring/std", ...]`, and `"ring/std"`
+# written without a `?` implicitly turns on the optional `ring` dependency.
+# ring needs a C toolchain, which breaks the aarch64-linux-android build for a
+# crate that otherwise has no C dependencies at all. We use none of the
+# ring-accelerated paths, so leaving `std` off costs nothing and keeps the
+# dependency tree pure Rust.
+snow = { version = "0.10", default-features = false, features = [
+    "default-resolver",
+    "use-curve25519",
+    "use-chacha20poly1305",
+    "use-sha2",
+    "use-getrandom",
+] }
+
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+sha2 = "0.10"
+rand_core = "0.6"
+thiserror = "2"
+
+[dev-dependencies]
+# Self dev-dependency with `vectors` on, so `cargo test` can drive the canonical
+# Noise vectors through the pinned-ephemeral constructors. An integration test is
+# a separate crate, so `#[cfg(test)]` inside the lib does not reach it — without
+# this, tests/noise_vectors.rs fails to resolve `for_vectors`.
+chatter-mesh-noise = { path = ".", features = ["vectors"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
