@@ -2035,6 +2035,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "chatter-mesh-store"
+version = "0.1.0"
+dependencies = [
+ "chatter-mesh",
+ "chatter-mesh-noise",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "chatter-ui"
 version = "0.1.0"
 dependencies = [

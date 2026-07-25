@@ -1,0 +1,22 @@
+[package]
+name = "chatter-mesh-store"
+version = "0.1.0"
+edition = "2024"
+authors = ["xander1421"]
+description = "Store and forward for the bitchat mesh: outbox, couriers, gossip sync, bridge drops"
+license = "GPL-3.0"
+repository = "https://github.com/xander1421/chatter"
+rust-version = "1.85"
+
+[lib]
+name = "chatter_mesh_store"
+path = "src/lib.rs"
+
+[dependencies]
+chatter-mesh = { path = "../chatter-mesh" }
+chatter-mesh-noise = { path = "../chatter-mesh-noise" }
+thiserror = "2"
+
+# No tokio. Retries, expiry, and rate limiting are all expressed against a
+# caller-supplied `now`, so the policy is testable without a clock and the
+# scheduling belongs to whoever owns the runtime.
