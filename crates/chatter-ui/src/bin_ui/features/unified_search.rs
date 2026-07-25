@@ -204,6 +204,11 @@ fn wire_message_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         CT::ServerDm | CT::MailboxDm | CT::AnonDm => w.invoke_dm_selected(id_slint),
                         CT::AnonGroup => w.invoke_private_group_selected(id_slint),
                         CT::SavedMessages => w.set_loading_messages(false),
+                        // Mesh conversations have no UI surface until P7 wires
+                        // one. Clearing the spinner is the honest behaviour:
+                        // routing them to a DM or channel view would open the
+                        // wrong conversation rather than none.
+                        CT::Mesh | CT::MeshDm => w.set_loading_messages(false),
                     }
                 }
             });
