@@ -307,6 +307,45 @@ impl MeshTimeline {
             .map(|entry| entry.conversation.clone())
     }
 
+    /// Panic wipe: destroy every mesh message and forget every conversation.
+    ///
+    /// Deletes by conversation *type*, not by walking the open directory.
+    /// Leaving a geohash cell keeps its history by design, so a wipe driven from
+    /// the sidebar would silently spare everything said in every cell the user
+    /// ever left — and a panic wipe that leaves messages behind is worse than no
+    /// panic wipe, because the user believes it worked.
+    ///
+    /// Both conversation types are cleared even if one fails, and the first
+    /// error is returned afterwards: stopping at the first failure would leave
+    /// the rest on disk, which is the worst outcome for the one operation whose
+    /// entire purpose is leaving nothing behind.
+    pub fn wipe(&self) -> Result<(), StorageError> {
+        self.open.lock().clear();
+
+        let mut first_error = None;
+        for conversation_type in [ConversationType::Mesh, ConversationType::MeshDm] {
+            if let Err(error) = self.messages.delete_by_conversation_type(&conversation_type)
+                && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
+        }
+        if let Err(error) = self.directory.wipe()
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
+
+        // The room is not something you join, so it comes back immediately —
+        // an empty room, with nothing in it.
+        self.register(&MeshConversation::Room, None);
+
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
     /// Mirror one directory entry to disk.
     ///
     /// Failures are logged, not propagated: the conversation is already open in
@@ -465,6 +504,24 @@ impl MeshEvents {
 /// `:memory:` handling needs a passphrase after attach and `Database::open`
 /// assumes a real path, so a temp file is as close to in-memory as this gets.
 /// The temp dir is leaked so it outlives the test that made it.
+/// A throwaway identity store on its own temp database.
+///
+/// The panic wipe destroys the keypair, so the service needs a real store even
+/// in tests — making the field optional to suit a test would put a
+/// test-shaped hole in production code.
+#[cfg(test)]
+pub(crate) fn temp_identity_store() -> Arc<crate::storage::mesh_identity_store::MeshIdentityStore> {
+    use crate::storage::Database;
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = Arc::new(
+        Database::open(&dir.path().join("mesh_identity.db"), "testpass").expect("open database"),
+    );
+    db.run_migrations().expect("migrations");
+    Box::leak(Box::new(dir));
+    Arc::new(crate::storage::mesh_identity_store::MeshIdentityStore::new(db))
+}
+
 #[cfg(test)]
 pub(crate) fn temp_timeline() -> Arc<MeshTimeline> {
     use crate::storage::Database;
@@ -536,6 +593,88 @@ mod tests {
             listed.iter().any(|c| c.name == "alice"),
             "the peer's name should come back too, not just the row"
         );
+    }
+
+    /// The case a naive panic wipe misses.
+    ///
+    /// Leaving a cell keeps its history by design, so a wipe that walks the open
+    /// sidebar spares everything said in every cell the user ever left — while
+    /// telling them it worked.
+    #[test]
+    fn a_wipe_destroys_history_from_cells_that_were_already_left() {
+        let timeline = temp_timeline();
+
+        timeline.note_geohash("dr5rsj7");
+        let cell = MeshConversation::Geohash("dr5rsj7".to_string());
+        timeline
+            .record(&inbound(
+                "wire-cell-1",
+                cell.clone(),
+                &peer("aabbccddeeff00112233445566778899"),
+                "stranger",
+                "in the square",
+                1_700_000_000_000,
+            ))
+            .expect("record");
+        timeline.forget_geohash("dr5rsj7");
+
+        // Gone from the sidebar, still on disk — that is the design.
+        assert!(timeline.conversation_for(&cell.conversation_id()).is_none());
+        assert_eq!(
+            timeline.history(&cell, None, 50).expect("history").len(),
+            1,
+            "leaving a cell must keep its history, or this test proves nothing"
+        );
+
+        timeline.wipe().expect("wipe");
+
+        assert!(
+            timeline.history(&cell, None, 50).expect("history").is_empty(),
+            "a panic wipe must reach history the sidebar can no longer see"
+        );
+    }
+
+    /// A wipe leaves the room present but empty: it is not something you join,
+    /// so a running radio is always in it.
+    #[test]
+    fn a_wipe_empties_everything_and_keeps_only_the_empty_room() {
+        let timeline = temp_timeline();
+        let room = MeshConversation::Room;
+        let dm = MeshConversation::Dm(peer("00112233445566778899aabbccddeeff"));
+
+        timeline
+            .record(&inbound(
+                "wire-room-1",
+                room.clone(),
+                &peer("aabbccddeeff00112233445566778899"),
+                "stranger",
+                "hello room",
+                1_700_000_000_000,
+            ))
+            .expect("record");
+        timeline
+            .record(&inbound(
+                "wire-dm-1",
+                dm.clone(),
+                &peer("00112233445566778899aabbccddeeff"),
+                "alice",
+                "hello dm",
+                1_700_000_000_001,
+            ))
+            .expect("record");
+        timeline.note_geohash("u4pruy");
+
+        timeline.wipe().expect("wipe");
+
+        assert!(timeline.history(&room, None, 50).expect("history").is_empty());
+        assert!(timeline.history(&dm, None, 50).expect("history").is_empty());
+        assert!(
+            timeline.conversation_for(&dm.conversation_id()).is_none(),
+            "the DM must be gone from the directory too"
+        );
+
+        let listed = timeline.conversations().expect("conversations");
+        assert_eq!(listed.len(), 1, "only the room should remain");
     }
 
     /// Leaving a cell forgets it durably, rather than only for this session.

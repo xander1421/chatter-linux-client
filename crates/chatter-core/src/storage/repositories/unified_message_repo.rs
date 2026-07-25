@@ -311,6 +311,28 @@ impl UnifiedMessageRepository {
     }
 
     /// Delete a message by ID (hard delete — CASCADE removes unified_reactions).
+    /// Hard-delete every message of one conversation type.
+    ///
+    /// Exists for the mesh panic wipe, and it deletes by *type* rather than by
+    /// walking open conversations on purpose: leaving a geohash cell keeps its
+    /// history by design, so a wipe driven from the open-conversation list would
+    /// silently leave everything said in every cell the user ever left. A panic
+    /// wipe that leaves messages behind is worse than none, because the user
+    /// believes it worked.
+    ///
+    /// Returns the number of rows removed.
+    pub fn delete_by_conversation_type(
+        &self,
+        conversation_type: &crate::domain::message::ConversationType,
+    ) -> Result<usize, StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "DELETE FROM messages WHERE conversation_type = ?1",
+            params![conversation_type.as_str()],
+        )?;
+        Ok(rows)
+    }
+
     pub fn delete(&self, id: &MessageId) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         let rows = conn.execute("DELETE FROM messages WHERE id = ?1", params![id.to_string()])?;

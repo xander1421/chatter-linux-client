@@ -163,6 +163,14 @@ impl MeshFavorites {
         self.keys.lock().remove(key);
     }
 
+    /// Forget every favourite. Panic-wipe support.
+    ///
+    /// Favourites are the courier trust tier, so this is not cosmetic: after it,
+    /// no peer is permitted the larger deposit quota.
+    pub fn clear(&self) {
+        self.keys.lock().clear();
+    }
+
     #[must_use]
     pub fn contains(&self, key: &[u8; 32]) -> bool {
         self.keys.lock().contains(key)

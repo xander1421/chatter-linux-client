@@ -418,6 +418,22 @@ impl ChatterClient {
         crate::services::mesh::mapping::peer_user_id(&self.mesh().local_peer())
     }
 
+    /// Panic wipe: destroy everything this device holds about the mesh.
+    ///
+    /// Identity keypair, retained mail, carried courier envelopes, gossip
+    /// history, bridge dedup sets, every mesh message, the conversation
+    /// directory, and favourites.
+    ///
+    /// **It does not touch the chatter account**, its Signal identity, or its
+    /// messages. Those are a separate identity with a separate threat model,
+    /// and destroying an account is a larger irreversible act that deserves its
+    /// own confirmation rather than riding along with this one. Anyone relying
+    /// on this to leave a device clean of everything needs to know that.
+    #[cfg(feature = "mesh")]
+    pub fn mesh_panic_wipe(&self) -> Result<(), crate::services::mesh::MeshError> {
+        self.mesh().panic_wipe()
+    }
+
     /// Send into a mesh conversation, choosing the transport from the scope.
     ///
     /// The room and a cell are broadcasts and return as soon as the packet is

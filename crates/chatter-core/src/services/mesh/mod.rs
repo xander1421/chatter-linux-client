@@ -135,6 +135,8 @@ struct Pending {
 /// The mesh, composed.
 pub struct MeshService {
     identity: Arc<MeshIdentity>,
+    /// Retained so a panic wipe can destroy the keypair, not merely the mail.
+    identity_store: Arc<MeshIdentityStore>,
     config: Arc<MeshConfig>,
     state: Arc<MeshState>,
     nostr_state: Arc<NostrState>,
@@ -158,6 +160,7 @@ impl MeshService {
     /// Load the identity and wire the stack. Does not touch the radio or the
     /// network — [`start`](Self::start) does that.
     pub fn new(deps: MeshDeps, config: MeshConfig) -> Result<Self, MeshError> {
+        let identity_store = Arc::clone(&deps.identity_store);
         let identity = Arc::new(deps.identity_store.get_or_create()?);
         let config = Arc::new(config);
         let state = Arc::new(MeshState::new(identity.peer_id()));
@@ -190,6 +193,7 @@ impl MeshService {
             state,
             nostr_state,
             favorites,
+            identity_store,
             storage: SharedStorage::new(deps.storage),
             router,
             ble: ble_tx,
@@ -555,6 +559,59 @@ impl MeshService {
         self.router.send(RouterCommand::Wipe)
     }
 
+    /// Panic wipe: destroy everything this device holds about the mesh.
+    ///
+    /// Clears, in order: live sessions, retained mail, carried courier
+    /// envelopes, gossip history, the bridge dedup sets, every mesh message,
+    /// the conversation directory, favourites, and finally the identity
+    /// keypair itself.
+    ///
+    /// # What this does not clear
+    ///
+    /// The chatter account, its Signal identity, and its messages. They are a
+    /// separate identity with a separate threat model, and destroying an
+    /// account is a larger, irreversible act that deserves its own deliberate
+    /// confirmation rather than riding along with this one. Anyone relying on
+    /// this to leave a device clean of *everything* needs to know that.
+    ///
+    /// # Why it continues after a failure
+    ///
+    /// Every step runs even if an earlier one fails, and the first error is
+    /// returned at the end. Stopping at the first failure would leave the
+    /// remainder on disk — the worst possible outcome for the one operation
+    /// whose entire purpose is leaving nothing behind. A partial wipe that
+    /// reports success would be worse still, so the error is not swallowed.
+    ///
+    /// The identity goes last. The steps before it log and emit events, and
+    /// doing those under a destroyed identity would be the one moment this
+    /// service could not describe itself.
+    pub fn panic_wipe(&self) -> Result<(), MeshError> {
+        let mut first_error: Option<MeshError> = None;
+        let mut fail = |error: MeshError, slot: &mut Option<MeshError>| {
+            if slot.is_none() {
+                *slot = Some(error);
+            }
+        };
+
+        self.state.with(|state| state.sessions.clear());
+
+        if let Err(error) = self.router.send(RouterCommand::Wipe) {
+            fail(error, &mut first_error);
+        }
+        if let Err(error) = self.timeline.wipe() {
+            fail(error.into(), &mut first_error);
+        }
+        self.favorites.clear();
+        if let Err(error) = self.identity_store.wipe() {
+            fail(error.into(), &mut first_error);
+        }
+
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
     // ----------------------------------------------------------------- helpers
 
     /// Whether any transport could carry a DM to this peer.
@@ -632,6 +689,7 @@ mod tests {
         let nostr_state = Arc::new(NostrState::new());
         let favorites = Arc::new(MeshFavorites::new());
         let timeline = timeline::temp_timeline();
+        let identity_store = timeline::temp_identity_store();
         let events = MeshEvents::new(EVENT_CAPACITY, Arc::clone(&timeline));
         let (ble_tx, ble_rx) = unbounded_channel();
         let (nostr_tx, nostr_rx) = unbounded_channel();
@@ -653,6 +711,7 @@ mod tests {
 
         MeshService {
             identity,
+            identity_store,
             config,
             state,
             nostr_state,
