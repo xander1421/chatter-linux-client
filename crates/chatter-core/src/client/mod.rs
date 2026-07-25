@@ -418,6 +418,24 @@ impl ChatterClient {
         crate::services::mesh::mapping::peer_user_id(&self.mesh().local_peer())
     }
 
+    /// Start the mesh. Deliberately **not** part of [`start`](Self::start).
+    ///
+    /// `start` is the authenticated client coming up: inbox polling, channel
+    /// streams, prekeys — all of which need an account. The mesh needs none of
+    /// them. It makes no RPC, shares no identity with the account, and is the
+    /// one part of this app that is supposed to work when there is no server,
+    /// no internet, and no login.
+    ///
+    /// Gating it behind authentication would have broken exactly the situations
+    /// it exists for: the disaster and protest scenarios bitchat targets are
+    /// the ones where nobody is signing in to anything.
+    ///
+    /// Safe to call more than once; the service tracks whether it is running.
+    #[cfg(feature = "mesh")]
+    pub async fn start_mesh(&self) -> Result<(), crate::services::mesh::MeshError> {
+        self.mesh().start().await
+    }
+
     /// Panic wipe: destroy everything this device holds about the mesh.
     ///
     /// Identity keypair, retained mail, carried courier envelopes, gossip
@@ -1705,19 +1723,6 @@ impl ChatterClient {
                 }
             }
         });
-
-        // ── bitchat mesh ────────────────────────────────────────────
-        // Serverless and independent of everything above: it makes no RPC and
-        // shares no identity with the account. A failure here is logged and the
-        // rest of the client continues — losing the mesh must not stop chatter
-        // from working, and this radio stack has never met another device.
-        #[cfg(feature = "mesh")]
-        {
-            match self.mesh().start().await {
-                Ok(()) => tracing::info!("mesh: started"),
-                Err(error) => tracing::warn!(%error, "mesh: failed to start, continuing without it"),
-            }
-        }
 
         // ── Channel + DM services ───────────────────────────────────
         let h_channel_stream = self.ctx.start_channel_event_stream();

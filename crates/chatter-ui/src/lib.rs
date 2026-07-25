@@ -263,6 +263,19 @@ pub async fn app_init() -> AppState {
         tracing::info!("Using software video rendering");
     }
 
+    // The mesh comes up regardless of login. It is serverless by design — no
+    // RPC, no account, no internet required — and the situations it exists for
+    // are precisely the ones where nobody is signing in to anything. Starting it
+    // inside the authenticated branch below would have made it useless exactly
+    // when it matters. A failure is logged and the app continues.
+    #[cfg(feature = "mesh")]
+    {
+        match client.start_mesh().await {
+            Ok(()) => tracing::info!("mesh: started"),
+            Err(error) => tracing::warn!("mesh: failed to start, continuing without it: {error}"),
+        }
+    }
+
     if ui_ctx.is_logged_in() {
         if let Some((user_id, device_id)) = ui_ctx.current_user() {
             let display_name = ui_ctx.display_name(&user_id);
