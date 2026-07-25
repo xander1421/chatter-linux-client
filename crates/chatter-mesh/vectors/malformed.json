@@ -1,0 +1,96 @@
+{
+  "source": "localPackages/BitFoundation/Tests/BitFoundationTests/BinaryProtocolTests.swift",
+  "note": "Every one of these must return an error, never panic and never allocate on the attacker-supplied length before validating it.",
+  "vectors": [
+    {
+      "name": "empty",
+      "note": "Zero bytes.",
+      "encoded_hex": "",
+      "derivation": "Trivial."
+    },
+    {
+      "name": "partial_header_1",
+      "note": "1 bytes: shorter than the 14-byte v1 header plus 8-byte sender.",
+      "encoded_hex": "01",
+      "derivation": "BinaryProtocolTests.partialHeaderData uses 0x01 fill at sizes 0,1,5,10,12."
+    },
+    {
+      "name": "partial_header_5",
+      "note": "5 bytes: shorter than the 14-byte v1 header plus 8-byte sender.",
+      "encoded_hex": "0101010101",
+      "derivation": "BinaryProtocolTests.partialHeaderData uses 0x01 fill at sizes 0,1,5,10,12."
+    },
+    {
+      "name": "partial_header_10",
+      "note": "10 bytes: shorter than the 14-byte v1 header plus 8-byte sender.",
+      "encoded_hex": "01010101010101010101",
+      "derivation": "BinaryProtocolTests.partialHeaderData uses 0x01 fill at sizes 0,1,5,10,12."
+    },
+    {
+      "name": "partial_header_12",
+      "note": "12 bytes: shorter than the 14-byte v1 header plus 8-byte sender.",
+      "encoded_hex": "010101010101010101010101",
+      "derivation": "BinaryProtocolTests.partialHeaderData uses 0x01 fill at sizes 0,1,5,10,12."
+    },
+    {
+      "name": "partial_header_13",
+      "note": "13 bytes: shorter than the 14-byte v1 header plus 8-byte sender.",
+      "encoded_hex": "01010101010101010101010101",
+      "derivation": "BinaryProtocolTests.partialHeaderData uses 0x01 fill at sizes 0,1,5,10,12."
+    },
+    {
+      "name": "too_small_five_zero_bytes",
+      "note": "Five zero bytes -- the first case in BinaryProtocolTests.invalidDataDecoding.",
+      "encoded_hex": "0000000000",
+      "derivation": "Transcribed verbatim (Data(repeating: 0, count: 5))."
+    },
+    {
+      "name": "unsupported_version_0xff",
+      "note": "Version byte corrupted to 0xFF. Only 1 and 2 decode.",
+      "encoded_hex": "ff02030000018bcfe5680000000c001122334455667774657374207061796c6f6164",
+      "derivation": "BinaryProtocolTests.invalidDataDecoding corrupts encoded[0] = 0xFF."
+    },
+    {
+      "name": "unsupported_version_99",
+      "note": "Version byte 99.",
+      "encoded_hex": "6302030000018bcfe5680000000c001122334455667774657374207061796c6f6164",
+      "derivation": "BinaryProtocolTests.unsupportedProtocolVersion sets encoded[0] = 99."
+    },
+    {
+      "name": "payload_length_193_with_30_bytes",
+      "note": "payloadLength claims 193 (0x00C1) but only 8 payload bytes follow. The original crash scenario.",
+      "encoded_hex": "01010a00000000000000000000c101010101010101010202020202020202",
+      "derivation": "Transcribed verbatim from BinaryProtocolTests.malformedPacketWithInvalidPayloadLength."
+    },
+    {
+      "name": "compressed_payload_length_below_original_size_field",
+      "note": "IS_COMPRESSED with payloadLength = 1, which cannot even hold the 2-byte v1 original-size field.",
+      "encoded_hex": "01010a0000000000000000040001010101010101010199",
+      "derivation": "Transcribed verbatim from BinaryProtocolTests.malformedCompressedPacket."
+    },
+    {
+      "name": "payload_length_65535_with_three_bytes",
+      "note": "payloadLength = 65535 with 3 bytes present. Must fail without allocating 64 KiB first.",
+      "encoded_hex": "01010a000000000000000000ffff0101010101010101010203",
+      "derivation": "Transcribed verbatim from BinaryProtocolTests.excessivelyLargePayloadLength."
+    },
+    {
+      "name": "compressed_original_size_exceeds_available_bytes",
+      "note": "IS_COMPRESSED, payloadLength = 16 so compressedSize = 14, but only 13 bytes remain after the original-size field.",
+      "encoded_hex": "01010a00000000000000000400100101010101010101200001020304000000000000000000",
+      "derivation": "Transcribed verbatim from BinaryProtocolTests.compressedPacketWithInvalidOriginalSize, including its `while count < 21+16` zero fill."
+    },
+    {
+      "name": "suspicious_compression_ratio",
+      "note": "originalSize = 65535 against 1 compressed byte -> 65535:1, above the 50,000:1 bomb guard.",
+      "encoded_hex": "01010a00000000000000000400030101010101010101ffff99",
+      "derivation": "Transcribed verbatim from BinaryProtocolTests.compressedPacketWithSuspiciousCompressionRatio."
+    },
+    {
+      "name": "integer_overflow_attempt",
+      "note": "HAS_RECIPIENT|HAS_SIGNATURE with payloadLength 65534 and 2 payload bytes: every optional field pushes the required length past the buffer.",
+      "encoded_hex": "01010a000000000000000003fffe010101010101010102020202020202020102",
+      "derivation": "Transcribed verbatim from BinaryProtocolTests.maliciousPacketWithIntegerOverflow."
+    }
+  ]
+}

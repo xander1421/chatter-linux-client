@@ -1,0 +1,60 @@
+{
+  "source": "bitchat/Services/BLE/BLEReceivePipeline.swift (context(for:))",
+  "derivation": "Key is the Swift interpolation \"\\(senderID)-\\(timestamp)-\\(type)-\\(digestPrefix)\" where senderID is PeerID(hexData:) rendered lowercase hex, type is the UInt8 in decimal, and digestPrefix is sha256(payload).prefix(4) in lowercase hex. Digests computed with python hashlib.",
+  "vectors": [
+    {
+      "name": "message",
+      "sender_id": "0011223344556677",
+      "timestamp": 1700000000000,
+      "msg_type": 2,
+      "payload_hex": "68656c6c6f206d657368",
+      "key": "0011223344556677-1700000000000-2-0d86592c",
+      "note": "Baseline."
+    },
+    {
+      "name": "same_sender_ts_type_other_payload",
+      "sender_id": "0011223344556677",
+      "timestamp": 1700000000000,
+      "msg_type": 2,
+      "payload_hex": "68656c6c6f206d657367",
+      "key": "0011223344556677-1700000000000-2-474a721c",
+      "note": "PRIORITY: identical sender, timestamp and type; only the payload differs. Without the SHA-256 prefix in the key these collapse, and the post-handshake flush (message + delivered + read inside one millisecond) loses every packet after the first."
+    },
+    {
+      "name": "delivered_receipt_same_millisecond",
+      "sender_id": "0011223344556677",
+      "timestamp": 1700000000000,
+      "msg_type": 17,
+      "payload_hex": "036d73672d6964",
+      "key": "0011223344556677-1700000000000-17-4872d851",
+      "note": "The sibling packet from that same flush: same sender and millisecond, different type and payload."
+    },
+    {
+      "name": "read_receipt_same_millisecond",
+      "sender_id": "0011223344556677",
+      "timestamp": 1700000000000,
+      "msg_type": 17,
+      "payload_hex": "026d73672d6964",
+      "key": "0011223344556677-1700000000000-17-c79bd5f8",
+      "note": "And the third: same type as the previous one, so only the payload digest separates them."
+    },
+    {
+      "name": "uppercase_sender_renders_lowercase",
+      "sender_id": "aabbccddeeff0011",
+      "timestamp": 1699999999999,
+      "msg_type": 1,
+      "payload_hex": "616e6e6f756e6365",
+      "key": "aabbccddeeff0011-1699999999999-1-f178ad42",
+      "note": "Sender hex is rendered lowercase (Swift `String(format: \"%02x\")`)."
+    },
+    {
+      "name": "empty_payload",
+      "sender_id": "0000000000000000",
+      "timestamp": 0,
+      "msg_type": 32,
+      "payload_hex": "",
+      "key": "0000000000000000-0-32-e3b0c442",
+      "note": "SHA-256 of the empty string still yields a 4-byte prefix."
+    }
+  ]
+}

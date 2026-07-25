@@ -1,0 +1,60 @@
+{
+  "source": "bitchat/Sync/PacketIdUtil.swift",
+  "derivation": "SHA-256 over type || senderID || bigEndian(timestamp) || payload, first 16 bytes. Digests computed with python hashlib; the concatenation order is transcribed from PacketIdUtil.computeId.",
+  "vectors": [
+    {
+      "name": "message_basic",
+      "msg_type": 2,
+      "sender_id": "0011223344556677",
+      "timestamp": 1700000000000,
+      "payload_hex": "68656c6c6f206d657368",
+      "packet_id_hex": "38f32c538a7bf3985833853ffd338268",
+      "note": "Baseline."
+    },
+    {
+      "name": "same_fields_different_ttl",
+      "msg_type": 2,
+      "sender_id": "0011223344556677",
+      "timestamp": 1700000000000,
+      "payload_hex": "68656c6c6f206d657368",
+      "packet_id_hex": "38f32c538a7bf3985833853ffd338268",
+      "note": "Identical to the baseline: ttl, recipient, route and signature are outside the hash, so a relayed copy keeps the originator's ID."
+    },
+    {
+      "name": "different_payload",
+      "msg_type": 2,
+      "sender_id": "0011223344556677",
+      "timestamp": 1700000000000,
+      "payload_hex": "68656c6c6f206d657367",
+      "packet_id_hex": "34f3ac9864ed245023edb4e2a1127063",
+      "note": "One byte of payload changed."
+    },
+    {
+      "name": "different_type",
+      "msg_type": 1,
+      "sender_id": "0011223344556677",
+      "timestamp": 1700000000000,
+      "payload_hex": "68656c6c6f206d657368",
+      "packet_id_hex": "d3e335a59ae5e6896046699b0696a9c8",
+      "note": "Type participates."
+    },
+    {
+      "name": "different_timestamp",
+      "msg_type": 2,
+      "sender_id": "0011223344556677",
+      "timestamp": 1700000000001,
+      "payload_hex": "68656c6c6f206d657368",
+      "packet_id_hex": "867994387bfb6b0d3b5f069841eb2f52",
+      "note": "Timestamp is hashed big-endian."
+    },
+    {
+      "name": "empty_payload",
+      "msg_type": 3,
+      "sender_id": "ffffffffffffffff",
+      "timestamp": 0,
+      "payload_hex": "",
+      "packet_id_hex": "8230fb74b89a13f744f82d160a90b60d",
+      "note": "Degenerate inputs still hash."
+    }
+  ]
+}

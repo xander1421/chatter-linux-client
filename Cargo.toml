@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/chatter-core",
+    "crates/chatter-mesh",
     "crates/chatter-ui",
 ]
 # The fuzz crate must NOT be a workspace member — otherwise libfuzzer-sys

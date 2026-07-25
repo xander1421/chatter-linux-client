@@ -1,0 +1,48 @@
+{
+  "source": "localPackages/BitFoundation/Sources/BitFoundation/PeerID.swift + Tests/BitFoundationTests/PeerIDTests.swift",
+  "derivation": "short_id = SHA-256(noise static public key) rendered as lowercase hex, first 16 characters -- i.e. the first 8 digest bytes. Digests computed with python hashlib.",
+  "from_public_key": [
+    {
+      "name": "noise_key_ab",
+      "public_key_hex": "abababababababababababababababababababababababababababababababab",
+      "short_id": "9a2db2e23f1504cd",
+      "routing_data_hex": "9a2db2e23f1504cd",
+      "note": "PeerIDTests.fileTransfer_toShortNormalizesNoiseKeyToFingerprint: the short peer ID is the first 16 hex chars of SHA-256 over the RAW key bytes -- not the first 8 bytes of the key, which is the bug that test documents."
+    },
+    {
+      "name": "noise_key_cd",
+      "public_key_hex": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "short_id": "7969ec0fcb8b648d",
+      "routing_data_hex": "7969ec0fcb8b648d",
+      "note": "PeerIDTests.fileTransfer_shortIDMatchesMyPeerIDFormat."
+    },
+    {
+      "name": "noise_key_ef",
+      "public_key_hex": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+      "short_id": "b9c61610704cb9b9",
+      "routing_data_hex": "b9c61610704cb9b9",
+      "note": "PeerIDTests.fileTransfer_truncatedRawKeyDoesNotMatchMyPeerID: contrast with the truncated form efefefefefefefef, which must NOT match."
+    },
+    {
+      "name": "noise_key_12",
+      "public_key_hex": "1212121212121212121212121212121212121212121212121212121212121212",
+      "short_id": "b6acca81a0939a85",
+      "routing_data_hex": "b6acca81a0939a85",
+      "note": "PeerIDTests.fileTransfer_shortIDProducesCorrect8ByteRoutingData: the 8-byte routing form is this hex decoded."
+    }
+  ],
+  "routing": [
+    {
+      "name": "short_hex_round_trip",
+      "id": "0011223344556677",
+      "routing_data_hex": "0011223344556677",
+      "note": "PeerIDTests.routingPeerRoundTrip: a 16-hex ID is already the 8 routing bytes."
+    },
+    {
+      "name": "lowercased_on_construction",
+      "id": "AABBCCDDEEFF0011",
+      "routing_data_hex": "aabbccddeeff0011",
+      "note": "PeerID lowercases in its initialiser, so 0xAA..-cased input compares equal to lowercase (PeerIDTests.equality)."
+    }
+  ]
+}

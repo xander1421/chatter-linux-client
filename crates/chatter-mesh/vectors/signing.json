@@ -1,0 +1,82 @@
+{
+  "source": "localPackages/BitFoundation/Sources/BitFoundation/BitchatPacket.swift (toBinaryDataForSigning) + BinaryProtocol.swift",
+  "note": "P0 verifies signature FRAMING only -- these vectors pin the bytes an Ed25519 signature must cover, not any signature value.",
+  "vectors": [
+    {
+      "name": "signed_dm_with_recipient",
+      "note": "PRIORITY: the preimage is the PADDED encoding with ttl forced to 0, the signature field removed and IS_RSR cleared. All three mutate in flight, so none of them can be inside the signature.",
+      "packet": {
+        "version": 1,
+        "msg_type": 17,
+        "ttl": 7,
+        "timestamp": 1700000000000,
+        "sender_id": "0011223344556677",
+        "recipient_id": "8899aabbccddeeff",
+        "payload_hex": "7369676e656420626f6479",
+        "signature_hex": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+        "route": null,
+        "is_rsr": true
+      },
+      "preimage_hex": "0111000000018bcfe5680001000b00112233445566778899aabbccddeeff7369676e656420626f6479d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7",
+      "derivation": "BitchatPacket.toBinaryDataForSigning() calls BinaryProtocol.encode(unsignedPacket) WITHOUT a padding argument, so the parameter takes its Swift default of true. Preimage here = encode({ttl:0, signature:nil, isRSR:false}, padding:true): the frame is 14+8+8+11 = 41 bytes, optimalBlockSize(41) = 256, so 215 bytes of 0xD7 follow. Signing the 41 unpadded bytes verifies against itself and fails against every real peer."
+    },
+    {
+      "name": "signed_announce_broadcast",
+      "note": "A broadcast announce. Same rule: preimage is padded to 256.",
+      "packet": {
+        "version": 1,
+        "msg_type": 1,
+        "ttl": 7,
+        "timestamp": 1700000000000,
+        "sender_id": "0011223344556677",
+        "recipient_id": "ffffffffffffffff",
+        "payload_hex": "6e69636b6e616d652b6b657973",
+        "signature_hex": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+        "route": null,
+        "is_rsr": false
+      },
+      "preimage_hex": "0101000000018bcfe5680001000d0011223344556677ffffffffffffffff6e69636b6e616d652b6b657973d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5",
+      "derivation": "As above."
+    },
+    {
+      "name": "signed_v2_routed",
+      "note": "A signed v2 packet with a 3-hop route. The route IS inside the preimage -- which is why attaching a route means re-signing.",
+      "packet": {
+        "version": 2,
+        "msg_type": 2,
+        "ttl": 6,
+        "timestamp": 1720000000000,
+        "sender_id": "0102030405060708",
+        "recipient_id": "2122232425262728",
+        "payload_hex": "726f7574652d74657374",
+        "signature_hex": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+        "route": [
+          "0102030405060708",
+          "1112131415161718",
+          "2122232425262728"
+        ],
+        "is_rsr": false
+      },
+      "preimage_hex": "0202000000019077fd3000090000000a0102030405060708212223242526272803010203040506070811121314151617182122232425262728726f7574652d74657374bdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbd",
+      "derivation": "encode({ttl:0, signature:nil, isRSR:false}, padding:true). Route bytes are emitted before the payload and are therefore covered."
+    },
+    {
+      "name": "preimage_longer_than_240_bytes_is_unpadded",
+      "note": "The padding refusal reaches the preimage too: a 241-byte unsigned frame cannot be padded to 512 (gap 271 > 255), so the preimage is the raw frame. An implementation that always pads to a block would diverge here.",
+      "packet": {
+        "version": 1,
+        "msg_type": 2,
+        "ttl": 3,
+        "timestamp": 1700000000000,
+        "sender_id": "0011223344556677",
+        "recipient_id": null,
+        "payload_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9da",
+        "signature_hex": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+        "route": null,
+        "is_rsr": false
+      },
+      "preimage_hex": "0102000000018bcfe568000000db0011223344556677000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9da",
+      "derivation": "Unsigned frame = 14 + 8 + 219 = 241 bytes. optimalBlockSize(241) = 512; pad refuses because 512-241 = 271 > 255."
+    }
+  ]
+}

@@ -1,0 +1,74 @@
+{
+  "source": "localPackages/BitFoundation/Sources/BitFoundation/PeerCapabilities.swift + Tests/BitFoundationTests/PeerCapabilitiesTests.swift",
+  "note": "The four `encoded_hex` values marked 'literal' are copied straight out of PeerCapabilitiesTests; the rest follow the same minimal little-endian rule.",
+  "encode": [
+    {
+      "name": "empty",
+      "bits": 0,
+      "encoded_hex": "00",
+      "note": "PeerCapabilitiesTests literal: PeerCapabilities([]).encoded() == Data([0x00]). Always at least one byte so an empty set is distinguishable from an absent TLV."
+    },
+    {
+      "name": "prekeys",
+      "bits": 1,
+      "encoded_hex": "01",
+      "note": "PeerCapabilitiesTests literal."
+    },
+    {
+      "name": "mesh_diagnostics",
+      "bits": 64,
+      "encoded_hex": "40",
+      "note": "PeerCapabilitiesTests literal."
+    },
+    {
+      "name": "bit_nine",
+      "bits": 512,
+      "encoded_hex": "0002",
+      "note": "PeerCapabilitiesTests literal: little-endian, so bit 9 lands in the SECOND byte. Big-endian would give 0200."
+    },
+    {
+      "name": "all_seven_named",
+      "bits": 127,
+      "encoded_hex": "7f",
+      "note": "prekeys|wifiBulk|gateway|groups|board|vouch|meshDiagnostics, the set PeerCapabilitiesTests round-trips."
+    },
+    {
+      "name": "bridge_only",
+      "bits": 128,
+      "encoded_hex": "80",
+      "note": "Highest named bit still fits one byte."
+    },
+    {
+      "name": "all_64_bits",
+      "bits": 18446744073709551615,
+      "encoded_hex": "ffffffffffffffff",
+      "note": "Eight bytes, the widest legal encoding."
+    }
+  ],
+  "decode": [
+    {
+      "name": "empty_value_is_no_capabilities",
+      "encoded_hex": "",
+      "bits": 0,
+      "note": "PeerCapabilitiesTests literal: PeerCapabilities(encoded: Data()) == []."
+    },
+    {
+      "name": "unknown_bits_survive",
+      "encoded_hex": "ffff",
+      "bits": 65535,
+      "note": "PeerCapabilitiesTests literal: unknown bits are preserved verbatim, not masked to the known set."
+    },
+    {
+      "name": "oversized_field_keeps_low_64",
+      "encoded_hex": "0100000000000000aabb",
+      "bits": 1,
+      "note": "PeerCapabilitiesTests literal: bytes past the eighth are ignored, so this decodes to .prekeys and not to something carrying 0xAA/0xBB."
+    },
+    {
+      "name": "trailing_zeros_are_harmless",
+      "encoded_hex": "0100000000",
+      "bits": 1,
+      "note": "Non-minimal encodings decode fine; only encode() is minimal."
+    }
+  ]
+}

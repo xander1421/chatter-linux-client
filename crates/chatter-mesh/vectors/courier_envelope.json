@@ -1,0 +1,157 @@
+{
+  "source": "localPackages/BitFoundation/Sources/BitFoundation/CourierEnvelope.swift + Tests/BitFoundationTests/CourierEnvelopeTests.swift",
+  "derivation": "TLV framing is 1-byte type, 2-byte big-endian length, value -- transcribed from CourierEnvelope.encode. Field values (0xAB x 16 tag, expiry 1900000000000, 0x42 x 128 ciphertext) are the CourierEnvelopeTests fixtures. Recipient tags are HMAC-SHA256(key, \"bitchat-courier-tag-v1\" || bigEndian(epochDay)) truncated to 16 bytes, computed with python hmac.",
+  "tag_length": 16,
+  "max_ciphertext_bytes": 16384,
+  "max_copies": 8,
+  "vectors": [
+    {
+      "name": "carry_only",
+      "envelope": {
+        "recipient_tag": "abababababababababababababababab",
+        "expiry": 1900000000000,
+        "ciphertext_hex": "4242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242",
+        "copies": 1,
+        "prekey_id": null
+      },
+      "encoded_hex": "010010abababababababababababababababab020008000001ba60d338000300804242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242",
+      "check_encode": true,
+      "check_decode": true,
+      "note": "copies == 1 omits the 0x04 TLV entirely so the frame stays byte-identical to the pre-spray wire format."
+    },
+    {
+      "name": "four_copies",
+      "envelope": {
+        "recipient_tag": "abababababababababababababababab",
+        "expiry": 1900000000000,
+        "ciphertext_hex": "4242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242",
+        "copies": 4,
+        "prekey_id": null
+      },
+      "encoded_hex": "010010abababababababababababababababab020008000001ba60d33800030080424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424204000104",
+      "check_encode": true,
+      "check_decode": true,
+      "note": "Spray budget rides in a 1-byte TLV appended after the ciphertext."
+    },
+    {
+      "name": "prekey_sealed",
+      "envelope": {
+        "recipient_tag": "abababababababababababababababab",
+        "expiry": 1900000000000,
+        "ciphertext_hex": "4242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242",
+        "copies": 1,
+        "prekey_id": 16909060
+      },
+      "encoded_hex": "010010abababababababababababababababab020008000001ba60d33800030080424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424205000401020304",
+      "check_encode": true,
+      "check_decode": true,
+      "note": "v2 seal: TLV 0x05 carries the one-time prekey ID, big-endian."
+    },
+    {
+      "name": "minimum_ciphertext",
+      "envelope": {
+        "recipient_tag": "abababababababababababababababab",
+        "expiry": 0,
+        "ciphertext_hex": "01",
+        "copies": 1,
+        "prekey_id": null
+      },
+      "encoded_hex": "010010abababababababababababababababab020008000000000000000003000101",
+      "check_encode": true,
+      "check_decode": true,
+      "note": "One ciphertext byte is the smallest legal envelope; zero is rejected."
+    },
+    {
+      "name": "unknown_tlv_skipped",
+      "envelope": {
+        "recipient_tag": "abababababababababababababababab",
+        "expiry": 1900000000000,
+        "ciphertext_hex": "4242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242",
+        "copies": 1,
+        "prekey_id": null
+      },
+      "encoded_hex": "010010abababababababababababababababab020008000001ba60d3380003008042424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242427f0002dead",
+      "check_encode": false,
+      "check_decode": true,
+      "note": "CourierEnvelopeTests.decodeSkipsUnknownTLVs appends type 0x7F with a 2-byte value; the decoder must skip it and still produce the base envelope. Decode-only: re-encoding drops the unknown TLV."
+    }
+  ],
+  "decode_rejects": [
+    {
+      "name": "truncated_value",
+      "encoded_hex": "010010abababababababababababababababab020008000001ba60d3380003008042424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242",
+      "note": "CourierEnvelopeTests.decodeRejectsTruncatedValue: the final TLV declares more bytes than remain."
+    },
+    {
+      "name": "missing_ciphertext_tlv",
+      "encoded_hex": "010010abababababababababababababababab020008000001ba60d33800",
+      "note": "CourierEnvelopeTests.decodeRejectsMissingFields: tag and expiry only. All three of tag/expiry/ciphertext are required."
+    },
+    {
+      "name": "empty",
+      "encoded_hex": "",
+      "note": "No TLVs at all -- required fields absent."
+    },
+    {
+      "name": "wrong_tag_length",
+      "encoded_hex": "0100080000000000000000020008000001ba60d338000300804242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242",
+      "note": "Tag TLV of 8 bytes. tagLength is a fixed 16."
+    },
+    {
+      "name": "expiry_wrong_length",
+      "encoded_hex": "010010abababababababababababababababab0200040000000103000101",
+      "note": "Expiry TLV must be exactly 8 bytes."
+    },
+    {
+      "name": "header_truncated_after_type",
+      "encoded_hex": "0100",
+      "note": "A type byte with only one of the two length bytes present."
+    }
+  ],
+  "encode_rejects": [
+    {
+      "name": "tag_too_short",
+      "recipient_tag": "0000000000000000",
+      "expiry": 1900000000000,
+      "ciphertext_hex": "4242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242",
+      "note": "CourierEnvelopeTests.encodeRejectsInvalidFields.",
+      "unreachable_in_rust": "recipient_tag is a [u8; 16], so a short tag has no representation to reject. The Swift guard is a runtime check; ours is a type."
+    },
+    {
+      "name": "empty_ciphertext",
+      "recipient_tag": "abababababababababababababababab",
+      "expiry": 1900000000000,
+      "ciphertext_hex": "",
+      "note": "Same test."
+    },
+    {
+      "name": "ciphertext_over_16k",
+      "recipient_tag": "abababababababababababababababab",
+      "expiry": 1900000000000,
+      "ciphertext_len": 16385,
+      "note": "Same test: maxCiphertextBytes is 16 KiB."
+    }
+  ],
+  "recipient_tags": [
+    {
+      "noise_static_key": "1111111111111111111111111111111111111111111111111111111111111111",
+      "epoch_day": 20000,
+      "tag_hex": "173d54ec4ce3de7b45d355eea6500dde"
+    },
+    {
+      "noise_static_key": "1111111111111111111111111111111111111111111111111111111111111111",
+      "epoch_day": 20001,
+      "tag_hex": "33055c4c2dee565a4a641bd00aa1d691"
+    },
+    {
+      "noise_static_key": "2222222222222222222222222222222222222222222222222222222222222222",
+      "epoch_day": 20000,
+      "tag_hex": "664d981a8883942af67dd4c32d3140f2"
+    },
+    {
+      "noise_static_key": "3333333333333333333333333333333333333333333333333333333333333333",
+      "epoch_day": 20255,
+      "tag_hex": "4330d9c3a7ac5a91324fafcc08367d04"
+    }
+  ]
+}

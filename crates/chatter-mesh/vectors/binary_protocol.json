@@ -1,0 +1,333 @@
+{
+  "source": "localPackages/BitFoundation/Sources/BitFoundation/BinaryProtocol.swift + Tests/BitFoundationTests/BinaryProtocolTests.swift",
+  "note": "check_encode/check_decode say which directions apply. Vectors with both true are exact round trips.",
+  "vectors": [
+    {
+      "name": "v1_minimal_empty_payload",
+      "note": "The exact 22-byte frame BinaryProtocolTests.boundaryConditions builds byte-by-byte as its 'minimum valid size' case. Its comment says 21 bytes; the literal it actually appends is 22 (14-byte header + 8-byte sender).",
+      "packet": {
+        "version": 1,
+        "msg_type": 1,
+        "ttl": 10,
+        "timestamp": 0,
+        "sender_id": "0101010101010101",
+        "recipient_id": null,
+        "payload_hex": "",
+        "signature_hex": null,
+        "route": null,
+        "is_rsr": false
+      },
+      "padding": false,
+      "encoded_hex": "01010a00000000000000000000000101010101010101",
+      "check_encode": true,
+      "check_decode": true,
+      "derivation": "Transcribed verbatim from BinaryProtocolTests.swift:784-801."
+    },
+    {
+      "name": "v1_basic_unpadded",
+      "note": "Baseline v1 frame: 14-byte header, 8-byte sender, no recipient, no signature, uncompressed 12-byte payload. flags = 0x00.",
+      "packet": {
+        "version": 1,
+        "msg_type": 2,
+        "ttl": 3,
+        "timestamp": 1700000000000,
+        "sender_id": "0011223344556677",
+        "recipient_id": null,
+        "payload_hex": "74657374207061796c6f6164",
+        "signature_hex": null,
+        "route": null,
+        "is_rsr": false
+      },
+      "padding": false,
+      "encoded_hex": "0102030000018bcfe5680000000c001122334455667774657374207061796c6f6164",
+      "check_encode": true,
+      "check_decode": true,
+      "derivation": "Hand-encoded per BinaryProtocol.encode: version|type|ttl|ts_be64|flags|len_be16|sender. 14+8+12 = 34 bytes."
+    },
+    {
+      "name": "v1_basic_padded",
+      "note": "Same packet with padding on: 34 bytes -> optimalBlockSize(34) = 256 -> 222 PKCS#7 bytes of value 0xDE appended.",
+      "packet": {
+        "version": 1,
+        "msg_type": 2,
+        "ttl": 3,
+        "timestamp": 1700000000000,
+        "sender_id": "0011223344556677",
+        "recipient_id": null,
+        "payload_hex": "74657374207061796c6f6164",
+        "signature_hex": null,
+        "route": null,
+        "is_rsr": false
+      },
+      "padding": true,
+      "encoded_hex": "0102030000018bcfe5680000000c001122334455667774657374207061796c6f6164dededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededede",
+      "check_encode": true,
+      "check_decode": true,
+      "derivation": "optimalBlockSize(34): 34+16=50 <= 256. pad appends 256-34 = 222 bytes of 0xDE (222 = 0xDE)."
+    },
+    {
+      "name": "v1_recipient_and_signature",
+      "note": "flags = 0x03 (HAS_RECIPIENT|HAS_SIGNATURE). The 64 signature bytes sit after the payload, outside payloadLength.",
+      "packet": {
+        "version": 1,
+        "msg_type": 17,
+        "ttl": 7,
+        "timestamp": 1700000000000,
+        "sender_id": "0011223344556677",
+        "recipient_id": "8899aabbccddeeff",
+        "payload_hex": "6869",
+        "signature_hex": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+        "route": null,
+        "is_rsr": false
+      },
+      "padding": false,
+      "encoded_hex": "0111070000018bcfe5680003000200112233445566778899aabbccddeeff6869abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+      "check_encode": true,
+      "check_decode": true,
+      "derivation": "Hand-encoded. payloadLength = 2 (payload only); signature and recipient are never counted in it. Signature value 0xAB x 64 is TestConstants.testSignature."
+    },
+    {
+      "name": "v1_broadcast_recipient",
+      "note": "Explicit all-0xFF broadcast recipient. flags = 0x01: the field is present and its value is the broadcast address.",
+      "packet": {
+        "version": 1,
+        "msg_type": 2,
+        "ttl": 4,
+        "timestamp": 1700000000000,
+        "sender_id": "0011223344556677",
+        "recipient_id": "ffffffffffffffff",
+        "payload_hex": "68656c6c6f206d657368",
+        "signature_hex": null,
+        "route": null,
+        "is_rsr": false
+      },
+      "padding": false,
+      "encoded_hex": "0102040000018bcfe5680001000a0011223344556677ffffffffffffffff68656c6c6f206d657368",
+      "check_encode": true,
+      "check_decode": true,
+      "derivation": "Hand-encoded."
+    },
+    {
+      "name": "v1_absent_recipient",
+      "note": "Byte-for-byte the previous packet with the recipient field omitted entirely: flags 0x00 and 8 fewer bytes. Absent is not broadcast.",
+      "packet": {
+        "version": 1,
+        "msg_type": 2,
+        "ttl": 4,
+        "timestamp": 1700000000000,
+        "sender_id": "0011223344556677",
+        "recipient_id": null,
+        "payload_hex": "68656c6c6f206d657368",
+        "signature_hex": null,
+        "route": null,
+        "is_rsr": false
+      },
+      "padding": false,
+      "encoded_hex": "0102040000018bcfe5680000000a001122334455667768656c6c6f206d657368",
+      "check_encode": true,
+      "check_decode": true,
+      "derivation": "Hand-encoded."
+    },
+    {
+      "name": "v1_is_rsr_flag",
+      "note": "IS_RSR is flag bit 0x10 and is orthogonal to the others; here combined with HAS_RECIPIENT for flags = 0x11.",
+      "packet": {
+        "version": 1,
+        "msg_type": 2,
+        "ttl": 0,
+        "timestamp": 1700000000000,
+        "sender_id": "0011223344556677",
+        "recipient_id": "8899aabbccddeeff",
+        "payload_hex": "73796e632d616e73776572",
+        "signature_hex": null,
+        "route": null,
+        "is_rsr": true
+      },
+      "padding": false,
+      "encoded_hex": "0102000000018bcfe5680011000b00112233445566778899aabbccddeeff73796e632d616e73776572",
+      "check_encode": true,
+      "check_decode": true,
+      "derivation": "Hand-encoded; Flags.isRSR = 0x10 per BinaryProtocol.Flags."
+    },
+    {
+      "name": "v2_no_route",
+      "note": "v2 header is 16 bytes: the payload-length field widens from 2 to 4. HAS_ROUTE stays clear when there is no route.",
+      "packet": {
+        "version": 2,
+        "msg_type": 2,
+        "ttl": 5,
+        "timestamp": 1750000000000,
+        "sender_id": "0011223344556677",
+        "recipient_id": "8899aabbccddeeff",
+        "payload_hex": "76322d6e6f2d726f757465",
+        "signature_hex": null,
+        "route": null,
+        "is_rsr": false
+      },
+      "padding": false,
+      "encoded_hex": "020205000001977420dc00010000000b00112233445566778899aabbccddeeff76322d6e6f2d726f757465",
+      "check_encode": true,
+      "check_decode": true,
+      "derivation": "Field values taken from BinaryProtocolTests.v2PacketWithoutRouteDecodesCorrectly; bytes hand-encoded per BinaryProtocol.encode.",
+      "header_payload_length": 11
+    },
+    {
+      "name": "v2_routed_three_hops",
+      "note": "Source-routed v2 frame. Route is a 1-byte hop count followed by 3 x 8 bytes, placed after the recipient and BEFORE the payload. payloadLength in the header is 10 -- the payload only -- while 25 route bytes ride outside it.",
+      "packet": {
+        "version": 2,
+        "msg_type": 1,
+        "ttl": 6,
+        "timestamp": 1720000000000,
+        "sender_id": "0102030405060708",
+        "recipient_id": "2122232425262728",
+        "payload_hex": "726f7574652d74657374",
+        "signature_hex": null,
+        "route": [
+          "0102030405060708",
+          "1112131415161718",
+          "2122232425262728"
+        ],
+        "is_rsr": false
+      },
+      "padding": false,
+      "encoded_hex": "0201060000019077fd3000090000000a0102030405060708212223242526272803010203040506070811121314151617182122232425262728726f7574652d74657374",
+      "check_encode": true,
+      "check_decode": true,
+      "derivation": "Field values from BinaryProtocolTests.packetWithRouteRoundTrip; bytes hand-encoded per BinaryProtocol.encode lines 223-228.",
+      "header_payload_length": 10
+    },
+    {
+      "name": "v2_route_short_hop_zero_padded",
+      "note": "A route hop shorter than 8 bytes is right-padded with zeros, never truncated or rejected. The packet here already carries the padded form because our hops are fixed 8-byte arrays.",
+      "packet": {
+        "version": 2,
+        "msg_type": 2,
+        "ttl": 5,
+        "timestamp": 1730000000000,
+        "sender_id": "0011223344556677",
+        "recipient_id": "8899aabbccddeeff",
+        "payload_hex": "7061642d74657374",
+        "signature_hex": null,
+        "route": [
+          "aabbcc0000000000",
+          "8899aabbccddeeff"
+        ],
+        "is_rsr": false
+      },
+      "padding": false,
+      "encoded_hex": "02020500000192cc091400090000000800112233445566778899aabbccddeeff02aabbcc00000000008899aabbccddeeff7061642d74657374",
+      "check_encode": true,
+      "check_decode": true,
+      "derivation": "Field values from BinaryProtocolTests.packetWithRoutePadsShortHop (hop 0xAABBCC); zero-padding per BinaryProtocol.encode lines 156-162."
+    },
+    {
+      "name": "v1_route_dropped_on_encode",
+      "note": "A v1 packet carrying a route must encode without it and without the HAS_ROUTE flag. Encode-only: decoding these bytes yields route = null, which is not equal to the input packet.",
+      "packet": {
+        "version": 1,
+        "msg_type": 1,
+        "ttl": 6,
+        "timestamp": 1720000000000,
+        "sender_id": "0102030405060708",
+        "recipient_id": "1112131415161718",
+        "payload_hex": "76312d6e6f2d726f757465",
+        "signature_hex": null,
+        "route": [
+          "0102030405060708",
+          "1112131415161718"
+        ],
+        "is_rsr": false
+      },
+      "padding": false,
+      "encoded_hex": "0101060000019077fd300001000b0102030405060708111213141516171876312d6e6f2d726f757465",
+      "check_encode": true,
+      "check_decode": false,
+      "derivation": "Field values from BinaryProtocolTests.v1PacketIgnoresRouteOnEncode; bytes hand-encoded. `originalRoute` is gated on version >= 2 (BinaryProtocol.swift:154)."
+    },
+    {
+      "name": "v1_has_route_flag_ignored_on_decode",
+      "note": "PRIORITY: a v1 frame with HAS_ROUTE (0x08) set must have the flag ignored, not treated as an error and not consumed as route bytes. Decode-only: re-encoding produces flags 0x01.",
+      "packet": {
+        "version": 1,
+        "msg_type": 2,
+        "ttl": 3,
+        "timestamp": 1700000000000,
+        "sender_id": "0011223344556677",
+        "recipient_id": "8899aabbccddeeff",
+        "payload_hex": "73747261792d666c6167",
+        "signature_hex": null,
+        "route": null,
+        "is_rsr": false
+      },
+      "padding": false,
+      "encoded_hex": "0102030000018bcfe5680009000a00112233445566778899aabbccddeeff73747261792d666c6167",
+      "check_encode": false,
+      "check_decode": true,
+      "derivation": "Built by hand: the v1_basic frame shape with the flags byte forced to 0x09 and NO route bytes present, because BinaryProtocol.decode gates hasRoute on `version >= 2` before reading anything (line 320)."
+    },
+    {
+      "name": "v1_high_entropy_payload_not_compressed",
+      "note": "PRIORITY: 219 bytes is well over the 100-byte threshold, but all 219 bytes are distinct so uniqueRatio = 1.0 >= 0.9 and shouldCompress returns false. The payload must appear verbatim, IS_COMPRESSED clear.",
+      "packet": {
+        "version": 1,
+        "msg_type": 2,
+        "ttl": 3,
+        "timestamp": 1700000000000,
+        "sender_id": "0011223344556677",
+        "recipient_id": null,
+        "payload_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9da",
+        "signature_hex": null,
+        "route": null,
+        "is_rsr": false
+      },
+      "padding": false,
+      "encoded_hex": "0102030000018bcfe568000000db0011223344556677000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9da",
+      "check_encode": true,
+      "check_decode": true,
+      "derivation": "Payload is bytes 0x00..0xDA. shouldCompress: uniqueByteCount = 219, sampleSize = min(219,256) = 219, ratio = 1.0, not < 0.9 -> false."
+    },
+    {
+      "name": "v1_padding_refuses_when_gap_exceeds_255",
+      "note": "PRIORITY: the same 241-byte frame with padding requested. optimalBlockSize(241) = 512 because 241+16 > 256, and pad() then refuses because 512-241 = 271 > 255. The frame goes out unpadded -- identical bytes to the padding:false vector above.",
+      "packet": {
+        "version": 1,
+        "msg_type": 2,
+        "ttl": 3,
+        "timestamp": 1700000000000,
+        "sender_id": "0011223344556677",
+        "recipient_id": null,
+        "payload_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9da",
+        "signature_hex": null,
+        "route": null,
+        "is_rsr": false
+      },
+      "padding": true,
+      "encoded_hex": "0102030000018bcfe568000000db0011223344556677000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9da",
+      "check_encode": true,
+      "check_decode": true,
+      "derivation": "MessagePadding.optimalBlockSize(241): 241+16 = 257 > 256, <= 512 -> 512. MessagePadding.pad: paddingNeeded = 271, guard paddingNeeded <= 255 fails -> returns data unchanged."
+    },
+    {
+      "name": "v1_payload_99_bytes_uncompressed",
+      "note": "PRIORITY: 99 bytes is one below Constants.compressionThresholdBytes (100), so a maximally compressible payload still ships raw. An implementation built from BinaryProtocol's doc comment ('payloads > 256 bytes') would agree here and disagree at 100.",
+      "packet": {
+        "version": 1,
+        "msg_type": 2,
+        "ttl": 3,
+        "timestamp": 1700000000000,
+        "sender_id": "0011223344556677",
+        "recipient_id": null,
+        "payload_hex": "414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141",
+        "signature_hex": null,
+        "route": null,
+        "is_rsr": false
+      },
+      "padding": false,
+      "encoded_hex": "0102030000018bcfe568000000630011223344556677414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141",
+      "check_encode": true,
+      "check_decode": true,
+      "derivation": "shouldCompress guards on `data.count >= compressionThreshold` with compressionThreshold = 100."
+    }
+  ]
+}

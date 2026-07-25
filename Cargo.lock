@@ -1885,6 +1885,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "chatter-mesh"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "hex",
+ "hmac",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "chatter-ui"
 version = "0.1.0"
 dependencies = [
