@@ -51,7 +51,6 @@ use chatter_mesh_store::archive::GossipMessageArchive;
 use chatter_mesh_store::courier::{AnnounceIngress, CourierStore};
 use chatter_mesh_store::outbox::AckKind;
 use chatter_mesh_store::sync::{GossipSyncManager, SyncConfig};
-use tokio::sync::broadcast;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::config::MeshConfig;
@@ -60,6 +59,7 @@ use super::glue::SharedStorage;
 use super::mapping::{InboundMessage, MeshConversation, outbound_message};
 use super::router::{RouterCommand, RouterHandle};
 use super::state::{MeshState, NostrState, link_candidates_locked, now_millis, now_secs};
+use super::timeline::MeshEvents;
 use super::transport::BleCommand;
 
 /// How often the loop wakes to run the parts that nothing else can schedule.
@@ -80,7 +80,7 @@ pub struct BleRuntime {
     nostr_state: Arc<NostrState>,
     identity: Arc<MeshIdentity>,
     config: Arc<MeshConfig>,
-    events: broadcast::Sender<MeshEvent>,
+    events: MeshEvents,
     router: Arc<RouterHandle>,
     gossip: GossipSyncManager,
     couriers: CourierStore<SharedStorage>,
@@ -95,7 +95,7 @@ impl BleRuntime {
         nostr_state: Arc<NostrState>,
         identity: Arc<MeshIdentity>,
         config: Arc<MeshConfig>,
-        events: broadcast::Sender<MeshEvent>,
+        events: MeshEvents,
         router: Arc<RouterHandle>,
         storage: SharedStorage,
     ) -> Self {
@@ -564,7 +564,7 @@ impl BleRuntime {
             .state
             .with(|state| state.peers.info(&sender).is_some_and(|p| p.verified_nickname));
         let nickname = inbound.nickname.clone();
-        let _ = self.events.send(MeshEvent::Message(Box::new(MeshMessage {
+        self.events.send(MeshEvent::Message(Box::new(MeshMessage {
             message: inbound.to_domain(),
             conversation: inbound.conversation,
             sender,
@@ -893,7 +893,7 @@ impl BleRuntime {
             content,
             now_ms,
         );
-        let _ = self.events.send(MeshEvent::Message(Box::new(MeshMessage {
+        self.events.send(MeshEvent::Message(Box::new(MeshMessage {
             message,
             conversation: MeshConversation::Room,
             sender: local,
@@ -1341,7 +1341,7 @@ impl BleRuntime {
             content: content.to_string(),
             timestamp_ms,
         };
-        let _ = self.events.send(MeshEvent::Message(Box::new(MeshMessage {
+        self.events.send(MeshEvent::Message(Box::new(MeshMessage {
             message: inbound.to_domain(),
             conversation: inbound.conversation,
             sender: peer.clone(),
@@ -1376,19 +1376,19 @@ impl BleRuntime {
     }
 
     fn emit_peers(&self) {
-        let _ = self.events.send(MeshEvent::Peers(self.state.peers()));
+        self.events.send(MeshEvent::Peers(self.state.peers()));
     }
 
     fn emit_status(&self) {
         let status = self
             .state
             .status(self.nostr_state.connected_relay_count());
-        let _ = self.events.send(MeshEvent::Status(status));
+        self.events.send(MeshEvent::Status(status));
     }
 
     fn degraded(&self, message: String) {
         tracing::debug!(target: "mesh::ble", "{message}");
-        let _ = self.events.send(MeshEvent::Degraded(message));
+        self.events.send(MeshEvent::Degraded(message));
     }
 }
 
@@ -1475,7 +1475,7 @@ mod tests {
         let identity = Arc::new(MeshIdentity::generate(&mut OsRng));
         let state = Arc::new(MeshState::new(identity.peer_id()));
         let nostr_state = Arc::new(NostrState::new());
-        let (events, _) = broadcast::channel(64);
+        let events = MeshEvents::new(64, crate::services::mesh::timeline::temp_timeline());
         let storage = SharedStorage::new(Arc::new(MemoryStorage::new()) as Arc<dyn Storage>);
         let router = Arc::new(RouterHandle::spawn(super::super::router::RouterDeps {
             state: Arc::clone(&state),

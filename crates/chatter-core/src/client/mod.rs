@@ -325,6 +325,8 @@ impl ChatterClient {
     crate::service_accessor!(ai, AIService, ai_service);
     #[cfg(feature = "jarvis")]
     crate::service_accessor!(jarvis, JarvisService, jarvis_service);
+    #[cfg(feature = "mesh")]
+    crate::service_accessor!(mesh, crate::services::mesh::MeshService, mesh_service);
     crate::service_accessor!(mailbox_manager, MailboxManager, mailbox_manager);
     crate::service_accessor!(local_ai, LocalAIService, local_ai_service);
     crate::service_accessor!(
@@ -1570,6 +1572,19 @@ impl ChatterClient {
                 }
             }
         });
+
+        // ── bitchat mesh ────────────────────────────────────────────
+        // Serverless and independent of everything above: it makes no RPC and
+        // shares no identity with the account. A failure here is logged and the
+        // rest of the client continues — losing the mesh must not stop chatter
+        // from working, and this radio stack has never met another device.
+        #[cfg(feature = "mesh")]
+        {
+            match self.mesh().start().await {
+                Ok(()) => tracing::info!("mesh: started"),
+                Err(error) => tracing::warn!(%error, "mesh: failed to start, continuing without it"),
+            }
+        }
 
         // ── Channel + DM services ───────────────────────────────────
         let h_channel_stream = self.ctx.start_channel_event_stream();

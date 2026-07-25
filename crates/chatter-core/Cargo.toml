@@ -296,6 +296,16 @@ desktop-gstreamer = [
 desktop-media = ["media", "desktop-gstreamer"]
 local-ai = ["dep:mistralrs"]
 jarvis = []
+# The bitchat mesh. Off by default: the radio stack has never exchanged a byte
+# with another device, so it should be opted into rather than shipped live.
+#
+# Deliberately does NOT imply `onion`. Without it the relay connector is absent,
+# the BLE mesh still works, and geohash channels and Nostr DMs stay quiet —
+# `MeshService` is built for that and reports `can_deliver_promptly` as false.
+# Mesh-over-clearnet is not offered on purpose: publishing to public relays
+# without Tor would hand every relay operator the user's IP alongside the cell
+# they are sitting in, which is the correlation the design exists to prevent.
+mesh = []
 # Widens `ChatterClient` service accessors to `pub` so integration tests in
 # this crate's `tests/` directory (which are external consumers) can wire
 # real services against a live server. Do NOT enable for application builds —

@@ -45,6 +45,7 @@ pub mod radio;
 pub mod router;
 pub mod session;
 pub mod state;
+pub mod timeline;
 #[cfg(feature = "onion")]
 pub mod tor_relay;
 pub mod transport;
@@ -70,12 +71,17 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
+use crate::domain::ids::ChannelId;
+use crate::domain::message::Message;
+use crate::domain::UnifiedConversation;
 use crate::storage::mesh_identity_store::MeshIdentityStore;
+use crate::storage::repositories::MessageRepository;
 
 pub use config::MeshConfig;
 pub use error::MeshError;
 pub use events::{MeshDelivery, MeshEvent, MeshMessage, MeshPeer, MeshStatus};
 pub use mapping::MeshConversation;
+pub use timeline::{MeshEvents, MeshTimeline};
 
 use ble::BleRuntime;
 use glue::SharedStorage;
@@ -98,6 +104,14 @@ pub struct MeshDeps {
     pub identity_store: Arc<MeshIdentityStore>,
     /// Durable, already-sealed storage for the store-and-forward stack.
     pub storage: Arc<dyn Storage>,
+    /// The unified message store. Mesh messages are rows in it like every other
+    /// conversation type — see [`MeshTimeline::record`] for why they are stored
+    /// at all, which is where this client parts company with bitchat.
+    pub messages: Arc<MessageRepository>,
+    /// Durable directory of open mesh conversations. Without it a DM's history
+    /// survives a restart while its sidebar entry does not, which looks like
+    /// lost data.
+    pub conversations: Arc<crate::storage::repositories::MeshConversationRepository>,
     /// Seals outbox blobs before they reach storage. The key never enters the
     /// store crates, which is what makes "nothing plaintext reaches disk"
     /// structural rather than a matter of remembering.
@@ -129,7 +143,10 @@ pub struct MeshService {
     router: Arc<RouterHandle>,
     ble: UnboundedSender<BleCommand>,
     nostr: UnboundedSender<NostrCommand>,
-    events: broadcast::Sender<MeshEvent>,
+    events: MeshEvents,
+    /// The message store side of the mesh. Everything the service surfaces has
+    /// already been through it by the time a subscriber sees it.
+    timeline: Arc<MeshTimeline>,
     radio: Option<Arc<dyn MeshLink>>,
     relay_connector: Option<Arc<dyn RelayConnector>>,
     pending: Mutex<Option<Pending>>,
@@ -146,7 +163,8 @@ impl MeshService {
         let state = Arc::new(MeshState::new(identity.peer_id()));
         let nostr_state = Arc::new(NostrState::new());
         let favorites = Arc::new(MeshFavorites::new());
-        let (events, _) = broadcast::channel(EVENT_CAPACITY);
+        let timeline = Arc::new(MeshTimeline::new(deps.messages, deps.conversations));
+        let events = MeshEvents::new(EVENT_CAPACITY, Arc::clone(&timeline));
 
         let (ble_tx, ble_rx) = unbounded_channel();
         let (nostr_tx, nostr_rx) = unbounded_channel();
@@ -177,6 +195,7 @@ impl MeshService {
             ble: ble_tx,
             nostr: nostr_tx,
             events,
+            timeline,
             radio: deps.radio_override.or_else(radio::platform_radio),
             relay_connector: deps.relay_connector,
             pending: Mutex::new(Some(Pending {
@@ -306,6 +325,52 @@ impl MeshService {
         MeshConversation::Room
     }
 
+    /// Every mesh conversation, shaped for the unified sidebar.
+    ///
+    /// The public room, every joined geohash cell, and every mesh DM — already
+    /// ordered and counted. The caller renders this list; it filters nothing and
+    /// derives nothing, and in particular it does not go looking for a server
+    /// record of any of these conversations, because there is none.
+    pub fn conversations(&self) -> Result<Vec<UnifiedConversation>, MeshError> {
+        Ok(self.timeline.conversations()?)
+    }
+
+    /// The mesh conversation a sidebar row refers to, or `None` when the id is
+    /// not one of ours.
+    ///
+    /// The UI holds conversation ids as strings and cannot re-derive a
+    /// [`MeshConversation`] from one — the derivation is one-way — so opening a
+    /// mesh row goes through here.
+    #[must_use]
+    pub fn conversation_for(&self, id: &str) -> Option<MeshConversation> {
+        let id: ChannelId = id.parse().ok()?;
+        self.timeline.conversation_for(&id)
+    }
+
+    /// History for one mesh conversation, oldest first.
+    ///
+    /// `before_sent_at` pages backwards through it in the sender's nanosecond
+    /// timestamps, the same cursor every other conversation type uses.
+    pub fn history(
+        &self,
+        conversation: &MeshConversation,
+        before_sent_at: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<Message>, MeshError> {
+        Ok(self.timeline.history(conversation, before_sent_at, limit)?)
+    }
+
+    /// Mark a mesh conversation read on this device.
+    ///
+    /// Local only. Telling the peer costs airtime, so it is a separate act:
+    /// [`mark_read`](Self::mark_read) puts a receipt on the wire.
+    pub fn mark_conversation_read(
+        &self,
+        conversation: &MeshConversation,
+    ) -> Result<(), MeshError> {
+        Ok(self.timeline.mark_read(conversation)?)
+    }
+
     // ------------------------------------------------------------- write paths
 
     /// Broadcast into the public mesh room.
@@ -365,6 +430,10 @@ impl MeshService {
         // Mirror it into the timeline before routing. The mesh has no server
         // echo, so this is the only copy — and it must exist whichever transport
         // the router picks, which is why it is here and not in a runtime.
+        //
+        // The send goes through [`MeshEvents`], so this both stores the row and
+        // publishes it: the message is on disk before this call returns, and a
+        // restart mid-delivery still shows what the user sent.
         let conversation = MeshConversation::Dm(peer.clone());
         let message = mapping::outbound_message(
             &conversation,
@@ -373,7 +442,7 @@ impl MeshService {
             &content,
             now_millis(),
         );
-        let _ = self.events.send(MeshEvent::Message(Box::new(MeshMessage {
+        self.events.send(MeshEvent::Message(Box::new(MeshMessage {
             message,
             conversation,
             sender: self.identity.peer_id(),
@@ -562,7 +631,8 @@ mod tests {
         let state = Arc::new(MeshState::new(identity.peer_id()));
         let nostr_state = Arc::new(NostrState::new());
         let favorites = Arc::new(MeshFavorites::new());
-        let (events, _) = broadcast::channel(EVENT_CAPACITY);
+        let timeline = timeline::temp_timeline();
+        let events = MeshEvents::new(EVENT_CAPACITY, Arc::clone(&timeline));
         let (ble_tx, ble_rx) = unbounded_channel();
         let (nostr_tx, nostr_rx) = unbounded_channel();
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::new());
@@ -592,6 +662,7 @@ mod tests {
             ble: ble_tx,
             nostr: nostr_tx,
             events,
+            timeline,
             radio,
             relay_connector: connector,
             pending: Mutex::new(Some(Pending {
@@ -732,6 +803,68 @@ mod tests {
             }
             other => panic!("expected the local mirror first, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn a_sent_dm_is_on_disk_by_the_time_send_returns() {
+        // No server echo will ever bring this message back, so the local copy is
+        // the message — and it has to survive a restart mid-delivery.
+        let radio = MockLink::shared();
+        let service = service(Some(Arc::clone(&radio) as Arc<dyn MeshLink>), None);
+        let peer = PeerId::from_str("bbbbbbbbbbbbbbbb");
+
+        service.send_dm(&peer, "hello").await.expect("routed");
+
+        let conversation = MeshConversation::Dm(peer.clone());
+        let history = service.history(&conversation, None, 50).expect("history");
+        assert_eq!(history.len(), 1);
+        assert_eq!(mapping::text_of(&history[0]), Some("hello"));
+        assert_eq!(history[0].conversation_type, ConversationType::MeshDm);
+        assert!(
+            history[0].delivery_status.is_empty(),
+            "mesh delivery is not server delivery; the field stays unclaimed"
+        );
+
+        // Typing the same text twice is two messages, not a duplicate: each send
+        // mints its own wire ID. Dedup keys on that ID, and a resend carrying an
+        // ID we already stored collapses onto the existing row instead — see
+        // `timeline::tests::the_same_message_arriving_three_ways_is_stored_once`.
+        service.send_dm(&peer, "hello").await.expect("routed");
+        let history = service.history(&conversation, None, 50).expect("history");
+        assert_eq!(history.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn the_public_room_is_a_conversation_before_anything_has_happened() {
+        let service = service(None, None);
+        let conversations = service.conversations().expect("conversations");
+        assert_eq!(conversations.len(), 1, "just the public room");
+        assert_eq!(conversations[0].conversation_type, ConversationType::Mesh);
+        assert!(
+            conversations[0].owner_id.is_none(),
+            "no server account owns the mesh room"
+        );
+        assert!(conversations[0].my_role.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_dm_shows_up_in_the_sidebar_once_it_has_been_used() {
+        let radio = MockLink::shared();
+        let service = service(Some(Arc::clone(&radio) as Arc<dyn MeshLink>), None);
+        let peer = PeerId::from_str("bbbbbbbbbbbbbbbb");
+        service.send_dm(&peer, "hello").await.expect("routed");
+
+        let conversations = service.conversations().expect("conversations");
+        assert_eq!(conversations.len(), 2, "the room and the dm");
+        let dm = conversations
+            .iter()
+            .find(|c| c.conversation_type == ConversationType::MeshDm)
+            .expect("the dm");
+        assert_eq!(
+            dm.id,
+            MeshConversation::Dm(peer).conversation_id().to_string()
+        );
+        assert_eq!(dm.unread_count, 0, "our own message is already read");
     }
 
     #[tokio::test]

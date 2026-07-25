@@ -230,6 +230,31 @@ impl MeshSealer {
     /// forever, and the caller, seeing a working sealer, would overwrite it. A
     /// locked keyring is temporary; destroying the key is not.
     pub fn from_keyring(db_path: &Path) -> Result<Self, StoreError> {
+        // Development / headless bypass, mirroring `CHATTER_DB_PASSPHRASE`.
+        //
+        // Without this the mesh cannot start on a box with no Secret Service, and
+        // every dev run prompts for a keyring unlock. The key is a 64-char hex
+        // string; anything else is an error rather than a silent fallback, because
+        // quietly generating a different key would make existing sealed blobs
+        // undecryptable while looking like it worked.
+        //
+        // This is a plaintext key in the environment. It exists for development and
+        // CI, exactly as the database passphrase override does, and must not be used
+        // to hold a real user's key.
+        if let Ok(hex_key) = std::env::var("CHATTER_MESH_SEAL_KEY") {
+            let raw = Zeroizing::new(hex::decode(hex_key.trim()).map_err(|e| {
+                storage_error("env decode", SEAL_KEY_LABEL, e)
+            })?);
+            let key: [u8; KEY_SIZE] = raw.as_slice().try_into().map_err(|_| {
+                storage_error(
+                    "env decode",
+                    SEAL_KEY_LABEL,
+                    format!("CHATTER_MESH_SEAL_KEY must be {KEY_SIZE} bytes of hex"),
+                )
+            })?;
+            return Ok(Self::from_key(&key));
+        }
+
         let entry = keyring::Entry::new(APP_ID, &Self::entry_username(db_path))
             .map_err(|e| storage_error("keyring open", SEAL_KEY_LABEL, e))?;
 

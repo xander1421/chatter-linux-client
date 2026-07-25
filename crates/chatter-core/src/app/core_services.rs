@@ -85,6 +85,9 @@ pub struct CoreServices {
     pub semantic_search_service: Arc<SemanticSearchService>,
     #[cfg(feature = "jarvis")]
     pub jarvis_service: Arc<JarvisService>,
+    /// The bitchat mesh. Serverless: it shares no identity and makes no RPC.
+    #[cfg(feature = "mesh")]
+    pub mesh_service: Arc<crate::services::mesh::MeshService>,
     #[cfg(feature = "jarvis")]
     pub jarvis_engine: SharedJarvisEngine,
     pub notification_service: Arc<NotificationService>,
@@ -170,6 +173,8 @@ impl CoreServices {
             semantic_search_service: services.semantic_search_service.clone(),
             #[cfg(feature = "jarvis")]
             jarvis_service: services.jarvis_service.clone(),
+            #[cfg(feature = "mesh")]
+            mesh_service: services.mesh_service.clone(),
             #[cfg(feature = "jarvis")]
             jarvis_engine: services.jarvis_engine.clone(),
             notification_service: {

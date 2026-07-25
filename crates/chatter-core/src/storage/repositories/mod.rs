@@ -35,6 +35,7 @@ pub mod settings_repo;
 pub mod user_repo;
 pub mod anon_group_repo;
 pub mod anon_dm_repo;
+pub mod mesh_conversation_repo;
 pub(crate) mod repo_utils;
 #[cfg(feature = "jarvis")]
 pub mod jarvis_memory_repo;
@@ -61,6 +62,7 @@ pub use settings_repo::{keys as settings_keys, SettingsRepository};
 pub use user_repo::UserRepository;
 pub use anon_group_repo::AnonGroupRepository;
 pub use anon_dm_repo::AnonDmRepository;
+pub use mesh_conversation_repo::{MeshConversationRepository, StoredMeshConversation};
 #[cfg(feature = "jarvis")]
 pub use jarvis_memory_repo::JarvisMemoryRepository;
 #[cfg(feature = "jarvis")]

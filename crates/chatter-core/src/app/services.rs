@@ -23,6 +23,8 @@ use crate::services::dm_bootstrap_service::DmBootstrapService;
 use crate::services::draft_service::DraftService;
 use crate::services::ephemeral_service::EphemeralService;
 use crate::services::mailbox_manager::MailboxManager;
+#[cfg(feature = "mesh")]
+use crate::services::mesh::{MeshConfig, MeshDeps, MeshService};
 use crate::services::message::MessageService;
 use crate::services::gateway::MessageGateway;
 use crate::services::pairwise::PairwiseService;
@@ -91,6 +93,10 @@ pub struct ServiceContainer {
     /// Local AI service (high-level API for summarization, smart replies).
     pub local_ai_service: Arc<LocalAIService>,
     /// Jarvis AI assistant service.
+    /// The bitchat mesh, when built in. Serverless and independent of every
+    /// other service here: it makes no RPC and shares no identity with them.
+    #[cfg(feature = "mesh")]
+    pub mesh_service: Arc<MeshService>,
     #[cfg(feature = "jarvis")]
     pub jarvis_service: Arc<JarvisService>,
     /// Jarvis inference engine (hot-swappable on provider change).
@@ -321,6 +327,51 @@ impl ServiceContainer {
         }
 
         // 20. Jarvis AI assistant service, driven by the active local AI provider
+        // The mesh. Constructed but not started — `start()` is the caller's,
+        // so the radio does not come up merely because the app booted.
+        #[cfg(feature = "mesh")]
+        let mesh_service = {
+            let db_path = infra.directories.database_path();
+            let deps = MeshDeps {
+                identity_store: Arc::new(crate::storage::MeshIdentityStore::new(
+                    infra.database.clone(),
+                )),
+                storage: Arc::new(crate::storage::mesh_store::MeshStorage::new(
+                    infra.database.clone(),
+                )),
+                // Mesh messages are rows in the same unified message store as
+                // every other conversation type. See `MeshTimeline::record` for
+                // why they are stored at all — bitchat's stack is ephemeral by
+                // design and this one deliberately is not.
+                messages: infra.message_repo.clone(),
+                conversations: Arc::new(
+                    crate::storage::repositories::MeshConversationRepository::new(
+                        infra.database.clone(),
+                    ),
+                ),
+                sealer: Arc::new(
+                    crate::storage::mesh_store::MeshSealer::from_keyring(&db_path)
+                        .map_err(|e| ContextError::Mesh(e.to_string()))?,
+                ),
+                // Relay traffic rides the Tor client the gRPC pool already owns,
+                // on its own isolation group. Without the `onion` feature there is
+                // no connector at all and the mesh runs radio-only.
+                #[cfg(feature = "onion")]
+                relay_connector: Some(Arc::new(
+                    crate::services::mesh::tor_relay::TorRelayConnector::new(
+                        infra.grpc_pool.onion_tor(),
+                    ),
+                )),
+                #[cfg(not(feature = "onion"))]
+                relay_connector: None,
+                radio_override: None,
+            };
+            Arc::new(
+                MeshService::new(deps, MeshConfig::default())
+                    .map_err(|e| ContextError::Mesh(e.to_string()))?,
+            )
+        };
+
         #[cfg(feature = "jarvis")]
         let jarvis_engine = SharedJarvisEngine::new(JarvisEngine::from_settings(
             http_local_ai_service.settings(),
@@ -415,6 +466,8 @@ impl ServiceContainer {
             anon_dm_service,
             local_ai,
             local_ai_service,
+            #[cfg(feature = "mesh")]
+            mesh_service,
             #[cfg(feature = "jarvis")]
             jarvis_service,
             #[cfg(feature = "jarvis")]

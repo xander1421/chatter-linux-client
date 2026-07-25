@@ -39,7 +39,6 @@ use chatter_mesh_store::{MESSAGE_TTL_SECS, RouterTransport, StoreError};
 use parking_lot::Mutex;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use tokio::sync::broadcast;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
@@ -47,6 +46,7 @@ use super::error::MeshError;
 use super::events::{MeshDelivery, MeshEvent, MeshMessage};
 use super::mapping::{InboundMessage, MeshConversation};
 use super::state::{MeshState, NostrState, now_secs};
+use super::timeline::MeshEvents;
 use super::transport::{
     BleCommand, BleTransport, MeshDirectory, MeshFavorites, NostrCommand, NostrTransport,
 };
@@ -67,7 +67,7 @@ pub struct RouterDeps {
     pub favorites: Arc<MeshFavorites>,
     pub ble: UnboundedSender<BleCommand>,
     pub nostr: UnboundedSender<NostrCommand>,
-    pub events: broadcast::Sender<MeshEvent>,
+    pub events: MeshEvents,
     /// Whether to park sealed copies on relays when no courier is nearby.
     pub bridge_enabled: bool,
 }
@@ -235,7 +235,7 @@ struct MeshDropSink {
     identity: Arc<MeshIdentity>,
     state: Arc<MeshState>,
     ble: UnboundedSender<BleCommand>,
-    events: broadcast::Sender<MeshEvent>,
+    events: MeshEvents,
 }
 
 impl MeshDropSink {
@@ -282,7 +282,7 @@ impl DropSink for MeshDropSink {
     fn open_for_self(&self, envelope: &CourierEnvelope) -> bool {
         match self.open(envelope) {
             Some(message) => {
-                let _ = self.events.send(MeshEvent::Message(Box::new(message)));
+                self.events.send(MeshEvent::Message(Box::new(message)));
                 true
             }
             // Not ours, or malformed. Consuming the event ID for something we
@@ -366,7 +366,7 @@ struct Actor {
     identity: Arc<MeshIdentity>,
     storage: Arc<dyn Storage>,
     sealer: Arc<dyn Sealer>,
-    events: broadcast::Sender<MeshEvent>,
+    events: MeshEvents,
 }
 
 impl Actor {
@@ -470,7 +470,7 @@ impl Actor {
                 // A locked keyring is not an empty set. Starting empty would
                 // republish every drop this device has ever sent, which is the
                 // amplification storm the persistence exists to prevent.
-                let _ = self.events.send(MeshEvent::Degraded(format!(
+                self.events.send(MeshEvent::Degraded(format!(
                     "bridge drop history unreadable; the relay bridge stays off: {error}"
                 )));
                 self.bridge.borrow_mut().set_bridge_enabled(false);
@@ -530,7 +530,7 @@ impl Actor {
                     AckKind::Delivered => MeshDelivery::Delivered,
                     AckKind::Read => MeshDelivery::Read,
                 };
-                let _ = self.events.send(MeshEvent::Delivery {
+                self.events.send(MeshEvent::Delivery {
                     message_id,
                     peer: Some(peer),
                     state,
@@ -567,7 +567,7 @@ impl Actor {
                     && resolved.accepted
                     && let Some(message_id) = resolved.message_id
                 {
-                    let _ = self.events.send(MeshEvent::Delivery {
+                    self.events.send(MeshEvent::Delivery {
                         message_id,
                         peer: None,
                         state: MeshDelivery::Carried,
@@ -592,12 +592,11 @@ impl Actor {
                 let evicted = self.bridge.borrow_mut().wipe();
                 self.abandoned.borrow_mut().extend(evicted);
                 if let Err(error) = self.router.wipe_outbox() {
-                    let _ = self
-                        .events
+                    self.events
                         .send(MeshEvent::Degraded(format!("outbox wipe failed: {error}")));
                 }
                 if let Err(error) = self.storage.wipe_all() {
-                    let _ = self.events.send(MeshEvent::Degraded(format!(
+                    self.events.send(MeshEvent::Degraded(format!(
                         "mesh storage wipe failed: {error}"
                     )));
                 }
@@ -611,7 +610,7 @@ impl Actor {
         let drops: Vec<AbandonedDrop> = self.abandoned.borrow_mut().drain(..).collect();
         for drop in drops {
             if let Some(message_id) = drop.message_id {
-                let _ = self.events.send(MeshEvent::Delivery {
+                self.events.send(MeshEvent::Delivery {
                     message_id,
                     peer: None,
                     state: MeshDelivery::Unreachable,
@@ -623,7 +622,7 @@ impl Actor {
     fn persist_dedup(&self) {
         let snapshot = self.bridge.borrow().dedup_snapshot();
         if let Err(error) = save_dedup(self.storage.as_ref(), self.sealer.as_ref(), &snapshot) {
-            let _ = self.events.send(MeshEvent::Degraded(format!(
+            self.events.send(MeshEvent::Degraded(format!(
                 "bridge drop history could not be persisted: {error}"
             )));
         }
@@ -636,7 +635,7 @@ impl Actor {
             LinkState::Reachable => MeshDelivery::Reachable,
             LinkState::Unreachable => MeshDelivery::Unreachable,
         };
-        let _ = self.events.send(MeshEvent::Delivery {
+        self.events.send(MeshEvent::Delivery {
             message_id: message_id.to_string(),
             peer: Some(peer.clone()),
             state,
@@ -660,7 +659,7 @@ impl Actor {
                         DropReason::AttemptsExhausted => "no route after repeated attempts",
                         DropReason::QueueOverflow => "outbox full",
                     };
-                    let _ = self.events.send(MeshEvent::Degraded(format!(
+                    self.events.send(MeshEvent::Degraded(format!(
                         "message {} to {} dropped: {reason}",
                         dropped.message_id, dropped.peer
                     )));
@@ -674,7 +673,7 @@ impl Actor {
                     "retained mail could not reach durable storage: {error}"
                 )),
             };
-            let _ = self.events.send(mapped);
+            self.events.send(mapped);
         }
     }
 }

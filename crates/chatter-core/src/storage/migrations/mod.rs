@@ -56,6 +56,7 @@ pub mod v054_channel_icon_blob;
 pub mod v055_temporal_facts;
 pub mod v056_mesh_identity;
 pub mod v057_mesh_store;
+pub mod v058_mesh_conversations;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -115,6 +116,7 @@ pub use v054_channel_icon_blob::V054ChannelIconBlob;
 pub use v055_temporal_facts::V055TemporalFacts;
 pub use v056_mesh_identity::V056MeshIdentity;
 pub use v057_mesh_store::V057MeshStore;
+pub use v058_mesh_conversations::V058MeshConversations;
 
 /// Trait for database migrations.
 ///
@@ -289,4 +291,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V055TemporalFacts)
         .register(V056MeshIdentity)
         .register(V057MeshStore)
+        .register(V058MeshConversations)
 }

@@ -31,6 +31,16 @@ pub enum ContextError {
     /// Network initialization failed.
     #[error("network error: {0}")]
     Network(#[from] NetworkError),
+
+    /// The bitchat mesh failed to initialise.
+    ///
+    /// Its own error types live in the mesh crates and do not convert into the
+    /// variants above — a sealer failure is `chatter_mesh_store::StoreError`, not
+    /// chatter's `StorageError` — so folding it into `Storage` would report a mesh
+    /// keyring problem as a database problem.
+    #[cfg(feature = "mesh")]
+    #[error("mesh error: {0}")]
+    Mesh(String),
 }
 
 /// Application context holding all initialized dependencies.

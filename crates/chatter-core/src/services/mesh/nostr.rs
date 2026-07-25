@@ -27,7 +27,6 @@ use chatter_mesh_nostr::{NostrError, builders, embed, geohash, wrap};
 use chatter_mesh_store::bridge_drop::DropOperationId;
 use chatter_mesh_store::outbox::AckKind;
 use rand_core_06::OsRng;
-use tokio::sync::broadcast;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::config::MeshConfig;
@@ -36,6 +35,7 @@ use super::identity::NostrIdentities;
 use super::mapping::{InboundMessage, MeshConversation};
 use super::router::{RouterCommand, RouterHandle};
 use super::state::{MeshState, NostrState, now_millis, now_secs};
+use super::timeline::MeshEvents;
 use super::transport::NostrCommand;
 
 /// How far back to ask for gift wraps on (re)subscribe.
@@ -79,7 +79,7 @@ pub struct NostrRuntime {
     mesh_state: Arc<MeshState>,
     identities: NostrIdentities,
     config: Arc<MeshConfig>,
-    events: broadcast::Sender<MeshEvent>,
+    events: MeshEvents,
     router: Arc<RouterHandle>,
     relays: Vec<String>,
     /// Recipient tags currently watched for courier drops.
@@ -98,7 +98,7 @@ impl NostrRuntime {
         mesh_state: Arc<MeshState>,
         identities: NostrIdentities,
         config: Arc<MeshConfig>,
-        events: broadcast::Sender<MeshEvent>,
+        events: MeshEvents,
         router: Arc<RouterHandle>,
     ) -> Self {
         let relays = config.relay_urls();
@@ -252,7 +252,7 @@ impl NostrRuntime {
             Err(error) => self.degraded(format!("no identity for {cell}: {error}")),
         }
 
-        let _ = self.events.send(MeshEvent::GeohashJoined(cell.to_string()));
+        self.events.send(MeshEvent::GeohashJoined(cell.to_string()));
     }
 
     async fn leave(&mut self, cell: &str) {
@@ -269,7 +269,7 @@ impl NostrRuntime {
                 .dm_origin
                 .retain(|_, origin| origin.as_str() != cell);
         });
-        let _ = self.events.send(MeshEvent::GeohashLeft(cell.to_string()));
+        self.events.send(MeshEvent::GeohashLeft(cell.to_string()));
     }
 
     async fn publish_geohash(
@@ -561,7 +561,7 @@ impl NostrRuntime {
             content: event.content.clone(),
             timestamp_ms: (event.created_at.max(0) as u64).saturating_mul(1_000),
         };
-        let _ = self.events.send(MeshEvent::Message(Box::new(MeshMessage {
+        self.events.send(MeshEvent::Message(Box::new(MeshMessage {
             message: inbound.to_domain(),
             conversation: inbound.conversation,
             sender,
@@ -605,7 +605,7 @@ impl NostrRuntime {
                 content,
                 timestamp_ms,
             };
-            let _ = self.events.send(MeshEvent::Message(Box::new(MeshMessage {
+            self.events.send(MeshEvent::Message(Box::new(MeshMessage {
                 message: inbound.to_domain(),
                 conversation: inbound.conversation,
                 sender: peer,
@@ -626,7 +626,7 @@ impl NostrRuntime {
                     content: body,
                     timestamp_ms,
                 };
-                let _ = self.events.send(MeshEvent::Message(Box::new(MeshMessage {
+                self.events.send(MeshEvent::Message(Box::new(MeshMessage {
                     message: inbound.to_domain(),
                     conversation: inbound.conversation,
                     sender: peer.clone(),
@@ -700,7 +700,7 @@ impl NostrRuntime {
             content,
             now_millis(),
         );
-        let _ = self.events.send(MeshEvent::Message(Box::new(MeshMessage {
+        self.events.send(MeshEvent::Message(Box::new(MeshMessage {
             message,
             conversation,
             sender: sender.clone(),
@@ -714,12 +714,12 @@ impl NostrRuntime {
     /// would make the UI show the radio as dead every time a relay flapped.
     fn emit_status(&self) {
         let status = self.mesh_state.status(self.state.connected_relay_count());
-        let _ = self.events.send(MeshEvent::Status(status));
+        self.events.send(MeshEvent::Status(status));
     }
 
     fn degraded(&self, message: String) {
         tracing::debug!(target: "mesh::nostr", "{message}");
-        let _ = self.events.send(MeshEvent::Degraded(message));
+        self.events.send(MeshEvent::Degraded(message));
     }
 }
 
