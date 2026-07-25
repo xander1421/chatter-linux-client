@@ -17,6 +17,18 @@ pub enum SystemError {
     #[error("Keyring error: {0}")]
     Keyring(String),
 
+    /// The keyring answered, and there is genuinely no entry.
+    ///
+    /// Distinct from [`Keyring`](Self::Keyring) on purpose, and the distinction
+    /// is load-bearing: "there is no passphrase" means a first run and it is
+    /// safe to generate one, while "the keyring did not answer" means a locked
+    /// or slow password manager and the passphrase almost certainly still
+    /// exists. Generating a fresh key in the second case makes the existing
+    /// database undecryptable, and the caller then treats that as an
+    /// unrecoverable database and deletes it.
+    #[error("Keyring has no entry")]
+    KeyringNoEntry,
+
     /// Failed to send notification.
     #[error("Failed to send notification: {0}")]
     NotificationSend(String),

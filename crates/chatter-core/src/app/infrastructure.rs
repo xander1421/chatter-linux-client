@@ -176,8 +176,39 @@ impl InfrastructureContainer {
                     "Database passphrase mismatch — wiping encrypted DB and retrying with fresh key"
                 );
                 passphrase.zeroize();
+                // Move the old database aside rather than deleting it.
+                //
+                // The recovery path is unchanged — a fresh database is created
+                // and the app starts — but the bytes survive. The comment above
+                // assumes the only way here is genuine key loss, and that is not
+                // true: anything that yields the wrong passphrase lands here,
+                // and in most of those cases the real key still exists
+                // somewhere. Deleting made that unrecoverable; renaming does not,
+                // and costs one stale file.
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
                 for p in [&db_path, &db_path.with_extension("db-wal"), &db_path.with_extension("db-shm")] {
-                    let _ = std::fs::remove_file(p);
+                    if !p.exists() {
+                        continue;
+                    }
+                    let mut aside = p.clone().into_os_string();
+                    aside.push(format!(".unreadable-{stamp}"));
+                    let aside = std::path::PathBuf::from(aside);
+                    if let Err(error) = std::fs::rename(p, &aside) {
+                        tracing::error!(
+                            path = %p.display(),
+                            %error,
+                            "could not move the unreadable database aside; leaving it untouched"
+                        );
+                    } else {
+                        tracing::warn!(
+                            from = %p.display(),
+                            to = %aside.display(),
+                            "database could not be decrypted; kept a copy rather than deleting it"
+                        );
+                    }
                 }
                 #[cfg(target_os = "android")]
                 {
@@ -367,11 +398,27 @@ impl InfrastructureContainer {
                     tracing::info!("Retrieved existing passphrase from keyring");
                     return Ok(passphrase);
                 }
+                // ONLY a genuine absence may generate a new passphrase.
+                //
+                // Any other failure — a locked password manager, a timeout, a
+                // denied request — means the passphrase very probably still
+                // exists and we simply could not read it. Generating a fresh one
+                // then fails to open the existing database, and the caller
+                // treats that failure as an unrecoverable database and DELETES
+                // it. A locked KeePass must not be able to destroy the user's
+                // messages.
+                Err(crate::error::SystemError::KeyringNoEntry) => {
+                    tracing::info!("No passphrase in keyring; generating one for a first run");
+                }
                 Err(e) => {
-                    tracing::info!(
-                        "No existing passphrase in keyring ({}), generating new one",
-                        e
+                    tracing::error!(
+                        error = %e,
+                        "Could not read the database passphrase. Refusing to continue: \
+                         generating a new one here would make the existing database \
+                         undecryptable and it would then be deleted as unrecoverable. \
+                         Unlock your keyring and try again, or set CHATTER_DB_PASSPHRASE."
                     );
+                    return Err(e.into());
                 }
             }
 

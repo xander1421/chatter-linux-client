@@ -98,7 +98,7 @@ impl Keyring {
     /// Read the on-disk default passphrase.
     fn read_local_file(&self) -> Result<String, SystemError> {
         if !self.local_path.exists() {
-            return Err(SystemError::Keyring("No passphrase found locally".into()));
+            return Err(SystemError::KeyringNoEntry);
         }
         let pass = std::fs::read_to_string(&self.local_path)
             .map_err(|e| SystemError::Keyring(format!("Failed to read local passphrase: {}", e)))?;
@@ -125,7 +125,7 @@ impl Keyring {
             match self.entry() {
                 Ok(entry) => match entry.get_password() {
                     Ok(p) => return Ok(p),
-                    Err(keyring::Error::NoEntry) => return Err(SystemError::Keyring("Not found".into())),
+                    Err(keyring::Error::NoEntry) => return Err(SystemError::KeyringNoEntry),
                     Err(_) => continue,
                 },
                 Err(e) => return Err(e),
