@@ -1,0 +1,26 @@
+[package]
+name = "chatter-mesh-link"
+version = "0.1.0"
+edition = "2024"
+authors = ["xander1421"]
+description = "Sans-IO link policy and the MeshLink radio abstraction for the bitchat mesh"
+license = "GPL-3.0"
+repository = "https://github.com/xander1421/chatter"
+rust-version = "1.85"
+
+[lib]
+name = "chatter_mesh_link"
+path = "src/lib.rs"
+
+[dependencies]
+chatter-mesh = { path = "../chatter-mesh" }
+thiserror = "2"
+# Broadcast fanout picks its subset by SHA-256 over "{message_id}::{link_id}".
+# Determinism across peers is the whole point — every node must choose the same
+# links for the same message or duplicate suppression stops working — so the hash
+# is part of the wire behaviour, not an implementation detail.
+sha2 = "0.10"
+
+# No tokio, and no futures. The MeshLink trait uses boxed futures from core, so a
+# radio implementation can be swapped at runtime (bluer on Linux, JNI on Android,
+# a mock in tests) without this crate depending on any runtime or transport.

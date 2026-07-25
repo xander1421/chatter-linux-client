@@ -1,0 +1,29 @@
+[package]
+name = "chatter-mesh-ble"
+version = "0.1.0"
+edition = "2024"
+authors = ["xander1421"]
+description = "BlueZ implementation of MeshLink for the bitchat mesh (Linux only)"
+license = "GPL-3.0"
+repository = "https://github.com/xander1421/chatter"
+rust-version = "1.85"
+
+[lib]
+name = "chatter_mesh_ble"
+path = "src/lib.rs"
+
+[dependencies]
+chatter-mesh-link = { path = "../chatter-mesh-link" }
+
+# Linux-only by construction. The dependency is target-gated as well as cfg-gated
+# in the source, so an Android or Windows build resolves without pulling BlueZ or
+# a D-Bus client at all.
+[target.'cfg(target_os = "linux")'.dependencies]
+# `bluetoothd` is the D-Bus path, which is where BlueZ exposes advertising and the
+# GATT server. Raw HCI would mean reimplementing the host stack ourselves.
+bluer = { version = "0.17", features = ["bluetoothd"] }
+tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
+futures = "0.3"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

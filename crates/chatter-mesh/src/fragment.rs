@@ -182,7 +182,7 @@ pub fn plan_fragments(
 /// Ported from `BLEOutboundPacketPolicy.padsBLEFrame(for:)`. Voice frames are
 /// deliberately unpadded: padding a ~490-byte signed voice packet to the 512
 /// block would push it over the MTU and into this very fragment path.
-fn pads_ble_frame(msg_type: u8) -> bool {
+pub fn pads_ble_frame(msg_type: u8) -> bool {
     matches!(
         MessageType::from_u8(msg_type),
         Some(MessageType::NoiseEncrypted | MessageType::NoiseHandshake)
