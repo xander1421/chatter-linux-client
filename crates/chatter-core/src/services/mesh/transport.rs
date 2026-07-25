@@ -147,6 +147,12 @@ pub enum NostrCommand {
 #[derive(Debug, Default)]
 pub struct MeshFavorites {
     keys: Mutex<BTreeSet<[u8; 32]>>,
+    /// Durable mirror. `None` in tests that do not care about persistence.
+    ///
+    /// Losing this set on restart is not cosmetic: it silently demotes every
+    /// favourite to the stranger quota, so less of the user's mail gets carried
+    /// and nothing anywhere reports it.
+    store: Option<Arc<crate::storage::repositories::MeshFavoritesRepository>>,
 }
 
 impl MeshFavorites {
@@ -155,12 +161,43 @@ impl MeshFavorites {
         Self::default()
     }
 
+    /// Load the durable set and keep mirroring to it.
+    ///
+    /// A read failure is logged and starts empty rather than refusing to build:
+    /// a mesh with no favourites still works, one that will not start does not.
+    #[must_use]
+    pub fn with_store(
+        store: Arc<crate::storage::repositories::MeshFavoritesRepository>,
+    ) -> Self {
+        let keys = match store.list() {
+            Ok(keys) => keys.into_iter().collect(),
+            Err(error) => {
+                tracing::warn!(%error, "mesh: could not load favourites; starting with none");
+                BTreeSet::new()
+            }
+        };
+        Self {
+            keys: Mutex::new(keys),
+            store: Some(store),
+        }
+    }
+
     pub fn add(&self, key: [u8; 32]) {
         self.keys.lock().insert(key);
+        if let Some(store) = &self.store
+            && let Err(error) = store.add(&key)
+        {
+            tracing::warn!(%error, "mesh: could not persist a favourite");
+        }
     }
 
     pub fn remove(&self, key: &[u8; 32]) {
         self.keys.lock().remove(key);
+        if let Some(store) = &self.store
+            && let Err(error) = store.remove(key)
+        {
+            tracing::warn!(%error, "mesh: could not un-persist a favourite");
+        }
     }
 
     /// Forget every favourite. Panic-wipe support.
@@ -169,6 +206,11 @@ impl MeshFavorites {
     /// no peer is permitted the larger deposit quota.
     pub fn clear(&self) {
         self.keys.lock().clear();
+        if let Some(store) = &self.store
+            && let Err(error) = store.wipe()
+        {
+            tracing::warn!(%error, "mesh: could not wipe favourites from disk");
+        }
     }
 
     #[must_use]

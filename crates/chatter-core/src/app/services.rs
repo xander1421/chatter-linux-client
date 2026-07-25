@@ -349,6 +349,11 @@ impl ServiceContainer {
                         infra.database.clone(),
                     ),
                 ),
+                favorites: Arc::new(
+                    crate::storage::repositories::MeshFavoritesRepository::new(
+                        infra.database.clone(),
+                    ),
+                ),
                 sealer: Arc::new(
                     crate::storage::mesh_store::MeshSealer::from_keyring(&db_path)
                         .map_err(|e| ContextError::Mesh(e.to_string()))?,

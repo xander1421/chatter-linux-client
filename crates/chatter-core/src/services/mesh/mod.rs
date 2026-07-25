@@ -112,6 +112,9 @@ pub struct MeshDeps {
     /// survives a restart while its sidebar entry does not, which looks like
     /// lost data.
     pub conversations: Arc<crate::storage::repositories::MeshConversationRepository>,
+    /// Durable favourites. These are the courier trust tier, so losing them on
+    /// restart silently demotes every favourite to the stranger deposit quota.
+    pub favorites: Arc<crate::storage::repositories::MeshFavoritesRepository>,
     /// Seals outbox blobs before they reach storage. The key never enters the
     /// store crates, which is what makes "nothing plaintext reaches disk"
     /// structural rather than a matter of remembering.
@@ -165,7 +168,7 @@ impl MeshService {
         let config = Arc::new(config);
         let state = Arc::new(MeshState::new(identity.peer_id()));
         let nostr_state = Arc::new(NostrState::new());
-        let favorites = Arc::new(MeshFavorites::new());
+        let favorites = Arc::new(MeshFavorites::with_store(Arc::clone(&deps.favorites)));
         let timeline = Arc::new(MeshTimeline::new(deps.messages, deps.conversations));
         let events = MeshEvents::new(EVENT_CAPACITY, Arc::clone(&timeline));
 
