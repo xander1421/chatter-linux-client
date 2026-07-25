@@ -5,6 +5,7 @@ import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, Mes
 import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 import { TextFormat } from "chat/message_composer.slint";
 import { AnonMode, TorStatus } from "anon_mode/anon_mode_global.slint";
+import { MeshGlobal, MeshConversationData } from "mesh/mesh_global.slint";
 import { Typography } from "theme/typography.slint";
 
 // Re-export all types for Rust binding
@@ -13,6 +14,9 @@ export { JarvisGlobal }
 export { TextFormat }
 export { AnonMode }
 export { TorStatus }
+// bitchat mesh: runtime feature flag + the sidebar row shape. Written from
+// `bin_ui::features::mesh`; inert when the `mesh` Cargo feature is off.
+export { MeshGlobal, MeshConversationData }
 
 export component MainWindow inherits Window {
     title: "Chatter";

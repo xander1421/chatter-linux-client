@@ -166,6 +166,10 @@ fn wire_conversation_selected(window: &MainWindow) {
                 "dm" | "anon_dm" => w.invoke_dm_selected(id),
                 "private_group" => w.invoke_private_group_selected(id),
                 "saved_messages" => w.invoke_saved_messages_clicked(),
+                // Mesh rows open through the same global callback the sidebar
+                // uses, so there is one way into a mesh conversation.
+                #[cfg(feature = "mesh")]
+                "mesh" => w.global::<crate::MeshGlobal>().invoke_conversation_selected(id),
                 _ => {}
             }
         }
@@ -204,11 +208,26 @@ fn wire_message_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         CT::ServerDm | CT::MailboxDm | CT::AnonDm => w.invoke_dm_selected(id_slint),
                         CT::AnonGroup => w.invoke_private_group_selected(id_slint),
                         CT::SavedMessages => w.set_loading_messages(false),
-                        // Mesh conversations have no UI surface until P7 wires
-                        // one. Clearing the spinner is the honest behaviour:
-                        // routing them to a DM or channel view would open the
-                        // wrong conversation rather than none.
-                        CT::Mesh | CT::MeshDm => w.set_loading_messages(false),
+                        // Mesh conversations open through their own global
+                        // callback — same entry point as the sidebar row, so a
+                        // search hit and a click land in the same place.
+                        CT::Mesh | CT::MeshDm => {
+                            #[cfg(feature = "mesh")]
+                            {
+                                w.global::<crate::MeshGlobal>()
+                                    .invoke_conversation_selected(id_slint);
+                            }
+                            #[cfg(not(feature = "mesh"))]
+                            {
+                                // No mesh in this build: the row cannot exist,
+                                // but a stored message from a mesh-enabled run
+                                // can. Clearing the spinner is the honest
+                                // outcome — opening a channel view would show
+                                // the wrong conversation rather than none.
+                                let _ = id_slint;
+                                w.set_loading_messages(false);
+                            }
+                        }
                     }
                 }
             });
@@ -294,6 +313,24 @@ fn filter_to_items(query: &str, window: &MainWindow) -> Vec<QuickSwitcherItem> {
                 presence_status: String::new(),
                 unread_count: g.unread_count,
             });
+        }
+    }
+
+    // Mesh conversations are jump targets like any other. Collected from the
+    // same model the sidebar renders, and ranked by the same core filter.
+    #[cfg(feature = "mesh")]
+    {
+        let mesh = window.global::<crate::MeshGlobal>().get_conversations();
+        for i in 0..mesh.row_count() {
+            if let Some(row) = mesh.row_data(i) {
+                entries.push(QuickSwitcherEntry {
+                    id: row.id.to_string(),
+                    name: row.title.to_string(),
+                    conv_type: "mesh".into(),
+                    presence_status: String::new(),
+                    unread_count: row.unread_count,
+                });
+            }
         }
     }
 

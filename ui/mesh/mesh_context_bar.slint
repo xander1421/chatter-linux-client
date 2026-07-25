@@ -1,0 +1,142 @@
+// The strip above a mesh conversation.
+//
+// Four things a server chat never has to say, said once, quietly, in the one
+// place the user is already looking:
+//
+//   1. this works with no server and no internet;
+//   2. the connectivity signal is a peer count, and zero is normal;
+//   3. exactly which geohash cell is being published with each message;
+//   4. delivery is best-effort and may be deferred by hours.
+//
+// Every value here comes from `MeshGlobal`, which Rust fills from
+// `chatter-core`. The bar chooses wording, never facts.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { MeshGlobal } from "mesh_global.slint";
+
+export component MeshContextBar inherits Rectangle {
+    // What this scope is, in one line.
+    property <string> scope-line:
+        MeshGlobal.active-kind == "geohash"
+            ? "#" + MeshGlobal.active-scope + " · public to everyone in this area"
+      : MeshGlobal.active-kind == "room"
+            ? "Public mesh room · everyone in radio range"
+      : MeshGlobal.active-verified
+            ? "Encrypted one to one · key verified"
+            : "Encrypted one to one · nickname unverified";
+
+    // Peers, as a count. Never a dot, never red — zero is a normal state of a
+    // mesh, not a failure of one.
+    property <string> peer-line:
+        MeshGlobal.peer-count == 0 ? "none nearby"
+      : MeshGlobal.peer-count == 1 ? "1 nearby"
+      : MeshGlobal.peer-count + " nearby";
+
+    // What "sent" means here, which is not what it means anywhere else.
+    property <string> delivery-line:
+        MeshGlobal.active-kind == "dm"
+            ? (MeshGlobal.active-reachable
+                ? "Best-effort: sent means handed on, not arrived."
+                : "No route right now. What you send is kept and offered to passing devices — it may arrive hours later.")
+            : (MeshGlobal.peer-count == 0
+                ? "Nobody is in range. What you send waits to be carried, and may be read hours from now."
+                : "Best-effort: reaches whoever is in range now, and travels further as devices move.");
+
+    height: 46px;
+    background: Colors.surface.with-alpha(0.7);
+
+    // Bottom hairline, matching the other in-chat strips.
+    Rectangle {
+        y: parent.height - 1px;
+        width: 100%;
+        height: 1px;
+        background: Colors.neo-highlight;
+    }
+
+    HorizontalLayout {
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        padding-top: 5px;
+        padding-bottom: 5px;
+        spacing: Spacing.sm;
+
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            Image {
+                source: Icons.radio;
+                width: 16px;
+                height: 16px;
+                colorize: MeshGlobal.peer-count > 0 ? Colors.glow-cyan : Colors.text-muted;
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 1px;
+
+            HorizontalLayout {
+                spacing: 6px;
+                Text {
+                    text: root.scope-line;
+                    color: Colors.text-secondary;
+                    font-size: Typography.xs;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                if MeshGlobal.active-kind == "geohash": VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    Image {
+                        source: Icons.globe;
+                        width: 12px;
+                        height: 12px;
+                        colorize: Colors.text-muted;
+                    }
+                }
+            }
+
+            Text {
+                text: "No server, no internet · " + root.peer-line + " · " + root.delivery-line;
+                color: Colors.text-muted;
+                font-size: Typography.xxs;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+
+        // Leaving a cell belongs next to the cell name, where it is
+        // unambiguous which one is being left.
+        if MeshGlobal.active-kind == "geohash": VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            Rectangle {
+                width: leave-label.preferred-width + Spacing.md;
+                height: 24px;
+                border-radius: Spacing.radius-sm;
+                background: leave-touch.has-hover ? Colors.surface-hover : transparent;
+                border-width: 1px;
+                border-color: Colors.neo-highlight;
+                leave-label := Text {
+                    text: "Leave cell";
+                    color: leave-touch.has-hover ? Colors.text-primary : Colors.text-muted;
+                    font-size: Typography.xxs;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: 100%;
+                    height: 100%;
+                }
+                leave-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { MeshGlobal.leave-geohash(MeshGlobal.active-scope); }
+                }
+            }
+        }
+    }
+}

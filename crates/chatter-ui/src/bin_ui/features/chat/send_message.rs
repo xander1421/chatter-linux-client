@@ -34,6 +34,15 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
         if text.trim().is_empty() && !has_attachments { return; }
 
+        // Mesh conversation open: serverless, so it must not reach the gateway
+        // pipeline — or the Jarvis interceptions below, which would answer a
+        // slash command instead of broadcasting it. Core picks the transport
+        // (public room / geohash cell / peer).
+        #[cfg(feature = "mesh")]
+        if crate::bin_ui::features::mesh::intercept_send(&ui_ctx_jarvis, &text, weak_window.clone()) {
+            return;
+        }
+
         // Local AI channel: every send routes to Jarvis, nothing networks.
         #[cfg(feature = "jarvis")]
         if let Some(id) = chat_state.get().active_channel_id {

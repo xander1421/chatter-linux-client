@@ -1,0 +1,70 @@
+// bitchat mesh — runtime state pushed from Rust.
+//
+// Slint cannot `cfg`-gate, so `enabled` mirrors the `mesh` Cargo feature the
+// same way `JarvisGlobal.enabled` does: every mesh surface is wrapped in
+// `if MeshGlobal.enabled : ...` and renders as nothing when the feature is off.
+//
+// Everything here is written by `bin_ui::features::mesh` from values
+// `chatter-core` produced. No mesh surface derives state of its own: the view
+// picks wording, never facts.
+
+// One row in the mesh section of the sidebar.
+//
+// Mirrors the Rust `MeshRow` in `bin_ui/features/mesh/core_api.rs`.
+export struct MeshConversationData {
+    // Stable conversation id (the `ChannelId` core derived for this scope).
+    // This is the key handed back on selection.
+    id: string,
+    // "room" | "geohash" | "dm". Decides the glyph and the wording; the UI
+    // never sniffs the id to work this out.
+    kind: string,
+    // Display title: "Mesh room", "#u4pruy", or a peer's nickname.
+    title: string,
+    // The scope published alongside every message: the geohash cell for
+    // "geohash", the peer id for "dm", empty for the room. Shown verbatim so
+    // the user always knows what they are speaking into.
+    scope: string,
+    timestamp: string,
+    unread-count: int,
+    // DM rows only: a transport can carry to this peer right now. False does
+    // not mean the message is lost — it means it waits for a carrier.
+    reachable: bool,
+    // DM rows only: the peer's announce signature verified. Nicknames on
+    // public traffic are unauthenticated and never set this.
+    verified: bool,
+    is-selected: bool,
+}
+
+export global MeshGlobal {
+    // The `mesh` Cargo feature is built in. Everything mesh hangs off this.
+    in-out property <bool> enabled: false;
+
+    // ── Transport, as reported by MeshService ──
+    // The BLE radio is started. False on platforms with no radio, where the
+    // mesh still runs over Nostr relays.
+    in-out property <bool> radio-running: false;
+    // Peers the mesh can see right now. THE connectivity signal for this
+    // feature — there is no connection dot, because there is no connection.
+    in-out property <int> peer-count: 0;
+    // Connected Nostr relays. Geohash channels ride these.
+    in-out property <int> relay-count: 0;
+    // Last thing core said went wrong without stopping the service. Empty
+    // when nothing is wrong.
+    in-out property <string> notice: "";
+
+    // ── Sidebar ──
+    in-out property <[MeshConversationData]> conversations: [];
+
+    // ── The mesh conversation currently open (empty id = none) ──
+    in-out property <string> active-id: "";
+    in-out property <string> active-kind: "";
+    in-out property <string> active-title: "";
+    in-out property <string> active-scope: "";
+    in-out property <bool> active-reachable: false;
+    in-out property <bool> active-verified: false;
+
+    // ── Actions, handled in Rust ──
+    callback conversation-selected(/* conversation id */ string);
+    callback join-geohash(/* cell */ string);
+    callback leave-geohash(/* cell */ string);
+}

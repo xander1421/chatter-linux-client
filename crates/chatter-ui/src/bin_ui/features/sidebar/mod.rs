@@ -51,6 +51,16 @@ pub(crate) fn refresh_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
 
     let active = ui_ctx.active_conversation();
 
+    // A server-backed conversation was selected, so whatever mesh conversation
+    // was open no longer is. `ActiveConversation` has no mesh arm — mesh rows
+    // are keyed by a transport scope the server never hears about — so the two
+    // selections are cleared against each other here, in the one place every
+    // selection path already funnels through.
+    #[cfg(feature = "mesh")]
+    if !matches!(active, chatter_core::state::ActiveConversation::None) {
+        crate::bin_ui::features::mesh::clear_active(window);
+    }
+
     // Channels (regular server channels only — DMs live in a separate model).
     {
         let model = window.get_channels();

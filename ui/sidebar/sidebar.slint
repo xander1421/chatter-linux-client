@@ -21,6 +21,8 @@ import { SectionContextMenu, SectionHeaderContextMenu } from "section_context_me
 import { Avatar } from "../components/avatar.slint";
 import { TooltipArea } from "../components/tooltip.slint";
 import { AnonMode, TorStatus } from "../anon_mode/anon_mode_global.slint";
+import { MeshGlobal } from "../mesh/mesh_global.slint";
+import { MeshList } from "../mesh/mesh_list.slint";
 
 export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, CustomSectionData, SectionConversationData }
 
@@ -719,6 +721,16 @@ export component Sidebar inherits Rectangle {
                         root.ctx-menu-current-section-id = "";
                         root.ctx-menu-show = true;
                     }
+                }
+
+                // 6. MESH — the public room, every joined geohash cell, and mesh
+                // DMs. A peer of the sections above, not a mode: same list, same
+                // item shape, distinguished by `ConversationType` on the Rust
+                // side exactly as anon DMs are. Present in both normal and anon
+                // mode — the mesh needs no server either way.
+                if MeshGlobal.enabled: MeshList {
+                    vertical-stretch: 0;
+                    collapsed: root.collapsed;
                 }
 
                 // 4b. CUSTOM SECTIONS (user-created, between Messages and Channels)

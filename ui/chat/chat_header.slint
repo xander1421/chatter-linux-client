@@ -7,6 +7,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
+import { MeshGlobal } from "../mesh/mesh_global.slint";
 
 // Data struct for chat header (mirrors Rust ChatHeaderData)
 export struct ChatHeaderData {
@@ -103,13 +104,18 @@ export component ChatHeader inherits Rectangle {
     property <bool> show-member-count: has-channel && (channel-type == "public" || channel-type == "private" || is-private-group) && member-count > 0;
 
     // Show settings for regular channels and private groups, not for anon DMs or saved messages
-    property <bool> show-settings: has-channel && ((!is-anon-dm && !is-saved) || is-private-group);
+    property <bool> show-settings: has-channel && ((!is-anon-dm && !is-saved) || is-private-group) && !is-mesh;
+
+    // A mesh conversation is open. Calls, invites and channel settings are all
+    // server operations; offering them over a transport that reaches no server
+    // would be offering something that cannot happen.
+    property <bool> is-mesh: MeshGlobal.active-id != "";
 
     // Show invite button for channels and private groups only (not DMs, anon DMs, or saved)
-    property <bool> show-invite: has-channel && !is-dm && !is-anon-dm && !is-saved;
+    property <bool> show-invite: has-channel && !is-dm && !is-anon-dm && !is-saved && !is-mesh;
 
     // Show call buttons for everything except saved messages
-    property <bool> show-calls: has-channel && !is-saved;
+    property <bool> show-calls: has-channel && !is-saved && !is-mesh;
 
     // Layout (56px header) — Neo glassmorphism: translucent surface with edge definition
     height: 56px;

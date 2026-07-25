@@ -54,7 +54,10 @@ component ConvRow inherits Rectangle {
         padding-right: Spacing.md;
         spacing: Spacing.sm;
         Text {
-            text: root.conv-type == "saved_messages" ? "🔖" : root.conv-type == "channel" ? "#" : root.conv-type == "private_group" ? "🔒" : root.conv-type == "anon_dm" ? "👤" : "@";
+            // "))" is the mesh mark: radio waves, matching the sidebar glyph —
+            // a jump target that reaches no server looks different from one
+            // that does.
+            text: root.conv-type == "saved_messages" ? "🔖" : root.conv-type == "channel" ? "#" : root.conv-type == "private_group" ? "🔒" : root.conv-type == "anon_dm" ? "👤" : root.conv-type == "mesh" ? "))" : "@";
             color: root.selected ? Colors.primary : Colors.text-muted;
             font-size: Typography.sm;
             font-weight: Typography.semibold;

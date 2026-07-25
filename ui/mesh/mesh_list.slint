@@ -1,0 +1,239 @@
+// The mesh section of the sidebar.
+//
+// Reads `MeshGlobal` directly rather than taking properties, the same way the
+// sidebar reads `AnonMode` / `TorStatus` — the whole section is one runtime
+// flag away from not existing, and threading five properties through
+// `app.slint` for that would be worse.
+//
+// The caption line under the header is the feature's one standing claim: no
+// server, no internet, and a peer count in place of a connection dot. Zero
+// peers reads as "none nearby", never as an error.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { MeshGlobal } from "mesh_global.slint";
+import { MeshListItem } from "mesh_list_item.slint";
+
+export component MeshList inherits Rectangle {
+    in property <bool> collapsed: false;
+
+    property <bool> expanded: true;
+    property <bool> joining: false;
+
+    // Transparent on purpose: the sidebar tints its own surface (anon mode),
+    // and a section that repainted over that would fight it.
+    VerticalLayout {
+        // ── Section header ──
+        if !root.collapsed: Rectangle {
+            height: 32px;
+            HorizontalLayout {
+                padding-left: 6px;
+                padding-right: 4px;
+
+                TouchArea {
+                    horizontal-stretch: 1;
+                    mouse-cursor: pointer;
+                    clicked => { root.expanded = !root.expanded; }
+                    HorizontalLayout {
+                        padding-left: 2px;
+                        spacing: 4px;
+                        alignment: start;
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 0;
+                            Image {
+                                source: Icons.chevron-right;
+                                width: 10px;
+                                height: 10px;
+                                colorize: Colors.text-muted;
+                                transform-rotation: root.expanded ? 90deg : 0deg;
+                                animate transform-rotation { duration: 150ms; easing: ease-out; }
+                            }
+                        }
+                        Text {
+                            text: "Mesh";
+                            color: Colors.text-muted;
+                            font-size: Typography.xs2;
+                            font-weight: 600;
+                            letter-spacing: 0.5px;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                // Join a geohash cell.
+                Rectangle {
+                    width: 28px;
+                    horizontal-stretch: 0;
+                    Rectangle {
+                        width: 24px;
+                        height: 24px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: Spacing.radius-sm;
+                        background: join-touch.has-hover ? Colors.surface-hover : transparent;
+                        Image {
+                            source: Icons.plus;
+                            width: 14px;
+                            height: 14px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            colorize: join-touch.has-hover ? Colors.text-primary : Colors.text-muted;
+                        }
+                    }
+                    join-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.joining = !root.joining;
+                            root.expanded = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── The standing claim: serverless, and a peer count for connectivity ──
+        if !root.collapsed && root.expanded: Rectangle {
+            height: 18px;
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: Spacing.sm;
+                spacing: 5px;
+                alignment: start;
+
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    Image {
+                        source: Icons.radio;
+                        width: 11px;
+                        height: 11px;
+                        colorize: MeshGlobal.peer-count > 0 ? Colors.glow-cyan : Colors.text-muted;
+                    }
+                }
+                Text {
+                    text: "No server, no internet · "
+                        + (MeshGlobal.peer-count == 0 ? "none nearby"
+                           : MeshGlobal.peer-count == 1 ? "1 nearby"
+                           : MeshGlobal.peer-count + " nearby");
+                    color: Colors.text-muted;
+                    font-size: Typography.xxs;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+
+        // ── Join-a-cell input ──
+        if !root.collapsed && root.joining: Rectangle {
+            height: 34px;
+            HorizontalLayout {
+                padding-left: Spacing.sm;
+                padding-right: Spacing.sm;
+                padding-bottom: 4px;
+
+                Rectangle {
+                    height: 28px;
+                    background: Colors.neo-inset-bg;
+                    border-radius: Spacing.radius-sm;
+                    border-width: 1px;
+                    border-color: cell-input.has-focus ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
+
+                    HorizontalLayout {
+                        padding-left: Spacing.sm;
+                        padding-right: Spacing.sm;
+                        spacing: 4px;
+
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 0;
+                            Image {
+                                source: Icons.hash;
+                                width: 11px;
+                                height: 11px;
+                                colorize: Colors.text-muted;
+                            }
+                        }
+
+                        cell-input := TextInput {
+                            horizontal-stretch: 1;
+                            color: Colors.text-primary;
+                            font-size: Typography.xs;
+                            vertical-alignment: center;
+                            single-line: true;
+                            accepted => {
+                                MeshGlobal.join-geohash(self.text);
+                                self.text = "";
+                                root.joining = false;
+                            }
+                        }
+                    }
+
+                    if cell-input.text == "": Text {
+                        x: Spacing.sm + 11px + 4px;
+                        height: 100%;
+                        text: "geohash cell, e.g. u4pruy";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // ── Whatever core last said went wrong ──
+        if !root.collapsed && MeshGlobal.notice != "": Rectangle {
+            height: notice-text.preferred-height + 8px;
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: Spacing.sm;
+                padding-bottom: 4px;
+                notice-text := Text {
+                    text: MeshGlobal.notice;
+                    color: Colors.warning;
+                    font-size: Typography.xxs;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        // ── Rows ──
+        if root.expanded: VerticalLayout {
+            padding-left: Spacing.xs;
+            padding-right: Spacing.xs;
+            spacing: 2px;
+
+            for item in MeshGlobal.conversations: MeshListItem {
+                title: item.title;
+                kind: item.kind;
+                scope: item.scope;
+                timestamp: item.timestamp;
+                unread-count: item.unread-count;
+                reachable: item.reachable;
+                verified: item.verified;
+                selected: item.is-selected;
+                collapsed: root.collapsed;
+
+                clicked => { MeshGlobal.conversation-selected(item.id); }
+            }
+        }
+
+        // Nothing at all yet — say what this is instead of leaving a blank gap.
+        if !root.collapsed && root.expanded && MeshGlobal.conversations.length == 0: Rectangle {
+            height: empty-text.preferred-height + 12px;
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: Spacing.sm;
+                padding-bottom: 6px;
+                empty-text := Text {
+                    text: "Nothing here yet. Messages arrive over Bluetooth from whoever is nearby, and can be relayed onwards hours later.";
+                    color: Colors.text-muted;
+                    font-size: Typography.xxs;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+}

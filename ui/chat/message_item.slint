@@ -40,6 +40,13 @@ export component MessageItem inherits Rectangle {
     in property <bool> show-sender: true;
     in property <bool> is-dm: false;  // When true, hide avatar/name - just bubbles
     in property <string> delivery-status: "";  // "sent", "delivered", "read" for own messages
+    // Mesh-only delivery states, set by `bin_ui::features::mesh` from
+    // `MeshDelivery`: "waiting" (held here, nothing can carry it yet),
+    // "carried" (a courier or relay drop took a sealed copy), "undelivered"
+    // (left the outbox unacknowledged). Rendered as words, not ticks.
+    property <bool> mesh-delivery: root.delivery-status == "carried"
+                                || root.delivery-status == "waiting"
+                                || root.delivery-status == "undelivered";
 
     // Call message
     in property <bool> is-call: false;
@@ -1043,8 +1050,27 @@ export component MessageItem inherits Rectangle {
                                     font-italic: true;
                                 }
 
+                                // Delivery status. Mesh states get a word rather
+                                // than a tick: over couriers "sent" and
+                                // "delivered" are hours apart, and two ticks
+                                // would claim an arrival nobody has confirmed.
+                                if root.mesh-delivery: Text {
+                                    text: root.delivery-status == "carried" ? "carried"
+                                        : root.delivery-status == "waiting" ? "waiting"
+                                        : "not delivered";
+                                    color: root.delivery-status == "undelivered" ? Colors.text-secondary : Colors.text-muted;
+                                    font-size: Typography.xs;
+                                    font-italic: true;
+                                    accessible-role: text;
+                                    accessible-label: root.delivery-status == "carried"
+                                            ? "Handed to a passing device; may arrive later"
+                                        : root.delivery-status == "waiting"
+                                            ? "Held on this device until something can carry it"
+                                        : "Left the outbox without ever being acknowledged";
+                                }
+
                                 // Delivery status checkmarks
-                                Text {
+                                if !root.mesh-delivery: Text {
                                     text: root.delivery-status == "sent" ? "✓" : "✓✓";
                                     color: root.delivery-status == "read" ? Colors.primary : Colors.text-muted;
                                     font-size: Typography.xs;

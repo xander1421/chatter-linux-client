@@ -327,6 +327,123 @@ impl ChatterClient {
     crate::service_accessor!(jarvis, JarvisService, jarvis_service);
     #[cfg(feature = "mesh")]
     crate::service_accessor!(mesh, crate::services::mesh::MeshService, mesh_service);
+
+    // ── bitchat mesh façade ─────────────────────────────────────────
+    //
+    // `MeshService` is `pub(crate)`, so the UI reaches it through here. Most of
+    // these are one-line forwards; `mesh_send` is not, and that is the point —
+    // choosing between the room, a cell and a DM is a routing decision, and the
+    // presentation layer must not be the thing that makes it.
+
+    /// Live mesh events: messages, peers, transport state.
+    #[cfg(feature = "mesh")]
+    pub fn mesh_subscribe(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<crate::services::mesh::MeshEvent> {
+        self.mesh().subscribe()
+    }
+
+    /// Radio and relay state. `connected_peers` is the mesh's connectivity
+    /// signal; zero is an ordinary state, not a failure.
+    #[cfg(feature = "mesh")]
+    pub fn mesh_status(&self) -> crate::services::mesh::MeshStatus {
+        self.mesh().status()
+    }
+
+    /// Everyone currently visible on the radio.
+    #[cfg(feature = "mesh")]
+    pub fn mesh_peers(&self) -> Vec<crate::services::mesh::MeshPeer> {
+        self.mesh().peers()
+    }
+
+    /// Open mesh conversations, for the sidebar.
+    #[cfg(feature = "mesh")]
+    pub fn mesh_conversations(
+        &self,
+    ) -> Result<Vec<crate::domain::unified_conversation::UnifiedConversation>, crate::services::mesh::MeshError>
+    {
+        self.mesh().conversations()
+    }
+
+    /// Which mesh scope a sidebar row refers to.
+    #[cfg(feature = "mesh")]
+    pub fn mesh_conversation_for(
+        &self,
+        id: &str,
+    ) -> Option<crate::services::mesh::MeshConversation> {
+        self.mesh().conversation_for(id)
+    }
+
+    /// Stored history for one mesh conversation, oldest first.
+    #[cfg(feature = "mesh")]
+    pub fn mesh_history(
+        &self,
+        conversation: &crate::services::mesh::MeshConversation,
+        before_sent_at: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<crate::domain::message::Message>, crate::services::mesh::MeshError> {
+        self.mesh().history(conversation, before_sent_at, limit)
+    }
+
+    /// Clear a mesh conversation's unread count locally.
+    ///
+    /// Local only. Telling the peer costs airtime and is a separate act.
+    #[cfg(feature = "mesh")]
+    pub fn mesh_mark_conversation_read(
+        &self,
+        conversation: &crate::services::mesh::MeshConversation,
+    ) -> Result<(), crate::services::mesh::MeshError> {
+        self.mesh().mark_conversation_read(conversation)
+    }
+
+    /// Join a geohash cell. Public: everything said there is readable by anyone
+    /// subscribed to that cell.
+    #[cfg(feature = "mesh")]
+    pub fn mesh_join_geohash(&self, cell: &str) -> Result<(), crate::services::mesh::MeshError> {
+        self.mesh().join_geohash(cell)
+    }
+
+    /// Leave a cell. History stays; only the sidebar entry goes.
+    #[cfg(feature = "mesh")]
+    pub fn mesh_leave_geohash(&self, cell: &str) -> Result<(), crate::services::mesh::MeshError> {
+        self.mesh().leave_geohash(cell)
+    }
+
+    /// Our own mesh sender id, for telling our messages from everyone else's.
+    ///
+    /// Derived from the mesh peer ID and unrelated to the chatter account: the
+    /// two identities are deliberately separate.
+    #[cfg(feature = "mesh")]
+    pub fn mesh_local_user_id(&self) -> crate::domain::ids::UserId {
+        crate::services::mesh::mapping::peer_user_id(&self.mesh().local_peer())
+    }
+
+    /// Send into a mesh conversation, choosing the transport from the scope.
+    ///
+    /// The room and a cell are broadcasts and return as soon as the packet is
+    /// queued; a DM resolves to a [`MeshDelivery`] describing how far it
+    /// actually got. Note that "sent" here can mean "handed to a courier who
+    /// may hand it over hours from now" — further from "delivered" than
+    /// anywhere else in the app.
+    #[cfg(feature = "mesh")]
+    pub async fn mesh_send(
+        &self,
+        conversation: &crate::services::mesh::MeshConversation,
+        text: &str,
+    ) -> Result<crate::services::mesh::MeshDelivery, crate::services::mesh::MeshError> {
+        use crate::services::mesh::{MeshConversation, MeshDelivery};
+        match conversation {
+            MeshConversation::Room => {
+                self.mesh().send_room(text)?;
+                Ok(MeshDelivery::Broadcast)
+            }
+            MeshConversation::Geohash(cell) => {
+                self.mesh().send_geohash(cell, text)?;
+                Ok(MeshDelivery::Broadcast)
+            }
+            MeshConversation::Dm(peer) => self.mesh().send_dm(peer, text).await,
+        }
+    }
     crate::service_accessor!(mailbox_manager, MailboxManager, mailbox_manager);
     crate::service_accessor!(local_ai, LocalAIService, local_ai_service);
     crate::service_accessor!(

@@ -108,6 +108,10 @@ webrtc-sys-build = "0.3.16"
 
 [features]
 default = ["desktop", "jarvis"]
+# The bitchat mesh. Off by default while the radio stack is unproven against a
+# second device. `mesh` alone gives BLE; add `onion` for geohash channels and
+# Nostr DMs, which are Tor-only on purpose.
+mesh = ["chatter-core/mesh"]
 desktop = [
     "dep:i-slint-backend-winit", "dep:winit", "dep:arboard", "slint/backend-winit", 
     "slint/renderer-skia", "chatter-core/desktop-system", "chatter-core/desktop-media", 

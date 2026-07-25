@@ -1,0 +1,13 @@
+// bitchat mesh UI components.
+//
+// Usage: import { MeshGlobal, MeshList } from "mesh/mod.slint";
+//
+// Like `anon_mode/`, this is small on purpose: a mesh conversation is an
+// ordinary conversation with a different transport, so it reuses the sidebar
+// and the message list rather than growing a parallel UI. Only what a mesh
+// conversation has to say and a server one does not lives here.
+
+export { MeshGlobal, MeshConversationData } from "mesh_global.slint";
+export { MeshList } from "mesh_list.slint";
+export { MeshListItem } from "mesh_list_item.slint";
+export { MeshContextBar } from "mesh_context_bar.slint";

@@ -21,6 +21,10 @@ pub mod composer;
 pub mod header;
 #[cfg(feature = "jarvis")]
 pub mod jarvis;
+/// bitchat mesh surfaces. Gated exactly like `jarvis`: the Slint side is
+/// always compiled and stays inert until `MeshGlobal.enabled` is flipped here.
+#[cfg(feature = "mesh")]
+pub mod mesh;
 pub mod modals;
 pub mod navigation;
 pub mod notifications;
@@ -51,6 +55,8 @@ pub fn wire_all(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     calls::wire(window, ui_ctx);
     #[cfg(feature = "jarvis")]
     jarvis::memory_view::wire(window, ui_ctx);
+    #[cfg(feature = "mesh")]
+    mesh::wire(window, ui_ctx);
     status::wire(window, ui_ctx);
     connection::wire(window, ui_ctx);
     unified_search::wire(window, ui_ctx);

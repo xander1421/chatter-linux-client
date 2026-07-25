@@ -52,6 +52,14 @@ pub enum MeshDelivery {
     Read,
     /// It left the outbox without ever being acknowledged.
     Dropped,
+    /// Put on the air for the room or a cell.
+    ///
+    /// Every other variant describes a one-to-one delivery. A broadcast has no
+    /// per-recipient notion at all: nobody acknowledges it, so there is no
+    /// "delivered" to progress to and no outbox retaining it. Reusing `Secure`
+    /// or `Reachable` here would claim something about a specific recipient
+    /// that was never true.
+    Broadcast,
 }
 
 /// One peer as the mesh currently sees it.

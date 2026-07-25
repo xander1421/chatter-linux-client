@@ -6,6 +6,7 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+import { MeshGlobal } from "../mesh/mesh_global.slint";
 
 // Markdown wrapping for the formatting toolbar. Implemented in Rust
 // (composer/format_text.rs) because Slint has no substring/byte-slice op.
@@ -766,8 +767,10 @@ export component MessageComposer inherits Rectangle {
                 }
             }
 
-            // Attachment button
-            Rectangle {
+            // Attachment button — absent in a mesh conversation. The bitchat
+            // wire protocol carries no file transfer, so an attach button
+            // there would be an offer the transport cannot keep.
+            if MeshGlobal.active-id == "": Rectangle {
                 width: 36px;
                 height: 36px;
                 background: attachment-touch.has-hover ? Colors.surface-hover : transparent;

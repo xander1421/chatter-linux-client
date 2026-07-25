@@ -12,6 +12,8 @@ import { MessageComposer, PendingAttachmentData } from "message_composer.slint";
 import { PinnedBar } from "pinned_bar.slint";
 import { EmojiPicker, EmojiData } from "../components/emoji_picker.slint";
 import { GifPicker, GifData } from "../components/gif_picker.slint";
+import { MeshGlobal } from "../mesh/mesh_global.slint";
+import { MeshContextBar } from "../mesh/mesh_context_bar.slint";
 
 // Re-export types for parent components
 export { MessageItemData, MessageAttachmentData, PendingAttachmentData, ReactionEntry }
@@ -187,6 +189,14 @@ export component ChatLayout inherits Rectangle {
             video-call-clicked => {
                 root.video-call-clicked();
             }
+        }
+
+        // Mesh strip — only present while a mesh conversation is open. Carries
+        // the serverless claim, the peer count, the geohash cell being
+        // published, and what "sent" means over couriers.
+        if MeshGlobal.active-id != "": MeshContextBar {
+            width: 100%;
+            vertical-stretch: 0;
         }
 
         // In-conversation search bar (Ctrl+F) — Neo glass surface

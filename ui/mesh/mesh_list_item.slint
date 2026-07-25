@@ -1,0 +1,213 @@
+// One mesh conversation in the sidebar — Neo 2.0.
+//
+// Deliberately the same shape as `ChannelListItem`: a mesh conversation is a
+// peer of the other conversation types, not a mode. The only things it says
+// extra are the two facts a server chat never has to carry: whether anything
+// can move a message right now (a clock, not a warning), and — for a geohash
+// cell — that the scope is public and location-bound (a globe).
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Icons } from "../theme/icons.slint";
+import { Typography } from "../theme/typography.slint";
+import { TooltipArea } from "../components/tooltip.slint";
+
+export component MeshListItem inherits Rectangle {
+    in property <string> title: "";
+    in property <string> kind: "room";        // "room" | "geohash" | "dm"
+    in property <string> scope: "";
+    in property <string> timestamp: "";
+    in property <int> unread-count: 0;
+    in property <bool> reachable: false;
+    in property <bool> verified: false;
+    in property <bool> selected: false;
+    in property <bool> collapsed: false;
+
+    callback clicked();
+
+    // Secondary line: what this scope actually is. More useful than a message
+    // preview would be, because the answer to "what am I speaking into" is the
+    // thing a mesh conversation has to keep answering.
+    property <string> secondary:
+        root.kind == "geohash" ? "public · " + root.scope
+      : root.kind == "room" ? "everyone in radio range"
+      : root.reachable ? "encrypted, one to one"
+      : "no route now — sends wait for a carrier";
+
+    property <image> glyph: root.kind == "geohash" ? Icons.hash
+                          : root.kind == "dm" ? Icons.message-circle
+                          : Icons.radio;
+
+    height: 48px;
+    border-radius: Spacing.radius-sm;
+    background: root.selected ? Colors.neo-inset-bg
+              : touch.has-hover ? Colors.surface-hover
+              : transparent;
+    border-width: root.selected || touch.has-hover ? 1px : 0px;
+    border-color: root.selected ? Colors.glow-primary : Colors.neo-highlight;
+
+    accessible-role: button;
+    accessible-label: root.kind == "geohash"
+        ? root.title + ", public geohash channel, location-scoped"
+        : root.kind == "room"
+        ? root.title + ", public mesh room, everyone in radio range"
+        : root.reachable
+        ? root.title + ", mesh direct message"
+        : root.title + ", mesh direct message, no route right now";
+
+    if !root.collapsed: HorizontalLayout {
+        padding-left: Spacing.sm;
+        padding-right: Spacing.sm;
+        spacing: Spacing.sm;
+        alignment: stretch;
+
+        // Kind glyph
+        Rectangle {
+            width: 24px;
+            height: parent.height;
+            Image {
+                source: root.glyph;
+                width: 16px;
+                height: 16px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                colorize: root.selected ? Colors.glow-cyan : Colors.text-secondary;
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 1px;
+
+            HorizontalLayout {
+                spacing: 4px;
+                Text {
+                    text: root.title;
+                    color: root.selected ? Colors.text-primary : Colors.text-secondary;
+                    font-size: Typography.sm;
+                    font-weight: root.unread-count > 0 ? 600 : 400;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                // The peer's announce signature verified against the key it
+                // advertises. Absent is the ordinary case, not a warning: a
+                // nickname alone is simply not an identity out here.
+                if root.kind == "dm" && root.verified: VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    Image {
+                        source: Icons.lock;
+                        width: 11px;
+                        height: 11px;
+                        colorize: Colors.success;
+                    }
+                }
+                // Geohash cells are public and location-scoped. The glyph says
+                // so on every row, because the cell travels with every message.
+                if root.kind == "geohash": VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    Image {
+                        source: Icons.globe;
+                        width: 11px;
+                        height: 11px;
+                        colorize: Colors.text-muted;
+                    }
+                }
+                if root.timestamp != "": Text {
+                    text: root.timestamp;
+                    color: Colors.text-muted;
+                    font-size: Typography.xxs;
+                    vertical-alignment: center;
+                    horizontal-stretch: 0;
+                }
+            }
+
+            Text {
+                text: root.secondary;
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+
+        // Nothing can carry to this peer at the moment. A clock rather than a
+        // warning colour: what you send is still sent, it just waits. Only for
+        // DMs — a broadcast scope has no single peer to be out of reach.
+        if root.kind == "dm" && !root.reachable: VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            Image {
+                source: Icons.clock;
+                width: 12px;
+                height: 12px;
+                colorize: Colors.text-muted;
+            }
+        }
+
+        if root.unread-count > 0: VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            Rectangle {
+                width: max(20px, badge-text.preferred-width + 12px);
+                height: 20px;
+                border-radius: Spacing.radius-full;
+                background: Colors.primary;
+                badge-text := Text {
+                    text: root.unread-count > 99 ? "99+" : root.unread-count;
+                    color: Colors.text-primary;
+                    font-size: Typography.xs2;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: 100%;
+                    height: 100%;
+                }
+            }
+        }
+    }
+
+    if root.collapsed: TooltipArea {
+        width: 100%;
+        height: 100%;
+        tooltip-text: root.kind == "geohash" ? root.title + " — public, location-scoped" : root.title;
+        tooltip-enabled: true;
+        placement: "right";
+
+        Image {
+            source: root.glyph;
+            width: 20px;
+            height: 20px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            colorize: root.selected ? Colors.glow-cyan : Colors.text-secondary;
+        }
+
+        if root.unread-count > 0: Rectangle {
+            x: parent.width / 2 + 4px;
+            y: parent.height / 2 - 16px;
+            width: max(16px, collapsed-badge.preferred-width + 8px);
+            height: 16px;
+            border-radius: Spacing.radius-full;
+            background: Colors.primary;
+            collapsed-badge := Text {
+                text: root.unread-count > 99 ? "99+" : root.unread-count;
+                color: Colors.text-primary;
+                font-size: Typography.xxs;
+                font-weight: 600;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                width: 100%;
+                height: 100%;
+            }
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
