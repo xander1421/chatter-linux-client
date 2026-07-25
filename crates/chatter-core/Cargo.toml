@@ -14,6 +14,26 @@ path = "src/lib.rs"
 
 [dependencies]
 # ============================================================================
+# bitchat mesh
+# ============================================================================
+# Noise sessions and the mesh identity type. The crate holds no key custody by
+# design — `storage/mesh_identity_store.rs` provides it, over SQLCipher.
+# Its `rand_core` is 0.6, which is why the mesh identity is generated with the
+# `rand_core_06` alias below rather than the crate's main `rand` 0.9.
+chatter-mesh-noise = { path = "../chatter-mesh-noise" }
+# Store-and-forward (P5). Leaves `Storage` and `Sealer` open on purpose so the
+# sealing key never enters that crate — `storage/mesh_store.rs` implements both.
+chatter-mesh-store = { path = "../chatter-mesh-store" }
+# Wire format: packet codec, TLV payloads, relay policy, gossip-sync filters.
+chatter-mesh = { path = "../chatter-mesh" }
+# Link policy plus the MeshLink radio trait. The trait lives here rather than in
+# a platform crate so the Android backend needs no BlueZ.
+chatter-mesh-link = { path = "../chatter-mesh-link" }
+# Nostr transport: geohash channels and gift-wrapped DMs. Its RelayConnector is
+# injected, so no second Tor stack — the existing arti client backs it.
+chatter-mesh-nostr = { path = "../chatter-mesh-nostr" }
+
+# ============================================================================
 # Async Runtime
 # ============================================================================
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "io-util", "net", "fs"] }
@@ -172,6 +192,11 @@ hyper = { version = "1", features = ["client", "http1"], optional = true }
 http-body-util = { version = "0.1", optional = true }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"], optional = true }
 webpki-roots = { version = "1", optional = true }
+# WebSocket framing for Nostr relays, over the Tor DataStream. Under `onion`
+# because that is the only build with a relay connector at all. Replaces a
+# hand-rolled RFC 6455 implementation: this code parses frames from relays we
+# neither control nor authenticate, which is not a place for bespoke framing.
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["handshake"], optional = true }
 unicode-segmentation = "1.12.0"
 argon2 = "0.5.3"
 tempfile = "3"
@@ -193,6 +218,8 @@ open = "5.3.3"
 # Platform-specific: Linux
 # ============================================================================
 [target.'cfg(target_os = "linux")'.dependencies]
+# BlueZ radio for the mesh (Linux only, by construction).
+chatter-mesh-ble = { path = "../chatter-mesh-ble" }
 zbus = "5"
 ksni = "0.2"
 v4l = "0.14"
@@ -220,6 +247,8 @@ muda = "0.17"
 # Android platform integration (JNI, ndk-context) lives in chatter-ui, not core.
 # Core is platform-neutral; UI crate injects platform impls via NotificationSink.
 [target.'cfg(target_os = "android")'.dependencies]
+# JNI radio for the mesh (Android only).
+chatter-mesh-android = { path = "../chatter-mesh-android" }
 gstreamer-gl-egl = { version = "0.23", optional = true }
 glutin_egl_sys = { version = "0.7", optional = true }
 
@@ -248,6 +277,7 @@ default = ["desktop-system", "desktop-media", "jarvis"]
 onion = [
     "dep:arti-client", "dep:tor-rtcompat", "dep:hyper-util",
     "dep:hyper", "dep:http-body-util", "dep:tokio-rustls", "dep:webpki-roots",
+    "dep:tokio-tungstenite",
 ]
 desktop-system = ["keyring/sync-secret-service", "keyring/windows-native"]
 # Shared media stack (LiveKit + WebRTC) — works on every target the `livekit`

@@ -160,9 +160,23 @@ impl PeerId {
         Some(out)
     }
 
-    /// The full Noise static public key, when the bare part is exactly 64 hex
-    /// characters.
+    /// The full Noise static public key, when this ID actually carries one.
+    ///
+    /// Requires the bare part to be exactly 64 hex characters **and** the prefix to
+    /// be one that denotes a Noise identity — no prefix, or `noise:`.
+    ///
+    /// The prefix check is load-bearing, not tidiness. A geohash-DM ID is `nostr_`
+    /// followed by the full 64-hex secp256k1 x-only pubkey, so a bare-part-only test
+    /// reports it as a Noise static key. Sealing to it produces courier envelopes
+    /// encrypted to a point on the wrong curve — mail that no recipient can ever
+    /// open, failing silently at the far end rather than at the call site.
+    /// `group_` and `bridge:` are likewise not key-bearing.
     pub fn noise_key(&self) -> Option<Vec<u8>> {
+        match self.prefix() {
+            None => {}
+            Some("noise:") => {}
+            Some(_) => return None,
+        }
         let bare = self.bare();
         if bare.chars().count() != MAX_ID_LEN {
             return None;

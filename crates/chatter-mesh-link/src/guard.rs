@@ -265,6 +265,43 @@ pub enum IngressRejection {
     },
 }
 
+impl core::fmt::Display for IngressRejection {
+    /// Rejections are the main diagnostic when a mesh link looks connected but
+    /// carries nothing, so they need to render.
+    ///
+    /// Peer IDs are included because a rejection is meaningless without knowing who
+    /// it applies to; nothing here exposes packet contents.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::SelfLoopback { msg_type } => {
+                write!(f, "packet type {msg_type} claims our own sender ID")
+            }
+            Self::SelfBroadcastEcho {
+                msg_type,
+                message_id,
+            } => match message_id {
+                Some(id) => write!(f, "echo of our own type-{msg_type} packet ({id})"),
+                None => write!(f, "echo of our own type-{msg_type} packet"),
+            },
+            Self::DirectSenderMismatch { bound, claimed } => write!(
+                f,
+                "never-relayed packet claims {claimed} on a link bound to {bound}"
+            ),
+            Self::UnsolicitedSyncResponse { peer } => {
+                write!(f, "sync response from {peer} answering no request of ours")
+            }
+            Self::TimestampSkew {
+                peer,
+                skew_millis,
+                max_skew_millis,
+            } => write!(
+                f,
+                "timestamp from {peer} is {skew_millis}ms off, limit {max_skew_millis}ms"
+            ),
+        }
+    }
+}
+
 /// A packet that survived every check.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IngressAccept {

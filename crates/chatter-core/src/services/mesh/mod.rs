@@ -1,0 +1,799 @@
+//! The bitchat mesh, wired into chatter.
+//!
+//! Seven crates sit underneath this one and none of them reference each other's
+//! IO: the wire format parses, the link policy decides, the Noise layer seals,
+//! the store retains, and the Nostr layer builds events — all of it sans-IO,
+//! owning no clock, no task, and no socket. [`MeshService`] is the composition
+//! root that gives them one.
+//!
+//! ```text
+//!                     MeshService  (this module)
+//!        ┌──────────────────┼───────────────────────┐
+//!   BleRuntime         RouterHandle            NostrRuntime
+//!   (radio task)       (store thread)          (relay task)
+//!        │                  │                       │
+//!   MeshLink          MessageRouter            RelayPool
+//!   BlueZ / JNI       OutboxStore              RelayConnector
+//!   link policy       CourierStore             (Tor)
+//!   Noise sessions    BridgeCourier
+//! ```
+//!
+//! # Three invariants worth stating once
+//!
+//! - **No server, ever.** A mesh conversation makes no RPC. Anything in here
+//!   reaching for `GrpcClientPool` would be a design error, not a missing
+//!   feature — [`ConversationType::is_mesh`] exists so that code keyed on "the
+//!   server knows about this conversation" excludes these rows.
+//!   [`ConversationType::is_mesh`]: crate::domain::message::ConversationType::is_mesh
+//! - **The mesh identity is not the Signal identity.** Separate keypair,
+//!   separate table, no derivation between them. See
+//!   [`MeshIdentityStore`](crate::storage::mesh_identity_store::MeshIdentityStore).
+//! - **Decisions live here.** The UI crate renders [`MeshEvent`]s and calls the
+//!   methods below; it filters nothing and derives nothing.
+
+pub mod ble;
+pub mod config;
+pub mod error;
+pub mod events;
+pub mod glue;
+pub mod identity;
+pub mod mapping;
+#[cfg(test)]
+pub(crate) mod mock;
+pub mod nostr;
+pub mod radio;
+pub mod router;
+pub mod session;
+pub mod state;
+#[cfg(feature = "onion")]
+pub mod tor_relay;
+pub mod transport;
+// Gated with `tor_relay`: the WebSocket adapter now sits on tokio-tungstenite,
+// which is an `onion`-feature dependency, and a build with no relay connector has
+// nothing to frame anyway.
+#[cfg(feature = "onion")]
+pub mod ws;
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use chatter_mesh::ids::PeerId;
+use chatter_mesh::packet::NoisePayloadType;
+use chatter_mesh_link::MeshLink;
+use chatter_mesh_noise::MeshIdentity;
+use chatter_mesh_nostr::relay::{RelayConnector, RelayPool};
+use chatter_mesh_store::outbox::{LinkState, Sealer};
+use chatter_mesh_store::storage::Storage;
+use parking_lot::Mutex;
+use tokio::sync::broadcast;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::task::JoinHandle;
+use uuid::Uuid;
+
+use crate::storage::mesh_identity_store::MeshIdentityStore;
+
+pub use config::MeshConfig;
+pub use error::MeshError;
+pub use events::{MeshDelivery, MeshEvent, MeshMessage, MeshPeer, MeshStatus};
+pub use mapping::MeshConversation;
+
+use ble::BleRuntime;
+use glue::SharedStorage;
+use identity::NostrIdentities;
+use nostr::NostrRuntime;
+use router::{RouterCommand, RouterDeps, RouterHandle};
+use state::{MeshState, NostrState, now_millis};
+use transport::{BleCommand, MeshFavorites, NostrCommand};
+
+/// How many events the broadcast channel buffers before a slow subscriber
+/// starts missing them.
+///
+/// Generous: a mesh in a crowded room produces bursts, and a UI that was busy
+/// rendering should not lose messages because of it.
+const EVENT_CAPACITY: usize = 512;
+
+/// Everything [`MeshService`] needs from the rest of the client.
+pub struct MeshDeps {
+    /// The mesh keypair store. Owns the only long-term secret this service has.
+    pub identity_store: Arc<MeshIdentityStore>,
+    /// Durable, already-sealed storage for the store-and-forward stack.
+    pub storage: Arc<dyn Storage>,
+    /// Seals outbox blobs before they reach storage. The key never enters the
+    /// store crates, which is what makes "nothing plaintext reaches disk"
+    /// structural rather than a matter of remembering.
+    pub sealer: Arc<dyn Sealer>,
+    /// How a Nostr relay is reached. `None` disables the relay half entirely:
+    /// geohash channels and gift-wrapped DMs go quiet, the mesh still works over
+    /// the radio, and `can_deliver_promptly` correctly reports false.
+    pub relay_connector: Option<Arc<dyn RelayConnector>>,
+    /// Overrides the platform radio. `None` selects
+    /// [`radio::platform_radio`], which is what production does; tests pass a
+    /// double.
+    pub radio_override: Option<Arc<dyn MeshLink>>,
+}
+
+/// Receivers parked between construction and `start`.
+struct Pending {
+    ble: UnboundedReceiver<BleCommand>,
+    nostr: UnboundedReceiver<NostrCommand>,
+}
+
+/// The mesh, composed.
+pub struct MeshService {
+    identity: Arc<MeshIdentity>,
+    config: Arc<MeshConfig>,
+    state: Arc<MeshState>,
+    nostr_state: Arc<NostrState>,
+    favorites: Arc<MeshFavorites>,
+    storage: SharedStorage,
+    router: Arc<RouterHandle>,
+    ble: UnboundedSender<BleCommand>,
+    nostr: UnboundedSender<NostrCommand>,
+    events: broadcast::Sender<MeshEvent>,
+    radio: Option<Arc<dyn MeshLink>>,
+    relay_connector: Option<Arc<dyn RelayConnector>>,
+    pending: Mutex<Option<Pending>>,
+    tasks: Mutex<Vec<JoinHandle<()>>>,
+    running: AtomicBool,
+}
+
+impl MeshService {
+    /// Load the identity and wire the stack. Does not touch the radio or the
+    /// network — [`start`](Self::start) does that.
+    pub fn new(deps: MeshDeps, config: MeshConfig) -> Result<Self, MeshError> {
+        let identity = Arc::new(deps.identity_store.get_or_create()?);
+        let config = Arc::new(config);
+        let state = Arc::new(MeshState::new(identity.peer_id()));
+        let nostr_state = Arc::new(NostrState::new());
+        let favorites = Arc::new(MeshFavorites::new());
+        let (events, _) = broadcast::channel(EVENT_CAPACITY);
+
+        let (ble_tx, ble_rx) = unbounded_channel();
+        let (nostr_tx, nostr_rx) = unbounded_channel();
+
+        let router = Arc::new(RouterHandle::spawn(RouterDeps {
+            state: Arc::clone(&state),
+            nostr_state: Arc::clone(&nostr_state),
+            identity: Arc::clone(&identity),
+            storage: Arc::clone(&deps.storage),
+            sealer: Arc::clone(&deps.sealer),
+            favorites: Arc::clone(&favorites),
+            ble: ble_tx.clone(),
+            nostr: nostr_tx.clone(),
+            events: events.clone(),
+            bridge_enabled: config.bridge_enabled,
+        }));
+
+        state.with(|inner| inner.duty_enabled = config.scan_duty_cycle);
+
+        Ok(Self {
+            identity,
+            config,
+            state,
+            nostr_state,
+            favorites,
+            storage: SharedStorage::new(deps.storage),
+            router,
+            ble: ble_tx,
+            nostr: nostr_tx,
+            events,
+            radio: deps.radio_override.or_else(radio::platform_radio),
+            relay_connector: deps.relay_connector,
+            pending: Mutex::new(Some(Pending {
+                ble: ble_rx,
+                nostr: nostr_rx,
+            })),
+            tasks: Mutex::new(Vec::new()),
+            running: AtomicBool::new(false),
+        })
+    }
+
+    /// Start the radio and the relay pool.
+    ///
+    /// Both halves are optional and independent: a build with no radio still
+    /// carries geohash channels, and a client with no relay connector still
+    /// carries the BLE mesh. Neither absence is an error.
+    pub async fn start(&self) -> Result<(), MeshError> {
+        if self.running.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
+        let Some(pending) = self.pending.lock().take() else {
+            return Ok(());
+        };
+
+        let mut tasks = Vec::new();
+
+        if let Some(radio) = self.radio.clone() {
+            let runtime = BleRuntime::new(
+                radio,
+                Arc::clone(&self.state),
+                Arc::clone(&self.nostr_state),
+                Arc::clone(&self.identity),
+                Arc::clone(&self.config),
+                self.events.clone(),
+                Arc::clone(&self.router),
+                self.storage.clone(),
+            );
+            tasks.push(tokio::spawn(runtime.run(pending.ble)));
+        } else {
+            tracing::info!(
+                target: "mesh",
+                "no radio on this platform; the mesh runs over nostr only"
+            );
+        }
+
+        if let Some(connector) = self.relay_connector.clone() {
+            // `RelayPool::new` spawns its dispatcher, so it has to be built
+            // inside the runtime rather than at construction time.
+            let (pool, relay_events) = RelayPool::new(connector);
+            let runtime = NostrRuntime::new(
+                pool,
+                Arc::clone(&self.nostr_state),
+                Arc::clone(&self.state),
+                NostrIdentities::from_mesh(&self.identity),
+                Arc::clone(&self.config),
+                self.events.clone(),
+                Arc::clone(&self.router),
+            );
+            tasks.push(tokio::spawn(runtime.run(pending.nostr, relay_events)));
+        } else {
+            tracing::info!(
+                target: "mesh",
+                "no relay connector configured; geohash channels and gift-wrapped DMs are off"
+            );
+        }
+
+        *self.tasks.lock() = tasks;
+        Ok(())
+    }
+
+    /// Stop both runtimes and the store thread, and wait for them.
+    pub async fn shutdown(&self) {
+        if !self.running.swap(false, Ordering::SeqCst) {
+            return;
+        }
+        let _ = self.ble.send(BleCommand::Stop);
+        let _ = self.nostr.send(NostrCommand::Stop);
+
+        let tasks: Vec<JoinHandle<()>> = std::mem::take(&mut *self.tasks.lock());
+        for task in tasks {
+            let _ = task.await;
+        }
+        self.router.shutdown();
+    }
+
+    // -------------------------------------------------------------- read paths
+
+    /// Subscribe to everything the mesh reports.
+    #[must_use]
+    pub fn subscribe(&self) -> broadcast::Receiver<MeshEvent> {
+        self.events.subscribe()
+    }
+
+    /// This device's mesh peer ID — `SHA256(static key)[..8]` as hex.
+    #[must_use]
+    pub fn local_peer(&self) -> PeerId {
+        self.identity.peer_id()
+    }
+
+    /// This device's mesh fingerprint, for out-of-band verification.
+    #[must_use]
+    pub fn fingerprint(&self) -> String {
+        self.identity.fingerprint()
+    }
+
+    /// Every peer the mesh currently knows, shaped for display.
+    #[must_use]
+    pub fn peers(&self) -> Vec<MeshPeer> {
+        self.state.peers()
+    }
+
+    /// Transport status across both halves.
+    #[must_use]
+    pub fn status(&self) -> MeshStatus {
+        self.state.status(self.nostr_state.connected_relay_count())
+    }
+
+    /// The geohash cells currently joined.
+    #[must_use]
+    pub fn joined_geohashes(&self) -> Vec<String> {
+        self.nostr_state.joined_cells()
+    }
+
+    /// The conversation a public mesh room message belongs to.
+    #[must_use]
+    pub fn room_conversation() -> MeshConversation {
+        MeshConversation::Room
+    }
+
+    // ------------------------------------------------------------- write paths
+
+    /// Broadcast into the public mesh room.
+    ///
+    /// Returns the wire message ID. The message itself arrives on the event
+    /// stream as a [`MeshEvent::Message`] with `is_local` set — one path for
+    /// local and remote messages, so a row cannot be built two different ways.
+    pub fn send_room(&self, text: &str) -> Result<String, MeshError> {
+        let content = Self::require_content(text)?;
+        if self.radio.is_none() {
+            return Err(MeshError::NoRadio);
+        }
+        let message_id = new_message_id();
+        self.ble
+            .send(BleCommand::PublicMessage {
+                message_id: message_id.clone(),
+                content,
+            })
+            .map_err(|_| MeshError::WorkerGone)?;
+        Ok(message_id)
+    }
+
+    /// Publish into a geohash channel.
+    pub fn send_geohash(&self, cell: &str, text: &str) -> Result<String, MeshError> {
+        let content = Self::require_content(text)?;
+        if !chatter_mesh_nostr::geohash::is_valid(cell) {
+            return Err(MeshError::InvalidGeohash(cell.to_string()));
+        }
+        if self.relay_connector.is_none() {
+            return Err(MeshError::NoRelayConnector);
+        }
+        let message_id = new_message_id();
+        self.nostr
+            .send(NostrCommand::GeohashMessage {
+                cell: cell.to_string(),
+                message_id: message_id.clone(),
+                content,
+                nickname: self.config.nickname.clone(),
+            })
+            .map_err(|_| MeshError::WorkerGone)?;
+        Ok(message_id)
+    }
+
+    /// Send a private message, letting the router choose the transport.
+    ///
+    /// The returned [`MeshDelivery`] is the branch the router took, which is the
+    /// whole decision the UI needs: [`MeshDelivery::Secure`] means nothing was
+    /// retained, everything else means a copy is held and will be retried.
+    pub async fn send_dm(&self, peer: &PeerId, text: &str) -> Result<MeshDelivery, MeshError> {
+        let content = Self::require_content(text)?;
+        if !self.can_route_to(peer) {
+            return Err(MeshError::Unroutable(peer.as_str().to_string()));
+        }
+        let message_id = new_message_id();
+        let nickname = self.nickname_for(peer);
+
+        // Mirror it into the timeline before routing. The mesh has no server
+        // echo, so this is the only copy — and it must exist whichever transport
+        // the router picks, which is why it is here and not in a runtime.
+        let conversation = MeshConversation::Dm(peer.clone());
+        let message = mapping::outbound_message(
+            &conversation,
+            &message_id,
+            &self.identity.peer_id(),
+            &content,
+            now_millis(),
+        );
+        let _ = self.events.send(MeshEvent::Message(Box::new(MeshMessage {
+            message,
+            conversation,
+            sender: self.identity.peer_id(),
+            nickname: self.config.nickname.clone(),
+            is_local: true,
+            sender_verified: true,
+        })));
+
+        let outcome = self
+            .router
+            .send_private(content, peer.clone(), nickname, message_id)
+            .await?;
+
+        Ok(match outcome.link {
+            LinkState::Secure => MeshDelivery::Secure,
+            LinkState::Insecure => MeshDelivery::Insecure,
+            LinkState::Reachable => MeshDelivery::Reachable,
+            LinkState::Unreachable => MeshDelivery::Unreachable,
+        })
+    }
+
+    /// Acknowledge that a message has been read.
+    ///
+    /// Routed over the same first-reachable rule the router uses, because a
+    /// receipt that goes out on a transport the peer is not on leaves their
+    /// message unread forever.
+    pub fn mark_read(&self, peer: &PeerId, message_id: &str) -> Result<(), MeshError> {
+        if self.state.is_connected(peer) || self.state.is_reachable(peer) {
+            self.ble
+                .send(BleCommand::Ack {
+                    peer: peer.clone(),
+                    message_id: message_id.to_string(),
+                    payload_type: NoisePayloadType::ReadReceipt,
+                })
+                .map_err(|_| MeshError::WorkerGone)
+        } else if self.nostr_state.knows_peer(peer) {
+            self.nostr
+                .send(NostrCommand::Ack {
+                    peer: peer.clone(),
+                    message_id: message_id.to_string(),
+                    payload_type: NoisePayloadType::ReadReceipt,
+                })
+                .map_err(|_| MeshError::WorkerGone)
+        } else {
+            Err(MeshError::Unroutable(peer.as_str().to_string()))
+        }
+    }
+
+    /// Join a geohash channel.
+    pub fn join_geohash(&self, cell: &str) -> Result<(), MeshError> {
+        if !chatter_mesh_nostr::geohash::is_valid(cell) {
+            return Err(MeshError::InvalidGeohash(cell.to_string()));
+        }
+        if self.relay_connector.is_none() {
+            return Err(MeshError::NoRelayConnector);
+        }
+        self.nostr
+            .send(NostrCommand::Join(cell.to_string()))
+            .map_err(|_| MeshError::WorkerGone)
+    }
+
+    /// Leave a geohash channel.
+    pub fn leave_geohash(&self, cell: &str) -> Result<(), MeshError> {
+        self.nostr
+            .send(NostrCommand::Leave(cell.to_string()))
+            .map_err(|_| MeshError::WorkerGone)
+    }
+
+    /// Announce our identity now, outside the normal cadence.
+    pub fn announce_now(&self) -> Result<(), MeshError> {
+        if self.radio.is_none() {
+            return Err(MeshError::NoRadio);
+        }
+        self.ble
+            .send(BleCommand::Announce)
+            .map_err(|_| MeshError::WorkerGone)
+    }
+
+    /// Mark a peer's static key as a mutual favourite.
+    ///
+    /// Favourites and signature-verified strangers draw from separate courier
+    /// quotas, so this is what stops a crowd of strangers crowding a favourite's
+    /// mail out of the pool.
+    pub fn add_favorite(&self, noise_key: [u8; 32]) {
+        self.favorites.add(noise_key);
+    }
+
+    /// Drop a favourite.
+    pub fn remove_favorite(&self, noise_key: &[u8; 32]) {
+        self.favorites.remove(noise_key);
+    }
+
+    /// Tell the duty cycle whether the app is in the foreground.
+    ///
+    /// Scanning is the expensive half of BLE. In the foreground it runs
+    /// continuously; in the background it duty-cycles.
+    pub fn set_app_active(&self, active: bool) {
+        self.state.with(|state| state.app_is_active = active);
+    }
+
+    /// Forget everything: retained mail, carried envelopes, gossip history, and
+    /// the bridge's dedup sets.
+    ///
+    /// The identity itself is wiped separately, by
+    /// [`MeshIdentityStore::wipe`](crate::storage::mesh_identity_store::MeshIdentityStore::wipe) —
+    /// they are deliberately not the same operation, because clearing a device's
+    /// mail is not the same act as destroying its identity.
+    pub fn wipe(&self) -> Result<(), MeshError> {
+        self.state.with(|state| state.sessions.clear());
+        self.router.send(RouterCommand::Wipe)
+    }
+
+    // ----------------------------------------------------------------- helpers
+
+    /// Whether any transport could carry a DM to this peer.
+    fn can_route_to(&self, peer: &PeerId) -> bool {
+        if peer.is_empty() {
+            return false;
+        }
+        // Nostr peers are addressed by their gift-wrap pubkey; mesh peers by
+        // their routing ID. A peer that is neither cannot be reached at all, and
+        // saying so up front beats queueing a message nothing will ever pick up.
+        if self.nostr_state.knows_peer(peer) {
+            return self.relay_connector.is_some();
+        }
+        self.radio.is_some() && peer.to_routing_bytes().is_some()
+    }
+
+    fn nickname_for(&self, peer: &PeerId) -> String {
+        self.state
+            .with(|state| state.peers.nickname(peer, false).map(str::to_string))
+            .or_else(|| self.nostr_state.nickname(peer))
+            .unwrap_or_else(|| peer.as_str().to_string())
+    }
+
+    /// Empty bodies never reach the wire: they cost airtime, render as nothing,
+    /// and are indistinguishable from a decode failure on the far side.
+    fn require_content(text: &str) -> Result<String, MeshError> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Err(MeshError::EmptyContent);
+        }
+        Ok(trimmed.to_string())
+    }
+}
+
+/// A fresh wire message ID.
+///
+/// Uppercase UUID, matching what bitchat puts on the wire, so an ID this client
+/// mints is indistinguishable from one theirs did.
+fn new_message_id() -> String {
+    Uuid::new_v4().to_string().to_uppercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::message::ConversationType;
+    use chatter_mesh_store::MemoryStorage;
+    use chatter_mesh_store::StoreError;
+    use super::mock::{LoopbackConnector, MockLink, OfflineConnector};
+
+    struct NoopSealer;
+
+    impl Sealer for NoopSealer {
+        fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, StoreError> {
+            Ok(plaintext.to_vec())
+        }
+
+        fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, StoreError> {
+            Ok(sealed.to_vec())
+        }
+    }
+
+    /// A service built without touching the database.
+    ///
+    /// `MeshIdentityStore` needs a real `Database`, and construction tests are
+    /// about the wiring rather than about SQLCipher, so this assembles the same
+    /// parts `MeshService::new` does from an identity handed in directly.
+    fn service(
+        radio: Option<Arc<dyn MeshLink>>,
+        connector: Option<Arc<dyn RelayConnector>>,
+    ) -> MeshService {
+        let identity = Arc::new(MeshIdentity::generate(&mut rand_core_06::OsRng));
+        let config = Arc::new(MeshConfig::default());
+        let state = Arc::new(MeshState::new(identity.peer_id()));
+        let nostr_state = Arc::new(NostrState::new());
+        let favorites = Arc::new(MeshFavorites::new());
+        let (events, _) = broadcast::channel(EVENT_CAPACITY);
+        let (ble_tx, ble_rx) = unbounded_channel();
+        let (nostr_tx, nostr_rx) = unbounded_channel();
+        let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::new());
+        let sealer: Arc<dyn Sealer> = Arc::new(NoopSealer);
+
+        let router = Arc::new(RouterHandle::spawn(RouterDeps {
+            state: Arc::clone(&state),
+            nostr_state: Arc::clone(&nostr_state),
+            identity: Arc::clone(&identity),
+            storage: Arc::clone(&storage),
+            sealer: Arc::clone(&sealer),
+            favorites: Arc::clone(&favorites),
+            ble: ble_tx.clone(),
+            nostr: nostr_tx.clone(),
+            events: events.clone(),
+            bridge_enabled: false,
+        }));
+
+        MeshService {
+            identity,
+            config,
+            state,
+            nostr_state,
+            favorites,
+            storage: SharedStorage::new(storage),
+            router,
+            ble: ble_tx,
+            nostr: nostr_tx,
+            events,
+            radio,
+            relay_connector: connector,
+            pending: Mutex::new(Some(Pending {
+                ble: ble_rx,
+                nostr: nostr_rx,
+            })),
+            tasks: Mutex::new(Vec::new()),
+            running: AtomicBool::new(false),
+        }
+    }
+
+    #[tokio::test]
+    async fn it_starts_and_stops_with_both_transports_mocked() {
+        let radio = MockLink::shared();
+        let service = service(
+            Some(Arc::clone(&radio) as Arc<dyn MeshLink>),
+            Some(Arc::new(LoopbackConnector::new()) as Arc<dyn RelayConnector>),
+        );
+        service.start().await.expect("start");
+        // Give the runtimes a turn so the radio actually comes up.
+        tokio::task::yield_now().await;
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        assert!(radio.is_started(), "the radio was started");
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn starting_twice_is_a_no_op_rather_than_a_second_stack() {
+        let radio = MockLink::shared();
+        let service = service(Some(Arc::clone(&radio) as Arc<dyn MeshLink>), None);
+        service.start().await.expect("first start");
+        service.start().await.expect("second start");
+        assert_eq!(service.tasks.lock().len(), 1, "one radio task, not two");
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn it_constructs_and_runs_with_no_radio_at_all() {
+        // The supported configuration on Windows and every other target with no
+        // MeshLink implementation.
+        let service = service(
+            None,
+            Some(Arc::new(OfflineConnector) as Arc<dyn RelayConnector>),
+        );
+        service.start().await.expect("start");
+        assert!(matches!(
+            service.send_room("hello"),
+            Err(MeshError::NoRadio)
+        ));
+        assert!(matches!(
+            service.announce_now(),
+            Err(MeshError::NoRadio)
+        ));
+        // The Nostr half still works.
+        assert!(service.join_geohash("u4pruy").is_ok());
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn it_constructs_and_runs_with_no_relay_connector() {
+        let radio = MockLink::shared();
+        let service = service(Some(Arc::clone(&radio) as Arc<dyn MeshLink>), None);
+        service.start().await.expect("start");
+        assert!(matches!(
+            service.join_geohash("u4pruy"),
+            Err(MeshError::NoRelayConnector)
+        ));
+        assert!(matches!(
+            service.send_geohash("u4pruy", "hi"),
+            Err(MeshError::NoRelayConnector)
+        ));
+        assert!(service.send_room("hello").is_ok());
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn empty_messages_never_reach_the_wire() {
+        let radio = MockLink::shared();
+        let service = service(Some(Arc::clone(&radio) as Arc<dyn MeshLink>), None);
+        assert!(matches!(service.send_room("   "), Err(MeshError::EmptyContent)));
+        assert!(matches!(service.send_room(""), Err(MeshError::EmptyContent)));
+        let peer = PeerId::from_str("bbbbbbbbbbbbbbbb");
+        assert!(matches!(
+            service.send_dm(&peer, "\n\t ").await,
+            Err(MeshError::EmptyContent)
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_geohash_that_is_not_a_geohash_is_refused_before_it_is_published() {
+        let service = service(
+            None,
+            Some(Arc::new(OfflineConnector) as Arc<dyn RelayConnector>),
+        );
+        assert!(matches!(
+            service.join_geohash("not a geohash!"),
+            Err(MeshError::InvalidGeohash(_))
+        ));
+        assert!(matches!(
+            service.send_geohash("!!!", "hi"),
+            Err(MeshError::InvalidGeohash(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_dm_to_an_unroutable_peer_fails_instead_of_queueing_forever() {
+        // No radio, no relay connector: nothing can carry anything.
+        let service = service(None, None);
+        let peer = PeerId::from_str("bbbbbbbbbbbbbbbb");
+        assert!(matches!(
+            service.send_dm(&peer, "hello").await,
+            Err(MeshError::Unroutable(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_dm_is_mirrored_into_the_timeline_before_it_is_routed() {
+        let radio = MockLink::shared();
+        let service = service(Some(Arc::clone(&radio) as Arc<dyn MeshLink>), None);
+        let mut events = service.subscribe();
+        let peer = PeerId::from_str("bbbbbbbbbbbbbbbb");
+
+        let delivery = service.send_dm(&peer, "hello").await.expect("routed");
+        // Nothing is connected, so nothing can carry it — and the router says so
+        // rather than pretending.
+        assert_eq!(delivery, MeshDelivery::Unreachable);
+
+        match events.try_recv() {
+            Ok(MeshEvent::Message(message)) => {
+                assert!(message.is_local);
+                assert_eq!(message.conversation, MeshConversation::Dm(peer.clone()));
+                assert_eq!(
+                    message.message.conversation_type,
+                    ConversationType::MeshDm,
+                    "a 1:1 mesh conversation is MeshDm, not Mesh"
+                );
+                assert_eq!(mapping::text_of(&message.message), Some("hello"));
+            }
+            other => panic!("expected the local mirror first, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_message_is_trimmed_before_it_is_sent() {
+        let radio = MockLink::shared();
+        let service = service(Some(Arc::clone(&radio) as Arc<dyn MeshLink>), None);
+        let mut events = service.subscribe();
+        let peer = PeerId::from_str("bbbbbbbbbbbbbbbb");
+        service.send_dm(&peer, "  hello  ").await.expect("routed");
+        match events.try_recv() {
+            Ok(MeshEvent::Message(message)) => {
+                assert_eq!(mapping::text_of(&message.message), Some("hello"));
+            }
+            other => panic!("expected a message, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_receipts_refuse_a_peer_no_transport_can_reach() {
+        let service = service(None, None);
+        let peer = PeerId::from_str("bbbbbbbbbbbbbbbb");
+        assert!(matches!(
+            service.mark_read(&peer, "MSG-1"),
+            Err(MeshError::Unroutable(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn favourites_are_tracked_for_the_courier_tiers() {
+        let service = service(None, None);
+        let key = [4u8; 32];
+        assert!(service.favorites.is_empty());
+        service.add_favorite(key);
+        assert!(service.favorites.contains(&key));
+        service.remove_favorite(&key);
+        assert!(service.favorites.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_local_identity_is_stable_and_self_consistent() {
+        let service = service(None, None);
+        assert_eq!(service.local_peer(), service.local_peer());
+        assert_eq!(service.fingerprint().len(), 64, "SHA-256 as hex");
+        assert!(service.local_peer().is_hex());
+    }
+
+    #[tokio::test]
+    async fn message_ids_are_unique_and_uppercase() {
+        let a = new_message_id();
+        let b = new_message_id();
+        assert_ne!(a, b);
+        assert_eq!(a, a.to_uppercase());
+    }
+
+    #[tokio::test]
+    async fn a_fresh_service_reports_nothing_connected() {
+        let service = service(None, None);
+        let status = service.status();
+        assert!(!status.radio_running);
+        assert_eq!(status.connected_links, 0);
+        assert_eq!(status.connected_relays, 0);
+        assert!(service.peers().is_empty());
+        assert!(service.joined_geohashes().is_empty());
+    }
+}

@@ -48,6 +48,7 @@ pub mod sealed_sender;
 pub mod fanout;
 pub mod anon_group;
 pub mod anon_dm;
+pub mod mesh;
 pub(crate) mod anon_shared;
 pub mod svr_backup_service;
 #[cfg(feature = "jarvis")]

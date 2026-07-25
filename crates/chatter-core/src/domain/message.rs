@@ -29,6 +29,18 @@ pub enum ConversationType {
     AnonGroup,
     /// Saved messages / personal vault.
     SavedMessages,
+    /// Public bitchat mesh room, or a geohash channel. Client-managed and
+    /// serverless: these messages never reach the server, so no server-side
+    /// authorization applies to them.
+    ///
+    /// The transport scope lives in the conversation id rather than here —
+    /// `PeerId` is already namespaced (`nostr:` for geohash chat, plain hex for
+    /// the BLE mesh room), and a second variant would give it two sources of
+    /// truth.
+    Mesh,
+    /// One-to-one bitchat conversation, end-to-end encrypted over the mesh
+    /// (Noise) or over Nostr (gift-wrapped). Also serverless.
+    MeshDm,
 }
 
 impl ConversationType {
@@ -41,7 +53,18 @@ impl ConversationType {
             Self::AnonDm => "anon_dm",
             Self::AnonGroup => "anon_group",
             Self::SavedMessages => "saved_messages",
+            Self::Mesh => "mesh",
+            Self::MeshDm => "mesh_dm",
         }
+    }
+
+    /// Serverless conversations carried by the bitchat mesh.
+    ///
+    /// These never make a server RPC, so nothing about them is authorized
+    /// server-side. Anything keyed on "the server knows about this conversation"
+    /// must exclude them.
+    pub fn is_mesh(&self) -> bool {
+        matches!(self, Self::Mesh | Self::MeshDm)
     }
 
     /// Whether an inbound message in this conversation should create a DM
@@ -71,6 +94,8 @@ impl ConversationType {
             "anon_dm" => Ok(Self::AnonDm),
             "anon_group" => Ok(Self::AnonGroup),
             "saved_messages" => Ok(Self::SavedMessages),
+            "mesh" => Ok(Self::Mesh),
+            "mesh_dm" => Ok(Self::MeshDm),
             _ => Err(StorageError::InvalidData(format!(
                 "Unknown conversation type: {s}"
             ))),

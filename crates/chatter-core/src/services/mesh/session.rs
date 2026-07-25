@@ -1,0 +1,382 @@
+//! Noise XX sessions, keyed by peer.
+//!
+//! `chatter_mesh_noise` gives us a handshake state machine and a transport
+//! state; it deliberately owns no map from peer to state, because that map is
+//! session *policy* — when to start one, what to do when two devices start at
+//! once, when to throw one away. That policy lives here.
+//!
+//! # Why this exists at all
+//!
+//! [`RouterTransport::can_deliver_securely`] must mean "an established Noise
+//! session", not "a live link". Without a per-peer session map there is nothing
+//! to answer that question with, and the router's first branch — send and
+//! retain nothing — would be taken on the strength of a link binding that a
+//! replayed announce can forge.
+//!
+//! [`RouterTransport::can_deliver_securely`]: chatter_mesh_store::RouterTransport::can_deliver_securely
+
+use std::collections::BTreeMap;
+
+use chatter_mesh::ids::PeerId;
+use chatter_mesh_noise::identity::MeshIdentity;
+use chatter_mesh_noise::session::{HandshakeRole, NoiseHandshake, NoiseSession};
+use chatter_mesh_noise::{NoiseError, fingerprint_of};
+
+/// Length of the opening XX message: one 32-byte ephemeral, no payload.
+///
+/// Used only to recognise a peer *restarting* a handshake. The two later
+/// messages are 96 and 64 bytes, so the discrimination is unambiguous for the
+/// empty payloads we send. A wrong guess here costs a handshake round trip, not
+/// correctness: the handshake state machine rejects anything it cannot read.
+const OPENING_MESSAGE_LEN: usize = 32;
+
+/// What a handshake message produced.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HandshakeStep {
+    /// The next handshake message to put on the wire, if the exchange
+    /// continues.
+    pub reply: Option<Vec<u8>>,
+    /// The peer's Noise static public key, set on the step that completes the
+    /// handshake. This is the point at which the peer becomes addressable
+    /// offline — it is the key courier envelopes are sealed to.
+    pub established: Option<[u8; 32]>,
+}
+
+/// Per-peer Noise state.
+#[derive(Default)]
+pub struct SessionManager {
+    handshakes: BTreeMap<PeerId, (NoiseHandshake, HandshakeRole)>,
+    sessions: BTreeMap<PeerId, NoiseSession>,
+}
+
+impl SessionManager {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Whether an encrypted delivery to this peer can complete right now.
+    #[must_use]
+    pub fn has_session(&self, peer: &PeerId) -> bool {
+        self.sessions.contains_key(peer)
+    }
+
+    /// Whether a handshake is in flight — a send will stall rather than fail.
+    #[must_use]
+    pub fn is_handshaking(&self, peer: &PeerId) -> bool {
+        self.handshakes.contains_key(peer)
+    }
+
+    /// The peer's Noise static key, once a session exists.
+    #[must_use]
+    pub fn remote_static(&self, peer: &PeerId) -> Option<[u8; 32]> {
+        self.sessions.get(peer).map(NoiseSession::remote_static)
+    }
+
+    /// The peer's fingerprint, once a session exists.
+    #[must_use]
+    pub fn fingerprint(&self, peer: &PeerId) -> Option<String> {
+        self.sessions
+            .get(peer)
+            .map(|session| fingerprint_of(&session.remote_static()))
+    }
+
+    /// Every peer we hold an established session with.
+    #[must_use]
+    pub fn established_peers(&self) -> Vec<PeerId> {
+        self.sessions.keys().cloned().collect()
+    }
+
+    /// Begin an outbound handshake, returning the opening message.
+    ///
+    /// Restarts any handshake already in flight for this peer: a stalled
+    /// handshake that is never retried is a peer that can never be messaged
+    /// securely, and the far side treats a fresh opening message as a restart
+    /// for the same reason.
+    pub fn initiate(
+        &mut self,
+        peer: &PeerId,
+        identity: &MeshIdentity,
+    ) -> Result<Vec<u8>, NoiseError> {
+        let mut handshake = NoiseHandshake::new(HandshakeRole::Initiator, identity)?;
+        let message = handshake.write_message(&[])?;
+        self.handshakes
+            .insert(peer.clone(), (handshake, HandshakeRole::Initiator));
+        Ok(message)
+    }
+
+    /// Feed an inbound handshake message.
+    pub fn on_handshake(
+        &mut self,
+        peer: &PeerId,
+        local_peer: &PeerId,
+        identity: &MeshIdentity,
+        message: &[u8],
+    ) -> Result<HandshakeStep, NoiseError> {
+        let is_opening = message.len() == OPENING_MESSAGE_LEN;
+
+        // A peer that restarts — reinstalled, wiped, or simply lost its state —
+        // opens a new handshake while we still hold a session. Keeping the old
+        // session would leave us encrypting to a key the peer no longer has.
+        if is_opening && self.sessions.contains_key(peer) {
+            self.sessions.remove(peer);
+            self.handshakes.remove(peer);
+        }
+
+        if is_opening
+            && matches!(
+                self.handshakes.get(peer),
+                Some((_, HandshakeRole::Initiator))
+            )
+        {
+            // Simultaneous initiation. Both sides hold an initiator state and
+            // neither can read the other's opening message, so one has to yield.
+            // The rule has to be symmetric and computable from data both sides
+            // already have: the lower peer ID keeps its initiator role, the
+            // higher yields and becomes responder. Without this, both sides sit
+            // on dead handshakes until something else evicts them.
+            if local_peer < peer {
+                return Ok(HandshakeStep::default());
+            }
+            self.handshakes.remove(peer);
+        }
+
+        let (mut handshake, role) = match self.handshakes.remove(peer) {
+            Some(existing) => existing,
+            None => (
+                NoiseHandshake::new(HandshakeRole::Responder, identity)?,
+                HandshakeRole::Responder,
+            ),
+        };
+
+        handshake.read_message(message)?;
+
+        if handshake.is_complete() {
+            let session = handshake.into_session()?;
+            let remote = session.remote_static();
+            self.sessions.insert(peer.clone(), session);
+            return Ok(HandshakeStep {
+                reply: None,
+                established: Some(remote),
+            });
+        }
+
+        let reply = handshake.write_message(&[])?;
+
+        if handshake.is_complete() {
+            let session = handshake.into_session()?;
+            let remote = session.remote_static();
+            self.sessions.insert(peer.clone(), session);
+            return Ok(HandshakeStep {
+                reply: Some(reply),
+                established: Some(remote),
+            });
+        }
+
+        self.handshakes.insert(peer.clone(), (handshake, role));
+        Ok(HandshakeStep {
+            reply: Some(reply),
+            established: None,
+        })
+    }
+
+    /// Encrypt for an established session.
+    pub fn encrypt(&mut self, peer: &PeerId, plaintext: &[u8]) -> Result<Vec<u8>, NoiseError> {
+        self.sessions
+            .get_mut(peer)
+            .ok_or(NoiseError::WrongState("no session for peer"))?
+            .encrypt(plaintext)
+    }
+
+    /// Decrypt for an established session.
+    pub fn decrypt(&mut self, peer: &PeerId, ciphertext: &[u8]) -> Result<Vec<u8>, NoiseError> {
+        self.sessions
+            .get_mut(peer)
+            .ok_or(NoiseError::WrongState("no session for peer"))?
+            .decrypt(ciphertext)
+    }
+
+    /// Whether the session with this peer is close enough to its message limit
+    /// that it should be renegotiated.
+    #[must_use]
+    pub fn needs_rekey(&self, peer: &PeerId) -> bool {
+        self.sessions
+            .get(peer)
+            .is_some_and(NoiseSession::needs_rekey)
+    }
+
+    /// Forget everything about one peer.
+    pub fn forget(&mut self, peer: &PeerId) {
+        self.handshakes.remove(peer);
+        self.sessions.remove(peer);
+    }
+
+    /// Forget every session. Used by the panic wipe and on shutdown.
+    pub fn clear(&mut self) {
+        self.handshakes.clear();
+        self.sessions.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand_core_06::OsRng;
+
+    fn identity() -> MeshIdentity {
+        MeshIdentity::generate(&mut OsRng)
+    }
+
+    /// Drive a full XX exchange between two managers.
+    fn complete(
+        alice: &mut SessionManager,
+        alice_id: &MeshIdentity,
+        bob: &mut SessionManager,
+        bob_id: &MeshIdentity,
+    ) -> (PeerId, PeerId) {
+        let alice_peer = alice_id.peer_id();
+        let bob_peer = bob_id.peer_id();
+
+        let m1 = alice
+            .initiate(&bob_peer, alice_id)
+            .expect("opening message");
+        let step = bob
+            .on_handshake(&alice_peer, &bob_peer, bob_id, &m1)
+            .expect("bob reads m1");
+        let m2 = step.reply.expect("bob replies with m2");
+        assert!(step.established.is_none());
+
+        let step = alice
+            .on_handshake(&bob_peer, &alice_peer, alice_id, &m2)
+            .expect("alice reads m2");
+        let m3 = step.reply.expect("alice replies with m3");
+        assert!(step.established.is_some(), "alice completes on m2");
+
+        let step = bob
+            .on_handshake(&alice_peer, &bob_peer, bob_id, &m3)
+            .expect("bob reads m3");
+        assert!(step.reply.is_none());
+        assert!(step.established.is_some(), "bob completes on m3");
+
+        (alice_peer, bob_peer)
+    }
+
+    #[test]
+    fn a_full_handshake_establishes_a_session_on_both_sides() {
+        let (alice_id, bob_id) = (identity(), identity());
+        let (mut alice, mut bob) = (SessionManager::new(), SessionManager::new());
+        let (alice_peer, bob_peer) = complete(&mut alice, &alice_id, &mut bob, &bob_id);
+
+        assert!(alice.has_session(&bob_peer));
+        assert!(bob.has_session(&alice_peer));
+        assert_eq!(alice.remote_static(&bob_peer), Some(bob_id.static_public()));
+        assert_eq!(bob.remote_static(&alice_peer), Some(alice_id.static_public()));
+        assert_eq!(alice.fingerprint(&bob_peer).as_deref(), Some(bob_id.fingerprint().as_str()));
+    }
+
+    #[test]
+    fn messages_round_trip_after_the_handshake() {
+        let (alice_id, bob_id) = (identity(), identity());
+        let (mut alice, mut bob) = (SessionManager::new(), SessionManager::new());
+        let (alice_peer, bob_peer) = complete(&mut alice, &alice_id, &mut bob, &bob_id);
+
+        let sealed = alice.encrypt(&bob_peer, b"ping").expect("encrypt");
+        assert_ne!(sealed, b"ping");
+        let opened = bob.decrypt(&alice_peer, &sealed).expect("decrypt");
+        assert_eq!(opened, b"ping");
+    }
+
+    #[test]
+    fn no_session_means_no_encryption_rather_than_plaintext() {
+        let mut manager = SessionManager::new();
+        let peer = PeerId::from_str("abcdef0123456789");
+        assert!(!manager.has_session(&peer));
+        assert!(manager.encrypt(&peer, b"secret").is_err());
+        assert!(manager.decrypt(&peer, b"secret").is_err());
+    }
+
+    #[test]
+    fn simultaneous_initiation_resolves_to_exactly_one_initiator() {
+        // Both sides open at once; the lower peer ID must keep its initiator
+        // role and the higher must yield, or both sit on dead handshakes.
+        let (a_id, b_id) = (identity(), identity());
+        let (a_peer, b_peer) = (a_id.peer_id(), b_id.peer_id());
+        let (low_id, low_peer, high_id, high_peer) = if a_peer < b_peer {
+            (&a_id, a_peer, &b_id, b_peer)
+        } else {
+            (&b_id, b_peer, &a_id, a_peer)
+        };
+
+        let mut low = SessionManager::new();
+        let mut high = SessionManager::new();
+        let low_open = low.initiate(&high_peer, low_id).expect("low opens");
+        let high_open = high.initiate(&low_peer, high_id).expect("high opens");
+
+        // The low side sees the high side's opening message and ignores it.
+        let step = low
+            .on_handshake(&high_peer, &low_peer, low_id, &high_open)
+            .expect("low handles the collision");
+        assert_eq!(step, HandshakeStep::default(), "low keeps its initiator role");
+
+        // The high side yields and answers as responder.
+        let step = high
+            .on_handshake(&low_peer, &high_peer, high_id, &low_open)
+            .expect("high yields");
+        let m2 = step.reply.expect("high replies as responder");
+
+        let step = low
+            .on_handshake(&high_peer, &low_peer, low_id, &m2)
+            .expect("low reads m2");
+        let m3 = step.reply.expect("low replies with m3");
+        assert!(step.established.is_some());
+        let step = high
+            .on_handshake(&low_peer, &high_peer, high_id, &m3)
+            .expect("high reads m3");
+        assert!(step.established.is_some());
+
+        assert!(low.has_session(&high_peer));
+        assert!(high.has_session(&low_peer));
+    }
+
+    #[test]
+    fn a_peer_restart_replaces_the_stale_session() {
+        let (alice_id, bob_id) = (identity(), identity());
+        let (mut alice, mut bob) = (SessionManager::new(), SessionManager::new());
+        let (alice_peer, bob_peer) = complete(&mut alice, &alice_id, &mut bob, &bob_id);
+        assert!(bob.has_session(&alice_peer));
+
+        // Alice restarts with fresh state and opens again.
+        let mut restarted = SessionManager::new();
+        let m1 = restarted
+            .initiate(&bob_peer, &alice_id)
+            .expect("opening message");
+        let step = bob
+            .on_handshake(&alice_peer, &bob_peer, &bob_id, &m1)
+            .expect("bob accepts the restart");
+        assert!(step.reply.is_some());
+        // The stale session is gone rather than left encrypting to a dead key.
+        assert!(!bob.has_session(&alice_peer));
+    }
+
+    #[test]
+    fn forgetting_a_peer_drops_both_handshake_and_session() {
+        let (alice_id, bob_id) = (identity(), identity());
+        let (mut alice, mut bob) = (SessionManager::new(), SessionManager::new());
+        let (_, bob_peer) = complete(&mut alice, &alice_id, &mut bob, &bob_id);
+
+        assert!(alice.has_session(&bob_peer));
+        alice.forget(&bob_peer);
+        assert!(!alice.has_session(&bob_peer));
+        assert!(!alice.is_handshaking(&bob_peer));
+        assert!(alice.established_peers().is_empty());
+    }
+
+    #[test]
+    fn clear_removes_every_session() {
+        let (alice_id, bob_id) = (identity(), identity());
+        let (mut alice, mut bob) = (SessionManager::new(), SessionManager::new());
+        complete(&mut alice, &alice_id, &mut bob, &bob_id);
+        alice.clear();
+        assert!(alice.established_peers().is_empty());
+    }
+}

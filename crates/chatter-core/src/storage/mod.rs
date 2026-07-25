@@ -6,12 +6,15 @@ pub mod blob_stream;
 pub mod cache;
 pub mod database;
 pub mod key_store;
+pub mod mesh_identity_store;
+pub mod mesh_store;
 pub mod migrations;
 pub mod repositories;
 pub mod serialization;
 
 pub use database::Database;
 pub use key_store::KeyStore;
+pub use mesh_identity_store::MeshIdentityStore;
 pub use repositories::AttachmentRepository;
 pub use repositories::ChannelRepository;
 pub use repositories::DraftRepository;
