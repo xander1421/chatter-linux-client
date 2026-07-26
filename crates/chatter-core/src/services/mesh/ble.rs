@@ -356,13 +356,34 @@ impl BleRuntime {
         let now_s = now_secs();
         let local = self.identity.peer_id();
         let claimed = PeerId::from_bytes(&packet.sender_id);
-        let solicited = self.gossip.is_valid_response(&claimed, packet.is_rsr, now_s);
+        let bound = self.state.with(|state| state.links.peer_for(link).cloned());
+
+        // Which peer's outstanding request this could be answering.
+        //
+        // For a sync response that is the peer on the *link* — the one that
+        // forwarded it — not the ID stamped on the packet. A gossip response
+        // carries another peer's packet verbatim, so its sender is the original
+        // author and can be anybody, including us. Asking "do we have a request
+        // out to the author" therefore answered a question nobody had, and every
+        // response was rejected as unsolicited: the guard names the link peer in
+        // its rejection while this had computed the answer for the author.
+        //
+        // `IngressGuard::evaluate` picks the same peer for the same reason and
+        // passes it to the closure below; the closure cannot use it directly only
+        // because `self.gossip` may not be borrowed inside `self.state.with`.
+        let validation_peer = if packet.is_rsr {
+            bound.clone().unwrap_or_else(|| claimed.clone())
+        } else {
+            claimed.clone()
+        };
+        let solicited = self
+            .gossip
+            .is_valid_response(&validation_peer, packet.is_rsr, now_s);
 
         // Copied out so the closure below borrows only the state, not the whole
         // runtime.
         let guard = self.guard;
         let accepted = self.state.with(|state| {
-            let bound = state.links.peer_for(link).cloned();
             guard.evaluate(
                 IngressInput {
                     packet: &packet,
