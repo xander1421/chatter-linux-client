@@ -508,6 +508,13 @@ impl BleRuntime {
         });
 
         self.emit_peers();
+        tracing::debug!(
+            target: "mesh::ble",
+            peer = %claimed,
+            nickname = %announcement.nickname,
+            new_peer = is_new,
+            "announce accepted"
+        );
 
         // Hand over any mail we are carrying for them.
         //
@@ -943,8 +950,20 @@ impl BleRuntime {
             Some(capabilities),
             self.config.bridge_geohash.clone(),
         );
-        let Ok(payload) = announcement.encode() else {
-            return;
+        let payload = match announcement.encode() {
+            Ok(payload) => payload,
+            Err(error) => {
+                // Silent before. An announce that cannot be encoded means this
+                // device is invisible to every peer forever, which is the single
+                // worst failure the mesh has and deserves to be loud.
+                tracing::error!(
+                    target: "mesh::ble",
+                    %error,
+                    nickname = %nickname,
+                    "the announce could not be encoded; this device is invisible"
+                );
+                return;
+            }
         };
 
         let mut packet = self.build_packet(
@@ -1052,6 +1071,27 @@ impl BleRuntime {
             });
             return;
         }
+
+        if plan.selected.is_empty() {
+            // Not an error — a broadcast with no links yet is normal on a quiet
+            // mesh. Logged because the alternative is indistinguishable from a
+            // packet that went out and was ignored, and telling those two apart
+            // is most of what bringing up a second device consists of.
+            tracing::debug!(
+                target: "mesh::ble",
+                msg_type = packet.msg_type,
+                links = self.state.link_candidates().len(),
+                "nothing to write to; packet not sent"
+            );
+            return;
+        }
+        tracing::debug!(
+            target: "mesh::ble",
+            msg_type = packet.msg_type,
+            links = plan.selected.len(),
+            frames = frames.len(),
+            "writing"
+        );
 
         let priority = planner::priority(packet);
         let write_priority = chatter_mesh_link::backpressure::WritePriority {
