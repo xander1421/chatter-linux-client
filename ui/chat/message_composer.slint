@@ -767,10 +767,19 @@ export component MessageComposer inherits Rectangle {
                 }
             }
 
-            // Attachment button — absent in a mesh conversation. The bitchat
-            // wire protocol carries no file transfer, so an attach button
-            // there would be an offer the transport cannot keep.
-            if MeshGlobal.active-id == "": Rectangle {
+            // Attachment button.
+            //
+            // Present in the mesh room and in a cell, absent in a mesh DM. The
+            // bitchat protocol does carry file transfer (`FileTransfer = 0x22`,
+            // plus our streamed chunking on top), so hiding it everywhere in the
+            // mesh — as this did while the feature was unimplemented — now
+            // withholds something that works.
+            //
+            // A mesh DM is the exception and stays without it: a file packet is
+            // cleartext, every mesh DM is Noise-sealed, and core refuses a
+            // directed file for exactly that reason. Offering the button there
+            // would be an offer the transport declines.
+            if MeshGlobal.active-id == "" || MeshGlobal.active-kind != "dm": Rectangle {
                 width: 36px;
                 height: 36px;
                 background: attachment-touch.has-hover ? Colors.surface-hover : transparent;

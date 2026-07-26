@@ -89,12 +89,24 @@ pub(crate) fn update_attachments_ui(chat_state: &ChatState, weak: &Weak<MainWind
     });
 }
 
-pub(crate) fn wire_attachment_clicked(window: &MainWindow, chat_state: ChatState) {
+pub(crate) fn wire_attachment_clicked(
+    window: &MainWindow,
+    chat_state: ChatState,
+    ui_ctx: &std::sync::Arc<chatter_core::client::ChatterClient>,
+) {
     let weak_window = window.as_weak();
+    // Only the mesh interception below consumes this; without the feature the
+    // whole path is the ordinary staging one.
+    #[cfg(feature = "mesh")]
+    let ui_ctx_attach = ui_ctx.clone();
+    #[cfg(not(feature = "mesh"))]
+    let _ = ui_ctx;
 
     window.on_attachment_clicked(move || {
         let weak = weak_window.clone();
         let chat_state = chat_state.clone();
+        #[cfg(feature = "mesh")]
+        let ui_ctx_attach = ui_ctx_attach.clone();
         tracing::debug!("Attachment clicked");
 
         // Check if we have an active conversation BEFORE opening file picker
@@ -107,6 +119,14 @@ pub(crate) fn wire_attachment_clicked(window: &MainWindow, chat_state: ChatState
 
         if matches!(conversation, ActiveConversation::None) {
             tracing::warn!("Cannot upload: no active conversation selected");
+            return;
+        }
+
+        // A mesh file is fragmented onto the radio, never uploaded, and never
+        // staged — staging exists for a later send with text attached. Intercept
+        // before any of that, the same way a mesh text send does.
+        #[cfg(feature = "mesh")]
+        if crate::bin_ui::features::mesh::intercept_attachment(&ui_ctx_attach, weak.clone()) {
             return;
         }
 

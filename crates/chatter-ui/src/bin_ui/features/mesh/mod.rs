@@ -28,9 +28,11 @@
 //! glyphs, and nothing else. [`core_api`] is the single seam.
 
 pub mod core_api;
+mod attach;
 mod conversation;
 mod send;
 
+pub use attach::intercept_attachment;
 pub use conversation::open;
 pub use send::intercept_send;
 
