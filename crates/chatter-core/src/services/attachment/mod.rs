@@ -29,6 +29,44 @@ use crate::storage::repositories::AttachmentRepository;
 // Submodules add impl blocks to AttachmentService
 // No re-exports needed - methods are on the struct
 
+/// The shared HTTP client for presigned CDN transfers.
+///
+/// Every direct CDN request used to build its own `reqwest::Client::new()`, with
+/// no deadline of any kind. Against an unreachable or black-holing storage host
+/// that hung forever, and one of those hangs was permanent from the user's side:
+/// `handle_download_attachment` persists `AttachmentStatus::Downloading` before
+/// spawning, and the click handler refuses to start a download that is already
+/// "in progress" — so a single tap while the server was gone left that
+/// attachment un-openable and un-retryable across restarts. A request that can
+/// fail is what lets that state clear.
+///
+/// The bounds are deliberately not an overall request timeout: attachments are
+/// large, a slow link is not a broken one, and a whole-request deadline would
+/// cancel honest transfers. Instead:
+///
+/// * `connect_timeout` bounds finding the host at all — the offline case.
+/// * `read_timeout` bounds the gap *between* bytes, so a transfer that is
+///   progressing is never interrupted but a stalled one is.
+///
+/// One shared client, also because `reqwest::Client::new()` per request threw
+/// away the connection pool and TLS session cache on every call.
+fn cdn_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(15))
+            .read_timeout(std::time::Duration::from_secs(60))
+            .build()
+            // A builder failure here is a TLS/config problem, not a network one,
+            // and there is no meaningful degraded mode — fall back to the
+            // unbounded default rather than take the process down over it.
+            .unwrap_or_else(|error| {
+                tracing::error!(%error, "could not build the CDN HTTP client; using defaults");
+                reqwest::Client::new()
+            })
+    })
+}
+
 /// Attachment service errors.
 #[derive(Debug, Error)]
 pub enum AttachmentError {
@@ -260,7 +298,7 @@ impl AttachmentService {
                 .map_err(AttachmentError::NetworkError);
         }
 
-        let response = reqwest::Client::new()
+        let response = cdn_client()
             .get(url)
             .send()
             .await
@@ -299,7 +337,7 @@ impl AttachmentService {
         }
 
         let content_length = body.len();
-        let response = reqwest::Client::new()
+        let response = cdn_client()
             .put(url)
             .header("Content-Type", content_type)
             .header("Content-Length", content_length)

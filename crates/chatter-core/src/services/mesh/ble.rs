@@ -28,6 +28,7 @@ use chatter_mesh::relay::{self, RelayInput};
 use chatter_mesh::tlv::announce::AnnouncementPacket;
 use chatter_mesh::tlv::capabilities::PeerCapabilities;
 use chatter_mesh::tlv::courier_envelope::CourierEnvelope;
+use chatter_mesh::tlv::file::BitchatFilePacket;
 use chatter_mesh::tlv::private_message::PrivateMessagePacket;
 use chatter_mesh::tlv::request_sync::RequestSyncPacket;
 use chatter_mesh_link::backpressure::{
@@ -55,7 +56,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use super::config::MeshConfig;
 use super::events::{MeshEvent, MeshMessage};
 use super::glue::SharedStorage;
-use super::mapping::{InboundMessage, MeshConversation, outbound_message};
+use super::mapping::{self, InboundMessage, MeshConversation, outbound_message};
 use super::router::{RouterCommand, RouterHandle};
 use super::state::{MeshState, NostrState, link_candidates_locked, now_millis, now_secs};
 use super::timeline::MeshEvents;
@@ -504,10 +505,11 @@ impl BleRuntime {
             Some(MessageType::NoiseEncrypted) => self.on_encrypted(link, packet, claimed).await,
             Some(MessageType::CourierEnvelope) => self.on_courier_envelope(packet, claimed),
             Some(MessageType::RequestSync) => self.on_request_sync(packet, claimed).await,
-            // File transfer, boards, groups, voice and prekey bundles were
-            // deferred from P0. Not handling them is right; not *relaying* them
-            // would partition every peer that does implement them, so the relay
-            // decision in `on_packet` still runs.
+            Some(MessageType::FileTransfer) => self.on_file_transfer(packet, claimed),
+            // Boards, groups, voice and prekey bundles were deferred from P0.
+            // Not handling them is right; not *relaying* them would partition
+            // every peer that does implement them, so the relay decision in
+            // `on_packet` still runs.
             _ => {}
         }
     }
@@ -770,6 +772,182 @@ impl BleRuntime {
         })));
     }
 
+    /// A file, image or voice note broadcast into the mesh room.
+    ///
+    /// Every gate below is [`on_public_message`](Self::on_public_message)'s, and
+    /// that is deliberate rather than copied by accident: the two carry the same
+    /// authentication problem. A broadcast's `sender_id` is a header field the
+    /// sender chose, so registry membership is not proof of identity — only a
+    /// signature that verifies against the key an announce established is.
+    /// bitchat reaches the same conclusion in the same words and for a concrete
+    /// reason: without it "a peer that observed a public voice burst could spoof
+    /// a broadcast `voice_<burstID>.m4a` note under the talker's ID and overwrite
+    /// the signature-verified live bubble with attacker audio"
+    /// (`BLEFileTransferHandler.swift`, `resolveSenderNickname`).
+    ///
+    /// What is *not* ported is bitchat's MIME allowlist and magic-byte check
+    /// (`BLEIncomingFileValidator`). Those exist to protect a decoder, and
+    /// nothing here decodes: the bytes are encrypted and stored, never parsed.
+    /// Whatever eventually renders them will need that check, and this is the
+    /// layer to put it in.
+    fn on_file_transfer(&mut self, packet: &BitchatPacket, claimed: &PeerId) {
+        // Directed file transfers are refused, where bitchat delivers one as a
+        // private message (`BLEFileTransferPolicy.deliveryPlan`). A directed
+        // `FileTransfer` is a file in the clear addressed to one peer, and this
+        // client's private traffic is Noise-encrypted without exception —
+        // accepting it would put an unencrypted file in a DM and teach the UI
+        // that a DM can arrive unencrypted. `on_public_message` refuses the
+        // legacy directed `Message` for exactly this reason. Relaying is
+        // untouched: a peer that does implement directed files must not be
+        // partitioned by our refusal.
+        if !packet.is_broadcast() {
+            return;
+        }
+        let Ok(file) = BitchatFilePacket::decode(&packet.payload) else {
+            return;
+        };
+
+        let sender = claimed.clone();
+        // A file we sent ourselves, recovered from a peer's gossip archive. The
+        // ingress guard admits a self-authored TTL-0 sync response on purpose, so
+        // this reaches us and has to be handled rather than dropped.
+        let is_self = sender == self.identity.peer_id();
+        // One of our own broadcasts flooded or synced straight back. We stored
+        // and showed it when it was composed, so this copy is a duplicate — and
+        // a worse one than a duplicate text message, because storing it again
+        // would write a *second encrypted copy of the bytes* to disk under a new
+        // attachment id. bitchat suppresses the same case as
+        // `BLEFileTransferPolicy.isSelfEcho`.
+        if is_self && self.state.with(|state| state.self_broadcasts.contains(packet)) {
+            tracing::debug!(
+                target: "mesh::ble",
+                "our own file came back; already stored"
+            );
+            return;
+        }
+        let (signing_key, nickname, verified) = if is_self {
+            // Verified against our own key, because we are deliberately not in
+            // our own peer registry — see `on_announce`.
+            (
+                self.identity.signing_public(),
+                self.config.nickname.clone(),
+                true,
+            )
+        } else {
+            let known = self.state.with(|state| {
+                state.peers.info(&sender).map(|peer| {
+                    (
+                        peer.signing_public_key.clone(),
+                        peer.nickname.clone(),
+                        peer.verified_nickname,
+                    )
+                })
+            });
+            let Some((Some(key), nickname, verified)) = known else {
+                // No announce from this peer, or one that carried no signing
+                // key: there is nothing to check the signature against, so the
+                // file is unattributable. bitchat drops it here too, as
+                // "file transfer from unverified or unknown peer".
+                tracing::debug!(
+                    target: "mesh::ble",
+                    peer = %sender,
+                    "file transfer from an unknown or unverified peer dropped"
+                );
+                return;
+            };
+            let Ok(key) = <[u8; 32]>::try_from(key.as_slice()) else {
+                return;
+            };
+            (key, nickname, verified)
+        };
+        if !verify_packet(packet, &signing_key) {
+            tracing::debug!(
+                target: "mesh::ble",
+                peer = %sender,
+                "file transfer with missing or invalid signature dropped",
+            );
+            return;
+        }
+
+        // No message ID on the wire, so it is derived from the packet — the same
+        // derivation a public message uses, which is what collapses the copies
+        // arriving by different paths onto one row.
+        let wire_id = MessageDeduplicator::dedup_key(packet);
+        // Already have it. The dedup set in `on_packet` catches the flood, but the
+        // gossip archive exists to hand public packets back *after* that window
+        // has closed — and a file cannot be stored idempotently the way a text
+        // message can, because its bytes go to disk before the row that would
+        // have been ignored. See `MeshTimeline::already_stored`.
+        match self.events.already_stored(&wire_id) {
+            Ok(true) => {
+                tracing::debug!(
+                    target: "mesh::ble",
+                    peer = %sender,
+                    "a file already on disk arrived again; not stored twice"
+                );
+                return;
+            }
+            Ok(false) => {}
+            Err(error) => {
+                // Store anyway rather than dropping the file over a read failure:
+                // a duplicate copy is recoverable, a discarded one is not.
+                tracing::warn!(
+                    target: "mesh::ble",
+                    %error,
+                    "could not check whether this file is already stored"
+                );
+            }
+        }
+
+        // Stored before the event exists, because the row the event carries names
+        // the attachment by id. A failure here is loud: the packet is off the air,
+        // its dedup entry is already recorded, and nothing retransmits — so this
+        // is a file the user will never be offered again.
+        let attachment = match self.events.store_file(
+            file.file_name.as_deref(),
+            file.mime_type.as_deref(),
+            &file.content,
+        ) {
+            Ok(attachment) => attachment,
+            Err(error) => {
+                tracing::error!(
+                    target: "mesh::ble",
+                    %error,
+                    peer = %sender,
+                    bytes = file.content.len(),
+                    "an inbound mesh file could not be stored; it is lost"
+                );
+                self.degraded(format!("a file from {nickname} could not be saved: {error}"));
+                return;
+            }
+        };
+
+        tracing::info!(
+            target: "mesh::ble",
+            peer = %sender,
+            nickname = %nickname,
+            bytes = file.content.len(),
+            name = ?file.file_name,
+            mime = ?file.mime_type,
+            is_self,
+            "file transfer received"
+        );
+        self.events.send(MeshEvent::Message(Box::new(MeshMessage {
+            message: mapping::inbound_file_message(
+                &MeshConversation::Room,
+                &wire_id,
+                &sender,
+                attachment,
+                packet.timestamp,
+            ),
+            conversation: MeshConversation::Room,
+            sender,
+            nickname,
+            is_local: is_self,
+            sender_verified: verified,
+        })));
+    }
+
     async fn on_handshake(&mut self, packet: &BitchatPacket, claimed: &PeerId) {
         let local = self.identity.peer_id();
         let identity = Arc::clone(&self.identity);
@@ -963,6 +1141,9 @@ impl BleRuntime {
                 message_id,
                 content,
             } => self.broadcast_public(&message_id, &content).await,
+            BleCommand::FileTransfer { message_id, file } => {
+                self.broadcast_file(&message_id, &file).await
+            }
         }
     }
 
@@ -1092,6 +1273,89 @@ impl BleRuntime {
         );
         self.events.send(MeshEvent::Message(Box::new(MeshMessage {
             message,
+            conversation: MeshConversation::Room,
+            sender: local,
+            nickname,
+            is_local: true,
+            sender_verified: true,
+        })));
+    }
+
+    /// Put a file on the air for the mesh room.
+    ///
+    /// The counterpart of [`broadcast_public`](Self::broadcast_public), and
+    /// deliberately shaped the same way: build, sign, remember as our own,
+    /// transmit, then mirror locally — because the mesh has no server echo, so
+    /// the local copy *is* the message.
+    pub async fn broadcast_file(&mut self, message_id: &str, file: &BitchatFilePacket) {
+        let now_ms = now_millis();
+        let nickname = self.config.nickname.clone();
+        let payload = match file.encode() {
+            Ok(payload) => payload,
+            Err(error) => {
+                // Only reachable above `MAX_PAYLOAD_BYTES`, which the service
+                // already refused, so this is a bug rather than a user error —
+                // and returning quietly would leave the user's row holding a
+                // delivery state for a packet that never existed.
+                tracing::error!(
+                    target: "mesh::ble",
+                    %error,
+                    bytes = file.content.len(),
+                    "a file transfer could not be encoded; nothing was sent"
+                );
+                return;
+            }
+        };
+        let packet = self.build_packet(
+            MessageType::FileTransfer,
+            None,
+            payload,
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        // Signed, because the receiver requires it: `on_file_transfer` drops an
+        // unsigned broadcast before it looks at the content, exactly as the
+        // public-message path does.
+        let packet = self.maybe_sign(packet, true);
+        // Remember it, so the copy that floods back is recognised as ours rather
+        // than stored a second time under a new attachment id.
+        self.state
+            .with(|state| state.self_broadcasts.record(message_id, &packet, now_ms));
+        self.transmit(&packet, None, None).await;
+
+        // Our own copy, stored the same way an inbound one is. Without it the row
+        // would name an attachment that does not exist, and the sender would be
+        // the only person on the mesh who cannot open what they just sent.
+        let attachment = match self.events.store_file(
+            file.file_name.as_deref(),
+            file.mime_type.as_deref(),
+            &file.content,
+        ) {
+            Ok(attachment) => attachment,
+            Err(error) => {
+                // The packet is already away, so the file did reach the room.
+                // Only our own record of it is missing, and saying so is better
+                // than a row pointing at nothing.
+                tracing::error!(
+                    target: "mesh::ble",
+                    %error,
+                    "a sent mesh file could not be stored locally"
+                );
+                self.degraded(format!(
+                    "the file was sent, but this device could not keep a copy: {error}"
+                ));
+                return;
+            }
+        };
+
+        let local = self.identity.peer_id();
+        self.events.send(MeshEvent::Message(Box::new(MeshMessage {
+            message: mapping::outbound_file_message(
+                &MeshConversation::Room,
+                message_id,
+                &local,
+                attachment,
+                now_ms,
+            ),
             conversation: MeshConversation::Room,
             sender: local,
             nickname,
@@ -1696,17 +1960,34 @@ async fn transmit_forwarded(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::mesh::events::MeshDelivery;
     use crate::services::mesh::mock::MockLink;
     use chatter_mesh_store::MemoryStorage;
     use chatter_mesh_store::storage::Storage;
     use rand_core_06::OsRng;
 
     fn runtime() -> (BleRuntime, Arc<MockLink>, Arc<MeshState>) {
+        let (runtime, radio, state, _timeline) = runtime_parts();
+        (runtime, radio, state)
+    }
+
+    /// The same runtime, with the timeline it stores through.
+    ///
+    /// Only the file tests need it: a file has to be readable back out of the
+    /// store to prove anything, because unlike a text message the row is only a
+    /// pointer to bytes that landed somewhere else.
+    fn runtime_parts() -> (
+        BleRuntime,
+        Arc<MockLink>,
+        Arc<MeshState>,
+        Arc<crate::services::mesh::timeline::MeshTimeline>,
+    ) {
         let radio = MockLink::shared();
         let identity = Arc::new(MeshIdentity::generate(&mut OsRng));
         let state = Arc::new(MeshState::new(identity.peer_id()));
         let nostr_state = Arc::new(NostrState::new());
-        let events = MeshEvents::new(64, crate::services::mesh::timeline::temp_timeline());
+        let timeline = crate::services::mesh::timeline::temp_timeline();
+        let events = MeshEvents::new(64, Arc::clone(&timeline));
         let storage = SharedStorage::new(Arc::new(MemoryStorage::new()) as Arc<dyn Storage>);
         let router = Arc::new(RouterHandle::spawn(super::super::router::RouterDeps {
             state: Arc::clone(&state),
@@ -1730,7 +2011,62 @@ mod tests {
             router,
             storage,
         );
-        (runtime, radio, state)
+        (runtime, radio, state, timeline)
+    }
+
+    /// A peer in the registry with a known signing key, as a verified announce
+    /// would have left it. Returns the identity that has to sign for it.
+    fn register_verified_peer(
+        state: &MeshState,
+        peer: &PeerId,
+        nickname: &str,
+    ) -> MeshIdentity {
+        let identity = MeshIdentity::generate(&mut OsRng);
+        let announcement = AnnouncementPacket::new(
+            nickname.to_string(),
+            identity.static_public().to_vec(),
+            identity.signing_public().to_vec(),
+            None,
+            None,
+            None,
+        );
+        state.with(|inner| {
+            inner
+                .peers
+                .upsert_verified_announce(peer, &announcement, true, now_millis());
+        });
+        identity
+    }
+
+    /// One file transfer on the wire, optionally signed.
+    fn file_packet(
+        sender: &PeerId,
+        identity: &MeshIdentity,
+        file: &BitchatFilePacket,
+        recipient: Option<&PeerId>,
+        sign: bool,
+    ) -> BitchatPacket {
+        let mut packet = BitchatPacket::new(
+            MessageType::FileTransfer,
+            sender.to_routing_bytes().expect("routing bytes"),
+            recipient.and_then(PeerId::to_routing_bytes),
+            now_millis(),
+            file.encode().expect("encodes"),
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        if sign {
+            packet.signature = Some(sign_packet(identity, &packet).expect("signs"));
+        }
+        packet
+    }
+
+    fn sample_file() -> BitchatFilePacket {
+        BitchatFilePacket::new(
+            Some("note.txt".to_string()),
+            None,
+            Some("text/plain".to_string()),
+            b"the contents".to_vec(),
+        )
     }
 
     struct NoopSealer;
@@ -2130,5 +2466,277 @@ mod tests {
             !writes[0].1.windows(6).any(|w| w == b"secret"),
             "plaintext must never reach the wire"
         );
+    }
+
+    #[tokio::test]
+    async fn a_file_from_a_verified_peer_is_stored_and_reachable_from_its_row() {
+        // A file's row is only a pointer: unlike a text message, "it arrived"
+        // and "its bytes are somewhere the user can open" are two claims, and
+        // the second is the one that makes the feature exist.
+        let (mut runtime, _radio, state, timeline) = runtime_parts();
+        let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
+        let identity = register_verified_peer(&state, &sender, "wanderer");
+        let mut events = runtime.events.subscribe();
+
+        let file = sample_file();
+        let packet = file_packet(&sender, &identity, &file, None, true);
+        runtime.on_file_transfer(&packet, &sender);
+
+        let attachment = match events.try_recv() {
+            Ok(MeshEvent::Message(message)) => {
+                assert!(!message.is_local, "someone else's file is not ours");
+                assert_eq!(message.conversation, MeshConversation::Room);
+                assert!(
+                    message.sender_verified,
+                    "the signature verified, so the sender is verified"
+                );
+                assert_eq!(
+                    mapping::text_of(&message.message),
+                    None,
+                    "a file has no text body; `Mixed` with no text is the point"
+                );
+                let attachments = mapping::attachments_of(&message.message);
+                assert_eq!(attachments.len(), 1, "one file, one attachment");
+                attachments[0]
+            }
+            other => panic!("expected the file, got {other:?}"),
+        };
+
+        // The row survived the store, still naming the same attachment — the
+        // event and the durable copy must not disagree about which bytes the
+        // message is.
+        let history = timeline
+            .history(&MeshConversation::Room, None, 10)
+            .expect("history");
+        assert_eq!(history.len(), 1);
+        assert_eq!(mapping::attachments_of(&history[0]), [attachment]);
+
+        // And the bytes are really on disk, where the existing attachment read
+        // path looks for them.
+        let path = crate::services::attachment::attachment_file_path(&attachment);
+        assert!(path.exists(), "the content has to be at {}", path.display());
+        assert_ne!(
+            std::fs::read(&path).expect("readable"),
+            file.content,
+            "a mesh file lands encrypted, like every other attachment — the \
+             bytes sit outside SQLCipher, so storing them in the clear would \
+             leave mesh files the one thing in this app lying open on disk"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_same_file_arriving_again_does_not_store_a_second_copy() {
+        // The dedup set in `on_packet` catches the flood, but the gossip archive
+        // exists to hand public packets back after that window closes. A text
+        // message re-arriving is free — `record` is idempotent on the message ID.
+        // A file is not: its bytes go to disk *before* the row, so storing first
+        // and letting the row be ignored leaves an encrypted megabyte nothing
+        // references, and shows the user an attachment the stored row never had.
+        let (mut runtime, _radio, state, timeline) = runtime_parts();
+        let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
+        let identity = register_verified_peer(&state, &sender, "wanderer");
+        let packet = file_packet(&sender, &identity, &sample_file(), None, true);
+
+        runtime.on_file_transfer(&packet, &sender);
+        let first = timeline
+            .history(&MeshConversation::Room, None, 10)
+            .expect("history");
+        assert_eq!(first.len(), 1);
+        let stored = mapping::attachments_of(&first[0]).to_vec();
+
+        // The same packet, arriving by another path with the dedup entry gone.
+        let mut events = runtime.events.subscribe();
+        runtime.on_file_transfer(&packet, &sender);
+
+        assert!(
+            events.try_recv().is_err(),
+            "the second arrival must produce no row and no event"
+        );
+        let after = timeline
+            .history(&MeshConversation::Room, None, 10)
+            .expect("history");
+        assert_eq!(after.len(), 1);
+        assert_eq!(
+            mapping::attachments_of(&after[0]),
+            stored.as_slice(),
+            "still pointing at the copy that was stored the first time"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unsigned_file_transfer_is_dropped() {
+        // The security gate, and the reason this handler exists rather than a
+        // `_ => {}`. A broadcast's `sender_id` is a header field the sender
+        // picked, so without a signature that verifies against the key their
+        // announce established, anybody in range publishes files under anybody's
+        // name. bitchat names the concrete attack: a peer that overheard a public
+        // voice burst spoofing a broadcast note under the talker's ID to
+        // overwrite their signature-verified bubble with attacker audio.
+        let (mut runtime, _radio, state, timeline) = runtime_parts();
+        let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
+        let identity = register_verified_peer(&state, &sender, "wanderer");
+        let mut events = runtime.events.subscribe();
+
+        let packet = file_packet(&sender, &identity, &sample_file(), None, false);
+        runtime.on_file_transfer(&packet, &sender);
+
+        assert!(
+            events.try_recv().is_err(),
+            "an unsigned file must not reach the room"
+        );
+        assert!(
+            timeline
+                .history(&MeshConversation::Room, None, 10)
+                .expect("history")
+                .is_empty(),
+            "and nothing about it may reach disk"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_file_from_a_peer_that_never_announced_is_dropped() {
+        // A signature is only worth something against a key we obtained
+        // independently. With no announce there is nothing to check against, so
+        // a self-signed packet would otherwise authenticate itself.
+        let (mut runtime, _radio, _state, timeline) = runtime_parts();
+        let stranger = PeerId::from_str("cccccccccccccccc");
+        let identity = MeshIdentity::generate(&mut OsRng);
+
+        let packet = file_packet(&stranger, &identity, &sample_file(), None, true);
+        let mut events = runtime.events.subscribe();
+        runtime.on_file_transfer(&packet, &stranger);
+
+        assert!(
+            events.try_recv().is_err(),
+            "a validly-signed file from an unknown key is still unattributable"
+        );
+        assert!(
+            timeline
+                .history(&MeshConversation::Room, None, 10)
+                .expect("history")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn our_own_file_coming_straight_back_is_not_stored_twice() {
+        // Worse than the duplicate row a returning text message produces: a
+        // second pass through `store_file` writes a *second encrypted copy of
+        // the bytes* under a new attachment id, so every echo of a 1 MiB file
+        // would cost another megabyte of disk.
+        let (mut runtime, radio, state, timeline) = runtime_parts();
+        let local = runtime.identity.peer_id();
+        let link = LinkId::new("/mock/out");
+        state.with(|inner| {
+            inner.links.link_up(link.clone(), LinkRole::Central);
+            inner.links.set_writable(&link, true);
+            inner.max_write.insert(link.clone(), 512);
+        });
+        let mut events = runtime.events.subscribe();
+
+        runtime.broadcast_file("MSG-F1", &sample_file()).await;
+        let packet = codec::decode(&radio.writes()[0].1).expect("decodable");
+        assert_eq!(packet.message_type(), Some(MessageType::FileTransfer));
+        // The local mirror: the row the sender is already looking at.
+        let sent = match events.try_recv() {
+            Ok(MeshEvent::Message(message)) => {
+                assert!(message.is_local);
+                assert_eq!(
+                    message.message.delivery_status,
+                    MeshDelivery::Broadcast.as_str(),
+                    "nobody acknowledges a room file, so \"sent\" would be a \
+                     one-to-one word for something with no recipient"
+                );
+                mapping::attachments_of(&message.message).to_vec()
+            }
+            other => panic!("expected the local mirror, got {other:?}"),
+        };
+        assert_eq!(sent.len(), 1);
+
+        runtime.on_file_transfer(&packet, &local);
+
+        assert!(
+            events.try_recv().is_err(),
+            "our own file returning must not produce a second row"
+        );
+        let history = timeline
+            .history(&MeshConversation::Room, None, 10)
+            .expect("history");
+        assert_eq!(history.len(), 1, "one row");
+        assert_eq!(
+            mapping::attachments_of(&history[0]),
+            sent.as_slice(),
+            "and one copy of the bytes, still the first one"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_file_addressed_to_us_alone_is_not_accepted_in_the_clear() {
+        // bitchat delivers a directed `FileTransfer` as a private message
+        // (`BLEFileTransferPolicy.deliveryPlan`). This client will not: the
+        // packet is unencrypted, and every mesh DM here is Noise-sealed, so
+        // showing it in a conversation would teach the UI that private traffic
+        // can arrive in the clear. `on_public_message` refuses the legacy
+        // directed `Message` for the same reason.
+        let (mut runtime, _radio, state, timeline) = runtime_parts();
+        let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
+        let identity = register_verified_peer(&state, &sender, "wanderer");
+        let local = runtime.identity.peer_id();
+        let mut events = runtime.events.subscribe();
+
+        let packet = file_packet(&sender, &identity, &sample_file(), Some(&local), true);
+        runtime.on_file_transfer(&packet, &sender);
+
+        assert!(
+            events.try_recv().is_err(),
+            "a cleartext file addressed to one person is not a mesh DM"
+        );
+        assert!(
+            timeline
+                .history(&MeshConversation::Room, None, 10)
+                .expect("history")
+                .is_empty(),
+            "and it is certainly not a room message"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sent_file_is_signed_and_broadcast_with_the_payload_intact() {
+        let (mut runtime, radio, state, _timeline) = runtime_parts();
+        let link = LinkId::new("/mock/one");
+        state.with(|inner| {
+            inner.links.link_up(link.clone(), LinkRole::Central);
+            inner.links.set_writable(&link, true);
+            inner.max_write.insert(link.clone(), 512);
+        });
+
+        let file = sample_file();
+        runtime.broadcast_file("MSG-F1", &file).await;
+
+        let writes = radio.writes();
+        assert_eq!(writes.len(), 1);
+        let packet = codec::decode(&writes[0].1).expect("decodable");
+        assert_eq!(packet.message_type(), Some(MessageType::FileTransfer));
+        assert!(
+            packet.recipient_id.is_none(),
+            "\"everyone\" is encoded by omitting the recipient"
+        );
+        assert!(
+            verify_packet(&packet, &runtime.identity.signing_public()),
+            "an unsigned file transfer is dropped by the receiver before its \
+             payload is read"
+        );
+        let decoded = BitchatFilePacket::decode(&packet.payload).expect("payload decodes");
+        assert_eq!(decoded.content, file.content);
+        assert_eq!(decoded.file_name.as_deref(), Some("note.txt"));
+        assert_eq!(
+            decoded.file_size,
+            Some(file.content.len() as u64),
+            "the declared size has to match the bytes, or the receiver rejects it"
+        );
+
+        // The echo of our own file must be recognisable, or it comes back and is
+        // stored a second time.
+        assert!(state.with(|inner| inner.self_broadcasts.contains(&packet)));
     }
 }

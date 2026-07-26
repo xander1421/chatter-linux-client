@@ -210,7 +210,7 @@ impl AttachmentService {
                     .map_err(|e| AttachmentError::FileError(format!("Failed to open temp file: {}", e)))?;
                 let stream = tokio_util::io::ReaderStream::new(encrypted_file);
                 let body = reqwest::Body::wrap_stream(stream);
-                let response = reqwest::Client::new()
+                let response = super::cdn_client()
                     .put(&upload_url)
                     .header("Content-Type", "application/octet-stream")
                     .header("Content-Length", encrypt_result.ciphertext_size)

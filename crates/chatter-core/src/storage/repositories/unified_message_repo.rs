@@ -321,6 +321,35 @@ impl UnifiedMessageRepository {
     /// believes it worked.
     ///
     /// Returns the number of rows removed.
+    /// Every message of one conversation type.
+    ///
+    /// The sibling of [`delete_by_conversation_type`](Self::delete_by_conversation_type),
+    /// and it exists for the same caller: a panic wipe has to know what it is
+    /// about to destroy before it destroys it. Mesh messages can carry
+    /// attachments whose bytes live *outside* the database, so deleting the rows
+    /// first would orphan the files with no way left to find them.
+    ///
+    /// Unbounded on purpose. A caller that is about to delete all of these can
+    /// afford to hold them, and a limit here would silently spare whatever fell
+    /// past it — which for a panic wipe is the worst possible failure.
+    pub fn list_by_conversation_type(
+        &self,
+        conversation_type: &crate::domain::message::ConversationType,
+    ) -> Result<Vec<Message>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM messages WHERE conversation_type = ?1",
+            MSG_COLS
+        ))?;
+        let rows = stmt.query_map(params![conversation_type.as_str()], row_to_message)?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        Ok(out)
+    }
+
     pub fn delete_by_conversation_type(
         &self,
         conversation_type: &crate::domain::message::ConversationType,

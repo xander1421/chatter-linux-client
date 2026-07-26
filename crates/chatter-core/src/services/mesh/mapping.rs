@@ -23,8 +23,8 @@
 use chatter_mesh::ids::PeerId;
 use uuid::Uuid;
 
-use crate::domain::ids::{ChannelId, MessageId, UserId};
-use crate::domain::message::{ConversationType, Message, MessageContent};
+use crate::domain::ids::{AttachmentId, ChannelId, MessageId, UserId};
+use crate::domain::message::{ConversationType, Message, MessageContent, MixedContent};
 
 use super::events::MeshDelivery;
 
@@ -219,6 +219,68 @@ pub fn outbound_message(
     message
 }
 
+/// The row for a message whose body is a file rather than text.
+///
+/// [`MessageContent::Mixed`] with no text is how a message carries an attachment
+/// and nothing else, which is why this cannot go through
+/// [`InboundMessage::to_domain`] or [`outbound_message`]: both of those hold the
+/// body as a `String`, and a file has no string form. Everything else — the
+/// derived conversation, the derived sender, the wire message ID — is identical,
+/// so a file and a text message from the same peer land in the same
+/// conversation and dedup the same way.
+fn file_row(
+    conversation: &MeshConversation,
+    wire_id: &str,
+    sender: &PeerId,
+    attachment: AttachmentId,
+    timestamp_ms: u64,
+) -> Message {
+    let mut message = Message::new_text(
+        conversation.conversation_id(),
+        conversation.conversation_type(),
+        Some(peer_user_id(sender)),
+        String::new(),
+        millis_to_nanos(timestamp_ms),
+    );
+    message.id = wire_message_id(wire_id);
+    message.content =
+        MessageContent::Mixed(MixedContent::attachments_only(vec![attachment]));
+    message
+}
+
+/// A file that arrived from a peer.
+#[must_use]
+pub fn inbound_file_message(
+    conversation: &MeshConversation,
+    wire_id: &str,
+    sender: &PeerId,
+    attachment: AttachmentId,
+    timestamp_ms: u64,
+) -> Message {
+    file_row(conversation, wire_id, sender, attachment, timestamp_ms)
+}
+
+/// A file this device put on the air, mirrored into the timeline immediately.
+///
+/// Carries the broadcast delivery state for the same reason
+/// [`outbound_message`] does: nobody acknowledges a file sent to the room, so
+/// there is no later event to correct it with, and an own message with an empty
+/// status falls through to the converter's one-to-one word "sent".
+#[must_use]
+pub fn outbound_file_message(
+    conversation: &MeshConversation,
+    wire_id: &str,
+    sender: &PeerId,
+    attachment: AttachmentId,
+    timestamp_ms: u64,
+) -> Message {
+    let mut message = file_row(conversation, wire_id, sender, attachment, timestamp_ms);
+    if conversation.is_public() {
+        message.delivery_status = MeshDelivery::Broadcast.as_str().to_string();
+    }
+    message
+}
+
 /// Extract the plain text of a mapped message, for callers that only want the
 /// body back out.
 #[must_use]
@@ -226,6 +288,19 @@ pub fn text_of(message: &Message) -> Option<&str> {
     match &message.content {
         MessageContent::Text(text) => Some(text.as_str()),
         _ => None,
+    }
+}
+
+/// The attachments a mapped message carries.
+///
+/// Empty for a text message rather than `None`: "this message has no files" and
+/// "this message could not have files" are the same answer to every caller that
+/// asks.
+#[must_use]
+pub fn attachments_of(message: &Message) -> &[AttachmentId] {
+    match &message.content {
+        MessageContent::Mixed(mixed) => &mixed.attachment_ids,
+        _ => &[],
     }
 }
 

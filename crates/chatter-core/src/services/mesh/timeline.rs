@@ -33,16 +33,22 @@ use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
 
-use crate::domain::ids::ChannelId;
+use crate::crypto::attachment_crypto::AttachmentCrypto;
+use crate::domain::attachment::{
+    Attachment, AttachmentStatus, ContentLocation, FileMetadata,
+};
+use crate::domain::ids::{AttachmentId, ChannelId};
 use crate::domain::message::{ConversationType, Message};
 use crate::domain::UnifiedConversation;
 use crate::error::StorageError;
+use crate::services::attachment::{attachment_file_path, attachments_dir, ensure_attachments_dir};
 use chatter_mesh::ids::PeerId;
 use crate::storage::repositories::{
-    MeshConversationRepository, MeshDeliveryRepository, MessageRepository,
+    AttachmentRepository, MeshConversationRepository, MeshDeliveryRepository, MessageRepository,
     StoredMeshConversation,
 };
 
+use super::error::MeshError;
 use super::events::{MeshDelivery, MeshEvent, MeshMessage};
 use super::mapping::MeshConversation;
 
@@ -51,6 +57,18 @@ use super::mapping::MeshConversation;
 /// Not user-configurable: every device on the mesh is in the same single room,
 /// so a per-device name would describe nothing.
 const ROOM_LABEL: &str = "#mesh";
+
+/// What a file with no usable name on the wire is called.
+///
+/// Both metadata TLVs are optional in `BitchatFilePacket`, and a nameless row
+/// renders as a blank line rather than as a file.
+const UNNAMED_FILE: &str = "mesh-file";
+
+/// What a file with no MIME type on the wire is called.
+///
+/// `FileCategory::from_mime_and_filename` falls back to the extension, so an
+/// unhelpful type here still categorises correctly when the name is present.
+const DEFAULT_MIME: &str = "application/octet-stream";
 
 /// Status value for a live mesh conversation, matching the `1 = active` the
 /// unified conversation SQL uses for an unarchived channel. A mesh conversation
@@ -128,6 +146,10 @@ pub struct MeshTimeline {
     /// vocabulary. Separate from `messages.delivery_status`, which means
     /// something else — see V060.
     delivery: Arc<MeshDeliveryRepository>,
+    /// Files carried by mesh messages. The same table every other conversation
+    /// type's attachments live in — a mesh file is not a second kind of
+    /// attachment, it just never had a CDN.
+    attachments: Arc<AttachmentRepository>,
 }
 
 impl MeshTimeline {
@@ -137,12 +159,14 @@ impl MeshTimeline {
         messages: Arc<MessageRepository>,
         directory: Arc<MeshConversationRepository>,
         delivery: Arc<MeshDeliveryRepository>,
+        attachments: Arc<AttachmentRepository>,
     ) -> Self {
         let timeline = Self {
             messages,
             open: Mutex::new(HashMap::new()),
             directory,
             delivery,
+            attachments,
         };
         // Restore what was open before the restart. A directory read that fails
         // is logged and tolerated: starting with an empty sidebar is a degraded
@@ -228,6 +252,99 @@ impl MeshTimeline {
         self.register(&event.conversation, nickname);
 
         Ok(stored)
+    }
+
+    /// Whether a message with this wire ID is already on disk.
+    ///
+    /// The file path needs this and the text path does not. [`record`](Self::record)
+    /// is idempotent on the message ID, so a text message that arrives twice
+    /// collapses onto its row for free — but a file's bytes are stored *before*
+    /// the row exists, and the gossip archive exists precisely to hand public
+    /// packets back long after the dedup window that would have caught them on
+    /// the radio. Storing first and letting the row be ignored would leave an
+    /// encrypted copy on disk that nothing references, and emit an event naming
+    /// an attachment the stored row does not have.
+    pub fn already_stored(&self, wire_id: &str) -> Result<bool, StorageError> {
+        Ok(self
+            .messages
+            .get(&super::mapping::wire_message_id(wire_id))?
+            .is_some())
+    }
+
+    /// Persist one mesh file, and hand back the id a message can carry it by.
+    ///
+    /// Used by both directions: a file that arrived over the radio, and the
+    /// sender's own copy of one it just put on the air. Neither has a server
+    /// behind it, so `remote_url` stays `None` — a mesh attachment that claimed
+    /// a CDN key would join the download queue and be retried forever against a
+    /// CDN that never had it.
+    ///
+    /// # Why the filesystem and not `insert_with_content`
+    ///
+    /// `insert_with_content` is one call and puts the bytes straight into the
+    /// SQLCipher blob, which reads like the better fit for a payload capped at
+    /// 1 MiB. It is not: it writes `ContentLocation::InDatabase`, which V019
+    /// records as the legacy location, and every reader left in the tree checks
+    /// for `OnFilesystem` and refuses anything else
+    /// (`services::attachment::crypto`, `has_local_content`). A row written the
+    /// short way would be storage nothing in this client can open. So a mesh
+    /// file is stored exactly as a locally-composed attachment is: encrypted
+    /// under a fresh per-file key, written to [`attachment_file_path`], and
+    /// recorded with the key and digest that the existing read path decrypts
+    /// with.
+    ///
+    /// The encryption is not theatre either. The bytes land outside SQLCipher,
+    /// so this is what keeps a mesh file at parity with the messages beside it
+    /// rather than lying in the open next to an encrypted database.
+    pub fn store_file(
+        &self,
+        file_name: Option<&str>,
+        mime_type: Option<&str>,
+        bytes: &[u8],
+    ) -> Result<AttachmentId, MeshError> {
+        let id = AttachmentId::new();
+        let encrypted = AttachmentCrypto::encrypt(bytes)?;
+
+        ensure_attachments_dir().map_err(|source| MeshError::FileIo {
+            path: attachments_dir().display().to_string(),
+            source,
+        })?;
+        let path = attachment_file_path(&id);
+        std::fs::write(&path, &encrypted.ciphertext).map_err(|source| MeshError::FileIo {
+            path: path.display().to_string(),
+            source,
+        })?;
+
+        let mut metadata = FileMetadata::new(
+            display_name(file_name),
+            mime_type.unwrap_or(DEFAULT_MIME).to_string(),
+            bytes.len() as u64,
+        );
+        // The digest over the ciphertext, matching what the CDN upload path
+        // stores here — the read path verifies against `encryption_iv`, and
+        // leaving this empty would make a mesh attachment the only one whose
+        // metadata cannot be checked against its bytes.
+        metadata.sha256 = encrypted.digest.to_vec();
+
+        let attachment = Attachment {
+            id,
+            metadata,
+            status: AttachmentStatus::Ready,
+            content_location: ContentLocation::OnFilesystem,
+            local_path: None,
+            remote_url: None,
+            encryption_key: Some(encrypted.key.to_vec()),
+            encryption_iv: Some(encrypted.digest.to_vec()),
+            created_at: Utc::now(),
+        };
+        if let Err(error) = self.attachments.insert_with_file_path(&attachment, &path) {
+            // The row holds the only copy of the key, so a ciphertext left
+            // behind after it fails to insert is an orphan nothing can ever open
+            // or name.
+            let _ = std::fs::remove_file(&path);
+            return Err(error.into());
+        }
+        Ok(id)
     }
 
     /// Note that a geohash cell is joined, so it shows up in the sidebar before
@@ -365,6 +482,54 @@ impl MeshTimeline {
 
         let mut first_error = None;
         for conversation_type in [ConversationType::Mesh, ConversationType::MeshDm] {
+            // Attachments first, and *before* the messages that name them.
+            //
+            // A mesh file's bytes live outside the database — encrypted, under a
+            // key held only in its `attachments` row — so deleting the messages
+            // first would orphan both the row and the file with nothing left
+            // pointing at them. Dropping the row alone would crypto-shred the
+            // blob, which protects the contents, but a panic wipe is not only
+            // about contents: a megabyte left on disk is proof that something was
+            // received, and that is exactly what the user reached for this button
+            // to destroy.
+            match self.messages.list_by_conversation_type(&conversation_type) {
+                Ok(messages) => {
+                    for attachment in messages.iter().flat_map(super::mapping::attachments_of) {
+                        // Best effort per attachment, and deliberately no early
+                        // return: one file that refuses to unlink must not spare
+                        // every file after it.
+                        let path = crate::services::attachment::attachment_file_path(attachment);
+                        if let Err(error) = std::fs::remove_file(&path)
+                            && error.kind() != std::io::ErrorKind::NotFound
+                        {
+                            tracing::warn!(
+                                target: "mesh",
+                                %error,
+                                path = %path.display(),
+                                "a mesh attachment file could not be removed"
+                            );
+                        }
+                        if let Err(error) = self.attachments.delete(attachment) {
+                            tracing::warn!(
+                                target: "mesh",
+                                %error,
+                                "a mesh attachment row could not be removed"
+                            );
+                        }
+                    }
+                }
+                Err(error) => {
+                    tracing::error!(
+                        target: "mesh",
+                        %error,
+                        "mesh messages could not be listed; their attachments may survive the wipe"
+                    );
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                }
+            }
+
             if let Err(error) = self.messages.delete_by_conversation_type(&conversation_type)
                 && first_error.is_none()
             {
@@ -470,6 +635,22 @@ impl MeshTimeline {
     }
 }
 
+/// The display name for a file, from whatever the sender put on the wire.
+///
+/// Only the final path component survives, and `.`/`..` do not. The bytes
+/// themselves land at a path derived from the attachment id, so a hostile name
+/// cannot steer the write — but the name *is* rendered and passed on to
+/// whatever the user saves it as, and handing `../../.bashrc` to that is not a
+/// question worth leaving open one layer further out.
+fn display_name(file_name: Option<&str>) -> String {
+    file_name
+        .and_then(|name| name.rsplit(['/', '\\']).next())
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && *name != "." && *name != "..")
+        .unwrap_or(UNNAMED_FILE)
+        .to_string()
+}
+
 /// The sidebar name for a conversation.
 fn label_for(conversation: &MeshConversation, nickname: Option<&str>) -> String {
     match conversation {
@@ -540,6 +721,29 @@ impl MeshEvents {
         let _ = self.events.send(event);
     }
 
+    /// Store a mesh file and hand back the id a message can carry it by.
+    ///
+    /// Deliberately *not* part of [`send`](Self::send), which is where every
+    /// other write in this module happens: the event a runtime sends already
+    /// names the attachment by id, so the bytes have to be on disk before the
+    /// event exists. There is no shape of [`MeshMessage`] that means "a file
+    /// whose content has not landed yet".
+    pub fn store_file(
+        &self,
+        file_name: Option<&str>,
+        mime_type: Option<&str>,
+        bytes: &[u8],
+    ) -> Result<AttachmentId, MeshError> {
+        self.timeline.store_file(file_name, mime_type, bytes)
+    }
+
+    /// Whether a message with this wire ID is already on disk.
+    ///
+    /// See [`MeshTimeline::already_stored`] for why only the file path asks.
+    pub fn already_stored(&self, wire_id: &str) -> Result<bool, StorageError> {
+        self.timeline.already_stored(wire_id)
+    }
+
     /// Subscribe to the fan-out.
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<MeshEvent> {
@@ -571,10 +775,31 @@ pub(crate) fn temp_identity_store() -> Arc<crate::storage::mesh_identity_store::
     Arc::new(crate::storage::mesh_identity_store::MeshIdentityStore::new(db))
 }
 
+/// Point attachment storage at a throwaway directory, once per test process.
+///
+/// [`store_file`](MeshTimeline::store_file) writes real bytes to
+/// [`attachments_dir`], which without this is the user's own
+/// `~/.local/share/chatter/attachments`. The base is a `OnceLock`, so the first
+/// caller wins and every test in the process shares one leaked directory —
+/// which is what we want: they are only ever writing files nobody reads back
+/// across tests.
+#[cfg(test)]
+fn redirect_attachments_to_temp() {
+    use std::sync::Once;
+
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let dir = tempfile::tempdir().expect("temp dir");
+        crate::services::attachment::set_attachments_base_dir(dir.path().to_path_buf());
+        Box::leak(Box::new(dir));
+    });
+}
+
 #[cfg(test)]
 pub(crate) fn temp_timeline() -> Arc<MeshTimeline> {
     use crate::storage::Database;
 
+    redirect_attachments_to_temp();
     let dir = tempfile::tempdir().expect("temp dir");
     let db = Arc::new(
         Database::open(&dir.path().join("mesh_timeline.db"), "testpass").expect("open database"),
@@ -584,7 +809,8 @@ pub(crate) fn temp_timeline() -> Arc<MeshTimeline> {
     Arc::new(MeshTimeline::new(
         Arc::new(MessageRepository::new(db.clone())),
         Arc::new(MeshConversationRepository::new(db.clone())),
-        Arc::new(MeshDeliveryRepository::new(db)),
+        Arc::new(MeshDeliveryRepository::new(db.clone())),
+        Arc::new(AttachmentRepository::new(db)),
     ))
 }
 
@@ -621,10 +847,16 @@ mod tests {
         let messages = Arc::new(MessageRepository::new(db.clone()));
         let directory = Arc::new(MeshConversationRepository::new(db.clone()));
         let deliveries = Arc::new(MeshDeliveryRepository::new(db.clone()));
+        let attachments = Arc::new(AttachmentRepository::new(db.clone()));
         let conversation = MeshConversation::Dm(peer("00112233445566778899aabbccddeeff"));
 
         {
-            let timeline = MeshTimeline::new(messages.clone(), directory.clone(), deliveries.clone());
+            let timeline = MeshTimeline::new(
+                messages.clone(),
+                directory.clone(),
+                deliveries.clone(),
+                attachments.clone(),
+            );
             timeline.register(&conversation, Some("alice"));
             assert!(
                 timeline.conversation_for(&conversation.conversation_id()).is_some(),
@@ -633,7 +865,7 @@ mod tests {
         }
 
         // A second timeline over the same database is what a restart looks like.
-        let restarted = MeshTimeline::new(messages, directory, deliveries);
+        let restarted = MeshTimeline::new(messages, directory, deliveries, attachments);
         let recovered = restarted
             .conversation_for(&conversation.conversation_id())
             .expect("the DM must still be reachable after a restart");
@@ -662,10 +894,16 @@ mod tests {
         let messages = Arc::new(MessageRepository::new(db.clone()));
         let directory = Arc::new(MeshConversationRepository::new(db.clone()));
         let deliveries = Arc::new(MeshDeliveryRepository::new(db.clone()));
+        let attachments = Arc::new(AttachmentRepository::new(db.clone()));
         let conversation = MeshConversation::Dm(peer("00112233445566778899aabbccddeeff"));
 
         {
-            let timeline = MeshTimeline::new(messages.clone(), directory.clone(), deliveries.clone());
+            let timeline = MeshTimeline::new(
+                messages.clone(),
+                directory.clone(),
+                deliveries.clone(),
+                attachments.clone(),
+            );
             let message = MeshMessage {
                 message: crate::services::mesh::mapping::outbound_message(
                     &conversation,
@@ -684,7 +922,7 @@ mod tests {
             timeline.record_delivery("WIRE-1", MeshDelivery::Dropped);
         }
 
-        let restarted = MeshTimeline::new(messages, directory, deliveries);
+        let restarted = MeshTimeline::new(messages, directory, deliveries, attachments);
         let history = restarted.history(&conversation, None, 10).expect("history");
         assert_eq!(history.len(), 1);
         assert_eq!(
@@ -736,6 +974,52 @@ mod tests {
 
     /// A wipe leaves the room present but empty: it is not something you join,
     /// so a running radio is always in it.
+    #[test]
+    fn a_wipe_destroys_the_bytes_of_a_received_file_not_only_its_row() {
+        // A mesh file's bytes live outside the database. Deleting the row
+        // crypto-shreds them — the per-file key is only in that row — but a panic
+        // wipe is not only about contents: a megabyte left on disk is proof that
+        // something was received, which is exactly what the user pressed this
+        // button to destroy. So the file has to go too.
+        let timeline = temp_timeline();
+        let room = MeshConversation::Room;
+
+        let attachment = timeline
+            .store_file(Some("secret.bin"), Some("application/octet-stream"), b"payload")
+            .expect("stores");
+        let path = crate::services::attachment::attachment_file_path(&attachment);
+        assert!(path.exists(), "the fixture must really have written a file");
+
+        // A message that names it, so the wipe can find it.
+        let sender = peer("00112233445566778899aabbccddeeff");
+        let message = MeshMessage {
+            message: crate::services::mesh::mapping::outbound_file_message(
+                &room,
+                "WIRE-FILE",
+                &sender,
+                attachment,
+                1_700_000_000_000,
+            ),
+            conversation: room.clone(),
+            sender,
+            nickname: String::new(),
+            is_local: true,
+            sender_verified: false,
+        };
+        timeline.record(&message).expect("record");
+
+        timeline.wipe().expect("wipe");
+
+        assert!(
+            !path.exists(),
+            "the file must be gone, not merely unreadable"
+        );
+        assert!(
+            timeline.history(&room, None, 10).expect("history").is_empty(),
+            "and the message with it"
+        );
+    }
+
     #[test]
     fn a_wipe_empties_everything_and_keeps_only_the_empty_room() {
         let timeline = temp_timeline();
@@ -791,14 +1075,20 @@ mod tests {
         let messages = Arc::new(MessageRepository::new(db.clone()));
         let directory = Arc::new(MeshConversationRepository::new(db.clone()));
         let deliveries = Arc::new(MeshDeliveryRepository::new(db.clone()));
+        let attachments = Arc::new(AttachmentRepository::new(db.clone()));
 
         {
-            let timeline = MeshTimeline::new(messages.clone(), directory.clone(), deliveries.clone());
+            let timeline = MeshTimeline::new(
+                messages.clone(),
+                directory.clone(),
+                deliveries.clone(),
+                attachments.clone(),
+            );
             timeline.note_geohash("dr5rsj7");
             timeline.forget_geohash("dr5rsj7");
         }
 
-        let restarted = MeshTimeline::new(messages, directory, deliveries);
+        let restarted = MeshTimeline::new(messages, directory, deliveries, attachments);
         let cell = MeshConversation::Geohash("dr5rsj7".to_string());
         assert!(
             restarted.conversation_for(&cell.conversation_id()).is_none(),

@@ -55,11 +55,13 @@ pub mod transport;
 #[cfg(feature = "onion")]
 pub mod ws;
 
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use chatter_mesh::ids::PeerId;
 use chatter_mesh::packet::NoisePayloadType;
+use chatter_mesh::tlv::file::{BitchatFilePacket, MAX_PAYLOAD_BYTES};
 use chatter_mesh_link::MeshLink;
 use chatter_mesh_noise::MeshIdentity;
 use chatter_mesh_nostr::relay::{RelayConnector, RelayPool};
@@ -116,6 +118,10 @@ pub struct MeshDeps {
     /// mesh delivery state is live-only, so a message that was never delivered
     /// comes back after a reopen looking sent.
     pub deliveries: Arc<crate::storage::repositories::MeshDeliveryRepository>,
+    /// Where a file that arrived over the radio lands. The same table every
+    /// other conversation type's attachments live in — a mesh file is not a
+    /// second kind of attachment, it simply never had a CDN behind it.
+    pub attachments: Arc<crate::storage::repositories::AttachmentRepository>,
     /// Durable favourites. These are the courier trust tier, so losing them on
     /// restart silently demotes every favourite to the stranger deposit quota.
     pub favorites: Arc<crate::storage::repositories::MeshFavoritesRepository>,
@@ -175,7 +181,12 @@ impl MeshService {
         let state = Arc::new(MeshState::new(identity.peer_id()));
         let nostr_state = Arc::new(NostrState::new());
         let favorites = Arc::new(MeshFavorites::with_store(Arc::clone(&deps.favorites)));
-        let timeline = Arc::new(MeshTimeline::new(deps.messages, deps.conversations, deps.deliveries));
+        let timeline = Arc::new(MeshTimeline::new(
+            deps.messages,
+            deps.conversations,
+            deps.deliveries,
+            deps.attachments,
+        ));
         let events = MeshEvents::new(EVENT_CAPACITY, Arc::clone(&timeline));
 
         let (ble_tx, ble_rx) = unbounded_channel();
@@ -357,6 +368,25 @@ impl MeshService {
         self.state.status(self.nostr_state.connected_relay_count())
     }
 
+    /// Whether [`start`](Self::start) succeeded and has not been stopped.
+    ///
+    /// Deliberately **not** a field on [`MeshStatus`]. That struct is "which
+    /// transports are live", it is rebuilt from `MeshState` in several places
+    /// that have no view of the service, and it travels as
+    /// [`MeshEvent::Status`](crate::services::mesh::MeshEvent::Status) — so a
+    /// service flag riding along inside it would have read `false` every time a
+    /// relay flapped, and told the UI the mesh had died.
+    ///
+    /// Distinct from `MeshStatus::radio_running`, and the distinction is the
+    /// point: a running service with no radio still carries geohash cells over
+    /// relays and still retains what you write for a carrier that has not
+    /// arrived yet, whereas a service that never started has nothing at all — no
+    /// timeline, no identity loaded, no store to queue into.
+    #[must_use]
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
+    }
+
     /// The geohash cells currently joined.
     #[must_use]
     pub fn joined_geohashes(&self) -> Vec<String> {
@@ -437,6 +467,87 @@ impl MeshService {
         // A broadcast has no recipient and therefore no later state to progress
         // to. Recording it now is the whole of its delivery history; leaving it
         // unrecorded would make it render as an ordinary one-to-one "sent".
+        self.timeline
+            .record_delivery(&message_id, MeshDelivery::Broadcast);
+        Ok(message_id)
+    }
+
+    /// Put a file on the air for the public mesh room.
+    ///
+    /// Returns the wire message ID; the row itself arrives on the event stream as
+    /// a [`MeshEvent::Message`] whose content is
+    /// [`Mixed`](crate::domain::message::MessageContent::Mixed), one path for
+    /// local and remote files just as [`send_room`](Self::send_room) is for text.
+    ///
+    /// # Room only, and no chunking
+    ///
+    /// A mesh file transfer is a cleartext broadcast, so there is no directed
+    /// form to offer: this client's DMs are Noise-encrypted, and
+    /// `on_file_transfer` refuses a directed file for that reason. The whole file
+    /// also rides one packet — the fragmenter splits it for the radio, but
+    /// nothing above that chunks or resumes — so anything over
+    /// [`MAX_PAYLOAD_BYTES`] is refused here rather than truncated onto the wire,
+    /// where every peer's decoder would reject it anyway.
+    pub fn send_file(&self, path: &Path) -> Result<String, MeshError> {
+        if self.radio.is_none() {
+            return Err(MeshError::NoRadio);
+        }
+        // Against the file's own length first, so a multi-gigabyte pick is
+        // refused without being read into memory.
+        let declared = std::fs::metadata(path)
+            .map_err(|source| MeshError::FileIo {
+                path: path.display().to_string(),
+                source,
+            })?
+            .len();
+        if declared > MAX_PAYLOAD_BYTES as u64 {
+            return Err(MeshError::FileTooLarge {
+                size: declared,
+                max: MAX_PAYLOAD_BYTES,
+            });
+        }
+        let content = std::fs::read(path).map_err(|source| MeshError::FileIo {
+            path: path.display().to_string(),
+            source,
+        })?;
+        // Re-checked against what was actually read: the file can grow between
+        // the two calls, and the limit is the receiver's decode ceiling, so one
+        // byte over it is a packet nobody will accept.
+        if content.len() > MAX_PAYLOAD_BYTES {
+            return Err(MeshError::FileTooLarge {
+                size: content.len() as u64,
+                max: MAX_PAYLOAD_BYTES,
+            });
+        }
+        if content.is_empty() {
+            // `BitchatFilePacket::decode` rejects an empty content TLV outright,
+            // so an empty file is airtime spent on a packet no peer can accept.
+            return Err(MeshError::EmptyContent);
+        }
+
+        // The name is the leaf, not the path: the rest is this device's directory
+        // layout and is nobody else's business.
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_string);
+        let mime = mime_guess::from_path(path)
+            .first_or_octet_stream()
+            .to_string();
+        // `file_size: None` lets `encode` write the content length, so the
+        // declared size can never disagree with the bytes that follow it.
+        let file = BitchatFilePacket::new(file_name, None, Some(mime), content);
+
+        let message_id = new_message_id();
+        self.ble
+            .send(BleCommand::FileTransfer {
+                message_id: message_id.clone(),
+                file,
+            })
+            .map_err(|_| MeshError::WorkerGone)?;
+        // A broadcast, exactly as `send_room`: nobody acknowledges it, so this is
+        // the whole of its delivery history. Leaving it unrecorded would make the
+        // row render as an ordinary one-to-one "sent" — see `outbound_message`.
         self.timeline
             .record_delivery(&message_id, MeshDelivery::Broadcast);
         Ok(message_id)
@@ -866,6 +977,107 @@ mod tests {
             service.send_dm(&peer, "\n\t ").await,
             Err(MeshError::EmptyContent)
         ));
+    }
+
+    /// A file of `bytes` zero bytes, on a leaked temp path.
+    fn temp_file(name: &str, bytes: usize) -> std::path::PathBuf {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join(name);
+        std::fs::write(&path, vec![0x5A; bytes]).expect("write");
+        Box::leak(Box::new(dir));
+        path
+    }
+
+    #[tokio::test]
+    async fn a_file_over_the_one_packet_budget_is_refused_rather_than_truncated() {
+        // There is no chunking or resume above the fragmenter, and
+        // `MAX_PAYLOAD_BYTES` is also the *receiver's* decode ceiling — so a
+        // truncated send would spend a megabyte of airtime on a packet every peer
+        // rejects, and the sender would have no way to know.
+        let radio = MockLink::shared();
+        let service = service(Some(Arc::clone(&radio) as Arc<dyn MeshLink>), None);
+
+        let path = temp_file("too-big.bin", MAX_PAYLOAD_BYTES + 1);
+        match service.send_file(&path) {
+            Err(MeshError::FileTooLarge { size, max }) => {
+                assert_eq!(size, MAX_PAYLOAD_BYTES as u64 + 1);
+                assert_eq!(max, MAX_PAYLOAD_BYTES);
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+
+        // One byte under it is fine, so the boundary is the limit and not an
+        // off-by-one that quietly costs the largest sends.
+        let path = temp_file("just-fits.bin", MAX_PAYLOAD_BYTES);
+        assert!(service.send_file(&path).is_ok());
+    }
+
+    #[tokio::test]
+    async fn an_empty_file_never_reaches_the_wire() {
+        // `BitchatFilePacket::decode` rejects an empty content TLV outright, so an
+        // empty file is airtime spent on a packet nobody can accept.
+        let radio = MockLink::shared();
+        let service = service(Some(Arc::clone(&radio) as Arc<dyn MeshLink>), None);
+        let path = temp_file("empty.bin", 0);
+        assert!(matches!(
+            service.send_file(&path),
+            Err(MeshError::EmptyContent)
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_file_that_is_not_there_says_so_with_its_path() {
+        // The two i/o failures this error covers are opposites — a send cannot
+        // read what the user picked, a receive cannot write to the attachments
+        // directory — and without the path the message cannot tell them apart.
+        let radio = MockLink::shared();
+        let service = service(Some(Arc::clone(&radio) as Arc<dyn MeshLink>), None);
+        match service.send_file(std::path::Path::new("/nonexistent/nope.bin")) {
+            Err(MeshError::FileIo { path, .. }) => {
+                assert_eq!(path, "/nonexistent/nope.bin");
+            }
+            other => panic!("expected an i/o error naming the file, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_sent_file_lands_in_the_room_as_a_broadcast_and_not_as_sent() {
+        // Same reason as `send_room`: nobody acknowledges a room file, so there is
+        // no later event to correct the state with, and a message with no recorded
+        // state falls through to the converter's one-to-one word "sent" — which
+        // claims an arrival from a recipient the message never had.
+        let radio = MockLink::shared();
+        let service = service(Some(Arc::clone(&radio) as Arc<dyn MeshLink>), None);
+        service.start().await.expect("start");
+        let path = temp_file("note.bin", 32);
+
+        service.send_file(&path).expect("queued");
+        // The send is a queue submission; the runtime mirrors the row.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let history = service
+            .history(&MeshConversation::Room, None, 50)
+            .expect("history");
+        assert_eq!(history.len(), 1, "the sender's own copy of the file");
+        assert_eq!(
+            history[0].delivery_status,
+            MeshDelivery::Broadcast.as_str(),
+            "a room file has no recipient to have been \"sent\" to"
+        );
+        assert_ne!(history[0].delivery_status, "sent");
+        assert_eq!(
+            mapping::attachments_of(&history[0]).len(),
+            1,
+            "the sender must be able to open what they just sent"
+        );
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn sending_a_file_with_no_radio_fails_instead_of_queueing_forever() {
+        let service = service(None, None);
+        let path = temp_file("note.bin", 32);
+        assert!(matches!(service.send_file(&path), Err(MeshError::NoRadio)));
     }
 
     #[tokio::test]

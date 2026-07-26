@@ -32,6 +32,7 @@ use std::sync::Arc;
 use chatter_mesh::ids::PeerId;
 use chatter_mesh::packet::{BitchatPacket, NoisePayloadType, encode_noise_payload};
 use chatter_mesh::tlv::courier_envelope::{CourierEnvelope, epoch_day, recipient_tag};
+use chatter_mesh::tlv::file::BitchatFilePacket;
 use chatter_mesh::tlv::private_message::PrivateMessagePacket;
 use chatter_mesh_noise::MeshIdentity;
 use chatter_mesh_noise::seal::seal_courier;
@@ -80,6 +81,17 @@ pub enum BleCommand {
     },
     /// Broadcast a public message into the mesh room.
     PublicMessage { message_id: String, content: String },
+    /// Broadcast a file into the mesh room.
+    ///
+    /// The TLV arrives already built and already size-checked: the service reads
+    /// the file and refuses an oversized one before anything is queued, so the
+    /// runtime's remaining job is to sign, fragment and mirror it. Nothing here
+    /// chunks — a 1 MiB payload is one packet that the fragmenter splits for the
+    /// radio, and there is no resume above it.
+    FileTransfer {
+        message_id: String,
+        file: BitchatFilePacket,
+    },
     /// Announce our identity now, out of the normal cadence.
     Announce,
     /// Stop the loop.
