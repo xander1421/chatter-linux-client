@@ -384,6 +384,22 @@ impl JarvisContext {
         }
     }
 
+    /// The conversation kind this context refers to, for AI policy decisions.
+    ///
+    /// Maps onto [`crate::domain::message::ConversationType`] so
+    /// `local_ai::policy` has a single notion of "is this a DM".
+    /// `ContextType::Dm` covers every server-mediated DM flavour; the policy
+    /// treats them all as local-only, so the specific variant doesn't matter.
+    pub fn conversation_type(&self) -> crate::domain::message::ConversationType {
+        use crate::domain::message::ConversationType;
+        match self.context_type {
+            ContextType::Channel => ConversationType::Channel,
+            ContextType::Dm => ConversationType::ServerDm,
+            ContextType::AnonDm => ConversationType::AnonDm,
+            ContextType::AnonGroup => ConversationType::AnonGroup,
+        }
+    }
+
     /// Create a context for a channel.
     pub fn channel(channel_id: ChannelId) -> Self {
         Self {

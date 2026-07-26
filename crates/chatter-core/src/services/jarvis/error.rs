@@ -32,4 +32,11 @@ pub enum JarvisError {
     /// Jarvis is disabled.
     #[error("Jarvis is disabled")]
     Disabled,
+
+    /// The conversation's AI policy forbids this engine.
+    ///
+    /// Raised when a cloud provider is asked to run on a DM, or any provider
+    /// on mesh-delivered traffic. See `local_ai::policy`.
+    #[error("AI not permitted here: {0}")]
+    NotPermitted(String),
 }

@@ -15,6 +15,7 @@ use crate::services::ai::SampleParams;
 use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
 
 use super::engine::SharedJarvisEngine;
+use crate::local_ai::policy::AiAccess;
 use super::error::JarvisError;
 
 /// Memory manager for Jarvis.
@@ -119,6 +120,7 @@ impl MemoryManager {
         context: &JarvisContext,
         config: &CompressionConfig,
     ) -> Result<Option<JarvisSummary>, JarvisError> {
+        let access = crate::local_ai::policy::ai_access(&context.conversation_type(), false);
         let count = self.memory_repo.count_conversations(context)?;
 
         if count < config.max_messages {
@@ -149,7 +151,7 @@ impl MemoryManager {
         }
 
         // Generate summary using LLM
-        let summary_text = self.generate_summary(&conversations).await?;
+        let summary_text = self.generate_summary(access, &conversations).await?;
 
         let message_range_start = conversations.first().map(|c| c.timestamp).unwrap_or(0);
         let message_range_end = conversations.last().map(|c| c.timestamp).unwrap_or(0);
@@ -184,6 +186,7 @@ impl MemoryManager {
     /// Generate a summary of conversations using the LLM.
     async fn generate_summary(
         &self,
+        access: AiAccess,
         conversations: &[JarvisConversation],
     ) -> Result<String, JarvisError> {
         let conversation_text: Vec<String> = conversations
@@ -221,7 +224,7 @@ Summary:"#,
             json_schema: None,
         };
 
-        let summary = self.ai.complete(prompt, params).await?;
+        let summary = self.ai.complete_gated(access, prompt, params).await?;
         Ok(summary.trim().to_string())
     }
 

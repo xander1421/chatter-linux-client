@@ -323,9 +323,17 @@ impl FragmentAssembler {
 
     /// Drops reassemblies older than [`FRAGMENT_LIFETIME_SECS`], measured from
     /// the stream's first fragment.
-    pub fn evict_expired(&mut self, now_unix_secs: u64) {
+    ///
+    /// Returns how many were dropped, so the caller can say so. This layer is
+    /// sans-IO and does not log, but a silent eviction is the difference between
+    /// "the sender is too slow" and "the file vanished": a transfer that misses
+    /// the window leaves no other trace anywhere, on either device. That cost a
+    /// long debugging session once.
+    pub fn evict_expired(&mut self, now_unix_secs: u64) -> usize {
+        let before = self.streams.len();
         self.streams
             .retain(|_, assembly| now_unix_secs.saturating_sub(assembly.started_at) <= FRAGMENT_LIFETIME_SECS);
+        before - self.streams.len()
     }
 
     /// Stream IDs of incomplete *broadcast* reassemblies that have seen no new

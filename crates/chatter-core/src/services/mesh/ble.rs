@@ -73,6 +73,27 @@ use super::transport::BleCommand;
 /// How often the loop wakes to run the parts that nothing else can schedule.
 const TICK: Duration = Duration::from_millis(500);
 
+/// How soon to retry a frame the radio refused for being busy.
+///
+/// One ATT operation may be outstanding per link — Android's bridge enforces
+/// that with an `OpGate` and reports the second write as retryable, and BlueZ
+/// fills its controller queue the same way. The refused frame goes to
+/// [`OutboundWriteBuffer`], and *when it is retried* is what sets throughput.
+///
+/// Measured on real hardware before this existed: the retry only happened on
+/// the next [`TICK`], so exactly one 469-byte frame crossed per 500 ms — 0.9
+/// kB/s, with the radio idle for 98% of it. A 32 KiB file is ~70 frames, so it
+/// took 36 s to send and the receiver's 30 s reassembly window had already
+/// dropped it. Silently: an incomplete reassembly is evicted without a log, so
+/// the file simply never appeared. Nothing at the single-packet cap could ever
+/// arrive.
+///
+/// 20 ms is a connection interval or two — long enough not to spin against a
+/// gate that is still closed, short enough that the radio's own completion rate
+/// becomes the limit again, which is where the limit belongs. This is a floor
+/// on retry latency, not a rate: the loop only arms it while frames are queued.
+const WRITE_RETRY_DELAY: Duration = Duration::from_millis(20);
+
 /// The TTL an announce still carries when it has not been relayed.
 ///
 /// Only ever a *hint*: the TTL is excluded from the signature preimage so relays
@@ -204,6 +225,7 @@ impl BleRuntime {
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
+            let backlogged = !self.state.with(|state| state.writes.is_empty());
             tokio::select! {
                 event = radio.next_event() => match event {
                     Some(event) => self.on_link_event(event).await,
@@ -215,6 +237,11 @@ impl BleRuntime {
                     Some(command) => self.on_command(command).await,
                 },
                 _ = ticker.tick() => self.on_tick().await,
+                // Only armed while something is queued, so a quiet mesh still
+                // wakes twice a second and no faster.
+                _ = tokio::time::sleep(WRITE_RETRY_DELAY), if backlogged => {
+                    self.flush_buffered_writes().await;
+                }
             }
         }
 
@@ -2375,7 +2402,16 @@ impl BleRuntime {
     fn cleanup(&mut self, now_ms: u64, now_s: u64) {
         self.state.with(|state| {
             state.dedup.cleanup(now_s);
-            state.fragments.evict_expired(now_s);
+            let evicted = state.fragments.evict_expired(now_s);
+            if evicted > 0 {
+                tracing::warn!(
+                    target: "mesh::ble",
+                    streams = evicted,
+                    lifetime_secs = chatter_mesh::fragment::FRAGMENT_LIFETIME_SECS,
+                    "incomplete reassemblies expired; a packet was sent but never \
+                     finished arriving"
+                );
+            }
             state
                 .ingress
                 .prune(now_ms, chatter_mesh_link::registry::INGRESS_RECORD_LIFETIME_MS);

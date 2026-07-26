@@ -49,6 +49,10 @@ impl FactExtractor {
             return Ok(0);
         }
 
+        // Derived from the context this extraction belongs to: a DM refuses
+        // a cloud engine before the message text is sent anywhere.
+        let access = crate::local_ai::policy::ai_access(&context.conversation_type(), false);
+
         let prompt = Self::build_prompt(message);
         // Thinking models (qwen3, deepseek-r1) spend most of the budget in
         // their <think> block before the JSON — 256 tokens truncates mid-think
@@ -83,7 +87,7 @@ impl FactExtractor {
             })),
         };
 
-        let response = self.ai.complete(prompt, params).await?;
+        let response = self.ai.complete_gated(access, prompt, params).await?;
         let facts = Self::parse_response(&response);
         let count = facts.len();
 

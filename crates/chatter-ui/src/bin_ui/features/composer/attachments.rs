@@ -109,6 +109,19 @@ pub(crate) fn wire_attachment_clicked(
         let ui_ctx_attach = ui_ctx_attach.clone();
         tracing::debug!("Attachment clicked");
 
+        // Before the active-conversation check below, not after: a mesh room or
+        // cell is not an `ActiveConversation` at all — that enum is the
+        // server-side conversation — so the `None` early return would swallow
+        // the tap and the picker would never open. `intercept_send` sits in the
+        // same position in the send path, for the same reason.
+        //
+        // A mesh file is fragmented onto the radio, never uploaded, and never
+        // staged: staging exists for a later send with text attached.
+        #[cfg(feature = "mesh")]
+        if crate::bin_ui::features::mesh::intercept_attachment(&ui_ctx_attach, weak.clone()) {
+            return;
+        }
+
         // Check if we have an active conversation BEFORE opening file picker
         let conversation = chat_state.active_conversation();
 
@@ -119,14 +132,6 @@ pub(crate) fn wire_attachment_clicked(
 
         if matches!(conversation, ActiveConversation::None) {
             tracing::warn!("Cannot upload: no active conversation selected");
-            return;
-        }
-
-        // A mesh file is fragmented onto the radio, never uploaded, and never
-        // staged — staging exists for a later send with text attached. Intercept
-        // before any of that, the same way a mesh text send does.
-        #[cfg(feature = "mesh")]
-        if crate::bin_ui::features::mesh::intercept_attachment(&ui_ctx_attach, weak.clone()) {
             return;
         }
 

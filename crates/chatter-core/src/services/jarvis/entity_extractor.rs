@@ -7,6 +7,7 @@ use crate::domain::jarvis::{EntityType, JarvisEntity};
 use crate::services::ai::SampleParams;
 
 use super::engine::SharedJarvisEngine;
+use crate::local_ai::policy::AiAccess;
 use super::error::JarvisError;
 
 /// Entity extractor using local AI.
@@ -41,7 +42,11 @@ impl EntityExtractor {
     /// Extract entities from a message.
     ///
     /// Uses the local LLM to identify named entities in the text.
-    pub async fn extract(&self, message: &str) -> Result<Vec<ExtractedEntity>, JarvisError> {
+    pub async fn extract(
+        &self,
+        access: AiAccess,
+        message: &str,
+    ) -> Result<Vec<ExtractedEntity>, JarvisError> {
         if message.trim().is_empty() {
             return Ok(vec![]);
         }
@@ -63,7 +68,7 @@ impl EntityExtractor {
             json_schema: None,
         };
 
-        let response = self.ai.complete(prompt, params).await?;
+        let response = self.ai.complete_gated(access, prompt, params).await?;
         Self::parse_extraction_response(&response)
     }
 

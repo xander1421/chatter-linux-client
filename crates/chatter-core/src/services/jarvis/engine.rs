@@ -8,6 +8,7 @@
 use std::sync::{Arc, RwLock};
 
 use crate::local_ai::backend::{ChatMessage, ChatRole, GenerateParams, LocalAIBackend};
+use crate::local_ai::policy::AiAccess;
 use crate::local_ai::providers::{AnyBackend, ProviderKind};
 use crate::local_ai::settings::LocalAISettings;
 use crate::services::ai::{LocalAIActorHandle, SampleParams};
@@ -36,6 +37,17 @@ impl JarvisEngine {
             }
         }
         Self::InProcess(actor)
+    }
+
+    /// Whether this engine sends content off the device.
+    ///
+    /// The in-process actor never does; an HTTP engine inherits its backend's
+    /// answer (localhost providers are local; Anthropic is not).
+    pub fn is_cloud(&self) -> bool {
+        match self {
+            Self::InProcess(_) => false,
+            Self::Http { backend, .. } => backend.is_cloud(),
+        }
     }
 
     /// Does this chat error mean "the model isn't installed on the provider"?
@@ -171,6 +183,51 @@ impl SharedJarvisEngine {
         engine.complete(messages, params).await
     }
 
+    /// Single-shot completion gated by a conversation's AI policy.
+    ///
+    /// The gated twin of [`Self::complete`], for extraction and summarisation
+    /// which run over message content.
+    pub async fn complete_gated(
+        &self,
+        access: AiAccess,
+        prompt: String,
+        params: SampleParams,
+    ) -> Result<String, JarvisError> {
+        self.complete_conversation_gated(
+            access,
+            vec![ChatMessage { role: ChatRole::User, content: prompt }],
+            params,
+        )
+        .await
+    }
+
+    /// Completion gated by a conversation's AI policy.
+    ///
+    /// The enforcement point for `local_ai::policy`: refuses before any
+    /// content is sent when the active engine is a cloud provider and the
+    /// conversation only permits local inference (DMs, anon transports), or
+    /// when AI is denied outright (mesh-delivered traffic).
+    ///
+    /// Prefer this over [`Self::complete_conversation`] for anything driven by
+    /// message content.
+    pub async fn complete_conversation_gated(
+        &self,
+        access: AiAccess,
+        messages: Vec<ChatMessage>,
+        params: SampleParams,
+    ) -> Result<String, JarvisError> {
+        let engine = self.0.read().expect("engine lock poisoned").clone();
+
+        if !access.permits_cloud(engine.is_cloud()) {
+            return Err(JarvisError::NotPermitted(format!(
+                "{access:?} conversation cannot use the active engine ({})",
+                if engine.is_cloud() { "cloud" } else { "local" }
+            )));
+        }
+
+        engine.complete(messages, params).await
+    }
+
     /// Provider description for logging/UI ("ollama", "built-in", …).
     pub fn describe(&self) -> String {
         match &**self.0.read().expect("engine lock poisoned") {
@@ -193,6 +250,98 @@ mod tests {
         assert!(matches!(engine, JarvisEngine::Http { .. }));
         let shared = SharedJarvisEngine::new(engine);
         assert_eq!(shared.describe(), "ollama (qwen3:4b)");
+    }
+
+    /// Build a cloud-backed engine (no network touched by construction).
+    fn anthropic_engine() -> SharedJarvisEngine {
+        let settings = LocalAISettings {
+            active_provider: ProviderKind::Anthropic,
+            anthropic_api_key: Some("sk-ant-test".into()),
+            ..LocalAISettings::default()
+        };
+        let engine = JarvisEngine::from_settings(&settings, LocalAIActorHandle::spawn());
+        assert!(engine.is_cloud(), "anthropic settings must yield a cloud engine");
+        SharedJarvisEngine::new(engine)
+    }
+
+    fn user(text: &str) -> Vec<ChatMessage> {
+        vec![ChatMessage { role: ChatRole::User, content: text.into() }]
+    }
+
+    #[tokio::test]
+    async fn dm_refuses_a_cloud_engine_before_sending_anything() {
+        let shared = anthropic_engine();
+
+        let err = shared
+            .complete_conversation_gated(
+                AiAccess::LocalOnly,
+                user("private message text"),
+                SampleParams::default(),
+            )
+            .await
+            .expect_err("a DM must not reach a cloud provider");
+
+        assert!(matches!(err, JarvisError::NotPermitted(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn mesh_denies_even_a_local_engine() {
+        let settings = LocalAISettings::default(); // ollama, local
+        let engine = JarvisEngine::from_settings(&settings, LocalAIActorHandle::spawn());
+        assert!(!engine.is_cloud());
+        let shared = SharedJarvisEngine::new(engine);
+
+        let err = shared
+            .complete_conversation_gated(
+                AiAccess::Denied,
+                user("mesh-delivered text"),
+                SampleParams::default(),
+            )
+            .await
+            .expect_err("mesh traffic gets no inference at all");
+
+        assert!(matches!(err, JarvisError::NotPermitted(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn a_channel_lets_the_cloud_engine_through_the_gate() {
+        let shared = anthropic_engine();
+
+        // The key is fake, so this must fail at the provider — not at the gate.
+        // Anything other than NotPermitted proves the request got past policy.
+        let err = shared
+            .complete_conversation_gated(
+                AiAccess::LocalOrCloud,
+                user("hi"),
+                SampleParams::default(),
+            )
+            .await
+            .expect_err("fake key cannot succeed");
+
+        assert!(
+            !matches!(err, JarvisError::NotPermitted(_)),
+            "channel access must not be blocked by policy, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_engine_is_allowed_in_a_dm() {
+        // Ollama on a DM: permitted by policy. Without a running Ollama this
+        // fails at transport, which still proves the gate let it through.
+        let settings = LocalAISettings::default();
+        let engine = JarvisEngine::from_settings(&settings, LocalAIActorHandle::spawn());
+        let shared = SharedJarvisEngine::new(engine);
+
+        if let Err(err) = shared
+            .complete_conversation_gated(
+                AiAccess::LocalOnly,
+                user("hi"),
+                SampleParams::default(),
+            )
+            .await
+        {
+            assert!(!matches!(err, JarvisError::NotPermitted(_)), "{err:?}");
+        }
     }
 
     #[test]
