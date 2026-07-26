@@ -1402,7 +1402,20 @@ impl BleRuntime {
         let Some(transfer) = self.files_out.get_mut(&request.transfer_id) else {
             return;
         };
+        let pace_before = transfer.pace_percent();
         transfer.note_requested(&request.indices);
+        let pace_after = transfer.pace_percent();
+        if pace_after != pace_before {
+            // The one place the sender learns its own rate. Worth a line: it is
+            // the difference between "this link is slow" and "we are shouting
+            // over it", and the two need opposite responses.
+            tracing::info!(
+                target: "mesh::ble",
+                transfer = %hex_encode(&request.transfer_id),
+                pace_percent = pace_after,
+                "a re-request says the link cannot take the current rate; slowing down"
+            );
+        }
         tracing::info!(
             target: "mesh::ble",
             peer = %sender,
@@ -2037,9 +2050,13 @@ impl BleRuntime {
                 // waits proportionally less, and set before the write rather than
                 // after so a slow write does not extend the interval twice.
                 if let Some(transfer) = self.files_out.get_mut(&id) {
-                    let air_ms = (payload.len() as u64)
-                        .saturating_mul(1_000)
-                        .saturating_div(AIR_BYTES_PER_SEC.max(1));
+                    // Nothing outstanding means the receiver has asked for
+                    // nothing, so the last chunk is presumed to have landed and
+                    // the interval can come back in a little.
+                    if transfer.is_drained() || transfer.nothing_outstanding() {
+                        transfer.note_clean_pass();
+                    }
+                    let air_ms = transfer.pace_ms(payload.len(), AIR_BYTES_PER_SEC);
                     transfer.next_chunk_ms = now_ms.saturating_add(air_ms);
                 }
                 let packet = self.build_packet(
