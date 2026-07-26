@@ -339,7 +339,7 @@ impl FileStreamSpool {
     #[must_use]
     pub fn restored() -> Self {
         let mut spool = Self::new(transfers_dir());
-        let resumed = spool.restore();
+        let resumed = spool.restore(super::state::now_secs());
         if resumed > 0 {
             tracing::info!(
                 target: "mesh::file",
@@ -355,7 +355,14 @@ impl FileStreamSpool {
     /// Anything unparseable is *removed*, not skipped. A state file we cannot
     /// read describes a partial file we cannot finish, and leaving the pair
     /// behind would accumulate them silently.
-    pub fn restore(&mut self) -> usize {
+    /// `now_secs` stamps what is loaded, so a resumed transfer looks like one
+    /// that has just made progress rather than one that never has.
+    ///
+    /// Without it the resumed transfer carried `last_progress_secs: 0`, which
+    /// `abandon_stale` reads as "no progress since the epoch" — so every resumed
+    /// transfer was discarded on the first tick after startup, and P9's
+    /// resumability worked everywhere except across the restart it exists for.
+    pub fn restore(&mut self, now_secs: u64) -> usize {
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
             return 0;
         };
@@ -365,7 +372,7 @@ impl FileStreamSpool {
             if path.extension().and_then(|e| e.to_str()) != Some("state") {
                 continue;
             }
-            match self.load_state(&path) {
+            match self.load_state(&path, now_secs) {
                 Some(transfer) => {
                     loaded += 1;
                     self.transfers.insert(transfer.manifest.transfer_id, transfer);
@@ -738,7 +745,7 @@ impl FileStreamSpool {
 
     /// The inverse of [`write_state`](Self::write_state), returning `None` for
     /// anything it cannot fully account for.
-    fn load_state(&self, path: &Path) -> Option<InboundTransfer> {
+    fn load_state(&self, path: &Path, now_secs: u64) -> Option<InboundTransfer> {
         let bytes = std::fs::read(path).ok()?;
         // The same bounds-checked cursor the wire decoders use, for the same
         // reason: this file is attacker-influenced too — its contents came off
@@ -777,12 +784,13 @@ impl FileStreamSpool {
             // Deliberately not the persisted time. A transfer resumed at startup
             // gets a fresh quiet window, so the first thing a restart does is not
             // to fire a retransmit request at a peer it has not even discovered
-            // yet.
-            last_progress_secs: 0,
-            // Same reasoning, and the request clock is the one that now bounds
-            // the rate: a resumed transfer may ask once, then waits out the
-            // quiet period like any other.
-            last_request_secs: 0,
+            // Stamped now, not zero. A resumed transfer gets a full quiet
+            // window before it asks for anything — so a restart does not open
+            // with a retransmit request at a peer it has not discovered yet —
+            // and, just as importantly, is not immediately stale to
+            // `abandon_stale`, which is what used to delete it outright.
+            last_progress_secs: now_secs,
+            last_request_secs: now_secs,
         })
     }
 }
@@ -965,6 +973,39 @@ mod tests {
     }
 
     // -- bitmap ------------------------------------------------------------
+
+    #[test]
+    fn a_resumed_transfer_survives_the_first_tick_after_a_restart() {
+        // Resume used to stamp `last_progress_secs: 0`, which `abandon_stale`
+        // reads as "no progress since the epoch". The transfer was therefore
+        // discarded — file, bitmap and all — on the first tick after startup, so
+        // resumability worked in every test that never restarted and failed at
+        // the one thing it exists for.
+        let (mut spool, dir) = spool();
+        let bytes = body(9_000);
+        let manifest = manifest_for(&bytes, 1_024);
+        let sender = peer("cccccccccccccccc");
+        spool
+            .begin(manifest.clone(), sender.clone(), "WIRE-R".into(), 5, 10)
+            .unwrap();
+        feed(&mut spool, &manifest, &bytes, [0, 1, 2], &sender);
+        drop(spool);
+
+        let now = 1_000_000u64;
+        let mut restarted = FileStreamSpool::new(dir);
+        assert_eq!(restarted.restore(now), 1, "it comes back off disk");
+
+        // The tick the app runs immediately after startup.
+        restarted.abandon_stale(now, TRANSFER_ABANDON_SECS);
+        let transfer = restarted
+            .get(&ID)
+            .expect("a transfer resumed a moment ago has not gone an hour without progress");
+        assert_eq!(transfer.received.present(), 3, "and its chunks are still there");
+
+        // It is still abandoned once it really has been quiet for an hour.
+        restarted.abandon_stale(now + TRANSFER_ABANDON_SECS + 1, TRANSFER_ABANDON_SECS);
+        assert!(restarted.get(&ID).is_none(), "stale still means stale");
+    }
 
     #[test]
     fn a_stalled_transfer_is_not_re_requested_within_the_quiet_period() {
@@ -1193,7 +1234,7 @@ mod tests {
 
         // A fresh process over the same directory.
         let mut restarted = FileStreamSpool::new(dir);
-        assert_eq!(restarted.restore(), 1);
+        assert_eq!(restarted.restore(200), 1);
         let transfer = restarted.get(&ID).expect("resumed");
         assert_eq!(transfer.received.present(), 7);
         assert_eq!(transfer.wire_id, "WIRE-9", "the row identity survives too");
@@ -1374,7 +1415,7 @@ mod tests {
         std::fs::remove_file(spool.part_path(&ID)).unwrap();
 
         let mut restarted = FileStreamSpool::new(dir);
-        assert_eq!(restarted.restore(), 0);
+        assert_eq!(restarted.restore(200), 0);
         assert!(restarted.is_empty());
     }
 
@@ -1390,7 +1431,7 @@ mod tests {
         std::fs::write(&state, b"not a transfer").unwrap();
 
         let mut restarted = FileStreamSpool::new(dir);
-        assert_eq!(restarted.restore(), 0);
+        assert_eq!(restarted.restore(200), 0);
         assert!(!state.exists(), "and it does not linger to be retried forever");
     }
 

@@ -4018,7 +4018,7 @@ mod tests {
         // A new process over the same spool directory.
         let (mut restarted, _radio2, state2, timeline2) = runtime_parts();
         restarted.files_in = FileStreamSpool::new(spool);
-        assert_eq!(restarted.files_in.restore(), 1, "the partial transfer is back");
+        assert_eq!(restarted.files_in.restore(now_secs()), 1, "the partial transfer is back");
         let identity = register_verified_peer(&state2, &sender, "wanderer");
         assert_eq!(
             restarted
@@ -4094,7 +4094,7 @@ mod tests {
 
         let (mut restarted, _radio2, state2, timeline2) = runtime_parts();
         restarted.files_in = FileStreamSpool::new(spool);
-        assert_eq!(restarted.files_in.restore(), 1);
+        assert_eq!(restarted.files_in.restore(now_secs()), 1);
         register_verified_peer(&state2, &sender, "wanderer");
         assert_eq!(restarted.files_in.completed(), vec![manifest.transfer_id]);
 

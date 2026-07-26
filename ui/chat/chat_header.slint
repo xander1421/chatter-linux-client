@@ -429,11 +429,18 @@ export component ChatHeader inherits Rectangle {
                     font-size: Typography.xs;
                     vertical-alignment: center;
                 }
-                NeoActionToggle {
-                    checked: MeshGlobal.mesh-on;
-                    glow-mode: "cyan";
-                    accessible-text: "Bluetooth mesh";
-                    toggled(value) => { MeshGlobal.set-mesh-on(value); }
+                // Wrapped and centred, the same way the header's other fixed-size
+                // children are: the toggle has its own height, and left to the
+                // row it rides above the text it belongs to.
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    NeoActionToggle {
+                        checked: MeshGlobal.mesh-on;
+                        glow-mode: "cyan";
+                        accessible-text: "Bluetooth mesh";
+                        toggled(value) => { MeshGlobal.set-mesh-on(value); }
+                    }
                 }
                 Rectangle {
                     width: 1px;

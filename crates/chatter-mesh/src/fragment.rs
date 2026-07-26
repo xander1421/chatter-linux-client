@@ -335,8 +335,22 @@ impl FragmentAssembler {
         Ok(Some(reassembled))
     }
 
-    /// Drops reassemblies older than [`FRAGMENT_LIFETIME_SECS`], measured from
-    /// the stream's first fragment.
+    /// Drops reassemblies that have received nothing new for
+    /// [`FRAGMENT_LIFETIME_SECS`].
+    ///
+    /// Measured from the last fragment to land, not the first. bitchat measures
+    /// from the first, and that is what made a large packet impossible on a slow
+    /// link: a 32 KiB chunk is ~70 fragments, and where the air only carries a
+    /// couple per second the stream needs longer than the window to finish, so it
+    /// was evicted *while still arriving*. Observed on a real link at
+    /// `received=56 expected=70` — fourteen fragments short, and thrown away
+    /// after every one of the fifty-six had crossed successfully.
+    ///
+    /// From the last fragment, the window means what it is for: a stream that has
+    /// stopped is dropped just as promptly, while one that is merely slow is left
+    /// to finish. Memory stays bounded because silence is still what triggers the
+    /// drop — a stream cannot live longer than `FRAGMENT_LIFETIME_SECS` past the
+    /// last thing it received — and `MAX_REASSEMBLED_BYTES` still caps each one.
     ///
     /// Returns one [`ExpiredStream`] per dropped reassembly, so the caller can say
     /// what was lost. This layer is sans-IO and does not log, but a silent
@@ -351,7 +365,7 @@ impl FragmentAssembler {
     pub fn evict_expired(&mut self, now_unix_secs: u64) -> Vec<ExpiredStream> {
         let mut expired = Vec::new();
         self.streams.retain(|key, assembly| {
-            if now_unix_secs.saturating_sub(assembly.started_at) <= FRAGMENT_LIFETIME_SECS {
+            if now_unix_secs.saturating_sub(assembly.last_fragment_at) <= FRAGMENT_LIFETIME_SECS {
                 return true;
             }
             expired.push(ExpiredStream {
@@ -831,18 +845,30 @@ mod tests {
     }
 
     #[test]
-    fn expiry_is_measured_from_the_first_fragment() {
+    fn expiry_is_measured_from_the_last_fragment_so_a_slow_stream_can_finish() {
+        // Measured from the *first* fragment, as bitchat does, a large packet is
+        // impossible on a slow link: 70 fragments arriving a couple per second
+        // need longer than the window, so the stream was evicted while still
+        // arriving. Seen on a real link at 56 of 70 — thrown away after every one
+        // of the fifty-six had crossed.
         let make = stream(0x05, 0xAA, 3);
         let mut assembler = FragmentAssembler::new();
         assembler.accept(&make(0, b"a"), 1_000).expect("ok");
-        // Progress at t=1020 does not extend the lifetime.
+
+        // Still arriving, well past the window from the first fragment.
         assembler.accept(&make(1, b"b"), 1_020).expect("ok");
+        assembler.evict_expired(1_040);
+        assert_eq!(
+            assembler.len(),
+            1,
+            "a stream that is still receiving is not a stream that has stalled"
+        );
 
-        assembler.evict_expired(1_030);
+        // Silence is what expires it, and the clock runs from the last arrival.
+        assembler.evict_expired(1_020 + FRAGMENT_LIFETIME_SECS);
         assert_eq!(assembler.len(), 1, "exactly at the lifetime, still held");
-
-        assembler.evict_expired(1_031);
-        assert!(assembler.is_empty());
+        assembler.evict_expired(1_021 + FRAGMENT_LIFETIME_SECS);
+        assert!(assembler.is_empty(), "a stream that stopped is dropped");
     }
 
     #[test]
