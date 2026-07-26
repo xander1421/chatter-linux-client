@@ -13,6 +13,37 @@ use super::platform::APP_ID;
 /// Service name for keyring entries (platform-specific).
 const SERVICE: &str = APP_ID;
 
+/// Name of the opt-out marker, looked for beside the database file.
+pub const NO_KEYRING_MARKER: &str = "no-keyring";
+
+/// Whether this machine has opted out of the OS keyring entirely.
+///
+/// True when `CHATTER_NO_KEYRING` is set, or when a `no-keyring` file sits beside
+/// the database. The marker exists because the environment variable only helps
+/// when whoever launched the process remembered to set it: a desktop entry, a bare
+/// `cargo run`, or a debugger all start the app without it and land back on a
+/// Secret Service prompt that nobody is present to answer. The marker travels with
+/// the data directory instead, so the choice holds however the app is started.
+///
+/// # This is a deliberate weakening
+///
+/// With the keyring out of the picture the database passphrase and the mesh seal
+/// key are plaintext files next to the database, mode 0600 — protected by file
+/// permissions and nothing else. Anything that can read the user's home directory
+/// can decrypt their message history. It is here for development and headless
+/// testing on a box with no unlockable Secret Service. Delete the marker (and the
+/// key files, if the material should be gone) to go back to the keyring.
+#[must_use]
+pub fn keyring_disabled(db_path: &std::path::Path) -> bool {
+    if std::env::var("CHATTER_NO_KEYRING").is_ok() {
+        return true;
+    }
+    db_path
+        .parent()
+        .is_some_and(|dir| dir.join(NO_KEYRING_MARKER).exists())
+}
+
+
 /// Secure credential storage using the system keyring.
 ///
 /// Uses the Secret Service API (GNOME Keyring, KWallet) on Linux
@@ -37,6 +68,8 @@ pub struct Keyring {
     username: String,
     /// Path to a local fallback file for the passphrase.
     local_path: std::path::PathBuf,
+    /// Kept so the `no-keyring` marker can be looked for beside the database.
+    db_path: std::path::PathBuf,
 }
 
 impl Keyring {
@@ -55,7 +88,7 @@ impl Keyring {
         let mut local_path = db_path.clone();
         local_path.set_extension("passphrase");
 
-        Self { username, local_path }
+        Self { username, local_path, db_path }
     }
 
     /// Creates a new keyring Entry for the database passphrase.
@@ -82,7 +115,7 @@ impl Keyring {
             return Ok(passphrase);
         }
 
-        if Self::use_local_file() {
+        if self.use_local_file() {
             return self.read_local_file();
         }
 
@@ -91,8 +124,12 @@ impl Keyring {
     }
 
     /// Whether the naked local-file passphrase mode is explicitly opted into.
-    fn use_local_file() -> bool {
-        std::env::var("CHATTER_DB_PASSPHRASE_FILE").is_ok()
+    ///
+    /// Either by `CHATTER_DB_PASSPHRASE_FILE` for a single run, or by the
+    /// [`keyring_disabled`] marker, which persists the same choice for every
+    /// launch however it happens.
+    fn use_local_file(&self) -> bool {
+        std::env::var("CHATTER_DB_PASSPHRASE_FILE").is_ok() || keyring_disabled(&self.db_path)
     }
 
     /// Read the on-disk default passphrase.
@@ -112,7 +149,7 @@ impl Keyring {
     ) -> Result<String, SystemError> {
         // Retry only matters for the keyring path (Secret Service unlock
         // prompt). Env var + local file are synchronous.
-        if std::env::var("CHATTER_DB_PASSPHRASE").is_ok() || Self::use_local_file() {
+        if std::env::var("CHATTER_DB_PASSPHRASE").is_ok() || self.use_local_file() {
             return self.get_passphrase();
         }
 
@@ -134,12 +171,31 @@ impl Keyring {
         Err(SystemError::Keyring("Timeout".into()))
     }
 
+    /// Where [`get_passphrase`](Self::get_passphrase) would read from.
+    ///
+    /// Reported at startup because "retrieved existing passphrase" alone is the
+    /// same sentence whether the keyring answered, an environment variable did, or
+    /// a plaintext file beside the database did — and those have very different
+    /// security properties. A log line that cannot distinguish them is how a
+    /// machine silently running without its keyring looks identical to one using
+    /// it.
+    #[must_use]
+    pub fn passphrase_source(&self) -> &'static str {
+        if std::env::var("CHATTER_DB_PASSPHRASE").is_ok() {
+            "CHATTER_DB_PASSPHRASE"
+        } else if self.use_local_file() {
+            "a plaintext file beside the database (keyring opted out)"
+        } else {
+            "the OS keyring"
+        }
+    }
+
     pub fn set_passphrase(&self, passphrase: &str) -> Result<(), SystemError> {
         if std::env::var("CHATTER_DB_PASSPHRASE").is_ok() {
             return Ok(());
         }
 
-        if Self::use_local_file() {
+        if self.use_local_file() {
             return self.write_local_file(passphrase);
         }
 
@@ -182,7 +238,7 @@ impl Keyring {
     ) -> Result<(), SystemError> {
         // Retry only matters for the keyring path. Env var + local file
         // are synchronous.
-        if std::env::var("CHATTER_DB_PASSPHRASE").is_ok() || Self::use_local_file() {
+        if std::env::var("CHATTER_DB_PASSPHRASE").is_ok() || self.use_local_file() {
             return self.set_passphrase(passphrase);
         }
 

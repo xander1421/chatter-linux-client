@@ -395,7 +395,10 @@ impl InfrastructureContainer {
             // Try to get existing passphrase with retries
             match keyring.get_passphrase_with_retry(MAX_RETRIES, RETRY_DELAY_SECS) {
                 Ok(passphrase) => {
-                    tracing::info!("Retrieved existing passphrase from keyring");
+                    tracing::info!(
+                        source = keyring.passphrase_source(),
+                        "retrieved the existing database passphrase"
+                    );
                     return Ok(passphrase);
                 }
                 // ONLY a genuine absence may generate a new passphrase.

@@ -313,6 +313,15 @@ impl MeshSealer {
             return Ok(Self::from_key(&key));
         }
 
+        // The same opt-out the database passphrase honours, for the same reason:
+        // an environment variable only helps when whoever started the process set
+        // it, and an unattended run started any other way lands on a Secret
+        // Service prompt with nobody there to answer it. See
+        // `system::keyring::keyring_disabled` for what this gives up.
+        if crate::system::keyring::keyring_disabled(db_path) {
+            return Self::from_local_key_file(db_path);
+        }
+
         let entry = keyring::Entry::new(APP_ID, &Self::entry_username(db_path))
             .map_err(|e| format!("the OS keyring could not be opened: {e}"))?;
 
@@ -361,6 +370,57 @@ impl MeshSealer {
     /// Logout and account reset. Everything in `mesh_store` becomes permanently
     /// unreadable, which is the point — call [`Storage::wipe_all`] alongside it
     /// so the unreadable rows do not linger.
+    /// The seal key from a plaintext file beside the database, generating it on
+    /// first use.
+    ///
+    /// Mirrors `acquire`'s keyring branch exactly in the one respect that matters:
+    /// a key that exists is never replaced. A file that is present but unreadable
+    /// or malformed is an error, not an absence — regenerating there would leave
+    /// every already-sealed blob permanently undecryptable while appearing to
+    /// have worked.
+    ///
+    /// Written 0600, and plaintext. That is the trade the marker file opts into.
+    fn from_local_key_file(db_path: &Path) -> Result<Self, String> {
+        let path = Self::local_key_path(db_path);
+
+        match std::fs::read_to_string(&path) {
+            Ok(encoded) => {
+                let encoded = Zeroizing::new(encoded);
+                let raw = Zeroizing::new(
+                    hex::decode(encoded.trim().as_bytes())
+                        .map_err(|e| format!("{} is not hex: {e}", path.display()))?,
+                );
+                let key: [u8; KEY_SIZE] = raw.as_slice().try_into().map_err(|_| {
+                    format!(
+                        "{} must hold {KEY_SIZE} key bytes, found {}",
+                        path.display(),
+                        raw.len()
+                    )
+                })?;
+                Ok(Self::from_key(&key))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let key = Zeroizing::new(
+                    random_key().map_err(|e| format!("no randomness for a new key: {e}"))?,
+                );
+                let encoded = Zeroizing::new(hex::encode(key.as_slice()));
+                // Persisted before use, as the keyring branch does: a key sealed
+                // with but never stored reads back as garbage after a restart.
+                write_private(&path, encoded.as_bytes())
+                    .map_err(|e| format!("the mesh seal key could not be saved: {e}"))?;
+                Ok(Self::from_key(&key))
+            }
+            Err(error) => Err(format!("{} could not be read: {error}", path.display())),
+        }
+    }
+
+    /// Where the seal key lives when the keyring is opted out of.
+    fn local_key_path(db_path: &Path) -> std::path::PathBuf {
+        let mut path = db_path.to_path_buf();
+        path.set_extension("mesh-seal-key");
+        path
+    }
+
     pub fn delete_from_keyring(db_path: &Path) -> Result<(), StoreError> {
         let entry = keyring::Entry::new(APP_ID, &Self::entry_username(db_path))
             .map_err(|e| storage_error("keyring open", SEAL_KEY_LABEL, e))?;
@@ -450,6 +510,30 @@ impl Sealer for MeshSealer {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_marker_keeps_an_existing_local_seal_key_instead_of_replacing_it() {
+        // The whole point of the opt-out is that it is safe to leave on. A second
+        // start must find the same key: generating a fresh one would leave every
+        // blob already sealed permanently undecryptable, which is the exact failure
+        // `from_keyring` refuses to allow on the keyring path.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("chatter.db");
+        std::fs::write(dir.path().join(super::super::super::system::keyring::NO_KEYRING_MARKER), "x")
+            .expect("marker");
+
+        let first = MeshSealer::from_keyring(&db_path);
+        assert!(first.is_ready(), "the key should be generated on first use: {:?}", first.unavailable_reason());
+
+        let sealed = first.seal(b"outbox").expect("seal");
+        let second = MeshSealer::from_keyring(&db_path);
+        assert!(second.is_ready(), "the stored key should be read back");
+        assert_eq!(
+            second.open(&sealed).expect("open").as_slice(),
+            b"outbox",
+            "a restart must open what the previous run sealed"
+        );
+    }
     use super::*;
 
     // MARK: an unavailable sealer
@@ -760,4 +844,21 @@ mod tests {
         // `db:` prefix — a shared entry would defeat the whole separation.
         assert!(!a.starts_with("db:"), "{a}");
     }
+}
+
+/// Write a file only its owner can read.
+///
+/// The mode is set as part of opening it, not afterwards: creating it world
+/// readable and then narrowing leaves a window in which the key was readable.
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)?.write_all(bytes)
 }
