@@ -229,8 +229,11 @@ impl MeshService {
         ));
         let events = MeshEvents::new(EVENT_CAPACITY, Arc::clone(&timeline));
 
-        let (ble_bus, ble_rx) = CommandBus::new();
-        let (nostr_bus, nostr_rx) = CommandBus::new();
+        // The receivers for the first channel are dropped: nothing runs until
+        // `start`, and `start` rebinds. A command sent before then goes nowhere,
+        // which is what "not running" means.
+        let (ble_bus, _) = CommandBus::new();
+        let (nostr_bus, _) = CommandBus::new();
 
         let router = Arc::new(RouterHandle::spawn(RouterDeps {
             state: Arc::clone(&state),

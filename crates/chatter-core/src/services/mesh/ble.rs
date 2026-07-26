@@ -73,7 +73,7 @@ use super::transport::BleCommand;
 /// How often the loop wakes to run the parts that nothing else can schedule.
 const TICK: Duration = Duration::from_millis(500);
 
-/// How soon to retry a frame the radio refused for being busy.
+/// How long between frames on one link — the transmit rate, in one number.
 ///
 /// One ATT operation may be outstanding per link — Android's bridge enforces
 /// that with an `OpGate` and reports the second write as retryable, and BlueZ
@@ -92,7 +92,7 @@ const TICK: Duration = Duration::from_millis(500);
 /// gate that is still closed, short enough that the radio's own completion rate
 /// becomes the limit again, which is where the limit belongs. This is a floor
 /// on retry latency, not a rate: the loop only arms it while frames are queued.
-const WRITE_RETRY_DELAY: Duration = Duration::from_millis(20);
+const WRITE_PACING_DELAY: Duration = Duration::from_millis(20);
 
 /// The TTL an announce still carries when it has not been relayed.
 ///
@@ -109,29 +109,6 @@ const DIRECT_ANNOUNCE_TTL: u8 = chatter_mesh::relay::MESSAGE_TTL_DEFAULT;
 /// servicing link events for the entire transfer, which for a 16 MiB file is
 /// minutes of not noticing a peer connect or disconnect.
 const CHUNKS_PER_TICK: usize = 1;
-
-/// Measured air throughput for one link, in bytes of payload per second.
-///
-/// A calibration figure, not a constant of nature, and deliberately set from a
-/// *sustained* measurement rather than a burst.
-///
-/// A short isolated 32 KiB file crosses at ~21.5 kB/s, which is the figure this
-/// started at. A 2 MiB transfer measured end to end came in at 10.5 kB/s — 3.11 s
-/// per chunk against a 1.64 s budget — because a real transfer shares the link
-/// with announces, gossip sync and the receiver's own traffic for its whole
-/// duration, and a burst does not. The sustained number is the one that matters:
-/// pacing under the real rate costs a little time, pacing over it costs the whole
-/// transfer, because the excess is discarded rather than queued.
-///
-/// It exists because BlueZ gives no backpressure when it sends notifications.
-/// Android's bridge refuses a second concurrent write and the layer above queues
-/// and retries; BlueZ's `try_send` accepted 36,800 consecutive frames without one
-/// refusal while the link could carry roughly a third of them. A sender that
-/// waits to be told to slow down is never told, so it has to know.
-///
-/// Tune this if the radio or the platform changes. Too low is slow; too high is
-/// silent loss.
-const AIR_BYTES_PER_SEC: u64 = 10_000;
 
 /// Queued outbound bytes above which a transfer skips its turn.
 ///
@@ -262,7 +239,7 @@ impl BleRuntime {
                 _ = ticker.tick() => self.on_tick().await,
                 // Only armed while something is queued, so a quiet mesh still
                 // wakes twice a second and no faster.
-                _ = tokio::time::sleep(WRITE_RETRY_DELAY), if backlogged => {
+                _ = tokio::time::sleep(WRITE_PACING_DELAY), if backlogged => {
                     self.flush_buffered_writes().await;
                 }
             }
@@ -1402,20 +1379,7 @@ impl BleRuntime {
         let Some(transfer) = self.files_out.get_mut(&request.transfer_id) else {
             return;
         };
-        let pace_before = transfer.pace_percent();
         transfer.note_requested(&request.indices);
-        let pace_after = transfer.pace_percent();
-        if pace_after != pace_before {
-            // The one place the sender learns its own rate. Worth a line: it is
-            // the difference between "this link is slow" and "we are shouting
-            // over it", and the two need opposite responses.
-            tracing::info!(
-                target: "mesh::ble",
-                transfer = %hex_encode(&request.transfer_id),
-                pace_percent = pace_after,
-                "a re-request says the link cannot take the current rate; slowing down"
-            );
-        }
         tracing::info!(
             target: "mesh::ble",
             peer = %sender,
@@ -1944,10 +1908,7 @@ impl BleRuntime {
     /// Called from the tick, one chunk at a time, rather than looping over the
     /// whole file: the loop is also the only thing servicing link events, and a
     /// 16 MiB transfer emitted in one pass would leave the mesh deaf for minutes.
-    /// `now_ms` is a parameter rather than a call to the clock inside, because
-    /// chunk pacing is measured in milliseconds and a rate that reads its own
-    /// clock cannot be tested without sleeping for real.
-    async fn pump_streamed_files(&mut self, now_s: u64, now_ms: u64) {
+    async fn pump_streamed_files(&mut self, now_s: u64) {
         if self.files_out.is_empty() {
             return;
         }
@@ -1995,27 +1956,6 @@ impl BleRuntime {
                 continue;
             }
 
-            // Rate pacing, on top of the queue check above. The queue check only
-            // fires where the radio reports congestion; this one holds in the
-            // direction where it never does.
-            if let Some(due) = self
-                .files_out
-                .get(&id)
-                .map(|transfer| transfer.next_chunk_ms)
-                .filter(|due| now_ms < *due)
-            {
-                // Logged because a transfer that looks stalled and one that is
-                // being paced are indistinguishable from outside, and the whole
-                // reason this pacing exists is that the previous invisible
-                // bottleneck took a night to find.
-                tracing::debug!(
-                    target: "mesh::ble",
-                    transfer = %hex_encode(&id),
-                    wait_ms = due.saturating_sub(now_ms),
-                    "chunk turn skipped: pacing the previous chunk onto the air"
-                );
-                continue;
-            }
 
             for _ in 0..CHUNKS_PER_TICK {
                 let Some(transfer) = self.files_out.get_mut(&id) else {
@@ -2049,16 +1989,7 @@ impl BleRuntime {
                 // air. Stamped from the encoded length, so a short final chunk
                 // waits proportionally less, and set before the write rather than
                 // after so a slow write does not extend the interval twice.
-                if let Some(transfer) = self.files_out.get_mut(&id) {
-                    // Nothing outstanding means the receiver has asked for
-                    // nothing, so the last chunk is presumed to have landed and
-                    // the interval can come back in a little.
-                    if transfer.is_drained() || transfer.nothing_outstanding() {
-                        transfer.note_clean_pass();
-                    }
-                    let air_ms = transfer.pace_ms(payload.len(), AIR_BYTES_PER_SEC);
-                    transfer.next_chunk_ms = now_ms.saturating_add(air_ms);
-                }
+
                 let packet = self.build_packet(
                     MessageType::FileChunk,
                     None,
@@ -2308,37 +2239,46 @@ impl BleRuntime {
             suborder: priority.suborder,
         };
 
+        // Queued, never written straight out — and this is the whole of the
+        // pacing now. `flush_buffered_writes` takes one frame per link per
+        // `WRITE_PACING_DELAY`, which is the rate the radio actually carries.
+        //
+        // Writing them back to back here is what broke large transfers. BlueZ
+        // accepts frames far faster than the link can carry them and discards the
+        // excess below the socket, silently, so nothing on either side reported a
+        // loss: the receiver simply saw a fraction of each chunk. Android's bridge
+        // does push back, which is why the same code worked in one direction and
+        // not the other. Spacing every frame on this side is what makes both
+        // directions behave, and it needs no estimate of the link's speed.
+        //
+        // bitchat reaches the same place from the other end — `interFragmentDelayMs
+        // = 20` between fragments in `FragmentingPacketSender`. It can sleep inside
+        // its send loop because that loop is a coroutine per transfer; this one is
+        // the single event loop that also has to service link events, so the wait
+        // happens in the drain instead.
+        //
+        // The cost is that a one-frame packet waits up to one interval too. That is
+        // the price of not having to decide per packet which ones are large.
         for link in plan.selected.iter() {
             for frame in &frames {
-                match self.radio.send(link, frame).await {
-                    Ok(()) => {}
-                    Err(error) if should_buffer(&error) => {
-                        // Routine: BLE controller queues fill, and there is no
-                        // retransmission underneath us, so discarding here loses
-                        // the packet outright.
-                        let admitted = self.state.with(|state| {
-                            state.writes.enqueue(
-                                link,
-                                frame.clone(),
-                                write_priority,
-                                PENDING_WRITE_BUFFER_CAP_BYTES,
-                            )
-                        });
-                        // The buffer is byte-capped, so enqueue can refuse. Dropping
-                        // the outcome would turn a refusal into a silent packet loss,
-                        // which is exactly what #[must_use] on WriteEnqueue is for.
-                        if !matches!(admitted, WriteEnqueue::Enqueued { .. }) {
-                            tracing::warn!(
-                                link = %link,
-                                "mesh: outbound write buffer full, packet dropped"
-                            );
-                        }
-                        self.state.with(|_state| {
-                        });
-                    }
-                    Err(error) => {
-                        tracing::debug!(target: "mesh::ble", link = %link, %error, "write failed");
-                    }
+                let admitted = self.state.with(|state| {
+                    state.writes.enqueue(
+                        link,
+                        frame.clone(),
+                        write_priority,
+                        PENDING_WRITE_BUFFER_CAP_BYTES,
+                    )
+                });
+                // Byte-capped, so this can refuse. A refusal is a dropped packet
+                // and has to be said out loud — which is what `#[must_use]` on
+                // `WriteEnqueue` is for.
+                if !matches!(admitted, WriteEnqueue::Enqueued { .. }) {
+                    tracing::warn!(
+                        target: "mesh::ble",
+                        link = %link,
+                        msg_type = packet.msg_type,
+                        "the outbound queue is full; a frame was dropped"
+                    );
                 }
             }
         }
@@ -2481,7 +2421,7 @@ impl BleRuntime {
         // Chunked file transfers, which nothing else can schedule either: the
         // send side is paced by this tick rather than by a loop over the file, and
         // the receive side has no other way to notice that a transfer went quiet.
-        self.pump_streamed_files(now_s, now_millis()).await;
+        self.pump_streamed_files(now_s).await;
         self.request_missing_chunks(now_s).await;
 
         // Gossip sync, which nothing else can schedule.
@@ -2568,40 +2508,69 @@ impl BleRuntime {
         }
     }
 
+    /// Put everything queued on the air at once, ignoring the pacing interval.
+    ///
+    /// Tests only. Sending now queues, and the queue drains one frame per link per
+    /// [`WRITE_PACING_DELAY`] — so a test that sends and then reads the mock
+    /// radio's log sees nothing without this. Draining explicitly is better than
+    /// sleeping through the real interval: the tests assert *what* went on the air,
+    /// and the pacing has its own test for *when*.
+    #[cfg(test)]
+    async fn drain_writes(&self) {
+        // Bounded rather than `while !is_empty()`: a radio that refuses every
+        // write would otherwise spin here forever instead of failing the test.
+        for _ in 0..10_000 {
+            if self.state.with(|state| state.writes.is_empty()) {
+                return;
+            }
+            self.flush_buffered_writes().await;
+        }
+    }
+
+    /// Put **one** frame per link on the air.
+    ///
+    /// Called every [`WRITE_PACING_DELAY`] while anything is queued, so one frame
+    /// per link per interval is the transmit rate — deliberately, and this is the
+    /// only thing that limits it. It used to drain each link until the radio
+    /// refused, which is no limit at all where the radio never refuses: BlueZ
+    /// accepted every frame and dropped what the link could not carry.
+    ///
+    /// One per call rather than a batch because the interval is calibrated per
+    /// frame. Draining two would double the rate and put the guesswork back.
     async fn flush_buffered_writes(&self) {
-        let pending = self.state.with(|state| {
+        let next = self.state.with(|state| {
             let links: Vec<LinkId> = state.writes.link_ids().cloned().collect();
             links
                 .into_iter()
-                .map(|link| {
-                    let writes = state.writes.take_all(&link);
-                    (link, writes)
+                .filter_map(|link| {
+                    let mut writes = state.writes.take_all(&link);
+                    if writes.is_empty() {
+                        return None;
+                    }
+                    let head = writes.remove(0);
+                    if !writes.is_empty() {
+                        // The tail goes back in order. A reordered fragment
+                        // stream is worse than a delayed one.
+                        state.writes.prepend(&link, writes);
+                    }
+                    Some((link, head))
                 })
                 .collect::<Vec<_>>()
         });
 
-        for (link, writes) in pending {
-            let mut requeue = Vec::new();
-            let mut blocked = false;
-            for write in writes {
-                if blocked {
-                    requeue.push(write);
-                    continue;
+        for (link, write) in next {
+            match self.radio.send(&link, &write.bytes).await {
+                Ok(()) => {}
+                Err(error) if should_buffer(&error) => {
+                    // The radio does push back on some platforms. Put it back at
+                    // the head and try again on the next interval.
+                    self.state
+                        .with(|state| state.writes.prepend(&link, vec![write]));
+                    tracing::trace!(target: "mesh::ble", %link, %error, "write deferred");
                 }
-                match self.radio.send(&link, &write.bytes).await {
-                    Ok(()) => {}
-                    Err(error) if should_buffer(&error) => {
-                        // Still full. Stop and put the rest back in order — a
-                        // reordered fragment stream is worse than a delayed one.
-                        blocked = true;
-                        requeue.push(write);
-                    }
-                    Err(_) => {}
+                Err(error) => {
+                    tracing::debug!(target: "mesh::ble", %link, %error, "write failed");
                 }
-            }
-            if !requeue.is_empty() {
-                self.state
-                    .with(|state| state.writes.prepend(&link, requeue));
             }
         }
     }
@@ -3017,6 +2986,8 @@ mod tests {
         let mut events = runtime.events.subscribe();
 
         runtime.broadcast_public("MSG-1", "said once").await;
+
+        runtime.drain_writes().await;
         let packet = codec::decode(&radio.writes()[0].1).expect("decodable");
         // The local mirror: the copy the user is already looking at.
         assert!(matches!(events.try_recv(), Ok(MeshEvent::Message(_))));
@@ -3046,6 +3017,7 @@ mod tests {
 
         // Build the announce exactly as we would send it, then feed it back.
         runtime.announce().await;
+        runtime.drain_writes().await;
         let sent = _radio.writes();
         let packet = codec::decode(&sent[0].1).expect("decodable");
         assert_eq!(
@@ -3130,6 +3102,8 @@ mod tests {
 
         runtime.announce().await;
 
+        runtime.drain_writes().await;
+
         let writes = radio.writes();
         assert_eq!(writes.len(), 1, "the announce went out on the one link");
         let packet = codec::decode(&writes[0].1).expect("decodable");
@@ -3171,6 +3145,7 @@ mod tests {
             inner.max_write.insert(link.clone(), 512);
         });
         runtime.announce().await;
+        runtime.drain_writes().await;
         assert_eq!(radio.write_count(), 0);
     }
 
@@ -3186,6 +3161,8 @@ mod tests {
         let mut events = runtime.events.subscribe();
 
         runtime.broadcast_public("MSG-1", "hello room").await;
+
+        runtime.drain_writes().await;
 
         let writes = radio.writes();
         assert_eq!(writes.len(), 1);
@@ -3236,6 +3213,8 @@ mod tests {
         radio.set_reject_writes(true);
 
         runtime.broadcast_public("MSG-1", "hello room").await;
+
+        runtime.drain_writes().await;
 
         assert_eq!(radio.write_count(), 0, "the controller refused the write");
         assert_eq!(
@@ -3317,6 +3296,8 @@ mod tests {
         });
 
         runtime.send_private(&peer, "MSG-1", "secret").await;
+
+        runtime.drain_writes().await;
 
         // The message is held, not sent in the clear.
         let held = state.with(|inner| inner.pending_dms.get(&peer).map(Vec::len));
@@ -3498,6 +3479,8 @@ mod tests {
         let mut events = runtime.events.subscribe();
 
         runtime.broadcast_file("MSG-F1", &sample_file()).await;
+
+        runtime.drain_writes().await;
         let packet = codec::decode(&radio.writes()[0].1).expect("decodable");
         assert_eq!(packet.message_type(), Some(MessageType::FileTransfer));
         // The local mirror: the row the sender is already looking at.
@@ -3575,6 +3558,7 @@ mod tests {
 
         let file = sample_file();
         runtime.broadcast_file("MSG-F1", &file).await;
+        runtime.drain_writes().await;
 
         let writes = radio.writes();
         assert_eq!(writes.len(), 1);
@@ -3830,6 +3814,7 @@ mod tests {
         runtime
             .request_missing_chunks(now_secs() + CHUNK_REQUEST_QUIET_SECS)
             .await;
+        runtime.drain_writes().await;
         let writes = radio.writes();
         let packet = codec::decode(&writes[before].1).expect("decodable");
         assert_eq!(packet.message_type(), Some(MessageType::FileChunkRequest));
@@ -4146,54 +4131,63 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_chunk_waits_for_the_previous_one_to_clear_the_air() {
-        // The pacing that makes a large transfer possible at all. Chunk
-        // generation used to be gated only by the loop tick, on the assumption
-        // that the outbound write queue would absorb the difference and the radio
-        // would set the real rate. That holds only where the radio reports
-        // congestion — Android's bridge does. BlueZ sending notifications does
-        // not: measured over 36,800 frames, `try_send` never once refused, so
-        // every frame was accepted and the excess was dropped below the socket.
-        // The receiver saw 2 to 9 fragments of each 70-fragment chunk and never
-        // completed one, while asking for them twice a second.
+    async fn frames_go_out_one_at_a_time_rather_than_all_at_once() {
+        // The pacing that makes a large transfer possible, and where it now lives.
         //
-        // So a chunk is held until the previous one has had time on the air.
+        // It used to be a prediction: hold the next *chunk* back by how long its
+        // 70 fragments ought to take, from a calibrated rate. That needed a rate
+        // to calibrate, and one figure could not fit two radios — the same sender
+        // measured ~10.5 kB/s to one phone and ~2.5 kB/s to another.
+        //
+        // So the spacing moved to the frames themselves, which is where the limit
+        // actually is and needs no estimate. `transmit` queues; the drain takes one
+        // frame per link per interval. bitchat spaces fragments the same way
+        // (`interFragmentDelayMs = 20`).
         let (mut runtime, radio, state, _timeline) = runtime_parts();
+        // 512, the real negotiated write size on this stack, so the chunk below
+        // actually fragments. A text payload is no good here: `broadcast_public`
+        // DEFLATEs, and any string long enough to fragment is compressible enough
+        // not to.
+        writable_link(&state, "/mock/paced", 512);
         let dir = tempfile::tempdir().expect("temp dir");
         let source = dir.path().join("paced.bin");
         let bytes = body(4_000);
         std::fs::write(&source, &bytes).expect("write");
-        writable_link(&state, "/mock/paced", 4096);
 
         let manifest = test_manifest([0x2C; 8], &bytes);
         runtime
             .start_streamed_file("MSG-PACE", manifest.clone(), source)
             .await;
+        // The manifest is one frame; the chunk is many. Clear the manifest out so
+        // what is counted below is the fragment stream and nothing else.
+        runtime.drain_writes().await;
+        runtime.pump_streamed_files(now_secs()).await;
 
-        let at = 5_000_000u64;
-        runtime.pump_streamed_files(now_secs(), at).await;
-        let after_first = radio.write_count();
-        assert!(after_first > 0, "the first chunk goes out immediately");
+        let link = LinkId::new("/mock/paced");
+        let queued_frames = state.with(|inner| inner.writes.queued_count(&link));
+        assert!(
+            queued_frames > 1,
+            "a chunk is many frames, and all of them are queued rather than written"
+        );
+        assert_eq!(
+            radio.write_count(),
+            1,
+            "only the manifest, drained above; the chunk's frames are all still queued"
+        );
 
-        // Same millisecond, and every millisecond up to the interval: nothing
-        // more is generated, however often the loop runs.
-        for advance in [0, 1, 10] {
-            runtime.pump_streamed_files(now_secs(), at + advance).await;
+        // Each turn of the drain puts exactly one frame on the air per link.
+        let baseline = radio.write_count();
+        for step in 1..=queued_frames {
+            runtime.flush_buffered_writes().await;
             assert_eq!(
                 radio.write_count(),
-                after_first,
-                "a chunk {advance} ms after the last one would be dropped, not sent"
+                baseline + step,
+                "one frame per interval, so the rate is the interval and not a guess"
             );
         }
 
-        // Once the air time has elapsed, the next chunk goes.
-        runtime
-            .pump_streamed_files(now_secs(), at + CHUNK_AIR_MS_FOR_TESTS)
-            .await;
-        assert!(
-            radio.write_count() > after_first,
-            "pacing delays a chunk, it does not cancel it"
-        );
+        // And the queue empties rather than the tail being lost.
+        assert!(state.with(|inner| inner.writes.is_empty()));
     }
 
     #[tokio::test]
@@ -4214,6 +4208,7 @@ mod tests {
         runtime
             .start_streamed_file("MSG-S1", manifest.clone(), source.clone())
             .await;
+        runtime.drain_writes().await;
 
         // The manifest goes first, signed, as a broadcast.
         let writes = radio.writes();
@@ -4258,7 +4253,8 @@ mod tests {
         let mut now_ms = 1_000_000u64;
         for _ in 0..manifest.chunk_count {
             let before = radio.write_count();
-            runtime.pump_streamed_files(now_secs(), now_ms).await;
+            runtime.pump_streamed_files(now_secs()).await;
+            runtime.drain_writes().await;
             now_ms += CHUNK_AIR_MS_FOR_TESTS;
             let writes = radio.writes();
             assert_eq!(
@@ -4283,7 +4279,8 @@ mod tests {
         // Drained: nothing more goes out unprompted, because there is no
         // acknowledgement to wait for.
         let before = radio.write_count();
-        runtime.pump_streamed_files(now_secs(), u64::MAX).await;
+        runtime.pump_streamed_files(now_secs()).await;
+        runtime.drain_writes().await;
         assert_eq!(radio.write_count(), before);
     }
 
@@ -4304,11 +4301,13 @@ mod tests {
         runtime
             .start_streamed_file("MSG-S2", manifest.clone(), source)
             .await;
+        runtime.drain_writes().await;
         // Two passes, with the clock moved on between them so the second is not
         // held back by the first chunk's pacing interval.
-        runtime.pump_streamed_files(now_secs(), 1_000_000).await;
+        runtime.pump_streamed_files(now_secs()).await;
+        runtime.drain_writes().await;
         runtime
-            .pump_streamed_files(now_secs(), 1_000_000 + CHUNK_AIR_MS_FOR_TESTS)
+            .pump_streamed_files(now_secs())
             .await;
 
         // A signed request for chunk 0, which has already been sent once.
@@ -4322,6 +4321,10 @@ mod tests {
         );
         runtime.on_file_chunk_request(&packet, &asker);
 
+        // Everything the first pass queued has to be on the air before the
+        // baseline is taken, or `before` indexes into frames that were merely
+        // waiting rather than the one the re-request produces.
+        runtime.drain_writes().await;
         let before = radio.write_count();
         // Named rather than indexed. Tests install no tracing subscriber, so a
         // transfer that never started logs nothing anywhere, and indexing
@@ -4334,7 +4337,8 @@ mod tests {
              live: {})",
             !runtime.files_out.is_empty()
         );
-        runtime.pump_streamed_files(now_secs(), u64::MAX).await;
+        runtime.pump_streamed_files(now_secs()).await;
+        runtime.drain_writes().await;
         let writes = radio.writes();
         let served = writes
             .get(before)
@@ -4370,7 +4374,8 @@ mod tests {
              live: {})",
             !runtime.files_out.is_empty()
         );
-        runtime.pump_streamed_files(now_secs(), u64::MAX).await;
+        runtime.pump_streamed_files(now_secs()).await;
+        runtime.drain_writes().await;
         let writes = radio.writes();
         let served = writes
             .get(before)
@@ -4403,6 +4408,7 @@ mod tests {
         runtime
             .start_streamed_file("MSG-S3", manifest.clone(), source)
             .await;
+        runtime.drain_writes().await;
         let rows_before = timeline
             .history(&MeshConversation::Room, None, 10)
             .expect("history")
@@ -4465,6 +4471,8 @@ mod tests {
         writable_link(&state, "/mock/fork", 4096);
 
         runtime.broadcast_file("MSG-SMALL", &sample_file()).await;
+
+        runtime.drain_writes().await;
         let writes = radio.writes();
         assert_eq!(
             codec::decode(&writes[0].1).expect("decodable").message_type(),
@@ -4480,6 +4488,7 @@ mod tests {
         runtime
             .start_streamed_file("MSG-BIG", test_manifest([0x1B; 8], &bytes), source)
             .await;
+        runtime.drain_writes().await;
         let writes = radio.writes();
         assert_eq!(
             codec::decode(&writes[before].1)

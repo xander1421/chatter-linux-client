@@ -818,46 +818,7 @@ pub struct OutboundTransfer {
     /// When the manifest was last put on the air.
     pub last_manifest_secs: u64,
     pub started_secs: u64,
-    /// Earliest time the next chunk may be generated.
-    ///
-    /// Chunk generation used to be paced only by the loop tick — one chunk per
-    /// 500 ms — on the assumption that the outbound write queue would absorb the
-    /// difference and the radio would set the real rate. That holds only where
-    /// the radio reports congestion. Android's bridge does, and a transfer *to*
-    /// a phone works. BlueZ sending notifications does not: measured over 36,800
-    /// frames, `try_send` never once refused, so every frame was accepted and the
-    /// excess was discarded below the socket. The receiver saw 2 to 9 fragments
-    /// of each 70-fragment chunk and could not complete a single one.
-    ///
-    /// So the sender paces itself instead of waiting to be told to.
-    pub next_chunk_ms: u64,
-    /// Pacing interval as a percentage of the nominal one. 100 = as calibrated.
-    ///
-    /// One global rate cannot fit two radios. Measured against a Galaxy S25 the
-    /// link carries ~10.5 kB/s sustained; against a Galaxy S9+ the same sender
-    /// manages ~2.5 kB/s, four times slower. A constant tuned for either is wrong
-    /// for the other — too fast loses fragments, too slow wastes airtime — and
-    /// nothing in the transport reports a rate to read.
-    ///
-    /// The receiver reports it, though, without meaning to: asking again for a
-    /// chunk that was already sent is evidence that the previous pass outran the
-    /// link. So this widens on that evidence and narrows without it, which is
-    /// congestion control with the receiver's requests as the only feedback
-    /// available on a medium that acknowledges nothing.
-    pace_percent: u32,
 }
-
-/// Bounds on [`OutboundTransfer::pace_percent`], and how fast it moves.
-///
-/// Widening is aggressive and narrowing is gradual, the usual asymmetry: being
-/// too fast costs retransmissions of whole 32 KiB chunks, while being too slow
-/// costs only time. The ceiling exists so a peer that has walked out of range —
-/// which looks exactly like congestion from here — cannot stretch the interval
-/// without limit and leave a transfer that never resumes when it returns.
-const PACE_MIN_PERCENT: u32 = 100;
-const PACE_MAX_PERCENT: u32 = 800;
-const PACE_WIDEN_PERCENT: u32 = 50;
-const PACE_NARROW_PERCENT: u32 = 10;
 
 impl OutboundTransfer {
     #[must_use]
@@ -872,8 +833,6 @@ impl OutboundTransfer {
             started_secs: now_secs,
             // Zero, so the first chunk goes out on the next tick rather than
             // waiting out a pacing interval nothing has used yet.
-            next_chunk_ms: 0,
-            pace_percent: PACE_MIN_PERCENT,
         }
     }
 
@@ -892,54 +851,13 @@ impl OutboundTransfer {
     /// asking for a chunk the first pass has not reached yet, which is ordinary
     /// impatience rather than loss.
     pub fn note_requested(&mut self, indices: &[u32]) {
-        let mut resent = false;
         for index in indices {
-            if self.manifest.chunk_span(*index).is_none() {
-                continue;
+            if self.manifest.chunk_span(*index).is_some() {
+                self.requested.insert(*index);
             }
-            resent |= *index < self.cursor;
-            self.requested.insert(*index);
-        }
-        if resent {
-            self.pace_percent =
-                (self.pace_percent + PACE_WIDEN_PERCENT).min(PACE_MAX_PERCENT);
         }
     }
 
-    /// The pacing interval for a chunk of `bytes`, in milliseconds.
-    ///
-    /// `bytes` is the encoded length, so the short final chunk waits
-    /// proportionally less than a full one.
-    #[must_use]
-    pub fn pace_ms(&self, bytes: usize, air_bytes_per_sec: u64) -> u64 {
-        (bytes as u64)
-            .saturating_mul(1_000)
-            .saturating_mul(u64::from(self.pace_percent))
-            .saturating_div(air_bytes_per_sec.max(1).saturating_mul(100))
-    }
-
-    /// How wide the pacing interval currently is, as a percentage.
-    #[must_use]
-    pub fn pace_percent(&self) -> u32 {
-        self.pace_percent
-    }
-
-    /// Whether any receiver request is waiting to be served.
-    #[must_use]
-    pub fn nothing_outstanding(&self) -> bool {
-        self.requested.is_empty()
-    }
-
-    /// Narrow the interval a little, on evidence that the link is keeping up.
-    ///
-    /// Called when a chunk goes out with nothing outstanding: the receiver has
-    /// asked for nothing, so the last thing sent is presumed to have landed.
-    pub fn note_clean_pass(&mut self) {
-        self.pace_percent = self
-            .pace_percent
-            .saturating_sub(PACE_NARROW_PERCENT)
-            .max(PACE_MIN_PERCENT);
-    }
 
     /// The next chunk to put on the air, retransmissions first.
     ///
@@ -1052,67 +970,6 @@ mod tests {
     }
 
     // -- bitmap ------------------------------------------------------------
-
-    #[test]
-    fn a_re_request_widens_the_pacing_interval_and_a_clean_pass_narrows_it() {
-        // One global rate cannot fit two radios: the same sender measures ~10.5
-        // kB/s to a Galaxy S25 and ~2.5 kB/s to a Galaxy S9+. Nothing in the
-        // transport reports a rate, and broadcast acknowledges nothing — but a
-        // receiver asking again for a chunk already sent is evidence the last pass
-        // outran the link, and that is enough to steer by.
-        let bytes = body(200_000);
-        let manifest = manifest_for(&bytes, 32_768);
-        let mut transfer = OutboundTransfer::new(
-            manifest.clone(),
-            PathBuf::from("/nowhere"),
-            "MSG".into(),
-            0,
-        );
-
-        let nominal = transfer.pace_ms(32_768, 10_000);
-        assert_eq!(transfer.pace_percent(), 100, "it starts as calibrated");
-
-        // Chunks 0 and 1 have gone out.
-        transfer.next_chunk();
-        transfer.next_chunk();
-
-        // Asking for chunk 5, which the first pass has not reached, is impatience
-        // rather than loss and must not slow the transfer down.
-        transfer.note_requested(&[5]);
-        assert_eq!(
-            transfer.pace_percent(),
-            100,
-            "a chunk we have not sent yet says nothing about the link"
-        );
-
-        // Asking again for chunk 0 does say something.
-        transfer.note_requested(&[0]);
-        assert!(
-            transfer.pace_percent() > 100,
-            "a chunk sent once and asked for again is evidence of loss"
-        );
-        assert!(
-            transfer.pace_ms(32_768, 10_000) > nominal,
-            "and the interval widens, so the next pass is gentler"
-        );
-
-        // It cannot widen without limit: a peer out of range looks like congestion
-        // from here, and must not stretch the interval past returning.
-        for _ in 0..50 {
-            transfer.note_requested(&[0]);
-        }
-        assert_eq!(transfer.pace_percent(), PACE_MAX_PERCENT, "bounded above");
-
-        // And it comes back in when nothing is being re-requested.
-        for _ in 0..1_000 {
-            transfer.note_clean_pass();
-        }
-        assert_eq!(
-            transfer.pace_percent(),
-            PACE_MIN_PERCENT,
-            "a link that keeps up is not paced forever"
-        );
-    }
 
     #[test]
     fn a_resumed_transfer_survives_the_first_tick_after_a_restart() {

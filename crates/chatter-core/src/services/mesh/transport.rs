@@ -42,7 +42,6 @@ use chatter_mesh_store::courier::INITIAL_COPIES;
 use chatter_mesh_store::router::CourierDirectory;
 use chatter_mesh_store::{MESSAGE_TTL_SECS, PeerSnapshot, RouterTransport};
 use parking_lot::Mutex;
-use tokio::sync::mpsc::UnboundedSender;
 
 use super::state::{MeshState, NostrState, now_secs, recipient_pubkey};
 
