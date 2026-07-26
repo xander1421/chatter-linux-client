@@ -513,6 +513,17 @@ impl BleRuntime {
     }
 
     async fn on_announce(&mut self, link: &LinkId, packet: &BitchatPacket, claimed: &PeerId) {
+        // Our own announce, come back to us. The ingress guard lets a
+        // self-authored TTL-0 sync response through on purpose — that is how a
+        // reinstalled device recovers its own history from a peer's archive — so
+        // this is the one place that has to say no to it. Without the check we
+        // register *ourselves* as a peer, which inflates the "N nearby" count the
+        // whole mesh UI is built around and binds a link to our own identity.
+        // bitchat refuses it in its announce preflight, as `.reject(.selfAnnounce)`.
+        if claimed == &self.identity.peer_id() {
+            return;
+        }
+
         let Ok(announcement) = AnnouncementPacket::decode(&packet.payload) else {
             return;
         };
@@ -640,20 +651,39 @@ impl BleRuntime {
         // under anybody's name. An unsigned or unverifiable public message is
         // dropped, matching `BLEPublicMessageHandler.swift:86-95`.
         let sender = claimed.clone();
-        let known = self.state.with(|state| {
-            state.peers.info(&sender).map(|peer| {
-                (
-                    peer.signing_public_key.clone(),
-                    peer.nickname.clone(),
-                    peer.verified_nickname,
-                )
-            })
-        });
-        let Some((Some(signing_key), nickname, verified)) = known else {
-            return;
-        };
-        let Ok(signing_key) = <[u8; 32]>::try_from(signing_key.as_slice()) else {
-            return;
+        // A message we wrote ourselves, recovered from a peer's gossip archive.
+        // The ingress guard admits a self-authored TTL-0 sync response precisely
+        // so this can happen — it is how a device that lost its database gets its
+        // own history back — so it has to be handled rather than dropped.
+        //
+        // It is authenticated against our own signing key, because we are not in
+        // our own peer registry (and must not be: see `on_announce`). It is
+        // attributed to us, because it *is* ours; treating it as inbound would put
+        // our own words on screen as though a stranger had said them.
+        let is_self = sender == self.identity.peer_id();
+        let (signing_key, nickname, verified) = if is_self {
+            (
+                self.identity.signing_public(),
+                self.config.nickname.clone(),
+                true,
+            )
+        } else {
+            let known = self.state.with(|state| {
+                state.peers.info(&sender).map(|peer| {
+                    (
+                        peer.signing_public_key.clone(),
+                        peer.nickname.clone(),
+                        peer.verified_nickname,
+                    )
+                })
+            });
+            let Some((Some(key), nickname, verified)) = known else {
+                return;
+            };
+            let Ok(key) = <[u8; 32]>::try_from(key.as_slice()) else {
+                return;
+            };
+            (key, nickname, verified)
         };
         if !verify_packet(packet, &signing_key) {
             tracing::debug!(
@@ -669,6 +699,7 @@ impl BleRuntime {
             peer = %sender,
             nickname = %nickname,
             bytes = content.len(),
+            is_self,
             "public message received"
         );
         let inbound = InboundMessage {
@@ -688,7 +719,10 @@ impl BleRuntime {
             conversation: inbound.conversation,
             sender,
             nickname,
-            is_local: false,
+            // `is_local` decides which side of the timeline it lands on and
+            // whether it counts as unread. A recovered self-authored message is
+            // ours on both counts.
+            is_local: is_self,
             sender_verified: verified,
         })));
     }
@@ -1665,6 +1699,80 @@ mod tests {
 
         fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, chatter_mesh_store::StoreError> {
             Ok(sealed.to_vec())
+        }
+    }
+
+    #[tokio::test]
+    async fn our_own_announce_coming_back_does_not_register_us_as_a_peer() {
+        // The ingress guard admits a self-authored TTL-0 sync response on purpose,
+        // so our own announce really does reach `on_announce`. If it registers, we
+        // become our own peer: "N nearby" counts us, and a link binds to our own
+        // identity. bitchat refuses it as `.reject(.selfAnnounce)`.
+        let (mut runtime, _radio, state) = runtime();
+        let local = runtime.identity.peer_id();
+        let link_out = LinkId::new("/mock/out");
+        state.with(|inner| {
+            inner.links.link_up(link_out.clone(), LinkRole::Central);
+            inner.links.set_writable(&link_out, true);
+            inner.max_write.insert(link_out.clone(), 512);
+        });
+
+        // Build the announce exactly as we would send it, then feed it back.
+        runtime.announce().await;
+        let sent = _radio.writes();
+        let packet = codec::decode(&sent[0].1).expect("decodable");
+        assert_eq!(
+            PeerId::from_bytes(&packet.sender_id),
+            local,
+            "the fixture must really be our own announce"
+        );
+
+        let link = LinkId::new("/mock/self");
+        runtime.on_announce(&link, &packet, &local).await;
+
+        assert!(
+            state.with(|inner| inner.peers.info(&local).is_none()),
+            "we must never appear in our own peer registry"
+        );
+        assert!(
+            state.with(|inner| inner.links.peer_for(&link).is_none()),
+            "and no link may be bound to our own identity"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_message_of_ours_recovered_from_a_peer_is_attributed_to_us() {
+        // Gossip sync hands back what we wrote — that is how a device with no
+        // database gets its own history again. It must land as ours: verified
+        // against our own key (we are deliberately not in our own registry) and
+        // marked local, or our own words appear on screen as a stranger's.
+        let (mut runtime, _radio, _state) = runtime();
+        let local = runtime.identity.peer_id();
+        let link_out = LinkId::new("/mock/out");
+        _state.with(|inner| {
+            inner.links.link_up(link_out.clone(), LinkRole::Central);
+            inner.links.set_writable(&link_out, true);
+            inner.max_write.insert(link_out.clone(), 512);
+        });
+        let mut events = runtime.events.subscribe();
+
+        runtime.broadcast_public("MSG-SELF", "our own words").await;
+        let packet = codec::decode(&_radio.writes()[0].1).expect("decodable");
+        // Drain the local mirror `broadcast_public` emits for its own send.
+        let _ = events.try_recv();
+
+        runtime.on_public_message(&packet, &local);
+
+        match events.try_recv() {
+            Ok(MeshEvent::Message(message)) => {
+                assert!(message.is_local, "a recovered self message is ours");
+                assert_eq!(message.sender, local);
+                assert_eq!(
+                    super::super::mapping::text_of(&message.message),
+                    Some("our own words")
+                );
+            }
+            other => panic!("expected the recovered message, got {other:?}"),
         }
     }
 
