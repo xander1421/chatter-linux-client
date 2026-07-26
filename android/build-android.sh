@@ -74,8 +74,16 @@ export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-Wl,-z,max-page-size=16384"
 
 # ── 1. Build the cdylib ─────────────────────────────────────────────────────
 echo ">> cargo-ndk: building libchatter_ui.so (arm64-v8a, debug)…"
+# MESH=1 adds the bitchat mesh (BLE radio over the JNI bridge). Off by default,
+# matching the desktop build: the radio stack is opt-in until it has been shown
+# to talk to another device.
+MESH_FEATURE=""
+if [ "${MESH:-0}" = "1" ]; then
+    MESH_FEATURE=",mesh"
+    echo ">> mesh enabled (BLE radio + Kotlin bridge)"
+fi
 ( cd "$PROJECT_ROOT" && cargo ndk -t arm64-v8a build -p chatter-ui \
-    --no-default-features --features mobile --lib )
+    --no-default-features --features "mobile${MESH_FEATURE}" --lib )
 
 # ── 2. Stage the .so into the Gradle module ─────────────────────────────────
 JNI_DIR="app/src/main/jniLibs/arm64-v8a"
