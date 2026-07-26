@@ -558,6 +558,13 @@ mod tests {
             MessageType::PrekeyBundle,
             MessageType::GroupMessage,
             MessageType::VoiceFrame,
+            // The chunked-file types are not padded either, and for the same
+            // reason voice frames are not: padding a 32 KiB chunk to the block
+            // size buys nothing (its length is already a manifest-declared,
+            // public quantity) and costs another fragment.
+            MessageType::FileManifest,
+            MessageType::FileChunk,
+            MessageType::FileChunkRequest,
         ] {
             assert!(!pads_ble_frame(msg_type.as_u8()), "{msg_type:?}");
         }
@@ -893,9 +900,15 @@ mod tests {
         // DEFAULT_FRAGMENT_SIZE is well over two thousand fragments, each padded
         // out to a 512-byte block on the wire.
         //
-        // Measured BLE goodput on this stack is single-digit to low-tens of kB/s,
-        // and the sparse duty cycle keeps the radio off two thirds of the time.
-        // Both figures below are generous.
+        // Measured BLE goodput on this stack is single-digit to low-tens of kB/s.
+        //
+        // Note what the duty cycle does *not* do: `ScanCommand` is only ever mapped
+        // to `MeshLink::set_scanning`, and on BlueZ that starts and stops
+        // *discovery*. It never touches an established link, so 5s-on/10s-off gates
+        // how fast a peer is found, not how fast bytes reach one already connected.
+        // An earlier version of this comment claimed otherwise and inflated the
+        // pessimistic figure threefold; the conclusion is unchanged because even the
+        // optimistic case is past the wall.
         let fragments = MAX_REASSEMBLED_BYTES.div_ceil(DEFAULT_FRAGMENT_SIZE);
         assert!(
             fragments > 2_000,
@@ -910,6 +923,7 @@ mod tests {
         // larger than the payload.
         let wire_bytes = fragments * 512;
 
+        // Both figures are plain goodput, not duty-cycled goodput.
         for goodput_bytes_per_sec in [10_000usize, 3_000] {
             let seconds = wire_bytes / goodput_bytes_per_sec;
             assert!(

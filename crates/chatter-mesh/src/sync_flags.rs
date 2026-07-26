@@ -191,7 +191,18 @@ impl SyncTypeFlags {
             | MessageType::Ping
             | MessageType::Pong
             | MessageType::NostrCarrier
-            | MessageType::VoiceFrame => return None,
+            | MessageType::VoiceFrame
+            // Chunked transfers have no sync bit, and must not get one without a
+            // design for it. Replaying a manifest out of the gossip archive would
+            // offer a transfer whose sender is long gone and whose chunks nobody
+            // holds; replaying a chunk would hand a peer one piece of a file it
+            // has no manifest for. Whether a third node should be able to serve a
+            // finished transfer from its archive is a real question — see the P9
+            // design's open questions — but the answer is store-and-forward for
+            // *files*, not a bit on this bitfield.
+            | MessageType::FileManifest
+            | MessageType::FileChunk
+            | MessageType::FileChunkRequest => return None,
         })
     }
 
@@ -250,6 +261,11 @@ const fn type_name(t: MessageType) -> &'static str {
         MessageType::Pong => "pong",
         MessageType::NostrCarrier => "nostrCarrier",
         MessageType::VoiceFrame => "voiceFrame",
+        // No Swift case to match: these three are this client's extension. Named
+        // in the same lowercase-initial style so a log line reads consistently.
+        MessageType::FileManifest => "fileManifest",
+        MessageType::FileChunk => "fileChunk",
+        MessageType::FileChunkRequest => "fileChunkRequest",
     }
 }
 

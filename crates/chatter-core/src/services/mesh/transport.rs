@@ -33,6 +33,7 @@ use chatter_mesh::ids::PeerId;
 use chatter_mesh::packet::{BitchatPacket, NoisePayloadType, encode_noise_payload};
 use chatter_mesh::tlv::courier_envelope::{CourierEnvelope, epoch_day, recipient_tag};
 use chatter_mesh::tlv::file::BitchatFilePacket;
+use chatter_mesh::tlv::file_stream::FileManifest;
 use chatter_mesh::tlv::private_message::PrivateMessagePacket;
 use chatter_mesh_noise::MeshIdentity;
 use chatter_mesh_noise::seal::seal_courier;
@@ -86,11 +87,30 @@ pub enum BleCommand {
     /// The TLV arrives already built and already size-checked: the service reads
     /// the file and refuses an oversized one before anything is queued, so the
     /// runtime's remaining job is to sign, fragment and mirror it. Nothing here
-    /// chunks — a 1 MiB payload is one packet that the fragmenter splits for the
+    /// chunks — the whole payload is one packet that the fragmenter splits for the
     /// radio, and there is no resume above it.
+    ///
+    /// Only used below [`MAX_SINGLE_PACKET_FILE_BYTES`], because above that a
+    /// single packet cannot reassemble inside the fragmenter's lifetime window at
+    /// all. See [`Self::StreamedFile`].
+    ///
+    /// [`MAX_SINGLE_PACKET_FILE_BYTES`]: chatter_mesh::tlv::file_stream::MAX_SINGLE_PACKET_FILE_BYTES
     FileTransfer {
         message_id: String,
         file: BitchatFilePacket,
+    },
+    /// Stream a file into the mesh room as a chunked, resumable transfer.
+    ///
+    /// Carries a **path**, deliberately, where [`Self::FileTransfer`] carries
+    /// bytes. The file is never read whole on this side of the channel: the
+    /// service hashes it in windows to build the manifest, and the runtime reads
+    /// one chunk-sized window at a time as it paces the transfer out. A command
+    /// holding a `Vec<u8>` would have undone the entire point before the runtime
+    /// even saw it.
+    StreamedFile {
+        message_id: String,
+        manifest: FileManifest,
+        path: std::path::PathBuf,
     },
     /// Announce our identity now, out of the normal cadence.
     Announce,

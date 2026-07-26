@@ -33,6 +33,7 @@ pub mod board;
 pub mod capabilities;
 pub mod courier_envelope;
 pub mod file;
+pub mod file_stream;
 pub mod message;
 pub mod ping;
 pub mod private_message;

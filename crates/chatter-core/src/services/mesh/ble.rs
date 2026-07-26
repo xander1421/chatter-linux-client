@@ -29,6 +29,10 @@ use chatter_mesh::tlv::announce::AnnouncementPacket;
 use chatter_mesh::tlv::capabilities::PeerCapabilities;
 use chatter_mesh::tlv::courier_envelope::CourierEnvelope;
 use chatter_mesh::tlv::file::BitchatFilePacket;
+use chatter_mesh::tlv::file_stream::{
+    FileChunk, FileChunkRequest, FileManifest, MAX_REQUESTED_CHUNKS,
+};
+use chatter_mesh::tlv::hex_encode;
 use chatter_mesh::tlv::private_message::PrivateMessagePacket;
 use chatter_mesh::tlv::request_sync::RequestSyncPacket;
 use chatter_mesh_link::backpressure::{
@@ -55,6 +59,10 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::config::MeshConfig;
 use super::events::{MeshEvent, MeshMessage};
+use super::file_stream::{
+    CHUNK_REQUEST_QUIET_SECS, ChunkOutcome, FileStreamSpool, ManifestOutcome, OutboundTransfer,
+    TRANSFER_ABANDON_SECS, TransferId,
+};
 use super::glue::SharedStorage;
 use super::mapping::{self, InboundMessage, MeshConversation, outbound_message};
 use super::router::{RouterCommand, RouterHandle};
@@ -71,6 +79,32 @@ const TICK: Duration = Duration::from_millis(500);
 /// can decrement it, which means anyone can set it back and look adjacent.
 const DIRECT_ANNOUNCE_TTL: u8 = chatter_mesh::relay::MESSAGE_TTL_DEFAULT;
 
+/// Chunks of a streamed file put on the air per tick, per live transfer.
+///
+/// One, and the [`TICK`] is 500 ms, so a transfer offers ~64 kB/s to the write
+/// queue — comfortably more than the radio can take, which is the point: the
+/// queue is what paces this, not the loop. Emitting the whole file in one pass
+/// (as the single-packet path does, by construction) would block the loop from
+/// servicing link events for the entire transfer, which for a 16 MiB file is
+/// minutes of not noticing a peer connect or disconnect.
+const CHUNKS_PER_TICK: usize = 1;
+
+/// Queued outbound bytes above which a transfer skips its turn.
+///
+/// Backpressure the loop can see. `OutboundWriteBuffer` already trims from the
+/// low-priority tail when it hits [`PENDING_WRITE_BUFFER_CAP_BYTES`], and a file
+/// chunk *is* the low-priority tail — so pushing chunks into a full queue would
+/// mostly evict earlier chunks of the same transfer. Better not to generate them.
+const CHUNK_PACING_QUEUE_BYTES: usize = PENDING_WRITE_BUFFER_CAP_BYTES / 4;
+
+/// How often a live transfer's manifest goes back on the air.
+///
+/// A manifest is the only thing that lets a peer make sense of the chunks it is
+/// hearing, so a peer that arrives mid-transfer needs one — and there is no
+/// request/response to fetch it with. Sixty seconds is roughly the announce
+/// cadence: the same reasoning, and the same cost, as saying "I'm here" again.
+const MANIFEST_REPEAT_SECS: u64 = 60;
+
 /// The radio loop.
 pub struct BleRuntime {
     radio: Arc<dyn MeshLink>,
@@ -85,6 +119,13 @@ pub struct BleRuntime {
     gossip: GossipSyncManager,
     couriers: CourierStore<SharedStorage>,
     guard: IngressGuard,
+    /// Chunked transfers being received. Owned by the loop rather than by
+    /// [`MeshState`], because every method on it touches disk and `MeshState` is
+    /// behind a `parking_lot::Mutex` that must never be held across IO.
+    files_in: FileStreamSpool,
+    /// Chunked transfers being sent, keyed by transfer id. Each holds a path and
+    /// a cursor, never the file's bytes.
+    files_out: std::collections::BTreeMap<TransferId, OutboundTransfer>,
 }
 
 impl BleRuntime {
@@ -119,6 +160,12 @@ impl BleRuntime {
             gossip,
             couriers,
             guard: IngressGuard::default(),
+            // Restored here, not on the first chunk: a transfer interrupted by the
+            // process ending is exactly the case the persisted bitmap exists for,
+            // and the runtime has to know about it before the sender's next
+            // manifest arrives so that manifest resumes rather than restarts.
+            files_in: FileStreamSpool::restored(),
+            files_out: std::collections::BTreeMap::new(),
         }
     }
 
@@ -506,6 +553,9 @@ impl BleRuntime {
             Some(MessageType::CourierEnvelope) => self.on_courier_envelope(packet, claimed),
             Some(MessageType::RequestSync) => self.on_request_sync(packet, claimed).await,
             Some(MessageType::FileTransfer) => self.on_file_transfer(packet, claimed),
+            Some(MessageType::FileManifest) => self.on_file_manifest(packet, claimed),
+            Some(MessageType::FileChunk) => self.on_file_chunk(packet, claimed),
+            Some(MessageType::FileChunkRequest) => self.on_file_chunk_request(packet, claimed),
             // Boards, groups, voice and prekey bundles were deferred from P0.
             // Not handling them is right; not *relaying* them would partition
             // every peer that does implement them, so the relay decision in
@@ -948,6 +998,348 @@ impl BleRuntime {
         })));
     }
 
+    // ------------------------------------------------- chunked file transfer
+    //
+    // Three handlers, one authentication gate, and one rule that shapes all of
+    // them: **a manifest signed once does not authenticate the chunks that
+    // follow.** Skipping per-chunk verification would turn a transfer into an
+    // unauthenticated write channel into a file the receiver is going to store
+    // and show under the manifest sender's name. So every packet below goes
+    // through [`authenticate_stream_packet`](Self::authenticate_stream_packet),
+    // every time, and the spool separately checks that the verified sender is the
+    // *same* peer whose manifest opened the file.
+
+    /// Every gate P8 established, applied to one chunked-transfer packet.
+    ///
+    /// Deliberately a separate helper rather than a refactor of
+    /// [`on_file_transfer`](Self::on_file_transfer): that path works, is tested
+    /// against real bitchat, and has one gate this one does not — see the
+    /// `is_self` case below.
+    fn authenticate_stream_packet(
+        &self,
+        packet: &BitchatPacket,
+        claimed: &PeerId,
+    ) -> Option<(PeerId, String, bool)> {
+        // Broadcast only, exactly as `on_file_transfer`: a directed cleartext
+        // file has no business in a client whose every DM is Noise-sealed.
+        if !packet.is_broadcast() {
+            return None;
+        }
+
+        // Our own packet, coming back. Refused outright, where the single-packet
+        // path has to *handle* a self-authored copy because the gossip archive
+        // replays public `FileTransfer` packets and that is how a reinstalled
+        // device recovers its own history.
+        //
+        // These three types have no sync bit at all (`SyncTypeFlags::bit_index`
+        // returns `None` for each), so they are never replayed out of an archive
+        // and a self-authored copy can only be our own flood echoing back. There
+        // is nothing to recover and nothing to attribute: the local copy was
+        // stored when the transfer started.
+        if claimed == &self.identity.peer_id() {
+            return None;
+        }
+
+        let (key, nickname, verified) = self.state.with(|state| {
+            state.peers.info(claimed).map(|peer| {
+                (
+                    peer.signing_public_key.clone(),
+                    peer.nickname.clone(),
+                    peer.verified_nickname,
+                )
+            })
+        })?;
+        // No announce from this peer, or one with no signing key: there is
+        // nothing to check a signature against, so the packet is unattributable.
+        let key = <[u8; 32]>::try_from(key?.as_slice()).ok()?;
+        if !verify_packet(packet, &key) {
+            tracing::debug!(
+                target: "mesh::ble",
+                peer = %claimed,
+                msg_type = packet.msg_type,
+                "chunked transfer packet with missing or invalid signature dropped",
+            );
+            return None;
+        }
+        Some((claimed.clone(), nickname, verified))
+    }
+
+    /// A manifest: the start of a chunked transfer, or a repeat of one.
+    fn on_file_manifest(&mut self, packet: &BitchatPacket, claimed: &PeerId) {
+        let Ok(manifest) = FileManifest::decode(&packet.payload) else {
+            return;
+        };
+        let Some((sender, nickname, _verified)) =
+            self.authenticate_stream_packet(packet, claimed)
+        else {
+            return;
+        };
+
+        // The row identity, fixed now and persisted with the bitmap. Derived from
+        // the manifest packet the same way a text message's is, so the copies of
+        // the *manifest* arriving by different paths collapse onto one row — and
+        // so a transfer resumed after a restart lands on that same row rather
+        // than a second one.
+        let wire_id = MessageDeduplicator::dedup_key(packet);
+        let transfer = hex_encode(&manifest.transfer_id);
+
+        match self.files_in.begin(
+            manifest,
+            sender.clone(),
+            wire_id,
+            packet.timestamp,
+            now_secs(),
+        ) {
+            Ok(ManifestOutcome::Started) => {
+                tracing::info!(
+                    target: "mesh::ble",
+                    peer = %sender,
+                    nickname = %nickname,
+                    %transfer,
+                    "a chunked file transfer started"
+                );
+            }
+            Ok(ManifestOutcome::Resumed { present, total }) => {
+                tracing::info!(
+                    target: "mesh::ble",
+                    peer = %sender,
+                    %transfer,
+                    present,
+                    total,
+                    "resuming a chunked file transfer"
+                );
+            }
+            // The common case: the manifest repeats on a cadence so a peer that
+            // joins mid-transfer can pick it up.
+            Ok(ManifestOutcome::Unchanged { .. }) => {}
+            Err(error) => {
+                tracing::warn!(
+                    target: "mesh::ble",
+                    %error,
+                    peer = %sender,
+                    %transfer,
+                    "a chunked file transfer could not be started"
+                );
+            }
+        }
+    }
+
+    /// One chunk, verified in its own right and written straight to disk.
+    fn on_file_chunk(&mut self, packet: &BitchatPacket, claimed: &PeerId) {
+        let Ok(chunk) = FileChunk::decode(&packet.payload) else {
+            return;
+        };
+        let Some((sender, nickname, _verified)) =
+            self.authenticate_stream_packet(packet, claimed)
+        else {
+            return;
+        };
+
+        let outcome = self.files_in.accept_chunk(
+            &chunk.transfer_id,
+            chunk.index,
+            &chunk.bytes,
+            &sender,
+            now_secs(),
+        );
+        let transfer = hex_encode(&chunk.transfer_id);
+        match outcome {
+            Ok(ChunkOutcome::Stored { present, total }) => {
+                tracing::debug!(
+                    target: "mesh::ble",
+                    peer = %sender,
+                    %transfer,
+                    index = chunk.index,
+                    present,
+                    total,
+                    "chunk stored"
+                );
+            }
+            Ok(ChunkOutcome::Duplicate) => {}
+            Ok(ChunkOutcome::Complete) => self.complete_transfer(&chunk.transfer_id, &nickname),
+            // A chunk with no manifest is normal, not hostile: chunks and
+            // manifests are separate broadcasts and the manifest repeats.
+            Ok(ChunkOutcome::Unknown) => {
+                tracing::debug!(
+                    target: "mesh::ble",
+                    peer = %sender,
+                    %transfer,
+                    "a chunk arrived before its manifest; waiting for one"
+                );
+            }
+            Ok(ChunkOutcome::Refused(reason)) => {
+                tracing::warn!(
+                    target: "mesh::ble",
+                    peer = %sender,
+                    %transfer,
+                    index = chunk.index,
+                    reason,
+                    "chunk refused"
+                );
+            }
+            Err(error) => {
+                tracing::error!(
+                    target: "mesh::ble",
+                    %error,
+                    peer = %sender,
+                    %transfer,
+                    "a chunk could not be written; the transfer will stall"
+                );
+            }
+        }
+    }
+
+    /// Verify, encrypt into place, and surface the row.
+    ///
+    /// Ordering here is the whole security property of the receive path:
+    ///
+    /// 1. **Digest first.** Per-chunk signatures say who sent each chunk; only
+    ///    the whole-file digest says the assembly is the file the manifest
+    ///    described. It is checked before the encryptor opens the file, because
+    ///    after that the bytes are inside the attachments directory.
+    /// 2. **`already_stored` next**, for the same reason the single-packet path
+    ///    checks it: a file's bytes reach disk *before* the row that names them,
+    ///    so storing first and letting an idempotent row write be ignored would
+    ///    leave an encrypted copy nothing references.
+    /// 3. **Then encrypt into place** with the streaming call the CDN upload path
+    ///    uses, and only then the event, because the event names the attachment.
+    fn complete_transfer(&mut self, transfer_id: &TransferId, nickname: &str) {
+        let transfer_hex = hex_encode(transfer_id);
+        if let Err(error) = self.files_in.verify(transfer_id) {
+            // Terminal. `verify` has already discarded the partial file and its
+            // bitmap: a mismatch means some chunk that passed its packet
+            // signature still produced the wrong file, so there is no chunk to
+            // re-request and asking again would loop forever on the same bytes.
+            tracing::error!(
+                target: "mesh::ble",
+                %error,
+                transfer = %transfer_hex,
+                "a completed chunked transfer did not match its digest; discarded, not retried"
+            );
+            self.degraded(format!(
+                "a file from {nickname} arrived corrupted and was discarded"
+            ));
+            return;
+        }
+
+        let part = self.files_in.part_path(transfer_id);
+        let Some(transfer) = self.files_in.take(transfer_id) else {
+            return;
+        };
+
+        match self.events.already_stored(&transfer.wire_id) {
+            Ok(true) => {
+                tracing::debug!(
+                    target: "mesh::ble",
+                    transfer = %transfer_hex,
+                    "a chunked file already on disk completed again; not stored twice"
+                );
+                self.files_in.discard(transfer_id);
+                return;
+            }
+            Ok(false) => {}
+            Err(error) => {
+                // Store anyway: a duplicate copy is recoverable, and this file
+                // cost minutes of radio that nothing will spend again.
+                tracing::warn!(
+                    target: "mesh::ble",
+                    %error,
+                    "could not check whether this chunked file is already stored"
+                );
+            }
+        }
+
+        let attachment = match self.events.store_file_streamed(
+            transfer.manifest.file_name.as_deref(),
+            transfer.manifest.mime_type.as_deref(),
+            &part,
+        ) {
+            Ok(attachment) => attachment,
+            Err(error) => {
+                // The partial file is deliberately left on disk. Everything else
+                // about this transfer is gone from the air, and re-requesting is
+                // not possible — the bytes are all here, only the encryption or
+                // the row write failed, and a retry after the user frees disk
+                // space is the one recovery left.
+                tracing::error!(
+                    target: "mesh::ble",
+                    %error,
+                    transfer = %transfer_hex,
+                    bytes = transfer.manifest.total_size,
+                    "a completed chunked transfer could not be stored"
+                );
+                self.degraded(format!(
+                    "a file from {nickname} could not be saved: {error}"
+                ));
+                return;
+            }
+        };
+        self.files_in.discard(transfer_id);
+
+        tracing::info!(
+            target: "mesh::ble",
+            peer = %transfer.sender,
+            nickname = %nickname,
+            transfer = %transfer_hex,
+            bytes = transfer.manifest.total_size,
+            chunks = transfer.manifest.chunk_count,
+            name = ?transfer.manifest.file_name,
+            "a chunked file transfer completed"
+        );
+
+        let verified = self
+            .state
+            .with(|state| state.peers.info(&transfer.sender).is_some_and(|p| p.verified_nickname));
+        self.events.send(MeshEvent::Message(Box::new(MeshMessage {
+            message: mapping::inbound_file_message(
+                &MeshConversation::Room,
+                &transfer.wire_id,
+                &transfer.sender,
+                attachment,
+                // The manifest's timestamp, not now: the row belongs where the
+                // sender put it, and a transfer that took ten minutes would
+                // otherwise sort ten minutes after everything said during it.
+                transfer.timestamp_ms,
+            ),
+            conversation: MeshConversation::Room,
+            sender: transfer.sender,
+            nickname: nickname.to_string(),
+            is_local: false,
+            sender_verified: verified,
+        })));
+    }
+
+    /// A receiver asking us to send chunks again.
+    ///
+    /// Authenticated like everything else here, and for a reason beyond
+    /// attribution: serving a request costs *our* airtime, so an unauthenticated
+    /// request would be an amplification lever for anyone in range.
+    fn on_file_chunk_request(&mut self, packet: &BitchatPacket, claimed: &PeerId) {
+        let Ok(request) = FileChunkRequest::decode(&packet.payload) else {
+            return;
+        };
+        let Some((sender, _nickname, _verified)) =
+            self.authenticate_stream_packet(packet, claimed)
+        else {
+            return;
+        };
+        // Only a transfer we are actually sending. A request for anything else is
+        // a peer asking us to serve a file we do not have — which, once chunked
+        // transfers ride the gossip archive, becomes a real feature; today it is
+        // simply not ours to answer.
+        let Some(transfer) = self.files_out.get_mut(&request.transfer_id) else {
+            return;
+        };
+        transfer.note_requested(&request.indices);
+        tracing::info!(
+            target: "mesh::ble",
+            peer = %sender,
+            transfer = %hex_encode(&request.transfer_id),
+            chunks = request.indices.len(),
+            "retransmitting chunks a receiver asked for"
+        );
+    }
+
     async fn on_handshake(&mut self, packet: &BitchatPacket, claimed: &PeerId) {
         let local = self.identity.peer_id();
         let identity = Arc::clone(&self.identity);
@@ -1144,6 +1536,11 @@ impl BleRuntime {
             BleCommand::FileTransfer { message_id, file } => {
                 self.broadcast_file(&message_id, &file).await
             }
+            BleCommand::StreamedFile {
+                message_id,
+                manifest,
+                path,
+            } => self.start_streamed_file(&message_id, manifest, path).await,
         }
     }
 
@@ -1362,6 +1759,258 @@ impl BleRuntime {
             is_local: true,
             sender_verified: true,
         })));
+    }
+
+    /// Begin a chunked transfer: manifest on the air, local copy stored, chunks
+    /// paced out by the tick.
+    ///
+    /// Shaped like [`broadcast_file`](Self::broadcast_file) — build, sign,
+    /// remember as our own, transmit, mirror locally — with one difference that
+    /// is the whole of P9 on the send side: **the file is never read whole.** The
+    /// local mirror goes through the streaming encryptor straight from the
+    /// source path, and the chunks are read one window at a time from
+    /// [`on_tick`](Self::on_tick).
+    pub async fn start_streamed_file(
+        &mut self,
+        message_id: &str,
+        manifest: FileManifest,
+        path: std::path::PathBuf,
+    ) {
+        let now_ms = now_millis();
+        let now_s = now_secs();
+        let nickname = self.config.nickname.clone();
+        let transfer_id = manifest.transfer_id;
+
+        // Our own copy first, and a failure here aborts the send.
+        //
+        // The opposite of `broadcast_file`, which puts the packet on the air and
+        // then stores — because there it is one packet and by the time storing
+        // fails the file has already reached the room. Here the transfer takes
+        // minutes, so failing before the first byte costs nothing and avoids a
+        // sender streaming out a file it cannot itself open.
+        let attachment = match self.events.store_file_streamed(
+            manifest.file_name.as_deref(),
+            manifest.mime_type.as_deref(),
+            &path,
+        ) {
+            Ok(attachment) => attachment,
+            Err(error) => {
+                tracing::error!(
+                    target: "mesh::ble",
+                    %error,
+                    path = %path.display(),
+                    "a file could not be stored locally; nothing was streamed"
+                );
+                self.degraded(format!("that file could not be read or saved: {error}"));
+                return;
+            }
+        };
+
+        let transfer = OutboundTransfer::new(manifest, path, message_id.to_string(), now_s);
+        let manifest_packet = self.build_manifest_packet(&transfer.manifest);
+        // Remembered so the echo is recognised as ours. The chunks are recorded
+        // the same way as they go out — see `pump_streamed_files`.
+        self.state
+            .with(|state| state.self_broadcasts.record(message_id, &manifest_packet, now_ms));
+        self.transmit(&manifest_packet, None, None).await;
+
+        tracing::info!(
+            target: "mesh::ble",
+            transfer = %hex_encode(&transfer_id),
+            bytes = transfer.manifest.total_size,
+            chunks = transfer.manifest.chunk_count,
+            "streaming a file into the mesh room"
+        );
+        self.files_out.insert(transfer_id, transfer);
+
+        let local = self.identity.peer_id();
+        self.events.send(MeshEvent::Message(Box::new(MeshMessage {
+            message: mapping::outbound_file_message(
+                &MeshConversation::Room,
+                message_id,
+                &local,
+                attachment,
+                now_ms,
+            ),
+            conversation: MeshConversation::Room,
+            sender: local,
+            nickname,
+            is_local: true,
+            sender_verified: true,
+        })));
+    }
+
+    fn build_manifest_packet(&self, manifest: &FileManifest) -> BitchatPacket {
+        let payload = manifest.encode().unwrap_or_default();
+        let packet = self.build_packet(
+            MessageType::FileManifest,
+            None,
+            payload,
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        // Signed, because the receiver requires it: an unsigned manifest is
+        // dropped before its payload is looked at, exactly as an unsigned file
+        // transfer is.
+        self.maybe_sign(packet, true)
+    }
+
+    /// Put the next chunk of each live transfer on the air, and repeat manifests.
+    ///
+    /// Called from the tick, one chunk at a time, rather than looping over the
+    /// whole file: the loop is also the only thing servicing link events, and a
+    /// 16 MiB transfer emitted in one pass would leave the mesh deaf for minutes.
+    async fn pump_streamed_files(&mut self, now_s: u64) {
+        if self.files_out.is_empty() {
+            return;
+        }
+
+        // Backpressure the loop can see. A chunk is the lowest-priority thing in
+        // the write buffer, so generating chunks into a full buffer mostly evicts
+        // earlier chunks of the same transfer.
+        let queued = self.state.with(|state| state.writes.total_queued_bytes());
+        let congested = queued > CHUNK_PACING_QUEUE_BYTES;
+
+        let ids: Vec<TransferId> = self.files_out.keys().copied().collect();
+        for id in ids {
+            // A manifest again, whether or not the queue is busy: it is a few
+            // hundred bytes, and a peer that arrived mid-transfer cannot use a
+            // single chunk without one.
+            let due = self
+                .files_out
+                .get(&id)
+                .is_some_and(|t| now_s.saturating_sub(t.last_manifest_secs) >= MANIFEST_REPEAT_SECS);
+            if due {
+                let manifest = {
+                    let Some(transfer) = self.files_out.get_mut(&id) else {
+                        continue;
+                    };
+                    transfer.last_manifest_secs = now_s;
+                    transfer.manifest.clone()
+                };
+                let packet = self.build_manifest_packet(&manifest);
+                self.state.with(|state| {
+                    state
+                        .self_broadcasts
+                        .record("mesh-manifest-repeat", &packet, now_millis())
+                });
+                self.transmit(&packet, None, None).await;
+            }
+
+            if congested {
+                continue;
+            }
+
+            for _ in 0..CHUNKS_PER_TICK {
+                let Some(transfer) = self.files_out.get_mut(&id) else {
+                    break;
+                };
+                let Some(index) = transfer.next_chunk() else {
+                    break;
+                };
+                let bytes = match transfer.read_chunk(index) {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        // The user's file moved or became unreadable mid-transfer.
+                        // Nothing recovers from that, and continuing would stream
+                        // a file that no longer exists.
+                        tracing::error!(
+                            target: "mesh::ble",
+                            %error,
+                            transfer = %hex_encode(&id),
+                            index,
+                            "a chunk could not be read; abandoning the transfer"
+                        );
+                        self.files_out.remove(&id);
+                        self.degraded("a file being sent became unreadable".to_string());
+                        break;
+                    }
+                };
+                let Ok(payload) = FileChunk::new(id, index, bytes).and_then(|c| c.encode()) else {
+                    continue;
+                };
+                let packet = self.build_packet(
+                    MessageType::FileChunk,
+                    None,
+                    payload,
+                    chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+                );
+                // Signed individually. This is the point the design is emphatic
+                // about: the manifest's signature says nothing about the chunks,
+                // and an unsigned chunk is refused by the receiver.
+                let packet = self.maybe_sign(packet, true);
+                self.state.with(|state| {
+                    state
+                        .self_broadcasts
+                        .record("mesh-file-chunk", &packet, now_millis())
+                });
+                self.transmit(&packet, None, None).await;
+            }
+        }
+
+        // A drained transfer is kept, not dropped, for as long as a receiver
+        // might still ask: there is no acknowledgement, so "drained" only means
+        // we have nothing left to offer unprompted.
+        let expired: Vec<TransferId> = self
+            .files_out
+            .iter()
+            .filter(|(_, transfer)| {
+                transfer.is_drained()
+                    && now_s.saturating_sub(transfer.started_secs) > TRANSFER_ABANDON_SECS
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in expired {
+            tracing::debug!(
+                target: "mesh::ble",
+                transfer = %hex_encode(&id),
+                "closing a finished outbound transfer; no more retransmit requests will be served"
+            );
+            self.files_out.remove(&id);
+        }
+    }
+
+    /// Ask for the chunks of a stalled transfer.
+    ///
+    /// The receiver-driven half of retransmission, and the direct analogue of
+    /// `GossipSyncManager::request_missing_fragments` one layer down — including
+    /// the truncation: [`FileChunkRequest`] names at most
+    /// [`MAX_REQUESTED_CHUNKS`], so a receiver missing hundreds asks for the
+    /// earliest now and the rest next round rather than emitting a request that
+    /// would have to be fragmented to fit.
+    async fn request_missing_chunks(&mut self, now_s: u64) {
+        let stalled =
+            self.files_in
+                .stalled(now_s, CHUNK_REQUEST_QUIET_SECS, MAX_REQUESTED_CHUNKS);
+        for (transfer_id, missing) in stalled {
+            let Ok(request) = FileChunkRequest::new(transfer_id, missing) else {
+                continue;
+            };
+            let Ok(payload) = request.encode() else {
+                continue;
+            };
+            let packet = self.build_packet(
+                MessageType::FileChunkRequest,
+                None,
+                payload,
+                chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+            );
+            // Signed: the sender refuses an unauthenticated request, because
+            // serving one costs airtime and would otherwise be an amplification
+            // lever.
+            let packet = self.maybe_sign(packet, true);
+            self.state.with(|state| {
+                state
+                    .self_broadcasts
+                    .record("mesh-chunk-request", &packet, now_millis())
+            });
+            tracing::info!(
+                target: "mesh::ble",
+                transfer = %hex_encode(&transfer_id),
+                chunks = request.indices.len(),
+                "asking for chunks that never arrived"
+            );
+            self.transmit(&packet, None, None).await;
+        }
     }
 
     async fn announce(&mut self) {
@@ -1698,6 +2347,12 @@ impl BleRuntime {
 
         self.flush_buffered_writes().await;
 
+        // Chunked file transfers, which nothing else can schedule either: the
+        // send side is paced by this tick rather than by a loop over the file, and
+        // the receive side has no other way to notice that a transfer went quiet.
+        self.pump_streamed_files(now_s).await;
+        self.request_missing_chunks(now_s).await;
+
         // Gossip sync, which nothing else can schedule.
         let connected: Vec<PeerId> = self
             .state
@@ -1735,6 +2390,27 @@ impl BleRuntime {
         if let Err(error) = self.couriers.prune_expired(now_s) {
             tracing::debug!(target: "mesh::ble", %error, "courier pool prune failed");
         }
+        // Transfers that have every chunk but were never stored: the process ended
+        // between the last chunk and the store, or the store itself failed. Every
+        // byte is already on disk and nothing retransmits, so this periodic retry
+        // is the only recovery. On the cleanup cadence rather than the tick, so a
+        // persistent failure retries occasionally instead of twice a second.
+        for id in self.files_in.completed() {
+            let nickname = self
+                .files_in
+                .get(&id)
+                .and_then(|transfer| {
+                    self.state
+                        .with(|state| state.peers.nickname(&transfer.sender, false).map(str::to_string))
+                })
+                .unwrap_or_else(|| "a peer".to_string());
+            self.complete_transfer(&id, &nickname);
+        }
+        // A sender that walked out of range mid-transfer would otherwise leave its
+        // partial file in the spool forever. The window is deliberately long — the
+        // point of persisting the bitmap is surviving outages that last minutes —
+        // so this bounds disk, not patience.
+        self.files_in.abandon_stale(now_s, TRANSFER_ABANDON_SECS);
         self.reconcile_peers();
     }
 
@@ -2738,5 +3414,797 @@ mod tests {
         // The echo of our own file must be recognisable, or it comes back and is
         // stored a second time.
         assert!(state.with(|inner| inner.self_broadcasts.contains(&packet)));
+    }
+
+    // ---------------------------------------------- chunked file transfer (P9)
+
+    use chatter_mesh::tlv::file_stream::MAX_SINGLE_PACKET_FILE_BYTES;
+
+    /// Chunk size for the runtime tests: the smallest a manifest may declare, so
+    /// a handful of kilobytes exercises several chunks without a megabyte of IO.
+    const TEST_CHUNK: u32 = 1024;
+
+    /// Point one runtime's receive spool at a directory of its own.
+    ///
+    /// The attachments base is a process-wide `OnceLock`, so every test in the
+    /// process would otherwise share one spool directory and one test's partial
+    /// transfer could be restored into another's runtime.
+    fn isolate_spool(runtime: &mut BleRuntime) -> std::path::PathBuf {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().to_path_buf();
+        Box::leak(Box::new(dir));
+        runtime.files_in = FileStreamSpool::new(path.clone());
+        path
+    }
+
+    /// Position-dependent filler: a chunk written at the wrong offset changes the
+    /// digest, which a run of one byte would hide.
+    fn body(len: usize) -> Vec<u8> {
+        (0..len).map(|i| (i % 251) as u8).collect()
+    }
+
+    fn test_manifest(id: [u8; 8], bytes: &[u8]) -> FileManifest {
+        use sha2::{Digest, Sha256};
+        FileManifest::new(
+            id,
+            Some("clip.bin".into()),
+            Some("application/octet-stream".into()),
+            bytes.len() as u64,
+            TEST_CHUNK,
+            Sha256::digest(bytes).into(),
+        )
+        .expect("valid manifest")
+    }
+
+    fn signed(
+        sender: &PeerId,
+        identity: &MeshIdentity,
+        msg_type: MessageType,
+        payload: Vec<u8>,
+        sign: bool,
+    ) -> BitchatPacket {
+        let mut packet = BitchatPacket::new(
+            msg_type,
+            sender.to_routing_bytes().expect("routing bytes"),
+            None,
+            now_millis(),
+            payload,
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        if sign {
+            packet.signature = Some(sign_packet(identity, &packet).expect("signs"));
+        }
+        packet
+    }
+
+    fn manifest_packet(
+        sender: &PeerId,
+        identity: &MeshIdentity,
+        manifest: &FileManifest,
+        sign: bool,
+    ) -> BitchatPacket {
+        signed(
+            sender,
+            identity,
+            MessageType::FileManifest,
+            manifest.encode().expect("encodes"),
+            sign,
+        )
+    }
+
+    fn chunk_packet(
+        sender: &PeerId,
+        identity: &MeshIdentity,
+        manifest: &FileManifest,
+        bytes: &[u8],
+        index: u32,
+        sign: bool,
+    ) -> BitchatPacket {
+        let (offset, len) = manifest.chunk_span(index).expect("in range");
+        let slice = bytes[offset as usize..offset as usize + len].to_vec();
+        signed(
+            sender,
+            identity,
+            MessageType::FileChunk,
+            FileChunk::new(manifest.transfer_id, index, slice)
+                .expect("valid chunk")
+                .encode()
+                .expect("encodes"),
+            sign,
+        )
+    }
+
+    /// A writable link, so `transmit` produces writes instead of logging that
+    /// there was nowhere to send.
+    ///
+    /// `max_write` is a parameter because it decides whether one packet becomes
+    /// one write. Real links negotiate ~514, so a real 32 KiB chunk is ~70
+    /// fragments — that split is the fragmenter's business and is tested there.
+    /// The send tests below pass a value above the chunk size so that "one chunk
+    /// per tick" can be counted in writes, which is the property they are
+    /// actually about.
+    fn writable_link(state: &MeshState, name: &str, max_write: usize) -> LinkId {
+        let link = LinkId::new(name);
+        state.with(|inner| {
+            inner.links.link_up(link.clone(), LinkRole::Central);
+            inner.links.set_writable(&link, true);
+            inner.max_write.insert(link.clone(), max_write);
+        });
+        link
+    }
+
+    #[tokio::test]
+    async fn a_chunked_transfer_round_trips_into_a_row_with_its_bytes_on_disk() {
+        // The whole of P9 in one test. A payload this size cannot arrive as one
+        // packet at all — `FRAGMENT_LIFETIME_SECS` is measured from the first
+        // fragment, so a single-packet send of it is evicted at 30 s however far
+        // it got — and it arrives here in chunks, each verified in its own right,
+        // written straight to disk, digest-checked, and encrypted into place.
+        let (mut runtime, _radio, state, timeline) = runtime_parts();
+        let spool = isolate_spool(&mut runtime);
+        let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
+        let identity = register_verified_peer(&state, &sender, "wanderer");
+        let mut events = runtime.events.subscribe();
+
+        let bytes = body(2_500);
+        let manifest = test_manifest([0x10; 8], &bytes);
+        assert_eq!(manifest.chunk_count, 3);
+
+        runtime.on_file_manifest(&manifest_packet(&sender, &identity, &manifest, true), &sender);
+        assert!(
+            events.try_recv().is_err(),
+            "a manifest is not a message; nothing may surface until the bytes are \
+             here and verified"
+        );
+        for index in 0..3 {
+            runtime.on_file_chunk(
+                &chunk_packet(&sender, &identity, &manifest, &bytes, index, true),
+                &sender,
+            );
+        }
+
+        let attachment = match events.try_recv() {
+            Ok(MeshEvent::Message(message)) => {
+                assert!(!message.is_local);
+                assert_eq!(message.conversation, MeshConversation::Room);
+                assert!(message.sender_verified);
+                let attachments = mapping::attachments_of(&message.message);
+                assert_eq!(attachments.len(), 1);
+                attachments[0]
+            }
+            other => panic!("expected the completed file, got {other:?}"),
+        };
+
+        let history = timeline
+            .history(&MeshConversation::Room, None, 10)
+            .expect("history");
+        assert_eq!(history.len(), 1);
+        assert_eq!(mapping::attachments_of(&history[0]), [attachment]);
+
+        let path = crate::services::attachment::attachment_file_path(&attachment);
+        assert!(path.exists(), "the bytes have to be at {}", path.display());
+        let stored = std::fs::read(&path).expect("readable");
+        assert_ne!(
+            stored, bytes,
+            "a mesh file lands encrypted, streamed through the same call the CDN \
+             upload path uses"
+        );
+
+        // The spool is empty and its plaintext is gone: a partial file is
+        // unencrypted by construction, so leaving one behind after the transfer
+        // finished would be the one thing in this app lying open on disk.
+        assert!(runtime.files_in.is_empty());
+        assert_eq!(
+            std::fs::read_dir(&spool).expect("spool").count(),
+            0,
+            "no .part or .state may survive a completed transfer"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_chunk_is_re_requested_and_the_transfer_then_completes() {
+        // Retransmission is *receiver*-requested, and it has to be: a broadcast
+        // is not acknowledged, so the sender cannot know what landed. Without
+        // this, one dropped chunk out of thousands means a file that never
+        // arrives and nobody can say why.
+        let (mut runtime, radio, state, timeline) = runtime_parts();
+        isolate_spool(&mut runtime);
+        writable_link(&state, "/mock/req", 512);
+        let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
+        let identity = register_verified_peer(&state, &sender, "wanderer");
+
+        let bytes = body(3_000);
+        let manifest = test_manifest([0x11; 8], &bytes);
+        runtime.on_file_manifest(&manifest_packet(&sender, &identity, &manifest, true), &sender);
+        for index in [0u32, 2] {
+            runtime.on_file_chunk(
+                &chunk_packet(&sender, &identity, &manifest, &bytes, index, true),
+                &sender,
+            );
+        }
+
+        // Nothing is asked for while chunks are still plausibly in flight.
+        let before = radio.write_count();
+        runtime.request_missing_chunks(now_secs()).await;
+        assert_eq!(
+            radio.write_count(),
+            before,
+            "a transfer that just made progress is not stalled"
+        );
+
+        // Once it has gone quiet, the receiver names exactly what it is missing.
+        runtime
+            .request_missing_chunks(now_secs() + CHUNK_REQUEST_QUIET_SECS)
+            .await;
+        let writes = radio.writes();
+        let packet = codec::decode(&writes[before].1).expect("decodable");
+        assert_eq!(packet.message_type(), Some(MessageType::FileChunkRequest));
+        assert!(
+            verify_packet(&packet, &runtime.identity.signing_public()),
+            "an unsigned request is refused by the sender, because serving one \
+             costs airtime and would otherwise be an amplification lever"
+        );
+        let request = FileChunkRequest::decode(&packet.payload).expect("decodes");
+        assert_eq!(request.transfer_id, manifest.transfer_id);
+        assert_eq!(request.indices, vec![1], "only the chunk that never came");
+
+        // And the answer completes the file rather than restarting it.
+        runtime.on_file_chunk(
+            &chunk_packet(&sender, &identity, &manifest, &bytes, 1, true),
+            &sender,
+        );
+        assert_eq!(
+            timeline
+                .history(&MeshConversation::Room, None, 10)
+                .expect("history")
+                .len(),
+            1,
+            "the recovered chunk finished the transfer"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unsigned_chunk_is_refused() {
+        // The gate the design is most emphatic about. A manifest signed once says
+        // nothing about the chunks that follow it, so accepting an unsigned chunk
+        // would turn a transfer into an unauthenticated write channel into a file
+        // that is about to be stored and shown under the manifest sender's name.
+        let (mut runtime, _radio, state, timeline) = runtime_parts();
+        isolate_spool(&mut runtime);
+        let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
+        let identity = register_verified_peer(&state, &sender, "wanderer");
+        let mut events = runtime.events.subscribe();
+
+        let bytes = body(2_048);
+        let manifest = test_manifest([0x12; 8], &bytes);
+        runtime.on_file_manifest(&manifest_packet(&sender, &identity, &manifest, true), &sender);
+
+        // Chunk 0 unsigned, chunk 1 properly signed.
+        runtime.on_file_chunk(
+            &chunk_packet(&sender, &identity, &manifest, &bytes, 0, false),
+            &sender,
+        );
+        assert_eq!(
+            runtime
+                .files_in
+                .get(&manifest.transfer_id)
+                .expect("still open")
+                .received
+                .present(),
+            0,
+            "an unsigned chunk contributes nothing"
+        );
+
+        runtime.on_file_chunk(
+            &chunk_packet(&sender, &identity, &manifest, &bytes, 1, true),
+            &sender,
+        );
+        assert_eq!(
+            runtime
+                .files_in
+                .get(&manifest.transfer_id)
+                .expect("still open")
+                .received
+                .present(),
+            1,
+            "and a signed one does, so the refusal is the signature and not the shape"
+        );
+
+        // The transfer is incomplete, so nothing surfaced and nothing was stored.
+        assert!(events.try_recv().is_err());
+        assert!(
+            timeline
+                .history(&MeshConversation::Room, None, 10)
+                .expect("history")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unsigned_manifest_never_opens_a_transfer() {
+        // The same reasoning one packet earlier: a manifest's sender is a header
+        // field the sender chose, so without a signature verifying against the
+        // key their announce established, anyone in range opens a file under
+        // anyone's name — and every chunk after it inherits that attribution.
+        let (mut runtime, _radio, state, _timeline) = runtime_parts();
+        isolate_spool(&mut runtime);
+        let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
+        let identity = register_verified_peer(&state, &sender, "wanderer");
+
+        let bytes = body(2_048);
+        let manifest = test_manifest([0x13; 8], &bytes);
+        runtime.on_file_manifest(&manifest_packet(&sender, &identity, &manifest, false), &sender);
+        assert!(runtime.files_in.is_empty());
+
+        // Nor does a validly signed manifest from a peer that never announced:
+        // there is no key to check it against, so it authenticates itself.
+        let stranger = PeerId::from_str("cccccccccccccccc");
+        let own = MeshIdentity::generate(&mut OsRng);
+        runtime.on_file_manifest(&manifest_packet(&stranger, &own, &manifest, true), &stranger);
+        assert!(runtime.files_in.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_chunk_from_someone_other_than_the_manifests_sender_is_refused() {
+        // Both peers are verified and both signatures are valid — the packet-level
+        // gates all pass. What must not pass is a *different* verified peer
+        // contributing bytes to a file somebody else opened.
+        let (mut runtime, _radio, state, _timeline) = runtime_parts();
+        isolate_spool(&mut runtime);
+        let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
+        let identity = register_verified_peer(&state, &sender, "wanderer");
+        let other = PeerId::from_str("dddddddddddddddd");
+        let other_identity = register_verified_peer(&state, &other, "someone else");
+
+        let bytes = body(2_048);
+        let manifest = test_manifest([0x14; 8], &bytes);
+        runtime.on_file_manifest(&manifest_packet(&sender, &identity, &manifest, true), &sender);
+        runtime.on_file_chunk(
+            &chunk_packet(&other, &other_identity, &manifest, &bytes, 0, true),
+            &other,
+        );
+        assert_eq!(
+            runtime
+                .files_in
+                .get(&manifest.transfer_id)
+                .expect("still open")
+                .received
+                .present(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn a_digest_mismatch_discards_the_transfer_and_asks_for_nothing_more() {
+        // A mismatch means some chunk that passed its packet signature still
+        // produced the wrong file. There is no chunk to blame, so re-requesting
+        // would fetch the same bytes and fail identically — forever, and
+        // indistinguishably from a slow transfer.
+        let (mut runtime, radio, state, timeline) = runtime_parts();
+        let spool = isolate_spool(&mut runtime);
+        writable_link(&state, "/mock/bad", 512);
+        let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
+        let identity = register_verified_peer(&state, &sender, "wanderer");
+        let mut events = runtime.events.subscribe();
+
+        let bytes = body(2_500);
+        let mut manifest = test_manifest([0x15; 8], &bytes);
+        // A manifest whose digest does not describe the bytes that follow it. The
+        // manifest is still correctly signed, so nothing before the digest check
+        // can catch this.
+        manifest.sha256 = [0xAB; 32];
+        runtime.on_file_manifest(&manifest_packet(&sender, &identity, &manifest, true), &sender);
+        for index in 0..3 {
+            runtime.on_file_chunk(
+                &chunk_packet(&sender, &identity, &manifest, &bytes, index, true),
+                &sender,
+            );
+        }
+
+        // Discarded: no row, no attachment, no bytes.
+        assert!(
+            timeline
+                .history(&MeshConversation::Room, None, 10)
+                .expect("history")
+                .is_empty(),
+            "a file that failed its digest must not reach the timeline"
+        );
+        assert!(runtime.files_in.is_empty());
+        assert_eq!(std::fs::read_dir(&spool).expect("spool").count(), 0);
+
+        // Not retried: the tick asks for nothing, so there is no loop.
+        let before = radio.write_count();
+        runtime
+            .request_missing_chunks(now_secs() + CHUNK_REQUEST_QUIET_SECS * 10)
+            .await;
+        assert_eq!(
+            radio.write_count(),
+            before,
+            "a discarded transfer has nothing left to re-request"
+        );
+
+        // And the user is told, because minutes of radio produced nothing.
+        let mut degraded = false;
+        while let Ok(event) = events.try_recv() {
+            if matches!(event, MeshEvent::Degraded(_)) {
+                degraded = true;
+            }
+        }
+        assert!(degraded, "a corrupt file is worth saying out loud");
+    }
+
+    #[tokio::test]
+    async fn a_restart_resumes_a_transfer_instead_of_starting_it_again() {
+        // The reason the bitmap is on disk. In memory, resume survives a link
+        // drop and dies with the process — which is exactly when it is most
+        // wanted: the app was killed, the file is still half there, and the only
+        // record of which half was in a map.
+        let (mut first, _radio, state, _timeline) = runtime_parts();
+        let spool = isolate_spool(&mut first);
+        let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
+        let identity = register_verified_peer(&state, &sender, "wanderer");
+
+        let bytes = body(5_000);
+        let manifest = test_manifest([0x16; 8], &bytes);
+        assert_eq!(manifest.chunk_count, 5);
+        first.on_file_manifest(&manifest_packet(&sender, &identity, &manifest, true), &sender);
+        for index in [0u32, 1, 2] {
+            first.on_file_chunk(
+                &chunk_packet(&sender, &identity, &manifest, &bytes, index, true),
+                &sender,
+            );
+        }
+        drop(first);
+
+        // A new process over the same spool directory.
+        let (mut restarted, _radio2, state2, timeline2) = runtime_parts();
+        restarted.files_in = FileStreamSpool::new(spool);
+        assert_eq!(restarted.files_in.restore(), 1, "the partial transfer is back");
+        let identity = register_verified_peer(&state2, &sender, "wanderer");
+        assert_eq!(
+            restarted
+                .files_in
+                .get(&manifest.transfer_id)
+                .expect("resumed")
+                .received
+                .present(),
+            3,
+            "three chunks are already here and must not be asked for again"
+        );
+
+        // The sender's next manifest resumes rather than truncating.
+        restarted.on_file_manifest(
+            &manifest_packet(&sender, &identity, &manifest, true),
+            &sender,
+        );
+        assert_eq!(
+            restarted
+                .files_in
+                .get(&manifest.transfer_id)
+                .expect("still resumed")
+                .received
+                .present(),
+            3
+        );
+
+        for index in [3u32, 4] {
+            restarted.on_file_chunk(
+                &chunk_packet(&sender, &identity, &manifest, &bytes, index, true),
+                &sender,
+            );
+        }
+        assert_eq!(
+            timeline2
+                .history(&MeshConversation::Room, None, 10)
+                .expect("history")
+                .len(),
+            1,
+            "two chunks finished a transfer that had already survived a restart"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_transfer_that_completed_but_was_never_stored_is_finished_on_the_next_sweep() {
+        // The one case where every byte is on disk and nothing will retransmit
+        // them: the process ended between the last chunk and the store, or the
+        // store failed. Losing the file then would waste minutes of radio that
+        // nothing spends again.
+        let (mut first, _radio, state, _timeline) = runtime_parts();
+        let spool = isolate_spool(&mut first);
+        let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
+        let identity = register_verified_peer(&state, &sender, "wanderer");
+
+        let bytes = body(2_048);
+        let manifest = test_manifest([0x1C; 8], &bytes);
+        first.on_file_manifest(&manifest_packet(&sender, &identity, &manifest, true), &sender);
+        // Only the first chunk goes through the runtime; the second is written
+        // straight into the spool so the completion handler never runs, which is
+        // what a kill between the two looks like on disk.
+        first.on_file_chunk(
+            &chunk_packet(&sender, &identity, &manifest, &bytes, 0, true),
+            &sender,
+        );
+        assert_eq!(
+            first
+                .files_in
+                .accept_chunk(&manifest.transfer_id, 1, &bytes[1024..], &sender, now_secs())
+                .expect("accepted"),
+            ChunkOutcome::Complete
+        );
+        drop(first);
+
+        let (mut restarted, _radio2, state2, timeline2) = runtime_parts();
+        restarted.files_in = FileStreamSpool::new(spool);
+        assert_eq!(restarted.files_in.restore(), 1);
+        register_verified_peer(&state2, &sender, "wanderer");
+        assert_eq!(restarted.files_in.completed(), vec![manifest.transfer_id]);
+
+        restarted.cleanup(now_millis(), now_secs());
+        assert_eq!(
+            timeline2
+                .history(&MeshConversation::Room, None, 10)
+                .expect("history")
+                .len(),
+            1,
+            "the sweep stored the file rather than leaving it to expire"
+        );
+        assert!(restarted.files_in.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_streamed_send_puts_a_manifest_out_first_then_paces_chunks_by_tick() {
+        // The send side never reads the file whole, and never emits it in one
+        // pass: the loop that emits chunks is the same loop that services link
+        // events, so a 16 MiB transfer done in one go would leave the mesh deaf
+        // for minutes.
+        let (mut runtime, radio, state, timeline) = runtime_parts();
+        let sender_dir = tempfile::tempdir().expect("temp dir");
+        let source = sender_dir.path().join("outgoing.bin");
+        let bytes = body(3_000);
+        std::fs::write(&source, &bytes).expect("write");
+        writable_link(&state, "/mock/send", 4096);
+        let mut events = runtime.events.subscribe();
+
+        let manifest = test_manifest([0x17; 8], &bytes);
+        runtime
+            .start_streamed_file("MSG-S1", manifest.clone(), source.clone())
+            .await;
+
+        // The manifest goes first, signed, as a broadcast.
+        let writes = radio.writes();
+        assert_eq!(writes.len(), 1, "one packet, and it is not a chunk");
+        let packet = codec::decode(&writes[0].1).expect("decodable");
+        assert_eq!(packet.message_type(), Some(MessageType::FileManifest));
+        assert!(packet.recipient_id.is_none());
+        assert!(verify_packet(&packet, &runtime.identity.signing_public()));
+        assert_eq!(
+            FileManifest::decode(&packet.payload).expect("decodes"),
+            manifest
+        );
+        assert!(
+            state.with(|inner| inner.self_broadcasts.contains(&packet)),
+            "the echo of our own manifest has to be recognisable"
+        );
+
+        // The sender's own copy exists immediately: without it the row names an
+        // attachment that does not exist and the sender is the one person on the
+        // mesh who cannot open what they just sent.
+        match events.try_recv() {
+            Ok(MeshEvent::Message(message)) => {
+                assert!(message.is_local);
+                assert_eq!(mapping::attachments_of(&message.message).len(), 1);
+            }
+            other => panic!("expected the local mirror, got {other:?}"),
+        }
+        assert_eq!(
+            timeline
+                .history(&MeshConversation::Room, None, 10)
+                .expect("history")
+                .len(),
+            1
+        );
+
+        // Then one chunk per tick, in order, each signed in its own right.
+        let mut seen = Vec::new();
+        let mut rebuilt = Vec::new();
+        for _ in 0..manifest.chunk_count {
+            let before = radio.write_count();
+            runtime.pump_streamed_files(now_secs()).await;
+            let writes = radio.writes();
+            assert_eq!(
+                writes.len(),
+                before + 1,
+                "one chunk per tick, so the loop keeps servicing the radio"
+            );
+            let packet = codec::decode(&writes[before].1).expect("decodable");
+            assert_eq!(packet.message_type(), Some(MessageType::FileChunk));
+            assert!(
+                verify_packet(&packet, &runtime.identity.signing_public()),
+                "the receiver refuses an unsigned chunk"
+            );
+            let chunk = FileChunk::decode(&packet.payload).expect("decodes");
+            assert_eq!(chunk.transfer_id, manifest.transfer_id);
+            seen.push(chunk.index);
+            rebuilt.extend_from_slice(&chunk.bytes);
+        }
+        assert_eq!(seen, (0..manifest.chunk_count).collect::<Vec<_>>());
+        assert_eq!(rebuilt, bytes, "the chunks tile the file exactly");
+
+        // Drained: nothing more goes out unprompted, because there is no
+        // acknowledgement to wait for.
+        let before = radio.write_count();
+        runtime.pump_streamed_files(now_secs()).await;
+        assert_eq!(radio.write_count(), before);
+    }
+
+    #[tokio::test]
+    async fn a_chunk_request_from_a_receiver_is_served_before_the_first_pass() {
+        // The other half of receiver-driven retransmission. The peer that asked is
+        // *blocked* on that chunk; the first pass is merely unfinished.
+        let (mut runtime, radio, state, _timeline) = runtime_parts();
+        let dir = tempfile::tempdir().expect("temp dir");
+        let source = dir.path().join("outgoing2.bin");
+        let bytes = body(4_000);
+        std::fs::write(&source, &bytes).expect("write");
+        writable_link(&state, "/mock/serve", 4096);
+        let asker = PeerId::from_str("bbbbbbbbbbbbbbbb");
+        let asker_identity = register_verified_peer(&state, &asker, "wanderer");
+
+        let manifest = test_manifest([0x18; 8], &bytes);
+        runtime
+            .start_streamed_file("MSG-S2", manifest.clone(), source)
+            .await;
+        runtime.pump_streamed_files(now_secs()).await;
+        runtime.pump_streamed_files(now_secs()).await;
+
+        // A signed request for chunk 0, which has already been sent once.
+        let request = FileChunkRequest::new(manifest.transfer_id, vec![0]).expect("valid");
+        let packet = signed(
+            &asker,
+            &asker_identity,
+            MessageType::FileChunkRequest,
+            request.encode().expect("encodes"),
+            true,
+        );
+        runtime.on_file_chunk_request(&packet, &asker);
+
+        let before = radio.write_count();
+        runtime.pump_streamed_files(now_secs()).await;
+        let writes = radio.writes();
+        let sent = FileChunk::decode(
+            &codec::decode(&writes[before].1).expect("decodable").payload,
+        )
+        .expect("decodes");
+        assert_eq!(
+            sent.index, 0,
+            "the re-request jumps the queue ahead of the unfinished first pass"
+        );
+
+        // An unsigned request is ignored, so a stranger cannot make us spend
+        // airtime re-sending a file.
+        let unsigned = signed(
+            &asker,
+            &asker_identity,
+            MessageType::FileChunkRequest,
+            request.encode().expect("encodes"),
+            false,
+        );
+        runtime.on_file_chunk_request(&unsigned, &asker);
+        let before = radio.write_count();
+        runtime.pump_streamed_files(now_secs()).await;
+        let writes = radio.writes();
+        let sent = FileChunk::decode(
+            &codec::decode(&writes[before].1).expect("decodable").payload,
+        )
+        .expect("decodes");
+        assert_eq!(
+            sent.index, 2,
+            "the pass carried on; the unsigned request bought nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn our_own_manifest_and_chunks_coming_back_are_ignored() {
+        // These types have no gossip-sync bit, so a self-authored copy can only be
+        // our own flood echoing back — there is nothing to recover and the local
+        // copy was stored when the transfer started. Accepting one would spool our
+        // own file into a second attachment.
+        let (mut runtime, _radio, state, timeline) = runtime_parts();
+        isolate_spool(&mut runtime);
+        writable_link(&state, "/mock/echo", 4096);
+        let dir = tempfile::tempdir().expect("temp dir");
+        let source = dir.path().join("mine.bin");
+        let bytes = body(2_048);
+        std::fs::write(&source, &bytes).expect("write");
+
+        let manifest = test_manifest([0x19; 8], &bytes);
+        runtime
+            .start_streamed_file("MSG-S3", manifest.clone(), source)
+            .await;
+        let rows_before = timeline
+            .history(&MeshConversation::Room, None, 10)
+            .expect("history")
+            .len();
+
+        let local = runtime.identity.peer_id();
+        let own_manifest = manifest_packet(&local, &runtime.identity.clone(), &manifest, true);
+        runtime.on_file_manifest(&own_manifest, &local);
+        assert!(
+            runtime.files_in.is_empty(),
+            "our own manifest must not open a receive spool for a file we are sending"
+        );
+
+        let own_chunk = chunk_packet(&local, &runtime.identity.clone(), &manifest, &bytes, 0, true);
+        runtime.on_file_chunk(&own_chunk, &local);
+        assert!(runtime.files_in.is_empty());
+        assert_eq!(
+            timeline
+                .history(&MeshConversation::Room, None, 10)
+                .expect("history")
+                .len(),
+            rows_before,
+            "and no second row for a file we already have"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_chunked_transfer_is_refused_when_it_is_addressed_to_us_alone() {
+        // Every gate P8 established still applies. A directed cleartext file has
+        // no business in a client whose every DM is Noise-sealed, and accepting
+        // one would teach the UI that private traffic can arrive in the clear.
+        let (mut runtime, _radio, state, _timeline) = runtime_parts();
+        isolate_spool(&mut runtime);
+        let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
+        let identity = register_verified_peer(&state, &sender, "wanderer");
+        let local = runtime.identity.peer_id();
+
+        let bytes = body(2_048);
+        let manifest = test_manifest([0x1A; 8], &bytes);
+        let mut packet = BitchatPacket::new(
+            MessageType::FileManifest,
+            sender.to_routing_bytes().expect("routing bytes"),
+            local.to_routing_bytes(),
+            now_millis(),
+            manifest.encode().expect("encodes"),
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        packet.signature = Some(sign_packet(&identity, &packet).expect("signs"));
+        runtime.on_file_manifest(&packet, &sender);
+        assert!(runtime.files_in.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_small_file_still_rides_one_packet_and_a_large_one_streams() {
+        // The interop guarantee. Real bitchat speaks `FileTransfer` and knows
+        // nothing about 0x2A–0x2C, so everything small must keep going out the way
+        // P8 sent it. Chunking is an extension for the sizes that path cannot
+        // carry, selected by size — not a replacement.
+        let (mut runtime, radio, state, _timeline) = runtime_parts();
+        writable_link(&state, "/mock/fork", 4096);
+
+        runtime.broadcast_file("MSG-SMALL", &sample_file()).await;
+        let writes = radio.writes();
+        assert_eq!(
+            codec::decode(&writes[0].1).expect("decodable").message_type(),
+            Some(MessageType::FileTransfer),
+            "a small file is still a single bitchat file packet"
+        );
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let source = dir.path().join("big.bin");
+        let bytes = body(MAX_SINGLE_PACKET_FILE_BYTES + 1);
+        std::fs::write(&source, &bytes).expect("write");
+        let before = radio.write_count();
+        runtime
+            .start_streamed_file("MSG-BIG", test_manifest([0x1B; 8], &bytes), source)
+            .await;
+        let writes = radio.writes();
+        assert_eq!(
+            codec::decode(&writes[before].1)
+                .expect("decodable")
+                .message_type(),
+            Some(MessageType::FileManifest),
+            "and anything above one packet's worth announces itself instead"
+        );
     }
 }

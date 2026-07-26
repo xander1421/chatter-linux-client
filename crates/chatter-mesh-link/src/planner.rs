@@ -324,7 +324,19 @@ pub fn priority(packet: &BitchatPacket) -> OutboundPriority {
         Some(MessageType::Fragment) => {
             OutboundPriority::fragment(fragment_total_count(&packet.payload))
         }
-        Some(MessageType::FileTransfer) => OutboundPriority::FILE_TRANSFER,
+        // Bulk payload, both of them: the single-packet file and one chunk of a
+        // streamed one. `FileChunk` has to be named explicitly — before it was a
+        // known type it fell to `LOW` as an unknown, and adding it to
+        // `MessageType` without this arm would silently promote a 512-chunk
+        // transfer to `HIGH` and let it starve conversation, which is precisely
+        // what this level exists to prevent.
+        Some(MessageType::FileTransfer | MessageType::FileChunk) => {
+            OutboundPriority::FILE_TRANSFER
+        }
+        // `FileManifest` and `FileChunkRequest` stay HIGH deliberately. Both are
+        // a few hundred bytes of control plane, and both are on the critical path
+        // of a transfer that is otherwise stalled: queueing a retransmit request
+        // behind the chunks it is trying to repair would be self-defeating.
         Some(_) => OutboundPriority::HIGH,
     }
 }
@@ -790,6 +802,19 @@ mod tests {
 
         p.msg_type = MessageType::FileTransfer.as_u8();
         assert_eq!(priority(&p), OutboundPriority::FILE_TRANSFER);
+
+        // A streamed chunk is bulk too. If this ever reads HIGH, a large
+        // transfer outranks every message in the room for its whole duration.
+        p.msg_type = MessageType::FileChunk.as_u8();
+        assert_eq!(priority(&p), OutboundPriority::FILE_TRANSFER);
+
+        // The control plane of the same transfer is not bulk: a manifest nobody
+        // has yet, and a retransmit request for a stalled transfer, are both
+        // small and both blocking.
+        for control in [MessageType::FileManifest, MessageType::FileChunkRequest] {
+            p.msg_type = control.as_u8();
+            assert_eq!(priority(&p), OutboundPriority::HIGH, "{control:?}");
+        }
 
         p.msg_type = 0x7F;
         assert_eq!(priority(&p), OutboundPriority::LOW);

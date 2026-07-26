@@ -185,6 +185,13 @@ pub enum MessageType {
     NostrCarrier = 0x28,
     /// One signed push-to-talk burst. Ephemeral broadcast, never gossip-synced.
     VoiceFrame = 0x29,
+    /// Metadata for a chunked file transfer: size, chunking, whole-file digest.
+    /// Signed. See [`crate::tlv::file_stream`].
+    FileManifest = 0x2A,
+    /// One chunk of a chunked file transfer. Signed, individually.
+    FileChunk = 0x2B,
+    /// Receiver-driven request for chunks that never arrived. Signed.
+    FileChunkRequest = 0x2C,
 }
 
 impl MessageType {
@@ -206,6 +213,17 @@ impl MessageType {
             0x27 => Self::Pong,
             0x28 => Self::NostrCarrier,
             0x29 => Self::VoiceFrame,
+            // 0x2A and beyond are unused by bitchat today, and claiming them is
+            // a risk worth stating rather than hiding: **if upstream bitchat
+            // later defines 0x2A, two different protocols share a tag.** The
+            // mitigation is that an unrecognised type is relayed rather than
+            // rejected, and each of these payloads is signature-verified and
+            // structurally validated before it does anything, so a collision
+            // degrades to "peers ignore each other's version" instead of
+            // mis-parsing. Revisit the tag choice before calling this stable.
+            0x2A => Self::FileManifest,
+            0x2B => Self::FileChunk,
+            0x2C => Self::FileChunkRequest,
             _ => return None,
         })
     }
@@ -297,12 +315,18 @@ mod tests {
             MessageType::Pong,
             MessageType::NostrCarrier,
             MessageType::VoiceFrame,
+            MessageType::FileManifest,
+            MessageType::FileChunk,
+            MessageType::FileChunkRequest,
         ];
         for t in all {
             assert_eq!(MessageType::from_u8(t.as_u8()), Some(t));
         }
         assert_eq!(MessageType::from_u8(0x00), None);
         assert_eq!(MessageType::from_u8(0xFE), None);
+        // The next tag after ours. Named so that the day bitchat defines it, the
+        // collision recorded on `from_u8` is one grep away.
+        assert_eq!(MessageType::from_u8(0x2D), None);
     }
 
     #[test]

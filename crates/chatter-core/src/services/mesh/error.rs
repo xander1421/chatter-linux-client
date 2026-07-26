@@ -76,6 +76,31 @@ pub enum MeshError {
         source: std::io::Error,
     },
 
+    /// A completed chunked transfer did not hash to what its manifest declared.
+    ///
+    /// Terminal by design, and the reason this is its own variant rather than a
+    /// generic failure: every chunk verified against its sender's signing key, so
+    /// there is no chunk to blame and no chunk to re-request. Re-requesting would
+    /// fetch the same bytes and fail identically, forever — a loop that looks
+    /// exactly like a slow transfer. The transfer is discarded instead.
+    #[error("mesh transfer {transfer} did not match its manifest digest; discarded")]
+    TransferDigestMismatch { transfer: String },
+
+    /// A manifest arrived for a live transfer describing different chunking.
+    ///
+    /// The bitmap already on disk means something under the *old* chunking, so
+    /// adopting the new manifest would resume into a hole.
+    #[error("mesh transfer {transfer} was re-announced with different chunking")]
+    TransferManifestChanged { transfer: String },
+
+    /// An operation named a transfer the spool does not have.
+    #[error("no mesh transfer {transfer} in progress")]
+    UnknownTransfer { transfer: String },
+
+    /// A value outside the range the wire format or the manifest allows.
+    #[error("mesh value out of range: {0}")]
+    OutOfRange(&'static str),
+
     /// A mesh file could not be encrypted for storage.
     #[error("mesh attachment encryption failed: {0}")]
     Crypto(#[from] crate::error::CryptoError),

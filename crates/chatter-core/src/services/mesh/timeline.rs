@@ -347,6 +347,72 @@ impl MeshTimeline {
         Ok(id)
     }
 
+    /// Persist one mesh file that is already on disk, without reading it into
+    /// memory.
+    ///
+    /// The streaming counterpart of [`store_file`](Self::store_file), and the
+    /// call the chunked receive path ends with. Same row, same encryption, same
+    /// place on disk — the only difference is that the plaintext arrives as a
+    /// path rather than a `&[u8]`, so `encrypt_file_to_file` can do the work in
+    /// 256 KiB windows instead of the caller holding the whole file.
+    ///
+    /// This is the same function `services::attachment::upload` uses for the
+    /// server flow. Using it here is the point of P9: the mesh path and the CDN
+    /// path now have identical memory behaviour, so a 16 MiB mesh file costs what
+    /// a 16 MiB upload costs.
+    ///
+    /// `plaintext` is **not** removed. The caller owns it — for a received
+    /// transfer it is the spool's partial file, which is discarded together with
+    /// the bitmap; for a send it is the user's own file, which must obviously
+    /// survive.
+    pub fn store_file_streamed(
+        &self,
+        file_name: Option<&str>,
+        mime_type: Option<&str>,
+        plaintext: &std::path::Path,
+    ) -> Result<AttachmentId, MeshError> {
+        let id = AttachmentId::new();
+
+        ensure_attachments_dir().map_err(|source| MeshError::FileIo {
+            path: attachments_dir().display().to_string(),
+            source,
+        })?;
+        let path = attachment_file_path(&id);
+        let encrypted = AttachmentCrypto::encrypt_file_to_file(plaintext, &path).map_err(|error| {
+            // The output file is opened before the encryption can fail, so a
+            // failure leaves a partial ciphertext with no row and no key: an
+            // orphan nothing can open or name.
+            let _ = std::fs::remove_file(&path);
+            error
+        })?;
+
+        let mut metadata = FileMetadata::new(
+            display_name(file_name),
+            mime_type.unwrap_or(DEFAULT_MIME).to_string(),
+            encrypted.plaintext_size,
+        );
+        // Over the ciphertext, matching `store_file` and the CDN upload path: the
+        // read path verifies against `encryption_iv`.
+        metadata.sha256 = encrypted.digest.to_vec();
+
+        let attachment = Attachment {
+            id,
+            metadata,
+            status: AttachmentStatus::Ready,
+            content_location: ContentLocation::OnFilesystem,
+            local_path: None,
+            remote_url: None,
+            encryption_key: Some(encrypted.key.to_vec()),
+            encryption_iv: Some(encrypted.digest.to_vec()),
+            created_at: Utc::now(),
+        };
+        if let Err(error) = self.attachments.insert_with_file_path(&attachment, &path) {
+            let _ = std::fs::remove_file(&path);
+            return Err(error.into());
+        }
+        Ok(id)
+    }
+
     /// Note that a geohash cell is joined, so it shows up in the sidebar before
     /// anyone has said anything in it.
     pub fn note_geohash(&self, cell: &str) {
@@ -479,6 +545,12 @@ impl MeshTimeline {
     /// entire purpose is leaving nothing behind.
     pub fn wipe(&self) -> Result<(), StorageError> {
         self.open.lock().clear();
+
+        // Partial chunked transfers, before anything else. They have no
+        // attachment row, so nothing below would ever reach them — and unlike a
+        // finished attachment they are *plaintext* on disk, which makes them the
+        // most exposed thing the wipe has to destroy.
+        super::file_stream::clear_transfers_dir();
 
         let mut first_error = None;
         for conversation_type in [ConversationType::Mesh, ConversationType::MeshDm] {
@@ -735,6 +807,21 @@ impl MeshEvents {
         bytes: &[u8],
     ) -> Result<AttachmentId, MeshError> {
         self.timeline.store_file(file_name, mime_type, bytes)
+    }
+
+    /// Store a mesh file that is already on disk, without reading it into memory.
+    ///
+    /// See [`MeshTimeline::store_file_streamed`]. Used by both ends of a chunked
+    /// transfer: the receiver's assembled spool file and the sender's own copy of
+    /// the file it is streaming out.
+    pub fn store_file_streamed(
+        &self,
+        file_name: Option<&str>,
+        mime_type: Option<&str>,
+        plaintext: &std::path::Path,
+    ) -> Result<AttachmentId, MeshError> {
+        self.timeline
+            .store_file_streamed(file_name, mime_type, plaintext)
     }
 
     /// Whether a message with this wire ID is already on disk.
@@ -1017,6 +1104,25 @@ mod tests {
         assert!(
             timeline.history(&room, None, 10).expect("history").is_empty(),
             "and the message with it"
+        );
+    }
+
+    #[test]
+    fn a_wipe_destroys_partial_chunked_transfers_too() {
+        // The most exposed thing the wipe has to reach. A finished attachment is
+        // encrypted under a key held only in its row, so deleting the row alone
+        // would at least crypto-shred it — a *partial* transfer has no row and is
+        // plaintext on disk, so nothing but an unlink destroys it.
+        let timeline = temp_timeline();
+        super::super::file_stream::ensure_transfers_dir().expect("spool dir");
+        let leftover = super::super::file_stream::transfers_dir().join("deadbeefdeadbeef.part");
+        std::fs::write(&leftover, b"half of somebody's file").expect("write");
+
+        timeline.wipe().expect("wipe");
+
+        assert!(
+            !leftover.exists(),
+            "a partial transfer is unencrypted proof that something was received"
         );
     }
 
