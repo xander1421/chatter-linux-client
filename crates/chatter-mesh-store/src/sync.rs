@@ -281,6 +281,15 @@ impl RequestSyncTracker {
             .retain(|_, requested_at| now_unix_secs.saturating_sub(*requested_at) <= window);
     }
 
+    /// The peers we have outstanding sync requests to.
+    ///
+    /// Diagnostic only. An unsolicited-response rejection while this is non-empty
+    /// means the key we registered and the sender we looked up disagree, which
+    /// the count alone cannot tell you.
+    pub fn pending_peers(&self) -> Vec<PeerId> {
+        self.pending.keys().cloned().collect()
+    }
+
     pub fn pending_count(&self) -> usize {
         self.pending.len()
     }
@@ -1321,6 +1330,11 @@ impl GossipSyncManager {
 
     pub fn fragment_count(&self) -> usize {
         self.fragments.len()
+    }
+
+    /// See [`RequestSyncTracker::pending_peers`].
+    pub fn pending_request_peers(&self) -> Vec<PeerId> {
+        self.requests.pending_peers()
     }
 
     pub fn pending_request_count(&self) -> usize {

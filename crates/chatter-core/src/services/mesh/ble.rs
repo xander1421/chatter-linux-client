@@ -379,7 +379,19 @@ impl BleRuntime {
         let accepted = match accepted {
             Ok(accepted) => accepted,
             Err(rejection) => {
-                tracing::debug!(target: "mesh::ble", %rejection, "packet rejected at ingress");
+                // `pending` is the whole of the RSR decision: a response is
+                // exempt from the freshness check only while we have an
+                // outstanding request to that peer. Printing the count next to
+                // the rejection is what distinguishes "we never asked" from
+                // "we asked and the bookkeeping lost it".
+                tracing::debug!(
+                    target: "mesh::ble",
+                    %rejection,
+                    is_rsr = packet.is_rsr,
+                    claimed_sender = %claimed,
+                    pending_sync_peers = ?self.gossip.pending_request_peers(),
+                    "packet rejected at ingress"
+                );
                 return;
             }
         };
