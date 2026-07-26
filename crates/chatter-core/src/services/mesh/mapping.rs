@@ -245,6 +245,12 @@ fn file_row(
     message.id = wire_message_id(wire_id);
     message.content =
         MessageContent::Mixed(MixedContent::attachments_only(vec![attachment]));
+    // Both, because the two are read by different consumers. `content` is what
+    // `attachments_of` and the storage layer go through; `attachments` is the field
+    // the UI converter resolves against, and it is not derived from the content.
+    // Setting only `content` stored the file correctly and rendered an empty bubble
+    // — right timestamp, right delivery state, no name, no size, nothing to open.
+    message.attachments = vec![attachment];
     message
 }
 
@@ -306,6 +312,51 @@ pub fn attachments_of(message: &Message) -> &[AttachmentId] {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_file_row_names_its_attachment_in_the_field_the_ui_reads() {
+        // Two places carry the attachment and they have different readers.
+        // `content` is what `attachments_of` and the storage layer go through — and
+        // reading a row back from storage repopulates `attachments` from it, which
+        // is why a history reload looked fine. The live event does not go through
+        // storage: `MeshEvent::Message` hands this struct straight to the UI, whose
+        // converter resolves against `Message::attachments` and does not derive it.
+        //
+        // So setting only `content` produced a file that was stored correctly and
+        // rendered as an empty bubble the moment it was sent: right timestamp, right
+        // "broadcast" state, no name, no size, nothing to open — until a reload
+        // silently fixed it.
+        let attachment = AttachmentId::new();
+        let sender = PeerId::from_str("aaaaaaaaaaaaaaaa");
+
+        for message in [
+            outbound_file_message(
+                &MeshConversation::Room,
+                "WIRE-OUT",
+                &sender,
+                attachment,
+                1_700_000_000_000,
+            ),
+            inbound_file_message(
+                &MeshConversation::Room,
+                "WIRE-IN",
+                &sender,
+                attachment,
+                1_700_000_000_000,
+            ),
+        ] {
+            assert_eq!(
+                attachments_of(&message),
+                [attachment],
+                "the content must carry the attachment"
+            );
+            assert_eq!(
+                message.attachments,
+                [attachment],
+                "and so must the field the UI converter reads"
+            );
+        }
+    }
     use super::*;
 
     fn peer(s: &str) -> PeerId {
