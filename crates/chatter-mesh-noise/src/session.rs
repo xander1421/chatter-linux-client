@@ -38,6 +38,112 @@ pub const MAX_MESSAGE_SIZE: usize = 65535;
 /// ChaCha20-Poly1305 authentication tag length.
 pub(crate) const TAG_LEN: usize = 16;
 
+/// Width of the message counter bitchat prefixes to every transport frame.
+///
+/// From `NoiseCipherState.NONCE_SIZE_BYTES`. bitchat splits both of its
+/// handshake completion paths with `useExtractedNonce: true`
+/// (`NoiseSession.swift:107` and `:133`), which is not a Noise-specification
+/// framing: every transport message on the wire is
+///
+/// ```text
+/// be_u32(message_counter) ‖ ciphertext ‖ tag
+/// ```
+///
+/// The counter is carried explicitly so the receiver can decrypt out of order —
+/// BLE reorders — which is also why the receiver needs a replay window rather
+/// than a strictly incrementing counter. The handshake itself is unaffected:
+/// the flag is only applied at `split` (`NoiseProtocol.swift:481-489`), so
+/// handshake messages carry no prefix. That asymmetry is the trap — a session
+/// with a peer whose framing does not match completes its handshake normally and
+/// then silently drops every message.
+pub const NONCE_PREFIX_LEN: usize = 4;
+
+/// Nonces this large cannot be expressed in the 4-byte wire prefix. Mirrors
+/// bitchat's `guard nonce <= UInt64(UInt32.max) - 1` in `NoiseCipherState.encrypt`.
+const MAX_WIRE_NONCE: u64 = u32::MAX as u64 - 1;
+
+/// Width of the receive replay window, from `NoiseCipherState.REPLAY_WINDOW_SIZE`.
+const REPLAY_WINDOW_BITS: usize = 1024;
+const REPLAY_WINDOW_BYTES: usize = REPLAY_WINDOW_BITS / 8;
+
+/// Sliding window over received message counters.
+///
+/// Bit `i` records that counter `highest - i` has been accepted. A counter more
+/// than [`REPLAY_WINDOW_BITS`] behind `highest` is refused outright, as is one
+/// already inside the window.
+///
+/// This is *not* a transliteration of bitchat's `markNonceAsSeen`. Its
+/// window-shift loop (`NoiseProtocol.swift:200-212`) shifts toward *newer*
+/// offsets — the opposite of the direction the window advances — so its window
+/// forgets counters it should retain and accepts some replays. Copying that
+/// would import the weakness and buy nothing: the window is receiver-local
+/// policy and never appears on the wire, so a correct one cannot break
+/// interoperability. A well-behaved sender never reuses a counter, and BLE does
+/// not reorder by a thousand messages.
+#[derive(Debug)]
+struct ReplayWindow {
+    highest: u64,
+    bits: [u8; REPLAY_WINDOW_BYTES],
+}
+
+impl ReplayWindow {
+    fn new() -> Self {
+        Self {
+            highest: 0,
+            bits: [0; REPLAY_WINDOW_BYTES],
+        }
+    }
+
+    /// Whether `nonce` may still be accepted. Pure — call [`mark_seen`](Self::mark_seen)
+    /// only after the tag has actually verified, so a forged frame cannot
+    /// consume a slot.
+    fn accepts(&self, nonce: u64) -> bool {
+        if nonce > self.highest {
+            return true;
+        }
+        let offset = (self.highest - nonce) as usize;
+        if offset >= REPLAY_WINDOW_BITS {
+            return false;
+        }
+        self.bits[offset / 8] & (1 << (offset % 8)) == 0
+    }
+
+    fn mark_seen(&mut self, nonce: u64) {
+        if nonce > self.highest {
+            let shift = nonce - self.highest;
+            if shift as usize >= REPLAY_WINDOW_BITS {
+                self.bits = [0; REPLAY_WINDOW_BYTES];
+            } else {
+                self.shift_older(shift as usize);
+            }
+            self.highest = nonce;
+            self.bits[0] |= 1;
+            return;
+        }
+        let offset = (self.highest - nonce) as usize;
+        if offset < REPLAY_WINDOW_BITS {
+            self.bits[offset / 8] |= 1 << (offset % 8);
+        }
+    }
+
+    /// Ages every recorded counter by `shift` positions: a bit at offset `o`
+    /// moves to `o + shift`, and anything shifted past the window is forgotten.
+    fn shift_older(&mut self, shift: usize) {
+        let whole = shift / 8;
+        let partial = shift % 8;
+        for i in (0..REPLAY_WINDOW_BYTES).rev() {
+            let mut byte = 0u8;
+            if i >= whole {
+                byte = self.bits[i - whole] << partial;
+                if partial != 0 && i > whole {
+                    byte |= self.bits[i - whole - 1] >> (8 - partial);
+                }
+            }
+            self.bits[i] = byte;
+        }
+    }
+}
+
 /// Worst-case bytes a handshake message adds on top of its payload: one 32-byte
 /// ephemeral public key, one 32-byte static public key with its 16-byte tag, and
 /// the payload's own tag. `XX` message two and the `X` seal message both hit
@@ -212,6 +318,7 @@ impl NoiseHandshake {
             transport,
             remote_static,
             messages_sent: 0,
+            replay: ReplayWindow::new(),
         })
     }
 }
@@ -283,10 +390,12 @@ pub struct NoiseSession {
     transport: TransportState,
     remote_static: [u8; 32],
     messages_sent: u64,
+    replay: ReplayWindow,
 }
 
 impl NoiseSession {
-    /// Encrypts one transport message.
+    /// Encrypts one transport message, framed as bitchat frames it:
+    /// `be_u32(counter) ‖ ciphertext ‖ tag`. See [`NONCE_PREFIX_LEN`].
     ///
     /// Fails with [`NoiseError::SessionExhausted`] once the nonce budget is
     /// spent, rather than reusing a nonce — a nonce repeat under ChaCha20 is a
@@ -295,36 +404,61 @@ impl NoiseSession {
         if self.messages_sent >= MAX_MESSAGES_PER_SESSION {
             return Err(NoiseError::SessionExhausted);
         }
-        if plaintext.len() > MAX_MESSAGE_SIZE - TAG_LEN {
+        if plaintext.len() > MAX_MESSAGE_SIZE - TAG_LEN - NONCE_PREFIX_LEN {
             return Err(NoiseError::Encrypt);
         }
-        let mut buffer = vec![0u8; plaintext.len() + TAG_LEN];
+        // Read the counter *before* writing: `write_message` advances it, and
+        // the frame must carry the one the ciphertext was actually sealed under.
+        let counter = self.transport.sending_nonce();
+        if counter > MAX_WIRE_NONCE {
+            return Err(NoiseError::SessionExhausted);
+        }
+
+        let mut buffer = vec![0u8; NONCE_PREFIX_LEN + plaintext.len() + TAG_LEN];
         let written = self
             .transport
-            .write_message(plaintext, &mut buffer)
+            .write_message(plaintext, &mut buffer[NONCE_PREFIX_LEN..])
             .map_err(|err| match err {
                 snow::Error::State(StateProblem::Exhausted) => NoiseError::SessionExhausted,
                 _ => NoiseError::Encrypt,
             })?;
-        buffer.truncate(written);
+        // `counter <= u32::MAX - 1` was just checked, so the cast cannot wrap.
+        buffer[..NONCE_PREFIX_LEN].copy_from_slice(&(counter as u32).to_be_bytes());
+        buffer.truncate(NONCE_PREFIX_LEN + written);
         self.messages_sent = self.messages_sent.saturating_add(1);
         Ok(buffer)
     }
 
-    /// Decrypts one transport message.
+    /// Decrypts one transport message, taking its counter from the wire rather
+    /// than from a local sequence — which is what lets a reordered BLE frame
+    /// still decrypt.
     ///
     /// Every failure is [`NoiseError::Decrypt`]. A caller — and therefore an
     /// attacker probing us — learns only that it did not work, never whether the
-    /// tag mismatched, the key was wrong, or the length was implausible.
+    /// tag mismatched, the key was wrong, the counter replayed, or the length was
+    /// implausible.
     pub fn decrypt(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>, NoiseError> {
-        if ciphertext.len() < TAG_LEN || ciphertext.len() > MAX_MESSAGE_SIZE {
+        if ciphertext.len() < NONCE_PREFIX_LEN + TAG_LEN || ciphertext.len() > MAX_MESSAGE_SIZE {
             return Err(NoiseError::Decrypt);
         }
-        let mut buffer = vec![0u8; ciphertext.len()];
+        let (prefix, body) = ciphertext.split_at(NONCE_PREFIX_LEN);
+        // `prefix` is exactly `NONCE_PREFIX_LEN` bytes by construction.
+        let counter = u64::from(u32::from_be_bytes(
+            prefix.try_into().map_err(|_| NoiseError::Decrypt)?,
+        ));
+        if !self.replay.accepts(counter) {
+            return Err(NoiseError::Decrypt);
+        }
+
+        self.transport.set_receiving_nonce(counter);
+        let mut buffer = vec![0u8; body.len()];
         let written = self
             .transport
-            .read_message(ciphertext, &mut buffer)
+            .read_message(body, &mut buffer)
             .map_err(|_| NoiseError::Decrypt)?;
+        // Only a frame whose tag verified consumes a window slot, so a forged
+        // counter cannot lock out the real one that follows it.
+        self.replay.mark_seen(counter);
         buffer.truncate(written);
         Ok(buffer)
     }
@@ -460,8 +594,109 @@ mod tests {
         let (a, b) = (alice(), bob());
         let (mut initiator, mut responder) = handshake(&a, &b);
         let sealed = initiator.encrypt(&[]).unwrap();
-        assert_eq!(sealed.len(), TAG_LEN);
+        assert_eq!(sealed.len(), NONCE_PREFIX_LEN + TAG_LEN);
         assert!(responder.decrypt(&sealed).unwrap().is_empty());
+    }
+
+    // MARK: wire framing
+
+    #[test]
+    fn every_frame_carries_its_counter_big_endian() {
+        // The single most consequential byte layout in the port: a peer whose
+        // frames lack this prefix completes the handshake and then never
+        // decrypts anything, in either direction, with no error to see.
+        let (a, b) = (alice(), bob());
+        let (mut initiator, mut responder) = handshake(&a, &b);
+
+        for expected in 0..4u32 {
+            let sealed = initiator.encrypt(b"hello").unwrap();
+            assert_eq!(
+                &sealed[..NONCE_PREFIX_LEN],
+                &expected.to_be_bytes(),
+                "frame {expected} must carry its own counter",
+            );
+            assert_eq!(sealed.len(), NONCE_PREFIX_LEN + 5 + TAG_LEN);
+            assert_eq!(responder.decrypt(&sealed).unwrap(), b"hello");
+        }
+    }
+
+    #[test]
+    fn frames_decrypt_out_of_order() {
+        // The reason the counter is on the wire at all: BLE reorders, and a
+        // receiver driving a local sequence would desynchronise permanently on
+        // the first swap.
+        let (a, b) = (alice(), bob());
+        let (mut initiator, mut responder) = handshake(&a, &b);
+
+        let first = initiator.encrypt(b"one").unwrap();
+        let second = initiator.encrypt(b"two").unwrap();
+        let third = initiator.encrypt(b"three").unwrap();
+
+        assert_eq!(responder.decrypt(&third).unwrap(), b"three");
+        assert_eq!(responder.decrypt(&first).unwrap(), b"one");
+        assert_eq!(responder.decrypt(&second).unwrap(), b"two");
+    }
+
+    #[test]
+    fn a_replayed_frame_is_refused() {
+        let (a, b) = (alice(), bob());
+        let (mut initiator, mut responder) = handshake(&a, &b);
+
+        let sealed = initiator.encrypt(b"once").unwrap();
+        assert_eq!(responder.decrypt(&sealed).unwrap(), b"once");
+        assert!(
+            responder.decrypt(&sealed).is_err(),
+            "the same counter must not be accepted twice"
+        );
+
+        // And the session survives it: the next genuine frame still decrypts.
+        let next = initiator.encrypt(b"twice").unwrap();
+        assert_eq!(responder.decrypt(&next).unwrap(), b"twice");
+    }
+
+    #[test]
+    fn a_frame_older_than_the_replay_window_is_refused() {
+        let mut window = ReplayWindow::new();
+        window.mark_seen(0);
+        window.mark_seen(REPLAY_WINDOW_BITS as u64 + 5);
+
+        assert!(!window.accepts(0), "shifted out of the window");
+        assert!(!window.accepts(REPLAY_WINDOW_BITS as u64 + 5), "seen");
+        assert!(window.accepts(REPLAY_WINDOW_BITS as u64 + 4), "in window");
+        assert!(window.accepts(REPLAY_WINDOW_BITS as u64 + 6), "newer");
+    }
+
+    #[test]
+    fn the_replay_window_ages_counters_rather_than_forgetting_them() {
+        // Guards the shift direction, which is the one thing easy to invert:
+        // a bit recorded at offset 0 must end up at offset `shift`, not vanish.
+        let mut window = ReplayWindow::new();
+        window.mark_seen(10);
+        for advance in 1..=9u64 {
+            assert!(
+                !window.accepts(10),
+                "counter 10 stays seen after advancing {advance}",
+            );
+            window.mark_seen(10 + advance);
+        }
+        // Non-contiguous advances cross byte boundaries; check one of those too.
+        window.mark_seen(100);
+        assert!(!window.accepts(10));
+        assert!(!window.accepts(19));
+        assert!(window.accepts(50), "never seen, still inside the window");
+    }
+
+    #[test]
+    fn a_truncated_frame_is_refused_rather_than_read_as_a_counter() {
+        let (a, b) = (alice(), bob());
+        let (mut initiator, mut responder) = handshake(&a, &b);
+        let sealed = initiator.encrypt(b"payload").unwrap();
+
+        assert!(responder.decrypt(&sealed[..NONCE_PREFIX_LEN]).is_err());
+        assert!(responder.decrypt(&sealed[..NONCE_PREFIX_LEN + 1]).is_err());
+        assert!(responder.decrypt(&[]).is_err());
+        // Still healthy afterwards.
+        assert_eq!(responder.decrypt(&sealed).unwrap(), b"payload");
     }
 
     #[test]

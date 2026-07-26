@@ -629,7 +629,7 @@ mod tests {
     }
 
     #[test]
-    fn broadcast_recipient_survives_the_round_trip_distinctly_from_absent() {
+    fn both_broadcast_encodings_survive_the_round_trip_as_themselves() {
         let broadcast = BitchatPacket {
             recipient_id: Some(BROADCAST_RECIPIENT),
             ..sample_packet()
@@ -641,8 +641,12 @@ mod tests {
 
         assert_eq!(decoded_broadcast.recipient_id, Some(BROADCAST_RECIPIENT));
         assert_eq!(decoded_absent.recipient_id, None);
+        // The recipient field itself round-trips distinctly — an absent
+        // recipient must not be re-encoded as all-`0xFF`, or the packet would no
+        // longer be byte-identical to what its originator signed. Both forms
+        // nonetheless *mean* broadcast.
         assert!(decoded_broadcast.is_broadcast());
-        assert!(!decoded_absent.is_broadcast());
+        assert!(decoded_absent.is_broadcast());
     }
 
     #[test]

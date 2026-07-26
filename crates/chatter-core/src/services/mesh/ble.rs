@@ -21,14 +21,13 @@ use chatter_mesh::dedup::MessageDeduplicator;
 use chatter_mesh::fragment;
 use chatter_mesh::ids::PeerId;
 use chatter_mesh::packet::{
-    BROADCAST_RECIPIENT, BitchatPacket, MessageType, NoisePayloadType, SENDER_ID_LEN,
+    BitchatPacket, MessageType, NoisePayloadType, SENDER_ID_LEN,
     decode_noise_payload, encode_noise_payload,
 };
 use chatter_mesh::relay::{self, RelayInput};
 use chatter_mesh::tlv::announce::AnnouncementPacket;
 use chatter_mesh::tlv::capabilities::PeerCapabilities;
 use chatter_mesh::tlv::courier_envelope::CourierEnvelope;
-use chatter_mesh::tlv::message::BitchatMessagePayload;
 use chatter_mesh::tlv::private_message::PrivateMessagePacket;
 use chatter_mesh::tlv::request_sync::RequestSyncPacket;
 use chatter_mesh_link::backpressure::{
@@ -44,7 +43,7 @@ use chatter_mesh_link::scheduler::{
 };
 use chatter_mesh_link::{LinkEvent, LinkId, LinkRole, MeshLink};
 use chatter_mesh_noise::seal::open_courier;
-use chatter_mesh_noise::sign::{sign_announce, sign_packet, verify_announce};
+use chatter_mesh_noise::sign::{sign_packet, verify_packet};
 use chatter_mesh_noise::{MeshIdentity, NoiseError};
 use chatter_mesh_store::CourierTier;
 use chatter_mesh_store::archive::GossipMessageArchive;
@@ -470,17 +469,16 @@ impl BleRuntime {
         else {
             return;
         };
-        let verified = packet.signature.is_some_and(|signature| {
-            verify_announce(
-                &signature,
-                &packet.sender_id,
-                &announcement.noise_public_key,
-                &announcement.signing_public_key,
-                &announcement.nickname,
-                packet.timestamp,
-                &signing_key,
-            )
-        });
+        let verified = verify_packet(packet, &signing_key);
+        if !verified {
+            // bitchat drops an unverified announce outright rather than
+            // recording the peer unverified (`BLEAnnounceHandler.swift:167`).
+            // Recording it would be worse than useless: an unverified announce
+            // carries an attacker-chosen noise key and nickname, so accepting it
+            // is exactly the identity-poisoning their handler exists to prevent.
+            tracing::debug!(target: "mesh::ble", peer = %claimed, "unverified announce ignored");
+            return;
+        }
 
         let now_ms = now_millis();
         let now_s = now_secs();
@@ -538,32 +536,58 @@ impl BleRuntime {
     }
 
     fn on_public_message(&mut self, packet: &BitchatPacket, claimed: &PeerId) {
-        let Ok(payload) = BitchatMessagePayload::decode(&packet.payload) else {
-            return;
-        };
         // A `Message` addressed to one recipient is a legacy private message. We
         // do not carry those — private traffic is Noise-encrypted — and showing
         // it as public chat would put a message meant for one person in the room.
-        if payload.is_private || !packet.is_broadcast() {
+        if !packet.is_broadcast() {
+            return;
+        }
+        let Ok(content) = core::str::from_utf8(&packet.payload) else {
+            return;
+        };
+
+        // The sender is whoever the packet header says, authenticated against
+        // the signing key their announce established — there is no self-declared
+        // sender field to prefer, and preferring one would let anybody publish
+        // under anybody's name. An unsigned or unverifiable public message is
+        // dropped, matching `BLEPublicMessageHandler.swift:86-95`.
+        let sender = claimed.clone();
+        let known = self.state.with(|state| {
+            state.peers.info(&sender).map(|peer| {
+                (
+                    peer.signing_public_key.clone(),
+                    peer.nickname.clone(),
+                    peer.verified_nickname,
+                )
+            })
+        });
+        let Some((Some(signing_key), nickname, verified)) = known else {
+            return;
+        };
+        let Ok(signing_key) = <[u8; 32]>::try_from(signing_key.as_slice()) else {
+            return;
+        };
+        if !verify_packet(packet, &signing_key) {
+            tracing::debug!(
+                target: "mesh::ble",
+                peer = %sender,
+                "public message with missing or invalid signature dropped",
+            );
             return;
         }
 
-        let sender = payload
-            .sender_peer_id
-            .as_deref()
-            .map_or_else(|| claimed.clone(), PeerId::from_str);
         let inbound = InboundMessage {
-            wire_id: payload.id,
+            // No message ID on the wire, so one is derived from the packet. The
+            // dedup key is a function of sender, timestamp, type and payload
+            // hash, so every copy that reaches us over a different path — and
+            // the same message seen twice — resolves to one ID.
+            wire_id: MessageDeduplicator::dedup_key(packet),
             conversation: MeshConversation::Room,
             sender: sender.clone(),
-            nickname: payload.sender,
-            content: payload.content,
-            timestamp_ms: payload.timestamp_ms,
+            nickname: nickname.clone(),
+            content: content.to_string(),
+            timestamp_ms: packet.timestamp,
         };
-        let verified = self
-            .state
-            .with(|state| state.peers.info(&sender).is_some_and(|p| p.verified_nickname));
-        let nickname = inbound.nickname.clone();
         self.events.send(MeshEvent::Message(Box::new(MeshMessage {
             message: inbound.to_domain(),
             conversation: inbound.conversation,
@@ -863,22 +887,23 @@ impl BleRuntime {
     pub async fn broadcast_public(&mut self, message_id: &str, content: &str) {
         let now_ms = now_millis();
         let nickname = self.config.nickname.clone();
-        let mut payload = BitchatMessagePayload::new(
-            message_id.to_string(),
-            nickname.clone(),
-            content.to_string(),
-            now_ms,
-        );
-        payload.sender_peer_id = Some(self.identity.peer_id().as_str().to_string());
-        let Ok(encoded) = payload.encode() else {
-            return;
-        };
+        // The payload of a public message is the message text and nothing else
+        // (`BLEService.swift:504`: `payload: Data(content.utf8)`). There is no
+        // room on the wire for a message ID, a timestamp or a sender name:
+        // receivers take the sender from the packet header, the time from
+        // `packet.timestamp`, and the name from the announce registry. bitchat's
+        // `BitchatMessage.toBinaryPayload()` encodes all of those, and is dead
+        // code outside its own tests.
         let packet = self.build_packet(
             MessageType::Message,
             None,
-            encoded,
+            content.as_bytes().to_vec(),
             chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
         );
+        // Signed, because the receiver requires it: an unsigned public message
+        // is dropped before its payload is even decoded
+        // (`BLEPublicMessageHandler.swift:91`).
+        let packet = self.maybe_sign(packet, true);
         // Remember it so the copy that floods back to us is recognised as our
         // own rather than displayed twice.
         self.state
@@ -929,12 +954,12 @@ impl BleRuntime {
             chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
         );
         packet.timestamp = now_ms;
-        packet.signature = Some(sign_announce(
-            &self.identity,
-            &packet.sender_id,
-            &nickname,
-            now_ms,
-        ));
+        // Signed over the packet preimage, not over `canonicalAnnounceBytes`.
+        // bitchat has both, but `buildAnnounceSignature` has no callers outside
+        // its own tests — the wire uses `noiseService.signPacket(packet)`
+        // (`BLEService.swift:1685`), and an announce signed the other way is
+        // dropped by every real peer before it reaches their registry.
+        let packet = self.maybe_sign(packet, true);
 
         self.state.with(|state| state.last_announce_ms = now_ms);
         self.transmit(&packet, None, None).await;
@@ -960,10 +985,11 @@ impl BleRuntime {
             .peer_id()
             .to_routing_bytes()
             .unwrap_or([0u8; SENDER_ID_LEN]);
-        let recipient_id = match recipient {
-            Some(peer) => peer.to_routing_bytes(),
-            None => Some(BROADCAST_RECIPIENT),
-        };
+        // Broadcast is encoded by *omitting* the recipient, which is what
+        // bitchat sends (`recipientID: nil`). The explicit all-`0xFF` form is
+        // also accepted by them, but the omitted form is what their own packets
+        // carry, so sending it keeps our traffic byte-comparable with theirs.
+        let recipient_id = recipient.and_then(PeerId::to_routing_bytes);
         BitchatPacket::new(
             msg_type,
             sender_id,
@@ -1543,20 +1569,18 @@ mod tests {
             runtime.identity.signing_public().to_vec()
         );
 
-        let signature = packet.signature.expect("announces are signed");
+        assert!(packet.signature.is_some(), "announces are signed");
         let signing_key = <[u8; 32]>::try_from(announcement.signing_public_key.as_slice())
             .expect("32 bytes");
         assert!(
-            verify_announce(
-                &signature,
-                &packet.sender_id,
-                &announcement.noise_public_key,
-                &announcement.signing_public_key,
-                &announcement.nickname,
-                packet.timestamp,
-                &signing_key,
-            ),
-            "the signature must verify against the advertised key"
+            verify_packet(&packet, &signing_key),
+            "the signature must verify against the advertised key, over the \
+             packet preimage — a peer verifying `canonicalAnnounceBytes` \
+             instead never enters anyone's registry"
+        );
+        assert!(
+            packet.recipient_id.is_none(),
+            "an announce is addressed to everyone by omitting the recipient"
         );
     }
 
@@ -1591,6 +1615,17 @@ mod tests {
         let packet = codec::decode(&writes[0].1).expect("decodable");
         assert_eq!(packet.message_type(), Some(MessageType::Message));
         assert!(packet.is_broadcast());
+        // The three things a real bitchat checks before it will show this, and
+        // the three the port originally got wrong: the payload is the message
+        // text and nothing else, the packet is signed, and "everyone" is encoded
+        // by omitting the recipient.
+        assert_eq!(packet.payload, b"hello room");
+        assert!(packet.recipient_id.is_none());
+        let signing_key = runtime.identity.signing_public();
+        assert!(
+            verify_packet(&packet, &signing_key),
+            "an unsigned public message is dropped before its payload is read"
+        );
 
         // The echo of our own broadcast must be recognisable.
         assert!(state.with(|inner| inner.self_broadcasts.contains(&packet)));

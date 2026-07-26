@@ -17,11 +17,16 @@ pub const SENDER_ID_LEN: usize = 8;
 pub const SIGNATURE_LEN: usize = 64;
 /// A recipient of eight `0xFF` bytes means "everyone".
 ///
-/// Distinct from `recipient_id: None`, which means the packet carries no recipient
-/// field at all (the `HAS_RECIPIENT` flag is clear). Both occur on the wire and they
-/// are not interchangeable — source routing, for one, treats an explicit broadcast
-/// recipient as ineligible for a route while an absent recipient never reaches that
-/// check at all.
+/// Not the same *encoding* as `recipient_id: None`, which means the packet carries no
+/// recipient field at all (the `HAS_RECIPIENT` flag is clear). Both occur on the wire
+/// and both mean "everyone" — see [`BitchatPacket::is_broadcast`] — but they must
+/// never be rewritten into each other: the recipient bytes are inside the signature
+/// preimage, so substituting one form for the other invalidates the originator's
+/// signature. Source routing also reaches them differently: an explicit broadcast
+/// recipient is checked and found ineligible for a route, while an absent recipient
+/// never reaches that check at all.
+///
+/// bitchat originates the absent form for announces and public messages.
 pub const BROADCAST_RECIPIENT: [u8; SENDER_ID_LEN] = [0xFF; SENDER_ID_LEN];
 
 /// A decoded bitchat packet.
@@ -87,12 +92,17 @@ impl BitchatPacket {
         MessageType::from_u8(self.msg_type)
     }
 
-    /// True when the packet carries the explicit all-`0xFF` broadcast recipient.
+    /// True when the packet is addressed to everyone.
     ///
-    /// A packet with no recipient field at all is *not* broadcast by this
-    /// definition — it simply has no addressing.
+    /// Two encodings mean that, and both are on the wire. bitchat *sends* an
+    /// absent recipient — `recipientID: nil`, `HAS_RECIPIENT` clear — for
+    /// announces and public messages (`BLEService.swift:502` and `:1677`), and
+    /// *accepts* either that or the explicit all-`0xFF` recipient
+    /// (`BLEPacketFreshnessPolicy.isBroadcastRecipient`). Treating an absent
+    /// recipient as "not broadcast" silently drops every real public message.
     pub fn is_broadcast(&self) -> bool {
-        self.recipient_id == Some(BROADCAST_RECIPIENT)
+        self.recipient_id
+            .is_none_or(|recipient| recipient == BROADCAST_RECIPIENT)
     }
 
     /// The exact bytes an Ed25519 signature covers.
@@ -317,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn broadcast_recipient_is_distinct_from_absent_recipient() {
+    fn both_wire_encodings_of_broadcast_are_broadcast() {
         let mut packet = BitchatPacket::new(
             MessageType::Message,
             [1; SENDER_ID_LEN],
@@ -326,7 +336,9 @@ mod tests {
             b"hi".to_vec(),
             7,
         );
-        assert!(!packet.is_broadcast());
+        // The form bitchat actually sends: no recipient field at all. Reading
+        // this as "not broadcast" drops every real public message and announce.
+        assert!(packet.is_broadcast());
 
         packet.recipient_id = Some(BROADCAST_RECIPIENT);
         assert!(packet.is_broadcast());

@@ -48,7 +48,9 @@
 //! `if is_oneway || i % 2 == 0` over the global message index for both.
 
 use chatter_mesh_noise::identity::MeshIdentity;
-use chatter_mesh_noise::session::{HandshakeRole, NoiseHandshake, NoiseSession};
+use chatter_mesh_noise::session::{
+    HandshakeRole, NONCE_PREFIX_LEN, NoiseHandshake, NoiseSession,
+};
 use chatter_mesh_noise::{NOISE_X_PROTOCOL, NOISE_XX_PROTOCOL};
 use serde::Deserialize;
 
@@ -392,16 +394,32 @@ fn transport_step(
 ) {
     let payload = bytes(&message.payload);
 
+    // Each direction has its own counter, so it is read off the sender rather
+    // than derived from the position in the vector.
+    let expected_counter = u32::try_from(sender.messages_sent()).expect("few messages");
     let produced = sender
         .encrypt(&payload)
         .unwrap_or_else(|_| panic!("{label}: transport message {number} must encrypt"));
+
+    // bitchat's transport framing is deliberately *not* the Noise
+    // specification's: it prefixes each frame with the big-endian message
+    // counter (`useExtractedNonce: true`). The corpus is the specification's, so
+    // the prefix is asserted separately and then stripped, leaving the bare
+    // Noise transport message the vectors actually pin. Everything under the
+    // prefix — key schedule, nonce construction, AEAD — must still match byte
+    // for byte, which is the property this file exists to guard.
+    let (prefix, spec_bytes) = produced.split_at(NONCE_PREFIX_LEN);
     assert_eq!(
-        hex::encode(&produced),
+        prefix,
+        expected_counter.to_be_bytes(),
+        "{label}: transport message {number} must carry its counter, big-endian"
+    );
+    assert_eq!(
+        hex::encode(spec_bytes),
         message.ciphertext,
-        "{label}: transport message {number} ciphertext diverges from the specification. \
-         If the handshake passes and only transport fails, the likeliest cause is \
-         NoiseSession::encrypt adding framing of its own — the corpus expects the bare \
-         Noise transport message and nothing else."
+        "{label}: transport message {number} ciphertext diverges from the specification \
+         once bitchat's counter prefix is removed. The prefix is expected; a divergence \
+         *under* it means the key schedule or the AEAD is wrong."
     );
 
     let opened = receiver

@@ -476,8 +476,13 @@ mod tests {
         let embedded = embed_private_message_no_recipient("geohash dm", "MSG-2", &sender(), 5)
             .expect("embeds");
         let packet = decode_embedded(&embedded).expect("decodes");
+        // The point is that no recipient is written at all — a geohash DM must
+        // not name its recipient on a public relay. Note this is *not* an
+        // assertion about `is_broadcast()`, which is true for an absent
+        // recipient: the packet is `NoiseEncrypted`, so it is dispatched by type
+        // to the session handler and never reaches the public-room path.
         assert_eq!(packet.recipient_id, None);
-        assert!(!packet.is_broadcast());
+        assert_eq!(packet.msg_type, MessageType::NoiseEncrypted.as_u8());
     }
 
     #[test]
