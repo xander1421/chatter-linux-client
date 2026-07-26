@@ -112,10 +112,16 @@ const CHUNKS_PER_TICK: usize = 1;
 
 /// Measured air throughput for one link, in bytes of payload per second.
 ///
-/// A calibration figure, not a constant of nature. Measured on a Galaxy S25 to a
-/// BlueZ desktop at ~21.5 kB/s of fragment payload, and rounded down: pacing
-/// slightly under the real rate costs a little time, pacing over it costs the
-/// whole transfer, because the excess is discarded rather than queued.
+/// A calibration figure, not a constant of nature, and deliberately set from a
+/// *sustained* measurement rather than a burst.
+///
+/// A short isolated 32 KiB file crosses at ~21.5 kB/s, which is the figure this
+/// started at. A 2 MiB transfer measured end to end came in at 10.5 kB/s — 3.11 s
+/// per chunk against a 1.64 s budget — because a real transfer shares the link
+/// with announces, gossip sync and the receiver's own traffic for its whole
+/// duration, and a burst does not. The sustained number is the one that matters:
+/// pacing under the real rate costs a little time, pacing over it costs the whole
+/// transfer, because the excess is discarded rather than queued.
 ///
 /// It exists because BlueZ gives no backpressure when it sends notifications.
 /// Android's bridge refuses a second concurrent write and the layer above queues
@@ -125,7 +131,7 @@ const CHUNKS_PER_TICK: usize = 1;
 ///
 /// Tune this if the radio or the platform changes. Too low is slow; too high is
 /// silent loss.
-const AIR_BYTES_PER_SEC: u64 = 20_000;
+const AIR_BYTES_PER_SEC: u64 = 10_000;
 
 /// Queued outbound bytes above which a transfer skips its turn.
 ///
