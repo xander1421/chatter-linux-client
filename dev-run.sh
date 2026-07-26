@@ -36,4 +36,12 @@ export CHATTER_MESH_SEAL_KEY
 # Auto-register a dev account rather than prompting for one.
 export CHATTER_DEV=1
 
+# `--features mesh` is not optional and is easy to lose: any plain
+# `cargo build -p chatter-ui`, and every `cargo test --workspace`, overwrites
+# target/debug/chatter-ui with a build that has no mesh feature. The app then
+# starts perfectly and the radio simply never comes up, with no error anywhere —
+# `#[cfg(feature = "mesh")]` compiled the start call out. Running through cargo
+# here means the binary is always rebuilt with it.
+#
+# To check a binary by hand:  strings target/debug/chatter-ui | grep 'mesh: started'
 exec cargo run -p chatter-ui --features mesh "$@"
