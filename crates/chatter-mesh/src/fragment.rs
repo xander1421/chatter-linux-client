@@ -879,4 +879,53 @@ mod tests {
         assembler.clear();
         assert!(assembler.is_empty());
     }
+
+    // MARK: what the lifetime window can actually carry
+
+    #[test]
+    fn a_one_mebibyte_payload_cannot_reassemble_within_the_lifetime_window() {
+        // Not a style complaint — an arithmetic wall, and the reason P9 chunking
+        // is mandatory rather than an optimisation.
+        //
+        // FRAGMENT_LIFETIME_SECS is 30, measured from the *first* fragment, so a
+        // transfer that is 99% complete at t=31s is discarded whatever its
+        // progress. Meanwhile MAX_REASSEMBLED_BYTES is 1 MiB, which at
+        // DEFAULT_FRAGMENT_SIZE is well over two thousand fragments, each padded
+        // out to a 512-byte block on the wire.
+        //
+        // Measured BLE goodput on this stack is single-digit to low-tens of kB/s,
+        // and the sparse duty cycle keeps the radio off two thirds of the time.
+        // Both figures below are generous.
+        let fragments = MAX_REASSEMBLED_BYTES.div_ceil(DEFAULT_FRAGMENT_SIZE);
+        assert!(
+            fragments > 2_000,
+            "1 MiB is {fragments} fragments at {DEFAULT_FRAGMENT_SIZE} bytes"
+        );
+        assert!(
+            fragments < MAX_FRAGMENT_COUNT,
+            "the count cap is not what stops this — the clock is"
+        );
+
+        // Each 469-byte fragment pads to the 512-byte block, so the wire cost is
+        // larger than the payload.
+        let wire_bytes = fragments * 512;
+
+        for goodput_bytes_per_sec in [10_000usize, 3_000] {
+            let seconds = wire_bytes / goodput_bytes_per_sec;
+            assert!(
+                seconds as u64 > FRAGMENT_LIFETIME_SECS,
+                "1 MiB needs {seconds}s at {goodput_bytes_per_sec} B/s but the \
+                 assembly is evicted after {FRAGMENT_LIFETIME_SECS}s"
+            );
+        }
+
+        // What the window *can* carry, at the optimistic figure. Anything above
+        // this has to be chunked at a layer above the fragmenter, with resume,
+        // because no single reassembly will ever finish.
+        let carryable = 10_000 * FRAGMENT_LIFETIME_SECS as usize;
+        assert!(
+            carryable < MAX_REASSEMBLED_BYTES / 3,
+            "the reachable ceiling is a fraction of the advertised one"
+        );
+    }
 }
