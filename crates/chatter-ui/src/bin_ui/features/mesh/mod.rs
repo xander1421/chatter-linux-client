@@ -235,14 +235,27 @@ fn deselect_rows(window: &MainWindow) {
 
 /// Push transport state into the Slint global.
 fn push_status(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    apply_status(window, core_api::status(ui_ctx));
+    apply_status(window, ui_ctx, core_api::status(ui_ctx));
 }
 
-fn apply_status(window: &MainWindow, status: chatter_core::services::mesh::MeshStatus) {
+fn apply_status(
+    window: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    status: chatter_core::services::mesh::MeshStatus,
+) {
     let global = window.global::<MeshGlobal>();
+    // Asked separately, because `MeshStatus` is only about transports — a relay
+    // flapping rebuilds it, and a service flag inside it would read as the mesh
+    // dying. See `MeshService::is_running`.
+    global.set_running(core_api::service_running(ui_ctx));
     global.set_radio_running(status.radio_running);
     global.set_peer_count(i32::try_from(status.connected_peers).unwrap_or(i32::MAX));
     global.set_relay_count(i32::try_from(status.connected_relays).unwrap_or(i32::MAX));
+
+    // A running mesh is the whole of what makes the app usable without an
+    // account, so this is the one place where that answer can change. The
+    // sign-in screens read it to decide whether to offer a way past themselves.
+    window.set_account_free_surfaces(ui_ctx.has_account_free_surfaces());
 }
 
 /// Follow the mesh event stream for the life of the window.
@@ -308,7 +321,7 @@ fn handle_event(event: MeshEvent, weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
         MeshEvent::Status(status) => {
             let ui_ctx = ui_ctx.clone();
             run_ui!(weak, |w| {
-                apply_status(&w, status);
+                apply_status(&w, &ui_ctx, status);
                 refresh_rows(&w, &ui_ctx);
             });
         }

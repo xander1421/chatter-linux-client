@@ -186,6 +186,7 @@ impl ClientBuilder {
             notif_stream_handle: Mutex::new(None),
             push_url: Mutex::new(None),
             transport_switch_lock: tokio::sync::Mutex::new(()),
+            server_monitor_started: AtomicBool::new(false),
         }))
     }
 }
@@ -295,6 +296,9 @@ pub struct ChatterClient {
     /// Each rebuild reads live pool transport state, so any ordering converges
     /// to the final transport.
     transport_switch_lock: tokio::sync::Mutex<()>,
+    /// Guards the server-reachability monitor so it spawns exactly once.
+    /// See `start_server_monitor`.
+    server_monitor_started: AtomicBool,
 }
 
 pub use crate::services::user::ReceivedFriendRequestProfile;
@@ -436,6 +440,68 @@ impl ChatterClient {
         self.mesh().start().await
     }
 
+    /// Whether the mesh service came up and is still up.
+    ///
+    /// Not "the radio is on" and not "a peer is in range" — just that the
+    /// service exists, which is what decides whether there are mesh
+    /// conversations to open at all.
+    #[cfg(feature = "mesh")]
+    #[must_use]
+    pub fn mesh_running(&self) -> bool {
+        self.mesh().is_running()
+    }
+
+    /// Whether this app has anything usable by someone with no account.
+    ///
+    /// True exactly when the mesh service is running. The mesh is serverless and
+    /// account-free by construction (see [`start_mesh`](Self::start_mesh)), so a
+    /// running mesh means a user who has never registered, and cannot register
+    /// because there is no server to register with, still has conversations to
+    /// open — and the sign-in screen has something to offer a way past itself
+    /// *to*.
+    ///
+    /// It is deliberately the running service and not the `mesh` Cargo feature.
+    /// A build with the feature whose `start` failed (no sealer key, for
+    /// instance) has nothing behind the login screen, and offering a way past it
+    /// would strand the user somewhere emptier than where they began.
+    ///
+    /// This says nothing about whether messages will be delivered. Delivery on a
+    /// mesh depends on who is in radio range, is best-effort, and may be
+    /// deferred by hours; the mesh surfaces say so themselves and this must not
+    /// be read as a promise on their behalf.
+    #[must_use]
+    pub fn has_account_free_surfaces(&self) -> bool {
+        #[cfg(feature = "mesh")]
+        {
+            self.mesh_running()
+        }
+        #[cfg(not(feature = "mesh"))]
+        {
+            false
+        }
+    }
+
+    /// Start the server-reachability monitor.
+    ///
+    /// Deliberately **not** part of [`start`](Self::start), for the same reason
+    /// [`start_mesh`](Self::start_mesh) is not: `start` is the authenticated
+    /// client coming up, and the client that most needs to know whether the
+    /// server is there is the one that could not sign in to it. Called from app
+    /// startup regardless of login.
+    ///
+    /// Safe to call more than once — extra monitors would only duplicate probes,
+    /// so the second call is a no-op.
+    pub fn start_server_monitor(&self) {
+        if self.server_monitor_started.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let handle = tokio::spawn(crate::network::server_monitor::run(
+            self.services.grpc_pool.clone(),
+            self.services.offline_state.clone(),
+        ));
+        self.tasks.lock().push(handle);
+    }
+
     /// Panic wipe: destroy everything this device holds about the mesh.
     ///
     /// Identity keypair, retained mail, carried courier envelopes, gossip
@@ -477,6 +543,24 @@ impl ChatterClient {
             }
             MeshConversation::Dm(peer) => self.mesh().send_dm(peer, text).await,
         }
+    }
+
+    /// Put a file on the air for the mesh room.
+    ///
+    /// Room only, and there is no conversation argument for that reason: a mesh
+    /// file transfer is a cleartext broadcast, while this client's mesh DMs are
+    /// Noise-encrypted, so there is no directed form to send and the receiver
+    /// refuses one. Returns the wire message ID; the row arrives on the mesh
+    /// event stream like any other message, carrying the file as an attachment.
+    ///
+    /// Anything over the mesh's one-packet budget is refused rather than
+    /// truncated — there is no chunking or resume above the fragmenter.
+    #[cfg(feature = "mesh")]
+    pub fn mesh_send_file(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<String, crate::services::mesh::MeshError> {
+        self.mesh().send_file(path)
     }
     crate::service_accessor!(mailbox_manager, MailboxManager, mailbox_manager);
     crate::service_accessor!(local_ai, LocalAIService, local_ai_service);

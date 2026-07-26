@@ -423,6 +423,7 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                             w.set_settings_delete_loading(false);
                             w.set_settings_delete_password("".into());
                             w.set_settings_delete_error("".into());
+                            w.set_is_signed_in(false);
                             w.set_current_view("login".into());
                             w.set_active_modal("none".into());
                             w.set_login_username("".into());

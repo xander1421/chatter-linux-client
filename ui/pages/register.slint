@@ -7,6 +7,7 @@ import { Icons } from "../theme/icons.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 import { Avatar } from "../components/avatar.slint";
+import { OfflineMeshNotice } from "../components/offline_mesh_notice.slint";
 
 export component RegisterPage inherits Rectangle {
     in-out property <string> display-name: "";
@@ -50,6 +51,16 @@ export component RegisterPage inherits Rectangle {
     callback select-avatar();
     callback select-default-avatar(int);
     callback go-to-login();
+    callback continue-without-account();
+
+    // Live server reachability and the mesh escape hatch. Step 4 of this wizard
+    // is where a serverless install used to strand: "Create Account" is the only
+    // control on it, and with no server it can never succeed. See
+    // `components/offline_mesh_notice.slint`.
+    // Settled-unreachable, computed by chatter-core
+    // (`ConnectionState::is_unreachable`) rather than string-matched here.
+    in property <bool> server-unreachable: false;
+    in property <bool> account-free-surfaces: false;
 
     background: Colors.background;
 
@@ -144,6 +155,23 @@ export component RegisterPage inherits Rectangle {
                     VerticalLayout {
                         spacing: Spacing.lg;
                         padding: Spacing.lg;
+
+                        // Both of these used to live inside step 4, which meant a
+                        // registration that failed while the user was on any other
+                        // step reported nothing at all — and dev-mode
+                        // auto-register submits from step 1. The condition is not
+                        // step-specific, so neither is where it is said.
+                        if error != "": Text {
+                            text: root.error;
+                            color: Colors.error;
+                            font-size: Typography.sm;
+                            wrap: word-wrap;
+                        }
+
+                        if root.server-unreachable: OfflineMeshNotice {
+                            account-free-surfaces: root.account-free-surfaces;
+                            continue-without-account => { root.continue-without-account(); }
+                        }
 
                         // --- STEP 1: PROFILE ---
                         if current-step == 1: VerticalLayout {
@@ -436,13 +464,6 @@ export component RegisterPage inherits Rectangle {
                                     Text { text: "Official"; font-size: Typography.xs; color: Colors.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
                                     TouchArea { clicked => { root.server-url = "https://api.chatter.example.com"; } }
                                 }
-                            }
-
-                            if error != "": Text {
-                                text: root.error;
-                                color: Colors.error;
-                                font-size: Typography.sm;
-                                wrap: word-wrap;
                             }
 
                             Button {

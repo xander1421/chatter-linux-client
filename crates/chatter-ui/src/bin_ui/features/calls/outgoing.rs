@@ -101,13 +101,23 @@ async fn start_call_impl(
     // Delegate all orchestration to core — it resolves peer / kind / transport.
     let ctx = ui_ctx.clone();
     let dn = display_name.clone();
-    let start = match tokio::spawn(async move { ctx.start_call(conversation, call_type, &dn).await })
-        .await
-        .unwrap()
-    {
-        Ok(s) => s,
-        Err(e) => {
+    // The `JoinError` is handled rather than unwrapped: this runs inside
+    // `slint::spawn_local`, i.e. on the UI thread, so unwrapping it turned any
+    // panic in the LiveKit/gRPC start path into a panic on the event loop and
+    // took the whole app down — including the mesh, which had nothing to do with
+    // the call. A failed call should close the call view, not the process.
+    let joined = tokio::spawn(async move { ctx.start_call(conversation, call_type, &dn).await }).await;
+    let start = match joined {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => {
             tracing::error!(error = %e, "Failed to start call");
+            if let Some(w) = weak.upgrade() {
+                w.set_active_call_visible(false);
+            }
+            return;
+        }
+        Err(join_error) => {
+            tracing::error!(%join_error, "Call start task did not finish");
             if let Some(w) = weak.upgrade() {
                 w.set_active_call_visible(false);
             }

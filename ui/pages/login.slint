@@ -5,6 +5,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
+import { OfflineMeshNotice } from "../components/offline_mesh_notice.slint";
 
 export component LoginPage inherits Rectangle {
     in-out property <string> username: "";
@@ -13,6 +14,13 @@ export component LoginPage inherits Rectangle {
     in-out property <string> server-url: "";
     in property <bool> loading: false;
     in property <string> error: "";
+    // Live server reachability and the mesh escape hatch — see
+    // `components/offline_mesh_notice.slint` for why this screen needs a way out
+    // of itself at all.
+    // Settled-unreachable, computed by chatter-core
+    // (`ConnectionState::is_unreachable`) rather than string-matched here.
+    in property <bool> server-unreachable: false;
+    in property <bool> account-free-surfaces: false;
 
     property <bool> submitted: false;
 
@@ -20,6 +28,7 @@ export component LoginPage inherits Rectangle {
     callback register();
     callback go-to-recovery();
     callback go-to-link-device();
+    callback continue-without-account();
 
     background: Colors.background;
 
@@ -129,6 +138,14 @@ export component LoginPage inherits Rectangle {
                         color: Colors.error;
                         font-size: Typography.sm;
                         wrap: word-wrap;
+                    }
+
+                    // Next to the error, because when the server is down the
+                    // error above is "failed to connect" and this is the rest of
+                    // that sentence.
+                    if root.server-unreachable: OfflineMeshNotice {
+                        account-free-surfaces: root.account-free-surfaces;
+                        continue-without-account => { root.continue-without-account(); }
                     }
 
                     // Forgot password

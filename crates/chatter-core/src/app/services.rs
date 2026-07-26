@@ -354,6 +354,11 @@ impl ServiceContainer {
                         infra.database.clone(),
                     ),
                 ),
+                // Files carried by mesh messages are rows in the same attachment
+                // table as every other conversation type's, for the same reason
+                // the messages are: a mesh file is not a second kind of
+                // attachment, it just never had a CDN behind it.
+                attachments: infra.attachment_repo.clone(),
                 favorites: Arc::new(
                     crate::storage::repositories::MeshFavoritesRepository::new(
                         infra.database.clone(),

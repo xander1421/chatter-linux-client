@@ -1,13 +1,37 @@
 // Connection status banner — Neo 2.0 with glow effects on reconnecting
+//
+// Two facts, and the second one is the point of it:
+//
+//   1. the chatter server cannot be reached;
+//   2. what — if anything — still works while that is true.
+//
+// (2) exists because this app has a serverless BLE mesh, so "no server" is not
+// the end of the app the way it is in every other chat client. A banner that
+// said only (1) would be telling the user the app is down at the exact moment
+// the one feature built for that situation is up.
+//
+// The honesty rule from `ui/mesh/mesh_context_bar.slint` applies here and is
+// load-bearing: never claim the mesh works when it does not. Every value below
+// comes from `MeshGlobal` and `connection-state`, both filled by Rust from
+// `chatter-core`; the banner chooses wording, never facts. In particular a mesh
+// whose service failed to start is said to be down, not quietly omitted, and
+// "the mesh is running" is never allowed to read as "your message will arrive"
+// — delivery is the context bar's subject, not this one's.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { AnonMode, TorStatus } from "../anon_mode/anon_mode_global.slint";
+import { MeshGlobal } from "../mesh/mesh_global.slint";
 
 export component ConnectionBanner inherits Rectangle {
     // "connected", "connecting", "reconnecting", "disconnected", "failed"
     in property <string> connection-state: "connected";
+    // The server is settled-unreachable, as opposed to still being tried. Comes
+    // from chatter-core (`ConnectionState::is_unreachable`) rather than being
+    // re-derived from the string above, so this and the sign-in screens cannot
+    // end up disagreeing about it.
+    in property <bool> server-unreachable: false;
     in property <int> reconnect-attempt: 0;
     in property <int> queue-count: 0;
 
@@ -31,8 +55,40 @@ export component ConnectionBanner inherits Rectangle {
         || root.tor-error
         || root.just-reconnected;
 
+    // The mesh sentence appears only once the server is settled-unreachable:
+    // during "connecting" the honest position is that we do not know yet, and
+    // pre-announcing a fallback would be the app talking itself down.
+    property <bool> show-mesh-line: MeshGlobal.enabled && root.server-unreachable;
+
+    // What is left when the server is gone. Ordered by what the user can act on.
+    //
+    // `MeshGlobal.running` first, because a mesh that never started is the one
+    // case where the answer is "nothing" and saying anything else would be a
+    // lie. Then Bluetooth off, which is actionable. Then the ordinary states,
+    // where the peer count is the whole signal and zero is normal.
+    property <string> mesh-line:
+        !MeshGlobal.running
+            ? "The mesh is not running either, so there is nothing to fall back to."
+      : !MeshGlobal.radio-running
+            // Relay counts are stated rather than summarised as "relays work":
+            // a cell rides Nostr, which is servers over the internet, so this is
+            // the one mesh path that is not actually infrastructure-free.
+            ? (MeshGlobal.relay-count == 0
+                ? "Mesh is on, but Bluetooth is off and no relay is connected — nothing can carry a message right now."
+              : MeshGlobal.relay-count == 1
+                ? "Mesh is on but Bluetooth is off. Only the 1 connected relay can carry, and relays need internet."
+                : "Mesh is on but Bluetooth is off. Only the " + MeshGlobal.relay-count + " connected relays can carry, and relays need internet.")
+      : MeshGlobal.peer-count == 0
+            ? "Mesh is running over Bluetooth. Nobody is in range yet; what you send waits to be carried."
+      : MeshGlobal.peer-count == 1
+            ? "Mesh is running over Bluetooth — 1 nearby. Mesh conversations do not need the server."
+            : "Mesh is running over Bluetooth — " + MeshGlobal.peer-count + " nearby. Mesh conversations do not need the server.";
+
     visible: root.should-show;
-    height: root.should-show ? 36px : 0px;
+    // Content-driven, because the mesh sentence wraps and the half of it that
+    // would get cut is the half that says the mesh is *not* a substitute for
+    // the server.
+    height: root.should-show ? content.preferred-height : 0px;
     animate height { duration: 200ms; easing: ease-out; }
 
     // Banner color based on state
@@ -63,43 +119,63 @@ export component ConnectionBanner inherits Rectangle {
         background: root.banner-color.with-alpha(0.3);
     }
 
-    HorizontalLayout {
+    content := VerticalLayout {
         padding-left: Spacing.lg;
         padding-right: Spacing.lg;
-        spacing: Spacing.sm;
-        alignment: center;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 2px;
 
-        // Status dot (pulsing for connecting states)
-        Rectangle {
-            width: 8px;
-            height: 8px;
-            border-radius: 4px;
-            background: root.banner-color;
-            y: (parent.height - self.height) / 2;
+        HorizontalLayout {
+            spacing: Spacing.sm;
+            alignment: center;
 
-            // Pulse animation for connecting/reconnecting
-            states [
-                pulsing when connection-state == "connecting" || connection-state == "reconnecting": {
-                    opacity: 0.4;
-                }
-            ]
-            animate opacity { duration: 800ms; easing: ease-in-out; }
+            // Status dot (pulsing for connecting states)
+            Rectangle {
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: root.banner-color;
+                y: (parent.height - self.height) / 2;
+
+                // Pulse animation for connecting/reconnecting
+                states [
+                    pulsing when connection-state == "connecting" || connection-state == "reconnecting": {
+                        opacity: 0.4;
+                    }
+                ]
+                animate opacity { duration: 800ms; easing: ease-in-out; }
+            }
+
+            // Status text
+            Text {
+                text: root.just-reconnected ? "Connected" :
+                      root.tor-error ? "Tor connection error — retrying…" :
+                      root.tor-connecting ? "Connecting over Tor…" :
+                      connection-state == "connecting" ? "Connecting…" :
+                      connection-state == "reconnecting" ? "Reconnecting" + (reconnect-attempt > 0 ? " (attempt " + reconnect-attempt + ")…" : "…") :
+                      connection-state == "failed" ? "Server unreachable — check your network" :
+                      queue-count > 0 ? "Server unreachable — " + queue-count + " messages queued" :
+                      "Server unreachable — messages to it will be sent when it comes back";
+                color: root.banner-color;
+                font-size: Typography.xs;
+                font-weight: Typography.medium;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
         }
 
-        // Status text
-        Text {
-            text: root.just-reconnected ? "Connected" :
-                  root.tor-error ? "Tor connection error — retrying…" :
-                  root.tor-connecting ? "Connecting over Tor…" :
-                  connection-state == "connecting" ? "Connecting…" :
-                  connection-state == "reconnecting" ? "Reconnecting" + (reconnect-attempt > 0 ? " (attempt " + reconnect-attempt + ")…" : "…") :
-                  connection-state == "failed" ? "Connection failed — check your network" :
-                  queue-count > 0 ? "No connection — " + queue-count + " messages queued" :
-                  "No connection — messages will be sent when you reconnect";
-            color: root.banner-color;
-            font-size: Typography.xs;
-            font-weight: Typography.medium;
-            vertical-alignment: center;
+        // What still works. Muted rather than coloured: this is the reassuring
+        // half, and painting it in the error colour would file it under the
+        // problem.
+        if root.show-mesh-line: Text {
+            text: root.mesh-line;
+            color: MeshGlobal.running ? Colors.text-muted : root.banner-color;
+            font-size: Typography.xxs;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+            accessible-role: text;
+            accessible-label: root.mesh-line;
         }
     }
 }

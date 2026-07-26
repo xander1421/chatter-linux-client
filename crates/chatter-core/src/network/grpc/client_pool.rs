@@ -27,6 +27,14 @@ fn connect_timeout_for(server_url: &str) -> Duration {
     }
 }
 
+/// Ceiling on one `call_with_retry` sequence, retries and backoff included.
+///
+/// Generous enough that a slow server on a bad link still completes, short
+/// enough that a user who tapped something while the server was gone gets an
+/// answer rather than a spinner. It has to exceed the 60s onion connect timeout
+/// or onion cold-start would be cut off mid-bootstrap.
+const UNARY_DEADLINE: Duration = Duration::from_secs(75);
+
 /// gRPC connection pool with shared channel and authentication.
 ///
 /// Manages a single tonic Channel that can be cloned cheaply for
@@ -285,11 +293,64 @@ impl GrpcClientPool {
         #[cfg(not(feature = "onion"))]
         let connect_result = endpoint.connect().await;
 
-        let channel = connect_result
-            .map_err(|e| NetworkError::ConnectionFailed(format!("connection failed: {}", e)))?;
+        let channel = connect_result.map_err(|e| {
+            crate::network::connection::set_server_status(
+                crate::network::connection::ServerStatus::Unreachable,
+            );
+            NetworkError::ConnectionFailed(format!("connection failed: {}", e))
+        })?;
 
+        crate::network::connection::set_server_status(
+            crate::network::connection::ServerStatus::Reachable,
+        );
         *self.channel.write() = Some(channel);
         Ok(())
+    }
+
+    /// Dial the server and throw the connection away: a reachability probe.
+    ///
+    /// Deliberately does **not** touch the pool's channel. [`connect`] does, and
+    /// a monitor that re-dialled the live channel every half minute would tear
+    /// down whatever server streams were riding it. Healing the pool is already
+    /// somebody else's job: [`channel`] makes a lazy one on demand and
+    /// [`call_with_retry`] drops stale ones.
+    ///
+    /// The only thing this is for is the answer, which it records in
+    /// [`crate::network::connection::server_status`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `NetworkError::ConnectionFailed` if the dial fails.
+    ///
+    /// [`connect`]: Self::connect
+    /// [`channel`]: Self::channel
+    /// [`call_with_retry`]: Self::call_with_retry
+    pub async fn probe(&self) -> Result<(), NetworkError> {
+        use crate::network::connection::{set_server_status, ServerStatus};
+
+        let endpoint = self.endpoint.read().clone();
+
+        #[cfg(feature = "onion")]
+        let result = if *self.transport_mode.read() == TransportMode::Onion {
+            endpoint.connect_with_connector(self.onion_connector()).await
+        } else {
+            endpoint.connect().await
+        };
+        #[cfg(not(feature = "onion"))]
+        let result = endpoint.connect().await;
+
+        match result {
+            Ok(_channel) => {
+                set_server_status(ServerStatus::Reachable);
+                Ok(())
+            }
+            Err(e) => {
+                set_server_status(ServerStatus::Unreachable);
+                Err(NetworkError::ConnectionFailed(format!(
+                    "connection failed: {e}"
+                )))
+            }
+        }
     }
 
     /// Build a fresh onion connector sharing the pool's lazily-bootstrapped
@@ -450,19 +511,51 @@ impl GrpcClientPool {
         F: FnMut(&Self) -> Fut,
         Fut: Future<Output = Result<T, NetworkError>>,
     {
+        use crate::network::connection::{set_server_status, ServerStatus};
+
         let pool = self;
-        retry_unary(
-            &RetryConfig::default(),
+        let retry_config = RetryConfig::default();
+        let attempts = retry_unary(
+            &retry_config,
             operation,
             Some(|| {
                 tracing::warn!(
                     "Transport error detected — disconnecting stale channel for reconnect"
                 );
+                set_server_status(ServerStatus::Unreachable);
                 pool.disconnect();
             }),
             || f(pool),
-        )
-        .await
+        );
+
+        // The pool is deliberately built without a request deadline, because a
+        // deadline on the endpoint would also cut off server streams mid-stream.
+        // That left unary calls with nothing but the connect timeout, which only
+        // fires for a server that refuses TCP — not for one that accepts the
+        // connection and then never answers, where the call hung forever. The
+        // deadline goes here, around the whole retry sequence rather than each
+        // attempt, so the worst case a caller has to survive is one number.
+        let result = match tokio::time::timeout(UNARY_DEADLINE, attempts).await {
+            Ok(inner) => inner,
+            Err(_) => {
+                tracing::warn!(
+                    operation,
+                    deadline_s = UNARY_DEADLINE.as_secs(),
+                    "RPC exceeded its deadline — treating the server as unreachable"
+                );
+                set_server_status(ServerStatus::Unreachable);
+                pool.disconnect();
+                Err(NetworkError::Timeout)
+            }
+        };
+
+        // A completed RPC is the strongest evidence of reachability there is —
+        // better than the synthetic dial the monitor falls back to — so record it
+        // and spare the monitor a probe.
+        if result.is_ok() {
+            set_server_status(ServerStatus::Reachable);
+        }
+        result
     }
 
     // ========================================================================

@@ -40,6 +40,16 @@ export global MeshGlobal {
     in-out property <bool> enabled: false;
 
     // ── Transport, as reported by MeshService ──
+    // The mesh service itself came up, so mesh conversations exist and can be
+    // opened, read and written to. This is the flag that says the mesh is
+    // somewhere a user can actually go — `radio-running` below is only one of
+    // the two transports it can go there over, and a mesh with neither still
+    // keeps what you write for a carrier that has not arrived yet.
+    //
+    // It is emphatically not a promise of delivery. What reaches anyone depends
+    // on who is in range, and the context bar above an open conversation is
+    // where that gets said.
+    in-out property <bool> running: false;
     // The BLE radio is started. False on platforms with no radio, where the
     // mesh still runs over Nostr relays.
     in-out property <bool> radio-running: false;

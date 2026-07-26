@@ -97,6 +97,7 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak_for_view.upgrade() {
                             w.set_login_loading(false);
+                            w.set_is_signed_in(true);
                             w.set_current_view("main".into());
                         }
                     });

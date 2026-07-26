@@ -1,0 +1,86 @@
+// The strip that admits the main view is being shown to nobody in particular.
+//
+// A user who came in through "Use the mesh without an account" is looking at the
+// real main view with a real sidebar, and every server-backed section of it is
+// empty — not because they have no channels, but because there is no account to
+// have them under. Left unsaid, that reads as data loss.
+//
+// So this says it, and stays said. It is also the way back: the sign-in screen
+// is otherwise unreachable from here, and the server that was down when they
+// chose this may be up again five minutes later.
+//
+// It does not repeat what the connection banner above it already covers. That
+// one is about the server and disappears when the server returns; this one is
+// about the absence of an account and disappears only when there is one.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+export component MeshOnlyBar inherits Rectangle {
+    in property <bool> signed-in: true;
+
+    callback sign-in();
+
+    visible: !root.signed-in;
+    height: !root.signed-in ? Spacing.touch-target-min : 0px;
+
+    background: Colors.surface.with-alpha(0.7);
+
+    // Bottom hairline, matching the other strips.
+    Rectangle {
+        y: parent.height - 1px;
+        width: 100%;
+        height: 1px;
+        background: Colors.neo-highlight;
+    }
+
+    HorizontalLayout {
+        padding-left: Spacing.lg;
+        padding-right: Spacing.sm;
+        spacing: Spacing.sm;
+
+        Text {
+            // Both halves matter and neither is a warning: mesh conversations
+            // genuinely work here, and channels and DMs genuinely do not.
+            text: "Not signed in — mesh conversations only. Channels and DMs need an account.";
+            color: Colors.text-muted;
+            font-size: Typography.xs;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            Rectangle {
+                width: sign-in-label.preferred-width + Spacing.md;
+                height: 28px;
+                border-radius: Spacing.radius-sm;
+                background: sign-in-touch.has-hover ? Colors.surface-hover : transparent;
+                border-width: 1px;
+                border-color: Colors.neo-highlight;
+
+                sign-in-label := Text {
+                    text: "Sign in";
+                    color: sign-in-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
+                    font-size: Typography.xs;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: 100%;
+                    height: 100%;
+                }
+
+                sign-in-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.sign-in(); }
+                }
+
+                accessible-role: button;
+                accessible-label: "Sign in";
+                accessible-action-default => { root.sign-in(); }
+            }
+        }
+    }
+}

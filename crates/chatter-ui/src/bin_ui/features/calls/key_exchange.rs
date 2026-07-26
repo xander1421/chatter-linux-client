@@ -43,13 +43,20 @@ pub async fn handle_call_key_answer(
         let pid = peer_id;
         tokio::spawn(async move {
             ctx.complete_dm_call(peer_ephemeral_pk, &cid, &pid).await
-        }).await.unwrap()
+        }).await
     };
 
     let setup = match result {
-        Ok(setup) => setup,
-        Err(e) => {
+        Ok(Ok(setup)) => setup,
+        Ok(Err(e)) => {
             tracing::error!(call_id = %call_id, error = %e, "Failed to complete DM call");
+            return;
+        }
+        // Handled rather than unwrapped: this runs on the UI thread, where an
+        // unwrapped `JoinError` turned a panic in the key-exchange path into a
+        // dead app instead of a dead call.
+        Err(join_error) => {
+            tracing::error!(call_id = %call_id, %join_error, "Call key-answer task did not finish");
             return;
         }
     };

@@ -44,6 +44,13 @@ export component MainWindow inherits Window {
     in property <int> connection-reconnect-attempt <=> app.connection-reconnect-attempt;
     in property <int> connection-queue-count <=> app.connection-queue-count;
 
+    in property <bool> server-unreachable <=> app.server-unreachable;
+
+    // ========== Working without an account ==========
+    in property <bool> account-free-surfaces <=> app.account-free-surfaces;
+    in property <bool> is-signed-in <=> app.is-signed-in;
+    callback continue-without-account <=> app.continue-without-account;
+
     // ========== Loading page properties ==========
     in property <string> loading-message <=> app.loading-message;
     in property <string> loading-secondary-message <=> app.loading-secondary-message;

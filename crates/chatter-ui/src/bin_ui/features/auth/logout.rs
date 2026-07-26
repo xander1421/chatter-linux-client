@@ -26,6 +26,7 @@ pub fn wire_logout(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // Switch to login view
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
+                    w.set_is_signed_in(false);
                     w.set_current_view("login".into());
                     w.set_active_modal("none".into());
                     w.set_login_username("".into());

@@ -9,10 +9,14 @@ pub mod grpc;
 pub mod offline_queue;
 pub mod reconnect_config;
 pub mod recovery;
+pub mod server_monitor;
 pub mod streaming;
 pub mod validation;
 
-pub use connection::{ConnectionEvent, ConnectionState, ConnectionStateMachine, FailReason};
+pub use connection::{
+    server_status, ConnectionEvent, ConnectionState, ConnectionStateMachine, FailReason,
+    ServerStatus,
+};
 pub use connection_manager::{ConnectionConfig, ConnectionManager, ReplayResult};
 pub use offline_queue::{OfflineQueue, OperationType, QueueError, QueueEvent, QueuedOperation, QueueStats};
 pub use reconnect_config::ReconnectConfig;

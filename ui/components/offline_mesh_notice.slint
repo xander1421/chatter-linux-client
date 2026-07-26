@@ -1,0 +1,167 @@
+// What the sign-in and sign-up screens say when there is no server to sign in
+// to, and the way out of them.
+//
+// The situation this exists for: a fresh install, no account, and no reachable
+// server — so registration cannot succeed and login has nothing to log in to.
+// Before this, that was a dead end. The user sat on "Finalize Registration"
+// pressing a button that could not work, while underneath the process the BLE
+// mesh was up, advertising, and exchanging announces with a peer in the room.
+// The one feature designed for having no infrastructure was unreachable because
+// the app would not paint anything until it had talked to a server.
+//
+// Two rules this follows, both borrowed from `ui/mesh/mesh_context_bar.slint`:
+//
+//   * Never claim something works when it does not. The way past this screen is
+//     offered only when `account-free-surfaces` is true — Rust's answer from
+//     `ChatterClient::has_account_free_surfaces`, meaning the mesh service is
+//     actually running. When it is not, this says so and offers nothing, rather
+//     than sending the user somewhere emptier than here.
+//   * Never claim delivery. "The mesh does not need a server" is a statement
+//     about what the mesh needs, not a promise that anyone is in range. The
+//     context bar above an open mesh conversation owns that, and says it plainly.
+//
+// It also does not pretend the mesh is an account. Nothing here creates,
+// implies, or stands in for a chatter identity: the mesh has its own keypair
+// (`MeshIdentityStore`) that is deliberately unrelated to the account, and
+// signing in stays available and stays the only thing that produces one.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { MeshGlobal } from "../mesh/mesh_global.slint";
+
+export component OfflineMeshNotice inherits Rectangle {
+    // Rust's answer to "is there anything usable without an account".
+    in property <bool> account-free-surfaces: false;
+
+    callback continue-without-account();
+
+    // Whether the server is unreachable is *not* decided here. Callers wrap this
+    // in `if root.server-unreachable:` — a bool chatter-core computes via
+    // `ConnectionState::is_unreachable` — so the condition has one definition
+    // and, more practically, so a hidden notice does not sit in the parent layout
+    // as a zero-height child still claiming its share of the spacing.
+    height: body.preferred-height;
+
+    background: Colors.warning.with-alpha(0.08);
+    border-radius: Spacing.radius-sm;
+    border-width: 1px;
+    border-color: Colors.warning.with-alpha(0.25);
+
+    body := VerticalLayout {
+        padding: Spacing.md;
+        spacing: Spacing.sm;
+
+        HorizontalLayout {
+            spacing: Spacing.sm;
+
+            VerticalLayout {
+                alignment: start;
+                horizontal-stretch: 0;
+                Image {
+                    source: Icons.radio;
+                    width: 15px;
+                    height: 15px;
+                    colorize: Colors.warning;
+                }
+            }
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 3px;
+
+                Text {
+                    text: "Can't reach the server";
+                    color: Colors.warning;
+                    font-size: Typography.sm;
+                    font-weight: 600;
+                    wrap: word-wrap;
+                }
+
+                // Why the screen behind this notice cannot do its job. Said
+                // once, in the place the user is already stuck.
+                Text {
+                    text: "Creating an account and signing in both need it, so neither will work until it comes back.";
+                    color: Colors.text-secondary;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                }
+
+                // The mesh's standing claim, in the two forms it can honestly
+                // take. Nothing in between: either the service is up and this is
+                // a real offer, or it is down and there is no offer to make.
+                Text {
+                    text: root.account-free-surfaces
+                        ? "The mesh does not. It carries messages between nearby devices over Bluetooth with no server, no internet and no account — and it is running now."
+                        : (MeshGlobal.enabled
+                            ? "The mesh is not running on this device either, so there is nothing to fall back to right now."
+                            : "This build has no mesh, so there is nothing to fall back to.");
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        // Offered only when there is somewhere to go. Full-width and a real
+        // touch target: on a phone this is the only control on the screen that
+        // can actually do something.
+        if root.account-free-surfaces: Rectangle {
+            height: Spacing.touch-target-min;
+            border-radius: Spacing.radius-sm;
+            background: continue-touch.has-hover
+                ? Colors.warning.with-alpha(0.22)
+                : Colors.warning.with-alpha(0.14);
+            border-width: 1px;
+            border-color: Colors.warning.with-alpha(0.35);
+
+            HorizontalLayout {
+                padding-left: Spacing.sm;
+                padding-right: Spacing.sm;
+                spacing: 6px;
+                alignment: center;
+
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    Image {
+                        source: Icons.radio;
+                        width: 13px;
+                        height: 13px;
+                        colorize: Colors.warning;
+                    }
+                }
+
+                Text {
+                    text: "Use the mesh without an account";
+                    color: Colors.warning;
+                    font-size: Typography.xs;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    horizontal-stretch: 0;
+                }
+            }
+
+            continue-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.continue-without-account(); }
+            }
+
+            accessible-role: button;
+            accessible-label: "Use the mesh without an account";
+            accessible-action-default => { root.continue-without-account(); }
+        }
+
+        // Signing in stays on the table. The mesh is not a replacement for an
+        // account and this notice must not read as though the choice were
+        // permanent — the server may well be back in a minute.
+        if root.account-free-surfaces: Text {
+            text: "Your channels and DMs stay where they are. Sign in whenever the server is back.";
+            color: Colors.text-muted;
+            font-size: Typography.xxs;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+    }
+}

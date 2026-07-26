@@ -45,7 +45,7 @@ import { JarvisMemoryModal, MemoryFactData, MemoryEntityData, MemoryGraphNodeDat
 // Import components
 import { ImageViewer, EmojiData } from "components/mod.slint";
 import { Toast } from "components/mod.slint";
-import { ConnectionBanner } from "components/mod.slint";
+import { ConnectionBanner, MeshOnlyBar } from "components/mod.slint";
 import { CodePreviewPanel } from "components/mod.slint";
 import { PdfPreviewPanel } from "components/mod.slint";
 import { VideoPlayer } from "components/mod.slint";
@@ -103,10 +103,31 @@ export component App inherits Rectangle {
     callback unified-search-person-selected(string);
 
     // ========== Connection status ==========
-    // "connected", "connecting", "reconnecting", "disconnected", "failed"
+    // "connected", "connecting", "reconnecting", "disconnected", "failed".
+    // Pushed from `bin_ui::features::connection`, which reads chatter-core's
+    // `OfflineState` — kept honest by the reachability monitor in
+    // `chatter-core/src/network/server_monitor.rs`, which is the only thing that
+    // revises it after boot.
     in property <string> connection-status: "connected";
     in property <int> connection-reconnect-attempt: 0;
     in property <int> connection-queue-count: 0;
+
+    // Whether chatter-core considers the server settled-unreachable
+    // (`ConnectionState::is_unreachable`) — as opposed to a connect still being
+    // in flight, where nothing should be claimed either way. One definition,
+    // computed in core, so the auth screens and the banner cannot disagree.
+    in property <bool> server-unreachable: false;
+
+    // ========== Working without an account ==========
+    // Whether chatter-core says there is anything usable with no account
+    // (`ChatterClient::has_account_free_surfaces` — in practice, a running
+    // mesh). Gates the way past the sign-in screens; never guessed here.
+    in property <bool> account-free-surfaces: false;
+    // Whether there is a chatter session. False is a supported state of the main
+    // view, not a transient one: a user who came in over the mesh has no account
+    // and may never get one.
+    in property <bool> is-signed-in: false;
+    callback continue-without-account();
 
     // ========== Loading page properties ==========
     in property <string> loading-message: "Loading...";
@@ -928,6 +949,10 @@ export component App inherits Rectangle {
             loading: root.login-loading;
             error: root.login-error;
 
+            server-unreachable: root.server-unreachable;
+            account-free-surfaces: root.account-free-surfaces;
+            continue-without-account => { root.continue-without-account(); }
+
             login(u, p, s, pin) => {
                 root.login(u, p, s, pin);
             }
@@ -958,6 +983,10 @@ export component App inherits Rectangle {
             username-status: root.register-username-status;
             password-strength: root.register-password-strength;
             pin-strength: root.register-pin-strength;
+            server-unreachable: root.server-unreachable;
+            account-free-surfaces: root.account-free-surfaces;
+
+            continue-without-account => { root.continue-without-account(); }
 
             register(u, p, d, pin, s) => {
                 root.register(u, p, d, pin, s);
@@ -1028,11 +1057,21 @@ export component App inherits Rectangle {
             width: 100%;
             height: parent.height;
 
-            // Connection status banner (auto-hides when connected)
+            // Connection status banner (auto-hides when connected). Also carries
+            // the "and the mesh still works" half — see the component.
             ConnectionBanner {
                 connection-state: root.connection-status;
+                server-unreachable: root.server-unreachable;
                 reconnect-attempt: root.connection-reconnect-attempt;
                 queue-count: root.connection-queue-count;
+            }
+
+            // Only for a session-less main view (mesh-only entry). Auto-hides the
+            // moment there is an account, and is the only route back to sign-in
+            // from here.
+            MeshOnlyBar {
+                signed-in: root.is-signed-in;
+                sign-in => { root.go-to-login(); }
             }
 
             HorizontalLayout {

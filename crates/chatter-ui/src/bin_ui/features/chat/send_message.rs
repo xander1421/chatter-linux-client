@@ -20,6 +20,26 @@ use crate::bin_ui::converters::attachment_to_display_data;
 use super::typing::clear_outgoing_typing;
 use crate::{MainWindow, PendingAttachmentData};
 
+/// Tell the user a send did not happen.
+///
+/// Every early return in the send pipeline has already cleared the composer, the
+/// reply context and the staged attachments — which is fine when the message went
+/// out, and silent data loss when it did not. This is not optional politeness:
+/// with the server unreachable, a failed send is the *expected* outcome, and it
+/// has to be visible.
+///
+/// The message text itself comes from chatter-core (`format_send_error`); this
+/// only carries it to the surface.
+fn report_send_failure(weak: &slint::Weak<MainWindow>, message: String) {
+    let weak = weak.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(w) = weak.upgrade() else { return };
+        w.set_toast_message(message.into());
+        w.set_toast_variant("error".into());
+        w.set_toast_visible(true);
+    });
+}
+
 pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let chat_state = ui_ctx.chat_state().clone();
     let auth_state = ui_ctx.auth_state().clone();
@@ -187,11 +207,22 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
                 Ok(Err(e)) => {
                     tracing::error!(error = %e, "[UI_SEND] send_message_ui returned Err");
-                    ui_ctx.format_send_error(&e, "send");
+                    // `format_send_error` exists to produce exactly this string
+                    // and its return value used to be dropped on the floor, so a
+                    // send against a dead server cleared the composer and
+                    // reported nothing at all.
+                    report_send_failure(&weak, ui_ctx.format_send_error(&e, "send"));
                     return;
                 }
                 Err(_) => {
-                    tracing::error!("Message send timed out");
+                    tracing::error!(
+                        timeout_s = send_timeout.as_secs(),
+                        "Message send timed out"
+                    );
+                    report_send_failure(
+                        &weak,
+                        "The server did not answer, so the message was not sent.".to_string(),
+                    );
                     return;
                 }
             };

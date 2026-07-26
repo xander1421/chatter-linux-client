@@ -136,6 +136,13 @@ pub fn status(ui_ctx: &Arc<ChatterClient>) -> MeshStatus {
     ui_ctx.mesh_status()
 }
 
+/// Whether the service itself is up, which is what decides whether there are
+/// mesh conversations to open. Separate from [`status`] on purpose — see
+/// `MeshService::is_running`.
+pub fn service_running(ui_ctx: &Arc<ChatterClient>) -> bool {
+    ui_ctx.mesh_running()
+}
+
 /// Every mesh conversation, in the order core wants them shown.
 ///
 /// A row whose id core cannot resolve back to a scope is skipped rather than

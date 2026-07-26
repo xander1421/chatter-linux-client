@@ -256,6 +256,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                     let model_rc = std::rc::Rc::new(slint::VecModel::from(model));
                                     w.set_recovery_codes(slint::ModelRc::from(model_rc));
                                     w.set_register_loading(false);
+                                    w.set_is_signed_in(true);
                                     w.set_current_view("main".into());
                                     w.set_active_modal("recovery-codes".into());
                                 }
@@ -268,6 +269,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                                 if let Some(w) = weak_for_ui.upgrade() {
                                     w.set_register_loading(false);
+                                    w.set_is_signed_in(true);
                                     w.set_current_view("main".into());
                                 }
                             });

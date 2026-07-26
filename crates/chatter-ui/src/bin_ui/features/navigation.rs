@@ -16,7 +16,41 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_go_to_login(window);
     wire_go_to_recovery(window);
     wire_go_to_link_device(window);
+    wire_continue_without_account(window, ui_ctx);
     wire_calls_tab(window, ui_ctx);
+}
+
+/// Enter the main view with no account.
+///
+/// This is the way out of the sign-in screens when there is no server to sign in
+/// to. It is not a login: no session is created, no identity is faked, nothing is
+/// written. `is_signed_in` stays false and the main view says so — the account
+/// state is exactly what it was, and signing in later is unaffected.
+///
+/// What is behind it is the mesh, which needs no account by construction. So the
+/// route is offered only when core says the mesh is actually running
+/// (`has_account_free_surfaces`); the check is repeated here rather than trusted
+/// from the UI property, because the property was pushed at wire time and the
+/// mesh could have stopped since.
+fn wire_continue_without_account(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak_window = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
+
+    window.on_continue_without_account(move || {
+        let Some(w) = weak_window.upgrade() else { return };
+
+        if !ui_ctx.has_account_free_surfaces() {
+            // Nothing to go to. Say so where the user is looking instead of
+            // moving them to an empty room.
+            tracing::warn!("continue-without-account: no account-free surfaces are up");
+            w.set_account_free_surfaces(false);
+            return;
+        }
+
+        tracing::info!("entering the main view with no account (mesh only)");
+        w.set_is_signed_in(false);
+        w.set_current_view("main".into());
+    });
 }
 
 fn wire_go_to_link_device(window: &MainWindow) {

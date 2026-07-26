@@ -56,6 +56,20 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     Ok(accepted) => render_accepted_call(&weak, &ui_ctx, accepted),
                     Err(e) => {
                         tracing::error!(error = %e, "Failed to accept incoming call");
+                        // The modal was already hidden above, on the assumption
+                        // this would succeed. Accepting a call needs the server,
+                        // so with the server gone the modal vanished and nothing
+                        // replaced it — the call appeared to be answered and then
+                        // simply stopped existing. Say what happened.
+                        let weak = weak.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            let Some(w) = weak.upgrade() else { return };
+                            w.set_toast_message(
+                                "Could not answer the call — the server did not respond.".into(),
+                            );
+                            w.set_toast_variant("error".into());
+                            w.set_toast_visible(true);
+                        });
                     }
                 }
             });

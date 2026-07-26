@@ -220,6 +220,7 @@ async fn finish_linked(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClien
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak_for_view.upgrade() {
             w.set_link_device_active(false);
+            w.set_is_signed_in(true);
             w.set_current_view("main".into());
         }
     });
