@@ -8,7 +8,21 @@ pub enum LinkError {
     #[error("bluetooth adapter unavailable: {0}")]
     AdapterUnavailable(String),
 
-    /// A connect attempt failed or timed out.
+    /// A connect attempt ran past the radio layer's connect deadline.
+    ///
+    /// Kept apart from [`Self::ConnectFailed`] because the scheduler treats them
+    /// very differently: an outright failure costs the candidate score, while a
+    /// timeout earns [`TIMEOUT_DISCOVERY_IGNORE_MS`] of being left alone. On
+    /// BlueZ the difference is load-bearing — abandoning a pending connect makes
+    /// it abort, and the abort cascades into the *next* attempt as
+    /// `le-connection-abort-by-local`, so retrying quickly after a timeout is
+    /// how one slow peer becomes a run of failures.
+    ///
+    /// [`TIMEOUT_DISCOVERY_IGNORE_MS`]: crate::scheduler::TIMEOUT_DISCOVERY_IGNORE_MS
+    #[error("connect to {address} timed out")]
+    ConnectTimedOut { address: String },
+
+    /// A connect attempt failed outright.
     #[error("connect to {address} failed: {reason}")]
     ConnectFailed { address: String, reason: String },
 

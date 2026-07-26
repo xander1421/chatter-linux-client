@@ -221,10 +221,15 @@ pub(crate) async fn connect(
             // Leave nothing half-open behind: a dangling ACL keeps the peer's
             // connection slot occupied as well as ours.
             let _ = device.disconnect().await;
-            return Err(error::connect_failed(
-                address,
-                format!("timed out after {}s", CONNECT_TIMEOUT.as_secs()),
-            ));
+            // Reported as a timeout rather than a plain failure so the scheduler
+            // applies its timeout window. The distinction matters most here:
+            // `disconnect()` on a connect that is still in flight is what makes
+            // BlueZ abort it, and the abort surfaces on the *next* attempt as
+            // `le-connection-abort-by-local` — so a fast retry turns one slow
+            // peer into a run of failures.
+            return Err(LinkError::ConnectTimedOut {
+                address: address.to_string(),
+            });
         }
     };
 

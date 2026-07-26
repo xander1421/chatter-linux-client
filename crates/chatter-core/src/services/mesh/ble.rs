@@ -266,9 +266,19 @@ impl BleRuntime {
                 });
             }
             Err(error) => {
+                let timed_out = matches!(error, chatter_mesh_link::LinkError::ConnectTimedOut { .. });
                 self.state.with(|state| {
                     state.connecting.remove(address);
-                    state.scheduler.note_connect_failed(address, now);
+                    // A timeout earns the long ignore window; an outright failure
+                    // earns only the short one. `note_connect_timeout` existed and
+                    // was never reachable from here, because the radio layer
+                    // reported a timeout as an ordinary failure — so the window it
+                    // documents had never once applied.
+                    if timed_out {
+                        state.scheduler.note_connect_timeout(address, now);
+                    } else {
+                        state.scheduler.note_connect_failed(address, now);
+                    }
                 });
                 tracing::debug!(target: "mesh::ble", %address, %error, "connect failed");
             }
@@ -621,6 +631,13 @@ impl BleRuntime {
             return;
         }
 
+        tracing::info!(
+            target: "mesh::ble",
+            peer = %sender,
+            nickname = %nickname,
+            bytes = content.len(),
+            "public message received"
+        );
         let inbound = InboundMessage {
             // No message ID on the wire, so one is derived from the packet. The
             // dedup key is a function of sender, timestamp, type and payload
