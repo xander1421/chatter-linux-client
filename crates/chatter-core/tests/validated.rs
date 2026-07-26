@@ -18,8 +18,14 @@
 //! docker-compose stack (psql/redis-cli are shelled out to, so the SQL in the
 //! output is reproducible by hand — that is deliberate).
 //!
+//! The `testing` feature is not optional: this suite reaches into the service
+//! layer (`client.signal().decrypt_message`, and 17 other call sites) to prove
+//! the client can read what the server cannot, and those accessors are
+//! `pub(crate)` without it.
+//!
 //! Run:
-//!   INTEGRATION_TESTS=1 cargo test --test validated -- --nocapture --test-threads=1
+//!   INTEGRATION_TESTS=1 cargo test -p chatter-core --features testing \
+//!     --test validated -- --nocapture --test-threads=1
 
 #[macro_use]
 mod common;

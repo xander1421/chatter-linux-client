@@ -28,6 +28,26 @@ fn boot() -> MainWindow {
     MainWindow::new().expect("MainWindow::new under testing backend")
 }
 
+/// Fail with the cause, not the symptom, when the element-query API is inert.
+///
+/// `ElementHandle` needs debug info that the Slint compiler only emits when
+/// `SLINT_EMIT_DEBUG_INFO=1` is set at build time. Without it every query
+/// returns nothing, and the assertions here then report a UI that looks
+/// structurally broken -- "ThreadPanel was never instantiated", "there are no
+/// Rectangles" -- when the only thing wrong is the command line. Check the real
+/// precondition first.
+fn require_element_queries() {
+    assert_eq!(
+        env!("CHATTER_UI_SLINT_DEBUG_INFO"),
+        "1",
+        "the ElementHandle query API is inert: chatter-ui was built without \
+         SLINT_EMIT_DEBUG_INFO=1, so every element query returns nothing and \
+         nothing asserted below can mean anything. Run the UI suites with:\n\n    \
+         ./scripts/test-ui.sh\n\n  or directly:\n\n    \
+         SLINT_EMIT_DEBUG_INFO=1 cargo test -p chatter-ui --test ui_wiring --test ui_layout"
+    );
+}
+
 #[test]
 fn smoke_boots_and_view_roundtrips() {
     let w = boot();
@@ -44,6 +64,7 @@ fn smoke_boots_and_view_roundtrips() {
 
 #[test]
 fn smoke_can_query_elements() {
+    require_element_queries();
     let w = boot();
     // Prove the element tree is walkable at all: there must be at least one
     // element with a type name. If this returns empty, the whole query layer is
@@ -93,6 +114,7 @@ fn wired_offline() -> (
 
 #[test]
 fn settings_read_receipts_toggle_reaches_core() {
+    require_element_queries();
     let (_rt, _tmp, client, w) = wired_offline();
     // Default is true (get_bool_setting.unwrap_or(true)).
     assert_eq!(client.read_receipts_enabled().unwrap(), true, "precondition");
@@ -143,6 +165,7 @@ fn settings_read_receipts_toggle_reaches_core() {
 /// integration backend is once-per-process.
 #[test]
 fn settings_modal_routing_wire_instantiates_conditional() {
+    require_element_queries();
     use slint::ComponentHandle;
 
     testing::init_integration_test_with_system_time();

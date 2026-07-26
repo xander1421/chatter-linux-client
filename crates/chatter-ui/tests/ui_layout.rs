@@ -36,8 +36,29 @@ fn pump(w: &MainWindow) {
     pump_at(w, WIN_W, WIN_H);
 }
 
+/// Fail with the cause, not the symptom, when the element-query API is inert.
+///
+/// `ElementHandle` needs debug info that the Slint compiler only emits when
+/// `SLINT_EMIT_DEBUG_INFO=1` is set at build time. Without it every query
+/// returns nothing, and the assertions here then report a UI that looks
+/// structurally broken -- "ThreadPanel was never instantiated", "there are no
+/// Rectangles" -- when the only thing wrong is the command line. Check the real
+/// precondition first.
+fn require_element_queries() {
+    assert_eq!(
+        env!("CHATTER_UI_SLINT_DEBUG_INFO"),
+        "1",
+        "the ElementHandle query API is inert: chatter-ui was built without \
+         SLINT_EMIT_DEBUG_INFO=1, so every element query returns nothing and \
+         nothing asserted below can mean anything. Run the UI suites with:\n\n    \
+         ./scripts/test-ui.sh\n\n  or directly:\n\n    \
+         SLINT_EMIT_DEBUG_INFO=1 cargo test -p chatter-ui --test ui_wiring --test ui_layout"
+    );
+}
+
 #[test]
 fn thread_panel_lands_inside_the_normal_desktop_layout() {
+    require_element_queries();
     testing::init_integration_test_with_system_time();
     let w = MainWindow::new().expect("MainWindow::new");
     w.set_current_view("main".into());

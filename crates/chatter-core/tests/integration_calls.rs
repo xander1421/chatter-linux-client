@@ -29,7 +29,14 @@ fn test_screen_capture_lifecycle() {
 #[test]
 fn test_screen_capture_config_values() {
     let default_config = ScreenCaptureConfig::default();
-    assert_eq!(default_config.fps, 30, "Default FPS should be 30");
+    // 144, not 30 or 60: the bgra→i420 convert and the receive side both clear
+    // 240 fps, so a lower cap was artificial. The achieved rate is bounded by
+    // the portal pull loop and the panel refresh, not by this number — see the
+    // rationale above `impl Default for ScreenCaptureConfig`.
+    assert_eq!(
+        default_config.fps, 144,
+        "the default targets the high-refresh path"
+    );
     assert!(default_config.capture_cursor, "Default should capture cursor");
 
     let custom_config = ScreenCaptureConfig {
