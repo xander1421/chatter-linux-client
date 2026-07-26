@@ -1993,7 +1993,9 @@ dependencies = [
  "bluer",
  "chatter-mesh-link",
  "futures",
+ "futures-util",
  "tokio",
+ "uuid 1.23.1",
 ]
 
 [[package]]
