@@ -26,6 +26,8 @@ use uuid::Uuid;
 use crate::domain::ids::{ChannelId, MessageId, UserId};
 use crate::domain::message::{ConversationType, Message, MessageContent};
 
+use super::events::MeshDelivery;
+
 /// Namespace prefix for the single public BLE mesh room.
 const ROOM_KEY: &str = "chatter-mesh:room";
 /// Namespace prefix for a geohash channel conversation.
@@ -193,6 +195,27 @@ pub fn outbound_message(
         millis_to_nanos(timestamp_ms),
     );
     message.id = wire_message_id(wire_id);
+
+    // A broadcast's delivery state is known the instant it is composed and never
+    // changes: nobody acknowledges a room or cell message, so there is no later
+    // event to correct it with. Setting it here is what stops the live row from
+    // falling through to the converter's "own message with no status means sent"
+    // default — which put the one-to-one word "sent" on a broadcast, and only
+    // until the conversation was reopened, at which point the durable state (V060)
+    // said "broadcast" instead. Two labels for one message, minutes apart.
+    //
+    // A DM is deliberately left blank: its outcome is genuinely unknown at this
+    // point and arrives moments later as a `MeshEvent::Delivery`.
+    //
+    // This is display state. `MeshTimeline::record` still clears the column before
+    // storing, because there it would mean something else — see V060.
+    if matches!(
+        conversation,
+        MeshConversation::Room | MeshConversation::Geohash(_)
+    ) {
+        message.delivery_status = MeshDelivery::Broadcast.as_str().to_string();
+    }
+
     message
 }
 
@@ -338,5 +361,38 @@ mod tests {
         assert!(!dm.is_public());
         assert_eq!(dm.peer().map(PeerId::as_str), Some("nostr_ab"));
         assert!(dm.geohash().is_none());
+    }
+
+    #[test]
+    fn a_broadcast_carries_its_delivery_state_from_the_moment_it_is_composed() {
+        // The bug this pins showed the same message under two different labels
+        // minutes apart: "sent" while it was live, because an own message with an
+        // empty status falls through to that default, then "broadcast" after a
+        // reopen, from the durable state. "sent" is one-to-one vocabulary and a
+        // broadcast has no recipient to have sent it *to*.
+        let sender = PeerId::from_str("aabbccddeeff0011");
+        for conversation in [
+            MeshConversation::Room,
+            MeshConversation::Geohash("u4pruy".to_string()),
+        ] {
+            let message = outbound_message(&conversation, "MSG-B", &sender, "hi", 42_000);
+            assert_eq!(
+                message.delivery_status,
+                MeshDelivery::Broadcast.as_str(),
+                "{conversation:?} is a broadcast"
+            );
+            assert_ne!(message.delivery_status, "sent");
+        }
+    }
+
+    #[test]
+    fn a_dm_is_left_blank_because_its_outcome_is_not_known_yet() {
+        // The opposite case, and the reason this is not unconditional: a DM's
+        // delivery arrives moments later as a `MeshEvent::Delivery`, so claiming
+        // anything here would be a guess.
+        let sender = PeerId::from_str("aabbccddeeff0011");
+        let dm = MeshConversation::Dm(PeerId::from_str("1122334455667788"));
+        let message = outbound_message(&dm, "MSG-D", &sender, "hi", 42_000);
+        assert!(message.delivery_status.is_empty());
     }
 }

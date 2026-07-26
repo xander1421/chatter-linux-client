@@ -553,9 +553,34 @@ impl BleRuntime {
 
         let (is_new, link_authenticated, first_sighting, reconnected, bound_peer) =
             self.state.with(|state| {
+            // Whether this announce means the peer is *reachable on a link of
+            // its own*, which is not the same as "we heard from it".
+            //
+            // Passing `true` unconditionally, as this did, marks a peer that only
+            // reached us by relay as connected — and `reconcile_connectivity` then
+            // demotes it after PEER_INACTIVITY_TIMEOUT_MS because no live link is
+            // bound to it, so every subsequent announce arrives as a reconnect.
+            // With three devices in the room that is visible immediately: the
+            // second phone's announces come in over the first phone's link and
+            // flap `reconnected=true` forever.
+            //
+            // bitchat computes it as `hasPeripheralConnection ||
+            // hasCentralSubscription || (isDirectAnnounce && !linkBoundToOtherPeer)`
+            // (`BLEAnnounceHandler.swift:178`), and notes why the last clause is
+            // guarded: the TTL is unsigned, so a replayed announce can look direct
+            // on the replayer's link, and that must not shortcut an absent peer
+            // into "connected".
+            let has_own_link = !state.links.links_to(claimed).is_empty();
+            let link_bound_elsewhere = state
+                .links
+                .peer_for(link)
+                .is_some_and(|bound| bound != claimed);
+            let connected =
+                has_own_link || (direct.is_some() && !link_bound_elsewhere);
+
             let update = state
                 .peers
-                .upsert_verified_announce(claimed, &announcement, true, now_ms);
+                .upsert_verified_announce(claimed, &announcement, connected, now_ms);
             // Bind first, always. `rebind_after_verified_direct` refuses an
             // *unbound* link by design — it exists for the contested case, where a
             // link already belongs to someone else and a verified direct announce
@@ -661,6 +686,24 @@ impl BleRuntime {
         // attributed to us, because it *is* ours; treating it as inbound would put
         // our own words on screen as though a stranger had said them.
         let is_self = sender == self.identity.peer_id();
+        // One of our own recent broadcasts, flooded or synced back to us. We
+        // displayed it the moment it was composed, so showing it again is a
+        // duplicate — and a confusing one, because the two rows disagree: the
+        // local copy is labelled `broadcast` while this one has no delivery state
+        // and falls through to "sent".
+        //
+        // `SelfBroadcastTracker` is exactly the "we have already shown this"
+        // record. The ingress guard deliberately skips it for a TTL-0 sync
+        // response — that is how a device with no database recovers its own
+        // history — so this is the layer that has to consult it. A self-authored
+        // packet the tracker does *not* know is genuine recovery and still lands.
+        if is_self && self.state.with(|state| state.self_broadcasts.contains(packet)) {
+            tracing::debug!(
+                target: "mesh::ble",
+                "our own broadcast came back; already shown"
+            );
+            return;
+        }
         let (signing_key, nickname, verified) = if is_self {
             (
                 self.identity.signing_public(),
@@ -1703,6 +1746,91 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_peer_heard_only_by_relay_is_not_marked_connected() {
+        // Found with three devices in one room: the second phone's announces
+        // arrived over the *first* phone's link, we marked it connected anyway,
+        // and `reconcile_connectivity` demoted it 8s later for having no link of
+        // its own — so it flapped `reconnected=true` on every announce forever.
+        //
+        // "We heard from it" is not "it is reachable on a link of its own".
+        let (mut runtime, _radio, state) = runtime();
+        let relay = PeerId::from_str("aaaaaaaaaaaaaaaa");
+        let distant = PeerId::from_str("bbbbbbbbbbbbbbbb");
+
+        // One link, owned by the relay.
+        let link = LinkId::new("/mock/relay");
+        state.with(|inner| {
+            inner.links.link_up(link.clone(), LinkRole::Central);
+            inner.links.set_writable(&link, true);
+            inner.max_write.insert(link.clone(), 512);
+            inner.links.bind_if_unbound(&link, &relay);
+        });
+
+        // A signed announce authored by the distant peer, arriving on that link.
+        let identity = MeshIdentity::generate(&mut OsRng);
+        let announcement = AnnouncementPacket::new(
+            "distant".to_string(),
+            identity.static_public().to_vec(),
+            identity.signing_public().to_vec(),
+            None,
+            None,
+            None,
+        );
+        let mut packet = BitchatPacket::new(
+            MessageType::Announce,
+            distant.to_routing_bytes().expect("routing bytes"),
+            None,
+            now_millis(),
+            announcement.encode().expect("encodes"),
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        packet.signature = Some(
+            chatter_mesh_noise::sign::sign_packet(&identity, &packet).expect("signs"),
+        );
+
+        runtime.on_announce(&link, &packet, &distant).await;
+
+        assert!(
+            state.with(|inner| inner.peers.info(&distant).is_some()),
+            "a relayed peer is still a peer we know about"
+        );
+        assert!(
+            !state.with(|inner| inner.peers.info(&distant).expect("known").connected),
+            "but not one we can reach on a link of its own"
+        );
+    }
+
+    #[tokio::test]
+    async fn our_own_broadcast_coming_straight_back_is_not_shown_twice() {
+        // Reported from the phone: every send appeared twice, once labelled
+        // "broadcast" and once "sent". The second row is our own packet returning
+        // — flooded or synced back — carrying a different derived wire ID, so
+        // nothing collapsed the two, and with no delivery state it fell through to
+        // the one-to-one word "sent" beside its own correct copy.
+        let (mut runtime, radio, state) = runtime();
+        let local = runtime.identity.peer_id();
+        let link_out = LinkId::new("/mock/out");
+        state.with(|inner| {
+            inner.links.link_up(link_out.clone(), LinkRole::Central);
+            inner.links.set_writable(&link_out, true);
+            inner.max_write.insert(link_out.clone(), 512);
+        });
+        let mut events = runtime.events.subscribe();
+
+        runtime.broadcast_public("MSG-1", "said once").await;
+        let packet = codec::decode(&radio.writes()[0].1).expect("decodable");
+        // The local mirror: the copy the user is already looking at.
+        assert!(matches!(events.try_recv(), Ok(MeshEvent::Message(_))));
+
+        runtime.on_public_message(&packet, &local);
+
+        assert!(
+            events.try_recv().is_err(),
+            "our own broadcast returning must not produce a second row"
+        );
+    }
+
+    #[tokio::test]
     async fn our_own_announce_coming_back_does_not_register_us_as_a_peer() {
         // The ingress guard admits a self-authored TTL-0 sync response on purpose,
         // so our own announce really does reach `on_announce`. If it registers, we
@@ -1756,10 +1884,24 @@ mod tests {
         });
         let mut events = runtime.events.subscribe();
 
-        runtime.broadcast_public("MSG-SELF", "our own words").await;
-        let packet = codec::decode(&_radio.writes()[0].1).expect("decodable");
-        // Drain the local mirror `broadcast_public` emits for its own send.
-        let _ = events.try_recv();
+        // Built directly rather than through `broadcast_public`, because that
+        // records the packet in the self-broadcast tracker — which is precisely
+        // what marks a message as "already shown" and suppresses it. Recovery is
+        // the opposite case: a packet we authored in some *earlier* session, whose
+        // tracker entry died with the process, arriving from a peer's archive.
+        let packet = runtime.maybe_sign(
+            runtime.build_packet(
+                MessageType::Message,
+                None,
+                b"our own words".to_vec(),
+                chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+            ),
+            true,
+        );
+        assert!(
+            !_state.with(|inner| inner.self_broadcasts.contains(&packet)),
+            "the fixture must model a packet this session never sent"
+        );
 
         runtime.on_public_message(&packet, &local);
 

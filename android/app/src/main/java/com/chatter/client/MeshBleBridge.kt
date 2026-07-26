@@ -119,6 +119,15 @@ object MeshBleBridge {
     private const val DEFAULT_MAX_WRITE = DEFAULT_MTU - ATT_HEADER
 
     /**
+     * Frames held per peripheral link while it is connected but not yet writable.
+     *
+     * Small on purpose. The window it covers is one round trip — GATT connect to
+     * CCCD subscribe — so a handful of frames is generous, and a peer that writes
+     * without ever subscribing must not be able to grow this without bound.
+     */
+    private const val MAX_PENDING_INBOUND = 8
+
+    /**
      * How long a central link may take to become writable before we give up.
      * The stack's own connect timeout only covers the ACL; a peer that connects
      * and then never finishes discovery would otherwise leave Rust holding a
@@ -227,6 +236,28 @@ object MeshBleBridge {
         @Volatile var announced = false
         @Volatile var cccd: ByteArray = BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
         val gate = OpGate()
+
+        /**
+         * Frames written to us before Rust had been told this link exists.
+         *
+         * A remote central connects, writes its announce, and only then enables
+         * notifications — and it is that last step which makes the link writable
+         * and so the moment we announce it upward. Dropping the writes in between
+         * discards exactly the packet that would have introduced the peer, which
+         * on a three-device mesh with rotating addresses is most of them.
+         *
+         * bitchat's own Android server delivers an inbound write unconditionally
+         * (`BluetoothGattServerManager.onCharacteristicWriteRequest`). We cannot
+         * quite do that — `MeshLink` promises that a Connected link is writable,
+         * and it is not writable until the subscription lands — so the frames are
+         * held and flushed the instant it becomes announced. Ordering is preserved.
+         *
+         * Bounded, because an unsubscribed peer that only writes is otherwise a
+         * memory leak with a radio attached. Over the cap the oldest frame is
+         * dropped: a mesh recovers from a lost announce on the next cadence, and
+         * a stalled buffer would be a worse failure than a late one.
+         */
+        val pendingInbound = ArrayDeque<ByteArray>()
     }
 
     /**
@@ -732,10 +763,20 @@ object MeshBleBridge {
                     if (link != null && link.announced) {
                         // Copy: the stack owns and reuses this buffer.
                         emitData(id, value.copyOf())
+                    } else if (link != null) {
+                        // Connected but not yet announced upward: hold it rather
+                        // than lose it. See `PeripheralLink.pendingInbound`.
+                        synchronized(link.pendingInbound) {
+                            while (link.pendingInbound.size >= MAX_PENDING_INBOUND) {
+                                link.pendingInbound.removeFirst()
+                                Log.d(TAG, "pending inbound full for $id, oldest frame dropped")
+                            }
+                            link.pendingInbound.addLast(value.copyOf())
+                        }
+                        Log.d(TAG, "write from $id held until the link is announced")
                     } else {
-                        // Rust has no id for this link — it either never subscribed
-                        // or was already dropped — so there is nowhere to deliver.
-                        Log.d(TAG, "write from $id on an unannounced link, dropped")
+                        // No link object at all: already torn down, nowhere to put it.
+                        Log.d(TAG, "write from $id on an unknown link, dropped")
                     }
                 }
                 BluetoothGatt.GATT_SUCCESS
@@ -788,6 +829,18 @@ object MeshBleBridge {
                     link.announced = true
                     emitConnected(id, true, link.maxWrite)
                     Log.i(TAG, "peripheral link $id writable, maxWrite=${link.maxWrite}")
+                    // Anything they wrote while we could not yet name this link,
+                    // in the order they wrote it. Emitted after Connected so the
+                    // layer above already has the link when the data arrives.
+                    val held = synchronized(link.pendingInbound) {
+                        val frames = link.pendingInbound.toList()
+                        link.pendingInbound.clear()
+                        frames
+                    }
+                    if (held.isNotEmpty()) {
+                        Log.i(TAG, "flushing ${held.size} held frame(s) for $id")
+                        held.forEach { emitData(id, it) }
+                    }
                 } else if (!subscribed && link.announced) {
                     // Unsubscribed: still connected, no longer writable, which the
                     // layer above only understands as gone.
