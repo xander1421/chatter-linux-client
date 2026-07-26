@@ -58,7 +58,16 @@ export component ConnectionBanner inherits Rectangle {
     // The mesh sentence appears only once the server is settled-unreachable:
     // during "connecting" the honest position is that we do not know yet, and
     // pre-announcing a fallback would be the app talking itself down.
-    property <bool> show-mesh-line: MeshGlobal.enabled && root.server-unreachable;
+    //
+    // And not while the user is *in* a mesh conversation, where it is said twice.
+    // There the header carries the peer count on its own line and the strip below
+    // it explains what a send means when nobody is in range — so this sentence
+    // repeated "Nobody is in range yet; what you send waits to be carried" a few
+    // pixels above a strip saying the same thing, wrapping to two lines to do it.
+    // What the banner still says there is the part the mesh surfaces cannot: that
+    // the *server* is unreachable, which is why it is open at all.
+    property <bool> show-mesh-line:
+        MeshGlobal.enabled && root.server-unreachable && MeshGlobal.active-id == "";
 
     // What is left when the server is gone. Ordered by what the user can act on.
     //

@@ -115,6 +115,14 @@ export component ChatHeader inherits Rectangle {
     // Mesh status wording. Kept here rather than in the strip below because this
     // is where it is now shown; the strip's remaining line is the one that has to
     // wrap, and these are the ones that must not.
+    // Narrow enough that the header has to give something up.
+    //
+    // What it gives up is the standing claim and the word next to the switch, not
+    // the conversation name: on a phone the mesh line squeezed "#mesh" down to
+    // "#m…" while "No server, no inte…" kept its space, which is backwards. The
+    // peer count stays because it is the connectivity signal, and the switch stays
+    // because it is a control.
+    property <bool> mesh-tight: root.width < 520px;
     property <bool> mesh-radio-down: !MeshGlobal.radio-running;
     property <string> mesh-standing:
         MeshGlobal.active-kind == "geohash"
@@ -293,7 +301,7 @@ export component ChatHeader inherits Rectangle {
                     background: Colors.text-muted;
                     y: (parent.height - self.height) / 2;
                 }
-                Text {
+                if !root.mesh-tight: Text {
                     text: root.mesh-standing;
                     color: Colors.text-muted;
                     font-size: Typography.xs;
@@ -301,7 +309,7 @@ export component ChatHeader inherits Rectangle {
                     overflow: elide;
                     min-width: 0px;
                 }
-                Text {
+                if !root.mesh-tight: Text {
                     text: "·";
                     color: Colors.text-muted;
                     font-size: Typography.xs;
@@ -423,7 +431,7 @@ export component ChatHeader inherits Rectangle {
             if root.is-mesh: HorizontalLayout {
                 spacing: Spacing.xs;
                 alignment: center;
-                Text {
+                if !root.mesh-tight: Text {
                     text: "Mesh";
                     color: Colors.text-muted;
                     font-size: Typography.xs;
