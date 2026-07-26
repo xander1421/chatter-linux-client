@@ -58,6 +58,7 @@ pub mod v056_mesh_identity;
 pub mod v057_mesh_store;
 pub mod v058_mesh_conversations;
 pub mod v059_mesh_favorites;
+mod v060_mesh_delivery;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -119,6 +120,7 @@ pub use v056_mesh_identity::V056MeshIdentity;
 pub use v057_mesh_store::V057MeshStore;
 pub use v058_mesh_conversations::V058MeshConversations;
 pub use v059_mesh_favorites::V059MeshFavorites;
+pub use v060_mesh_delivery::V060MeshDelivery;
 
 /// Trait for database migrations.
 ///
@@ -295,4 +297,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V057MeshStore)
         .register(V058MeshConversations)
         .register(V059MeshFavorites)
+        .register(V060MeshDelivery)
 }

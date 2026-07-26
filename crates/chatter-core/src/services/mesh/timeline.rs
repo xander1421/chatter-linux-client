@@ -39,10 +39,11 @@ use crate::domain::UnifiedConversation;
 use crate::error::StorageError;
 use chatter_mesh::ids::PeerId;
 use crate::storage::repositories::{
-    MeshConversationRepository, MessageRepository, StoredMeshConversation,
+    MeshConversationRepository, MeshDeliveryRepository, MessageRepository,
+    StoredMeshConversation,
 };
 
-use super::events::{MeshEvent, MeshMessage};
+use super::events::{MeshDelivery, MeshEvent, MeshMessage};
 use super::mapping::MeshConversation;
 
 /// Display name for the public BLE mesh room.
@@ -123,6 +124,10 @@ pub struct MeshTimeline {
     open: Mutex<HashMap<ChannelId, Entry>>,
     /// Durable mirror of `open`.
     directory: Arc<MeshConversationRepository>,
+    /// Where each message this device sent has got to, in the mesh's own
+    /// vocabulary. Separate from `messages.delivery_status`, which means
+    /// something else — see V060.
+    delivery: Arc<MeshDeliveryRepository>,
 }
 
 impl MeshTimeline {
@@ -131,11 +136,13 @@ impl MeshTimeline {
     pub fn new(
         messages: Arc<MessageRepository>,
         directory: Arc<MeshConversationRepository>,
+        delivery: Arc<MeshDeliveryRepository>,
     ) -> Self {
         let timeline = Self {
             messages,
             open: Mutex::new(HashMap::new()),
             directory,
+            delivery,
         };
         // Restore what was open before the restart. A directory read that fails
         // is logged and tolerated: starting with an empty sidebar is a degraded
@@ -252,12 +259,46 @@ impl MeshTimeline {
         before_sent_at: Option<u64>,
         limit: u32,
     ) -> Result<Vec<Message>, StorageError> {
-        self.messages.list_for_conversation_asc(
+        let mut messages = self.messages.list_for_conversation_asc(
             &conversation.conversation_id(),
             &conversation.conversation_type(),
             before_sent_at,
             limit,
-        )
+        )?;
+
+        // Put the mesh delivery state back. Without this every state is
+        // live-only: a message that was `waiting`, `carried` or `not delivered`
+        // comes back after a reopen looking ordinarily sent, which is exactly
+        // the arrival-nobody-confirmed claim the mesh surfaces must never make.
+        //
+        // A read failure leaves the states empty rather than failing the whole
+        // history: showing the messages without their states is a degraded
+        // timeline, showing nothing is a lost one.
+        let ids: Vec<String> = messages.iter().map(|m| m.id.to_string()).collect();
+        match self.delivery.get_many(&ids) {
+            Ok(states) => {
+                for message in &mut messages {
+                    if let Some(state) = states.get(&message.id.to_string()) {
+                        message.delivery_status.clone_from(state);
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "mesh: could not read delivery states");
+            }
+        }
+        Ok(messages)
+    }
+
+    /// Remember where a message this device sent has got to.
+    ///
+    /// `wire_id` is the ID the mesh knows the message by; it is mapped to the
+    /// stored row's ID here so callers never have to know that derivation.
+    pub fn record_delivery(&self, wire_id: &str, state: MeshDelivery) {
+        let id = super::mapping::wire_message_id(wire_id);
+        if let Err(error) = self.delivery.set(&id.to_string(), state.as_str()) {
+            tracing::warn!(%error, "mesh: could not store a delivery state");
+        }
     }
 
     /// Mark everything in a mesh conversation read locally.
@@ -331,6 +372,11 @@ impl MeshTimeline {
             }
         }
         if let Err(error) = self.directory.wipe()
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
+        if let Err(error) = self.delivery.wipe()
             && first_error.is_none()
         {
             first_error = Some(error);
@@ -483,6 +529,9 @@ impl MeshEvents {
                     );
                 }
             }
+            MeshEvent::Delivery {
+                message_id, state, ..
+            } => self.timeline.record_delivery(message_id, *state),
             MeshEvent::GeohashJoined(cell) => self.timeline.note_geohash(cell),
             MeshEvent::GeohashLeft(cell) => self.timeline.forget_geohash(cell),
             _ => {}
@@ -534,7 +583,8 @@ pub(crate) fn temp_timeline() -> Arc<MeshTimeline> {
     Box::leak(Box::new(dir));
     Arc::new(MeshTimeline::new(
         Arc::new(MessageRepository::new(db.clone())),
-        Arc::new(MeshConversationRepository::new(db)),
+        Arc::new(MeshConversationRepository::new(db.clone())),
+        Arc::new(MeshDeliveryRepository::new(db)),
     ))
 }
 
@@ -570,10 +620,11 @@ mod tests {
 
         let messages = Arc::new(MessageRepository::new(db.clone()));
         let directory = Arc::new(MeshConversationRepository::new(db.clone()));
+        let deliveries = Arc::new(MeshDeliveryRepository::new(db.clone()));
         let conversation = MeshConversation::Dm(peer("00112233445566778899aabbccddeeff"));
 
         {
-            let timeline = MeshTimeline::new(messages.clone(), directory.clone());
+            let timeline = MeshTimeline::new(messages.clone(), directory.clone(), deliveries.clone());
             timeline.register(&conversation, Some("alice"));
             assert!(
                 timeline.conversation_for(&conversation.conversation_id()).is_some(),
@@ -582,7 +633,7 @@ mod tests {
         }
 
         // A second timeline over the same database is what a restart looks like.
-        let restarted = MeshTimeline::new(messages, directory);
+        let restarted = MeshTimeline::new(messages, directory, deliveries);
         let recovered = restarted
             .conversation_for(&conversation.conversation_id())
             .expect("the DM must still be reachable after a restart");
@@ -593,6 +644,55 @@ mod tests {
             listed.iter().any(|c| c.name == "alice"),
             "the peer's name should come back too, not just the row"
         );
+    }
+
+    #[test]
+    fn a_delivery_state_survives_a_restart_and_never_reads_as_sent() {
+        // The failure this pins: mesh delivery used to live only on the event
+        // stream, so a message that was *never delivered* came back after a
+        // reopen rendered as an ordinary sent message — the converter turns an
+        // empty status on an own message into "sent". A mesh surface claiming an
+        // arrival nobody confirmed is the one thing it must never do.
+        use crate::storage::Database;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db = Arc::new(Database::open(&dir.path().join("delivery.db"), "testpass").expect("open"));
+        db.run_migrations().expect("migrations");
+
+        let messages = Arc::new(MessageRepository::new(db.clone()));
+        let directory = Arc::new(MeshConversationRepository::new(db.clone()));
+        let deliveries = Arc::new(MeshDeliveryRepository::new(db.clone()));
+        let conversation = MeshConversation::Dm(peer("00112233445566778899aabbccddeeff"));
+
+        {
+            let timeline = MeshTimeline::new(messages.clone(), directory.clone(), deliveries.clone());
+            let message = MeshMessage {
+                message: crate::services::mesh::mapping::outbound_message(
+                    &conversation,
+                    "WIRE-1",
+                    &peer("00112233445566778899aabbccddeeff"),
+                    "did this arrive?",
+                    1_700_000_000_000,
+                ),
+                conversation: conversation.clone(),
+                sender: peer("00112233445566778899aabbccddeeff"),
+                nickname: String::new(),
+                is_local: true,
+                sender_verified: false,
+            };
+            timeline.record(&message).expect("record");
+            timeline.record_delivery("WIRE-1", MeshDelivery::Dropped);
+        }
+
+        let restarted = MeshTimeline::new(messages, directory, deliveries);
+        let history = restarted.history(&conversation, None, 10).expect("history");
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            history[0].delivery_status,
+            MeshDelivery::Dropped.as_str(),
+            "a message the mesh dropped must still say so after a restart"
+        );
+        assert_ne!(history[0].delivery_status, "sent");
     }
 
     /// The case a naive panic wipe misses.
@@ -690,14 +790,15 @@ mod tests {
 
         let messages = Arc::new(MessageRepository::new(db.clone()));
         let directory = Arc::new(MeshConversationRepository::new(db.clone()));
+        let deliveries = Arc::new(MeshDeliveryRepository::new(db.clone()));
 
         {
-            let timeline = MeshTimeline::new(messages.clone(), directory.clone());
+            let timeline = MeshTimeline::new(messages.clone(), directory.clone(), deliveries.clone());
             timeline.note_geohash("dr5rsj7");
             timeline.forget_geohash("dr5rsj7");
         }
 
-        let restarted = MeshTimeline::new(messages, directory);
+        let restarted = MeshTimeline::new(messages, directory, deliveries);
         let cell = MeshConversation::Geohash("dr5rsj7".to_string());
         assert!(
             restarted.conversation_for(&cell.conversation_id()).is_none(),

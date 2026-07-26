@@ -62,6 +62,39 @@ pub enum MeshDelivery {
     Broadcast,
 }
 
+impl MeshDelivery {
+    /// The mesh's own name for this state.
+    ///
+    /// Canonical: it is what goes in the durable store (V060) *and* what the UI
+    /// renders, so there is exactly one delivery vocabulary rather than a
+    /// storage one and a display one drifting apart. Deliberately disjoint from
+    /// the server vocabulary in `Message::delivery_status` — the mesh's "sent"
+    /// and the server's "sent" are not the same claim.
+    ///
+    /// The three states that collapse to `"sent"` differ only in *how* the
+    /// message left this device, which is not something a reader can act on.
+    /// The distinctions that survive are the ones with consequences: it has not
+    /// left yet, something else is carrying it, it never arrived, or there was
+    /// never a recipient to arrive at.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            // Handed to a live link. It has left this device.
+            Self::Secure | Self::Insecure | Self::Reachable => "sent",
+            // Nothing could carry it; it is retained and offered to couriers.
+            Self::Unreachable => "waiting",
+            // A courier or a relay drop took a sealed copy.
+            Self::Carried => "carried",
+            Self::Delivered => "delivered",
+            Self::Read => "read",
+            Self::Dropped => "undelivered",
+            // Nobody acknowledges a broadcast, so there is no later state to
+            // progress to and nothing to be "delivered" to.
+            Self::Broadcast => "broadcast",
+        }
+    }
+}
+
 /// One peer as the mesh currently sees it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MeshPeer {

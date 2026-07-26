@@ -344,6 +344,11 @@ impl ServiceContainer {
                 // why they are stored at all — bitchat's stack is ephemeral by
                 // design and this one deliberately is not.
                 messages: infra.message_repo.clone(),
+                deliveries: Arc::new(
+                    crate::storage::repositories::MeshDeliveryRepository::new(
+                        infra.database.clone(),
+                    ),
+                ),
                 conversations: Arc::new(
                     crate::storage::repositories::MeshConversationRepository::new(
                         infra.database.clone(),

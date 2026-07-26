@@ -112,6 +112,10 @@ pub struct MeshDeps {
     /// survives a restart while its sidebar entry does not, which looks like
     /// lost data.
     pub conversations: Arc<crate::storage::repositories::MeshConversationRepository>,
+    /// Durable delivery state for messages this device sent. Without it every
+    /// mesh delivery state is live-only, so a message that was never delivered
+    /// comes back after a reopen looking sent.
+    pub deliveries: Arc<crate::storage::repositories::MeshDeliveryRepository>,
     /// Durable favourites. These are the courier trust tier, so losing them on
     /// restart silently demotes every favourite to the stranger deposit quota.
     pub favorites: Arc<crate::storage::repositories::MeshFavoritesRepository>,
@@ -169,7 +173,7 @@ impl MeshService {
         let state = Arc::new(MeshState::new(identity.peer_id()));
         let nostr_state = Arc::new(NostrState::new());
         let favorites = Arc::new(MeshFavorites::with_store(Arc::clone(&deps.favorites)));
-        let timeline = Arc::new(MeshTimeline::new(deps.messages, deps.conversations));
+        let timeline = Arc::new(MeshTimeline::new(deps.messages, deps.conversations, deps.deliveries));
         let events = MeshEvents::new(EVENT_CAPACITY, Arc::clone(&timeline));
 
         let (ble_tx, ble_rx) = unbounded_channel();
@@ -397,6 +401,11 @@ impl MeshService {
                 content,
             })
             .map_err(|_| MeshError::WorkerGone)?;
+        // A broadcast has no recipient and therefore no later state to progress
+        // to. Recording it now is the whole of its delivery history; leaving it
+        // unrecorded would make it render as an ordinary one-to-one "sent".
+        self.timeline
+            .record_delivery(&message_id, MeshDelivery::Broadcast);
         Ok(message_id)
     }
 
@@ -418,6 +427,8 @@ impl MeshService {
                 nickname: self.config.nickname.clone(),
             })
             .map_err(|_| MeshError::WorkerGone)?;
+        self.timeline
+            .record_delivery(&message_id, MeshDelivery::Broadcast);
         Ok(message_id)
     }
 
@@ -460,15 +471,23 @@ impl MeshService {
 
         let outcome = self
             .router
-            .send_private(content, peer.clone(), nickname, message_id)
+            .send_private(content, peer.clone(), nickname, message_id.clone())
             .await?;
 
-        Ok(match outcome.link {
+        let delivery = match outcome.link {
             LinkState::Secure => MeshDelivery::Secure,
             LinkState::Insecure => MeshDelivery::Insecure,
             LinkState::Reachable => MeshDelivery::Reachable,
             LinkState::Unreachable => MeshDelivery::Unreachable,
-        })
+        };
+        // Persisted here rather than left to the router's own `Delivery` event.
+        // That event is the right vehicle for every *later* transition, but it
+        // travels through an actor, so relying on it alone leaves a window in
+        // which the message is on disk with no state — and a message with no
+        // recorded state renders as an ordinary "sent". The outcome is already
+        // in hand at this point; storing it is not a guess.
+        self.timeline.record_delivery(&message_id, delivery);
+        Ok(delivery)
     }
 
     /// Acknowledge that a message has been read.
@@ -882,9 +901,18 @@ mod tests {
         assert_eq!(history.len(), 1);
         assert_eq!(mapping::text_of(&history[0]), Some("hello"));
         assert_eq!(history[0].conversation_type, ConversationType::MeshDm);
-        assert!(
-            history[0].delivery_status.is_empty(),
-            "mesh delivery is not server delivery; the field stays unclaimed"
+        // The state is the mesh's own, and it is durable: it used to live only
+        // on the event stream, so reopening the conversation brought a message
+        // back as a plain server-style "sent" no matter what had really happened
+        // to it. Nothing here can carry the message, so it is waiting.
+        assert_eq!(
+            history[0].delivery_status,
+            MeshDelivery::Unreachable.as_str(),
+            "mesh delivery state must survive a reload, in the mesh's vocabulary"
+        );
+        assert_ne!(
+            history[0].delivery_status, "sent",
+            "the server's \"sent\" means a server accepted it, which never happened"
         );
 
         // Typing the same text twice is two messages, not a duplicate: each send
