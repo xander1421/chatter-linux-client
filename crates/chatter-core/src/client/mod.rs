@@ -3251,7 +3251,7 @@ mod upload_attachments_tests {
     //! instead of being dropped, which previously left `pointers` empty and
     //! sent attachments-only messages into the empty-content validation path.
     use super::*;
-    use crate::crypto::attachment_crypto::{max_attachment_size, set_max_attachment_size};
+    use crate::crypto::attachment_crypto::override_max_attachment_size;
     use crate::domain::AttachmentId;
     use crate::storage::database::Database;
     use crate::storage::repositories::AttachmentRepository;
@@ -3277,9 +3277,7 @@ mod upload_attachments_tests {
 
     #[tokio::test]
     async fn failed_upload_propagates_error_instead_of_dropping_pointer() {
-        let _guard = crate::crypto::attachment_crypto::SIZE_CAP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let original = max_attachment_size();
-        set_max_attachment_size(100);
+        let _cap = override_max_attachment_size(100);
 
         let (svc, _tmp) = make_service();
         let payload = vec![7u8; 200];
@@ -3289,7 +3287,6 @@ mod upload_attachments_tests {
         let pending = vec![pending_for(input.path().to_path_buf(), payload.len() as u64)];
         let result = upload_attachments(&pending, &svc).await;
 
-        set_max_attachment_size(original);
 
         match result {
             Err(AttachmentError::EncryptionError(msg)) => {

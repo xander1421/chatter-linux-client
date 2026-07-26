@@ -710,7 +710,6 @@ mod tests {
 
     #[test]
     fn test_incremental_mac_verifier_roundtrip() {
-        let _cap = crate::crypto::attachment_crypto::SIZE_CAP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         use crate::crypto::attachment_crypto::AttachmentCrypto;
         use tempfile::NamedTempFile;
         use std::io::Write;
@@ -753,7 +752,6 @@ mod tests {
 
     #[test]
     fn test_incremental_mac_verifier_detects_tamper() {
-        let _cap = crate::crypto::attachment_crypto::SIZE_CAP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         use crate::crypto::attachment_crypto::AttachmentCrypto;
         use tempfile::NamedTempFile;
         use std::io::Write;
@@ -813,7 +811,6 @@ mod tests {
 
     #[test]
     fn test_incremental_mac_small_file_no_mac() {
-        let _cap = crate::crypto::attachment_crypto::SIZE_CAP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         use crate::crypto::attachment_crypto::AttachmentCrypto;
         use tempfile::NamedTempFile;
         use std::io::Write;
@@ -837,7 +834,6 @@ mod tests {
 
     #[test]
     fn test_incremental_mac_chunked_feed() {
-        let _cap = crate::crypto::attachment_crypto::SIZE_CAP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         use crate::crypto::attachment_crypto::AttachmentCrypto;
         use tempfile::NamedTempFile;
         use std::io::Write;

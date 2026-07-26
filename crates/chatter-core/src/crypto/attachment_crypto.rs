@@ -657,22 +657,68 @@ const DEFAULT_MAX_ATTACHMENT_SIZE: u64 = 2 * 1024 * 1024 * 1024;
 static MAX_ATTACHMENT_SIZE: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(DEFAULT_MAX_ATTACHMENT_SIZE);
 
+#[cfg(test)]
+thread_local! {
+    /// Test-only override of the cap, scoped to the thread that set it.
+    ///
+    /// The cap has to be a process global in production — it is read from deep inside
+    /// the encryptor, configured once at startup. But a test that lowers it to prove
+    /// the too-large path is *also* lowering it for every test running beside it, and
+    /// libtest runs tests in parallel by default.
+    ///
+    /// This was previously handled with a mutex that every cap-touching test was
+    /// expected to take. That only works while every such test remembers to, and the
+    /// set of tests that read the cap is not the set that mentions it: the P9 mesh
+    /// transfer tests read it indirectly, through `store_file_streamed`, several
+    /// layers down. They did not take the lock, so a cap of 100 bytes reached them
+    /// and `store_file_streamed` refused a 4 kB fixture — surfacing as an unrelated
+    /// mesh test failing roughly 3 times in 10, with no mention of attachments
+    /// anywhere in the panic.
+    ///
+    /// A thread-local needs nothing remembered. libtest gives each test its own
+    /// thread, so an override is visible exactly where it was set and nowhere else,
+    /// and a test added tomorrow inherits that for free. Production reads the atomic
+    /// as before — this path does not exist outside `cfg(test)`.
+    static MAX_ATTACHMENT_SIZE_OVERRIDE: std::cell::Cell<Option<u64>> =
+        const { std::cell::Cell::new(None) };
+}
+
 pub fn max_attachment_size() -> u64 {
+    #[cfg(test)]
+    if let Some(size) = MAX_ATTACHMENT_SIZE_OVERRIDE.with(std::cell::Cell::get) {
+        return size;
+    }
     MAX_ATTACHMENT_SIZE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// Override the attachment size cap. Intended for startup config and tests.
+/// Override the attachment size cap. Intended for startup config.
 pub fn set_max_attachment_size(size: u64) {
     MAX_ATTACHMENT_SIZE.store(size, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Test-only lock serializing EVERY test that reads or mutates the process-global
-/// `MAX_ATTACHMENT_SIZE` — across the attachment_crypto, streaming_decrypt, and
-/// upload suites (they all share the one atomic). Without it, a size-cap test that
-/// lowers the cap races readers that encrypt large files, so the same suite passes
-/// serially but fails under `cargo test`'s default parallelism.
+/// Lower (or raise) the cap for the current test only.
+///
+/// Returns a guard that restores the previous value on drop, so a test that
+/// panics mid-way cannot leave the override set for whatever libtest schedules
+/// on that thread next.
 #[cfg(test)]
-pub(crate) static SIZE_CAP_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[must_use]
+pub(crate) fn override_max_attachment_size(size: u64) -> MaxAttachmentSizeOverride {
+    let previous = MAX_ATTACHMENT_SIZE_OVERRIDE.with(|cell| cell.replace(Some(size)));
+    MaxAttachmentSizeOverride { previous }
+}
+
+#[cfg(test)]
+pub(crate) struct MaxAttachmentSizeOverride {
+    previous: Option<u64>,
+}
+
+#[cfg(test)]
+impl Drop for MaxAttachmentSizeOverride {
+    fn drop(&mut self) {
+        MAX_ATTACHMENT_SIZE_OVERRIDE.with(|cell| cell.set(self.previous));
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -894,7 +940,6 @@ mod tests {
 
     #[test]
     fn test_streaming_encrypt_large_file() {
-        let _cap = SIZE_CAP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // 1MB of patterned data
         let plaintext: Vec<u8> = (0..1024 * 1024).map(|i| (i % 256) as u8).collect();
 
@@ -994,7 +1039,6 @@ mod tests {
 
     #[test]
     fn test_streaming_encrypt_small_file_no_incremental_mac() {
-        let _cap = SIZE_CAP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // Files <= 50KB should NOT have incremental MAC
         let plaintext = vec![42u8; 1024]; // 1KB
 
@@ -1014,7 +1058,6 @@ mod tests {
 
     #[test]
     fn test_streaming_encrypt_large_file_has_incremental_mac() {
-        let _cap = SIZE_CAP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // Files > 50KB should have incremental MAC
         let plaintext: Vec<u8> = (0..100_000).map(|i| (i % 256) as u8).collect(); // 100KB
 
@@ -1042,7 +1085,6 @@ mod tests {
 
     #[test]
     fn test_streaming_encrypt_incremental_mac_deterministic() {
-        let _cap = SIZE_CAP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // Same plaintext, same key → different ciphertext (random IV/key)
         // But the relationship between ciphertext and incremental MAC should be consistent
         let plaintext: Vec<u8> = (0..100_000).map(|i| (i % 256) as u8).collect();
@@ -1075,9 +1117,7 @@ mod tests {
 
     #[test]
     fn test_max_attachment_size_enforcement() {
-        let _guard = SIZE_CAP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let original = max_attachment_size();
-        set_max_attachment_size(100);
+        let _cap = override_max_attachment_size(100);
 
         let plaintext = vec![42u8; 200]; // 200 bytes, exceeds 100 byte limit
 
@@ -1091,7 +1131,6 @@ mod tests {
             output_file.path(),
         );
 
-        set_max_attachment_size(original);
 
         assert!(matches!(result, Err(CryptoError::AttachmentTooLarge { .. })));
     }

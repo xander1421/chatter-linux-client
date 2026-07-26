@@ -961,11 +961,11 @@ mod size_cap_tests {
     //! asserts the returned error round-trips Signal's `AttachmentTooLarge`
     //! display string. The cap is then restored via the captured `original`.
     use super::*;
-    use crate::crypto::attachment_crypto::{max_attachment_size, set_max_attachment_size};
+    use crate::crypto::attachment_crypto::override_max_attachment_size;
     use crate::services::attachment::AttachmentService;
     use crate::storage::database::Database;
     use crate::storage::repositories::AttachmentRepository;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
 
     /// Build a real but offline `AttachmentService`. The size cap check fires
@@ -982,9 +982,7 @@ mod size_cap_tests {
 
     #[tokio::test]
     async fn upload_to_cdn_encrypted_rejects_oversized_payload() {
-        let _guard = crate::crypto::attachment_crypto::SIZE_CAP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let original = max_attachment_size();
-        set_max_attachment_size(100);
+        let _cap = override_max_attachment_size(100);
 
         let (svc, _tmp) = make_service();
         let payload = vec![7u8; 200];
@@ -993,7 +991,6 @@ mod size_cap_tests {
 
         let result = svc.upload_to_cdn_encrypted(input.path()).await;
 
-        set_max_attachment_size(original);
 
         match result {
             Err(AttachmentError::EncryptionError(msg)) => {
@@ -1008,9 +1005,7 @@ mod size_cap_tests {
 
     #[tokio::test]
     async fn upload_bytes_to_cdn_encrypted_rejects_oversized_payload() {
-        let _guard = crate::crypto::attachment_crypto::SIZE_CAP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let original = max_attachment_size();
-        set_max_attachment_size(100);
+        let _cap = override_max_attachment_size(100);
 
         let (svc, _tmp) = make_service();
         let payload = vec![7u8; 200];
@@ -1019,7 +1014,6 @@ mod size_cap_tests {
             .upload_bytes_to_cdn_encrypted(&payload, "big.bin", "application/octet-stream")
             .await;
 
-        set_max_attachment_size(original);
 
         match result {
             Err(AttachmentError::EncryptionError(msg)) => {
@@ -1034,9 +1028,6 @@ mod size_cap_tests {
 
     #[tokio::test]
     async fn upload_bytes_under_default_cap_passes_check() {
-        let _guard = crate::crypto::attachment_crypto::SIZE_CAP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let original = max_attachment_size();
-        set_max_attachment_size(original);
 
         let (svc, _tmp) = make_service();
         let payload = vec![7u8; 32];

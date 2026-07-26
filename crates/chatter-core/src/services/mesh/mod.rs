@@ -875,7 +875,7 @@ impl MeshService {
     /// service could not describe itself.
     pub fn panic_wipe(&self) -> Result<(), MeshError> {
         let mut first_error: Option<MeshError> = None;
-        let mut fail = |error: MeshError, slot: &mut Option<MeshError>| {
+        let fail = |error: MeshError, slot: &mut Option<MeshError>| {
             if slot.is_none() {
                 *slot = Some(error);
             }

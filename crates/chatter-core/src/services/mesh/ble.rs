@@ -4105,10 +4105,24 @@ mod tests {
         runtime.on_file_chunk_request(&packet, &asker);
 
         let before = radio.write_count();
+        // Named rather than indexed. Tests install no tracing subscriber, so a
+        // transfer that never started logs nothing anywhere, and indexing
+        // straight into the write log turns that into an out-of-bounds panic
+        // that says only "len is 0" — which is every possible cause at once.
+        assert!(
+            before > 0,
+            "precondition: the manifest and the first pass should already be on \
+             the air after two pumps, but nothing was written (transfer still \
+             live: {})",
+            !runtime.files_out.is_empty()
+        );
         runtime.pump_streamed_files(now_secs()).await;
         let writes = radio.writes();
+        let served = writes
+            .get(before)
+            .unwrap_or_else(|| panic!("the re-requested chunk should have been written"));
         let sent = FileChunk::decode(
-            &codec::decode(&writes[before].1).expect("decodable").payload,
+            &codec::decode(&served.1).expect("decodable").payload,
         )
         .expect("decodes");
         assert_eq!(
@@ -4127,10 +4141,24 @@ mod tests {
         );
         runtime.on_file_chunk_request(&unsigned, &asker);
         let before = radio.write_count();
+        // Named rather than indexed. Tests install no tracing subscriber, so a
+        // transfer that never started logs nothing anywhere, and indexing
+        // straight into the write log turns that into an out-of-bounds panic
+        // that says only "len is 0" — which is every possible cause at once.
+        assert!(
+            before > 0,
+            "precondition: the manifest and the first pass should already be on \
+             the air after two pumps, but nothing was written (transfer still \
+             live: {})",
+            !runtime.files_out.is_empty()
+        );
         runtime.pump_streamed_files(now_secs()).await;
         let writes = radio.writes();
+        let served = writes
+            .get(before)
+            .unwrap_or_else(|| panic!("the re-requested chunk should have been written"));
         let sent = FileChunk::decode(
-            &codec::decode(&writes[before].1).expect("decodable").payload,
+            &codec::decode(&served.1).expect("decodable").payload,
         )
         .expect("decodes");
         assert_eq!(
