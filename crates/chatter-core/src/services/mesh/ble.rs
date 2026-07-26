@@ -110,6 +110,23 @@ const DIRECT_ANNOUNCE_TTL: u8 = chatter_mesh::relay::MESSAGE_TTL_DEFAULT;
 /// minutes of not noticing a peer connect or disconnect.
 const CHUNKS_PER_TICK: usize = 1;
 
+/// Measured air throughput for one link, in bytes of payload per second.
+///
+/// A calibration figure, not a constant of nature. Measured on a Galaxy S25 to a
+/// BlueZ desktop at ~21.5 kB/s of fragment payload, and rounded down: pacing
+/// slightly under the real rate costs a little time, pacing over it costs the
+/// whole transfer, because the excess is discarded rather than queued.
+///
+/// It exists because BlueZ gives no backpressure when it sends notifications.
+/// Android's bridge refuses a second concurrent write and the layer above queues
+/// and retries; BlueZ's `try_send` accepted 36,800 consecutive frames without one
+/// refusal while the link could carry roughly a third of them. A sender that
+/// waits to be told to slow down is never told, so it has to know.
+///
+/// Tune this if the radio or the platform changes. Too low is slow; too high is
+/// silent loss.
+const AIR_BYTES_PER_SEC: u64 = 20_000;
+
 /// Queued outbound bytes above which a transfer skips its turn.
 ///
 /// Backpressure the loop can see. `OutboundWriteBuffer` already trims from the
@@ -1908,7 +1925,10 @@ impl BleRuntime {
     /// Called from the tick, one chunk at a time, rather than looping over the
     /// whole file: the loop is also the only thing servicing link events, and a
     /// 16 MiB transfer emitted in one pass would leave the mesh deaf for minutes.
-    async fn pump_streamed_files(&mut self, now_s: u64) {
+    /// `now_ms` is a parameter rather than a call to the clock inside, because
+    /// chunk pacing is measured in milliseconds and a rate that reads its own
+    /// clock cannot be tested without sleeping for real.
+    async fn pump_streamed_files(&mut self, now_s: u64, now_ms: u64) {
         if self.files_out.is_empty() {
             return;
         }
@@ -1949,6 +1969,17 @@ impl BleRuntime {
                 continue;
             }
 
+            // Rate pacing, on top of the queue check above. The queue check only
+            // fires where the radio reports congestion; this one holds in the
+            // direction where it never does.
+            if self
+                .files_out
+                .get(&id)
+                .is_some_and(|transfer| now_ms < transfer.next_chunk_ms)
+            {
+                continue;
+            }
+
             for _ in 0..CHUNKS_PER_TICK {
                 let Some(transfer) = self.files_out.get_mut(&id) else {
                     break;
@@ -1977,6 +2008,16 @@ impl BleRuntime {
                 let Ok(payload) = FileChunk::new(id, index, bytes).and_then(|c| c.encode()) else {
                     continue;
                 };
+                // Hold the next chunk back for as long as this one needs on the
+                // air. Stamped from the encoded length, so a short final chunk
+                // waits proportionally less, and set before the write rather than
+                // after so a slow write does not extend the interval twice.
+                if let Some(transfer) = self.files_out.get_mut(&id) {
+                    let air_ms = (payload.len() as u64)
+                        .saturating_mul(1_000)
+                        .saturating_div(AIR_BYTES_PER_SEC.max(1));
+                    transfer.next_chunk_ms = now_ms.saturating_add(air_ms);
+                }
                 let packet = self.build_packet(
                     MessageType::FileChunk,
                     None,
@@ -2399,7 +2440,7 @@ impl BleRuntime {
         // Chunked file transfers, which nothing else can schedule either: the
         // send side is paced by this tick rather than by a loop over the file, and
         // the receive side has no other way to notice that a transfer went quiet.
-        self.pump_streamed_files(now_s).await;
+        self.pump_streamed_files(now_s, now_millis()).await;
         self.request_missing_chunks(now_s).await;
 
         // Gossip sync, which nothing else can schedule.
@@ -3529,6 +3570,13 @@ mod tests {
     /// a handful of kilobytes exercises several chunks without a megabyte of IO.
     const TEST_CHUNK: u32 = 1024;
 
+    /// Milliseconds to advance between pumps so chunk pacing never gates a test.
+    ///
+    /// `AIR_BYTES_PER_SEC` turns a chunk's encoded length into a hold-off, and a
+    /// `TEST_CHUNK` chunk is well under a second of air time. Rounded up to a
+    /// second so the figure stays correct if either constant moves.
+    const CHUNK_AIR_MS_FOR_TESTS: u64 = 1_000;
+
     /// Point one runtime's receive spool at a directory of its own.
     ///
     /// The attachments base is a process-wide `OnceLock`, so every test in the
@@ -4057,6 +4105,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_chunk_waits_for_the_previous_one_to_clear_the_air() {
+        // The pacing that makes a large transfer possible at all. Chunk
+        // generation used to be gated only by the loop tick, on the assumption
+        // that the outbound write queue would absorb the difference and the radio
+        // would set the real rate. That holds only where the radio reports
+        // congestion — Android's bridge does. BlueZ sending notifications does
+        // not: measured over 36,800 frames, `try_send` never once refused, so
+        // every frame was accepted and the excess was dropped below the socket.
+        // The receiver saw 2 to 9 fragments of each 70-fragment chunk and never
+        // completed one, while asking for them twice a second.
+        //
+        // So a chunk is held until the previous one has had time on the air.
+        let (mut runtime, radio, state, _timeline) = runtime_parts();
+        let dir = tempfile::tempdir().expect("temp dir");
+        let source = dir.path().join("paced.bin");
+        let bytes = body(4_000);
+        std::fs::write(&source, &bytes).expect("write");
+        writable_link(&state, "/mock/paced", 4096);
+
+        let manifest = test_manifest([0x2C; 8], &bytes);
+        runtime
+            .start_streamed_file("MSG-PACE", manifest.clone(), source)
+            .await;
+
+        let at = 5_000_000u64;
+        runtime.pump_streamed_files(now_secs(), at).await;
+        let after_first = radio.write_count();
+        assert!(after_first > 0, "the first chunk goes out immediately");
+
+        // Same millisecond, and every millisecond up to the interval: nothing
+        // more is generated, however often the loop runs.
+        for advance in [0, 1, 10] {
+            runtime.pump_streamed_files(now_secs(), at + advance).await;
+            assert_eq!(
+                radio.write_count(),
+                after_first,
+                "a chunk {advance} ms after the last one would be dropped, not sent"
+            );
+        }
+
+        // Once the air time has elapsed, the next chunk goes.
+        runtime
+            .pump_streamed_files(now_secs(), at + CHUNK_AIR_MS_FOR_TESTS)
+            .await;
+        assert!(
+            radio.write_count() > after_first,
+            "pacing delays a chunk, it does not cancel it"
+        );
+    }
+
+    #[tokio::test]
     async fn a_streamed_send_puts_a_manifest_out_first_then_paces_chunks_by_tick() {
         // The send side never reads the file whole, and never emits it in one
         // pass: the loop that emits chunks is the same loop that services link
@@ -4109,17 +4208,22 @@ mod tests {
             1
         );
 
-        // Then one chunk per tick, in order, each signed in its own right.
+        // Then one chunk at a time, in order, each signed in its own right —
+        // and each only once the previous one has had time on the air. The clock
+        // is advanced explicitly rather than slept through: the interval is the
+        // contract, so the test states it instead of waiting for it.
         let mut seen = Vec::new();
         let mut rebuilt = Vec::new();
+        let mut now_ms = 1_000_000u64;
         for _ in 0..manifest.chunk_count {
             let before = radio.write_count();
-            runtime.pump_streamed_files(now_secs()).await;
+            runtime.pump_streamed_files(now_secs(), now_ms).await;
+            now_ms += CHUNK_AIR_MS_FOR_TESTS;
             let writes = radio.writes();
             assert_eq!(
                 writes.len(),
                 before + 1,
-                "one chunk per tick, so the loop keeps servicing the radio"
+                "one chunk per pacing interval, so the loop keeps servicing the radio"
             );
             let packet = codec::decode(&writes[before].1).expect("decodable");
             assert_eq!(packet.message_type(), Some(MessageType::FileChunk));
@@ -4138,7 +4242,7 @@ mod tests {
         // Drained: nothing more goes out unprompted, because there is no
         // acknowledgement to wait for.
         let before = radio.write_count();
-        runtime.pump_streamed_files(now_secs()).await;
+        runtime.pump_streamed_files(now_secs(), u64::MAX).await;
         assert_eq!(radio.write_count(), before);
     }
 
@@ -4159,8 +4263,12 @@ mod tests {
         runtime
             .start_streamed_file("MSG-S2", manifest.clone(), source)
             .await;
-        runtime.pump_streamed_files(now_secs()).await;
-        runtime.pump_streamed_files(now_secs()).await;
+        // Two passes, with the clock moved on between them so the second is not
+        // held back by the first chunk's pacing interval.
+        runtime.pump_streamed_files(now_secs(), 1_000_000).await;
+        runtime
+            .pump_streamed_files(now_secs(), 1_000_000 + CHUNK_AIR_MS_FOR_TESTS)
+            .await;
 
         // A signed request for chunk 0, which has already been sent once.
         let request = FileChunkRequest::new(manifest.transfer_id, vec![0]).expect("valid");
@@ -4185,7 +4293,7 @@ mod tests {
              live: {})",
             !runtime.files_out.is_empty()
         );
-        runtime.pump_streamed_files(now_secs()).await;
+        runtime.pump_streamed_files(now_secs(), u64::MAX).await;
         let writes = radio.writes();
         let served = writes
             .get(before)
@@ -4221,7 +4329,7 @@ mod tests {
              live: {})",
             !runtime.files_out.is_empty()
         );
-        runtime.pump_streamed_files(now_secs()).await;
+        runtime.pump_streamed_files(now_secs(), u64::MAX).await;
         let writes = radio.writes();
         let served = writes
             .get(before)

@@ -278,6 +278,16 @@ pub struct InboundTransfer {
     pub timestamp_ms: u64,
     pub received: ChunkBitmap,
     pub last_progress_secs: u64,
+    /// When chunks were last asked for, so a re-request waits out the quiet
+    /// period like the first one did.
+    ///
+    /// Without this, `stalled` was true forever once a transfer went quiet —
+    /// its only clock was the last chunk to *arrive*, and a transfer receiving
+    /// nothing never advances it. The caller runs every tick, so a stalled
+    /// transfer emitted a signed 64-index request twice a second indefinitely:
+    /// measured at 2/s for minutes against a link already too busy to deliver
+    /// the chunks being asked for.
+    pub last_request_secs: u64,
 }
 
 /// What a manifest did.
@@ -429,6 +439,9 @@ impl FileStreamSpool {
             timestamp_ms,
             received: ChunkBitmap::new(count),
             last_progress_secs: now_secs,
+            // A new transfer has never been asked for, so the first request is
+            // gated only by the progress clock.
+            last_request_secs: 0,
         };
 
         // Sized up front, so the file's length is the file's length from the
@@ -583,21 +596,38 @@ impl FileStreamSpool {
     /// This is the resume trigger. A broadcast has no acknowledgement, so the
     /// sender cannot know what landed; the receiver notices the silence and asks.
     #[must_use]
-    pub fn stalled(&self, now_secs: u64, quiet_secs: u64, limit: usize) -> Vec<(TransferId, Vec<u32>)> {
-        self.transfers
-            .values()
-            .filter(|transfer| {
-                !transfer.received.is_complete()
-                    && now_secs.saturating_sub(transfer.last_progress_secs) >= quiet_secs
-            })
-            .map(|transfer| {
-                (
-                    transfer.manifest.transfer_id,
-                    transfer.received.missing(limit),
-                )
-            })
-            .filter(|(_, missing)| !missing.is_empty())
-            .collect()
+    /// Takes `&mut self` so it can stamp what it hands out.
+    ///
+    /// The stamp is the whole point and is deliberately not left to the caller:
+    /// a quiet period enforced by remembering to record the request is a quiet
+    /// period that stops working the first time someone forgets. Returning a
+    /// transfer *is* asking for it, so the two happen together.
+    pub fn stalled(
+        &mut self,
+        now_secs: u64,
+        quiet_secs: u64,
+        limit: usize,
+    ) -> Vec<(TransferId, Vec<u32>)> {
+        let mut asking = Vec::new();
+        for transfer in self.transfers.values_mut() {
+            if transfer.received.is_complete() {
+                continue;
+            }
+            // Quiet on both clocks: nothing has arrived *and* nothing has been
+            // asked for recently. The second is what bounds the request rate.
+            if now_secs.saturating_sub(transfer.last_progress_secs) < quiet_secs
+                || now_secs.saturating_sub(transfer.last_request_secs) < quiet_secs
+            {
+                continue;
+            }
+            let missing = transfer.received.missing(limit);
+            if missing.is_empty() {
+                continue;
+            }
+            transfer.last_request_secs = now_secs;
+            asking.push((transfer.manifest.transfer_id, missing));
+        }
+        asking
     }
 
     /// Drop transfers that have made no progress for `max_age_secs`.
@@ -749,6 +779,10 @@ impl FileStreamSpool {
             // to fire a retransmit request at a peer it has not even discovered
             // yet.
             last_progress_secs: 0,
+            // Same reasoning, and the request clock is the one that now bounds
+            // the rate: a resumed transfer may ask once, then waits out the
+            // quiet period like any other.
+            last_request_secs: 0,
         })
     }
 }
@@ -776,6 +810,19 @@ pub struct OutboundTransfer {
     /// When the manifest was last put on the air.
     pub last_manifest_secs: u64,
     pub started_secs: u64,
+    /// Earliest time the next chunk may be generated.
+    ///
+    /// Chunk generation used to be paced only by the loop tick — one chunk per
+    /// 500 ms — on the assumption that the outbound write queue would absorb the
+    /// difference and the radio would set the real rate. That holds only where
+    /// the radio reports congestion. Android's bridge does, and a transfer *to*
+    /// a phone works. BlueZ sending notifications does not: measured over 36,800
+    /// frames, `try_send` never once refused, so every frame was accepted and the
+    /// excess was discarded below the socket. The receiver saw 2 to 9 fragments
+    /// of each 70-fragment chunk and could not complete a single one.
+    ///
+    /// So the sender paces itself instead of waiting to be told to.
+    pub next_chunk_ms: u64,
 }
 
 impl OutboundTransfer {
@@ -789,6 +836,9 @@ impl OutboundTransfer {
             requested: std::collections::BTreeSet::new(),
             last_manifest_secs: now_secs,
             started_secs: now_secs,
+            // Zero, so the first chunk goes out on the next tick rather than
+            // waiting out a pacing interval nothing has used yet.
+            next_chunk_ms: 0,
         }
     }
 
@@ -915,6 +965,51 @@ mod tests {
     }
 
     // -- bitmap ------------------------------------------------------------
+
+    #[test]
+    fn a_stalled_transfer_is_not_re_requested_within_the_quiet_period() {
+        // `stalled` used to consult one clock: the last chunk to *arrive*. A
+        // transfer receiving nothing never advances that, so it was stalled
+        // forever and the caller — which runs every tick — emitted a signed
+        // 64-index request twice a second for as long as the transfer existed.
+        // Measured on hardware at 2/s for minutes, against a link already too
+        // busy to deliver the chunks being asked for.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut spool = FileStreamSpool::new(dir.path().to_path_buf());
+        let bytes = vec![3u8; 4_096];
+        let manifest = manifest_for(&bytes, 1_024);
+        let sender = PeerId::from_str("aaaaaaaaaaaaaaaa");
+
+        spool.begin(manifest.clone(), sender, "WIRE".into(), 0, 100);
+
+        // Nothing has arrived and nothing has been asked for: the first request
+        // goes out.
+        let first = spool.stalled(100 + CHUNK_REQUEST_QUIET_SECS, CHUNK_REQUEST_QUIET_SECS, 8);
+        assert_eq!(first.len(), 1, "a quiet transfer is asked for once");
+
+        // Every moment inside the quiet period after that asks for nothing,
+        // however often the caller runs.
+        for offset in [0, 1, 2, CHUNK_REQUEST_QUIET_SECS - 1] {
+            let again = spool.stalled(
+                100 + CHUNK_REQUEST_QUIET_SECS + offset,
+                CHUNK_REQUEST_QUIET_SECS,
+                8,
+            );
+            assert!(
+                again.is_empty(),
+                "a request at +{offset}s repeats one already in flight"
+            );
+        }
+
+        // And once the period is out, it asks again — the transfer is still
+        // incomplete, so giving up would be worse than asking twice.
+        let later = spool.stalled(
+            100 + CHUNK_REQUEST_QUIET_SECS * 2 + 1,
+            CHUNK_REQUEST_QUIET_SECS,
+            8,
+        );
+        assert_eq!(later.len(), 1, "the quiet period bounds the rate, not the retries");
+    }
 
     #[test]
     fn a_bitmap_tracks_presence_and_reports_the_earliest_gaps() {
