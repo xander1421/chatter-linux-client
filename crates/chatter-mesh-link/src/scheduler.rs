@@ -94,6 +94,36 @@ pub const CONNECT_TIMEOUT_MS: u64 = 8_000;
 /// left alone, whatever the link store thinks its state is.
 pub const RECENT_ATTEMPT_IGNORE_MS: u64 = 2_000;
 
+/// Minimum gap between connect attempts to the same address after one has
+/// *failed outright*, as opposed to timing out.
+///
+/// # A deliberate divergence from bitchat-iOS
+///
+/// iOS has no such window and no attempt cap: [`RECENT_ATTEMPT_IGNORE_MS`] (its
+/// literal `2.0`) is the only spacing it applies, because CoreBluetooth's
+/// `connect` queues indefinitely rather than failing. BlueZ does fail, promptly
+/// and repeatedly — `le-connection-abort-by-local` — and 2 s of spacing with no
+/// cap produced an observed seven consecutive failures to one address in 19 s,
+/// which hammering `connect` while also scanning and advertising can itself
+/// cause.
+///
+/// bitchat's *Android* client hit the same wall on a stack that behaves like
+/// BlueZ and answered it with `CONNECTION_RETRY_DELAY = 5s` and
+/// `MAX_CONNECTION_ATTEMPTS = 3`, keeping the attempt record on failure
+/// specifically so the cap bites (`MeshConnectionTracker.kt:23-40`, and the
+/// commented-out `removePendingConnection` calls in
+/// `BluetoothGattClientManager` that say so). Those are the numbers used here.
+pub const CONNECT_FAILURE_RETRY_DELAY_MS: u64 = 5_000;
+
+/// Consecutive outright failures to one address before it is left alone until its
+/// record expires. From `MeshConnectionTracker.MAX_CONNECTION_ATTEMPTS`.
+pub const MAX_CONNECT_FAILURES: u32 = 3;
+
+/// A failure record older than this is forgotten and the count starts again, so a
+/// peer that was simply out of range earlier is not penalised forever. Twice the
+/// retry delay, matching `ConnectionAttempt.isExpired`.
+pub const CONNECT_FAILURE_FORGET_MS: u64 = CONNECT_FAILURE_RETRY_DELAY_MS * 2;
+
 /// Literal `0.05` in `rateLimitRetryDelay` — slack added so the retry lands *after*
 /// the limit expires rather than exactly on it and bouncing again.
 pub const RATE_LIMIT_RETRY_SLACK_MS: u64 = 50;
@@ -262,6 +292,10 @@ pub struct ConnectionScheduler {
     last_connect_attempt_ms: Option<u64>,
     failure_counts: BTreeMap<String, u32>,
     recent_connect_timeouts: BTreeMap<String, u64>,
+    /// Consecutive outright connect failures per address: `(count, last_ms)`.
+    /// See [`CONNECT_FAILURE_RETRY_DELAY_MS`] for why this exists on BlueZ when
+    /// it does not on iOS.
+    recent_connect_failures: BTreeMap<String, (u32, u64)>,
     /// Tracked apart from timeouts on purpose: a peer we held a link with and lost
     /// usually returns, so it gets a brief settle window rather than backoff.
     recent_disconnects: BTreeMap<String, u64>,
@@ -287,6 +321,7 @@ impl ConnectionScheduler {
             last_connect_attempt_ms: None,
             failure_counts: BTreeMap::new(),
             recent_connect_timeouts: BTreeMap::new(),
+            recent_connect_failures: BTreeMap::new(),
             recent_disconnects: BTreeMap::new(),
             isolated_since_ms: None,
             dynamic_rssi_threshold: config.initial_rssi_threshold,
@@ -374,6 +409,10 @@ impl ConnectionScheduler {
             if now_ms.saturating_sub(last_timeout) < TIMEOUT_DISCOVERY_IGNORE_MS {
                 return DiscoveryDecision::Ignore;
             }
+        }
+
+        if self.is_failing_too_fast(&candidate.address, now_ms) {
+            return DiscoveryDecision::Ignore;
         }
 
         if let Some(&last_disconnect) = self.recent_disconnects.get(&candidate.address) {
@@ -516,13 +555,47 @@ impl ConnectionScheduler {
     pub fn note_connected(&mut self, address: &str) {
         self.failure_counts.remove(address);
         self.recent_connect_timeouts.remove(address);
+        self.recent_connect_failures.remove(address);
         self.recent_disconnects.remove(address);
     }
 
-    /// A connect attempt failed outright (as opposed to timing out). Counts against
-    /// the candidate's score but imposes no ignore window.
-    pub fn note_connect_failed(&mut self, address: &str) {
+    /// A connect attempt failed outright (as opposed to timing out).
+    ///
+    /// Counts against the candidate's score, and — unlike iOS — earns a short
+    /// per-address window and an attempt cap. See
+    /// [`CONNECT_FAILURE_RETRY_DELAY_MS`].
+    pub fn note_connect_failed(&mut self, address: &str, now_ms: u64) {
         *self.failure_counts.entry(address.to_string()).or_insert(0) += 1;
+
+        let entry = self
+            .recent_connect_failures
+            .entry(address.to_string())
+            .or_insert((0, now_ms));
+        // A record we have not touched in a while is stale: the peer was
+        // probably just out of range, and starting the count again is what stops
+        // one bad patch of radio from blacklisting it for the session.
+        let expired = now_ms.saturating_sub(entry.1) > CONNECT_FAILURE_FORGET_MS;
+        entry.0 = if expired { 1 } else { entry.0.saturating_add(1) };
+        entry.1 = now_ms;
+    }
+
+    /// Whether this address should be left alone because its recent attempts keep
+    /// failing.
+    ///
+    /// Two reasons to say yes: the last failure is too recent, or it has failed
+    /// [`MAX_CONNECT_FAILURES`] times in a row and the record has not yet aged
+    /// out. Public so the radio layer can answer the same question before it
+    /// spends a connect slot.
+    #[must_use]
+    pub fn is_failing_too_fast(&self, address: &str, now_ms: u64) -> bool {
+        let Some(&(count, last_ms)) = self.recent_connect_failures.get(address) else {
+            return false;
+        };
+        let since = now_ms.saturating_sub(last_ms);
+        if since > CONNECT_FAILURE_FORGET_MS {
+            return false;
+        }
+        since < CONNECT_FAILURE_RETRY_DELAY_MS || count >= MAX_CONNECT_FAILURES
     }
 
     /// An established link dropped. Earns the short settle window, not the timeout
@@ -536,7 +609,7 @@ impl ConnectionScheduler {
     pub fn note_connect_timeout(&mut self, address: &str, now_ms: u64) {
         self.recent_connect_timeouts
             .insert(address.to_string(), now_ms);
-        self.note_connect_failed(address);
+        self.note_connect_failed(address, now_ms);
     }
 
     /// Garbage-collect per-peer backoff older than
@@ -550,6 +623,8 @@ impl ConnectionScheduler {
     pub fn prune_backoff(&mut self, now_ms: u64) {
         let cutoff = now_ms.saturating_sub(CONNECT_TIMEOUT_BACKOFF_WINDOW_MS);
         self.recent_connect_timeouts.retain(|_, &mut at| at >= cutoff);
+        self.recent_connect_failures
+            .retain(|_, &mut (_, at)| now_ms.saturating_sub(at) <= CONNECT_FAILURE_FORGET_MS);
         self.recent_disconnects.retain(|_, &mut at| at >= cutoff);
 
         let timeouts = &self.recent_connect_timeouts;
@@ -569,6 +644,7 @@ impl ConnectionScheduler {
         self.candidates.clear();
         self.failure_counts.clear();
         self.recent_connect_timeouts.clear();
+        self.recent_connect_failures.clear();
         self.recent_disconnects.clear();
         self.isolated_since_ms = None;
         self.dynamic_rssi_threshold = self.config.initial_rssi_threshold;
@@ -726,6 +802,81 @@ impl ConnectionScheduler {
 
 #[cfg(test)]
 mod tests {
+
+    // MARK: outright connect failures (a BlueZ-only divergence from iOS)
+
+    use super::{
+        CONNECT_FAILURE_FORGET_MS, CONNECT_FAILURE_RETRY_DELAY_MS, MAX_CONNECT_FAILURES,
+    };
+
+    #[test]
+    fn one_failure_holds_the_address_for_the_retry_delay() {
+        // The behaviour this exists for: 2s of spacing with no per-failure window
+        // produced seven consecutive failures to one address in 19s on BlueZ.
+        let mut s = ConnectionScheduler::default();
+        s.note_connect_failed("aa", 1_000);
+
+        assert!(s.is_failing_too_fast("aa", 1_000));
+        assert!(s.is_failing_too_fast("aa", 1_000 + CONNECT_FAILURE_RETRY_DELAY_MS - 1));
+        assert!(!s.is_failing_too_fast("aa", 1_000 + CONNECT_FAILURE_RETRY_DELAY_MS));
+    }
+
+    #[test]
+    fn the_cap_bites_after_three_failures_in_a_row() {
+        let mut s = ConnectionScheduler::default();
+        let mut now = 0;
+        // Spaced so each one is allowed when it happens, per the delay above.
+        for _ in 0..MAX_CONNECT_FAILURES {
+            s.note_connect_failed("aa", now);
+            now += CONNECT_FAILURE_RETRY_DELAY_MS;
+        }
+        // Past the delay, but the cap is reached, so still refused.
+        assert!(s.is_failing_too_fast("aa", now));
+    }
+
+    #[test]
+    fn a_stale_record_starts_the_count_again() {
+        // One bad patch of radio must not blacklist a peer for the session.
+        let mut s = ConnectionScheduler::default();
+        let mut now = 0;
+        for _ in 0..MAX_CONNECT_FAILURES {
+            s.note_connect_failed("aa", now);
+            now += CONNECT_FAILURE_RETRY_DELAY_MS;
+        }
+        assert!(s.is_failing_too_fast("aa", now));
+
+        let much_later = now + CONNECT_FAILURE_FORGET_MS + 1;
+        assert!(!s.is_failing_too_fast("aa", much_later), "the record aged out");
+
+        // And the next failure counts as the first, not the fourth.
+        s.note_connect_failed("aa", much_later);
+        assert!(
+            !s.is_failing_too_fast("aa", much_later + CONNECT_FAILURE_RETRY_DELAY_MS),
+            "a reset count must not still be capped"
+        );
+    }
+
+    #[test]
+    fn a_successful_connect_forgets_the_failures() {
+        let mut s = ConnectionScheduler::default();
+        let mut now = 0;
+        for _ in 0..MAX_CONNECT_FAILURES {
+            s.note_connect_failed("aa", now);
+            now += CONNECT_FAILURE_RETRY_DELAY_MS;
+        }
+        assert!(s.is_failing_too_fast("aa", now));
+
+        s.note_connected("aa");
+        assert!(!s.is_failing_too_fast("aa", now), "success clears the record");
+    }
+
+    #[test]
+    fn failures_are_tracked_per_address() {
+        let mut s = ConnectionScheduler::default();
+        s.note_connect_failed("aa", 0);
+        assert!(s.is_failing_too_fast("aa", 0));
+        assert!(!s.is_failing_too_fast("bb", 0), "an unrelated peer is unaffected");
+    }
     use super::*;
 
     const P1: &str = "AA:BB:CC:DD:EE:01";
@@ -1195,7 +1346,7 @@ mod tests {
         // breaks near-ties, it does not override the radio.
         let mut s = ConnectionScheduler::new();
         for _ in 0..10 {
-            s.note_connect_failed("flaky");
+            s.note_connect_failed("flaky", 0);
         }
         s.note_connect_timeout("flaky", 0);
 
@@ -1226,7 +1377,7 @@ mod tests {
         assert_eq!(spotless, 1_000 + 80 - 1);
 
         for expected in [1i64, 3, 7, 15, 15, 15, 15] {
-            s.note_connect_failed(P1);
+            s.note_connect_failed(P1, 0);
             assert_eq!(spotless - s.score(&c, 0), expected);
         }
     }
@@ -1409,10 +1560,10 @@ mod tests {
     #[test]
     fn pruning_forgets_failure_counts_for_peers_with_nothing_pending() {
         let mut s = ConnectionScheduler::new();
-        s.note_connect_failed(P1);
+        s.note_connect_failed(P1, 0);
         s.note_connect_timeout(P2, 1_000);
         s.enqueue(candidate("queued", -60, 1_000));
-        s.note_connect_failed("queued");
+        s.note_connect_failed("queued", 0);
 
         // P1 has no timeout record and no queued candidate, so it goes; P2's record
         // is still inside the window; "queued" is still in the queue.

@@ -268,7 +268,7 @@ impl BleRuntime {
             Err(error) => {
                 self.state.with(|state| {
                     state.connecting.remove(address);
-                    state.scheduler.note_connect_failed(address);
+                    state.scheduler.note_connect_failed(address, now);
                 });
                 tracing::debug!(target: "mesh::ble", %address, %error, "connect failed");
             }
@@ -502,12 +502,26 @@ impl BleRuntime {
             let update = state
                 .peers
                 .upsert_verified_announce(claimed, &announcement, true, now_ms);
+            // Bind first, always. `rebind_after_verified_direct` refuses an
+            // *unbound* link by design — it exists for the contested case, where a
+            // link already belongs to someone else and a verified direct announce
+            // is the only evidence strong enough to move it. Calling only rebind
+            // for a direct announce therefore never bound a fresh inbound link at
+            // all, which is the normal first-contact case: the peer registered,
+            // no link was bound to it, so `reconcile_connectivity` saw no live
+            // presence and demoted it 8s later — and the next announce arrived as
+            // a reconnect. bitchat binds a peripheral link to the claimed sender
+            // on a direct announce before any signature check
+            // (`BLEService.swift:2516`), so binding is not the guarded part.
+            //
+            // Rebinding still runs afterwards, and is still fully guarded: on a
+            // link we just bound it refuses as `SamePeer`, and on a contested one
+            // `bind_if_unbound` was the no-op instead.
+            state.links.bind_if_unbound(link, claimed);
             if let Some(direct) = direct.as_ref() {
                 state
                     .links
                     .rebind_after_verified_direct(link, direct, now_ms);
-            } else {
-                state.links.bind_if_unbound(link, claimed);
             }
             let authenticated = state.sessions.has_session(claimed);
             if authenticated {
