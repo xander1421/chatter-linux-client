@@ -40,7 +40,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use chatter_mesh_nostr::types::{EventKind, GeohashLevel, NostrEvent};
-use chatter_mesh_nostr::{builders, crypto, event, geohash, identity, wrap};
+use chatter_mesh_nostr::{builders, crypto, event, geohash, identity, pow, wrap};
 
 // ---------------------------------------------------------------------------
 // Loading
@@ -1076,10 +1076,40 @@ fn geohash_message_tag_order() {
         )
         .unwrap();
 
-        assert_eq!(built.tags, vector.tags, "{name}: tag order");
-        assert_eq!(built.id, vector.id, "{name}: event id");
+        // Every geohash message is mined, so the built event carries a trailing
+        // `nonce` tag and its ID commits to that nonce. Our nonce is not
+        // bitchat's — they start the search at a random value — so the built
+        // ID is not a canonical thing to pin. The two properties the vector
+        // exists to prove are pinned separately instead:
+        //
+        //   1. the base tags, in order, are exactly what the vector says;
+        //   2. the NIP-01 ID serialization of those fields still reproduces the
+        //      vector's ID, recomputed here from an unmined copy.
+        let mined = built.tags.last().expect("a nonce tag");
+        assert_eq!(mined[0], "nonce", "{name}: the nonce tag is appended last");
+        let base = &built.tags[..built.tags.len() - 1];
+        assert_eq!(base, vector.tags, "{name}: tag order");
+
+        let unmined = NostrEvent::unsigned(
+            built.pubkey.clone(),
+            built.created_at,
+            EventKind::EphemeralEvent,
+            base.to_vec(),
+            built.content.clone(),
+        );
+        assert_eq!(
+            event::event_id_hex(&unmined).expect("id"),
+            vector.id,
+            "{name}: event id of the unmined fields"
+        );
+
         assert_eq!(built.kind, vector.kind);
         assert!(event::verify_event(&built), "{name}");
+        assert_eq!(
+            pow::difficulty_of(&built).expect("score"),
+            pow::TARGET_BITS,
+            "{name}: the shipped event must meet the difficulty it commits to"
+        );
     }
 }
 

@@ -32,6 +32,7 @@ pub mod error;
 pub mod event;
 pub mod geohash;
 pub mod identity;
+pub mod pow;
 pub mod types;
 pub mod wrap;
 

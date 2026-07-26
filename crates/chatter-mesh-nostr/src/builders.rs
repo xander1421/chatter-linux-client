@@ -19,6 +19,7 @@ use crate::error::NostrError;
 use crate::event::sign_event;
 use crate::geohash;
 use crate::identity::NostrIdentity;
+use crate::pow;
 use crate::types::{EventKind, GeohashLevel, NostrEvent};
 
 /// Build and sign an event under `identity`.
@@ -68,13 +69,21 @@ pub fn geohash_message(
         tags.push(vec!["t".to_string(), "teleport".to_string()]);
     }
 
-    build(
-        identity,
+    // Mined before signing, and after `created_at` is fixed: the nonce commits
+    // to the whole serialized event, so anything changed afterwards voids the
+    // work. bitchat's unmined variant of this event has no production callers —
+    // `createMinedEphemeralGeohashEvent` is what ships — and an unmined event is
+    // rate-limited harder by every bitchat peer and rejected outright by any
+    // relay that enforces NIP-13.
+    let mut event = NostrEvent::unsigned(
+        identity.public_key_hex().to_string(),
         created_at,
         EventKind::EphemeralEvent,
         tags,
         content.to_string(),
-    )
+    );
+    let _mined = pow::mine_in_place(&mut event, pow::TARGET_BITS);
+    sign_event(event, identity.secret())
 }
 
 /// A geohash presence heartbeat (kind 20001).
@@ -246,12 +255,24 @@ mod tests {
         assert!(verify_event(&event));
     }
 
+    /// The tags a geohash message carries before the mined nonce is appended.
+    ///
+    /// Every geohash message is mined (see `pow`), so the nonce tag is always
+    /// last and its value is not predictable — assertions about tag *order* have
+    /// to be made about the prefix.
+    fn base_tags(event: &NostrEvent) -> &[Vec<String>] {
+        let last = event.tags.last().expect("at least the g tag");
+        assert_eq!(last[0], "nonce", "the mined nonce tag is appended last");
+        assert_eq!(last[2], pow::TARGET_BITS.to_string());
+        &event.tags[..event.tags.len() - 1]
+    }
+
     #[test]
     fn geohash_message_tag_order_is_g_then_n_then_t() {
         let event = geohash_message("u4pru", "hi", Some("alice"), true, &identity(), NOW)
             .expect("builds");
         assert_eq!(
-            event.tags,
+            base_tags(&event),
             vec![
                 vec!["g".to_string(), "u4pru".to_string()],
                 vec!["n".to_string(), "alice".to_string()],
@@ -261,12 +282,27 @@ mod tests {
     }
 
     #[test]
+    fn geohash_message_carries_proof_of_work_that_verifies() {
+        // Without it every bitchat peer applies its strict per-sender rate
+        // limit to us, and a NIP-13-enforcing relay refuses the event outright.
+        let event = geohash_message("u4pru", "hi", Some("alice"), false, &identity(), NOW)
+            .expect("builds");
+        assert_eq!(
+            pow::difficulty_of(&event).expect("score"),
+            pow::TARGET_BITS,
+            "the signed event's own ID must meet the difficulty it commits to"
+        );
+        assert!(pow::difficulty_of(&event).expect("score") >= pow::RATE_LIMIT_BYPASS_BITS);
+        assert!(verify_event(&event), "mining must not disturb the signature");
+    }
+
+    #[test]
     fn geohash_message_omits_a_blank_nickname() {
         for nickname in [None, Some(""), Some("   "), Some("\t\n")] {
             let event =
                 geohash_message("u4pru", "hi", nickname, false, &identity(), NOW).expect("builds");
             assert_eq!(
-                event.tags,
+                base_tags(&event),
                 vec![vec!["g".to_string(), "u4pru".to_string()]],
                 "nickname {nickname:?} should produce no n tag"
             );
@@ -285,7 +321,7 @@ mod tests {
     fn geohash_message_omits_the_teleport_tag_when_not_teleported() {
         let event =
             geohash_message("u4pru", "hi", Some("alice"), false, &identity(), NOW).expect("builds");
-        assert_eq!(event.tags.len(), 2);
+        assert_eq!(base_tags(&event).len(), 2);
         assert_eq!(event.tag_value("t"), None);
     }
 
