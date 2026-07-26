@@ -359,10 +359,15 @@ impl ServiceContainer {
                         infra.database.clone(),
                     ),
                 ),
-                sealer: Arc::new(
-                    crate::storage::mesh_store::MeshSealer::from_keyring(&db_path)
-                        .map_err(|e| ContextError::Mesh(e.to_string()))?,
-                ),
+                // Never fatal. `from_keyring` hands back a sealer that reports
+                // why it has no key rather than an error, and `MeshService::start`
+                // declines to start on that basis. A locked keyring used to abort
+                // initialization for the entire client here, so a Secret Service
+                // that did not answer meant nobody could log in — over one
+                // optional feature.
+                sealer: Arc::new(crate::storage::mesh_store::MeshSealer::from_keyring(
+                    &db_path,
+                )),
                 // Relay traffic rides the Tor client the gRPC pool already owns,
                 // on its own isolation group. Without the `onion` feature there is
                 // no connector at all and the mesh runs radio-only.

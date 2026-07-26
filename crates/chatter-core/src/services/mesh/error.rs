@@ -26,6 +26,15 @@ pub enum MeshError {
     #[error("no mesh radio on this platform")]
     NoRadio,
 
+    /// The seal key could not be read, so nothing the mesh retains could be
+    /// written safely.
+    ///
+    /// Distinct from a hard failure on purpose: it is usually a locked keyring,
+    /// which opens later. The mesh declines to start and keeps the existing
+    /// sealed outbox intact rather than generating a new key over it.
+    #[error("the mesh cannot seal what it retains: {0}")]
+    SealerUnavailable(String),
+
     /// Nostr was not configured — no [`RelayConnector`] was supplied, so there
     /// is no way to reach a relay.
     ///

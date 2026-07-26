@@ -161,6 +161,8 @@ pub struct MeshService {
     pending: Mutex<Option<Pending>>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
     running: AtomicBool,
+    /// Set when the sealer holds no key — see [`MeshError::SealerUnavailable`].
+    sealer_unavailable: Option<String>,
 }
 
 impl MeshService {
@@ -194,6 +196,23 @@ impl MeshService {
 
         state.with(|inner| inner.duty_enabled = config.scan_duty_cycle);
 
+        // Probed once, here, by sealing a byte. `Sealer` is a trait object so it
+        // cannot be asked directly, and a probe covers every way a sealer can be
+        // unable to hold a key rather than only the one this crate knows about.
+        // Doing it at construction keeps `start()` cheap and means the reason is
+        // available before the radio is ever touched.
+        let sealer_unavailable = match deps.sealer.seal(b"probe") {
+            Ok(_) => None,
+            Err(error) => {
+                tracing::warn!(
+                    target: "mesh",
+                    %error,
+                    "the mesh cannot seal what it retains; it will not start"
+                );
+                Some(error.to_string())
+            }
+        };
+
         Ok(Self {
             identity,
             config,
@@ -215,7 +234,13 @@ impl MeshService {
             })),
             tasks: Mutex::new(Vec::new()),
             running: AtomicBool::new(false),
+            sealer_unavailable,
         })
+    }
+
+    /// Why the mesh cannot seal what it retains, if it cannot.
+    fn sealer_unavailable_reason(&self) -> Option<String> {
+        self.sealer_unavailable.clone()
     }
 
     /// Start the radio and the relay pool.
@@ -224,6 +249,14 @@ impl MeshService {
     /// carries geohash channels, and a client with no relay connector still
     /// carries the BLE mesh. Neither absence is an error.
     pub async fn start(&self) -> Result<(), MeshError> {
+        // Checked before the radio is touched. A mesh whose sealer has no key
+        // would advertise, connect, and then fail every retained write — a peer
+        // list that looks healthy over a store that cannot keep anything. Better
+        // to stay off and say which key is missing.
+        if let Some(reason) = self.sealer_unavailable_reason() {
+            self.running.store(false, Ordering::SeqCst);
+            return Err(MeshError::SealerUnavailable(reason));
+        }
         if self.running.swap(true, Ordering::SeqCst) {
             return Ok(());
         }
@@ -732,6 +765,9 @@ mod tests {
         }));
 
         MeshService {
+            // The test sealer is a no-op that always succeeds, so there is
+            // nothing to report.
+            sealer_unavailable: None,
             identity,
             identity_store,
             config,

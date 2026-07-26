@@ -198,7 +198,18 @@ impl Storage for MeshStorage {
 /// argue about, and the codebase already uses `XChaCha20Poly1305` elsewhere
 /// (`crypto/dm_crypto.rs`) for the same reason.
 pub struct MeshSealer {
-    cipher: XChaCha20Poly1305,
+    /// `Err` carries the reason the key could not be read.
+    ///
+    /// A sealer that exists but cannot seal is deliberate. The mesh needs its
+    /// key before it can retain anything, but a locked keyring must not stop the
+    /// *app* from starting — the mesh is one optional feature, and failing its
+    /// construction used to abort initialization for the whole client, so a
+    /// Secret Service that did not answer meant nobody could log in.
+    ///
+    /// Refusing here rather than at construction keeps the invariant that
+    /// matters: an unreadable key never leads to a *new* key being generated
+    /// over sealed data that is still perfectly good.
+    cipher: Result<XChaCha20Poly1305, String>,
 }
 
 impl MeshSealer {
@@ -210,8 +221,39 @@ impl MeshSealer {
     pub fn from_key(key: &[u8; KEY_SIZE]) -> Self {
         let key = Key::from(*key);
         Self {
-            cipher: XChaCha20Poly1305::new(&key),
+            cipher: Ok(XChaCha20Poly1305::new(&key)),
         }
+    }
+
+    /// A sealer that cannot seal, carrying why.
+    ///
+    /// [`MeshService::start`](crate::services::mesh::MeshService::start) checks
+    /// this before it touches the radio, so the mesh reports the reason instead
+    /// of coming up and failing every write.
+    #[must_use]
+    pub fn unavailable(reason: impl Into<String>) -> Self {
+        Self {
+            cipher: Err(reason.into()),
+        }
+    }
+
+    /// Whether this sealer holds a key.
+    #[must_use]
+    pub fn is_ready(&self) -> bool {
+        self.cipher.is_ok()
+    }
+
+    /// Why the key is missing, if it is.
+    #[must_use]
+    pub fn unavailable_reason(&self) -> Option<&str> {
+        self.cipher.as_ref().err().map(String::as_str)
+    }
+
+    /// The cipher, or the storage error naming why there is not one.
+    fn cipher(&self, operation: &'static str) -> Result<&XChaCha20Poly1305, StoreError> {
+        self.cipher
+            .as_ref()
+            .map_err(|reason| storage_error(operation, SEAL_KEY_LABEL, reason))
     }
 
     /// Load the seal key from the OS keyring, generating it on first use.
@@ -229,12 +271,28 @@ impl MeshSealer {
     /// generating a fresh key: the old sealed outbox would then be undecryptable
     /// forever, and the caller, seeing a working sealer, would overwrite it. A
     /// locked keyring is temporary; destroying the key is not.
-    pub fn from_keyring(db_path: &Path) -> Result<Self, StoreError> {
+    pub fn from_keyring(db_path: &Path) -> Self {
+        // Infallible by design. Every way this can fail yields a sealer that
+        // reports *why* it has no key, because the alternative — propagating an
+        // error — aborted initialization for the whole client over one optional
+        // feature. What must never happen is generating a *replacement* key: the
+        // existing sealed outbox would become permanently unreadable while
+        // everything looked like it had worked.
+        match Self::acquire(db_path) {
+            Ok(sealer) => sealer,
+            Err(reason) => Self::unavailable(reason),
+        }
+    }
+
+    /// The fallible half of [`from_keyring`](Self::from_keyring). `Err` carries a
+    /// sentence for the user, not a type: every caller turns it into the same
+    /// unavailable sealer.
+    fn acquire(db_path: &Path) -> Result<Self, String> {
         // Development / headless bypass, mirroring `CHATTER_DB_PASSPHRASE`.
         //
         // Without this the mesh cannot start on a box with no Secret Service, and
         // every dev run prompts for a keyring unlock. The key is a 64-char hex
-        // string; anything else is an error rather than a silent fallback, because
+        // string; anything else is refused rather than silently replaced, because
         // quietly generating a different key would make existing sealed blobs
         // undecryptable while looking like it worked.
         //
@@ -242,21 +300,21 @@ impl MeshSealer {
         // CI, exactly as the database passphrase override does, and must not be used
         // to hold a real user's key.
         if let Ok(hex_key) = std::env::var("CHATTER_MESH_SEAL_KEY") {
-            let raw = Zeroizing::new(hex::decode(hex_key.trim()).map_err(|e| {
-                storage_error("env decode", SEAL_KEY_LABEL, e)
-            })?);
+            let raw = Zeroizing::new(
+                hex::decode(hex_key.trim())
+                    .map_err(|e| format!("CHATTER_MESH_SEAL_KEY is not hex: {e}"))?,
+            );
             let key: [u8; KEY_SIZE] = raw.as_slice().try_into().map_err(|_| {
-                storage_error(
-                    "env decode",
-                    SEAL_KEY_LABEL,
-                    format!("CHATTER_MESH_SEAL_KEY must be {KEY_SIZE} bytes of hex"),
+                format!(
+                    "CHATTER_MESH_SEAL_KEY must be {KEY_SIZE} bytes of hex, found {}",
+                    raw.len()
                 )
             })?;
             return Ok(Self::from_key(&key));
         }
 
         let entry = keyring::Entry::new(APP_ID, &Self::entry_username(db_path))
-            .map_err(|e| storage_error("keyring open", SEAL_KEY_LABEL, e))?;
+            .map_err(|e| format!("the OS keyring could not be opened: {e}"))?;
 
         match entry.get_password() {
             Ok(encoded) => {
@@ -264,28 +322,37 @@ impl MeshSealer {
                 let raw = Zeroizing::new(hex::decode(encoded.as_bytes()).map_err(|e| {
                     // A corrupt entry is not "absent". Regenerating here would
                     // throw away the key that the stored blobs were sealed with.
-                    storage_error("keyring decode", SEAL_KEY_LABEL, e)
+                    format!("the stored mesh seal key is not hex: {e}")
                 })?);
                 let key: [u8; KEY_SIZE] = raw.as_slice().try_into().map_err(|_| {
-                    storage_error(
-                        "keyring decode",
-                        SEAL_KEY_LABEL,
-                        format!("expected {KEY_SIZE} key bytes, found {}", raw.len()),
-                    )
+                    format!("expected {KEY_SIZE} key bytes, found {}", raw.len())
                 })?;
                 Ok(Self::from_key(&key))
             }
             Err(keyring::Error::NoEntry) => {
-                let key = Zeroizing::new(random_key()?);
+                // The one case that may generate: there is genuinely nothing
+                // stored, so there is nothing to orphan.
+                let key = Zeroizing::new(
+                    random_key().map_err(|e| format!("no randomness for a new key: {e}"))?,
+                );
                 let encoded = Zeroizing::new(hex::encode(key.as_slice()));
                 // Store before use. A key we sealed with but failed to persist
-                // would read back as garbage after the next restart.
+                // would read back as garbage after the next restart, so a failure
+                // to write it has to mean "no sealer", not "sealer we cannot keep".
                 entry
                     .set_password(&encoded)
-                    .map_err(|e| storage_error("keyring store", SEAL_KEY_LABEL, e))?;
+                    .map_err(|e| format!("a new mesh seal key could not be stored: {e}"))?;
                 Ok(Self::from_key(&key))
             }
-            Err(e) => Err(storage_error("keyring unlock", SEAL_KEY_LABEL, e)),
+            // The keyring is there but would not answer: locked, denied, or no
+            // Secret Service running. Emphatically not a reason to generate a
+            // fresh key.
+            Err(e) => Err(format!(
+                "the mesh seal key could not be read from the OS keyring: {e}. \
+                 The mesh stays off rather than generate a new key over sealed data. \
+                 Unlock the keyring and restart, or set CHATTER_MESH_SEAL_KEY for a \
+                 development run."
+            )),
         }
     }
 
@@ -342,7 +409,7 @@ impl Sealer for MeshSealer {
         let nonce = XNonce::from(nonce_bytes);
 
         let ciphertext = self
-            .cipher
+            .cipher("seal")?
             .encrypt(&nonce, plaintext)
             .map_err(|e| storage_error("seal", SEAL_KEY_LABEL, e))?;
 
@@ -353,13 +420,17 @@ impl Sealer for MeshSealer {
     }
 
     fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, StoreError> {
-        // Every failure below is `Malformed`, which the store reads as "this can
-        // never be read, start empty and overwrite". That is the right call
-        // *here* and only here: this sealer already holds its key by the time it
-        // exists, so a failure is a corrupt blob or one sealed under a key that
-        // is definitively gone (a restore onto a new device), not a lock that
-        // will open later. The "not readable yet" case is handled one level up,
-        // in `from_keyring`, which returns an error instead of a sealer.
+        // A missing key is checked first and reported as a storage error, never
+        // as `Malformed`. The distinction is load-bearing: the store reads
+        // `Malformed` as "this can never be read, start empty and overwrite",
+        // so returning it for a locked keyring would destroy a perfectly good
+        // outbox the moment the Secret Service happened to be unavailable. A
+        // lock opens later; the data does not come back.
+        let cipher = self.cipher("open")?;
+
+        // From here every failure *is* `Malformed`, and only here: the key is in
+        // hand, so what remains is a corrupt blob or one sealed under a key that
+        // is definitively gone (a restore onto a new device).
         let (nonce_bytes, body) = sealed
             .split_at_checked(NONCE_SIZE)
             .ok_or(StoreError::Malformed("mesh seal"))?;
@@ -367,7 +438,7 @@ impl Sealer for MeshSealer {
             .try_into()
             .map_err(|_| StoreError::Malformed("mesh seal"))?;
 
-        self.cipher
+        cipher
             .decrypt(&XNonce::from(nonce), body)
             .map_err(|_| StoreError::Malformed("mesh seal"))
     }
@@ -380,6 +451,51 @@ impl Sealer for MeshSealer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // MARK: an unavailable sealer
+
+    #[test]
+    fn an_unavailable_sealer_refuses_rather_than_pretending() {
+        let sealer = MeshSealer::unavailable("the keyring is locked");
+        assert!(!sealer.is_ready());
+        assert_eq!(sealer.unavailable_reason(), Some("the keyring is locked"));
+        assert!(sealer.seal(b"anything").is_err());
+    }
+
+    #[test]
+    fn an_unavailable_sealer_never_reports_malformed() {
+        // This is the whole reason the distinction exists. `StoreError::Malformed`
+        // means "this can never be read, start empty and overwrite it", so a
+        // locked keyring answering with `Malformed` would destroy a perfectly
+        // good outbox the moment the Secret Service happened to be down.
+        let ready = MeshSealer::from_key(&[0x11; KEY_SIZE]);
+        let sealed = ready.seal(b"retained mail").expect("seals");
+
+        let locked = MeshSealer::unavailable("the keyring is locked");
+        match locked.open(&sealed) {
+            Err(StoreError::Malformed(_)) => {
+                panic!("a locked keyring must not read as unrecoverable data")
+            }
+            Err(_) => {}
+            Ok(_) => panic!("a sealer with no key cannot open anything"),
+        }
+
+        // And the data really was fine all along.
+        assert_eq!(ready.open(&sealed).expect("opens"), b"retained mail");
+    }
+
+    #[test]
+    fn a_corrupt_blob_still_reports_malformed_when_the_key_is_present() {
+        // The other side of the same coin: with a key in hand, an unreadable
+        // blob *is* unrecoverable and must say so, or the store keeps a row it
+        // can never use.
+        let sealer = MeshSealer::from_key(&[0x22; KEY_SIZE]);
+        assert!(matches!(
+            sealer.open(&[0u8; NONCE_SIZE + 4]),
+            Err(StoreError::Malformed(_))
+        ));
+        assert!(matches!(sealer.open(&[]), Err(StoreError::Malformed(_))));
+    }
 
     /// A real SQLCipher database in a temp dir, matching the pattern used by the
     /// repository tests. SQLCipher wants a real path, so this is as close to
