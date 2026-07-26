@@ -48,19 +48,10 @@ pub fn intercept_attachment(ui_ctx: &Arc<ChatterClient>, weak: slint::Weak<MainW
 
     let ui_ctx = ui_ctx.clone();
     tokio::spawn(async move {
-        use chatter_core::media::file_picker::{FileFilter, FilePicker, FilePickerConfig};
-
-        // One file, not many. Each is an independent transfer on a link measured
-        // in single-digit kB/s, so a multi-select would silently queue minutes of
-        // airtime behind one tap.
-        let config = FilePickerConfig::new()
-            .with_title("Send over the mesh")
-            .with_filter(FileFilter::all())
-            .with_filter(FileFilter::images())
-            .with_filter(FileFilter::documents())
-            .with_multiple(false);
-
-        let picked: Vec<PathBuf> = FilePicker::pick_files(config).await;
+        // One file, not many, on both platforms. Each is an independent transfer
+        // on a link measured in single-digit kB/s, so a multi-select would
+        // silently queue minutes of airtime behind one tap.
+        let picked: Vec<PathBuf> = pick_one().await;
         let Some(path) = picked.into_iter().next() else {
             return;
         };
@@ -90,4 +81,34 @@ pub fn intercept_attachment(ui_ctx: &Arc<ChatterClient>, weak: slint::Weak<MainW
     });
 
     true
+}
+
+/// The platform's file picker, restricted to a single file.
+///
+/// The same fork the staging path makes in
+/// [`crate::bin_ui::features::composer::attachments`]: desktop has a native
+/// dialog in `chatter-core`, and on Android that module is `cfg`'d out entirely
+/// in favour of the Storage Access Framework, which needs no permission.
+#[cfg(not(target_os = "android"))]
+async fn pick_one() -> Vec<PathBuf> {
+    use chatter_core::media::file_picker::{FileFilter, FilePicker, FilePickerConfig};
+
+    let config = FilePickerConfig::new()
+        .with_title("Send over the mesh")
+        .with_filter(FileFilter::all())
+        .with_filter(FileFilter::images())
+        .with_filter(FileFilter::documents())
+        .with_multiple(false);
+    FilePicker::pick_files(config).await
+}
+
+#[cfg(target_os = "android")]
+async fn pick_one() -> Vec<PathBuf> {
+    // `"*/*"`, as the staging path uses: the mesh will take any file, and the
+    // size cap is core's to enforce, not the chooser's.
+    crate::platform::android::file_picker::pick_files(&["*/*"])
+        .await
+        .into_iter()
+        .take(1)
+        .collect()
 }

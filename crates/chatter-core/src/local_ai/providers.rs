@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use super::backend::{
     AvailableModel, BackendError, ChatMessage, ChatResponse, GenerateParams, LocalAIBackend,
 };
+use super::anthropic::AnthropicBackend;
 use super::ollama::OllamaBackend;
 use super::openai_compat::OpenAiCompatBackend;
 use super::settings::LocalAISettings;
@@ -32,6 +33,9 @@ pub enum ProviderKind {
     Vllm,
     /// mistralrs in-process engine (compiled with the `local-ai` feature).
     MistralRs,
+    /// Anthropic (Claude) — the one cloud provider. Not detected on this
+    /// machine; enabled by configuring an API key.
+    Anthropic,
 }
 
 impl ProviderKind {
@@ -50,7 +54,20 @@ impl ProviderKind {
             Self::LmStudio => Some("http://localhost:1234"),
             Self::LlamaCpp => Some("http://localhost:8080"),
             Self::Vllm => Some("http://localhost:8000"),
-            Self::MistralRs => None,
+            // Not local servers: in-process engine, and a remote API with its
+            // own fixed endpoint.
+            Self::MistralRs | Self::Anthropic => None,
+        }
+    }
+
+    /// Whether inference on this provider leaves the device.
+    ///
+    /// Load-bearing for [`super::policy`]: DMs and mesh traffic may only use
+    /// providers for which this is `false`.
+    pub fn is_cloud(self) -> bool {
+        match self {
+            Self::Anthropic => true,
+            Self::Ollama | Self::LmStudio | Self::LlamaCpp | Self::Vllm | Self::MistralRs => false,
         }
     }
 
@@ -62,6 +79,7 @@ impl ProviderKind {
             Self::LlamaCpp => "llama.cpp",
             Self::Vllm => "vLLM",
             Self::MistralRs => "Built-in (GPU)",
+            Self::Anthropic => "Anthropic (Claude)",
         }
     }
 
@@ -73,6 +91,7 @@ impl ProviderKind {
             Self::LlamaCpp => "llama-cpp",
             Self::Vllm => "vllm",
             Self::MistralRs => "mistralrs",
+            Self::Anthropic => "anthropic",
         }
     }
 
@@ -84,6 +103,7 @@ impl ProviderKind {
             "llama-cpp" => Some(Self::LlamaCpp),
             "vllm" => Some(Self::Vllm),
             "mistralrs" => Some(Self::MistralRs),
+            "anthropic" => Some(Self::Anthropic),
             _ => None,
         }
     }
@@ -165,6 +185,7 @@ async fn probe_openai_compat(kind: ProviderKind) -> Option<DetectedProvider> {
 pub enum AnyBackend {
     Ollama(OllamaBackend),
     OpenAiCompat(OpenAiCompatBackend),
+    Anthropic(AnthropicBackend),
 }
 
 impl AnyBackend {
@@ -184,7 +205,26 @@ impl AnyBackend {
                     kind.as_str(),
                 )))
             }
+            // No API key configured means no cloud backend. Fail closed rather
+            // than construct a client that 401s on every call.
+            ProviderKind::Anthropic => settings
+                .anthropic_api_key
+                .as_ref()
+                .filter(|k| !k.trim().is_empty())
+                .map(|key| {
+                    Self::Anthropic(AnthropicBackend::new(key, settings.request_timeout))
+                }),
             ProviderKind::MistralRs => None,
+        }
+    }
+
+    /// Whether inference on this backend leaves the device.
+    ///
+    /// Mirrors [`ProviderKind::is_cloud`] for an already-constructed backend.
+    pub fn is_cloud(&self) -> bool {
+        match self {
+            Self::Anthropic(_) => true,
+            Self::Ollama(_) | Self::OpenAiCompat(_) => false,
         }
     }
 }
@@ -194,6 +234,7 @@ impl LocalAIBackend for AnyBackend {
         match self {
             Self::Ollama(b) => b.health_check().await,
             Self::OpenAiCompat(b) => b.health_check().await,
+            Self::Anthropic(b) => b.health_check().await,
         }
     }
 
@@ -206,6 +247,7 @@ impl LocalAIBackend for AnyBackend {
         match self {
             Self::Ollama(b) => b.chat(model, messages, params).await,
             Self::OpenAiCompat(b) => b.chat(model, messages, params).await,
+            Self::Anthropic(b) => b.chat(model, messages, params).await,
         }
     }
 
@@ -213,6 +255,7 @@ impl LocalAIBackend for AnyBackend {
         match self {
             Self::Ollama(b) => b.embed(model, texts).await,
             Self::OpenAiCompat(b) => b.embed(model, texts).await,
+            Self::Anthropic(b) => b.embed(model, texts).await,
         }
     }
 
@@ -220,6 +263,7 @@ impl LocalAIBackend for AnyBackend {
         match self {
             Self::Ollama(b) => b.list_models().await,
             Self::OpenAiCompat(b) => b.list_models().await,
+            Self::Anthropic(b) => b.list_models().await,
         }
     }
 
@@ -227,6 +271,7 @@ impl LocalAIBackend for AnyBackend {
         match self {
             Self::Ollama(b) => b.pull_model(name).await,
             Self::OpenAiCompat(b) => b.pull_model(name).await,
+            Self::Anthropic(b) => b.pull_model(name).await,
         }
     }
 
@@ -234,6 +279,7 @@ impl LocalAIBackend for AnyBackend {
         match self {
             Self::Ollama(b) => b.delete_model(name).await,
             Self::OpenAiCompat(b) => b.delete_model(name).await,
+            Self::Anthropic(b) => b.delete_model(name).await,
         }
     }
 
@@ -241,6 +287,7 @@ impl LocalAIBackend for AnyBackend {
         match self {
             Self::Ollama(b) => b.name(),
             Self::OpenAiCompat(b) => b.name(),
+            Self::Anthropic(b) => b.name(),
         }
     }
 }

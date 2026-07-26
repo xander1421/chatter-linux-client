@@ -91,7 +91,14 @@ class MainActivity : GameActivity() {
 
     private fun copyToCache(uri: Uri): String? {
         return try {
-            val name = queryDisplayName(uri) ?: "attachment_${System.nanoTime()}"
+            // The display name comes from another app's content provider, so it
+            // is untrusted input on a path: "../../x" would resolve out of the
+            // cache dir. Keep the last segment only, and fall back when what is
+            // left cannot name a file.
+            val name = queryDisplayName(uri)
+                ?.substringAfterLast('/')
+                ?.takeIf { it.isNotBlank() && it != "." && it != ".." }
+                ?: "attachment_${System.nanoTime()}"
             val dir = File(cacheDir, "picked").apply { mkdirs() }
             val out = File(dir, name)
             val input = contentResolver.openInputStream(uri) ?: return null

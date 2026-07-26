@@ -303,6 +303,17 @@ impl HttpLocalAIService {
         if let Ok(Some(model)) = repo.get_string("local_ai.embedding_model") {
             settings.embedding_model = model;
         }
+        if let Ok(Some(model)) = repo.get_string("local_ai.cloud_model") {
+            settings.cloud_model = model;
+        }
+        // Cloud API key. Absent → `AnyBackend::for_kind` refuses to build the
+        // Anthropic backend, so the cloud provider stays off until a key is set.
+        if let Ok(Some(key)) = repo.get_string("local_ai.anthropic_api_key") {
+            let key = key.trim().to_string();
+            if !key.is_empty() {
+                settings.anthropic_api_key = Some(key);
+            }
+        }
         if let Ok(false) = repo.get_local_ai_enabled() {
             // Only disable if explicitly set to false
             if repo.get_string("local_ai.enabled").ok().flatten().is_some() {

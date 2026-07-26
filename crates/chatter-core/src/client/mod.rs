@@ -553,8 +553,8 @@ impl ChatterClient {
     /// refuses one. Returns the wire message ID; the row arrives on the mesh
     /// event stream like any other message, carrying the file as an attachment.
     ///
-    /// Anything over the mesh's one-packet budget is refused rather than
-    /// truncated — there is no chunking or resume above the fragmenter.
+    /// Anything over the mesh's one-packet budget is chunked and streamed
+    /// rather than truncated; past `MAX_STREAMED_FILE_BYTES` it is refused.
     #[cfg(feature = "mesh")]
     pub fn mesh_send_file(
         &self,
