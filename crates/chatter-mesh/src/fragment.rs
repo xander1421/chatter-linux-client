@@ -212,6 +212,20 @@ struct Assembly {
     chunks: BTreeMap<u16, Vec<u8>>,
 }
 
+/// A reassembly dropped by [`FragmentAssembler::evict_expired`], and how close it
+/// came to completing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExpiredStream {
+    /// The peer whose fragments these were.
+    pub sender: [u8; SENDER_ID_LEN],
+    /// Distinct fragment indices that arrived.
+    pub received: u16,
+    /// `total` from the fragment that opened the stream.
+    pub expected: u16,
+    /// Whether a targeted REQUEST_SYNC could have recovered it.
+    pub is_broadcast: bool,
+}
+
 /// Bounded inbound fragment reassembly.
 #[derive(Clone, Debug, Default)]
 pub struct FragmentAssembler {
@@ -324,16 +338,31 @@ impl FragmentAssembler {
     /// Drops reassemblies older than [`FRAGMENT_LIFETIME_SECS`], measured from
     /// the stream's first fragment.
     ///
-    /// Returns how many were dropped, so the caller can say so. This layer is
-    /// sans-IO and does not log, but a silent eviction is the difference between
-    /// "the sender is too slow" and "the file vanished": a transfer that misses
-    /// the window leaves no other trace anywhere, on either device. That cost a
-    /// long debugging session once.
-    pub fn evict_expired(&mut self, now_unix_secs: u64) -> usize {
-        let before = self.streams.len();
-        self.streams
-            .retain(|_, assembly| now_unix_secs.saturating_sub(assembly.started_at) <= FRAGMENT_LIFETIME_SECS);
-        before - self.streams.len()
+    /// Returns one [`ExpiredStream`] per dropped reassembly, so the caller can say
+    /// what was lost. This layer is sans-IO and does not log, but a silent
+    /// eviction is the difference between "the sender is too slow" and "the file
+    /// vanished": a transfer that misses the window leaves no other trace
+    /// anywhere, on either device. That cost a long debugging session once.
+    ///
+    /// The progress figures are what make a report actionable. One fragment short
+    /// of `expected` is a sender that was nearly fast enough; two out of seventy
+    /// is a link that dropped, or a peer that stopped. Those want opposite fixes,
+    /// and a count of expired streams cannot tell them apart.
+    pub fn evict_expired(&mut self, now_unix_secs: u64) -> Vec<ExpiredStream> {
+        let mut expired = Vec::new();
+        self.streams.retain(|key, assembly| {
+            if now_unix_secs.saturating_sub(assembly.started_at) <= FRAGMENT_LIFETIME_SECS {
+                return true;
+            }
+            expired.push(ExpiredStream {
+                sender: key.sender,
+                received: assembly.chunks.len() as u16,
+                expected: assembly.total,
+                is_broadcast: assembly.is_broadcast,
+            });
+            false
+        });
+        expired
     }
 
     /// Stream IDs of incomplete *broadcast* reassemblies that have seen no new

@@ -922,6 +922,68 @@ mod tests {
     /// stored messages. The history was on disk and unreachable, which reads as
     /// lost data.
     #[test]
+    fn a_stored_mesh_file_reads_back_the_way_the_ui_resolves_it() {
+        // The UI does not read the attachment out of the message content. It takes
+        // the ids from `Message::attachments` and resolves each one through the
+        // attachment repository — `resolve_attachment` in the display converter —
+        // and renders a card from the metadata it gets back. Anything that breaks
+        // either half of that produces a bubble with a timestamp and no file in
+        // it, while storage, decryption and the digest are all perfectly fine.
+        //
+        // So this asserts the shape the UI actually consumes: ids on the row, and
+        // a repository row behind each id carrying the name and size a card needs.
+        let timeline = temp_timeline();
+        let dir = tempfile::tempdir().expect("temp dir");
+        let source = dir.path().join("clip.bin");
+        let bytes = vec![7u8; 4_096];
+        std::fs::write(&source, &bytes).expect("write");
+
+        let attachment = timeline
+            .store_file_streamed(Some("clip.bin"), Some("application/octet-stream"), &source)
+            .expect("stored");
+
+        let peer = PeerId::from_str("dddddddddddddddd");
+        let conversation = MeshConversation::Room;
+        let message = crate::services::mesh::mapping::inbound_file_message(
+            &conversation,
+            "WIRE-FILE",
+            &peer,
+            attachment,
+            1_700_000_000_000,
+        );
+        timeline
+            .record(&MeshMessage {
+                message,
+                conversation: conversation.clone(),
+                sender: peer.clone(),
+                nickname: "anon".to_string(),
+                is_local: false,
+                sender_verified: true,
+            })
+            .expect("record");
+
+        let history = timeline.history(&conversation, None, 50).expect("history");
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            history[0].attachments,
+            vec![attachment],
+            "the UI resolves ids from this field, not from the message content"
+        );
+
+        // And the id has to lead somewhere: an unresolvable id renders as nothing.
+        let stored = timeline
+            .attachments
+            .get(&attachment)
+            .expect("query")
+            .expect("the row the card is built from must exist");
+        assert_eq!(stored.metadata.name, "clip.bin");
+        assert_eq!(
+            stored.metadata.size, 4_096,
+            "the card shows the plaintext size, not the ciphertext size"
+        );
+    }
+
+    #[test]
     fn two_mesh_messages_in_the_same_millisecond_are_both_stored() {
         // The mesh identifies a message by its wire ID, and nothing else. The
         // server path also treats `(sender, sent_at)` as an identity, via a

@@ -2402,13 +2402,15 @@ impl BleRuntime {
     fn cleanup(&mut self, now_ms: u64, now_s: u64) {
         self.state.with(|state| {
             state.dedup.cleanup(now_s);
-            let evicted = state.fragments.evict_expired(now_s);
-            if evicted > 0 {
+            for expired in state.fragments.evict_expired(now_s) {
                 tracing::warn!(
                     target: "mesh::ble",
-                    streams = evicted,
+                    peer = %hex_encode(&expired.sender),
+                    received = expired.received,
+                    expected = expired.expected,
+                    is_broadcast = expired.is_broadcast,
                     lifetime_secs = chatter_mesh::fragment::FRAGMENT_LIFETIME_SECS,
-                    "incomplete reassemblies expired; a packet was sent but never \
+                    "an incomplete reassembly expired; a packet was sent but never \
                      finished arriving"
                 );
             }

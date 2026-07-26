@@ -14,6 +14,7 @@ use crate::error::ServiceError;
 use crate::local_ai::backend::{
     AvailableModel, BackendError, ChatMessage, ChatResponse, GenerateParams, LocalAIBackend,
 };
+use crate::local_ai::channel_ai;
 use crate::local_ai::embeddings::EmbeddingGenerator;
 use crate::local_ai::model_manager::ModelManager;
 use crate::local_ai::ollama::OllamaBackend;
@@ -271,6 +272,66 @@ impl HttpLocalAIService {
         self.settings_repo.set_string("local_ai.chat_model", model)
     }
 
+    /// Persist the Anthropic API key. Empty clears it (cloud provider off).
+    pub fn set_anthropic_api_key(&self, key: &str) -> Result<(), crate::error::StorageError> {
+        let key = key.trim();
+        if key.is_empty() {
+            self.settings_repo.delete("local_ai.anthropic_api_key")?;
+            return Ok(());
+        }
+        self.settings_repo.set_string("local_ai.anthropic_api_key", key)
+    }
+
+    /// Persist the model used when the active provider is a cloud one.
+    pub fn set_cloud_model(&self, model: &str) -> Result<(), crate::error::StorageError> {
+        self.settings_repo.set_string("local_ai.cloud_model", model)
+    }
+
+    // ==================== Per-conversation AI ====================
+
+    /// Is AI switched on for this conversation? Off unless explicitly enabled.
+    pub fn ai_enabled_for(&self, conversation_id: &str) -> bool {
+        self.settings_repo
+            .get_bool(&channel_ai::enabled_key(conversation_id))
+            .ok()
+            .flatten()
+            .unwrap_or(false)
+    }
+
+    /// Turn AI on or off for one conversation.
+    pub fn set_ai_enabled_for(
+        &self,
+        conversation_id: &str,
+        enabled: bool,
+    ) -> Result<(), crate::error::StorageError> {
+        self.settings_repo
+            .set_bool(&channel_ai::enabled_key(conversation_id), enabled)
+    }
+
+    /// What should actually run for this conversation, after policy.
+    ///
+    /// The single entry point a caller needs: combines the per-conversation
+    /// switch, the global provider, and the mesh/DM policy clamp. A
+    /// `Resolved::Use(_)` here is safe to run; anything else must not.
+    pub fn resolve_ai_for(
+        &self,
+        conversation_id: &str,
+        conversation: &crate::domain::message::ConversationType,
+        delivered_via_mesh: bool,
+    ) -> channel_ai::Resolved {
+        let access = crate::local_ai::policy::ai_access(conversation, delivered_via_mesh);
+        let settings = self.fresh_settings();
+
+        channel_ai::resolve(
+            self.ai_enabled_for(conversation_id),
+            // Provider is a user-level preference, not per-channel; the
+            // override slot stays open for when that changes.
+            None,
+            settings.active_provider,
+            access,
+        )
+    }
+
     /// Re-read settings from the repository (post-change snapshot).
     pub fn fresh_settings(&self) -> LocalAISettings {
         Self::load_settings(&self.settings_repo)
@@ -322,5 +383,103 @@ impl HttpLocalAIService {
         }
 
         settings
+    }
+}
+
+#[cfg(test)]
+mod per_conversation_ai_tests {
+    use super::*;
+    use crate::domain::message::ConversationType;
+    use crate::local_ai::channel_ai::Resolved;
+    use crate::local_ai::providers::ProviderKind;
+    use crate::storage::Database;
+
+    /// Same pattern as the other repository tests: SQLCipher needs a real path.
+    fn service() -> HttpLocalAIService {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Arc::new(
+            Database::open(&dir.path().join("local_ai_test.db"), "testpass").expect("open"),
+        );
+        db.run_migrations().expect("migrations");
+        Box::leak(Box::new(dir));
+
+        let settings_repo = Arc::new(SettingsRepository::new(db.clone()));
+        let vector_repo = Arc::new(VectorRepository::new(db));
+        HttpLocalAIService::new(settings_repo, vector_repo)
+    }
+
+    #[test]
+    fn ai_is_off_for_a_conversation_until_explicitly_enabled() {
+        let svc = service();
+        assert!(!svc.ai_enabled_for("chan-a"));
+        assert_eq!(
+            svc.resolve_ai_for("chan-a", &ConversationType::Channel, false),
+            Resolved::Off
+        );
+    }
+
+    #[test]
+    fn enabling_one_conversation_does_not_enable_another() {
+        let svc = service();
+        svc.set_ai_enabled_for("chan-a", true).expect("set");
+
+        assert!(svc.ai_enabled_for("chan-a"));
+        assert!(!svc.ai_enabled_for("chan-b"));
+
+        assert_eq!(
+            svc.resolve_ai_for("chan-a", &ConversationType::Channel, false),
+            Resolved::Use(ProviderKind::Ollama)
+        );
+        assert_eq!(
+            svc.resolve_ai_for("chan-b", &ConversationType::Channel, false),
+            Resolved::Off
+        );
+    }
+
+    #[test]
+    fn enabled_conversation_still_refuses_mesh_delivered_traffic() {
+        let svc = service();
+        svc.set_ai_enabled_for("chan-a", true).expect("set");
+
+        assert_eq!(
+            svc.resolve_ai_for("chan-a", &ConversationType::Channel, true),
+            Resolved::Off,
+        );
+    }
+
+    #[test]
+    fn enabled_dm_resolves_to_a_local_provider_never_a_cloud_one() {
+        let svc = service();
+        svc.set_ai_enabled_for("dm-1", true).expect("set");
+        // Global provider is the cloud one; the DM must not inherit it.
+        svc.set_active_provider(ProviderKind::Anthropic).expect("set provider");
+
+        match svc.resolve_ai_for("dm-1", &ConversationType::ServerDm, false) {
+            Resolved::Use(p) => panic!("DM resolved to {p:?}"),
+            // No local provider configured anywhere → asks for one, rather
+            // than silently using Anthropic.
+            other => assert_eq!(other, Resolved::NeedsLocalProvider),
+        }
+    }
+
+    #[test]
+    fn toggling_off_again_disables_it() {
+        let svc = service();
+        svc.set_ai_enabled_for("chan-a", true).expect("on");
+        svc.set_ai_enabled_for("chan-a", false).expect("off");
+        assert!(!svc.ai_enabled_for("chan-a"));
+    }
+
+    #[test]
+    fn api_key_round_trips_and_clears() {
+        let svc = service();
+        svc.set_anthropic_api_key("sk-ant-example").expect("set");
+        assert_eq!(
+            svc.fresh_settings().anthropic_api_key.as_deref(),
+            Some("sk-ant-example")
+        );
+
+        svc.set_anthropic_api_key("   ").expect("clear via blank");
+        assert!(svc.fresh_settings().anthropic_api_key.is_none());
     }
 }
