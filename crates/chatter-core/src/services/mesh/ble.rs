@@ -748,6 +748,28 @@ impl BleRuntime {
         let Ok(content) = core::str::from_utf8(&packet.payload) else {
             return;
         };
+        // An empty payload decodes cleanly and is not a message. `send_room` and
+        // `send_dm` both refuse to compose one (`require_content`), and bitchat
+        // refuses on its send side too (`MeshCore.kt:415`, `content.isEmpty()`) —
+        // but neither of us checks on receive, so an empty broadcast from anywhere
+        // became a stored row holding `Text("")`. There is nothing to render in
+        // it: the room showed a bubble with a sender and a timestamp and no body,
+        // which reads as a message that failed to load rather than one that was
+        // never said.
+        //
+        // Whitespace counts as empty for the same reason. This is the one place
+        // the check belongs, because a row, once stored, is what every surface
+        // reads from and no later layer can tell it apart from a message whose
+        // text genuinely went missing.
+        if content.trim().is_empty() {
+            tracing::debug!(
+                target: "mesh::ble",
+                peer = %claimed,
+                bytes = packet.payload.len(),
+                "an empty public message was dropped"
+            );
+            return;
+        }
 
         // The sender is whoever the packet header says, authenticated against
         // the signing key their announce established — there is no self-declared
@@ -2848,6 +2870,51 @@ mod tests {
             !state.with(|inner| inner.peers.info(&distant).expect("known").connected),
             "but not one we can reach on a link of its own"
         );
+    }
+
+    #[tokio::test]
+    async fn an_empty_public_message_is_not_stored_as_a_blank_row() {
+        // An empty payload is valid UTF-8 and decodes without complaint, so it used
+        // to become an ordinary row holding `Text("")`. The room then showed a
+        // bubble with a sender and a timestamp and no body — indistinguishable from
+        // a message whose text failed to load, and impossible to tell apart later
+        // because the row is all any surface has.
+        //
+        // Neither side composes one: `send_room` refuses via `require_content`, and
+        // bitchat refuses on its send path too (`MeshCore.kt:415`). Neither checks
+        // on receive, which is the gap.
+        let (mut runtime, _radio, state) = runtime();
+        let sender = PeerId::from_str("eeeeeeeeeeeeeeee");
+        let identity = register_verified_peer(&state, &sender, "quiet");
+        let mut events = runtime.events.subscribe();
+
+        for payload in [b"".to_vec(), b"   ".to_vec(), b"\n\t".to_vec()] {
+            let packet = signed(&sender, &identity, MessageType::Message, payload, true);
+            runtime.on_public_message(&packet, &sender);
+        }
+
+        assert!(
+            events.try_recv().is_err(),
+            "an empty broadcast is not a message and must not reach the timeline"
+        );
+
+        // The guard is on emptiness alone, not on the sender: a real message from
+        // the same peer still arrives.
+        let packet = signed(
+            &sender,
+            &identity,
+            MessageType::Message,
+            b"still here".to_vec(),
+            true,
+        );
+        runtime.on_public_message(&packet, &sender);
+        match events.try_recv() {
+            Ok(MeshEvent::Message(message)) => assert_eq!(
+                super::super::mapping::text_of(&message.message),
+                Some("still here")
+            ),
+            other => panic!("expected the real message, got {other:?}"),
+        }
     }
 
     #[tokio::test]
