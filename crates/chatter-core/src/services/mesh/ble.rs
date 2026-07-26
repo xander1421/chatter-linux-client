@@ -1972,17 +1972,35 @@ impl BleRuntime {
             }
 
             if congested {
+                tracing::debug!(
+                    target: "mesh::ble",
+                    transfer = %hex_encode(&id),
+                    queued,
+                    cap = CHUNK_PACING_QUEUE_BYTES,
+                    "chunk turn skipped: the write queue is backed up"
+                );
                 continue;
             }
 
             // Rate pacing, on top of the queue check above. The queue check only
             // fires where the radio reports congestion; this one holds in the
             // direction where it never does.
-            if self
+            if let Some(due) = self
                 .files_out
                 .get(&id)
-                .is_some_and(|transfer| now_ms < transfer.next_chunk_ms)
+                .map(|transfer| transfer.next_chunk_ms)
+                .filter(|due| now_ms < *due)
             {
+                // Logged because a transfer that looks stalled and one that is
+                // being paced are indistinguishable from outside, and the whole
+                // reason this pacing exists is that the previous invisible
+                // bottleneck took a night to find.
+                tracing::debug!(
+                    target: "mesh::ble",
+                    transfer = %hex_encode(&id),
+                    wait_ms = due.saturating_sub(now_ms),
+                    "chunk turn skipped: pacing the previous chunk onto the air"
+                );
                 continue;
             }
 
