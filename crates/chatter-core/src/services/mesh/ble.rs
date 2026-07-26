@@ -133,6 +133,14 @@ impl BleRuntime {
         }
         self.state.with(|state| state.radio_running = true);
         self.emit_status();
+        // Our own ID, said once. Every packet on the wire names its sender by
+        // this derivation, so without it an unfamiliar sender in the log cannot
+        // even be ruled out as our own traffic coming back.
+        tracing::info!(
+            target: "mesh::ble",
+            local_peer = %self.identity.peer_id(),
+            "radio up"
+        );
 
         // Carrying anything already in the courier pool matters more than it
         // looks: a device that forgets its pool on restart drops other people's
@@ -489,7 +497,8 @@ impl BleRuntime {
             DIRECT_ANNOUNCE_TTL,
         );
 
-        let (is_new, link_authenticated) = self.state.with(|state| {
+        let (is_new, link_authenticated, first_sighting, reconnected, bound_peer) =
+            self.state.with(|state| {
             let update = state
                 .peers
                 .upsert_verified_announce(claimed, &announcement, true, now_ms);
@@ -504,15 +513,30 @@ impl BleRuntime {
             if authenticated {
                 state.links.mark_noise_authenticated(link, claimed);
             }
-            (update.is_new_peer || update.was_disconnected, authenticated)
+            (
+                update.is_new_peer || update.was_disconnected,
+                authenticated,
+                update.is_new_peer,
+                update.was_disconnected,
+                state.links.peer_for(link).cloned(),
+            )
         });
 
         self.emit_peers();
+        // The two halves are reported separately on purpose. `is_new` is
+        // `first_sighting || reconnected`, and conflating them hides the
+        // interesting case: a peer that keeps *reconnecting* was demoted for
+        // silence between announces, which only happens when no live link is
+        // bound to it. That is a binding problem wearing a discovery problem's
+        // clothes, and one field cannot tell you which you have.
         tracing::debug!(
             target: "mesh::ble",
             peer = %claimed,
             nickname = %announcement.nickname,
-            new_peer = is_new,
+            first_sighting,
+            reconnected,
+            link = %link,
+            bound_to = ?bound_peer,
             "announce accepted"
         );
 
