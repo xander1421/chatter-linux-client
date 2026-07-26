@@ -27,3 +27,7 @@ futures = "0.3"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+# For the `discover` example only: it reaches past the MeshLink façade to the
+# raw discovery stream, which is the whole point of a bring-up tool.
+futures-util = "0.3"
+uuid = "1"

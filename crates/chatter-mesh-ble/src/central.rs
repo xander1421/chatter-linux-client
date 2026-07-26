@@ -70,9 +70,27 @@ const RSSI_FLOOR: i16 = -127;
 const _: () = assert!(RSSI_FLOOR <= -127);
 
 /// The discovery filter for the mesh.
-fn discovery_filter(service: Uuid) -> DiscoveryFilter {
+///
+/// Deliberately carries **no UUID list**, even though filtering by our service
+/// is exactly what it looks like this should do.
+///
+/// Setting `uuids` makes BlueZ stop populating the `RSSI` property. Not for
+/// non-matching devices — for every device, including the matching one. Measured
+/// on hci0 with a phone advertising the mesh service: with no UUID list the
+/// devices report −48, −72, −74, −76, −78; with the list set, the same devices
+/// in the same room report `None`. [`start_scan`] treats a missing RSSI as
+/// "BlueZ knows this device but is not currently seeing it" and skips it, so
+/// with the filter installed **every mesh peer was dropped, always** — the
+/// symptom being a mesh that advertises correctly, scans correctly, and never
+/// discovers anybody.
+///
+/// Nothing is lost by removing it: [`start_scan`] already re-checks the
+/// advertised UUIDs itself, and has to, because BlueZ merges discovery filters
+/// across every client on the bus — a second program scanning unfiltered widens
+/// ours regardless of what we ask for. The filter was never load-bearing; it was
+/// only ever an optimisation, and it cost the whole feature.
+fn discovery_filter(_service: Uuid) -> DiscoveryFilter {
     DiscoveryFilter {
-        uuids: [service].into_iter().collect(),
         // LE only. `Auto` would also run BR/EDR inquiry, which is slower, louder,
         // and cannot find anything we care about.
         transport: DiscoveryTransport::Le,
@@ -320,11 +338,19 @@ mod tests {
     }
 
     #[test]
-    fn the_filter_asks_bluez_for_le_mesh_peers_only() {
+    fn the_filter_asks_bluez_for_le_only_and_never_names_a_uuid() {
+        // The UUID list is the regression this pins. Setting it makes BlueZ stop
+        // reporting RSSI for *every* device, and `start_scan` drops a peer with
+        // no RSSI — so a filter that looks like an optimisation silently made
+        // the mesh unable to discover anyone at all. `start_scan` matches the
+        // service itself, which it must anyway: BlueZ merges filters across bus
+        // clients, so ours is never the only one in effect.
         let filter = discovery_filter(service());
         assert_eq!(filter.transport, DiscoveryTransport::Le);
-        assert_eq!(filter.uuids.len(), 1);
-        assert!(filter.uuids.contains(&service()));
+        assert!(
+            filter.uuids.is_empty(),
+            "a UUID list here suppresses RSSI and costs us every peer"
+        );
     }
 
     #[test]
