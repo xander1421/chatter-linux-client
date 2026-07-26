@@ -18,6 +18,15 @@ export component MessageList inherits Rectangle {
     // Properties
     in property <[MessageItemData]> messages: [];
     in property <bool> loading: false;
+    /// Every message here rode the mesh, so delivery is reported in words
+    /// rather than ticks.
+    in property <bool> is-mesh: false;
+    /// Anything said here goes out in the clear to whoever is listening — the
+    /// mesh room and geohash cells. Mesh DMs are not: those run over Noise.
+    in property <bool> public-broadcast: false;
+    /// The one sentence the empty state makes about privacy. Set by the caller
+    /// so this component never has to know what a geohash cell is.
+    in property <string> privacy-line: "Messages are end-to-end encrypted";
     in property <bool> is-dm: false;  // When true, messages show minimal UI (no avatars/names in DMs)
     in-out property <length> scroll-position: 0;
     in property <int> scroll-to-index: -1;  // Set to message index to scroll to it
@@ -135,21 +144,26 @@ export component MessageList inherits Rectangle {
                 height: Spacing.lg;
             }
 
+            // What is true about this conversation's privacy, which is not the
+            // same sentence everywhere. A mesh room and a geohash cell are
+            // plaintext broadcasts with no recipient to be encrypted *to*;
+            // saying otherwise here, in green, under a lock, is the one error on
+            // this screen that could get somebody hurt.
             HorizontalLayout {
                 alignment: center;
                 spacing: 6px;
 
                 Image {
-                    source: Icons.lock;
+                    source: root.public-broadcast ? Icons.globe : Icons.lock;
                     width: 14px;
                     height: 14px;
-                    colorize: Colors.success;
+                    colorize: root.public-broadcast ? Colors.warning : Colors.success;
                     vertical-alignment: center;
                 }
 
                 Text {
-                    text: "Messages are end-to-end encrypted";
-                    color: Colors.success;
+                    text: root.privacy-line;
+                    color: root.public-broadcast ? Colors.warning : Colors.success;
                     font-size: Typography.sm;
                     vertical-alignment: center;
                 }
@@ -286,6 +300,7 @@ export component MessageList inherits Rectangle {
                 is-system: item.is-system;
                 is-ai: item.is-ai;
                 is-dm: root.is-dm;
+                is-mesh: root.is-mesh;
                 is-call: item.is-call;
                 call-type: item.call-type;
                 call-duration: item.call-duration;

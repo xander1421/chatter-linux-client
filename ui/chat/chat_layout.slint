@@ -382,6 +382,16 @@ export component ChatLayout inherits Rectangle {
             messages: root.messages;
             loading: root.loading-messages;
             is-dm: root.is-dm;
+            is-mesh: MeshGlobal.active-id != "";
+            // A mesh room and a geohash cell are plaintext broadcasts. Only a
+            // mesh DM runs over Noise, so only it keeps the lock.
+            public-broadcast: MeshGlobal.active-kind == "room"
+                || MeshGlobal.active-kind == "geohash";
+            privacy-line: MeshGlobal.active-kind == "room"
+                ? "Anyone in radio range can read this"
+              : MeshGlobal.active-kind == "geohash"
+                ? "Anyone in this cell can read this"
+                : "Messages are end-to-end encrypted";
             current-playing-attachment-id: root.current-playing-attachment-id;
             is-media-playing: root.is-media-playing;
             audio-progress: root.audio-progress;

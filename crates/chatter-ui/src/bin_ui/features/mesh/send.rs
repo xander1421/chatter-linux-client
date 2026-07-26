@@ -55,11 +55,20 @@ pub fn intercept_send(
                 // relay-less build, an invalid cell. Worth saying out loud,
                 // because unlike "no peers nearby" this one means the message
                 // did not leave.
+                //
+                // The composer cleared itself optimistically when the send was
+                // dispatched, so the text is put back: a message that never left
+                // the device must not also disappear from it. Only when the
+                // composer is still empty, so a reply typed in the meantime is
+                // never clobbered.
                 tracing::warn!(%error, "mesh: message not sent");
                 let notice = format!("Not sent: {error}");
-                run_ui!(weak, |w| w
-                    .global::<MeshGlobal>()
-                    .set_notice(notice.clone().into()));
+                run_ui!(weak, |w| {
+                    w.global::<MeshGlobal>().set_notice(notice.clone().into());
+                    if w.get_composer_text().is_empty() {
+                        w.set_composer_text(text.clone().into());
+                    }
+                });
             }
         }
     });

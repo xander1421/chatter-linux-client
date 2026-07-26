@@ -40,13 +40,16 @@ export component MessageItem inherits Rectangle {
     in property <bool> show-sender: true;
     in property <bool> is-dm: false;  // When true, hide avatar/name - just bubbles
     in property <string> delivery-status: "";  // "sent", "delivered", "read" for own messages
-    // Mesh-only delivery states, set by `bin_ui::features::mesh` from
-    // `MeshDelivery`: "waiting" (held here, nothing can carry it yet),
-    // "carried" (a courier or relay drop took a sealed copy), "undelivered"
-    // (left the outbox unacknowledged). Rendered as words, not ticks.
-    property <bool> mesh-delivery: root.delivery-status == "carried"
-                                || root.delivery-status == "waiting"
-                                || root.delivery-status == "undelivered";
+    /// Whether this message went over the mesh. Set by the caller rather than
+    /// inferred from the status string: "sent" is a mesh state too — in fact the
+    /// most common one, since every room and cell message is a broadcast — so a
+    /// string allowlist silently sends the majority of mesh traffic down the
+    /// tick path it exists to avoid.
+    in property <bool> is-mesh: false;
+    // Mesh delivery is rendered as words, never ticks. Over couriers "sent" and
+    // "delivered" can be hours apart, and a tick carries a learned promise
+    // ("this lands in a second") that is wrong here by orders of magnitude.
+    property <bool> mesh-delivery: root.is-mesh && root.delivery-status != "";
 
     // Call message
     in property <bool> is-call: false;
@@ -1055,9 +1058,17 @@ export component MessageItem inherits Rectangle {
                                 // "delivered" are hours apart, and two ticks
                                 // would claim an arrival nobody has confirmed.
                                 if root.mesh-delivery: Text {
+                                    // "sent" is deliberately not reused for a
+                                    // broadcast: a room or cell message has no
+                                    // recipient to acknowledge it, so there is
+                                    // never anything to upgrade it to.
                                     text: root.delivery-status == "carried" ? "carried"
                                         : root.delivery-status == "waiting" ? "waiting"
-                                        : "not delivered";
+                                        : root.delivery-status == "undelivered" ? "not delivered"
+                                        : root.delivery-status == "delivered" ? "delivered"
+                                        : root.delivery-status == "read" ? "read"
+                                        : root.delivery-status == "broadcast" ? "broadcast"
+                                        : "sent";
                                     color: root.delivery-status == "undelivered" ? Colors.text-secondary : Colors.text-muted;
                                     font-size: Typography.xs;
                                     font-italic: true;
@@ -1066,7 +1077,15 @@ export component MessageItem inherits Rectangle {
                                             ? "Handed to a passing device; may arrive later"
                                         : root.delivery-status == "waiting"
                                             ? "Held on this device until something can carry it"
-                                        : "Left the outbox without ever being acknowledged";
+                                        : root.delivery-status == "undelivered"
+                                            ? "Left the outbox without ever being acknowledged"
+                                        : root.delivery-status == "delivered"
+                                            ? "The peer's device acknowledged it"
+                                        : root.delivery-status == "read"
+                                            ? "Read by the peer"
+                                        : root.delivery-status == "broadcast"
+                                            ? "Went out to whoever is in range; nobody acknowledges a broadcast"
+                                        : "Handed to a live link; not yet acknowledged";
                                 }
 
                                 // Delivery status checkmarks

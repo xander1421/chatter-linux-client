@@ -119,9 +119,10 @@ pub fn delivery_label(state: MeshDelivery) -> &'static str {
         MeshDelivery::Read => "read",
         MeshDelivery::Dropped => "undelivered",
         // A broadcast has no recipient to acknowledge it, so there is no state
-        // beyond "it went out". Saying "delivered" would claim an arrival that
-        // nobody ever confirms for the room or a cell.
-        MeshDelivery::Broadcast => "sent",
+        // beyond "it went out", and no later state to be upgraded to. Even
+        // "sent" is borrowed from a one-to-one vocabulary that does not apply:
+        // nobody ever confirms a room or cell message.
+        MeshDelivery::Broadcast => "broadcast",
     }
 }
 

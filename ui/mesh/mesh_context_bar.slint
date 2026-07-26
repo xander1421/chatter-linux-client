@@ -30,10 +30,28 @@ export component MeshContextBar inherits Rectangle {
 
     // Peers, as a count. Never a dot, never red — zero is a normal state of a
     // mesh, not a failure of one.
+    //
+    // The radio being *down* is the exception, and the only thing here that is
+    // actionable: styling it like "none nearby" would hide the one state the
+    // user can do something about behind the one they cannot.
+    property <bool> radio-down: !MeshGlobal.radio-running;
     property <string> peer-line:
-        MeshGlobal.peer-count == 0 ? "none nearby"
+        root.radio-down ? "Bluetooth off"
+      : MeshGlobal.peer-count == 0 ? "none nearby"
       : MeshGlobal.peer-count == 1 ? "1 nearby"
       : MeshGlobal.peer-count + " nearby";
+
+    // A geohash cell does not ride the radio — it is published to Nostr relays,
+    // which are servers reached over the internet. Claiming otherwise here is
+    // the kind of over-promise that gets someone to rely on it offline.
+    property <string> standing-claim:
+        MeshGlobal.active-kind == "geohash"
+            ? (MeshGlobal.relay-count == 0
+                ? "Public cell · no relay connected"
+              : MeshGlobal.relay-count == 1
+                ? "Public cell · carried by 1 relay"
+                : "Public cell · carried by " + MeshGlobal.relay-count + " relays")
+            : "No server, no internet";
 
     // What "sent" means here, which is not what it means anywhere else.
     property <string> delivery-line:
@@ -45,7 +63,11 @@ export component MeshContextBar inherits Rectangle {
                 ? "Nobody is in range. What you send waits to be carried, and may be read hours from now."
                 : "Best-effort: reaches whoever is in range now, and travels further as devices move.");
 
-    height: 46px;
+    // Deliberately not a fixed height. This strip carries the only explanation
+    // of why an empty room is normal, and on a phone a single elided line cuts
+    // that sentence in half — leaving "Nobody is in range" and dropping the part
+    // that says so is expected.
+    min-height: 46px;
     background: Colors.surface.with-alpha(0.7);
 
     // Bottom hairline, matching the other in-chat strips.
@@ -70,7 +92,9 @@ export component MeshContextBar inherits Rectangle {
                 source: Icons.radio;
                 width: 16px;
                 height: 16px;
-                colorize: MeshGlobal.peer-count > 0 ? Colors.glow-cyan : Colors.text-muted;
+                colorize: root.radio-down ? Colors.warning
+                    : MeshGlobal.peer-count > 0 ? Colors.glow-cyan
+                    : Colors.text-muted;
             }
         }
 
@@ -102,12 +126,62 @@ export component MeshContextBar inherits Rectangle {
                 }
             }
 
+            // Split, so that the peer count is never what gets truncated.
+            HorizontalLayout {
+                spacing: 4px;
+                Text {
+                    text: root.standing-claim + " · ";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    vertical-alignment: center;
+                    horizontal-stretch: 0;
+                    overflow: elide;
+                }
+                Text {
+                    text: root.peer-line;
+                    color: root.radio-down ? Colors.warning : Colors.text-muted;
+                    font-size: Typography.xs;
+                    font-weight: root.radio-down ? 600 : 400;
+                    vertical-alignment: center;
+                    horizontal-stretch: 0;
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+
             Text {
-                text: "No server, no internet · " + root.peer-line + " · " + root.delivery-line;
+                text: root.delivery-line;
                 color: Colors.text-muted;
-                font-size: Typography.xxs;
-                vertical-alignment: center;
-                overflow: elide;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+            }
+
+            // A send that failed outright. This is the only place it can be
+            // seen on a phone: the sidebar copy renders inside the expanded
+            // sidebar, which is collapsed by default on a narrow screen — so a
+            // failed send was reported to nobody. Tap to dismiss.
+            if MeshGlobal.notice != "": Rectangle {
+                height: notice-text.preferred-height + 6px;
+                border-radius: Spacing.radius-sm;
+                background: notice-touch.has-hover
+                    ? Colors.warning.with-alpha(0.16)
+                    : Colors.warning.with-alpha(0.10);
+                notice-text := Text {
+                    x: 6px;
+                    y: 3px;
+                    width: parent.width - 12px;
+                    text: MeshGlobal.notice;
+                    color: Colors.warning;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                    accessible-role: text;
+                    accessible-label: MeshGlobal.notice;
+                }
+                notice-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        MeshGlobal.notice = "";
+                    }
+                }
             }
         }
 
@@ -118,7 +192,9 @@ export component MeshContextBar inherits Rectangle {
             horizontal-stretch: 0;
             Rectangle {
                 width: leave-label.preferred-width + Spacing.md;
-                height: 24px;
+                // The control that stops you broadcasting your location should
+                // not be the hardest thing on the screen to hit.
+                height: Spacing.touch-target-min;
                 border-radius: Spacing.radius-sm;
                 background: leave-touch.has-hover ? Colors.surface-hover : transparent;
                 border-width: 1px;
