@@ -1200,23 +1200,42 @@ mod tests {
             fn exit(&self, _: &span::Id) {}
         }
 
+        fn captured_hit(captured: &[(String, String)]) -> bool {
+            captured
+                .iter()
+                .any(|(t, k)| t == "chatter::crypto::decrypt_failure" && k == "attachment")
+        }
+
         let sub = CaptureSub::default();
         let events = sub.events.clone();
 
-        with_default(sub, || {
-            // Trigger an attachment decrypt failure: ciphertext too short.
-            let key = [0u8; KEY_SET_LENGTH];
-            let digest = [0u8; 32];
-            let bad = vec![0u8; 4]; // shorter than MIN_CIPHERTEXT_LENGTH
-            let _ = AttachmentCrypto::decrypt(&bad, &key, &digest, 0);
-        });
+        // Retried, because what is being raced here is process-global and cannot
+        // be locked out from inside one test. `register_callsite` above asks for
+        // per-event evaluation, but tracing caches interest per callsite for the
+        // whole process, and `rebuild_interest_cache` only re-asks at the moment
+        // it is called — another test on another thread can register or rebuild in
+        // the window before our event fires, leaving the callsite cached as
+        // "never" for that one emission. Each attempt is independent and a hit
+        // ends the loop, so this costs nothing on the common path and removes a
+        // failure that reported broken code when only the cache was stale.
+        for _ in 0..8 {
+            let attempt = sub.clone();
+            with_default(attempt, || {
+                tracing::callsite::rebuild_interest_cache();
+                // Trigger an attachment decrypt failure: ciphertext too short.
+                let key = [0u8; KEY_SET_LENGTH];
+                let digest = [0u8; 32];
+                let bad = vec![0u8; 4]; // shorter than MIN_CIPHERTEXT_LENGTH
+                let _ = AttachmentCrypto::decrypt(&bad, &key, &digest, 0);
+            });
+            if captured_hit(&events.lock().unwrap()) {
+                break;
+            }
+        }
 
         let captured = events.lock().unwrap().clone();
-        let hit = captured.iter().any(|(t, k)| {
-            t == "chatter::crypto::decrypt_failure" && k == "attachment"
-        });
         assert!(
-            hit,
+            captured_hit(&captured),
             "expected decrypt_failure event with kind=attachment, got: {captured:?}"
         );
     }

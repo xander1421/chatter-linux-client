@@ -922,6 +922,53 @@ mod tests {
     /// stored messages. The history was on disk and unreachable, which reads as
     /// lost data.
     #[test]
+    fn two_mesh_messages_in_the_same_millisecond_are_both_stored() {
+        // The mesh identifies a message by its wire ID, and nothing else. The
+        // server path also treats `(sender, sent_at)` as an identity, via a
+        // unique index — and `sent_at` here is milliseconds widened to
+        // nanoseconds, so under that rule any two mesh messages from one sender
+        // to one conversation inside the same millisecond were the same row and
+        // the second was dropped by `INSERT OR IGNORE`. Silently: the mesh has no
+        // server echo, so that row was the only copy of the message.
+        //
+        // Two distinct wire IDs, one timestamp, deliberately.
+        let timeline = temp_timeline();
+        let peer = PeerId::from_str("cccccccccccccccc");
+        let conversation = MeshConversation::Dm(peer.clone());
+        let at_ms = 1_700_000_000_123_u64;
+
+        for wire_id in ["WIRE-ONE", "WIRE-TWO"] {
+            let message = crate::services::mesh::mapping::outbound_message(
+                &conversation,
+                wire_id,
+                &peer,
+                "hello",
+                at_ms,
+            );
+            let stored = timeline
+                .record(&MeshMessage {
+                    message,
+                    conversation: conversation.clone(),
+                    sender: peer.clone(),
+                    nickname: "anon".to_string(),
+                    is_local: true,
+                    sender_verified: true,
+                })
+                .expect("record");
+            assert!(stored, "{wire_id} is a distinct message and must be stored");
+        }
+
+        let history = timeline
+            .history(&conversation, None, 50)
+            .expect("history");
+        assert_eq!(
+            history.len(),
+            2,
+            "two wire IDs are two messages, however close together they were sent"
+        );
+    }
+
+    #[test]
     fn a_dm_conversation_survives_a_restart() {
         use crate::storage::Database;
 

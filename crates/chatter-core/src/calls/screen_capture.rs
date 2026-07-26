@@ -77,12 +77,21 @@ impl AsRef<dyn VideoBuffer> for RefBuf<'_> {
 }
 
 /// Check if we're running on Wayland (Linux only, always false on other platforms).
+/// Whether an `XDG_SESSION_TYPE` value names a Wayland session.
+///
+/// Split out from [`is_wayland`] so it can be tested without touching the
+/// environment. The test used to `set_var` its way through the cases, with a
+/// comment asserting that tests run single-threaded — they do not, which is why
+/// `set_var` is unsafe in the first place. Mutating a process-wide variable races
+/// every test running beside it, and this one is read by the capture path.
+fn session_type_is_wayland(session_type: Option<&str>) -> bool {
+    session_type.is_some_and(|value| value.eq_ignore_ascii_case("wayland"))
+}
+
 fn is_wayland() -> bool {
     #[cfg(target_os = "linux")]
     {
-        std::env::var("XDG_SESSION_TYPE")
-            .map(|s| s.to_lowercase() == "wayland")
-            .unwrap_or(false)
+        session_type_is_wayland(std::env::var("XDG_SESSION_TYPE").ok().as_deref())
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -856,31 +865,16 @@ mod tests {
 
     #[test]
     fn test_is_wayland_detection() {
-        // Save original value
-        let original = std::env::var("XDG_SESSION_TYPE").ok();
-
-        // SAFETY: Tests run single-threaded, so env var modification is safe
-        unsafe {
-            // Test Wayland detection
-            std::env::set_var("XDG_SESSION_TYPE", "wayland");
-            assert!(is_wayland(), "Should detect Wayland session");
-
-            std::env::set_var("XDG_SESSION_TYPE", "WAYLAND");
-            assert!(is_wayland(), "Should detect Wayland (case insensitive)");
-
-            // Test X11 detection
-            std::env::set_var("XDG_SESSION_TYPE", "x11");
-            assert!(!is_wayland(), "Should not detect X11 as Wayland");
-
-            std::env::set_var("XDG_SESSION_TYPE", "tty");
-            assert!(!is_wayland(), "Should not detect tty as Wayland");
-
-            // Restore original value
-            match original {
-                Some(v) => std::env::set_var("XDG_SESSION_TYPE", v),
-                None => std::env::remove_var("XDG_SESSION_TYPE"),
-            }
-        }
+        // No environment mutation: the cases go straight to the pure helper, so
+        // this test cannot affect — or be affected by — anything running beside it.
+        assert!(session_type_is_wayland(Some("wayland")), "should detect Wayland");
+        assert!(
+            session_type_is_wayland(Some("WAYLAND")),
+            "should detect Wayland case-insensitively"
+        );
+        assert!(!session_type_is_wayland(Some("x11")), "X11 is not Wayland");
+        assert!(!session_type_is_wayland(Some("tty")), "tty is not Wayland");
+        assert!(!session_type_is_wayland(None), "an unset session type is not Wayland");
     }
 
     #[test]
