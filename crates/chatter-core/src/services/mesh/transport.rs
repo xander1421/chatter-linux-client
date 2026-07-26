@@ -314,7 +314,7 @@ impl CourierDirectory for MeshDirectory {
 pub struct BleTransport {
     state: Arc<MeshState>,
     identity: Arc<MeshIdentity>,
-    commands: UnboundedSender<BleCommand>,
+    commands: Arc<super::CommandBus<BleCommand>>,
 }
 
 impl BleTransport {
@@ -322,7 +322,7 @@ impl BleTransport {
     pub fn new(
         state: Arc<MeshState>,
         identity: Arc<MeshIdentity>,
-        commands: UnboundedSender<BleCommand>,
+        commands: Arc<super::CommandBus<BleCommand>>,
     ) -> Self {
         Self {
             state,
@@ -454,12 +454,15 @@ impl RouterTransport for BleTransport {
 /// Nostr relays, as the router sees them.
 pub struct NostrTransport {
     state: Arc<NostrState>,
-    commands: UnboundedSender<NostrCommand>,
+    commands: Arc<super::CommandBus<NostrCommand>>,
 }
 
 impl NostrTransport {
     #[must_use]
-    pub fn new(state: Arc<NostrState>, commands: UnboundedSender<NostrCommand>) -> Self {
+    pub fn new(
+        state: Arc<NostrState>,
+        commands: Arc<super::CommandBus<NostrCommand>>,
+    ) -> Self {
         Self { state, commands }
     }
 }
@@ -548,9 +551,9 @@ mod tests {
     ) {
         let identity = Arc::new(MeshIdentity::generate(&mut OsRng));
         let state = Arc::new(MeshState::new(identity.peer_id()));
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (bus, rx) = crate::services::mesh::CommandBus::new();
         (
-            BleTransport::new(Arc::clone(&state), identity, tx),
+            BleTransport::new(Arc::clone(&state), identity, bus),
             state,
             rx,
         )
@@ -665,8 +668,8 @@ mod tests {
         mpsc::UnboundedReceiver<NostrCommand>,
     ) {
         let state = Arc::new(NostrState::new());
-        let (tx, rx) = mpsc::unbounded_channel();
-        (NostrTransport::new(Arc::clone(&state), tx), state, rx)
+        let (bus, rx) = crate::services::mesh::CommandBus::new();
+        (NostrTransport::new(Arc::clone(&state), bus), state, rx)
     }
 
     fn nostr_peer() -> PeerId {

@@ -171,6 +171,48 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         });
     }
 
+    // The mesh switch, from the header of any mesh conversation.
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        global.on_set_mesh_on(move |wanted| {
+            let weak = weak.clone();
+            let ui_ctx = ui_ctx.clone();
+            // Optimistic, then corrected: the switch has to move under the
+            // finger, and starting a radio is not instant. `push_status` below
+            // republishes what actually happened.
+            if let Some(w) = weak.upgrade() {
+                w.global::<MeshGlobal>().set_mesh_on(wanted);
+            }
+            tokio::spawn(async move {
+                let outcome = ui_ctx.set_mesh_enabled(wanted).await;
+                let ui_ctx = ui_ctx.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    match outcome {
+                        Ok(()) => {
+                            tracing::info!(wanted, "mesh: switched by the user");
+                            w.global::<MeshGlobal>().set_notice("".into());
+                        }
+                        Err(error) => {
+                            // Put the switch back. A control that stays where it
+                            // was put while the thing it controls did not move is
+                            // worse than one that springs back and says why.
+                            tracing::warn!(%error, wanted, "mesh: could not switch");
+                            let global = w.global::<MeshGlobal>();
+                            global.set_mesh_on(!wanted);
+                            global.set_notice(
+                                format!("Could not turn the mesh {}: {error}",
+                                    if wanted { "on" } else { "off" }).into(),
+                            );
+                        }
+                    }
+                    push_status(&w, &ui_ctx);
+                });
+            });
+        });
+    }
+
     push_status(window, ui_ctx);
     refresh_rows(window, ui_ctx);
     spawn_event_pump(window.as_weak(), ui_ctx.clone());

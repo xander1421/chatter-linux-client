@@ -440,6 +440,57 @@ impl ChatterClient {
         self.mesh().start().await
     }
 
+    /// Stop the mesh: radio down, relays disconnected, runtimes joined.
+    ///
+    /// The service can be started again afterwards — see `CommandBus`, which
+    /// exists so that a stop is not permanent. What is retained stays retained:
+    /// stopping the transport does not discard the timeline, the identity, or the
+    /// outbox, so anything already written is still there when it comes back.
+    #[cfg(feature = "mesh")]
+    pub async fn stop_mesh(&self) {
+        self.mesh().shutdown().await;
+    }
+
+    /// Whether the user wants the mesh on. Defaults to on.
+    ///
+    /// Defaulting to off would make a feature that exists for the moment the
+    /// network fails require a working app to go and enable — which is the one
+    /// situation it is for. So the toggle is opt-*out*, and this returns true
+    /// until somebody says otherwise.
+    #[cfg(feature = "mesh")]
+    #[must_use]
+    pub fn mesh_enabled(&self) -> bool {
+        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+        SettingsRepository::new(self.services.database.clone())
+            .get_bool(keys::MESH_ENABLED)
+            .ok()
+            .flatten()
+            .unwrap_or(true)
+    }
+
+    /// Record the preference and act on it now.
+    ///
+    /// Both halves, deliberately: a toggle that persists without taking effect
+    /// until a restart is a toggle that appears broken, and one that takes effect
+    /// without persisting comes back on by itself. A storage failure is reported
+    /// rather than swallowed, because the setting silently not sticking is worse
+    /// than being told it did not.
+    #[cfg(feature = "mesh")]
+    pub async fn set_mesh_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<(), crate::services::mesh::MeshError> {
+        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+        SettingsRepository::new(self.services.database.clone())
+            .set_bool(keys::MESH_ENABLED, enabled)?;
+        if enabled {
+            self.start_mesh().await
+        } else {
+            self.stop_mesh().await;
+            Ok(())
+        }
+    }
+
     /// Whether the mesh service came up and is still up.
     ///
     /// Not "the radio is on" and not "a peer is in range" — just that the

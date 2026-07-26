@@ -191,10 +191,12 @@ export component ChatLayout inherits Rectangle {
             }
         }
 
-        // Mesh strip — only present while a mesh conversation is open. Carries
-        // the serverless claim, the peer count, the geohash cell being
-        // published, and what "sent" means over couriers.
-        if MeshGlobal.active-id != "": MeshContextBar {
+        // Mesh strip — only while a mesh conversation is open *and* it has
+        // something to say. The serverless claim, the peer count and the cell now
+        // sit in the header on one line; what is left here is the delivery
+        // explanation, which is worth vertical space when the user could be
+        // surprised and is furniture when the mesh is simply working.
+        if MeshGlobal.active-id != "" && MeshGlobal.context-strip-needed: MeshContextBar {
             width: 100%;
             vertical-stretch: 0;
         }

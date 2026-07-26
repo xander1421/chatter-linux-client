@@ -296,10 +296,21 @@ pub async fn app_init() -> AppState {
     // when it matters. A failure is logged and the app continues.
     #[cfg(feature = "mesh")]
     {
-        match client.start_mesh().await {
-            Ok(()) => tracing::info!("mesh: started"),
-            Err(error) => tracing::warn!("mesh: failed to start, continuing without it: {error}"),
+        // The user's own switch, checked here and nowhere else. Off means the
+        // radio never comes up at all this session — not that it starts and is
+        // then stopped, which would advertise this device to everyone in range
+        // for as long as startup takes.
+        if client.mesh_enabled() {
+            match client.start_mesh().await {
+                Ok(()) => tracing::info!("mesh: started"),
+                Err(error) => {
+                    tracing::warn!("mesh: failed to start, continuing without it: {error}")
+                }
+            }
+        } else {
+            tracing::info!("mesh: off by preference; the radio was not started");
         }
+        window.global::<MeshGlobal>().set_mesh_on(client.mesh_enabled());
     }
 
     window.set_is_signed_in(ui_ctx.is_logged_in());

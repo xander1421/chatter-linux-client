@@ -71,6 +71,7 @@ use chatter_mesh_store::outbox::{LinkState, Sealer};
 use chatter_mesh_store::storage::Storage;
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
+use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
@@ -142,9 +143,47 @@ pub struct MeshDeps {
 }
 
 /// Receivers parked between construction and `start`.
-struct Pending {
-    ble: UnboundedReceiver<BleCommand>,
-    nostr: UnboundedReceiver<NostrCommand>,
+/// A command channel to a runtime, whose receiving end can be replaced.
+///
+/// The mesh can be switched off and on again, and `start` spawns fresh runtimes
+/// each time. Their receivers therefore have to be fresh too — a runtime that
+/// exited took its receiver with it, and the senders held by the service *and by
+/// the router* would otherwise point at a channel nobody reads. That was the
+/// shape before this existed: `start` consumed a one-shot `Pending`, so a second
+/// call returned `Ok(())` having started nothing, and the mesh could be stopped
+/// but never resumed.
+///
+/// Swapping the sender behind a lock keeps every holder correct without any of
+/// them knowing a restart happened. Deliberately not a broadcast or a rebuild of
+/// the router: the runtime loops and their shutdown handling are the part that is
+/// hard to get right, and this leaves them untouched.
+pub(crate) struct CommandBus<T> {
+    tx: Mutex<UnboundedSender<T>>,
+}
+
+impl<T> CommandBus<T> {
+    /// A bus and the receiver for its first channel.
+    fn new() -> (Arc<Self>, UnboundedReceiver<T>) {
+        let (tx, rx) = unbounded_channel();
+        (Arc::new(Self { tx: Mutex::new(tx) }), rx)
+    }
+
+    /// Replace the channel, returning the receiver for the new one.
+    ///
+    /// Anything still queued on the old channel is dropped with it. That is
+    /// correct: those commands were addressed to a runtime that has stopped, and
+    /// carrying them across a restart would replay work from a session the user
+    /// ended.
+    fn rebind(&self) -> UnboundedReceiver<T> {
+        let (tx, rx) = unbounded_channel();
+        *self.tx.lock() = tx;
+        rx
+    }
+
+    /// Queue a command for whichever runtime is current.
+    pub(crate) fn send(&self, command: T) -> Result<(), SendError<T>> {
+        self.tx.lock().send(command)
+    }
 }
 
 /// The mesh, composed.
@@ -158,15 +197,14 @@ pub struct MeshService {
     favorites: Arc<MeshFavorites>,
     storage: SharedStorage,
     router: Arc<RouterHandle>,
-    ble: UnboundedSender<BleCommand>,
-    nostr: UnboundedSender<NostrCommand>,
+    ble: Arc<CommandBus<BleCommand>>,
+    nostr: Arc<CommandBus<NostrCommand>>,
     events: MeshEvents,
     /// The message store side of the mesh. Everything the service surfaces has
     /// already been through it by the time a subscriber sees it.
     timeline: Arc<MeshTimeline>,
     radio: Option<Arc<dyn MeshLink>>,
     relay_connector: Option<Arc<dyn RelayConnector>>,
-    pending: Mutex<Option<Pending>>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
     running: AtomicBool,
     /// Set when the sealer holds no key — see [`MeshError::SealerUnavailable`].
@@ -191,8 +229,8 @@ impl MeshService {
         ));
         let events = MeshEvents::new(EVENT_CAPACITY, Arc::clone(&timeline));
 
-        let (ble_tx, ble_rx) = unbounded_channel();
-        let (nostr_tx, nostr_rx) = unbounded_channel();
+        let (ble_bus, ble_rx) = CommandBus::new();
+        let (nostr_bus, nostr_rx) = CommandBus::new();
 
         let router = Arc::new(RouterHandle::spawn(RouterDeps {
             state: Arc::clone(&state),
@@ -201,8 +239,8 @@ impl MeshService {
             storage: Arc::clone(&deps.storage),
             sealer: Arc::clone(&deps.sealer),
             favorites: Arc::clone(&favorites),
-            ble: ble_tx.clone(),
-            nostr: nostr_tx.clone(),
+            ble: Arc::clone(&ble_bus),
+            nostr: Arc::clone(&nostr_bus),
             events: events.clone(),
             bridge_enabled: config.bridge_enabled,
         }));
@@ -235,16 +273,12 @@ impl MeshService {
             identity_store,
             storage: SharedStorage::new(deps.storage),
             router,
-            ble: ble_tx,
-            nostr: nostr_tx,
+            ble: Arc::clone(&ble_bus),
+            nostr: Arc::clone(&nostr_bus),
             events,
             timeline,
             radio: deps.radio_override.or_else(radio::platform_radio),
             relay_connector: deps.relay_connector,
-            pending: Mutex::new(Some(Pending {
-                ble: ble_rx,
-                nostr: nostr_rx,
-            })),
             tasks: Mutex::new(Vec::new()),
             running: AtomicBool::new(false),
             sealer_unavailable,
@@ -273,9 +307,10 @@ impl MeshService {
         if self.running.swap(true, Ordering::SeqCst) {
             return Ok(());
         }
-        let Some(pending) = self.pending.lock().take() else {
-            return Ok(());
-        };
+        // Fresh channels for fresh runtimes. Every holder — this service and the
+        // router — sends through the bus, so none of them has to be told.
+        let ble_rx = self.ble.rebind();
+        let nostr_rx = self.nostr.rebind();
 
         let mut tasks = Vec::new();
 
@@ -290,7 +325,7 @@ impl MeshService {
                 Arc::clone(&self.router),
                 self.storage.clone(),
             );
-            tasks.push(tokio::spawn(runtime.run(pending.ble)));
+            tasks.push(tokio::spawn(runtime.run(ble_rx)));
         } else {
             tracing::info!(
                 target: "mesh",
@@ -311,7 +346,7 @@ impl MeshService {
                 self.events.clone(),
                 Arc::clone(&self.router),
             );
-            tasks.push(tokio::spawn(runtime.run(pending.nostr, relay_events)));
+            tasks.push(tokio::spawn(runtime.run(nostr_rx, relay_events)));
         } else {
             tracing::info!(
                 target: "mesh",
@@ -979,8 +1014,14 @@ mod tests {
         let timeline = timeline::temp_timeline();
         let identity_store = timeline::temp_identity_store();
         let events = MeshEvents::new(EVENT_CAPACITY, Arc::clone(&timeline));
-        let (ble_tx, ble_rx) = unbounded_channel();
-        let (nostr_tx, nostr_rx) = unbounded_channel();
+        let (ble_bus, ble_rx) = CommandBus::new();
+        let (nostr_bus, nostr_rx) = CommandBus::new();
+        // Kept alive rather than dropped. Several tests exercise send paths on a
+        // service they never start, and a channel with no receiver refuses every
+        // send — so dropping these would fail those tests for a reason that has
+        // nothing to do with what they assert. `start` rebinds and does not use
+        // them; they exist only so the bus has somewhere to put a command.
+        Box::leak(Box::new((ble_rx, nostr_rx)));
         let storage: Arc<dyn Storage> = Arc::new(MemoryStorage::new());
         let sealer: Arc<dyn Sealer> = Arc::new(NoopSealer);
 
@@ -991,8 +1032,8 @@ mod tests {
             storage: Arc::clone(&storage),
             sealer: Arc::clone(&sealer),
             favorites: Arc::clone(&favorites),
-            ble: ble_tx.clone(),
-            nostr: nostr_tx.clone(),
+            ble: Arc::clone(&ble_bus),
+            nostr: Arc::clone(&nostr_bus),
             events: events.clone(),
             bridge_enabled: false,
         }));
@@ -1009,19 +1050,61 @@ mod tests {
             favorites,
             storage: SharedStorage::new(storage),
             router,
-            ble: ble_tx,
-            nostr: nostr_tx,
+            ble: ble_bus,
+            nostr: nostr_bus,
             events,
             timeline,
             radio,
             relay_connector: connector,
-            pending: Mutex::new(Some(Pending {
-                ble: ble_rx,
-                nostr: nostr_rx,
-            })),
             tasks: Mutex::new(Vec::new()),
             running: AtomicBool::new(false),
         }
+    }
+
+    #[tokio::test]
+    async fn the_mesh_can_be_stopped_and_started_again() {
+        // What the user's switch needs and what `start` could not do before.
+        // `start` consumed a one-shot `Pending`, so the second call returned
+        // `Ok(())` having started nothing at all: the mesh could be switched off
+        // and never back on, and nothing said so — `is_running` even read true.
+        let radio = MockLink::shared();
+        let service = service(
+            Some(Arc::clone(&radio) as Arc<dyn MeshLink>),
+            Some(Arc::new(LoopbackConnector::new()) as Arc<dyn RelayConnector>),
+        );
+
+        // The runtimes come up on their own tasks, so the radio is up shortly
+        // after `start` returns rather than during it.
+        async fn settle() {
+            tokio::task::yield_now().await;
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+
+        service.start().await.expect("start");
+        settle().await;
+        assert!(service.is_running());
+        assert!(radio.is_started(), "the first start brings the radio up");
+
+        service.shutdown().await;
+        assert!(!service.is_running());
+
+        // The part that used to be a silent no-op.
+        service.start().await.expect("restart");
+        settle().await;
+        assert!(service.is_running(), "a stopped mesh starts again");
+        assert!(
+            radio.is_started(),
+            "and the radio is up again, not merely the flag"
+        );
+
+        // And a command sent after the restart reaches the new runtime rather
+        // than the channel the stopped one took with it.
+        service
+            .send_room("still here")
+            .expect("a send after a restart is routed");
+
+        service.shutdown().await;
+        assert!(!service.is_running());
     }
 
     #[tokio::test]

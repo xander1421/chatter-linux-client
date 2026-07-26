@@ -1,12 +1,19 @@
-// The strip above a mesh conversation.
+// What is left of the strip above a mesh conversation.
 //
-// Four things a server chat never has to say, said once, quietly, in the one
-// place the user is already looking:
+// It used to carry four things: no server and no internet, the peer count, the
+// geohash cell, and what "sent" means over couriers. Three of them fit on one
+// line, and now sit in the header next to the conversation name — three stacked
+// lines above the first message was most of the screen on a phone.
 //
-//   1. this works with no server and no internet;
-//   2. the connectivity signal is a peer count, and zero is normal;
-//   3. exactly which geohash cell is being published with each message;
-//   4. delivery is best-effort and may be deferred by hours.
+// What stays is the fourth, because it is the one that cannot be shortened
+// without changing what it says: an empty mesh room is *normal*, and a message
+// sent into one waits for a carrier rather than failing. Elided to one line it
+// reads "Nobody is in range" and drops the part that explains that is expected.
+//
+// So it is now conditional as well as short. It appears when there is something
+// the user could act on or would otherwise misread — nobody in range, no route
+// to a peer, the radio off, a failed send — and not at all when the mesh is
+// simply working, which is when a permanent explanation is just furniture.
 //
 // Every value here comes from `MeshGlobal`, which Rust fills from
 // `chatter-core`. The bar chooses wording, never facts.
@@ -18,44 +25,14 @@ import { Icons } from "../theme/icons.slint";
 import { MeshGlobal } from "mesh_global.slint";
 
 export component MeshContextBar inherits Rectangle {
-    // What this scope is, in one line.
-    property <string> scope-line:
-        MeshGlobal.active-kind == "geohash"
-            ? "#" + MeshGlobal.active-scope + " · public to everyone in this area"
-      : MeshGlobal.active-kind == "room"
-            ? "Public mesh room · everyone in radio range"
-      : MeshGlobal.active-verified
-            ? "Encrypted one to one · key verified"
-            : "Encrypted one to one · nickname unverified";
 
-    // Peers, as a count. Never a dot, never red — zero is a normal state of a
-    // mesh, not a failure of one.
-    //
-    // The radio being *down* is the exception, and the only thing here that is
-    // actionable: styling it like "none nearby" would hide the one state the
-    // user can do something about behind the one they cannot.
     property <bool> radio-down: !MeshGlobal.radio-running;
-    property <string> peer-line:
-        root.radio-down ? "Bluetooth off"
-      : MeshGlobal.peer-count == 0 ? "none nearby"
-      : MeshGlobal.peer-count == 1 ? "1 nearby"
-      : MeshGlobal.peer-count + " nearby";
-
-    // A geohash cell does not ride the radio — it is published to Nostr relays,
-    // which are servers reached over the internet. Claiming otherwise here is
-    // the kind of over-promise that gets someone to rely on it offline.
-    property <string> standing-claim:
-        MeshGlobal.active-kind == "geohash"
-            ? (MeshGlobal.relay-count == 0
-                ? "Public cell · no relay connected"
-              : MeshGlobal.relay-count == 1
-                ? "Public cell · carried by 1 relay"
-                : "Public cell · carried by " + MeshGlobal.relay-count + " relays")
-            : "No server, no internet";
 
     // What "sent" means here, which is not what it means anywhere else.
     property <string> delivery-line:
-        MeshGlobal.active-kind == "dm"
+        !MeshGlobal.mesh-on
+            ? "The mesh is switched off, so nothing is sent or received over Bluetooth. Earlier messages are still here."
+      : MeshGlobal.active-kind == "dm"
             ? (MeshGlobal.active-reachable
                 ? "Best-effort: sent means handed on, not arrived."
                 : "No route right now. What you send is kept and offered to passing devices — it may arrive hours later.")
@@ -63,11 +40,12 @@ export component MeshContextBar inherits Rectangle {
                 ? "Nobody is in range. What you send waits to be carried, and may be read hours from now."
                 : "Best-effort: reaches whoever is in range now, and travels further as devices move.");
 
-    // Deliberately not a fixed height. This strip carries the only explanation
-    // of why an empty room is normal, and on a phone a single elided line cuts
-    // that sentence in half — leaving "Nobody is in range" and dropping the part
-    // that says so is expected.
-    min-height: 46px;
+    // Still not a fixed height, and still for the original reason: the sentence
+    // wraps to two lines on a narrow screen, and cutting it in half leaves
+    // "Nobody is in range" without the part that says so is expected. What has
+    // changed is that it is one paragraph rather than three stacked rows, so the
+    // floor is a single line instead of three.
+    min-height: 24px;
     background: Colors.surface.with-alpha(0.7);
 
     // Bottom hairline, matching the other in-chat strips.
@@ -102,51 +80,6 @@ export component MeshContextBar inherits Rectangle {
             horizontal-stretch: 1;
             alignment: center;
             spacing: 1px;
-
-            HorizontalLayout {
-                spacing: 6px;
-                Text {
-                    text: root.scope-line;
-                    color: Colors.text-secondary;
-                    font-size: Typography.xs;
-                    font-weight: 600;
-                    vertical-alignment: center;
-                    overflow: elide;
-                    horizontal-stretch: 1;
-                }
-                if MeshGlobal.active-kind == "geohash": VerticalLayout {
-                    alignment: center;
-                    horizontal-stretch: 0;
-                    Image {
-                        source: Icons.globe;
-                        width: 12px;
-                        height: 12px;
-                        colorize: Colors.text-muted;
-                    }
-                }
-            }
-
-            // Split, so that the peer count is never what gets truncated.
-            HorizontalLayout {
-                spacing: 4px;
-                Text {
-                    text: root.standing-claim + " · ";
-                    color: Colors.text-muted;
-                    font-size: Typography.xs;
-                    vertical-alignment: center;
-                    horizontal-stretch: 0;
-                    overflow: elide;
-                }
-                Text {
-                    text: root.peer-line;
-                    color: root.radio-down ? Colors.warning : Colors.text-muted;
-                    font-size: Typography.xs;
-                    font-weight: root.radio-down ? 600 : 400;
-                    vertical-alignment: center;
-                    horizontal-stretch: 0;
-                }
-                Rectangle { horizontal-stretch: 1; }
-            }
 
             Text {
                 text: root.delivery-line;

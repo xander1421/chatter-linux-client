@@ -6,6 +6,7 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+import { NeoActionToggle } from "../components/neo_action_toggle.slint";
 import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 import { MeshGlobal } from "../mesh/mesh_global.slint";
 
@@ -110,6 +111,27 @@ export component ChatHeader inherits Rectangle {
     // server operations; offering them over a transport that reaches no server
     // would be offering something that cannot happen.
     property <bool> is-mesh: MeshGlobal.active-id != "";
+
+    // Mesh status wording. Kept here rather than in the strip below because this
+    // is where it is now shown; the strip's remaining line is the one that has to
+    // wrap, and these are the ones that must not.
+    property <bool> mesh-radio-down: !MeshGlobal.radio-running;
+    property <string> mesh-standing:
+        MeshGlobal.active-kind == "geohash"
+            ? (MeshGlobal.relay-count == 0
+                ? "Public cell · no relay"
+              : MeshGlobal.relay-count == 1
+                ? "Public cell · 1 relay"
+                : "Public cell · " + MeshGlobal.relay-count + " relays")
+      : !MeshGlobal.mesh-on
+            ? "Mesh off"
+            : "No server, no internet";
+    property <string> mesh-peers:
+        !MeshGlobal.mesh-on ? "radio stopped"
+      : root.mesh-radio-down ? "Bluetooth off"
+      : MeshGlobal.peer-count == 0 ? "none nearby"
+      : MeshGlobal.peer-count == 1 ? "1 nearby"
+      : MeshGlobal.peer-count + " nearby";
 
     // Show invite button for channels and private groups only (not DMs, anon DMs, or saved)
     property <bool> show-invite: has-channel && !is-dm && !is-anon-dm && !is-saved && !is-mesh;
@@ -253,6 +275,49 @@ export component ChatHeader inherits Rectangle {
                 min-width: 0px;
             }
 
+            // Mesh status, inline. The strip below the header used to carry three
+            // lines of this; on a phone that was most of the space above the
+            // first message. The facts that are short enough to sit on one line
+            // live here now, and the strip keeps only the sentence that cannot
+            // be shortened without changing what it says.
+            //
+            // The peer count is last and never elided: it is the connectivity
+            // signal for this feature, and the part before it is context.
+            if root.is-mesh: HorizontalLayout {
+                spacing: Spacing.xs;
+                alignment: center;
+                min-width: 0px;
+                Rectangle {
+                    width: 1px;
+                    height: 16px;
+                    background: Colors.text-muted;
+                    y: (parent.height - self.height) / 2;
+                }
+                Text {
+                    text: root.mesh-standing;
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    min-width: 0px;
+                }
+                Text {
+                    text: "·";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    vertical-alignment: center;
+                    horizontal-stretch: 0;
+                }
+                Text {
+                    text: root.mesh-peers;
+                    color: root.mesh-radio-down ? Colors.warning : Colors.text-muted;
+                    font-size: Typography.xs;
+                    font-weight: root.mesh-radio-down ? 600 : 400;
+                    vertical-alignment: center;
+                    horizontal-stretch: 0;
+                }
+            }
+
             // Member count. min-width: 0 + elide so it yields on narrow screens
             // (the members icon in the right section already covers this) instead
             // of forcing the header — and the chat column — past the screen.
@@ -342,6 +407,34 @@ export component ChatHeader inherits Rectangle {
                     clicked => { root.video-call-clicked(); }
                 }
                 // Divider
+                Rectangle {
+                    width: 1px;
+                    height: 20px;
+                    background: Colors.text-muted.with-alpha(0.3);
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+
+            // The mesh switch, where the mesh is — not in a settings screen the
+            // user would have to leave the conversation to find, and would have
+            // to reach through a working app in exactly the situation the mesh
+            // exists for. Off stops the radio; the conversations stay listed and
+            // readable, because they are messages that already arrived.
+            if root.is-mesh: HorizontalLayout {
+                spacing: Spacing.xs;
+                alignment: center;
+                Text {
+                    text: "Mesh";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    vertical-alignment: center;
+                }
+                NeoActionToggle {
+                    checked: MeshGlobal.mesh-on;
+                    glow-mode: "cyan";
+                    accessible-text: "Bluetooth mesh";
+                    toggled(value) => { MeshGlobal.set-mesh-on(value); }
+                }
                 Rectangle {
                     width: 1px;
                     height: 20px;

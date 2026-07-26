@@ -2779,8 +2779,8 @@ mod tests {
             storage: Arc::new(MemoryStorage::new()),
             sealer: Arc::new(NoopSealer),
             favorites: Arc::new(super::super::transport::MeshFavorites::new()),
-            ble: tokio::sync::mpsc::unbounded_channel().0,
-            nostr: tokio::sync::mpsc::unbounded_channel().0,
+            ble: crate::services::mesh::CommandBus::new().0,
+            nostr: crate::services::mesh::CommandBus::new().0,
             events: events.clone(),
             bridge_enabled: false,
         }));

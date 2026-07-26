@@ -39,6 +39,35 @@ export global MeshGlobal {
     // The `mesh` Cargo feature is built in. Everything mesh hangs off this.
     in-out property <bool> enabled: false;
 
+    // The user's own switch, distinct from `enabled` above and from `running`
+    // below. `enabled` is what was compiled; this is what was asked for.
+    //
+    // Turning it off stops the radio and leaves everything else alone: past mesh
+    // conversations stay listed and readable, because they are messages the user
+    // received and switching a transport off is not a reason to hide them. The
+    // context bar already has wording for a mesh with no radio, so the off state
+    // needs no new surface — it says "Bluetooth off", which is now true because
+    // the user turned it off.
+    in-out property <bool> mesh-on: true;
+
+    // Set the switch. Persists the preference and starts or stops the radio.
+    callback set-mesh-on(bool);
+
+    // Whether the context strip below the header is worth any vertical space.
+    //
+    // Derived here rather than inside the strip because the layout has to decide
+    // whether to create it at all, and Slint cannot ask an element that does not
+    // exist yet. The strip earns its room when what the user is about to do could
+    // surprise them — nothing in range, no route to the peer, the radio down, the
+    // mesh switched off, or a send that failed. A working mesh with peers in range
+    // needs no standing caveat: the header already says how many are there.
+    out property <bool> context-strip-needed:
+        MeshGlobal.notice != ""
+        || !MeshGlobal.mesh-on
+        || !MeshGlobal.radio-running
+        || (MeshGlobal.active-kind == "dm" && !MeshGlobal.active-reachable)
+        || (MeshGlobal.active-kind != "dm" && MeshGlobal.peer-count == 0);
+
     // ── Transport, as reported by MeshService ──
     // The mesh service itself came up, so mesh conversations exist and can be
     // opened, read and written to. This is the flag that says the mesh is

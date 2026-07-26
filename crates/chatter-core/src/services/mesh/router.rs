@@ -65,8 +65,8 @@ pub struct RouterDeps {
     pub storage: Arc<dyn Storage>,
     pub sealer: Arc<dyn Sealer>,
     pub favorites: Arc<MeshFavorites>,
-    pub ble: UnboundedSender<BleCommand>,
-    pub nostr: UnboundedSender<NostrCommand>,
+    pub ble: Arc<super::CommandBus<BleCommand>>,
+    pub nostr: Arc<super::CommandBus<NostrCommand>>,
     pub events: MeshEvents,
     /// Whether to park sealed copies on relays when no courier is nearby.
     pub bridge_enabled: bool,
@@ -185,7 +185,7 @@ impl Drop for RouterHandle {
 /// Publishes sealed drops onto Nostr relays.
 struct NostrDropRelay {
     state: Arc<NostrState>,
-    commands: UnboundedSender<NostrCommand>,
+    commands: Arc<super::CommandBus<NostrCommand>>,
 }
 
 impl DropRelay for NostrDropRelay {
@@ -234,7 +234,7 @@ impl DropRelay for NostrDropRelay {
 struct MeshDropSink {
     identity: Arc<MeshIdentity>,
     state: Arc<MeshState>,
-    ble: UnboundedSender<BleCommand>,
+    ble: Arc<super::CommandBus<BleCommand>>,
     events: MeshEvents,
 }
 
