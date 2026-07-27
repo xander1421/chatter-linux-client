@@ -1175,12 +1175,32 @@ impl BleRuntime {
 
     /// One chunk, verified in its own right and written straight to disk.
     fn on_file_chunk(&mut self, packet: &BitchatPacket, claimed: &PeerId) {
+        // Both refusals below were silent, and a chunk refused silently is
+        // indistinguishable from one that never arrived — which is precisely the
+        // case that needs telling apart when a transfer stops progressing while
+        // the sender insists it is serving chunks. Warn rather than debug: the
+        // Android build logs at info, so debug here would still say nothing on the
+        // device where it matters most.
         let Ok(chunk) = FileChunk::decode(&packet.payload) else {
+            tracing::warn!(
+                target: "mesh::ble",
+                peer = %claimed,
+                bytes = packet.payload.len(),
+                "a file chunk arrived that could not be decoded"
+            );
             return;
         };
         let Some((sender, nickname, _verified)) =
             self.authenticate_stream_packet(packet, claimed)
         else {
+            tracing::warn!(
+                target: "mesh::ble",
+                peer = %claimed,
+                transfer = %hex_encode(&chunk.transfer_id),
+                index = chunk.index,
+                "a file chunk was refused: unsigned, or from a peer with no \
+                 announce to check it against"
+            );
             return;
         };
 
@@ -1379,12 +1399,16 @@ impl BleRuntime {
         let Some(transfer) = self.files_out.get_mut(&request.transfer_id) else {
             return;
         };
-        transfer.note_requested(&request.indices);
+        let accepted = transfer.note_requested(&request.indices);
+        // `asked` and `queued` separately, because they can differ: an index the
+        // manifest does not cover is dropped here, and logging only the request
+        // size would report a retransmission that never happened.
         tracing::info!(
             target: "mesh::ble",
             peer = %sender,
             transfer = %hex_encode(&request.transfer_id),
-            chunks = request.indices.len(),
+            asked = request.indices.len(),
+            queued = accepted,
             "retransmitting chunks a receiver asked for"
         );
     }

@@ -850,12 +850,21 @@ impl OutboundTransfer {
     /// An index at or above `cursor` is not evidence of anything: the receiver is
     /// asking for a chunk the first pass has not reached yet, which is ordinary
     /// impatience rather than loss.
-    pub fn note_requested(&mut self, indices: &[u32]) {
+    /// Returns how many of `indices` this transfer can actually serve.
+    ///
+    /// An index the manifest does not cover is dropped, and the count lets the
+    /// caller say so: "asked for 8, queued 8" and "asked for 8, queued 0" are the
+    /// difference between a slow link and a request nobody can answer, and they
+    /// used to log identically.
+    pub fn note_requested(&mut self, indices: &[u32]) -> usize {
+        let mut queued = 0;
         for index in indices {
             if self.manifest.chunk_span(*index).is_some() {
                 self.requested.insert(*index);
+                queued += 1;
             }
         }
+        queued
     }
 
 
