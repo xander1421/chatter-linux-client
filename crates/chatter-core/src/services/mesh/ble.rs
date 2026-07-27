@@ -66,7 +66,7 @@ use super::file_stream::{
 use super::glue::SharedStorage;
 use super::mapping::{self, InboundMessage, MeshConversation, outbound_message};
 use super::router::{RouterCommand, RouterHandle};
-use super::state::{MeshState, NostrState, link_candidates_locked, now_millis, now_secs};
+use super::state::{LinkStateInner, MeshState, NostrState, link_candidates_locked, now_millis, now_secs};
 use super::timeline::MeshEvents;
 use super::transport::BleCommand;
 
@@ -2148,6 +2148,14 @@ impl BleRuntime {
         self.transmit(&packet, None, None).await;
     }
 
+    /// Every *other* link bound to the peer a packet arrived on.
+    fn sibling_links_of(&self, ingress_link: Option<&LinkId>) -> Vec<LinkId> {
+        let Some(ingress) = ingress_link else {
+            return Vec::new();
+        };
+        self.state.with(|state| sibling_links_locked(state, ingress))
+    }
+
     /// Sign a packet over its own preimage, when the caller asked for it.
     fn maybe_sign(&self, mut packet: BitchatPacket, sign: bool) -> BitchatPacket {
         if sign && let Ok(signature) = sign_packet(&self.identity, &packet) {
@@ -2195,10 +2203,27 @@ impl BleRuntime {
             return;
         };
 
+        // Split horizon has to be by *peer*, not only by link. Two devices can hold
+        // two links to each other at once — each having connected outward to the
+        // other — and excluding just the ingress link then leaves the sibling link
+        // to the same peer selected, so a relay sends the packet straight back to
+        // where it came from.
+        //
+        // That is not theoretical. On a two-node mesh it turned every broadcast
+        // into an echo: the sender logged 250 expired reassemblies of *its own*
+        // chunks against 14 real ones, roughly seventeen thousand fragments of its
+        // own traffic coming back and occupying the air the transfer needed.
+        //
+        // `excluded_links` exists for exactly this — its own documentation says
+        // "every other link to the ingress peer" — and nothing had ever populated
+        // it.
+        let siblings = self.sibling_links_of(ingress_link);
+
         let (plan, frames) = {
             let links = self.state.link_candidates();
             let request = OutboundPlanRequest::new(packet, encoded.len(), &links)
                 .with_ingress_link(ingress_link)
+                .with_excluded_links(&siblings)
                 .with_directed_only_peer(directed_peer)
                 .with_direct_announce_ttl(DIRECT_ANNOUNCE_TTL);
             let plan = planner::plan(&request);
@@ -2702,6 +2727,39 @@ impl BleRuntime {
 ///
 /// A free function so the relay path can be spawned: it needs the radio and the
 /// shared state and nothing else from the runtime.
+/// Every *other* link bound to the peer `ingress` is bound to.
+///
+/// Split horizon has to be by peer, not only by link. Two devices can hold two
+/// links to each other at once — each having connected outward to the other — so
+/// excluding just the ingress link leaves the sibling link to the same peer
+/// selected, and the relay sends the packet straight back where it came from.
+///
+/// Measured on a two-node mesh before this existed: the sender logged 250 expired
+/// reassemblies of its *own* chunks against 14 real ones — roughly seventeen
+/// thousand fragments of its own traffic returning to occupy the air its transfer
+/// needed. `excluded_links` exists for exactly this and its own documentation says
+/// so ("every other link to the ingress peer"); nothing had ever populated it.
+///
+/// Empty when the ingress link has no peer bound yet: an unbound link cannot be
+/// known to lead back to the sender, and excluding on a guess would partition the
+/// mesh rather than quiet it.
+fn sibling_links_locked(state: &LinkStateInner, ingress: &LinkId) -> Vec<LinkId> {
+    let Some(peer) = state
+        .links
+        .links()
+        .find(|(id, _)| *id == ingress)
+        .and_then(|(_, link_state)| link_state.peer.clone())
+    else {
+        return Vec::new();
+    };
+    state
+        .links
+        .links()
+        .filter(|(id, link_state)| *id != ingress && link_state.peer.as_ref() == Some(&peer))
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
 async fn transmit_forwarded(
     radio: &Arc<dyn MeshLink>,
     state: &Arc<MeshState>,
@@ -2712,10 +2770,17 @@ async fn transmit_forwarded(
     let Ok(encoded) = codec::encode(packet, padding) else {
         return;
     };
-    let links = state.with(|inner| link_candidates_locked(inner));
+    let (links, siblings) = state.with(|inner| {
+        (
+            link_candidates_locked(inner),
+            sibling_links_locked(inner, ingress),
+        )
+    });
     let request = OutboundPlanRequest::new(packet, encoded.len(), &links)
-        // Split horizon: never send a packet back down the link it arrived on.
+        // Split horizon: never send a packet back down the link it arrived on —
+        // nor down any other link to the same peer, which is what `siblings` adds.
         .with_ingress_link(Some(ingress))
+        .with_excluded_links(&siblings)
         .with_direct_announce_ttl(DIRECT_ANNOUNCE_TTL);
     let plan = planner::plan(&request);
 
@@ -2740,29 +2805,29 @@ async fn transmit_forwarded(
         suborder: priority.suborder,
     };
 
+    // Queued, exactly as `transmit` does, and for the same reason. This path was
+    // still writing frame after frame straight at the radio, so every *relayed*
+    // packet bypassed the pacing — and on a mesh most traffic is relayed. A relay
+    // blasting a 70-fragment chunk as fast as BlueZ accepts it is precisely the
+    // behaviour that lost fragments below the socket in the first place, just
+    // moved one hop along.
     for link in plan.selected.iter() {
         for frame in &frames {
-            match radio.send(link, frame).await {
-                Ok(()) => {}
-                Err(error) if should_buffer(&error) => {
-                    let admitted = state.with(|inner| {
-                        inner.writes.enqueue(
-                            link,
-                            frame.clone(),
-                            write_priority,
-                            PENDING_WRITE_BUFFER_CAP_BYTES,
-                        )
-                    });
-                    if !matches!(admitted, WriteEnqueue::Enqueued { .. }) {
-                        tracing::warn!(
-                            link = %link,
-                            "mesh: outbound write buffer full, packet dropped"
-                        );
-                    }
-                    state.with(|_inner| {
-                    });
-                }
-                Err(_) => {}
+            let admitted = state.with(|inner| {
+                inner.writes.enqueue(
+                    link,
+                    frame.clone(),
+                    write_priority,
+                    PENDING_WRITE_BUFFER_CAP_BYTES,
+                )
+            });
+            if !matches!(admitted, WriteEnqueue::Enqueued { .. }) {
+                tracing::warn!(
+                    target: "mesh::ble",
+                    link = %link,
+                    msg_type = packet.msg_type,
+                    "the outbound queue is full; a relayed frame was dropped"
+                );
             }
         }
     }
@@ -4152,6 +4217,56 @@ mod tests {
             "the sweep stored the file rather than leaving it to expire"
         );
         assert!(restarted.files_in.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_relay_never_sends_a_packet_back_to_the_peer_it_came_from() {
+        // Split horizon by link is not enough. Two devices can hold two links to
+        // each other at once — each having connected outward to the other — and
+        // excluding only the ingress link leaves the sibling link to the same peer
+        // selected, so the relay sends the packet straight back.
+        //
+        // Measured on a two-node mesh before this: the sender logged 250 expired
+        // reassemblies of its *own* chunks against 14 real ones, roughly seventeen
+        // thousand fragments of its own traffic returning to occupy the air its
+        // transfer needed.
+        let (mut runtime, radio, state, _timeline) = runtime_parts();
+        let neighbour = PeerId::from_str("bbbbbbbbbbbbbbbb");
+        let identity = register_verified_peer(&state, &neighbour, "twolinks");
+
+        // Both links to the same peer, as two devices that each dialled the other.
+        let inbound = writable_link(&state, "/mock/they-dialled-us", 512);
+        let sibling = writable_link(&state, "/mock/we-dialled-them", 512);
+        state.with(|inner| {
+            inner.links.bind_if_unbound(&inbound, &neighbour);
+            inner.links.bind_if_unbound(&sibling, &neighbour);
+        });
+
+        // A broadcast from that peer, arriving on one of the two links.
+        let packet = signed(
+            &neighbour,
+            &identity,
+            MessageType::Message,
+            b"worth relaying".to_vec(),
+            true,
+        );
+        runtime.relay(&inbound, &packet, &runtime.identity.peer_id()).await;
+        // `relay` spawns the write behind a collision-avoidance delay, so the
+        // frames are not queued the instant it returns.
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        runtime.drain_writes().await;
+
+        let sent_back: Vec<_> = radio
+            .writes()
+            .into_iter()
+            .filter(|(link, _)| *link == inbound || *link == sibling)
+            .collect();
+        assert!(
+            sent_back.is_empty(),
+            "the only links are to the peer that sent it, so the relay has nowhere \
+             to go — it wrote {} frame(s) back at the sender",
+            sent_back.len()
+        );
     }
 
     #[tokio::test]
