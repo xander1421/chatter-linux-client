@@ -2625,21 +2625,33 @@ impl BleRuntime {
                     tracing::trace!(target: "mesh::ble", %link, %error, "write deferred");
                 }
                 Err(error) => {
-                    // Dropped, and therefore loud. This arm is the one place a
-                    // frame leaves the queue without reaching the air, and it was
-                    // logging at debug — which the Android build does not emit, so
-                    // on a phone it said nothing at all.
+                    // The whole queue for this link goes, not just this frame.
                     //
-                    // Seen on hardware: a sender reporting `asked=5 queued=5` on
-                    // every round while no receiver got a single chunk, with no
-                    // queue-full warning and no skipped turns to explain it. Every
-                    // frame was arriving here and vanishing.
+                    // The error that actually shows up here, now that it is
+                    // logged, is "link is no longer connected": the peer is gone
+                    // and every remaining frame will fail the same way. Draining
+                    // them one per pacing interval would spend 20 ms each to
+                    // discover that — twenty seconds for a single queued chunk —
+                    // while the interval that matters is the one live links are
+                    // waiting for.
+                    //
+                    // A disconnect event already clears the queue via
+                    // `discard_all`; this covers the window where frames were
+                    // queued before the event arrived, which is exactly when a
+                    // transfer is in flight.
+                    let dropped = self.state.with(|state| {
+                        let queued = state.writes.queued_count(&link);
+                        state.writes.discard_all(&link);
+                        queued
+                    });
                     tracing::warn!(
                         target: "mesh::ble",
                         %link,
                         %error,
                         bytes = write.bytes.len(),
-                        "a frame was dropped: the radio refused it and it cannot be retried"
+                        also_discarded = dropped,
+                        "a frame was dropped and the link's queue with it: the radio \
+                         refused it and it cannot be retried"
                     );
                 }
             }
@@ -4239,6 +4251,44 @@ mod tests {
             "the sweep stored the file rather than leaving it to expire"
         );
         assert!(restarted.files_in.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_dead_link_takes_its_whole_queue_with_it() {
+        // Observed on hardware once the drop was logged: the error is "link is no
+        // longer connected", and every remaining frame for that link will fail the
+        // same way. Draining them one per pacing interval spends 20 ms each to
+        // learn that — twenty seconds for one queued chunk — while live links wait
+        // their turn behind it.
+        let (mut runtime, radio, state, _timeline) = runtime_parts();
+        // 512 so the payload below fragments into a queue worth discarding.
+        let link = writable_link(&state, "/mock/doomed", 512);
+        let dir = tempfile::tempdir().expect("temp dir");
+        let source = dir.path().join("doomed.bin");
+        let bytes = body(4_000);
+        std::fs::write(&source, &bytes).expect("write");
+
+        runtime
+            .start_streamed_file("MSG-DEAD", test_manifest([0x3D; 8], &bytes), source)
+            .await;
+        runtime.pump_streamed_files(now_secs()).await;
+        let queued = state.with(|inner| inner.writes.queued_count(&link));
+        assert!(queued > 2, "a chunk is many frames, all of them queued");
+
+        // The radio now fails terminally, as a disconnected link does.
+        radio.set_links_gone(true);
+        runtime.flush_buffered_writes().await;
+
+        assert_eq!(
+            state.with(|inner| inner.writes.queued_count(&link)),
+            0,
+            "one failure is enough to know the rest will fail too"
+        );
+        assert_eq!(
+            radio.write_count(),
+            0,
+            "and nothing reached the air, since the link is gone"
+        );
     }
 
     #[tokio::test]

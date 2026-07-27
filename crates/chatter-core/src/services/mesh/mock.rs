@@ -36,6 +36,7 @@ pub struct MockLink {
     connects: Mutex<Vec<String>>,
     /// Every write is rejected while set, so the backpressure path can be driven.
     reject_writes: AtomicBool,
+    links_gone: AtomicBool,
 }
 
 impl Default for MockLink {
@@ -58,6 +59,7 @@ impl MockLink {
             scan_changes: AtomicUsize::new(0),
             connects: Mutex::new(Vec::new()),
             reject_writes: AtomicBool::new(false),
+            links_gone: AtomicBool::new(false),
         }
     }
 
@@ -115,8 +117,18 @@ impl MockLink {
         self.connects.lock().clone()
     }
 
+    /// Refuse writes with a *retryable* error, as a full controller queue does.
     pub fn set_reject_writes(&self, reject: bool) {
         self.reject_writes.store(reject, Ordering::SeqCst);
+    }
+
+    /// Refuse writes with a *terminal* error, as a disconnected link does.
+    ///
+    /// Distinct from `set_reject_writes` because the two are handled in opposite
+    /// ways and `should_buffer` is what tells them apart: a retryable refusal goes
+    /// back on the queue, a terminal one takes the queue with it.
+    pub fn set_links_gone(&self, gone: bool) {
+        self.links_gone.store(gone, Ordering::SeqCst);
     }
 }
 
@@ -150,6 +162,10 @@ impl MeshLink for MockLink {
     }
 
     fn send(&self, link: &LinkId, bytes: &[u8]) -> BoxFuture<'_, Result<(), LinkError>> {
+        if self.links_gone.load(Ordering::SeqCst) {
+            let id = link.to_string();
+            return Box::pin(async move { Err(LinkError::LinkGone(id)) });
+        }
         if self.reject_writes.load(Ordering::SeqCst) {
             let id = link.to_string();
             return Box::pin(async move { Err(LinkError::WriteRejected(id)) });
