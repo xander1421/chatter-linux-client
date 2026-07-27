@@ -2625,7 +2625,22 @@ impl BleRuntime {
                     tracing::trace!(target: "mesh::ble", %link, %error, "write deferred");
                 }
                 Err(error) => {
-                    tracing::debug!(target: "mesh::ble", %link, %error, "write failed");
+                    // Dropped, and therefore loud. This arm is the one place a
+                    // frame leaves the queue without reaching the air, and it was
+                    // logging at debug — which the Android build does not emit, so
+                    // on a phone it said nothing at all.
+                    //
+                    // Seen on hardware: a sender reporting `asked=5 queued=5` on
+                    // every round while no receiver got a single chunk, with no
+                    // queue-full warning and no skipped turns to explain it. Every
+                    // frame was arriving here and vanishing.
+                    tracing::warn!(
+                        target: "mesh::ble",
+                        %link,
+                        %error,
+                        bytes = write.bytes.len(),
+                        "a frame was dropped: the radio refused it and it cannot be retried"
+                    );
                 }
             }
         }
