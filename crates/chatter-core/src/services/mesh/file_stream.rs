@@ -84,7 +84,10 @@ pub const CHUNK_REQUEST_MIN_QUIET_SECS: u64 = 5;
 /// the two passes over a completed transfer cost the same.
 const IO_CHUNK_BYTES: usize = 256 * 1024;
 
-const STATE_MAGIC: &[u8; 6] = b"CMFT01";
+/// Bumped when the state layout changes. `restore` removes anything it cannot
+/// parse, so an older file is discarded rather than misread — which is the whole
+/// reason the magic carries a version.
+const STATE_MAGIC: &[u8; 6] = b"CMFT02";
 
 /// Where partial transfers live: *beside* the attachments directory, never
 /// inside it.
@@ -838,6 +841,12 @@ impl FileStreamSpool {
         out.extend_from_slice(&(wire.len() as u16).to_be_bytes());
         out.extend_from_slice(wire);
         out.extend_from_slice(&transfer.timestamp_ms.to_be_bytes());
+        // Persisted, so the abandon clock measures real elapsed time rather than
+        // time since the last restart. Stamping it fresh on resume let a transfer
+        // whose sender is long gone survive indefinitely: every restart moved its
+        // deadline an hour further out, and it went on asking for chunks nobody
+        // holds, every 45 seconds, for as long as the app kept being reopened.
+        out.extend_from_slice(&transfer.last_progress_secs.to_be_bytes());
         out.extend_from_slice(transfer.received.as_bytes());
 
         let mut file = File::create(&path).map_err(io)?;
@@ -868,6 +877,7 @@ impl FileStreamSpool {
             .ok()?
             .to_string();
         let timestamp_ms = reader.u64_be().ok()?;
+        let last_progress_secs = reader.u64_be().ok()?;
         let received = ChunkBitmap::from_bytes(reader.take_rest(), manifest.chunk_count)?;
         let present_on_disk = received.present();
 
@@ -888,12 +898,15 @@ impl FileStreamSpool {
             // Deliberately not the persisted time. A transfer resumed at startup
             // gets a fresh quiet window, so the first thing a restart does is not
             // to fire a retransmit request at a peer it has not even discovered
-            // Stamped now, not zero. A resumed transfer gets a full quiet
-            // window before it asks for anything — so a restart does not open
-            // with a retransmit request at a peer it has not discovered yet —
-            // and, just as importantly, is not immediately stale to
-            // `abandon_stale`, which is what used to delete it outright.
-            last_progress_secs: now_secs,
+            // The persisted value, so `abandon_stale` sees how long this
+            // transfer has *really* been without progress. Zero here used to
+            // delete every resumed transfer on the first tick; `now_secs` then
+            // went too far the other way and made a dead one immortal across
+            // restarts. The recorded time is the only one that is true.
+            last_progress_secs,
+            // The request clock is still stamped fresh, and for its own reason: a
+            // restart should not open by firing a retransmit request at a peer it
+            // has not discovered yet.
             last_request_secs: now_secs,
             // A resumed transfer has no idea whether its peer is still there, so
             // it starts at the floor and finds out.
@@ -1074,13 +1087,26 @@ mod tests {
         indices: impl IntoIterator<Item = u32>,
         sender: &PeerId,
     ) -> Vec<ChunkOutcome> {
+        feed_at(spool, manifest, bytes, indices, sender, 100)
+    }
+
+    /// `feed` with the arrival time spelled out, for the tests that care when a
+    /// chunk landed rather than only that it did.
+    fn feed_at(
+        spool: &mut FileStreamSpool,
+        manifest: &FileManifest,
+        bytes: &[u8],
+        indices: impl IntoIterator<Item = u32>,
+        sender: &PeerId,
+        now_secs: u64,
+    ) -> Vec<ChunkOutcome> {
         indices
             .into_iter()
             .map(|index| {
                 let (offset, len) = manifest.chunk_span(index).expect("in range");
                 let slice = &bytes[offset as usize..offset as usize + len];
                 spool
-                    .accept_chunk(&ID, index, slice, sender, 100)
+                    .accept_chunk(&ID, index, slice, sender, now_secs)
                     .expect("accepted")
             })
             .collect()
@@ -1185,36 +1211,58 @@ mod tests {
     }
 
     #[test]
-    fn a_resumed_transfer_survives_the_first_tick_after_a_restart() {
-        // Resume used to stamp `last_progress_secs: 0`, which `abandon_stale`
-        // reads as "no progress since the epoch". The transfer was therefore
-        // discarded — file, bitmap and all — on the first tick after startup, so
-        // resumability worked in every test that never restarted and failed at
-        // the one thing it exists for.
-        let (mut spool, dir) = spool();
+    fn resume_keeps_the_real_progress_clock_rather_than_restarting_it() {
+        // Two failures live here, in opposite directions, and the persisted time
+        // is what avoids both.
+        //
+        // Resume once stamped `last_progress_secs: 0`, which `abandon_stale` reads
+        // as "no progress since the epoch" — so every resumed transfer was deleted
+        // on the first tick after startup, and resumability failed at the one
+        // thing it exists for.
+        //
+        // Stamping `now` instead fixed that and created the opposite leak: the
+        // abandon deadline moved an hour further out on every restart, so a
+        // transfer whose sender was long gone became immortal, asking for chunks
+        // nobody holds every 45 seconds for as long as the app kept being
+        // reopened.
+        let now = 1_000_000u64;
+
+        // Recent progress: still alive after a restart.
+        let (mut recent, dir) = spool();
         let bytes = body(9_000);
         let manifest = manifest_for(&bytes, 1_024);
         let sender = peer("cccccccccccccccc");
-        spool
-            .begin(manifest.clone(), sender.clone(), "WIRE-R".into(), 5, 10)
+        recent
+            .begin(manifest.clone(), sender.clone(), "WIRE-R".into(), 5, now - 60)
             .unwrap();
-        feed(&mut spool, &manifest, &bytes, [0, 1, 2], &sender);
-        drop(spool);
+        feed_at(&mut recent, &manifest, &bytes, [0, 1, 2], &sender, now - 60);
+        drop(recent);
 
-        let now = 1_000_000u64;
         let mut restarted = FileStreamSpool::new(dir);
         assert_eq!(restarted.restore(now), 1, "it comes back off disk");
-
-        // The tick the app runs immediately after startup.
         restarted.abandon_stale(now, TRANSFER_ABANDON_SECS);
         let transfer = restarted
             .get(&ID)
-            .expect("a transfer resumed a moment ago has not gone an hour without progress");
+            .expect("a minute without progress is not an hour");
         assert_eq!(transfer.received.present(), 3, "and its chunks are still there");
 
-        // It is still abandoned once it really has been quiet for an hour.
-        restarted.abandon_stale(now + TRANSFER_ABANDON_SECS + 1, TRANSFER_ABANDON_SECS);
-        assert!(restarted.get(&ID).is_none(), "stale still means stale");
+        // Long-dead progress: abandoned on resume, however many restarts it took
+        // to get here.
+        let (mut stale_spool, old_dir) = spool();
+        stale_spool
+            .begin(manifest.clone(), sender.clone(), "WIRE-OLD".into(), 5, 10)
+            .unwrap();
+        feed_at(&mut stale_spool, &manifest, &bytes, [0], &sender, 10);
+        drop(stale_spool);
+
+        let mut reopened = FileStreamSpool::new(old_dir);
+        assert_eq!(reopened.restore(now), 1);
+        reopened.abandon_stale(now, TRANSFER_ABANDON_SECS);
+        assert!(
+            reopened.get(&ID).is_none(),
+            "a transfer dead for a fortnight does not get another hour just for \
+             being reopened"
+        );
     }
 
     #[test]
