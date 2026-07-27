@@ -203,7 +203,22 @@ pub struct MeshService {
     /// The message store side of the mesh. Everything the service surfaces has
     /// already been through it by the time a subscriber sees it.
     timeline: Arc<MeshTimeline>,
-    radio: Option<Arc<dyn MeshLink>>,
+    /// A fixed radio to use instead of the platform's, for tests.
+    ///
+    /// Production leaves this `None` and [`start`](Self::start) builds a fresh one
+    /// each time, because a stopped link layer cannot be restarted: `AndroidLink`
+    /// refuses with "this link layer has been stopped; construct a new AndroidLink
+    /// to restart". Holding one radio for the life of the service made the mesh
+    /// switchable off and then never back on — the service restarted, the runtime
+    /// spawned, and the radio it was handed declined.
+    ///
+    /// Found on hardware rather than in a test, because `MockLink::start` always
+    /// succeeds and latches no stopped state, so the mock was more forgiving than
+    /// either real link layer.
+    radio_override: Option<Arc<dyn MeshLink>>,
+    /// Whether this platform has a radio at all, which is a different question
+    /// from whether one is running.
+    has_radio: bool,
     relay_connector: Option<Arc<dyn RelayConnector>>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
     running: AtomicBool,
@@ -280,7 +295,8 @@ impl MeshService {
             nostr: Arc::clone(&nostr_bus),
             events,
             timeline,
-            radio: deps.radio_override.or_else(radio::platform_radio),
+            has_radio: deps.radio_override.is_some() || radio::platform_radio().is_some(),
+            radio_override: deps.radio_override,
             relay_connector: deps.relay_connector,
             tasks: Mutex::new(Vec::new()),
             running: AtomicBool::new(false),
@@ -317,7 +333,12 @@ impl MeshService {
 
         let mut tasks = Vec::new();
 
-        if let Some(radio) = self.radio.clone() {
+        // Fresh per start, never reused: see `radio_override`.
+        let radio = self
+            .radio_override
+            .clone()
+            .or_else(radio::platform_radio);
+        if let Some(radio) = radio {
             let runtime = BleRuntime::new(
                 radio,
                 Arc::clone(&self.state),
@@ -494,7 +515,7 @@ impl MeshService {
     /// local and remote messages, so a row cannot be built two different ways.
     pub fn send_room(&self, text: &str) -> Result<String, MeshError> {
         let content = Self::require_content(text)?;
-        if self.radio.is_none() {
+        if !self.has_radio {
             return Err(MeshError::NoRadio);
         }
         let message_id = new_message_id();
@@ -541,7 +562,7 @@ impl MeshService {
     ///
     /// [`send_file_streamed`]: Self::send_file_streamed
     pub fn send_file(&self, path: &Path) -> Result<String, MeshError> {
-        if self.radio.is_none() {
+        if !self.has_radio {
             return Err(MeshError::NoRadio);
         }
         // Against the file's own length first, so a multi-gigabyte pick is
@@ -843,7 +864,7 @@ impl MeshService {
 
     /// Announce our identity now, outside the normal cadence.
     pub fn announce_now(&self) -> Result<(), MeshError> {
-        if self.radio.is_none() {
+        if !self.has_radio {
             return Err(MeshError::NoRadio);
         }
         self.ble
@@ -951,7 +972,7 @@ impl MeshService {
         if self.nostr_state.knows_peer(peer) {
             return self.relay_connector.is_some();
         }
-        self.radio.is_some() && peer.to_routing_bytes().is_some()
+        self.has_radio && peer.to_routing_bytes().is_some()
     }
 
     fn nickname_for(&self, peer: &PeerId) -> String {
@@ -1057,7 +1078,8 @@ mod tests {
             nostr: nostr_bus,
             events,
             timeline,
-            radio,
+            has_radio: radio.is_some(),
+            radio_override: radio,
             relay_connector: connector,
             tasks: Mutex::new(Vec::new()),
             running: AtomicBool::new(false),

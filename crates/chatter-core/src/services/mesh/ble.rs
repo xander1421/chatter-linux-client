@@ -2828,8 +2828,16 @@ impl BleRuntime {
         self.events.send(MeshEvent::Status(status));
     }
 
+    /// Report something that went wrong without stopping the mesh.
+    ///
+    /// Warn, not debug. Every message that reaches here is an abnormal condition
+    /// already judged worth telling the user about, so it is worth telling a log
+    /// reader too — and the Android build emits info and above, which meant the
+    /// most detailed explanation of a failure was invisible on the device where
+    /// the failure was being reported. "the radio would not start: …" was written
+    /// at debug and read by nobody.
     fn degraded(&self, message: String) {
-        tracing::debug!(target: "mesh::ble", "{message}");
+        tracing::warn!(target: "mesh::ble", "{message}");
         self.events.send(MeshEvent::Degraded(message));
     }
 }

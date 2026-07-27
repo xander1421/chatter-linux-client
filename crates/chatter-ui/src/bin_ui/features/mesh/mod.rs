@@ -191,8 +191,13 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let Some(w) = weak.upgrade() else { return };
                     match outcome {
                         Ok(()) => {
+                            // Deliberately does not clear the notice. Turning the
+                            // mesh on returns as soon as the service accepts the
+                            // request — the radio itself comes up later, inside the
+                            // spawned runtime — so a failure to start arrives
+                            // *after* this point and clearing here would erase the
+                            // one explanation the user was going to get.
                             tracing::info!(wanted, "mesh: switched by the user");
-                            w.global::<MeshGlobal>().set_notice("".into());
                         }
                         Err(error) => {
                             // Put the switch back. A control that stays where it
