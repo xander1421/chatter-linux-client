@@ -67,6 +67,19 @@ pub const TRANSFER_ABANDON_SECS: u64 = 3600;
 /// stalled transfer is noticed while the sender is probably still in range.
 pub const CHUNK_REQUEST_QUIET_SECS: u64 = 45;
 
+/// Shortest gap between asking a peer for chunks, and where a transfer starts.
+///
+/// [`CHUNK_REQUEST_QUIET_SECS`] is the *ceiling*, not the cadence. Starting there
+/// made the tail of a transfer cost far more than the air did: measured on a real
+/// 60-chunk file, one round recovered 49 chunks in about 45 seconds, and the last
+/// handful then took several minutes — one 45-second wait each, almost all of it
+/// silence. The link was never the limit; the wait was.
+///
+/// Five seconds is comfortably longer than the gap between chunks of a stream that
+/// is actually flowing, so a transfer in progress still never interrupts itself to
+/// ask for what is already on its way.
+pub const CHUNK_REQUEST_MIN_QUIET_SECS: u64 = 5;
+
 /// Read size for hashing and copying. Matches `encrypt_file_to_file`'s window, so
 /// the two passes over a completed transfer cost the same.
 const IO_CHUNK_BYTES: usize = 256 * 1024;
@@ -278,6 +291,16 @@ pub struct InboundTransfer {
     pub timestamp_ms: u64,
     pub received: ChunkBitmap,
     pub last_progress_secs: u64,
+    /// How long this transfer currently waits between requests.
+    ///
+    /// Starts at [`CHUNK_REQUEST_MIN_QUIET_SECS`] and doubles, up to the ceiling,
+    /// each time a request produces nothing — and drops straight back to the floor
+    /// the moment one produces a chunk. A peer that is answering should be asked
+    /// again promptly; a peer that is gone should be asked rarely, and the two are
+    /// only distinguishable by whether the last ask worked.
+    pub request_backoff_secs: u64,
+    /// Chunks present when the last request went out, to judge whether it worked.
+    pub present_at_last_request: u32,
     /// When chunks were last asked for, so a re-request waits out the quiet
     /// period like the first one did.
     ///
@@ -449,6 +472,8 @@ impl FileStreamSpool {
             // A new transfer has never been asked for, so the first request is
             // gated only by the progress clock.
             last_request_secs: 0,
+            request_backoff_secs: CHUNK_REQUEST_MIN_QUIET_SECS,
+            present_at_last_request: 0,
         };
 
         // Sized up front, so the file's length is the file's length from the
@@ -609,6 +634,7 @@ impl FileStreamSpool {
     /// a quiet period enforced by remembering to record the request is a quiet
     /// period that stops working the first time someone forgets. Returning a
     /// transfer *is* asking for it, so the two happen together.
+    /// `quiet_secs` is the ceiling on the per-transfer backoff, not the interval.
     pub fn stalled(
         &mut self,
         now_secs: u64,
@@ -620,10 +646,30 @@ impl FileStreamSpool {
             if transfer.received.is_complete() {
                 continue;
             }
+
+            // Judge the previous request before deciding on the next. Anything
+            // arriving since then means the peer is answering, so go back to
+            // asking promptly; nothing means back off, so a peer that has left
+            // is not shouted at every few seconds for an hour.
+            if transfer.last_request_secs > 0 {
+                if transfer.received.present() > transfer.present_at_last_request {
+                    transfer.request_backoff_secs = CHUNK_REQUEST_MIN_QUIET_SECS;
+                } else {
+                    transfer.request_backoff_secs = transfer
+                        .request_backoff_secs
+                        .saturating_mul(2)
+                        .clamp(CHUNK_REQUEST_MIN_QUIET_SECS, quiet_secs.max(CHUNK_REQUEST_MIN_QUIET_SECS));
+                }
+            }
+            let wait = transfer
+                .request_backoff_secs
+                .clamp(CHUNK_REQUEST_MIN_QUIET_SECS, quiet_secs.max(CHUNK_REQUEST_MIN_QUIET_SECS));
+
             // Quiet on both clocks: nothing has arrived *and* nothing has been
-            // asked for recently. The second is what bounds the request rate.
-            if now_secs.saturating_sub(transfer.last_progress_secs) < quiet_secs
-                || now_secs.saturating_sub(transfer.last_request_secs) < quiet_secs
+            // asked for recently. The first stops a transfer interrupting a stream
+            // that is already flowing; the second bounds the request rate.
+            if now_secs.saturating_sub(transfer.last_progress_secs) < wait
+                || now_secs.saturating_sub(transfer.last_request_secs) < wait
             {
                 continue;
             }
@@ -632,6 +678,7 @@ impl FileStreamSpool {
                 continue;
             }
             transfer.last_request_secs = now_secs;
+            transfer.present_at_last_request = transfer.received.present();
             asking.push((transfer.manifest.transfer_id, missing));
         }
         asking
@@ -766,6 +813,7 @@ impl FileStreamSpool {
             .to_string();
         let timestamp_ms = reader.u64_be().ok()?;
         let received = ChunkBitmap::from_bytes(reader.take_rest(), manifest.chunk_count)?;
+        let present_on_disk = received.present();
 
         // The partial file has to be there, at the length the manifest declares.
         // A bitmap describing a file that is gone, or a differently sized one,
@@ -791,6 +839,10 @@ impl FileStreamSpool {
             // `abandon_stale`, which is what used to delete it outright.
             last_progress_secs: now_secs,
             last_request_secs: now_secs,
+            // A resumed transfer has no idea whether its peer is still there, so
+            // it starts at the floor and finds out.
+            request_backoff_secs: CHUNK_REQUEST_MIN_QUIET_SECS,
+            present_at_last_request: present_on_disk,
         })
     }
 }
@@ -981,6 +1033,61 @@ mod tests {
     // -- bitmap ------------------------------------------------------------
 
     #[test]
+    fn the_request_gap_starts_short_and_only_grows_when_asking_stops_working() {
+        // The tail of a transfer used to cost far more than the air did. Measured
+        // on a real 60-chunk file: one round recovered 49 chunks in about 45
+        // seconds, and the last handful then took several minutes — a full 45
+        // second wait each, nearly all of it silence. The link was never the
+        // limit, the fixed interval was.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut spool = FileStreamSpool::new(dir.path().to_path_buf());
+        let bytes = body(4_096);
+        let manifest = manifest_for(&bytes, 1_024);
+        let sender = PeerId::from_str("aaaaaaaaaaaaaaaa");
+        spool.begin(manifest.clone(), sender.clone(), "WIRE".into(), 0, 0);
+
+        // First ask comes after the floor, not the ceiling.
+        let mut now = CHUNK_REQUEST_MIN_QUIET_SECS;
+        assert_eq!(
+            spool.stalled(now, CHUNK_REQUEST_QUIET_SECS, 8).len(),
+            1,
+            "a transfer with nothing arriving is asked about within seconds"
+        );
+
+        // A request that produces nothing backs off, repeatedly, up to the ceiling.
+        let mut gaps = Vec::new();
+        let mut last_asked = now;
+        for _ in 0..8 {
+            now += 1;
+            while spool.stalled(now, CHUNK_REQUEST_QUIET_SECS, 8).is_empty() {
+                now += 1;
+                assert!(now < 10_000, "it must keep asking eventually");
+            }
+            gaps.push(now - last_asked);
+            last_asked = now;
+        }
+        assert!(
+            gaps.windows(2).all(|w| w[1] >= w[0]),
+            "each fruitless ask waits at least as long as the last: {gaps:?}"
+        );
+        assert_eq!(
+            *gaps.last().expect("asked"),
+            CHUNK_REQUEST_QUIET_SECS,
+            "and it settles at the ceiling rather than growing without bound"
+        );
+
+        // A chunk arriving means the peer is answering, so go back to asking
+        // promptly instead of waiting out a ceiling earned while it was silent.
+        feed(&mut spool, &manifest, &bytes, [0], &sender);
+        let after_progress = now + CHUNK_REQUEST_MIN_QUIET_SECS + 1;
+        assert_eq!(
+            spool.stalled(after_progress, CHUNK_REQUEST_QUIET_SECS, 8).len(),
+            1,
+            "progress resets the gap to the floor — this is the several minutes saved"
+        );
+    }
+
+    #[test]
     fn a_resumed_transfer_survives_the_first_tick_after_a_restart() {
         // Resume used to stamp `last_progress_secs: 0`, which `abandon_stale`
         // reads as "no progress since the epoch". The transfer was therefore
@@ -1014,13 +1121,17 @@ mod tests {
     }
 
     #[test]
-    fn a_stalled_transfer_is_not_re_requested_within_the_quiet_period() {
+    fn a_transfer_that_never_answers_settles_at_the_quiet_period_ceiling() {
         // `stalled` used to consult one clock: the last chunk to *arrive*. A
         // transfer receiving nothing never advances that, so it was stalled
         // forever and the caller — which runs every tick — emitted a signed
         // 64-index request twice a second for as long as the transfer existed.
         // Measured on hardware at 2/s for minutes, against a link already too
         // busy to deliver the chunks being asked for.
+        //
+        // Nothing arrives here, so the backoff saturates almost immediately and
+        // this covers the ceiling. The floor and the reset-on-progress are in
+        // `the_request_gap_starts_short_and_only_grows_when_asking_stops_working`.
         let dir = tempfile::tempdir().expect("temp dir");
         let mut spool = FileStreamSpool::new(dir.path().to_path_buf());
         let bytes = vec![3u8; 4_096];
