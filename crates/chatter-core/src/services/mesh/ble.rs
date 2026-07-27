@@ -94,6 +94,9 @@ const TICK: Duration = Duration::from_millis(500);
 /// on retry latency, not a rate: the loop only arms it while frames are queued.
 const WRITE_PACING_DELAY: Duration = Duration::from_millis(20);
 
+/// How often to report achieved frame throughput while there is traffic.
+const THROUGHPUT_REPORT_INTERVAL_MS: u64 = 10_000;
+
 /// The TTL an announce still carries when it has not been relayed.
 ///
 /// Only ever a *hint*: the TTL is excluded from the signature preimage so relays
@@ -147,6 +150,17 @@ pub struct BleRuntime {
     /// Chunked transfers being sent, keyed by transfer id. Each holds a path and
     /// a cursor, never the file's bytes.
     files_out: std::collections::BTreeMap<TransferId, OutboundTransfer>,
+    /// Frames actually put on the air since the last throughput report.
+    ///
+    /// The one number this feature turns on and nothing was measuring. Chunk
+    /// pacing allows one frame per `WRITE_PACING_DELAY`, so 50 a second — but the
+    /// drain runs from a `select!` arm that competes with radio events and the
+    /// tick, so what it *achieves* is a different question. Derived from the
+    /// receiver, a 2 MB transfer came to about 13 frames a second, and whether
+    /// that is the link's ceiling or the loop's was unanswerable from the logs.
+    frames_written: std::sync::atomic::AtomicU64,
+    /// When the last throughput report went out.
+    last_throughput_report_ms: u64,
 }
 
 impl BleRuntime {
@@ -187,6 +201,8 @@ impl BleRuntime {
             // manifest arrives so that manifest resumes rather than restarts.
             files_in: FileStreamSpool::restored(),
             files_out: std::collections::BTreeMap::new(),
+            frames_written: std::sync::atomic::AtomicU64::new(0),
+            last_throughput_report_ms: 0,
         }
     }
 
@@ -2385,6 +2401,8 @@ impl BleRuntime {
         let now_ms = now_millis();
         let now_s = now_secs();
 
+        self.report_throughput(now_ms);
+
         // Scan duty cycle. Scanning is the expensive half of BLE, so it runs
         // intermittently while advertising stays up continuously.
         let configured_duty = self.config.scan_duty_cycle;
@@ -2564,6 +2582,47 @@ impl BleRuntime {
         }
     }
 
+    /// Say how fast frames are actually reaching the air, while that is in doubt.
+    ///
+    /// Pacing allows one frame per [`WRITE_PACING_DELAY`] — fifty a second — but
+    /// the drain runs from a `select!` arm competing with radio events and the
+    /// tick, so the achieved rate is a separate question from the permitted one.
+    /// A 2 MB transfer worked out at roughly 13 frames a second when derived from
+    /// the receiver, and nothing in either log could say whether that was the
+    /// link's ceiling or the loop's.
+    ///
+    /// Only while something is queued or in flight, so a quiet mesh stays quiet,
+    /// and at info because the question usually comes up on a phone, where debug
+    /// is not emitted.
+    fn report_throughput(&mut self, now_ms: u64) {
+        let queued = self.state.with(|state| state.writes.total_queued_bytes());
+        let busy = queued > 0 || !self.files_out.is_empty();
+        if !busy {
+            // Reset the window so the first report after a quiet spell measures
+            // the transfer rather than the silence before it.
+            self.frames_written
+                .store(0, std::sync::atomic::Ordering::Relaxed);
+            self.last_throughput_report_ms = now_ms;
+            return;
+        }
+        let elapsed = now_ms.saturating_sub(self.last_throughput_report_ms);
+        if elapsed < THROUGHPUT_REPORT_INTERVAL_MS {
+            return;
+        }
+        let frames = self
+            .frames_written
+            .swap(0, std::sync::atomic::Ordering::Relaxed);
+        self.last_throughput_report_ms = now_ms;
+        tracing::info!(
+            target: "mesh::ble",
+            frames,
+            per_second = frames * 1_000 / elapsed.max(1),
+            ceiling_per_second = 1_000 / WRITE_PACING_DELAY.as_millis().max(1) as u64,
+            queued_bytes = queued,
+            "frames on the air"
+        );
+    }
+
     /// Put everything queued on the air at once, ignoring the pacing interval.
     ///
     /// Tests only. Sending now queues, and the queue drains one frame per link per
@@ -2616,7 +2675,10 @@ impl BleRuntime {
 
         for (link, write) in next {
             match self.radio.send(&link, &write.bytes).await {
-                Ok(()) => {}
+                Ok(()) => {
+                    self.frames_written
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
                 Err(error) if should_buffer(&error) => {
                     // The radio does push back on some platforms. Put it back at
                     // the head and try again on the next interval.
