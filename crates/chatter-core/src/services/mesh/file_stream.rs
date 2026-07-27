@@ -323,6 +323,8 @@ pub enum ManifestOutcome {
     /// A repeat of a manifest we are already working on. Manifests are
     /// re-broadcast on the announce cadence, so this is the common case.
     Unchanged { present: u32, total: u32 },
+    /// A manifest for a transfer that already finished. Ignored.
+    AlreadyComplete,
 }
 
 /// What a chunk did.
@@ -346,14 +348,54 @@ pub enum ChunkOutcome {
 pub struct FileStreamSpool {
     dir: PathBuf,
     transfers: BTreeMap<TransferId, InboundTransfer>,
+    completed: std::collections::VecDeque<TransferId>,
 }
 
+/// How many finished transfer ids to remember. Enough to cover a sender's
+/// manifest repeats for every file in a burst, small enough to be free.
+const MAX_REMEMBERED_COMPLETIONS: usize = 64;
+
 impl FileStreamSpool {
+    /// Transfer ids finished recently, so a re-broadcast manifest is not
+    /// mistaken for a new transfer.
+    ///
+    /// A sender repeats the manifest on the announce cadence for as long as it
+    /// holds the transfer open, and those repeats keep arriving after the file is
+    /// complete. By then the transfer is gone from `transfers` — finished and
+    /// cleared — so `begin` saw a manifest it did not recognise and started the
+    /// whole download again. The `already_stored` guard downstream cannot catch
+    /// it either: that keys on the manifest *packet's* dedup id, which is
+    /// different for every re-broadcast.
+    ///
+    /// Observed on hardware: the same 116 KB file received three times in four
+    /// minutes — and stored twice, a second encrypted copy under a second row —
+    /// while a 2.5 MB transfer waited for the air.
+    ///
+    /// The transfer id is the stable identity here, so that is what is remembered.
+    /// Bounded and in memory only: after a restart a repeat costs one re-download,
+    /// which is the old behaviour and not worth a file on disk to avoid.
+    fn note_completed(&mut self, transfer_id: TransferId) {
+        if self.completed.contains(&transfer_id) {
+            return;
+        }
+        if self.completed.len() >= MAX_REMEMBERED_COMPLETIONS {
+            self.completed.pop_front();
+        }
+        self.completed.push_back(transfer_id);
+    }
+
+    /// Whether this transfer finished recently.
+    #[must_use]
+    pub fn is_complete(&self, transfer_id: &TransferId) -> bool {
+        self.completed.contains(transfer_id)
+    }
+
     #[must_use]
     pub fn new(dir: PathBuf) -> Self {
         Self {
             dir,
             transfers: BTreeMap::new(),
+            completed: std::collections::VecDeque::new(),
         }
     }
 
@@ -424,6 +466,9 @@ impl FileStreamSpool {
         now_secs: u64,
     ) -> Result<ManifestOutcome, MeshError> {
         let id = manifest.transfer_id;
+        if self.is_complete(&id) {
+            return Ok(ManifestOutcome::AlreadyComplete);
+        }
         if let Some(existing) = self.transfers.get_mut(&id) {
             // A repeat of a manifest already in progress. The manifest is
             // re-broadcast on the announce cadence so a peer that joined
@@ -606,6 +651,17 @@ impl FileStreamSpool {
     }
 
     /// Forget a transfer and remove both of its files.
+    /// Finish a transfer: remember it, then clear it.
+    ///
+    /// Distinct from [`discard`](Self::discard), which is for a transfer that
+    /// failed or was abandoned. Those must stay eligible to start again — a peer
+    /// re-sending a file after a stall is exactly the recovery the mesh wants —
+    /// whereas one that completed must not be downloaded a second time.
+    pub fn finish(&mut self, transfer_id: &TransferId) {
+        self.note_completed(*transfer_id);
+        self.discard(transfer_id);
+    }
+
     pub fn discard(&mut self, transfer_id: &TransferId) {
         self.transfers.remove(transfer_id);
         for path in [self.part_path(transfer_id), self.state_path(transfer_id)] {
@@ -1031,6 +1087,47 @@ mod tests {
     }
 
     // -- bitmap ------------------------------------------------------------
+
+    #[test]
+    fn a_manifest_for_a_finished_transfer_does_not_start_it_again() {
+        // A sender repeats the manifest on the announce cadence for as long as it
+        // holds the transfer open, so repeats keep arriving after the file is
+        // complete. The transfer is gone from the map by then — finished and
+        // cleared — so `begin` saw a manifest it did not recognise and downloaded
+        // the whole file again.
+        //
+        // The `already_stored` guard downstream cannot catch this: it keys on the
+        // manifest *packet's* dedup id, which differs for every re-broadcast. The
+        // transfer id is the stable identity, so that is what is remembered here.
+        //
+        // Observed on hardware: the same 116 KB file received three times in four
+        // minutes, and stored twice, while a 2.5 MB transfer waited for the air.
+        let (mut spool, _dir) = spool();
+        let bytes = body(3_000);
+        let manifest = manifest_for(&bytes, 1_024);
+        let sender = peer("bbbbbbbbbbbbbbbb");
+
+        spool
+            .begin(manifest.clone(), sender.clone(), "WIRE-1".into(), 0, 10)
+            .expect("first manifest starts it");
+        feed(&mut spool, &manifest, &bytes, [0, 1, 2], &sender);
+        spool.finish(&ID);
+
+        // The same manifest again, with a *different* wire id — which is what a
+        // re-broadcast looks like, and why keying on that id could never work.
+        let repeat = spool
+            .begin(manifest.clone(), sender.clone(), "WIRE-2".into(), 0, 20)
+            .expect("a repeat is not an error");
+        assert_eq!(
+            repeat,
+            ManifestOutcome::AlreadyComplete,
+            "a finished transfer is not downloaded a second time"
+        );
+        assert!(
+            spool.get(&ID).is_none(),
+            "and no partial transfer is created for it"
+        );
+    }
 
     #[test]
     fn the_request_gap_starts_short_and_only_grows_when_asking_stops_working() {

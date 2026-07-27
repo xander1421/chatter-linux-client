@@ -1148,6 +1148,13 @@ impl BleRuntime {
                     "a chunked file transfer started"
                 );
             }
+            Ok(ManifestOutcome::AlreadyComplete) => {
+                tracing::debug!(
+                    target: "mesh::ble",
+                    peer = %sender,
+                    "a manifest arrived for a transfer already finished; ignored"
+                );
+            }
             Ok(ManifestOutcome::Resumed { present, total }) => {
                 tracing::info!(
                     target: "mesh::ble",
@@ -1303,7 +1310,7 @@ impl BleRuntime {
                     transfer = %transfer_hex,
                     "a chunked file already on disk completed again; not stored twice"
                 );
-                self.files_in.discard(transfer_id);
+                self.files_in.finish(transfer_id);
                 return;
             }
             Ok(false) => {}
@@ -1343,7 +1350,7 @@ impl BleRuntime {
                 return;
             }
         };
-        self.files_in.discard(transfer_id);
+        self.files_in.finish(transfer_id);
 
         tracing::info!(
             target: "mesh::ble",
