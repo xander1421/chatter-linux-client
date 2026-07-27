@@ -157,7 +157,7 @@ pub struct MeshDeps {
 /// them knowing a restart happened. Deliberately not a broadcast or a rebuild of
 /// the router: the runtime loops and their shutdown handling are the part that is
 /// hard to get right, and this leaves them untouched.
-pub(crate) struct CommandBus<T> {
+pub struct CommandBus<T> {
     tx: Mutex<UnboundedSender<T>>,
 }
 
@@ -181,7 +181,7 @@ impl<T> CommandBus<T> {
     }
 
     /// Queue a command for whichever runtime is current.
-    pub(crate) fn send(&self, command: T) -> Result<(), SendError<T>> {
+    pub fn send(&self, command: T) -> Result<(), SendError<T>> {
         self.tx.lock().send(command)
     }
 }

@@ -98,6 +98,20 @@ pub enum LinkEvent {
     /// The adapter was powered on or off underneath us, e.g. by a system toggle
     /// or airplane mode. Every link dies with it.
     AdapterPowerChanged { powered: bool },
+
+    /// This device can no longer be *connected to*, though it may still connect out.
+    ///
+    /// A peripheral role serves inbound subscriptions; when the stack ends that
+    /// stream the role is over, and from then on the mesh advertises normally,
+    /// scans normally, dials out normally — and silently accepts nobody. Half the
+    /// mesh, with no error anywhere, which is why this is an event rather than a
+    /// return value: nothing was being called at the moment it happened.
+    ///
+    /// Observed as a desktop registering zero inbound links across an entire
+    /// session while a phone in the same room reported twenty-one outbound
+    /// connections to it, every one having subscribed successfully from its own
+    /// side. The two facts could not be reconciled from either log.
+    PeripheralRoleEnded,
 }
 
 /// A bidirectional radio.

@@ -45,7 +45,7 @@ use bluer::gatt::local::{
 };
 use bluer::gatt::{CharacteristicReader, CharacteristicWriter};
 use bluer::{Adapter, Uuid};
-use chatter_mesh_link::{LinkError, LinkRole};
+use chatter_mesh_link::{LinkError, LinkEvent, LinkRole};
 use futures::StreamExt;
 use tokio::task::JoinHandle;
 
@@ -171,6 +171,11 @@ async fn serve_control_events(control: CharacteristicControl, adapter_name: Stri
     // session, for a stream that lives as long as the role does.
     let mut control = Box::pin(control);
 
+    // The loop below ends only when the stack closes the control stream, and that
+    // has to be reported: from that moment this device accepts no inbound
+    // connections at all, while every other part of the radio carries on looking
+    // healthy. Returning quietly is what made a half-deaf mesh indistinguishable
+    // from a quiet room.
     while let Some(event) = control.next().await {
         match event {
             CharacteristicControlEvent::Write(request) => {
@@ -205,6 +210,8 @@ async fn serve_control_events(control: CharacteristicControl, adapter_name: Stri
             }
         }
     }
+
+    shared.emit(LinkEvent::PeripheralRoleEnded);
 }
 
 /// Read one peer's inbound writes until its channel closes.

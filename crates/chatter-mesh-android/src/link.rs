@@ -172,6 +172,11 @@ fn describe(event: &LinkEvent) -> String {
         LinkEvent::Disconnected { link } => format!("Disconnected({link})"),
         LinkEvent::Data { link, bytes } => format!("Data({link}, {} bytes)", bytes.len()),
         LinkEvent::AdapterPowerChanged { powered } => format!("AdapterPowerChanged({powered})"),
+        // The Android bridge does not emit this: its GATT server outlives the
+        // process, and there is no equivalent of BlueZ closing a control stream
+        // underneath us. Named anyway, so adding the case here is a deliberate act
+        // rather than something the compiler stops asking about.
+        LinkEvent::PeripheralRoleEnded => "PeripheralRoleEnded".to_string(),
     }
 }
 

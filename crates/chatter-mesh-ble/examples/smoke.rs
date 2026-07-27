@@ -66,6 +66,13 @@ async fn main() {
                     println!("link layer shut down");
                     break;
                 }
+                // Worth shouting about in a smoke test: from here on the
+                // adapter still advertises and still dials out, but nothing can
+                // connect *to* it. A run that reports this and then looks quiet is
+                // not a quiet room.
+                Some(LinkEvent::PeripheralRoleEnded) => {
+                    println!("  !! PERIPHERAL ROLE ENDED — inbound connections are no longer served");
+                }
                 Some(LinkEvent::Discovered { address, rssi }) => {
                     discovered += 1;
                     println!("  discovered {address} at {rssi} dBm");

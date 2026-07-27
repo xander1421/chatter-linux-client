@@ -281,6 +281,22 @@ impl BleRuntime {
             } => self.on_connected(link, role, max_write).await,
             LinkEvent::Disconnected { link } => self.on_disconnected(&link).await,
             LinkEvent::Data { link, bytes } => self.on_data(&link, bytes).await,
+            LinkEvent::PeripheralRoleEnded => {
+                // Not fatal and not recoverable from here: outbound links still
+                // work, so the mesh is half alive, and that is precisely the state
+                // worth saying out loud. A peer that dials us now gets nowhere and
+                // has no way to know why.
+                tracing::warn!(
+                    target: "mesh::ble",
+                    "this device can no longer be connected to; inbound links have \
+                     stopped being served, and only outbound ones will form now"
+                );
+                self.degraded(
+                    "Other devices can no longer connect to this one over Bluetooth. \
+                     Restarting the app should restore it."
+                        .to_string(),
+                );
+            }
             LinkEvent::AdapterPowerChanged { powered } => {
                 self.state.with(|state| {
                     state.adapter_powered = powered;
@@ -2383,7 +2399,6 @@ impl BleRuntime {
         // The delay is collision avoidance on a shared channel, so it has to be
         // a real wait rather than a hint. Spawned so the loop keeps servicing the
         // radio while it elapses.
-        let radio = Arc::clone(&self.radio);
         let state = Arc::clone(&self.state);
         let ingress = ingress.clone();
         let delay = u64::from(decision.delay_ms);
@@ -2391,7 +2406,7 @@ impl BleRuntime {
             if delay > 0 {
                 tokio::time::sleep(Duration::from_millis(delay)).await;
             }
-            transmit_forwarded(&radio, &state, &forwarded, &ingress).await;
+            transmit_forwarded(&state, &forwarded, &ingress).await;
         });
     }
 
@@ -2819,10 +2834,6 @@ impl BleRuntime {
     }
 }
 
-/// Write a relayed packet, with the ingress link excluded.
-///
-/// A free function so the relay path can be spawned: it needs the radio and the
-/// shared state and nothing else from the runtime.
 /// Every *other* link bound to the peer `ingress` is bound to.
 ///
 /// Split horizon has to be by peer, not only by link. Two devices can hold two
@@ -2856,8 +2867,12 @@ fn sibling_links_locked(state: &LinkStateInner, ingress: &LinkId) -> Vec<LinkId>
         .collect()
 }
 
+/// Write a relayed packet, with the ingress link excluded.
+///
+/// A free function so the relay path can be spawned: it needs the shared state and
+/// nothing else from the runtime. It no longer needs the radio — everything goes
+/// through the paced queue now, the same as `transmit`.
 async fn transmit_forwarded(
-    radio: &Arc<dyn MeshLink>,
     state: &Arc<MeshState>,
     packet: &BitchatPacket,
     ingress: &LinkId,
@@ -4313,6 +4328,30 @@ mod tests {
             "the sweep stored the file rather than leaving it to expire"
         );
         assert!(restarted.files_in.is_empty());
+    }
+
+    #[tokio::test]
+    async fn losing_the_peripheral_role_is_reported_rather_than_silent() {
+        // The half-deaf state: this device still advertises, still scans, still
+        // dials out — and accepts nobody. Seen as a desktop registering zero
+        // inbound links all session while a phone in the same room reported
+        // twenty-one successful outbound connections to it, each having subscribed
+        // from its own side. Neither log could explain the other, because the side
+        // that stopped working said nothing.
+        let (mut runtime, _radio, _state, _timeline) = runtime_parts();
+        let mut events = runtime.events.subscribe();
+
+        runtime.on_link_event(LinkEvent::PeripheralRoleEnded).await;
+
+        match events.try_recv() {
+            Ok(MeshEvent::Degraded(reason)) => assert!(
+                reason.to_lowercase().contains("connect"),
+                "the reason has to name what stopped working, got {reason:?}"
+            ),
+            other => panic!(
+                "losing inbound links must be reported, not swallowed; got {other:?}"
+            ),
+        }
     }
 
     #[tokio::test]
