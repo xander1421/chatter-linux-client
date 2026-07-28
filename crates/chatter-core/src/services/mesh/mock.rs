@@ -129,6 +129,12 @@ impl MockLink {
     /// Distinct from `set_reject_writes` because the two are handled in opposite
     /// ways and `should_buffer` is what tells them apart: a retryable refusal goes
     /// back on the queue, a terminal one takes the queue with it.
+    /// Tell the mock a link's negotiated write ceiling, as a `Connected` event
+    /// would.
+    pub fn set_max_write(&self, link: &LinkId, max_write: usize) {
+        self.max_write.lock().insert(link.clone(), max_write);
+    }
+
     pub fn set_links_gone(&self, gone: bool) {
         self.links_gone.store(gone, Ordering::SeqCst);
     }
@@ -189,6 +195,21 @@ impl MeshLink for MockLink {
         if self.reject_writes.load(Ordering::SeqCst) {
             let id = link.to_string();
             return Box::pin(async move { Err(LinkError::WriteRejected(id)) });
+        }
+        // Both real link layers refuse an oversized frame — BlueZ and the Android
+        // bridge each return `PayloadTooLarge` — and this used to accept anything.
+        // A fragment sized past the negotiated MTU would therefore pass every test
+        // and be dropped on a radio, which is the failure mode fragmentation bugs
+        // actually have.
+        //
+        // Only enforced where a size is known for the link: an unnegotiated link
+        // has no MTU to measure against, and inventing one would fail writes that
+        // production would accept.
+        if let Some(max) = self.max_write.lock().get(link).copied()
+            && bytes.len() > max
+        {
+            let actual = bytes.len();
+            return Box::pin(async move { Err(LinkError::PayloadTooLarge { actual, max }) });
         }
         self.writes.lock().push((link.clone(), bytes.to_vec()));
         Box::pin(async { Ok(()) })

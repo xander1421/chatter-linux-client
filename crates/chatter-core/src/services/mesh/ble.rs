@@ -3214,7 +3214,7 @@ mod tests {
         // so our own announce really does reach `on_announce`. If it registers, we
         // become our own peer: "N nearby" counts us, and a link binds to our own
         // identity. bitchat refuses it as `.reject(.selfAnnounce)`.
-        let (mut runtime, _radio, state) = runtime();
+        let (mut runtime, radio, state) = runtime();
         let local = runtime.identity.peer_id();
         let link_out = LinkId::new("/mock/out");
         state.with(|inner| {
@@ -3226,7 +3226,7 @@ mod tests {
         // Build the announce exactly as we would send it, then feed it back.
         runtime.announce().await;
         runtime.drain_writes().await;
-        let sent = _radio.writes();
+        let sent = radio.writes();
         let packet = codec::decode(&sent[0].1).expect("decodable");
         assert_eq!(
             PeerId::from_bytes(&packet.sender_id),
@@ -3919,6 +3919,23 @@ mod tests {
         link
     }
 
+    /// `writable_link`, with the radio told the same MTU the planner will use.
+    ///
+    /// Worth the extra argument: it is what makes an oversized write fail in a
+    /// test rather than on a radio. The two numbers being the same is the point —
+    /// a fragmenter that sizes against one and writes against the other is exactly
+    /// the bug this catches.
+    fn writable_link_on(
+        state: &MeshState,
+        radio: &MockLink,
+        name: &str,
+        max_write: usize,
+    ) -> LinkId {
+        let link = writable_link(state, name, max_write);
+        radio.set_max_write(&link, max_write);
+        link
+    }
+
     #[tokio::test]
     async fn a_chunked_transfer_round_trips_into_a_row_with_its_bytes_on_disk() {
         // The whole of P9 in one test. A payload this size cannot arrive as one
@@ -3995,7 +4012,7 @@ mod tests {
         // arrives and nobody can say why.
         let (mut runtime, radio, state, timeline) = runtime_parts();
         isolate_spool(&mut runtime);
-        writable_link(&state, "/mock/req", 512);
+        writable_link_on(&state, &radio, "/mock/req", 512);
         let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
         let identity = register_verified_peer(&state, &sender, "wanderer");
 
@@ -4169,7 +4186,7 @@ mod tests {
         // indistinguishably from a slow transfer.
         let (mut runtime, radio, state, timeline) = runtime_parts();
         let spool = isolate_spool(&mut runtime);
-        writable_link(&state, "/mock/bad", 512);
+        writable_link_on(&state, &radio, "/mock/bad", 512);
         let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
         let identity = register_verified_peer(&state, &sender, "wanderer");
         let mut events = runtime.events.subscribe();
@@ -4363,6 +4380,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_mock_refuses_an_oversized_frame_like_a_real_radio_would() {
+        // Guards the guard. Both real link layers return `PayloadTooLarge` past the
+        // negotiated MTU and the mock used to accept anything, so a fragment sized
+        // wrongly would pass every test and be discarded on a radio — the failure
+        // mode fragmentation bugs actually have.
+        //
+        // The whole mesh suite now writes against radios that enforce the same
+        // number the planner fragments against, and passes. That is only worth
+        // something if the enforcement can fail, which is what this checks.
+        let (_runtime, radio, state, _timeline) = runtime_parts();
+        let link = writable_link_on(&state, &radio, "/mock/tight", 64);
+
+        assert!(
+            matches!(
+                radio.send(&link, &[0u8; 65]).await,
+                Err(chatter_mesh_link::LinkError::PayloadTooLarge { actual: 65, max: 64 })
+            ),
+            "one byte over the ceiling is refused"
+        );
+        assert!(
+            radio.send(&link, &[0u8; 64]).await.is_ok(),
+            "and exactly the ceiling is not"
+        );
+    }
+
+    #[tokio::test]
     async fn a_dead_link_takes_its_whole_queue_with_it() {
         // Observed on hardware once the drop was logged: the error is "link is no
         // longer connected", and every remaining frame for that link will fail the
@@ -4371,7 +4414,7 @@ mod tests {
         // their turn behind it.
         let (mut runtime, radio, state, _timeline) = runtime_parts();
         // 512 so the payload below fragments into a queue worth discarding.
-        let link = writable_link(&state, "/mock/doomed", 512);
+        let link = writable_link_on(&state, &radio, "/mock/doomed", 512);
         let dir = tempfile::tempdir().expect("temp dir");
         let source = dir.path().join("doomed.bin");
         let bytes = body(4_000);
@@ -4416,8 +4459,8 @@ mod tests {
         let identity = register_verified_peer(&state, &neighbour, "twolinks");
 
         // Both links to the same peer, as two devices that each dialled the other.
-        let inbound = writable_link(&state, "/mock/they-dialled-us", 512);
-        let sibling = writable_link(&state, "/mock/we-dialled-them", 512);
+        let inbound = writable_link_on(&state, &radio, "/mock/they-dialled-us", 512);
+        let sibling = writable_link_on(&state, &radio, "/mock/we-dialled-them", 512);
         state.with(|inner| {
             inner.links.bind_if_unbound(&inbound, &neighbour);
             inner.links.bind_if_unbound(&sibling, &neighbour);
@@ -4468,7 +4511,7 @@ mod tests {
         // actually fragments. A text payload is no good here: `broadcast_public`
         // DEFLATEs, and any string long enough to fragment is compressible enough
         // not to.
-        writable_link(&state, "/mock/paced", 512);
+        writable_link_on(&state, &radio, "/mock/paced", 512);
         let dir = tempfile::tempdir().expect("temp dir");
         let source = dir.path().join("paced.bin");
         let bytes = body(4_000);
@@ -4521,7 +4564,7 @@ mod tests {
         let source = sender_dir.path().join("outgoing.bin");
         let bytes = body(3_000);
         std::fs::write(&source, &bytes).expect("write");
-        writable_link(&state, "/mock/send", 4096);
+        writable_link_on(&state, &radio, "/mock/send", 4096);
         let mut events = runtime.events.subscribe();
 
         let manifest = test_manifest([0x17; 8], &bytes);
@@ -4613,7 +4656,7 @@ mod tests {
         let source = dir.path().join("outgoing2.bin");
         let bytes = body(4_000);
         std::fs::write(&source, &bytes).expect("write");
-        writable_link(&state, "/mock/serve", 4096);
+        writable_link_on(&state, &radio, "/mock/serve", 4096);
         let asker = PeerId::from_str("bbbbbbbbbbbbbbbb");
         let asker_identity = register_verified_peer(&state, &asker, "wanderer");
 
@@ -4716,9 +4759,9 @@ mod tests {
         // our own flood echoing back — there is nothing to recover and the local
         // copy was stored when the transfer started. Accepting one would spool our
         // own file into a second attachment.
-        let (mut runtime, _radio, state, timeline) = runtime_parts();
+        let (mut runtime, radio, state, timeline) = runtime_parts();
         isolate_spool(&mut runtime);
-        writable_link(&state, "/mock/echo", 4096);
+        writable_link_on(&state, &radio, "/mock/echo", 4096);
         let dir = tempfile::tempdir().expect("temp dir");
         let source = dir.path().join("mine.bin");
         let bytes = body(2_048);
@@ -4788,7 +4831,7 @@ mod tests {
         // P8 sent it. Chunking is an extension for the sizes that path cannot
         // carry, selected by size — not a replacement.
         let (mut runtime, radio, state, _timeline) = runtime_parts();
-        writable_link(&state, "/mock/fork", 4096);
+        writable_link_on(&state, &radio, "/mock/fork", 4096);
 
         runtime.broadcast_file("MSG-SMALL", &sample_file()).await;
 
