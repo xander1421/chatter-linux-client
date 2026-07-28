@@ -37,7 +37,8 @@ use chatter_mesh::tlv::hex_encode;
 use chatter_mesh::tlv::private_message::PrivateMessagePacket;
 use chatter_mesh::tlv::request_sync::RequestSyncPacket;
 use chatter_mesh_link::backpressure::{
-    InboundAppend, InboundChunk, InboundLimits, PENDING_WRITE_BUFFER_CAP_BYTES, should_buffer, WriteEnqueue,
+    InboundAppend, InboundAppendMetadata, InboundChunk, InboundLimits,
+    PENDING_WRITE_BUFFER_CAP_BYTES, should_buffer, WriteEnqueue,
 };
 use chatter_mesh_link::duty::{self, ScanCommand};
 use chatter_mesh_link::guard::{IngressGuard, IngressInput};
@@ -499,11 +500,27 @@ impl BleRuntime {
             )
         });
 
+        // Both discard paths report the numbers that tell them apart, and both at
+        // warn. The metadata was already being assembled and then thrown away with
+        // `..`, which is how a peer whose frames never land looks identical to a
+        // peer that never sent any. `received=56 expected=70` is what made the
+        // fragment-expiry bug findable; the same applies here.
         match appended {
-            InboundAppend::Decoded { packet, .. } => self.on_packet(link, *packet).await,
-            InboundAppend::Waiting { .. } => {}
-            InboundAppend::Oversized { .. } => {
-                tracing::debug!(target: "mesh::ble", link = %link, "oversized inbound frame discarded");
+            InboundAppend::Decoded { packet, metadata } => {
+                report_stall_discard(link, &metadata);
+                self.on_packet(link, *packet).await
+            }
+            InboundAppend::Waiting { metadata } => report_stall_discard(link, &metadata),
+            InboundAppend::Oversized { metadata } => {
+                tracing::warn!(
+                    target: "mesh::ble",
+                    link = %link,
+                    needed_bytes = metadata.accumulated_bytes,
+                    cap_bytes = InboundLimits::default().cap_bytes,
+                    appended_bytes = metadata.appended_bytes,
+                    packet_type = ?metadata.packet_type,
+                    "inbound frame over the cap; the link's buffer was dropped"
+                );
             }
         }
     }
@@ -1543,7 +1560,10 @@ impl BleRuntime {
         let step = match step {
             Ok(step) => step,
             Err(error) => {
-                tracing::debug!(target: "mesh::ble", peer = %claimed, %error, "handshake failed");
+                // Warn: no session means no direct message with this peer will
+                // ever open, and nothing retries on a schedule. Silence here reads
+                // as "they never wrote", which is the opposite of what happened.
+                tracing::warn!(target: "mesh::ble", peer = %claimed, %error, "handshake failed");
                 return;
             }
         };
@@ -1588,7 +1608,9 @@ impl BleRuntime {
                 return;
             }
             Err(error) => {
-                tracing::debug!(target: "mesh::ble", peer = %claimed, %error, "decrypt failed");
+                // Warn: this was a message, and over the mesh there is no server
+                // copy to fetch again. The plaintext is gone.
+                tracing::warn!(target: "mesh::ble", peer = %claimed, %error, "decrypt failed");
                 return;
             }
         };
@@ -1659,7 +1681,15 @@ impl BleRuntime {
         };
         if !verified {
             // An unverified peer may not deposit mail: without a checked
-            // signature the pool is a free amplifier.
+            // signature the pool is a free amplifier. Said at debug rather than
+            // warn only because an attacker controls how often it happens — but
+            // said, because a silent return here is indistinguishable from mail
+            // that was never sent.
+            tracing::debug!(
+                target: "mesh::ble",
+                peer = %claimed,
+                "courier deposit from an unverified peer refused"
+            );
             return;
         }
         if let Err(error) = self.couriers.deposit(
@@ -1668,7 +1698,9 @@ impl BleRuntime {
             CourierTier::Verified,
             now_secs(),
         ) {
-            tracing::debug!(target: "mesh::ble", %error, "courier deposit refused");
+            // Warn: the depositor believes we are carrying this for them, and we
+            // are not. Nothing tells them otherwise.
+            tracing::warn!(target: "mesh::ble", %error, "courier deposit refused");
         }
     }
 
@@ -2952,6 +2984,28 @@ fn sibling_links_locked(state: &LinkStateInner, ingress: &LinkId) -> Vec<LinkId>
         .filter(|(id, link_state)| *id != ingress && link_state.peer.as_ref() == Some(&peer))
         .map(|(id, _)| id.clone())
         .collect()
+}
+
+/// Report bytes the assembler threw away because the previous partial frame
+/// stalled past its window.
+///
+/// A non-zero `stall_discarded_bytes` on an otherwise *successful* append is the
+/// quietest data loss in the inbound path: the frame that follows decodes fine, so
+/// nothing looks wrong, while everything the peer sent before the stall is gone.
+/// It rides on `Decoded` and `Waiting` alike and was being dropped with `..` at
+/// both.
+fn report_stall_discard(link: &LinkId, metadata: &InboundAppendMetadata) {
+    if metadata.stall_discarded_bytes == 0 {
+        return;
+    }
+    tracing::warn!(
+        target: "mesh::ble",
+        %link,
+        discarded_bytes = metadata.stall_discarded_bytes,
+        appended_bytes = metadata.appended_bytes,
+        packet_type = ?metadata.packet_type,
+        "a stalled partial frame was discarded; reassembly restarted"
+    );
 }
 
 /// The peer's redundant *central* links — every one except the single keeper.
