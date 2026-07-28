@@ -2899,11 +2899,15 @@ impl BleRuntime {
                     // `discard_all`; this covers the window where frames were
                     // queued before the event arrived, which is exactly when a
                     // transfer is in flight.
-                    let dropped = self.state.with(|state| {
-                        let queued = state.writes.queued_count(&link);
-                        state.writes.discard_all(&link);
-                        queued
-                    });
+                    let discarded_types = self.state.with(|state| state.writes.discard_all(&link));
+                    // Counted per type rather than listed: a stalled transfer
+                    // discards dozens of fragments at once and the shape is the
+                    // information, not the sequence.
+                    let mut by_type: std::collections::BTreeMap<u8, usize> =
+                        std::collections::BTreeMap::new();
+                    for msg_type in &discarded_types {
+                        *by_type.entry(*msg_type).or_default() += 1;
+                    }
                     // The type distinguishes a loss that matters from one that does
                     // not, and without it the line cannot: an announce or a sync
                     // request is re-sent on the next interval, while a message or a
@@ -2917,7 +2921,8 @@ impl BleRuntime {
                         %error,
                         bytes = write.bytes.len(),
                         msg_type = ?write.bytes.get(1),
-                        also_discarded = dropped,
+                        also_discarded = discarded_types.len(),
+                        also_discarded_types = ?by_type,
                         "a frame was dropped and the link's queue with it: the radio \
                          refused it and it cannot be retried"
                     );

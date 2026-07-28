@@ -327,8 +327,16 @@ impl OutboundWriteBuffer {
     /// accumulate a fresh per-link byte cap each, which is unbounded growth wearing
     /// a bounded cap's clothing — and the ciphertext is link-specific anyway, so it
     /// is useless to whatever link replaces this one.
-    pub fn discard_all(&mut self, link: &LinkId) {
-        self.writes.remove(link);
+    ///
+    /// Returns the packet type byte of everything thrown away, so the caller can
+    /// say whether the loss mattered. An announce is re-sent on the next interval
+    /// and a fragment is not: a queue full of `Fragment` is a transfer that has
+    /// just lost its middle, which no other line records.
+    pub fn discard_all(&mut self, link: &LinkId) -> Vec<u8> {
+        self.writes
+            .remove(link)
+            .map(|queue| queue.iter().filter_map(|write| write.bytes.get(1).copied()).collect())
+            .unwrap_or_default()
     }
 
     /// Puts partially drained writes back at the head, preserving their order.
