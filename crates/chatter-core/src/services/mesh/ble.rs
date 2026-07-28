@@ -2564,12 +2564,29 @@ impl BleRuntime {
                 other => other,
             }
         });
+        // A refused scan toggle was discarded, and the two directions fail in
+        // opposite ways: unable to *start* means we stop discovering peers
+        // altogether — the mesh goes blind while looking perfectly healthy —
+        // and unable to stop means the duty cycle silently stops saving power.
+        // Neither is inferable from any other line.
         match scan {
             ScanCommand::StartScanning => {
-                let _ = self.radio.set_scanning(true).await;
+                if let Err(error) = self.radio.set_scanning(true).await {
+                    tracing::warn!(
+                        target: "mesh::ble",
+                        %error,
+                        "could not start scanning; no new peer will be discovered"
+                    );
+                }
             }
             ScanCommand::StopScanning => {
-                let _ = self.radio.set_scanning(false).await;
+                if let Err(error) = self.radio.set_scanning(false).await {
+                    tracing::warn!(
+                        target: "mesh::ble",
+                        %error,
+                        "could not stop scanning; the duty cycle is not saving power"
+                    );
+                }
             }
             ScanCommand::Unchanged => {}
         }
@@ -2622,7 +2639,18 @@ impl BleRuntime {
         if plan.should_ensure_advertising {
             // Nobody can see us. Advertising is the first suspect, and a restart
             // is the only lever the trait offers.
-            let _ = self.radio.start().await;
+            //
+            // Reported through `degraded` rather than swallowed, because this is
+            // the *recovery* path: if it fails, the peripheral role stays
+            // invisible and the one mechanism meant to fix that has just given up
+            // in silence. A user watching an empty peer list has no other way to
+            // learn the difference between an empty room and a radio that will
+            // not advertise.
+            if let Err(error) = self.radio.start().await {
+                self.degraded(format!(
+                    "nobody can see us and the radio would not restart to fix it: {error}"
+                ));
+            }
         }
         if plan.should_run_cleanup {
             self.cleanup(now_ms, now_s);
@@ -4152,6 +4180,38 @@ mod tests {
         let link = writable_link(state, name, max_write);
         radio.set_max_write(&link, max_write);
         link
+    }
+
+    #[tokio::test]
+    async fn a_radio_that_will_not_restart_when_nobody_can_see_us_is_reported() {
+        // `should_ensure_advertising` fires whenever the peer registry is empty,
+        // and restarting the radio is the only lever the trait offers for "nobody
+        // can see us". The result was discarded, so a restart that failed left the
+        // peripheral role invisible and said nothing — the recovery path giving up
+        // in silence, which is indistinguishable from an empty room.
+        let (mut runtime, radio, _state, _timeline) = runtime_parts();
+        let mut events = runtime.events.subscribe();
+
+        // A stopped MockLink refuses to start again, exactly as the Android link
+        // does: its handle is single-use.
+        let _ = radio.stop().await;
+
+        runtime.on_tick().await;
+
+        let mut degraded = None;
+        while let Ok(event) = events.try_recv() {
+            if let MeshEvent::Degraded(message) = event {
+                degraded = Some(message);
+                break;
+            }
+        }
+        let message = degraded.expect(
+            "the radio refused to restart while nobody could see us and nothing was reported",
+        );
+        assert!(
+            message.contains("restart"),
+            "the notice does not say the restart failed: {message}"
+        );
     }
 
     #[tokio::test]
