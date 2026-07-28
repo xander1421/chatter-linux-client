@@ -30,7 +30,7 @@
 //! silently drop.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::Duration;
 
 use bluer::gatt::remote::Characteristic as RemoteCharacteristic;
@@ -273,9 +273,12 @@ pub(crate) async fn connect(
     // bound covers four of them and they fail for unrelated reasons; naming the
     // one that hung is the difference between a diagnosis and a shrug.
     let stage = Arc::new(AtomicU8::new(ConnectStage::Acl as u8));
+    // Whether this attempt is what opened the ACL, and so whether it is ours to
+    // close on the way out. See `establish`.
+    let opened_here = Arc::new(AtomicBool::new(false));
     let outcome = timeout(
         CONNECT_TIMEOUT,
-        establish(&device, service, characteristic, Arc::clone(&stage)),
+        establish(&device, service, characteristic, Arc::clone(&stage), Arc::clone(&opened_here)),
     )
     .await;
     let (writer, reader) = match outcome {
@@ -288,13 +291,18 @@ pub(crate) async fn connect(
         // Only the timeout branch used to clean up, and a socket acquisition can
         // fail outright well inside twenty seconds.
         Ok(Err(error)) => {
-            let _ = device.disconnect().await;
+            if opened_here.load(Ordering::Relaxed) {
+                let _ = device.disconnect().await;
+            }
             return Err(error);
         }
         Err(_) => {
             // Leave nothing half-open behind: a dangling ACL keeps the peer's
-            // connection slot occupied as well as ours.
-            let _ = device.disconnect().await;
+            // connection slot occupied as well as ours — but only if this attempt
+            // is what opened it. See `establish`.
+            if opened_here.load(Ordering::Relaxed) {
+                let _ = device.disconnect().await;
+            }
             // Reported as a timeout rather than a plain failure so the scheduler
             // applies its timeout window. The distinction matters most here:
             // `disconnect()` on a connect that is still in flight is what makes
@@ -328,6 +336,7 @@ pub(crate) async fn connect(
 /// Everything between "we have a device object" and "we can write to it".
 async fn establish(
     device: &Device, service: Uuid, characteristic: Uuid, stage: Arc<AtomicU8>,
+    opened_here: Arc<AtomicBool>,
 ) -> Result<(CharacteristicWriter, CharacteristicReader), LinkError> {
     let address = device.address().to_string();
 
@@ -336,6 +345,15 @@ async fn establish(
     stage.store(ConnectStage::Acl as u8, Ordering::Relaxed);
     let connected = device.is_connected().await.map_err(|err| error::classify_connect(&address, &err))?;
     if !connected {
+        // Only now do we own this ACL, and only an ACL we opened may we close.
+        // A device already connected is one the *peer* dialled: BLE has a single
+        // ACL per pair of controllers, so it is the same connection carrying our
+        // inbound peripheral link, and hanging it up on a failed outbound attempt
+        // would drop a link that is working. Nothing upstream prevents this
+        // pairing — `find_link` checks only the central role, inbound links never
+        // enter `address_of`, and an advert whose scan response has not arrived
+        // yet carries no peer id for the policy layer to recognise.
+        opened_here.store(true, Ordering::Relaxed);
         device.connect().await.map_err(|err| error::classify_connect(&address, &err))?;
     }
 
