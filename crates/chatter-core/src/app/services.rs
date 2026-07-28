@@ -384,7 +384,7 @@ impl ServiceContainer {
                 )),
                 #[cfg(not(feature = "onion"))]
                 relay_connector: None,
-                radio_override: None,
+                radio_factory: None,
             };
             Arc::new(
                 MeshService::new(deps, MeshConfig::default())

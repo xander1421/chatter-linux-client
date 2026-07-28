@@ -37,6 +37,7 @@ pub struct MockLink {
     /// Every write is rejected while set, so the backpressure path can be driven.
     reject_writes: AtomicBool,
     links_gone: AtomicBool,
+    stopped_once: AtomicBool,
 }
 
 impl Default for MockLink {
@@ -60,6 +61,7 @@ impl MockLink {
             connects: Mutex::new(Vec::new()),
             reject_writes: AtomicBool::new(false),
             links_gone: AtomicBool::new(false),
+            stopped_once: AtomicBool::new(false),
         }
     }
 
@@ -133,12 +135,30 @@ impl MockLink {
 }
 
 impl MeshLink for MockLink {
+    /// Single-use, like the real link layers.
+    ///
+    /// `AndroidLink` refuses a restart outright — "this link layer has been
+    /// stopped; construct a new AndroidLink to restart" — and this mock used to
+    /// succeed instead. That leniency is what let a broken mesh switch ship: the
+    /// restart test passed against a mock that would restart, while the phone in
+    /// the room would not, and the failure only appeared when a human tapped the
+    /// control. A mock that is easier to satisfy than production tests nothing
+    /// about production.
     fn start(&self) -> BoxFuture<'_, Result<(), LinkError>> {
+        if self.stopped_once.load(Ordering::SeqCst) {
+            return Box::pin(async {
+                Err(LinkError::Backend(
+                    "this mock link layer has been stopped; construct a new one to restart"
+                        .to_string(),
+                ))
+            });
+        }
         self.started.store(true, Ordering::SeqCst);
         Box::pin(async { Ok(()) })
     }
 
     fn stop(&self) -> BoxFuture<'_, Result<(), LinkError>> {
+        self.stopped_once.store(true, Ordering::SeqCst);
         self.started.store(false, Ordering::SeqCst);
         self.scanning.store(false, Ordering::SeqCst);
         Box::pin(async { Ok(()) })

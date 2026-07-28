@@ -139,7 +139,14 @@ pub struct MeshDeps {
     /// Overrides the platform radio. `None` selects
     /// [`radio::platform_radio`], which is what production does; tests pass a
     /// double.
-    pub radio_override: Option<Arc<dyn MeshLink>>,
+    /// Build a radio, instead of asking the platform for one. Tests only.
+    ///
+    /// A factory rather than an instance because `start` needs a *fresh* radio
+    /// every time: stopping one is terminal on both real link layers. A test
+    /// holding one instance cannot tell a service that reuses a dead radio from
+    /// one that does not, which is exactly the gap that let a broken mesh switch
+    /// reach a phone.
+    pub radio_factory: Option<Arc<dyn Fn() -> Arc<dyn MeshLink> + Send + Sync>>,
 }
 
 /// Receivers parked between construction and `start`.
@@ -215,7 +222,7 @@ pub struct MeshService {
     /// Found on hardware rather than in a test, because `MockLink::start` always
     /// succeeds and latches no stopped state, so the mock was more forgiving than
     /// either real link layer.
-    radio_override: Option<Arc<dyn MeshLink>>,
+    radio_factory: Option<Arc<dyn Fn() -> Arc<dyn MeshLink> + Send + Sync>>,
     /// Whether this platform has a radio at all, which is a different question
     /// from whether one is running.
     has_radio: bool,
@@ -295,8 +302,8 @@ impl MeshService {
             nostr: Arc::clone(&nostr_bus),
             events,
             timeline,
-            has_radio: deps.radio_override.is_some() || radio::platform_radio().is_some(),
-            radio_override: deps.radio_override,
+            has_radio: deps.radio_factory.is_some() || radio::platform_radio().is_some(),
+            radio_factory: deps.radio_factory,
             relay_connector: deps.relay_connector,
             tasks: Mutex::new(Vec::new()),
             running: AtomicBool::new(false),
@@ -334,10 +341,10 @@ impl MeshService {
         let mut tasks = Vec::new();
 
         // Fresh per start, never reused: see `radio_override`.
-        let radio = self
-            .radio_override
-            .clone()
-            .or_else(radio::platform_radio);
+        let radio = match self.radio_factory.as_ref() {
+            Some(build) => Some(build()),
+            None => radio::platform_radio(),
+        };
         if let Some(radio) = radio {
             let runtime = BleRuntime::new(
                 radio,
@@ -1030,6 +1037,17 @@ mod tests {
         radio: Option<Arc<dyn MeshLink>>,
         connector: Option<Arc<dyn RelayConnector>>,
     ) -> MeshService {
+        let factory = radio.map(|radio| {
+            Arc::new(move || Arc::clone(&radio)) as Arc<dyn Fn() -> Arc<dyn MeshLink> + Send + Sync>
+        });
+        service_with_radio_factory(factory, connector)
+    }
+
+    /// A service that builds its radio per `start`, as production does.
+    fn service_with_radio_factory(
+        radio_factory: Option<Arc<dyn Fn() -> Arc<dyn MeshLink> + Send + Sync>>,
+        connector: Option<Arc<dyn RelayConnector>>,
+    ) -> MeshService {
         let identity = Arc::new(MeshIdentity::generate(&mut rand_core_06::OsRng));
         let config = Arc::new(MeshConfig::default());
         let state = Arc::new(MeshState::new(identity.peer_id()));
@@ -1078,8 +1096,8 @@ mod tests {
             nostr: nostr_bus,
             events,
             timeline,
-            has_radio: radio.is_some(),
-            radio_override: radio,
+            has_radio: radio_factory.is_some(),
+            radio_factory,
             relay_connector: connector,
             tasks: Mutex::new(Vec::new()),
             running: AtomicBool::new(false),
@@ -1088,18 +1106,31 @@ mod tests {
 
     #[tokio::test]
     async fn the_mesh_can_be_stopped_and_started_again() {
-        // What the user's switch needs and what `start` could not do before.
-        // `start` consumed a one-shot `Pending`, so the second call returned
-        // `Ok(())` having started nothing at all: the mesh could be switched off
-        // and never back on, and nothing said so — `is_running` even read true.
-        let radio = MockLink::shared();
-        let service = service(
-            Some(Arc::clone(&radio) as Arc<dyn MeshLink>),
+        // What the user's switch needs, and what neither half of this used to do.
+        //
+        // `start` once consumed a one-shot `Pending`, so a second call returned
+        // `Ok(())` having started nothing. That was fixed with `CommandBus` — and
+        // the test passed while the feature was still broken, because the service
+        // kept *one radio* for its lifetime and handed the same stopped object to
+        // the new runtime. A phone refused it outright: "this link layer has been
+        // stopped; construct a new AndroidLink to restart".
+        //
+        // The mock hid that by being more permissive than production. It refuses a
+        // second start now, so a service that reuses a radio fails here rather than
+        // on somebody's phone — and this test supplies fresh radios, which is what
+        // `start` does for real via `platform_radio`.
+        let built: Arc<Mutex<Vec<Arc<MockLink>>>> = Arc::new(Mutex::new(Vec::new()));
+        let radios = Arc::clone(&built);
+        let factory: Arc<dyn Fn() -> Arc<dyn MeshLink> + Send + Sync> = Arc::new(move || {
+            let radio = MockLink::shared();
+            radios.lock().push(Arc::clone(&radio));
+            radio as Arc<dyn MeshLink>
+        });
+        let service = service_with_radio_factory(
+            Some(factory),
             Some(Arc::new(LoopbackConnector::new()) as Arc<dyn RelayConnector>),
         );
 
-        // The runtimes come up on their own tasks, so the radio is up shortly
-        // after `start` returns rather than during it.
         async fn settle() {
             tokio::task::yield_now().await;
             tokio::time::sleep(std::time::Duration::from_millis(30)).await;
@@ -1108,17 +1139,22 @@ mod tests {
         service.start().await.expect("start");
         settle().await;
         assert!(service.is_running());
-        assert!(radio.is_started(), "the first start brings the radio up");
+        assert_eq!(built.lock().len(), 1, "one radio built for the first start");
+        assert!(built.lock()[0].is_started(), "and it is up");
 
         service.shutdown().await;
         assert!(!service.is_running());
 
-        // The part that used to be a silent no-op.
         service.start().await.expect("restart");
         settle().await;
         assert!(service.is_running(), "a stopped mesh starts again");
+        assert_eq!(
+            built.lock().len(),
+            2,
+            "a *new* radio, because stopping one is terminal on both real link layers"
+        );
         assert!(
-            radio.is_started(),
+            built.lock()[1].is_started(),
             "and the radio is up again, not merely the flag"
         );
 
