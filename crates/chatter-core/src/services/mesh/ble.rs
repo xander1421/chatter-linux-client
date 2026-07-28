@@ -2832,11 +2832,19 @@ impl BleRuntime {
                         state.writes.discard_all(&link);
                         queued
                     });
+                    // The type distinguishes a loss that matters from one that does
+                    // not, and without it the line cannot: an announce or a sync
+                    // request is re-sent on the next interval, while a message or a
+                    // file chunk is gone. Byte 1 of the frame is the packet type
+                    // (`codec.rs`: version:1 type:1 ttl:1 ...); on a fragment it
+                    // reads `Fragment`, which is itself the useful answer, since a
+                    // fragmented frame is never periodic chatter.
                     tracing::warn!(
                         target: "mesh::ble",
                         %link,
                         %error,
                         bytes = write.bytes.len(),
+                        msg_type = ?write.bytes.get(1),
                         also_discarded = dropped,
                         "a frame was dropped and the link's queue with it: the radio \
                          refused it and it cannot be retried"
