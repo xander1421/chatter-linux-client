@@ -99,6 +99,20 @@ pub const RECENT_ATTEMPT_IGNORE_MS: u64 = 2_000;
 ///
 /// # A deliberate divergence from bitchat-iOS
 ///
+/// An address that turned out to be a peer we already hold a link to is ignored
+/// for this long.
+///
+/// Far longer than the other windows because it is not a backoff — nothing failed.
+/// The address is a rotation of a peer already reachable, so dialling it again buys
+/// a second ACL to the same phone and costs a central slot, a GATT server the peer
+/// has to keep serving, and on a desktop a connect/disconnect notification per
+/// round. Five minutes outlasts the observed rotation cadence, so the address is
+/// stale long before the window reopens.
+///
+/// Ignoring it is safe even if the surviving link then dies: the peer is still
+/// advertising, under a *fresh* address, and that one is not in this map.
+pub const DUPLICATE_PEER_IGNORE_MS: u64 = 300_000;
+
 /// iOS has no such window and no attempt cap: [`RECENT_ATTEMPT_IGNORE_MS`] (its
 /// literal `2.0`) is the only spacing it applies, because CoreBluetooth's
 /// `connect` queues indefinitely rather than failing. BlueZ does fail, promptly
@@ -299,6 +313,9 @@ pub struct ConnectionScheduler {
     /// Tracked apart from timeouts on purpose: a peer we held a link with and lost
     /// usually returns, so it gets a brief settle window rather than backoff.
     recent_disconnects: BTreeMap<String, u64>,
+    /// Addresses found to be a rotation of a peer we already hold. Not a failure
+    /// record: see [`DUPLICATE_PEER_IGNORE_MS`].
+    duplicate_peers: BTreeMap<String, u64>,
     /// When the current run of isolation began. `None` whenever we have peers.
     isolated_since_ms: Option<u64>,
     dynamic_rssi_threshold: i16,
@@ -323,6 +340,7 @@ impl ConnectionScheduler {
             recent_connect_timeouts: BTreeMap::new(),
             recent_connect_failures: BTreeMap::new(),
             recent_disconnects: BTreeMap::new(),
+            duplicate_peers: BTreeMap::new(),
             isolated_since_ms: None,
             dynamic_rssi_threshold: config.initial_rssi_threshold,
             config,
@@ -413,6 +431,12 @@ impl ConnectionScheduler {
 
         if self.is_failing_too_fast(&candidate.address, now_ms) {
             return DiscoveryDecision::Ignore;
+        }
+
+        if let Some(&noted) = self.duplicate_peers.get(&candidate.address) {
+            if now_ms.saturating_sub(noted) < DUPLICATE_PEER_IGNORE_MS {
+                return DiscoveryDecision::Ignore;
+            }
         }
 
         if let Some(&last_disconnect) = self.recent_disconnects.get(&candidate.address) {
@@ -612,6 +636,14 @@ impl ConnectionScheduler {
         self.note_connect_failed(address, now_ms);
     }
 
+    /// This address turned out to be another rotation of a peer we already hold.
+    ///
+    /// Deliberately not `note_connect_failed`: nothing failed, and a failure count
+    /// would feed the backoff that governs genuinely broken peers.
+    pub fn note_duplicate_peer(&mut self, address: &str, now_ms: u64) {
+        self.duplicate_peers.insert(address.to_string(), now_ms);
+    }
+
     /// Garbage-collect per-peer backoff older than
     /// [`CONNECT_TIMEOUT_BACKOFF_WINDOW_MS`]. Call it on the maintenance tick.
     ///
@@ -626,6 +658,8 @@ impl ConnectionScheduler {
         self.recent_connect_failures
             .retain(|_, &mut (_, at)| now_ms.saturating_sub(at) <= CONNECT_FAILURE_FORGET_MS);
         self.recent_disconnects.retain(|_, &mut at| at >= cutoff);
+        self.duplicate_peers
+            .retain(|_, &mut at| now_ms.saturating_sub(at) < DUPLICATE_PEER_IGNORE_MS);
 
         let timeouts = &self.recent_connect_timeouts;
         let disconnects = &self.recent_disconnects;
@@ -646,6 +680,7 @@ impl ConnectionScheduler {
         self.recent_connect_timeouts.clear();
         self.recent_connect_failures.clear();
         self.recent_disconnects.clear();
+        self.duplicate_peers.clear();
         self.isolated_since_ms = None;
         self.dynamic_rssi_threshold = self.config.initial_rssi_threshold;
     }
@@ -1156,6 +1191,35 @@ mod tests {
         assert_eq!(
             discover(&mut s, P1, -50, 25_000),
             DiscoveryDecision::ConnectNow
+        );
+    }
+
+    #[test]
+    fn a_rotated_address_of_a_peer_we_hold_is_ignored_for_five_minutes() {
+        let mut s = ConnectionScheduler::new();
+        s.note_duplicate_peer(P1, 10_000);
+
+        assert_eq!(discover(&mut s, P1, -50, 309_999), DiscoveryDecision::Ignore);
+        assert_eq!(
+            discover(&mut s, P1, -50, 310_000),
+            DiscoveryDecision::ConnectNow
+        );
+    }
+
+    #[test]
+    fn a_duplicate_address_is_not_charged_as_a_failure() {
+        // The distinction the separate map exists for. Nothing failed — the peer is
+        // reachable, on another link — so the address must not accumulate the
+        // backoff that governs genuinely broken peers, or a phone that rotates a
+        // few times would poison its own future addresses' shared failure budget.
+        let mut s = ConnectionScheduler::new();
+        s.note_duplicate_peer(P1, 10_000);
+        s.prune_backoff(10_000);
+
+        assert_eq!(
+            discover(&mut s, P1, -50, 310_000),
+            DiscoveryDecision::ConnectNow,
+            "the window expired but something else still refuses the address"
         );
     }
 

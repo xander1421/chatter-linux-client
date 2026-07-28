@@ -739,9 +739,20 @@ impl BleRuntime {
         // Hang up any duplicate ACL to this peer. The announce is the only thing
         // that reveals identity — the address rotated out from under us — so this
         // is the first moment the duplicate can be recognised as one.
-        let redundant = self
-            .state
-            .with(|state| redundant_central_links_locked(state, claimed));
+        let redundant = self.state.with(|state| {
+            let doomed = redundant_central_links_locked(state, claimed);
+            // Stop the address being dialled straight back. Closing the link on its
+            // own is a loop: the peer is still advertising that address, discovery
+            // reports it as a device we do not hold, and we dial it again — measured
+            // as a prune at 03:43:34 followed by a redial of the same address 8s
+            // later. The address, not the peer, is what discovery is keyed on.
+            for link in &doomed {
+                if let Some(address) = state.address_of.get(link).cloned() {
+                    state.scheduler.note_duplicate_peer(&address, now_ms);
+                }
+            }
+            doomed
+        });
         for link in redundant {
             tracing::info!(
                 target: "mesh::ble",
