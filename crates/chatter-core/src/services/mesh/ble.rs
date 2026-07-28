@@ -339,6 +339,21 @@ impl BleRuntime {
     ///
     /// `None` means the scan response has not been seen yet, not that the device
     /// is a stranger, so it falls through to the ordinary scheduler path.
+    ///
+    /// Deliberately counts links of *either* role, unlike
+    /// [`redundant_central_links_locked`], which prunes only central ones. The two
+    /// asymmetries point the same way: a peer already reachable needs no second
+    /// path, so an inbound link is reason enough not to dial out — but a link the
+    /// peer dialled to us cost us no slot and is not ours to hang up. Measured
+    /// consequence: where both devices are running, the phone usually dials first
+    /// and the desktop then never dials at all, which is what a 25 minute run on a
+    /// single peripheral link with zero warnings looks like.
+    ///
+    /// This does nothing at a cold start, when there are no links to recognise a
+    /// peer by. Over five restarts, two produced a second link before the first
+    /// announce arrived; the prune resolved each within seconds and no frame was
+    /// lost. That residual is the price of identity arriving with the first
+    /// announce rather than before it.
     async fn on_discovered(&mut self, address: &str, rssi: i16, peer: Option<[u8; 8]>) {
         let now = now_millis();
 
