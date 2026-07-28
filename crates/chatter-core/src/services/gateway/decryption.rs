@@ -199,17 +199,31 @@ impl MessageGateway {
             .archive_session_for_resend(peer_id.to_string(), peer_device_id, dem_ratchet_key)
             .await?;
 
-        tracing::warn!(
-            peer_id = %peer_id,
-            peer_device_id,
-            archived,
-            "GATEWAY: peer reported a decryption error on our message — session {}",
-            if archived {
-                "archived; next send re-establishes via PreKeySignalMessage"
-            } else {
-                "left untouched (no session or stale report)"
-            }
-        );
+        // Split by outcome, because the two branches mean opposite things and only
+        // one is worth waking anyone for.
+        //
+        // Archiving is consequential: a session was torn down and the next send has
+        // to re-establish. Declining is the stale-report guard doing exactly its
+        // job — Signal requires it, since a report naming a ratchet key we have
+        // moved past must not archive a session that is currently working. That
+        // branch is also the common one: a backlog of 201 stale reports drained in
+        // a single inbox poll and logged 201 warnings for correct behaviour, which
+        // is how a log stops being read.
+        if archived {
+            tracing::warn!(
+                peer_id = %peer_id,
+                peer_device_id,
+                "GATEWAY: peer reported a decryption error on our message — session \
+                 archived; next send re-establishes via PreKeySignalMessage"
+            );
+        } else {
+            tracing::debug!(
+                peer_id = %peer_id,
+                peer_device_id,
+                "GATEWAY: decryption-error report left the session untouched \
+                 (no session, or it names a ratchet key we have moved past)"
+            );
+        }
 
         Ok(SealedSenderResult::SessionHealed {
             peer_id,
