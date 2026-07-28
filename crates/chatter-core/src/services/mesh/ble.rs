@@ -387,7 +387,17 @@ impl BleRuntime {
                         state.scheduler.note_connect_failed(address, now);
                     }
                 });
-                tracing::debug!(target: "mesh::ble", %address, %error, "connect failed");
+                // A timeout is worth saying out loud; an outright failure is not.
+                // A peer that walked out of range is ordinary churn and would
+                // drown the log, but twenty seconds spent half-connected is the
+                // symptom of the unexplained link death, and the error now names
+                // the stage that hung. Debug is invisible on Android, which is
+                // where the question gets asked.
+                if timed_out {
+                    tracing::warn!(target: "mesh::ble", %address, %error, "connect timed out");
+                } else {
+                    tracing::debug!(target: "mesh::ble", %address, %error, "connect failed");
+                }
             }
         }
     }

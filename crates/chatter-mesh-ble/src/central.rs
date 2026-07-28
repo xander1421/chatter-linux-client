@@ -265,7 +265,18 @@ pub(crate) async fn connect(
     )
     .await;
     let (writer, reader) = match outcome {
-        Ok(result) => result?,
+        Ok(Ok(pair)) => pair,
+        // A failure *after* the ACL opened leaves it open. Nothing owns it: no
+        // link was published, so no session drops it and nothing ever writes to
+        // it. The peer meanwhile holds a connected central that never
+        // subscribes — which is exactly what a device logging
+        // `connected (awaiting subscription)` and nothing further is looking at.
+        // Only the timeout branch used to clean up, and a socket acquisition can
+        // fail outright well inside twenty seconds.
+        Ok(Err(error)) => {
+            let _ = device.disconnect().await;
+            return Err(error);
+        }
         Err(_) => {
             // Leave nothing half-open behind: a dangling ACL keeps the peer's
             // connection slot occupied as well as ours.
