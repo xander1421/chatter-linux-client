@@ -707,6 +707,17 @@ pub struct MultiDeviceSealedMessage {
 /// Everything else is the genuine wedge this path exists for and becomes a
 /// [`CryptoError::SessionDesync`] carrying the failed ciphertext, so the caller can
 /// build the report.
+///
+/// This split mirrors libsignal's own control flow rather than guessing at it. In
+/// `decrypt_message_with_record` (`session_cipher.rs:478`) a `DuplicatedMessage`
+/// from the current session state `return result`s immediately, without trying any
+/// previous state — libsignal treats it as the authoritative answer. Every other
+/// error is pushed onto `errs` and the search continues, ending as
+/// `InvalidMessage`. So a duplicate verdict really does mean "this counter was
+/// already consumed", and a genuinely undeliverable message arrives here as
+/// `InvalidMessage` and still reports. Worth stating because the log around a
+/// duplicate is alarming and misleading: `creating new chains` and `Bad Mac!` are
+/// libsignal trying states, not the conclusion.
 fn classify_inner_failure(
     error: SignalProtocolError, sender_uuid: &str, sender_device_id: DeviceId,
     msg_type: CiphertextMessageType, contents: &[u8],
