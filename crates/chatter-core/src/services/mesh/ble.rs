@@ -4397,6 +4397,7 @@ mod tests {
         let (mut runtime, radio, state, _timeline) = runtime_parts();
         radio.set_connect_error(Some(LinkError::ConnectTimedOut {
             address: PEER.to_string(),
+            stage: "subscribing for notifications".to_string(),
         }));
         runtime.dial(PEER).await;
         let after = now_millis() + chatter_mesh_link::scheduler::TIMEOUT_DISCOVERY_IGNORE_MS / 2;

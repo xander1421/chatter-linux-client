@@ -19,8 +19,15 @@ pub enum LinkError {
     /// how one slow peer becomes a run of failures.
     ///
     /// [`TIMEOUT_DISCOVERY_IGNORE_MS`]: crate::scheduler::TIMEOUT_DISCOVERY_IGNORE_MS
-    #[error("connect to {address} timed out")]
-    ConnectTimedOut { address: String },
+    /// `stage` names the step that was still outstanding when the clock ran out.
+    ///
+    /// One bound covers the ACL, service resolution and both socket
+    /// acquisitions, and those fail for entirely different reasons — a peer out
+    /// of range, a GATT database that will not resolve, a subscription the far
+    /// side never sees. Without the stage a timeout says only "twenty seconds
+    /// passed", which was exactly the position this left an investigation in.
+    #[error("connect to {address} timed out during {stage}")]
+    ConnectTimedOut { address: String, stage: String },
 
     /// A connect attempt failed outright.
     #[error("connect to {address} failed: {reason}")]

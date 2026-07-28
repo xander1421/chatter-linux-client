@@ -30,6 +30,7 @@
 //! silently drop.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
 use bluer::gatt::remote::Characteristic as RemoteCharacteristic;
@@ -55,6 +56,46 @@ use crate::link::Shared;
 /// an unbonded device, but bounded, because a connect that never returns holds
 /// one of the six central slots forever and starves the scheduler.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// How far a connect got before the clock ran out.
+///
+/// The stages fail for unrelated reasons and want unrelated responses: an ACL
+/// that never forms is a peer out of range, a service resolution that hangs is a
+/// GATT database problem, and a notify socket that never arrives is a
+/// subscription the far side is still waiting on — which is what a peer logging
+/// "connected (awaiting subscription)" and nothing further is telling you.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+enum ConnectStage {
+    /// Opening the ACL.
+    Acl,
+    /// Resolving the GATT database and finding our characteristic.
+    ServiceDiscovery,
+    /// Acquiring the write socket, which is what settles the MTU.
+    WriteSocket,
+    /// Acquiring the notify socket — the subscription the peer waits for.
+    NotifySocket,
+}
+
+impl ConnectStage {
+    fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::ServiceDiscovery,
+            2 => Self::WriteSocket,
+            3 => Self::NotifySocket,
+            _ => Self::Acl,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Acl => "opening the connection",
+            Self::ServiceDiscovery => "finding the mesh service",
+            Self::WriteSocket => "acquiring the write socket",
+            Self::NotifySocket => "subscribing for notifications",
+        }
+    }
+}
 
 /// RSSI threshold handed to BlueZ, in dBm.
 ///
@@ -214,7 +255,15 @@ pub(crate) async fn connect(
 
     let device = adapter.device(peer).map_err(|err| error::classify_connect(address, &err))?;
 
-    let outcome = timeout(CONNECT_TIMEOUT, establish(&device, service, characteristic)).await;
+    // Which step is outstanding, for the timeout branch to report. A single
+    // bound covers four of them and they fail for unrelated reasons; naming the
+    // one that hung is the difference between a diagnosis and a shrug.
+    let stage = Arc::new(AtomicU8::new(ConnectStage::Acl as u8));
+    let outcome = timeout(
+        CONNECT_TIMEOUT,
+        establish(&device, service, characteristic, Arc::clone(&stage)),
+    )
+    .await;
     let (writer, reader) = match outcome {
         Ok(result) => result?,
         Err(_) => {
@@ -229,6 +278,9 @@ pub(crate) async fn connect(
             // peer into a run of failures.
             return Err(LinkError::ConnectTimedOut {
                 address: address.to_string(),
+                stage: ConnectStage::from_u8(stage.load(Ordering::Relaxed))
+                    .as_str()
+                    .to_string(),
             });
         }
     };
@@ -250,21 +302,28 @@ pub(crate) async fn connect(
 
 /// Everything between "we have a device object" and "we can write to it".
 async fn establish(
-    device: &Device, service: Uuid, characteristic: Uuid,
+    device: &Device, service: Uuid, characteristic: Uuid, stage: Arc<AtomicU8>,
 ) -> Result<(CharacteristicWriter, CharacteristicReader), LinkError> {
     let address = device.address().to_string();
 
+    // Each step records itself before starting, so whichever one is outstanding
+    // when the caller's clock expires is the one it names.
+    stage.store(ConnectStage::Acl as u8, Ordering::Relaxed);
     let connected = device.is_connected().await.map_err(|err| error::classify_connect(&address, &err))?;
     if !connected {
         device.connect().await.map_err(|err| error::classify_connect(&address, &err))?;
     }
 
+    stage.store(ConnectStage::ServiceDiscovery as u8, Ordering::Relaxed);
     let characteristic = find_characteristic(device, service, characteristic).await?;
 
     // Write first, then notify. Either order works, but acquiring the write
     // socket is what forces BlueZ to finish the MTU exchange, so the MTU the
     // notify socket reports afterwards is the settled one.
+    stage.store(ConnectStage::WriteSocket as u8, Ordering::Relaxed);
     let writer = characteristic.write_io().await.map_err(|err| error::classify_connect(&address, &err))?;
+
+    stage.store(ConnectStage::NotifySocket as u8, Ordering::Relaxed);
     let reader = characteristic.notify_io().await.map_err(|err| error::classify_connect(&address, &err))?;
 
     Ok((writer, reader))
