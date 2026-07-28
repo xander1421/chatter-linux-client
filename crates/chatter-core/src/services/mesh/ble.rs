@@ -736,6 +736,22 @@ impl BleRuntime {
             )
         });
 
+        // Hang up any duplicate ACL to this peer. The announce is the only thing
+        // that reveals identity — the address rotated out from under us — so this
+        // is the first moment the duplicate can be recognised as one.
+        let redundant = self
+            .state
+            .with(|state| redundant_central_links_locked(state, claimed));
+        for link in redundant {
+            tracing::info!(
+                target: "mesh::ble",
+                peer = %claimed,
+                %link,
+                "closing a duplicate link to a peer we already hold"
+            );
+            let _ = self.radio.disconnect(&link).await;
+        }
+
         self.emit_peers();
         // The two halves are reported separately on purpose. `is_new` is
         // `first_sighting || reconnected`, and conflating them hides the
@@ -2885,6 +2901,49 @@ fn sibling_links_locked(state: &LinkStateInner, ingress: &LinkId) -> Vec<LinkId>
         .collect()
 }
 
+/// The peer's redundant *central* links — every one except the single keeper.
+///
+/// A BLE peer advertises under a resolvable private address that rotates every
+/// fifteen minutes or so. Nothing in the address survives the rotation, so a
+/// scanner sees each one as a device it has never met, dials it, and ends up
+/// holding a second live ACL to a phone it was already connected to. The
+/// registry allowed for this — `links_to` scans rather than consulting a 1:1
+/// reverse map precisely because "one peer can legitimately hold several links
+/// at once" — but nothing ever closed the extras.
+///
+/// Measured on one desktop and one Galaxy S9+ in the same room: eight central
+/// links to a single peer in under two minutes, under eight distinct addresses,
+/// all binding to `4b51a6a51aa7eb3b`. There are only six central slots, so one
+/// phone starved the whole mesh, and the phone's own GATT server saturated —
+/// which is where `timed out during finding the mesh service` came from.
+///
+/// Only central links are pruned. A peripheral link is one the peer dialled to
+/// us; we did not spend a slot on it and it is not ours to hang up. Two devices
+/// legitimately holding one link each way is the case [`sibling_links_locked`]
+/// exists for.
+///
+/// The keeper is chosen deterministically — writable first, then lowest
+/// [`LinkId`] — because every link carrying an announce runs this, and two
+/// announces arriving together must agree on the survivor or they close each
+/// other. Preferring a writable link keeps the choice from settling on a stale
+/// rotation whose socket is already gone.
+fn redundant_central_links_locked(state: &LinkStateInner, peer: &PeerId) -> Vec<LinkId> {
+    let mut central: Vec<_> = state
+        .links
+        .links()
+        .filter(|(_, link_state)| {
+            link_state.role == LinkRole::Central && link_state.peer.as_ref() == Some(peer)
+        })
+        .collect();
+    if central.len() < 2 {
+        return Vec::new();
+    }
+    // `links()` is already in `LinkId` order, so a stable sort on writability
+    // alone leaves the lowest id first within each group.
+    central.sort_by_key(|(_, link_state)| !link_state.writable);
+    central.into_iter().skip(1).map(|(id, _)| id.clone()).collect()
+}
+
 /// Write a relayed packet, with the ingress link excluded.
 ///
 /// A free function so the relay path can be spawned: it needs the shared state and
@@ -3944,6 +4003,65 @@ mod tests {
         let link = writable_link(state, name, max_write);
         radio.set_max_write(&link, max_write);
         link
+    }
+
+    #[test]
+    fn one_peer_under_several_rotated_addresses_keeps_exactly_one_central_link() {
+        // The measured failure: a Galaxy S9+ rotating its private address gave one
+        // desktop eight central links to one peer inside two minutes, against six
+        // central slots. Every extra ACL is a slot the rest of the mesh cannot
+        // have and a GATT server the phone has to keep serving.
+        let (_runtime, _radio, state, _timeline) = runtime_parts();
+        let peer = PeerId::from_str("4b51a6a51aa7eb3b");
+
+        // Three links to the same peer, in the order the rotations arrived. The
+        // first is stale — its socket is gone, so it is not writable.
+        let stale = writable_link(&state, "central:dev_54_CB_34#1", 514);
+        let second = writable_link(&state, "central:dev_70_E0_8F#2", 514);
+        let third = writable_link(&state, "central:dev_5B_4F_1D#3", 514);
+        // ...and one *peripheral* link to the same peer, which the peer dialled to
+        // us. Not ours to hang up.
+        let inbound = LinkId::new("peripheral:dev_5B_4F_1D#4");
+        state.with(|inner| {
+            inner.links.link_up(inbound.clone(), LinkRole::Peripheral);
+            inner.links.set_writable(&inbound, true);
+            inner.links.set_writable(&stale, false);
+            for link in [&stale, &second, &third, &inbound] {
+                inner.links.bind_if_unbound(link, &peer);
+            }
+        });
+
+        let doomed = state.with(|inner| redundant_central_links_locked(inner, &peer));
+
+        // Asserted as properties rather than a fixed list: `links()` is ordered by
+        // `LinkId`, which is the D-Bus object path, and a rotated address sorts
+        // wherever its hex happens to fall — arrival order is not recoverable from
+        // it and the test should not pretend otherwise.
+        assert_eq!(doomed.len(), 2, "expected exactly one central link to survive");
+        assert!(doomed.contains(&stale), "kept a link whose socket is gone");
+        assert!(!doomed.contains(&inbound), "hung up a link the peer dialled to us");
+        let keeper = [&second, &third]
+            .into_iter()
+            .find(|link| !doomed.contains(link))
+            .expect("a writable central link survives");
+
+        // Deterministic across ingresses: every link carrying an announce computes
+        // this, and two announces landing together must agree on the survivor or
+        // they close each other. Same input, same answer.
+        state.with(|inner| {
+            assert_eq!(
+                redundant_central_links_locked(inner, &peer),
+                doomed,
+                "two announces would disagree on the survivor"
+            );
+            for link in &doomed {
+                inner.links.link_down(link);
+            }
+            assert!(
+                redundant_central_links_locked(inner, &peer).is_empty(),
+                "kept pruning once {keeper} was the only one left"
+            );
+        });
     }
 
     #[tokio::test]
