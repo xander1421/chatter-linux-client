@@ -2045,7 +2045,11 @@ impl BleRuntime {
         };
 
         let transfer = OutboundTransfer::new(manifest, path, message_id.to_string(), now_s);
-        let manifest_packet = self.build_manifest_packet(&transfer.manifest);
+        // Before `files_out.insert`, so a manifest that will not encode leaves no
+        // transfer behind to stream chunks nobody can place.
+        let Some(manifest_packet) = self.build_manifest_packet(&transfer.manifest) else {
+            return;
+        };
         // Remembered so the echo is recognised as ours. The chunks are recorded
         // the same way as they go out — see `pump_streamed_files`.
         self.state
@@ -2078,8 +2082,31 @@ impl BleRuntime {
         })));
     }
 
-    fn build_manifest_packet(&self, manifest: &FileManifest) -> BitchatPacket {
-        let payload = manifest.encode().unwrap_or_default();
+    /// The manifest as a signed packet, or `None` if it cannot be encoded.
+    ///
+    /// `unwrap_or_default` here put an *empty* payload on the air under a
+    /// `FileManifest` type. The receiver drops what it cannot decode, so the
+    /// sender would go on to stream every chunk of a transfer the far side had
+    /// never been told about — a stall with no error on either device.
+    ///
+    /// `encode` fails on `validate` (a size or chunk size out of range) or a TLV
+    /// field beyond 64 KiB. Both should be unreachable, since `mesh_send_file`
+    /// applies the cap before a manifest is ever built. Unreachable is the reason
+    /// to return the error rather than paper over it: if it does happen, the
+    /// invented value hides the cause exactly where nothing else records it.
+    fn build_manifest_packet(&self, manifest: &FileManifest) -> Option<BitchatPacket> {
+        let payload = match manifest.encode() {
+            Ok(payload) => payload,
+            Err(error) => {
+                tracing::warn!(
+                    target: "mesh::ble",
+                    transfer = %hex_encode(&manifest.transfer_id),
+                    %error,
+                    "file manifest could not be encoded; not sent"
+                );
+                return None;
+            }
+        };
         let packet = self.build_packet(
             MessageType::FileManifest,
             None,
@@ -2089,7 +2116,7 @@ impl BleRuntime {
         // Signed, because the receiver requires it: an unsigned manifest is
         // dropped before its payload is looked at, exactly as an unsigned file
         // transfer is.
-        self.maybe_sign(packet, true)
+        Some(self.maybe_sign(packet, true))
     }
 
     /// Put the next chunk of each live transfer on the air, and repeat manifests.
@@ -2125,7 +2152,9 @@ impl BleRuntime {
                     transfer.last_manifest_secs = now_s;
                     transfer.manifest.clone()
                 };
-                let packet = self.build_manifest_packet(&manifest);
+                let Some(packet) = self.build_manifest_packet(&manifest) else {
+                    continue;
+                };
                 self.state.with(|state| {
                     state
                         .self_broadcasts
