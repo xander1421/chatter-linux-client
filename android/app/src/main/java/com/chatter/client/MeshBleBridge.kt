@@ -234,6 +234,29 @@ object MeshBleBridge {
     }
 
     /** A link where we are the peripheral: a remote central connected inward. */
+    /**
+     * A GATT status as something readable, keeping the number.
+     *
+     * These constants are not public API — `BluetoothGatt` exposes almost none of
+     * them — so they are spelled out here from the stack's own `gatt_api.h`. A
+     * bare `status=8` is not actionable, and working out which of these it was
+     * has cost hours more than once.
+     */
+    private fun gattStatusName(status: Int): String {
+        val name = when (status) {
+            0 -> "success"
+            8 -> "GATT_CONN_TIMEOUT (link supervision timed out — peer out of range or asleep)"
+            19 -> "GATT_CONN_TERMINATE_PEER_USER (the peer hung up)"
+            22 -> "GATT_CONN_TERMINATE_LOCAL_HOST (we hung up)"
+            34 -> "GATT_CONN_LMP_TIMEOUT"
+            62 -> "GATT_CONN_FAIL_ESTABLISH (never finished connecting)"
+            133 -> "GATT_ERROR (the catch-all; usually a stack-level failure)"
+            256 -> "GATT_CONN_CANCEL"
+            else -> "unmapped"
+        }
+        return "status=$status $name"
+    }
+
     private class PeripheralLink(val id: String, val device: BluetoothDevice) {
         @Volatile var maxWrite = DEFAULT_MAX_WRITE
         @Volatile var announced = false
@@ -787,6 +810,19 @@ object MeshBleBridge {
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     val removed = peripheralLinks.remove(id)
                     if (removed != null && removed.announced) emitDisconnected(id)
+                    // Said out loud, always. This branch was silent, and a link
+                    // dying for no stated reason is the single most expensive
+                    // shape of bug in this codebase: the peer's own log is the
+                    // only place the reason exists, and it was throwing it away.
+                    // Warn when the stack gives a reason, because a clean
+                    // teardown is routine and an aborted one is not.
+                    val detail = "peripheral link $id disconnected, ${gattStatusName(status)}" +
+                        if (removed == null) " (no link was tracked)" else ""
+                    if (status == BluetoothGatt.GATT_SUCCESS) {
+                        Log.d(TAG, detail)
+                    } else {
+                        Log.w(TAG, detail)
+                    }
                 }
             }
         }
@@ -1062,7 +1098,10 @@ object MeshBleBridge {
                     guard("close", Unit) { gatt.close() }
                 }
                 if (status != BluetoothGatt.GATT_SUCCESS) {
-                    Log.d(TAG, "$id: disconnected with status=$status")
+                    // Warn, not debug. This is the line that says why a link we
+                    // were using went away, and it is the first thing anyone
+                    // looks for when the mesh goes quiet.
+                    Log.w(TAG, "central link $id disconnected, ${gattStatusName(status)}")
                 }
             }
         }

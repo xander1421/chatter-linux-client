@@ -13,6 +13,7 @@
 //! the duty cycle, the announce cadence, gossip sync, and outbox maintenance
 //! happen at all: none of those layers can schedule themselves.
 
+use std::cmp::Reverse;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -2974,11 +2975,21 @@ fn sibling_links_locked(state: &LinkStateInner, ingress: &LinkId) -> Vec<LinkId>
 /// legitimately holding one link each way is the case [`sibling_links_locked`]
 /// exists for.
 ///
-/// The keeper is chosen deterministically — writable first, then lowest
-/// [`LinkId`] — because every link carrying an announce runs this, and two
-/// announces arriving together must agree on the survivor or they close each
-/// other. Preferring a writable link keeps the choice from settling on a stale
-/// rotation whose socket is already gone.
+/// The keeper is chosen deterministically — writable first, then *newest* —
+/// because every link carrying an announce runs this, and two announces arriving
+/// together must agree on the survivor or they close each other.
+///
+/// Newest rather than lowest id, which is what this did first and got wrong. A
+/// duplicate exists because the peer rotated its address, so the older link is
+/// the one sitting on an address the peer has moved off; keeping it discards the
+/// fresher ACL for a dying one. Measured on the cold-start race: link #1
+/// announced, #2 was pruned in its favour, and two seconds later #1 was already
+/// refusing writes as "no longer connected" — both links gone and a reconnect
+/// from nothing.
+///
+/// Age comes from the sequence [`Shared::open_link`] appends as `#N`, which is
+/// monotonic per radio. An id without one sorts oldest, so a malformed id can
+/// never win the tie.
 fn redundant_central_links_locked(state: &LinkStateInner, peer: &PeerId) -> Vec<LinkId> {
     let mut central: Vec<_> = state
         .links
@@ -2990,10 +3001,19 @@ fn redundant_central_links_locked(state: &LinkStateInner, peer: &PeerId) -> Vec<
     if central.len() < 2 {
         return Vec::new();
     }
-    // `links()` is already in `LinkId` order, so a stable sort on writability
-    // alone leaves the lowest id first within each group.
-    central.sort_by_key(|(_, link_state)| !link_state.writable);
+    central.sort_by_key(|(id, link_state)| (!link_state.writable, Reverse(link_seq(id))));
     central.into_iter().skip(1).map(|(id, _)| id.clone()).collect()
+}
+
+/// The `#N` a [`LinkId`] ends with — its creation order on this radio.
+///
+/// `0` when absent or unparseable, which sorts oldest: an id we cannot read the
+/// age of must never be chosen as the survivor over one we can.
+fn link_seq(link: &LinkId) -> u64 {
+    link.as_str()
+        .rsplit_once('#')
+        .and_then(|(_, seq)| seq.parse().ok())
+        .unwrap_or(0)
 }
 
 /// Write a relayed packet, with the ingress link excluded.
@@ -4130,6 +4150,10 @@ mod tests {
             .into_iter()
             .find(|link| !doomed.contains(link))
             .expect("a writable central link survives");
+        // The newest writable link, specifically. A duplicate exists because the
+        // peer rotated, so the older link sits on an address it has moved off —
+        // and keeping that one cost both links in the measured cold-start race.
+        assert_eq!(keeper, &third, "kept an older link over a fresher one");
 
         // Deterministic across ingresses: every link carrying an announce computes
         // this, and two announces landing together must agree on the survivor or
