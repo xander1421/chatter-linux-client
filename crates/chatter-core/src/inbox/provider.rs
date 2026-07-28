@@ -553,13 +553,18 @@ impl DeviceInboxProvider {
                     if !handled.is_empty()
                         && let Err(error) = poller.acknowledge(handled).await
                     {
-                        // Not fatal — the next poll re-delivers and processing is
-                        // idempotent. Loud because a persistent failure here is
-                        // invisible except as a queue that never shrinks.
+                        // Not fatal, but not self-correcting within this session
+                        // either: the cursor has already advanced past these, so
+                        // the next poll asks for a higher `after_id` and skips
+                        // them. They come back on the next start, when the cursor
+                        // begins at 0 again, and processing is idempotent. Loud
+                        // because a persistent failure here is invisible except as
+                        // a queue that never shrinks.
                         tracing::warn!(
                             cycle = poll_cycle,
                             %error,
-                            "Device inbox: acknowledge failed; these messages will be redelivered"
+                            "Device inbox: acknowledge failed; these stay queued on \
+                             the server and are reprocessed at the next start"
                         );
                     }
                 }
