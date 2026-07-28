@@ -515,7 +515,9 @@ impl DeviceInboxProvider {
                     } else {
                         tracing::info!(cycle = poll_cycle, "Device inbox: empty");
                     }
+                    let mut handled: Vec<String> = Vec::with_capacity(count);
                     for msg in messages {
+                        let guid = msg.message_guid.clone();
                         process_device_message(
                             &msg,
                             &pipeline,
@@ -529,6 +531,36 @@ impl DeviceInboxProvider {
                             domain_tx.as_ref(),
                         )
                         .await;
+                        handled.push(guid);
+                    }
+
+                    // Drain the server queue. `AcknowledgeMessages` is documented in
+                    // the proto as "Acknowledge receipt of messages (deletes from
+                    // queue)", and nothing was calling it for the device inbox — only
+                    // the group/DM/anon mailbox paths, which use a different client.
+                    // So the queue only ever grew, and since `after_id` starts at 0
+                    // every launch, each start re-fetched and re-decrypted the whole
+                    // history: 100 messages a page with `has_more=true`.
+                    //
+                    // Acked whatever the outcome, not only on success. An undecryptable
+                    // message cannot be recovered by handing it to us again — the
+                    // ciphertext is dead. Its recovery path is the
+                    // `DecryptionErrorMessage` we send back, which makes the *sender*
+                    // re-send a fresh one. Keeping it queued instead means replaying it
+                    // at every start and reporting it again each time, which is
+                    // precisely the storm this produced: 201 inbound reports and 12
+                    // outbound in four minutes between two idle devices.
+                    if !handled.is_empty()
+                        && let Err(error) = poller.acknowledge(handled).await
+                    {
+                        // Not fatal — the next poll re-delivers and processing is
+                        // idempotent. Loud because a persistent failure here is
+                        // invisible except as a queue that never shrinks.
+                        tracing::warn!(
+                            cycle = poll_cycle,
+                            %error,
+                            "Device inbox: acknowledge failed; these messages will be redelivered"
+                        );
                     }
                 }
                 Ok(None) => {
