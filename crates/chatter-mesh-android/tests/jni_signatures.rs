@@ -539,6 +539,9 @@ public final class com.chatter.client.MeshBleBridge {
   public boolean setScanning(boolean);
     descriptor: (Z)Z
 
+  public void setLocalPeer(java.lang.String);
+    descriptor: (Ljava/lang/String;)V
+
   public java.lang.String connect(java.lang.String);
     descriptor: (Ljava/lang/String;)Ljava/lang/String;
 
@@ -569,8 +572,8 @@ public final class com.chatter.client.MeshBleBridge {
   public java.util.List<java.lang.String> peers();
     descriptor: ()Ljava/util/List;
 
-  private native void nativeOnDiscovered(java.lang.String, int);
-    descriptor: (Ljava/lang/String;I)V
+  private native void nativeOnDiscovered(java.lang.String, int, java.lang.String);
+    descriptor: (Ljava/lang/String;ILjava/lang/String;)V
 
   private native void nativeOnConnected(java.lang.String, boolean, int);
     descriptor: (Ljava/lang/String;ZI)V

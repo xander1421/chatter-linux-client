@@ -156,6 +156,7 @@ pub enum Op {
     Start,
     Stop,
     SetScanning,
+    SetLocalPeer,
     Connect,
     Disconnect,
     Send,
@@ -174,6 +175,7 @@ impl Op {
             Op::Start => "start",
             Op::Stop => "stop",
             Op::SetScanning => "setScanning",
+            Op::SetLocalPeer => "setLocalPeer",
             Op::Connect => "connect",
             Op::Disconnect => "disconnect",
             Op::Send => "send",
@@ -238,6 +240,13 @@ pub fn link_error(op: Op, subject: &str, failure: Failure) -> LinkError {
             // off, and both mean the radio is not usable right now.
             Op::SetScanning => LinkError::AdapterUnavailable(
                 "setScanning() returned false: BLUETOOTH_SCAN was refused or the adapter is off"
+                    .to_string(),
+            ),
+            // `setLocalPeer` returns void, so it cannot refuse. The arm exists
+            // for completeness; failing to publish the id costs deduplication,
+            // not the radio.
+            Op::SetLocalPeer => LinkError::AdapterUnavailable(
+                "setLocalPeer() failed; peers cannot recognise us across an address rotation"
                     .to_string(),
             ),
             Op::Connect => LinkError::ConnectFailed {

@@ -212,6 +212,12 @@ impl BleRuntime {
     /// branch reading it does not borrow the whole runtime, which every handler
     /// needs mutably.
     pub async fn run(mut self, mut commands: UnboundedReceiver<BleCommand>) {
+        // Before `start`, because an advertiser already running will not pick it
+        // up. This is what lets peers recognise us across a private address
+        // rotation instead of spending a connection to find out who we are.
+        if let Some(peer) = self.identity.peer_id().to_routing_bytes() {
+            self.radio.set_local_peer(peer);
+        }
         if let Err(error) = self.radio.start().await {
             self.degraded(format!("the radio would not start: {error}"));
             return;
@@ -273,7 +279,9 @@ impl BleRuntime {
 
     async fn on_link_event(&mut self, event: LinkEvent) {
         match event {
-            LinkEvent::Discovered { address, rssi } => self.on_discovered(&address, rssi).await,
+            LinkEvent::Discovered { address, rssi, peer } => {
+                self.on_discovered(&address, rssi, peer).await
+            }
             LinkEvent::Connected {
                 link,
                 role,
@@ -316,8 +324,41 @@ impl BleRuntime {
         }
     }
 
-    async fn on_discovered(&mut self, address: &str, rssi: i16) {
+    /// A device advertising the mesh service came into range.
+    ///
+    /// `peer` is the identity from the advert's service data, when it carried
+    /// one. Recognising it here is the whole point: a private address rotates,
+    /// and without the id the only way to learn that an unfamiliar address is a
+    /// peer we already hold is to connect to it and read its announce. That
+    /// connection is not free — it displaces the ACL we already had, and the
+    /// disconnect makes the peer's advertiser restart under yet another address.
+    /// Measured before this existed: nineteen addresses dialled in four minutes,
+    /// every one of them the same phone.
+    ///
+    /// `None` means the scan response has not been seen yet, not that the device
+    /// is a stranger, so it falls through to the ordinary scheduler path.
+    async fn on_discovered(&mut self, address: &str, rssi: i16, peer: Option<[u8; 8]>) {
         let now = now_millis();
+
+        if let Some(peer) = peer {
+            let peer = PeerId::from_bytes(&peer);
+            let held = self.state.with(|state| {
+                state
+                    .links
+                    .links()
+                    .any(|(_, link)| link.peer.as_ref() == Some(&peer))
+            });
+            if held {
+                tracing::trace!(
+                    target: "mesh::ble",
+                    %peer,
+                    %address,
+                    "another address for a peer we already hold; not dialling"
+                );
+                return;
+            }
+        }
+
         let decision = self.state.with(|state| {
             let candidate =
                 chatter_mesh_link::scheduler::ConnectionCandidate::new(address, rssi, now);
@@ -4014,6 +4055,40 @@ mod tests {
         let link = writable_link(state, name, max_write);
         radio.set_max_write(&link, max_write);
         link
+    }
+
+    #[tokio::test]
+    async fn a_rotated_address_of_a_held_peer_is_not_dialled() {
+        // The fix that stops the churn at its source. Every rotation used to cost
+        // a connection just to learn who was behind it, and that connection
+        // displaced the ACL already held — whose loss restarted the peer's
+        // advertiser under yet another address. Nineteen addresses in four
+        // minutes, all one phone.
+        let (mut runtime, radio, state, _timeline) = runtime_parts();
+        let peer = PeerId::from_str("4b51a6a51aa7eb3b");
+        let held = writable_link(&state, "central:dev_54_CB_34#1", 514);
+        state.with(|inner| {
+            inner.links.bind_if_unbound(&held, &peer);
+        });
+
+        let bytes = peer.to_routing_bytes().expect("an eight byte peer id");
+        runtime
+            .on_discovered("70:E0:8F:D7:6B:84", -50, Some(bytes))
+            .await;
+        assert!(
+            radio.connect_attempts().is_empty(),
+            "dialled another address for a peer already held"
+        );
+
+        // An advert with no id still gets dialled. The scan response often lands
+        // after the advertisement, so `None` has to mean "unknown", never "not a
+        // peer" — reading it the other way would make the mesh undiscoverable.
+        runtime.on_discovered("70:E0:8F:D7:6B:84", -50, None).await;
+        assert_eq!(
+            radio.connect_attempts(),
+            vec!["70:E0:8F:D7:6B:84".to_string()],
+            "an advert with no peer id must still be dialled"
+        );
     }
 
     #[test]

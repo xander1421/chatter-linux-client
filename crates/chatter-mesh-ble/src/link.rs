@@ -874,12 +874,12 @@ mod tests {
     #[tokio::test]
     async fn events_come_back_in_order() {
         let link = BlueZLink::new();
-        link.inner.emit(LinkEvent::Discovered { address: PEER.to_string(), rssi: -70 });
+        link.inner.emit(LinkEvent::Discovered { address: PEER.to_string(), rssi: -70, peer: None });
         link.inner.emit(LinkEvent::AdapterPowerChanged { powered: true });
 
         assert_eq!(
             link.next_event().await,
-            Some(LinkEvent::Discovered { address: PEER.to_string(), rssi: -70 })
+            Some(LinkEvent::Discovered { address: PEER.to_string(), rssi: -70, peer: None })
         );
         assert_eq!(link.next_event().await, Some(LinkEvent::AdapterPowerChanged { powered: true }));
     }

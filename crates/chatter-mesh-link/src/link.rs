@@ -63,7 +63,13 @@ pub enum LinkEvent {
     ///
     /// Not a connection — the scheduler decides whether this is worth spending one
     /// of the scarce central slots on, using `rssi` among other things.
-    Discovered { address: String, rssi: i16 },
+    ///
+    /// `peer` is the advertised identity, when the advert carried one. It is the
+    /// only thing about a device that survives a private-address rotation, and
+    /// therefore the only way to recognise an address as a peer already held
+    /// *before* spending a connection to find out. `None` from a peer whose scan
+    /// response was not received — treat that as unknown, never as unfamiliar.
+    Discovered { address: String, rssi: i16, peer: Option<[u8; 8]> },
 
     /// A link is up **and writable right now**.
     ///
@@ -155,6 +161,14 @@ pub trait MeshLink: Send + Sync {
 
     /// Next event, or `None` once the link layer has shut down for good.
     fn next_event(&self) -> BoxFuture<'_, Option<LinkEvent>>;
+
+    /// Publish this device's identity in the advertisement, so peers can recognise
+    /// it across a private-address rotation.
+    ///
+    /// Defaulted to a no-op: a link with no radio behind it has nothing to
+    /// advertise, and a test double should not have to care. Call it before
+    /// [`start`](Self::start) — an advertiser already running will not pick it up.
+    fn set_local_peer(&self, _peer: [u8; 8]) {}
 }
 
 /// bitchat's mainnet GATT service UUID.

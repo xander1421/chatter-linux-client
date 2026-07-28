@@ -227,7 +227,21 @@ pub(crate) async fn start_scan(
                 continue;
             };
 
-            shared.emit(LinkEvent::Discovered { address: address.to_string(), rssi });
+            // The advertised peer id, when the scan response arrived with it.
+            // `None` is "not known yet", not "not a peer": BlueZ fills service
+            // data in from whichever packets it has seen, and the scan response
+            // often lands a beat after the advertisement. The policy layer treats
+            // the unknown case as dialable, so a peer whose id we never learn
+            // behaves exactly as it did before this existed.
+            let peer = device
+                .service_data()
+                .await
+                .ok()
+                .flatten()
+                .and_then(|data| data.get(&service).cloned())
+                .and_then(|bytes| <[u8; 8]>::try_from(bytes.as_slice()).ok());
+
+            shared.emit(LinkEvent::Discovered { address: address.to_string(), rssi, peer });
         }
     });
 

@@ -163,6 +163,9 @@ object MeshBleBridge {
     private var scanActive = false
     private var advertising = false
 
+    /** Our mesh peer id, advertised in the scan response. Set before [start]. */
+    private var localPeer: ByteArray = ByteArray(0)
+
     private var bluetoothManager: BluetoothManager? = null
     private var gattServer: BluetoothGattServer? = null
     private var notifyCharacteristic: BluetoothGattCharacteristic? = null
@@ -435,6 +438,24 @@ object MeshBleBridge {
     }
 
     /**
+     * Publish our mesh peer id in the advertisement's scan response. `(Ljava/lang/String;)V`
+     *
+     * A BLE private address rotates, and nothing about it survives the rotation.
+     * A scanner that cannot see who is behind an address has to connect to find
+     * out — and that connection displaces the one it already had, whose loss
+     * restarts this advertiser under yet another address. The id breaks that
+     * loop. bitchat carries the same eight bytes in the same field for the same
+     * reason (`BluetoothGattServerManager.kt`).
+     *
+     * Call before [start]; an advertiser already running will not pick it up.
+     */
+    @Suppress("unused")
+    fun setLocalPeer(peerHex: String) = synchronized(lock) {
+        localPeer = peerHex.hexToBytesOrEmpty()
+        if (localPeer.isEmpty()) Log.w(TAG, "setLocalPeer: could not parse a peer id")
+    }
+
+    /**
      * Connect outward to a discovered address, taking the central role.
      * `(Ljava/lang/String;)Ljava/lang/String;`
      *
@@ -540,7 +561,7 @@ object MeshBleBridge {
     // ==============================================================================
 
     /** `(Ljava/lang/String;I)V` — a device advertising our service came into range. */
-    external fun nativeOnDiscovered(address: String, rssi: Int)
+    external fun nativeOnDiscovered(address: String, rssi: Int, peerHex: String?)
 
     /**
      * `(Ljava/lang/String;ZI)V` — a link is up **and writable right now**.
@@ -577,8 +598,32 @@ object MeshBleBridge {
         }
     }
 
-    private fun emitDiscovered(address: String, rssi: Int) =
-        emit("onDiscovered") { nativeOnDiscovered(address, rssi) }
+    private fun emitDiscovered(address: String, rssi: Int, peerHex: String?) =
+        emit("onDiscovered") { nativeOnDiscovered(address, rssi, peerHex) }
+
+    /**
+     * The advertised peer id, or null when this sighting did not carry one.
+     *
+     * Null is routine, not an error: the scan response often lands a beat after
+     * the advertisement, so the first sighting of a device frequently has no
+     * service data. The native side treats null as "unknown", never as "not a
+     * peer".
+     */
+    private fun ScanResult.advertisedPeer(): String? {
+        val data = scanRecord?.getServiceData(SERVICE_PARCEL_UUID) ?: return null
+        if (data.size < 8) return null
+        return data.take(8).joinToString("") { "%02x".format(it) }
+    }
+
+    /** Sixteen hex characters to eight bytes; empty on anything else. */
+    private fun String.hexToBytesOrEmpty(): ByteArray {
+        if (length != 16) return ByteArray(0)
+        return try {
+            chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        } catch (_: NumberFormatException) {
+            ByteArray(0)
+        }
+    }
 
     private fun emitConnected(link: String, peripheral: Boolean, maxWrite: Int) =
         emit("onConnected") { nativeOnConnected(link, peripheral, maxWrite) }
@@ -662,8 +707,21 @@ object MeshBleBridge {
             .addServiceUuid(SERVICE_PARCEL_UUID)
             .build()
 
+        // The peer id rides in the scan response, not the advertisement: a
+        // 128-bit service UUID plus eight bytes of service data does not fit in
+        // one 31-byte packet, and the scan response is a second 31 bytes.
+        //
+        // Not a privacy regression. This id is already in the clear in every
+        // announce we broadcast, and it names the mesh identity rather than the
+        // hardware — unlike the device name, which stays excluded above.
+        val scanResponse = if (localPeer.isEmpty()) null else AdvertiseData.Builder()
+            .setIncludeDeviceName(false)
+            .setIncludeTxPowerLevel(false)
+            .addServiceData(SERVICE_PARCEL_UUID, localPeer)
+            .build()
+
         val issued = guard("startAdvertising", false) {
-            advertiser.startAdvertising(settings, data, advertiseCallback)
+            advertiser.startAdvertising(settings, data, scanResponse, advertiseCallback)
             true
         }
         advertising = issued
@@ -939,11 +997,11 @@ object MeshBleBridge {
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult?) {
             val scan = result ?: return
-            emitDiscovered(scan.device.address, scan.rssi)
+            emitDiscovered(scan.device.address, scan.rssi, scan.advertisedPeer())
         }
 
         override fun onBatchScanResults(results: MutableList<ScanResult>?) {
-            results?.forEach { emitDiscovered(it.device.address, it.rssi) }
+            results?.forEach { emitDiscovered(it.device.address, it.rssi, it.advertisedPeer()) }
         }
 
         override fun onScanFailed(errorCode: Int) {

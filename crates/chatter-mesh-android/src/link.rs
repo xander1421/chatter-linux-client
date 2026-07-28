@@ -165,7 +165,7 @@ fn role_tag(role: LinkRole) -> &'static str {
 /// length is the part that matters.
 fn describe(event: &LinkEvent) -> String {
     match event {
-        LinkEvent::Discovered { address, rssi } => format!("Discovered({address}, {rssi} dBm)"),
+        LinkEvent::Discovered { address, rssi, .. } => format!("Discovered({address}, {rssi} dBm)"),
         LinkEvent::Connected { link, role, max_write } => {
             format!("Connected({link}, {}, max_write {max_write})", role_tag(*role))
         }
@@ -693,6 +693,20 @@ impl MeshLink for AndroidLink {
         })
     }
 
+    fn set_local_peer(&self, peer: [u8; 8]) {
+        // Best effort: without it peers cannot recognise us across an address
+        // rotation, which is a churn problem, not a broken radio. Said at warn
+        // because the symptom it produces — a peer reconnecting endlessly under
+        // new addresses — looks like anything but a missing advertisement field.
+        let hex: String = peer.iter().map(|byte| format!("{byte:02x}")).collect();
+        if let Err(error) = bridge::set_local_peer(&hex) {
+            error::log_warn(&format!(
+                "mesh: could not advertise our peer id; peers will not recognise us \
+                 across an address rotation: {error}"
+            ));
+        }
+    }
+
     fn connect(&self, address: &str) -> BoxFuture<'_, Result<LinkId, LinkError>> {
         let address = address.to_string();
         Box::pin(async move {
@@ -1176,15 +1190,15 @@ mod tests {
         // out-of-memory kill waiting to happen.
         let shared = shared(2);
         for rssi in [-40, -50, -60, -70] {
-            shared.emit(LinkEvent::Discovered { address: PEER.to_string(), rssi });
+            shared.emit(LinkEvent::Discovered { address: PEER.to_string(), rssi, peer: None });
         }
 
         let events = drain_events(&shared);
         assert_eq!(events.len(), 2, "the queue must not grow past its bound");
         // The oldest survive: `try_send` refuses the newcomer rather than
         // evicting, which keeps ordering intact for whatever is still queued.
-        assert_eq!(events[0], LinkEvent::Discovered { address: PEER.to_string(), rssi: -40 });
-        assert_eq!(events[1], LinkEvent::Discovered { address: PEER.to_string(), rssi: -50 });
+        assert_eq!(events[0], LinkEvent::Discovered { address: PEER.to_string(), rssi: -40, peer: None });
+        assert_eq!(events[1], LinkEvent::Discovered { address: PEER.to_string(), rssi: -50, peer: None });
     }
 
     #[test]
@@ -1209,7 +1223,7 @@ mod tests {
     fn every_event_describes_itself_by_name() {
         let link = LinkId::new("central:x#1");
         for event in [
-            LinkEvent::Discovered { address: PEER.to_string(), rssi: -70 },
+            LinkEvent::Discovered { address: PEER.to_string(), rssi: -70, peer: None },
             LinkEvent::Connected { link: link.clone(), role: LinkRole::Central, max_write: 244 },
             LinkEvent::Disconnected { link: link.clone() },
             LinkEvent::Data { link, bytes: vec![0; 3] },
@@ -1224,13 +1238,13 @@ mod tests {
     #[test]
     fn events_come_back_in_order() {
         let link = AndroidLink::new();
-        link.inner.emit(LinkEvent::Discovered { address: PEER.to_string(), rssi: -70 });
+        link.inner.emit(LinkEvent::Discovered { address: PEER.to_string(), rssi: -70, peer: None });
         link.inner.emit(LinkEvent::AdapterPowerChanged { powered: true });
 
         block_on(async {
             assert_eq!(
                 link.next_event().await,
-                Some(LinkEvent::Discovered { address: PEER.to_string(), rssi: -70 })
+                Some(LinkEvent::Discovered { address: PEER.to_string(), rssi: -70, peer: None })
             );
             assert_eq!(link.next_event().await, Some(LinkEvent::AdapterPowerChanged { powered: true }));
         });

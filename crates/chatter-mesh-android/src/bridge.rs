@@ -82,6 +82,7 @@ struct Methods {
     start: JMethodID,
     stop: JMethodID,
     set_scanning: JMethodID,
+    set_local_peer: JMethodID,
     connect: JMethodID,
     disconnect: JMethodID,
     send: JMethodID,
@@ -95,6 +96,7 @@ impl Methods {
             start: method_id(env, class, "start")?,
             stop: method_id(env, class, "stop")?,
             set_scanning: method_id(env, class, "setScanning")?,
+            set_local_peer: method_id(env, class, "setLocalPeer")?,
             connect: method_id(env, class, "connect")?,
             disconnect: method_id(env, class, "disconnect")?,
             send: method_id(env, class, "send")?,
@@ -456,6 +458,34 @@ pub fn disconnect(handle: &str) -> Result<(), LinkError> {
     })
 }
 
+/// Publish our peer id in the advertisement's scan response.
+///
+/// A private address rotates and nothing about it survives; this id does, so a
+/// scanner can tell a rotation from a stranger without spending a connection to
+/// find out. Best-effort by design — losing it costs deduplication, not the
+/// radio — so the caller logs and carries on.
+pub fn set_local_peer(peer_hex: &str) -> Result<(), LinkError> {
+    with_bridge(Op::SetLocalPeer, "", |env, bridge, instance| {
+        let created = env.new_string(peer_hex);
+        let target = classify(env, "NewStringUTF(peer id)", created)?;
+        let args = [JValue::Object(&target).as_jni()];
+
+        // SAFETY: `setLocalPeer` was resolved from BRIDGE_METHODS as
+        // `(Ljava/lang/String;)V` on this exact class, and is called with one
+        // string and read as void.
+        let called = unsafe {
+            env.call_method_unchecked(
+                instance,
+                bridge.methods.set_local_peer,
+                ReturnType::Primitive(Primitive::Void),
+                &args,
+            )
+        };
+        classify(env, "MeshBleBridge.setLocalPeer", called)?.v()?;
+        Ok(())
+    })
+}
+
 /// Write one payload to one connection.
 ///
 /// `false` from Kotlin means the write did not go out: an unknown link, a link
@@ -542,8 +572,17 @@ mod tests {
     use super::*;
 
     /// Every method this module resolves an ID for, in `Methods::resolve` order.
-    const RESOLVED: [&str; 8] =
-        ["attach", "start", "stop", "setScanning", "connect", "disconnect", "send", "maxWrite"];
+    const RESOLVED: [&str; 9] = [
+        "attach",
+        "start",
+        "stop",
+        "setScanning",
+        "setLocalPeer",
+        "connect",
+        "disconnect",
+        "send",
+        "maxWrite",
+    ];
 
     #[test]
     fn every_descriptor_comes_from_the_frozen_table() {

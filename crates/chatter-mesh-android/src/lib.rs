@@ -56,7 +56,10 @@ pub const BRIDGE_CLASS: &str = "com/chatter/client/MeshBleBridge";
 /// strings are checked from both sides rather than trusted.
 pub const NATIVE_METHODS: &[(&str, &str)] = &[
     // (name, JNI descriptor)
-    ("nativeOnDiscovered", "(Ljava/lang/String;I)V"),
+    // The trailing string is the advertised peer id as hex, or null when the
+    // scan response has not been seen. It is what makes a rotated private
+    // address recognisable without connecting to find out.
+    ("nativeOnDiscovered", "(Ljava/lang/String;ILjava/lang/String;)V"),
     ("nativeOnConnected", "(Ljava/lang/String;ZI)V"),
     ("nativeOnDisconnected", "(Ljava/lang/String;)V"),
     ("nativeOnData", "(Ljava/lang/String;[B)V"),
@@ -78,6 +81,9 @@ pub const BRIDGE_METHODS: &[(&str, &str)] = &[
     ("start", "()Z"),
     ("stop", "()V"),
     ("setScanning", "(Z)Z"),
+    // The eight-byte peer id as hex, advertised in the scan response so peers
+    // can recognise us across a private address rotation. Call before `start`.
+    ("setLocalPeer", "(Ljava/lang/String;)V"),
     ("connect", "(Ljava/lang/String;)Ljava/lang/String;"),
     ("disconnect", "(Ljava/lang/String;)V"),
     ("send", "(Ljava/lang/String;[B)Z"),

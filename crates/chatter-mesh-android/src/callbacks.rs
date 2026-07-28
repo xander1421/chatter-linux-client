@@ -243,13 +243,34 @@ extern "system" fn native_on_discovered(
     _this: JObject<'_>,
     address: JString<'_>,
     rssi: jint,
+    peer: JString<'_>,
 ) {
     guard("nativeOnDiscovered", || {
         let Some(address) = read_string(&mut env, &address, "nativeOnDiscovered(address)") else {
             return;
         };
-        link::dispatch(LinkEvent::Discovered { address, rssi: clamp_rssi(rssi) });
+        // Null whenever the scan response has not arrived, which is common on the
+        // first sighting and never an error. Unparseable is treated the same as
+        // absent: the policy layer dials an unknown peer, so the worst case is the
+        // behaviour we had before the id existed.
+        let peer = (!peer.is_null())
+            .then(|| read_string(&mut env, &peer, "nativeOnDiscovered(peer)"))
+            .flatten()
+            .and_then(|hex| decode_peer_hex(&hex));
+        link::dispatch(LinkEvent::Discovered { address, rssi: clamp_rssi(rssi), peer });
     });
+}
+
+/// Sixteen hex characters to the eight bytes they name.
+fn decode_peer_hex(hex: &str) -> Option<[u8; 8]> {
+    if hex.len() != 16 {
+        return None;
+    }
+    let mut out = [0u8; 8];
+    for (byte, pair) in out.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
+        *byte = u8::from_str_radix(core::str::from_utf8(pair).ok()?, 16).ok()?;
+    }
+    Some(out)
 }
 
 /// JNI: `MeshBleBridge.nativeOnConnected`.
@@ -391,12 +412,17 @@ mod tests {
         // The one string in this file that is an address rather than an opaque
         // Kotlin handle: it is what `MeshLink::connect` is called with.
         let event = LinkEvent::Discovered {
+            peer: None,
             address: "AA:BB:CC:DD:EE:FF".to_string(),
             rssi: clamp_rssi(-70),
         };
         assert_eq!(
             event,
-            LinkEvent::Discovered { address: "AA:BB:CC:DD:EE:FF".to_string(), rssi: -70 }
+            LinkEvent::Discovered {
+                address: "AA:BB:CC:DD:EE:FF".to_string(),
+                rssi: -70,
+                peer: None,
+            }
         );
     }
 

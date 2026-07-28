@@ -63,9 +63,6 @@ fn mesh_advertisement(service: Uuid) -> Advertisement {
         advertisement_type: AdvertisementType::Peripheral,
         service_uuids: [service].into_iter().collect(),
         discoverable: Some(true),
-        // Everything below is left empty on purpose. `local_name` and
-        // `system_includes` in particular would put a stable, human-readable
-        // identifier for this device into every advertising packet.
         local_name: None,
         ..Default::default()
     }
@@ -251,17 +248,41 @@ mod tests {
     }
 
     #[test]
-    fn the_advertisement_carries_no_local_name() {
-        // The whole point of the peripheral role's advertisement is that it says
-        // "the mesh is here" and nothing about *who* is here. A local name would
-        // hand a stable device identifier to every passive scanner in range.
+    fn the_advertisement_carries_no_device_identifier() {
+        // The advertisement says "the mesh is here", and about *who* is here it
+        // says only the mesh peer id — never anything tied to the hardware. A
+        // local name would hand a stable device identifier to every passive
+        // scanner in range, and unlike the peer id it would survive reinstalling
+        // the app and identify the machine rather than the identity.
         let advertisement = mesh_advertisement(service());
         assert_eq!(advertisement.local_name, None);
         assert!(advertisement.system_includes.is_empty(), "'local-name' must not sneak in via Includes");
         assert!(advertisement.manufacturer_data.is_empty());
-        assert!(advertisement.service_data.is_empty());
         assert!(advertisement.advertising_data.is_empty());
         assert_eq!(advertisement.appearance, None);
+        // Nothing to say when the runtime has not set an identity yet.
+        assert!(advertisement.service_data.is_empty());
+    }
+
+    #[test]
+    fn the_advertisement_stays_inside_one_legacy_packet() {
+        // Adding service data here is the tempting fix for address-rotation churn
+        // and it is the wrong one on this side: it overflows the legacy budget,
+        // and BlueZ answers an overflow by forcing extended advertising rather
+        // than by spilling into the scan response. A legacy-only scanner then
+        // sees nothing at all. Android carries the peer id instead, where the
+        // platform gives a real scan response to put it in.
+        let advertisement = mesh_advertisement(service());
+        let service_uuid_ad = 2 + 16;
+        let used: usize = service_uuid_ad
+            + advertisement
+                .service_data
+                .iter()
+                .map(|(_, data)| 2 + 16 + data.len())
+                .sum::<usize>();
+        // 31 less the three-byte flags AD that BlueZ prepends for a discoverable
+        // peripheral.
+        assert!(used <= 31 - 3, "{used} bytes will not fit a legacy advertisement");
     }
 
     #[test]

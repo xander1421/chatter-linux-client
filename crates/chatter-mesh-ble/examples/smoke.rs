@@ -73,7 +73,7 @@ async fn main() {
                 Some(LinkEvent::PeripheralRoleEnded) => {
                     println!("  !! PERIPHERAL ROLE ENDED — inbound connections are no longer served");
                 }
-                Some(LinkEvent::Discovered { address, rssi }) => {
+                Some(LinkEvent::Discovered { address, rssi, .. }) => {
                     discovered += 1;
                     println!("  discovered {address} at {rssi} dBm");
                 }
