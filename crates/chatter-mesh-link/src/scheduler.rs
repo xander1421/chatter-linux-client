@@ -109,8 +109,20 @@ pub const RECENT_ATTEMPT_IGNORE_MS: u64 = 2_000;
 /// round. Five minutes outlasts the observed rotation cadence, so the address is
 /// stale long before the window reopens.
 ///
-/// Ignoring it is safe even if the surviving link then dies: the peer is still
-/// advertising, under a *fresh* address, and that one is not in this map.
+/// Safe only because of two invariants elsewhere, and it becomes an availability
+/// bug if either changes.
+///
+/// A second central link to the *same* address is impossible — `central.rs`
+/// hands back the existing link rather than dialling again — so a duplicate can
+/// only arise from two distinct addresses, which means the peer rotated. And the
+/// prune keeps the *newest* link, so the address marked here is always the older
+/// one the peer has already moved off. The surviving link's address is never
+/// marked.
+///
+/// Reverse the keeper rule to "oldest" and this map starts blacklisting the
+/// address the peer is currently reachable on: if the kept link then dies, it
+/// cannot be redialled for five minutes even though the peer is advertising
+/// steadily. That is the failure this note exists to prevent.
 pub const DUPLICATE_PEER_IGNORE_MS: u64 = 300_000;
 
 /// iOS has no such window and no attempt cap: [`RECENT_ATTEMPT_IGNORE_MS`] (its

@@ -3124,6 +3124,12 @@ fn report_stall_discard(link: &LinkId, metadata: &InboundAppendMetadata) {
 /// Age comes from the sequence [`Shared::open_link`] appends as `#N`, which is
 /// monotonic per radio. An id without one sorts oldest, so a malformed id can
 /// never win the tie.
+///
+/// Keeping the newest is also what makes [`ConnectionScheduler::note_duplicate_peer`]
+/// safe, which is not obvious from either site. That map blacklists the pruned
+/// address for five minutes; because the pruned link is always the older one, the
+/// address blacklisted is always one the peer has moved off. Keep the oldest
+/// instead and it would blacklist the address the peer is currently reachable on.
 fn redundant_central_links_locked(state: &LinkStateInner, peer: &PeerId) -> Vec<LinkId> {
     let mut central: Vec<_> = state
         .links
