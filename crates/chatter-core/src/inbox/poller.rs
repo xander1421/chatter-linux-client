@@ -262,12 +262,6 @@ impl InboxPoller {
         self.current_interval()
     }
 
-    /// Reset the pagination cursor.
-    ///
-    /// Call this to start polling from the beginning again.
-    pub fn reset_cursor(&self) {
-        *self.last_queue_id.write() = 0;
-    }
 }
 
 #[cfg(test)]

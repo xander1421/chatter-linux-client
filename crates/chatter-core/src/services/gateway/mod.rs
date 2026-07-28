@@ -454,21 +454,6 @@ impl MessageGateway {
         })
     }
 
-    /// Create a sender key request message for a channel member.
-    ///
-    /// Call this when you receive an encrypted message but don't have
-    /// the sender's key.
-    pub fn create_sender_key_request(
-        channel_id: &ChannelId,
-        target_user_id: &UserId,
-    ) -> crate::proto::content_v1::SenderKeyRequest {
-        crate::proto::content_v1::SenderKeyRequest {
-            channel_id: channel_id.to_string(),
-            target_user_id: target_user_id.to_string(),
-            timestamp: TimestampNanos::now().as_u64(),
-        }
-    }
-
     /// Get the local identity private key for ECIES decryption.
     ///
     /// Returns the 32-byte X25519 private scalar used to decrypt
