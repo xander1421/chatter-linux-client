@@ -285,21 +285,7 @@ impl SealedSenderManager {
         // an INNER (session/ratchet) failure — surface it as SessionDesync so
         // the caller can send a DecryptionErrorMessage back to the sender.
         let map_inner_err = |e: SignalProtocolError| {
-            tracing::warn!(
-                target: "chatter::crypto::decrypt_failure",
-                kind = "sealed_sender_inner",
-                sender = %sender_uuid,
-                sender_device = ?sender_device_id,
-                error = %e,
-                "inner decryption failure (session desync candidate)"
-            );
-            CryptoError::SessionDesync {
-                sender_uuid: sender_uuid.clone(),
-                sender_device_id: sender_device_id.into(),
-                msg_type: msg_type as u8,
-                ciphertext: contents.to_vec(),
-                reason: e.to_string(),
-            }
+            classify_inner_failure(e, &sender_uuid, sender_device_id, msg_type, contents)
         };
 
         let mut rng = OsRng.unwrap_err();
@@ -703,6 +689,60 @@ pub struct MultiDeviceSealedMessage {
     pub unidentified_access_key: [u8; UAK_LENGTH],
 }
 
+/// Decide what an inner (post-envelope) decryption failure means.
+///
+/// The envelope already opened and the sender is authenticated, so this is a
+/// session-layer failure — with one exception that must not be treated as one.
+///
+/// A [`SignalProtocolError::DuplicatedMessage`] means the ratchet chain has moved
+/// past the counter this message carries and its message keys are gone: it was
+/// decrypted once already. The session is healthy and no plaintext is lost, so the
+/// message is dropped. Reporting it as a desync would send the peer a
+/// `DecryptionErrorMessage` asking it to archive a working session and resend,
+/// which produces more traffic and more re-deliveries. Measured before this split
+/// existed: 201 inbound reports and 12 outbound in four minutes between two idle
+/// devices. libsignal treats the same condition as routine, logging `Duplicate
+/// message for counter: N` at info.
+///
+/// Everything else is the genuine wedge this path exists for and becomes a
+/// [`CryptoError::SessionDesync`] carrying the failed ciphertext, so the caller can
+/// build the report.
+fn classify_inner_failure(
+    error: SignalProtocolError, sender_uuid: &str, sender_device_id: DeviceId,
+    msg_type: CiphertextMessageType, contents: &[u8],
+) -> CryptoError {
+    if let SignalProtocolError::DuplicatedMessage(chain_index, counter) = error {
+        tracing::debug!(
+            target: "chatter::crypto::decrypt_failure",
+            kind = "sealed_sender_duplicate",
+            sender = %sender_uuid,
+            sender_device = ?sender_device_id,
+            chain_index,
+            counter,
+            "duplicate inner message dropped; session left alone"
+        );
+        return CryptoError::DuplicateMessage {
+            sender_uuid: sender_uuid.to_string(),
+            sender_device_id: sender_device_id.into(),
+        };
+    }
+    tracing::warn!(
+        target: "chatter::crypto::decrypt_failure",
+        kind = "sealed_sender_inner",
+        sender = %sender_uuid,
+        sender_device = ?sender_device_id,
+        error = %error,
+        "inner decryption failure (session desync candidate)"
+    );
+    CryptoError::SessionDesync {
+        sender_uuid: sender_uuid.to_string(),
+        sender_device_id: sender_device_id.into(),
+        msg_type: msg_type as u8,
+        ciphertext: contents.to_vec(),
+        reason: error.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -725,6 +765,51 @@ mod tests {
         let mut different_key = profile_key;
         different_key[0] = 0x43;
         assert_ne!(uak, derive_uak(&different_key));
+    }
+
+    /// A re-delivery must not be reported as a desync.
+    ///
+    /// The whole cost of getting this wrong is off-box and invisible from here:
+    /// each misclassification sends the peer a `DecryptionErrorMessage` telling it
+    /// to archive a healthy session and resend, which produces another delivery to
+    /// misclassify. Two idle devices generated 201 inbound reports and 12 outbound
+    /// in four minutes.
+    #[test]
+    fn a_duplicate_inner_message_is_not_a_session_desync() {
+        let device = DeviceId::new(1).expect("device id");
+        let ciphertext = [0xAAu8; 8];
+
+        // `1 / 0`: the chain is at 1, the message carries counter 0 — decrypted
+        // once already, keys consumed. This is the exact error observed.
+        let duplicate = classify_inner_failure(
+            SignalProtocolError::DuplicatedMessage(1, 0),
+            "caa49e97-690f-407d-ab9a-74bf772dbd3d",
+            device,
+            CiphertextMessageType::Whisper,
+            &ciphertext,
+        );
+        assert!(
+            matches!(duplicate, CryptoError::DuplicateMessage { .. }),
+            "a duplicate was classified as {duplicate:?}, which sends the peer a \
+             DecryptionErrorMessage and restarts the loop"
+        );
+
+        // A genuine wedge still reports, or the 1:1 self-heal stops working. The
+        // ciphertext has to survive into the error — the report is built from it.
+        let wedged = classify_inner_failure(
+            SignalProtocolError::InvalidMessage(CiphertextMessageType::Whisper, "bad mac"),
+            "caa49e97-690f-407d-ab9a-74bf772dbd3d",
+            device,
+            CiphertextMessageType::Whisper,
+            &ciphertext,
+        );
+        match wedged {
+            CryptoError::SessionDesync { ciphertext: carried, msg_type, .. } => {
+                assert_eq!(carried, ciphertext, "the report would name no ciphertext");
+                assert_eq!(msg_type, CiphertextMessageType::Whisper as u8);
+            }
+            other => panic!("a real desync was classified as {other:?}; the self-heal is dead"),
+        }
     }
 
     #[test]

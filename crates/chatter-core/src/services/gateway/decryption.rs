@@ -59,6 +59,20 @@ impl MessageGateway {
                     envelope.timestamp,
                 );
             }
+            // Already decrypted once. Nothing to store, nothing to report, and
+            // nothing lost — `MessageStored` is this file's existing "handled,
+            // caller need do no more" answer.
+            Err(ServiceError::Crypto(CryptoError::DuplicateMessage {
+                sender_uuid,
+                sender_device_id,
+            })) => {
+                tracing::debug!(
+                    sender_uuid = %sender_uuid,
+                    sender_device_id,
+                    "GATEWAY: duplicate inner message dropped (re-delivery, not a desync)"
+                );
+                return Ok(SealedSenderResult::MessageStored);
+            }
             Err(e) => return Err(e),
         };
 

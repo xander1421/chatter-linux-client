@@ -59,6 +59,28 @@ pub enum CryptoError {
     #[error("session expired for {0}")]
     SessionExpired(String),
 
+    /// The inner message had already been decrypted once — libsignal's
+    /// `DuplicatedMessage`, raised when the ratchet chain has advanced past the
+    /// counter the message carries and its message keys are gone.
+    ///
+    /// **Not** a [`Self::SessionDesync`], although it arrives down the same path.
+    /// A duplicate is a re-delivery: the session is healthy and the plaintext was
+    /// already handled, so the message is dropped. Reporting it as a desync sends
+    /// the peer a `DecryptionErrorMessage` asking it to tear down a working
+    /// session and resend — which produces more traffic, more re-deliveries, and
+    /// more reports. Measured before this was split out: 201 inbound reports and
+    /// 12 outbound in four minutes between two idle devices.
+    ///
+    /// libsignal treats it as routine too, logging `Duplicate message for
+    /// counter: N` at info (`session_cipher.rs`).
+    #[error("duplicate message from {sender_uuid}:{sender_device_id} (already decrypted)")]
+    DuplicateMessage {
+        /// Authenticated sender user id.
+        sender_uuid: String,
+        /// Authenticated sender device id.
+        sender_device_id: u32,
+    },
+
     /// A sealed-sender envelope opened cleanly (sender authenticated via the
     /// certificate) but the INNER Whisper/PreKey message failed to decrypt —
     /// the classic desynced-1:1-session wedge. Carries everything needed to
