@@ -4380,6 +4380,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_connect_timeout_earns_a_longer_ignore_than_an_ordinary_refusal() {
+        // The runtime tells the two apart on purpose — a timeout means the peer
+        // held a scarce central slot for twenty seconds and gave nothing back, an
+        // outright refusal means it said no cheaply — and until the mock could fail
+        // a connect, neither branch had ever run in a test. The comment in `dial`
+        // records that `note_connect_timeout` "existed and was never reachable
+        // from here", which is the same class of gap: code written for a case
+        // nothing could produce.
+        use chatter_mesh_link::LinkError;
+
+        const PEER: &str = "AA:BB:CC:DD:EE:FF";
+        const STRONG: i16 = -40;
+
+        // A timeout: ignored for the full timeout window.
+        let (mut runtime, radio, state, _timeline) = runtime_parts();
+        radio.set_connect_error(Some(LinkError::ConnectTimedOut {
+            address: PEER.to_string(),
+        }));
+        runtime.dial(PEER).await;
+        let after = now_millis() + chatter_mesh_link::scheduler::TIMEOUT_DISCOVERY_IGNORE_MS / 2;
+        assert!(
+            !state.with(|inner| inner.scheduler.should_connect(PEER, STRONG, 0, after)),
+            "a peer that timed out is left alone for the whole timeout window"
+        );
+
+        // A single ordinary refusal: not enough to ignore it. One failed connect is
+        // a peer that walked behind a wall, not a peer to give up on.
+        let (mut runtime, radio, state, _timeline) = runtime_parts();
+        radio.set_connect_error(Some(LinkError::ConnectFailed {
+            address: PEER.to_string(),
+            reason: "refused".to_string(),
+        }));
+        runtime.dial(PEER).await;
+        let soon = now_millis() + chatter_mesh_link::scheduler::TIMEOUT_DISCOVERY_IGNORE_MS / 2;
+        assert!(
+            state.with(|inner| inner.scheduler.should_connect(PEER, STRONG, 0, soon)),
+            "one refusal is not a timeout, and must not buy the timeout's silence"
+        );
+    }
+
+    #[tokio::test]
     async fn the_mock_refuses_an_oversized_frame_like_a_real_radio_would() {
         // Guards the guard. Both real link layers return `PayloadTooLarge` past the
         // negotiated MTU and the mock used to accept anything, so a fragment sized

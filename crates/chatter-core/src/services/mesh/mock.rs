@@ -38,6 +38,7 @@ pub struct MockLink {
     reject_writes: AtomicBool,
     links_gone: AtomicBool,
     stopped_once: AtomicBool,
+    connect_error: Mutex<Option<LinkError>>,
 }
 
 impl Default for MockLink {
@@ -62,6 +63,7 @@ impl MockLink {
             reject_writes: AtomicBool::new(false),
             links_gone: AtomicBool::new(false),
             stopped_once: AtomicBool::new(false),
+            connect_error: Mutex::new(None),
         }
     }
 
@@ -131,6 +133,16 @@ impl MockLink {
     /// back on the queue, a terminal one takes the queue with it.
     /// Tell the mock a link's negotiated write ceiling, as a `Connected` event
     /// would.
+    /// Make `connect` fail with this error, as a real radio can.
+    ///
+    /// A connect that always succeeds cannot exercise the scheduler's backoff, and
+    /// the distinction the runtime draws between a *timeout* and an ordinary
+    /// refusal — different ignore windows, deliberately — was unreachable from a
+    /// test without it.
+    pub fn set_connect_error(&self, error: Option<LinkError>) {
+        *self.connect_error.lock() = error;
+    }
+
     pub fn set_max_write(&self, link: &LinkId, max_write: usize) {
         self.max_write.lock().insert(link.clone(), max_write);
     }
@@ -179,6 +191,9 @@ impl MeshLink for MockLink {
 
     fn connect(&self, address: &str) -> BoxFuture<'_, Result<LinkId, LinkError>> {
         self.connects.lock().push(address.to_string());
+        if let Some(error) = self.connect_error.lock().clone() {
+            return Box::pin(async move { Err(error) });
+        }
         let link = LinkId::new(format!("/mock/{address}"));
         Box::pin(async move { Ok(link) })
     }
