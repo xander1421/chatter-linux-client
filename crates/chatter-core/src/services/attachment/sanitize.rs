@@ -2,10 +2,14 @@
 //!
 //! Two hooks, mirroring how Signal clients use these sanitizers:
 //!
-//! - **Outgoing** ([`sanitize_media`]): before upload/encryption. MP4 presentation
-//!   metadata is normalized (`moov` relocated before `mdat`, non-presentation
-//!   metadata boxes stripped) and WebP structure is validated. Malformed files
-//!   are rejected — we never emit bytes we could not parse.
+//! - **Outgoing** ([`sanitize_media`]): before upload/encryption. MP4 layout is
+//!   normalized via mp4san (`moov` relocated before `mdat`) AND `moov.udta` /
+//!   `moov.meta` are dropped by us (mp4san preserves them; they carry Apple
+//!   GPS ©xyz and iTunes-style ItemList tags). JPEG APP1 (Exif+XMP — GPS,
+//!   serials, timestamps) and COM, and PNG eXIf/tEXt/zTXt/iTXt/tIME are
+//!   stripped losslessly (byte surgery, no re-encode). WebP structure is
+//!   validated. Malformed files are rejected — we never emit bytes we could
+//!   not parse.
 //! - **Incoming** ([`validate_media`]): after decryption, before the plaintext is
 //!   handed to renderers (image crate, FFmpeg). Malformed MP4/WebP is rejected so
 //!   crafted files never reach the platform media parsers.
@@ -13,12 +17,12 @@
 //! Detection is content-based (magic bytes), not MIME-based, because our
 //! renderers also sniff content — a lying MIME type must not bypass validation.
 //!
-//! ponytail: coverage ceiling — signal-media covers exactly ISO-BMFF MP4
-//! (`isom`-family brands) and WebP. Everything else (JPEG/PNG/GIF EXIF, MOV,
-//! HEIC, MKV, PDF, …) passes through byte-identical; we deliberately do NOT
-//! write custom sanitizers for other formats. Non-`isom` ftyp files (HEIC
-//! photos, QuickTime .mov) are outside mp4san's supported scope and also pass
-//! through unchanged.
+//! ponytail: coverage ceiling — sanitized: ISO-BMFF MP4 (isom brands), WebP
+//! (validate), JPEG, PNG. Passes through byte-identical: GIF, MOV, HEIC, MKV,
+//! PDF, …; non-`isom` ftyp is outside mp4san's scope and passes unchanged.
+//! Filenames are NOT metadata we strip: `FileMetadata.filename` is E2E-
+//! encrypted to the server and shown to the recipient by design (Signal
+//! parity for document sends).
 
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -44,6 +48,100 @@ fn looks_like_mp4(data: &[u8]) -> bool {
 
 fn looks_like_webp(data: &[u8]) -> bool {
     data.len() >= 12 && data.starts_with(b"RIFF") && &data[8..12] == b"WEBP"
+}
+
+fn looks_like_jpeg(data: &[u8]) -> bool {
+    data.len() >= 3 && data.starts_with(&[0xFF, 0xD8, 0xFF])
+}
+
+const PNG_SIG: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+
+fn looks_like_png(data: &[u8]) -> bool {
+    data.len() >= 8 && data.starts_with(&PNG_SIG)
+}
+
+/// Strip privacy metadata from a JPEG without re-encoding: drop APP1
+/// (Exif + XMP — the GPS carriers) and COM segments; keep everything else
+/// (APP0/JFIF, APP2/ICC so colors stay correct, all tables/frames). From SOS
+/// on, bytes are copied verbatim. Returns `None` when nothing was dropped.
+///
+/// Policy on malformed structure: reject — same as the MP4/WebP paths, we do
+/// not send bytes we could not parse.
+fn strip_jpeg_metadata(data: &[u8]) -> Result<Option<Vec<u8>>, AttachmentError> {
+    let bad = |m: &str| AttachmentError::InvalidAttachment(format!("malformed JPEG rejected: {m}"));
+    let mut out = Vec::with_capacity(data.len());
+    out.extend_from_slice(&data[..2]); // SOI
+    let mut i = 2;
+    let mut dropped = false;
+    loop {
+        if i + 4 > data.len() {
+            return Err(bad("truncated before SOS"));
+        }
+        if data[i] != 0xFF {
+            return Err(bad("expected marker"));
+        }
+        let marker = data[i + 1];
+        // Standalone markers between segments (rare, e.g. TEM/RSTn) — copy.
+        if marker == 0x01 || (0xD0..=0xD7).contains(&marker) {
+            out.extend_from_slice(&data[i..i + 2]);
+            i += 2;
+            continue;
+        }
+        if marker == 0xDA {
+            // SOS: entropy-coded data follows — copy the rest verbatim.
+            out.extend_from_slice(&data[i..]);
+            return Ok(if dropped { Some(out) } else { None });
+        }
+        if marker == 0xD9 {
+            // EOI before SOS (metadata-only file) — copy and finish.
+            out.extend_from_slice(&data[i..]);
+            return Ok(if dropped { Some(out) } else { None });
+        }
+        let len = u16::from_be_bytes([data[i + 2], data[i + 3]]) as usize;
+        if len < 2 || i + 2 + len > data.len() {
+            return Err(bad("segment length out of bounds"));
+        }
+        let drop = marker == 0xE1 /* APP1: Exif + XMP */ || marker == 0xFE /* COM */;
+        if drop {
+            dropped = true;
+        } else {
+            out.extend_from_slice(&data[i..i + 2 + len]);
+        }
+        i += 2 + len;
+    }
+}
+
+/// Strip privacy metadata from a PNG without re-encoding: drop eXIf (EXIF —
+/// GPS carrier), tEXt/zTXt/iTXt (free text) and tIME chunks; keep all others.
+/// Returns `None` when nothing was dropped.
+fn strip_png_metadata(data: &[u8]) -> Result<Option<Vec<u8>>, AttachmentError> {
+    let bad = |m: &str| AttachmentError::InvalidAttachment(format!("malformed PNG rejected: {m}"));
+    let mut out = Vec::with_capacity(data.len());
+    out.extend_from_slice(&PNG_SIG);
+    let mut i = 8;
+    let mut dropped = false;
+    while i < data.len() {
+        if i + 8 > data.len() {
+            return Err(bad("truncated chunk header"));
+        }
+        let len = u32::from_be_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]) as usize;
+        let ty = &data[i + 4..i + 8];
+        let total = len.checked_add(12).ok_or_else(|| bad("chunk length overflow"))?;
+        if i + total > data.len() {
+            return Err(bad("chunk length out of bounds"));
+        }
+        let drop = matches!(ty, b"eXIf" | b"tEXt" | b"zTXt" | b"iTXt" | b"tIME");
+        if drop {
+            dropped = true;
+        } else {
+            out.extend_from_slice(&data[i..i + total]);
+        }
+        if ty == b"IEND" {
+            break;
+        }
+        i += total;
+    }
+    Ok(if dropped { Some(out) } else { None })
 }
 
 /// Sanitize outgoing media bytes before they leave the device.
@@ -72,6 +170,20 @@ pub fn sanitize_media(content: &[u8]) -> Result<SanitizeOutcome, AttachmentError
             AttachmentError::InvalidAttachment(format!("malformed WebP rejected: {e}"))
         })?;
         return Ok(SanitizeOutcome::Unchanged);
+    }
+
+    if looks_like_jpeg(content) {
+        return Ok(match strip_jpeg_metadata(content)? {
+            Some(bytes) => SanitizeOutcome::Rewritten(bytes),
+            None => SanitizeOutcome::Unchanged,
+        });
+    }
+
+    if looks_like_png(content) {
+        return Ok(match strip_png_metadata(content)? {
+            Some(bytes) => SanitizeOutcome::Rewritten(bytes),
+            None => SanitizeOutcome::Unchanged,
+        });
     }
 
     Ok(SanitizeOutcome::Unchanged)
@@ -116,6 +228,29 @@ pub fn sanitize_media_file(
         return Ok(None);
     }
 
+    if looks_like_jpeg(&magic[..n]) || looks_like_png(&magic[..n]) {
+        // Photos are small (attachment cap already enforced upstream) — load,
+        // strip losslessly, write a temp if anything was dropped.
+        let content = std::fs::read(path)
+            .map_err(|e| AttachmentError::FileError(format!("Failed to read image: {e}")))?;
+        let stripped = if looks_like_jpeg(&content) {
+            strip_jpeg_metadata(&content)?
+        } else {
+            strip_png_metadata(&content)?
+        };
+        let Some(bytes) = stripped else { return Ok(None) };
+        super::ensure_attachments_dir()
+            .map_err(|e| AttachmentError::FileError(format!("Failed to create attachments dir: {e}")))?;
+        let mut out = tempfile::NamedTempFile::new_in(super::attachments_dir())
+            .map_err(|e| AttachmentError::FileError(format!("Failed to create sanitize temp: {e}")))?;
+        use std::io::Write;
+        out.write_all(&bytes)
+            .map_err(|e| AttachmentError::FileError(format!("Failed to write stripped image: {e}")))?;
+        out.flush()
+            .map_err(|e| AttachmentError::FileError(format!("Failed to flush stripped image: {e}")))?;
+        return Ok(Some(out));
+    }
+
     if !looks_like_mp4(&magic[..n]) {
         return Ok(None);
     }
@@ -138,8 +273,13 @@ pub fn sanitize_media_file(
     };
 
     let Some(metadata) = sanitized.metadata else {
-        // Metadata already clean and ahead of the media data.
-        return Ok(None);
+        // Layout already clean — but udta/meta GPS may still be present.
+        return strip_mp4_file_privacy_boxes(&mut file);
+    };
+    // Strip privacy boxes from the rebuilt head (ftyp+moov) before writing.
+    let metadata = match strip_mp4_privacy_boxes(&metadata)? {
+        Some(stripped) => stripped,
+        None => metadata,
     };
 
     super::ensure_attachments_dir()
@@ -166,6 +306,85 @@ pub fn sanitize_media_file(
     Ok(Some(out))
 }
 
+
+/// File-streaming variant of [`strip_mp4_privacy_boxes`] for the case where
+/// mp4san reports the layout already clean: walk top-level boxes via seeks,
+/// load only `moov` into memory (it is small), and if udta/meta must go,
+/// stream-copy the file into a temp with the stripped moov spliced in.
+fn strip_mp4_file_privacy_boxes(
+    file: &mut std::fs::File,
+) -> Result<Option<tempfile::NamedTempFile>, AttachmentError> {
+    use std::io::Write;
+    let bad = |m: &str| AttachmentError::InvalidAttachment(format!("malformed MP4 rejected: {m}"));
+    let ferr = |e: std::io::Error| AttachmentError::FileError(format!("sanitize io: {e}"));
+
+    let file_len = file.seek(SeekFrom::End(0)).map_err(ferr)?;
+    file.seek(SeekFrom::Start(0)).map_err(ferr)?;
+
+    // Pass 1: find moov, strip in memory.
+    let mut boxes: Vec<(u64, u64, bool)> = Vec::new(); // (offset, size, is_moov)
+    let mut stripped_moov: Option<Vec<u8>> = None;
+    let mut off = 0u64;
+    while off < file_len {
+        let mut hdr = [0u8; 16];
+        file.seek(SeekFrom::Start(off)).map_err(ferr)?;
+        let n = read_up_to(file, &mut hdr).map_err(ferr)?;
+        if n < 8 {
+            return Err(bad("truncated box header"));
+        }
+        let size32 = u32::from_be_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]) as u64;
+        let ty = [hdr[4], hdr[5], hdr[6], hdr[7]];
+        let size = match size32 {
+            0 => file_len - off,
+            1 => {
+                if n < 16 {
+                    return Err(bad("truncated largesize"));
+                }
+                u64::from_be_bytes(hdr[8..16].try_into().unwrap())
+            }
+            s => s,
+        };
+        if size < 8 || off + size > file_len {
+            return Err(bad("box size out of bounds"));
+        }
+        let is_moov = &ty == b"moov";
+        if is_moov {
+            let len = usize::try_from(size).map_err(|_| bad("moov too large"))?;
+            let mut moov = vec![0u8; len];
+            file.seek(SeekFrom::Start(off)).map_err(ferr)?;
+            let got = read_up_to(file, &mut moov).map_err(ferr)?;
+            if got != len {
+                return Err(bad("moov truncated"));
+            }
+            stripped_moov = strip_mp4_privacy_boxes(&moov)?;
+        }
+        boxes.push((off, size, is_moov));
+        off += size;
+    }
+
+    let Some(new_moov) = stripped_moov else { return Ok(None) };
+
+    // Pass 2: splice.
+    super::ensure_attachments_dir()
+        .map_err(|e| AttachmentError::FileError(format!("Failed to create attachments dir: {e}")))?;
+    let mut out = tempfile::NamedTempFile::new_in(super::attachments_dir())
+        .map_err(|e| AttachmentError::FileError(format!("Failed to create sanitize temp: {e}")))?;
+    for (boff, bsize, is_moov) in boxes {
+        if is_moov {
+            out.write_all(&new_moov).map_err(ferr)?;
+        } else {
+            file.seek(SeekFrom::Start(boff)).map_err(ferr)?;
+            let copied =
+                std::io::copy(&mut file.take(bsize), out.as_file_mut()).map_err(ferr)?;
+            if copied != bsize {
+                return Err(bad("box copy truncated"));
+            }
+        }
+    }
+    out.flush().map_err(ferr)?;
+    Ok(Some(out))
+}
+
 /// `Read::read` may return short counts; loop until the buffer is full or EOF.
 fn read_up_to(r: &mut impl Read, buf: &mut [u8]) -> std::io::Result<usize> {
     let mut filled = 0;
@@ -176,6 +395,91 @@ fn read_up_to(r: &mut impl Read, buf: &mut [u8]) -> std::io::Result<usize> {
         }
     }
     Ok(filled)
+}
+
+
+/// Drop privacy metadata children from a top-level `moov` box: `udta` (Apple
+/// ©xyz GPS, iTunes ilst under udta.meta) and `meta`. mp4san normalizes
+/// layout and validates structure but deliberately PRESERVES these boxes —
+/// proven by the real-sample harness (exiftool-tagged GPSCoordinates
+/// survived) — so we strip them ourselves. Presentation is unaffected: both
+/// are non-presentation by definition.
+///
+/// `data` is a whole MP4 (small enough to hold: callers pass either full
+/// bytes or the mp4san metadata buffer, never a multi-GB mdat). Returns
+/// `None` when nothing was dropped. moov with a 64-bit largesize is rejected
+/// (a >4 GiB moov does not occur in real files).
+fn strip_mp4_privacy_boxes(data: &[u8]) -> Result<Option<Vec<u8>>, AttachmentError> {
+    let bad = |m: &str| AttachmentError::InvalidAttachment(format!("malformed MP4 rejected: {m}"));
+    let mut out = Vec::with_capacity(data.len());
+    let mut i = 0usize;
+    let mut dropped = false;
+    while i < data.len() {
+        if i + 8 > data.len() {
+            return Err(bad("truncated box header"));
+        }
+        let size32 = u32::from_be_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]) as u64;
+        let ty = &data[i + 4..i + 8];
+        let (hdr, size) = match size32 {
+            0 => (8u64, (data.len() - i) as u64), // box extends to EOF
+            1 => {
+                if i + 16 > data.len() {
+                    return Err(bad("truncated largesize"));
+                }
+                let ls = u64::from_be_bytes(data[i + 8..i + 16].try_into().unwrap());
+                (16u64, ls)
+            }
+            s => (8u64, s),
+        };
+        if size < hdr || i as u64 + size > data.len() as u64 {
+            return Err(bad("box size out of bounds"));
+        }
+        let end = i + size as usize;
+        if ty == b"moov" {
+            if hdr == 16 {
+                return Err(bad("moov with 64-bit size unsupported"));
+            }
+            // Walk moov children, dropping udta/meta.
+            let mut kept: Vec<u8> = Vec::with_capacity(size as usize);
+            let mut j = i + 8;
+            while j < end {
+                if j + 8 > end {
+                    return Err(bad("truncated moov child"));
+                }
+                let csize32 =
+                    u32::from_be_bytes([data[j], data[j + 1], data[j + 2], data[j + 3]]) as u64;
+                let cty = &data[j + 4..j + 8];
+                let (chdr, csize) = match csize32 {
+                    0 => (8u64, (end - j) as u64),
+                    1 => {
+                        if j + 16 > end {
+                            return Err(bad("truncated moov child largesize"));
+                        }
+                        (16u64, u64::from_be_bytes(data[j + 8..j + 16].try_into().unwrap()))
+                    }
+                    s => (8u64, s),
+                };
+                if csize < chdr || j as u64 + csize > end as u64 {
+                    return Err(bad("moov child size out of bounds"));
+                }
+                if cty == b"udta" || cty == b"meta" {
+                    dropped = true;
+                } else {
+                    kept.extend_from_slice(&data[j..j + csize as usize]);
+                }
+                j += csize as usize;
+            }
+            let new_size = 8 + kept.len();
+            out.extend_from_slice(&(u32::try_from(new_size).map_err(|_| bad("moov too large"))?)
+                .to_be_bytes());
+            out.extend_from_slice(b"moov");
+            out.extend_from_slice(&kept);
+        } else {
+            out.extend_from_slice(&data[i..end]);
+        }
+        i = end;
+    }
+    Ok(if dropped { Some(out) } else { None })
 }
 
 async fn sanitize_mp4(content: &[u8]) -> Result<SanitizeOutcome, AttachmentError> {
@@ -195,10 +499,17 @@ async fn sanitize_mp4(content: &[u8]) -> Result<SanitizeOutcome, AttachmentError
                 let mut output = Vec::with_capacity(metadata.len() + len);
                 output.extend_from_slice(&metadata);
                 output.extend_from_slice(&content[start..end]);
+                let output = match strip_mp4_privacy_boxes(&output)? {
+                    Some(stripped) => stripped,
+                    None => output,
+                };
                 Ok(SanitizeOutcome::Rewritten(output))
             }
-            // Metadata already clean and ahead of the media data.
-            None => Ok(SanitizeOutcome::Unchanged),
+            // Layout already clean — but udta/meta GPS may still be present.
+            None => Ok(match strip_mp4_privacy_boxes(content)? {
+                Some(stripped) => SanitizeOutcome::Rewritten(stripped),
+                None => SanitizeOutcome::Unchanged,
+            }),
         },
         // Not an isom-brand MP4 (HEIC photo, QuickTime .mov, …): outside
         // mp4san's supported scope — treated as a non-covered format.
@@ -369,14 +680,152 @@ mod tests {
         assert!(sanitize_media_file(&png).expect("non-covered must pass").is_none());
     }
 
+
+    /// Minimal JPEG: SOI, APP0(JFIF), APP1(Exif with a GPS IFD), COM, SOS +
+    /// fake entropy data, EOI. Not decodable — structural, for the segment
+    /// walker. GPS coords appear as the ASCII rational markers below.
+    fn jpeg_with_gps() -> Vec<u8> {
+        let mut v = vec![0xFF, 0xD8]; // SOI
+        // APP0 JFIF
+        let app0_payload = b"JFIF\0\x01\x02\0\0\x01\0\x01\0\0";
+        v.extend_from_slice(&[0xFF, 0xE0]);
+        v.extend_from_slice(&((app0_payload.len() as u16 + 2).to_be_bytes()));
+        v.extend_from_slice(app0_payload);
+        // APP1 Exif containing a fake GPS IFD blob (marker string stands in
+        // for the rational values; the walker drops the whole segment).
+        let mut exif = b"Exif\0\0MM\0*\0\0\0\x08".to_vec();
+        exif.extend_from_slice(b"GPSLATITUDE:48.8583N-GPSLONGITUDE:2.2944E");
+        v.extend_from_slice(&[0xFF, 0xE1]);
+        v.extend_from_slice(&((exif.len() as u16 + 2).to_be_bytes()));
+        v.extend_from_slice(&exif);
+        // COM segment with a "secret"
+        let com = b"shot on my phone at home";
+        v.extend_from_slice(&[0xFF, 0xFE]);
+        v.extend_from_slice(&((com.len() as u16 + 2).to_be_bytes()));
+        v.extend_from_slice(com);
+        // SOS + entropy + EOI (walker copies verbatim from SOS on)
+        v.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x04, 0x01, 0x00]);
+        v.extend_from_slice(&[0xAA; 16]);
+        v.extend_from_slice(&[0xFF, 0xD9]);
+        v
+    }
+
+    /// PNG: signature, IHDR, eXIf chunk carrying GPS, tEXt secret, IDAT, IEND.
+    fn png_with_gps() -> Vec<u8> {
+        fn chunk(ty: &[u8; 4], data: &[u8]) -> Vec<u8> {
+            let mut c = (data.len() as u32).to_be_bytes().to_vec();
+            c.extend_from_slice(ty);
+            c.extend_from_slice(data);
+            let mut crc = crc32(&[&ty[..], data].concat());
+            c.extend_from_slice(&crc.to_be_bytes());
+            crc = 0; let _ = crc; // silence
+            c
+        }
+        // minimal crc32 (IEEE) — tables not worth it for a test
+        fn crc32(data: &[u8]) -> u32 {
+            let mut crc = 0xFFFF_FFFFu32;
+            for &b in data {
+                crc ^= b as u32;
+                for _ in 0..8 {
+                    crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+                }
+            }
+            !crc
+        }
+        let mut v = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        v.extend(chunk(b"IHDR", &[0, 0, 0, 1, 0, 0, 0, 1, 8, 0, 0, 0, 0]));
+        v.extend(chunk(b"eXIf", b"MM\0*GPSLATITUDE:48.8583N"));
+        v.extend(chunk(b"tEXt", b"Comment\0taken at my house"));
+        v.extend(chunk(b"IDAT", &[0x78, 0x9C, 0x62, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01]));
+        v.extend(chunk(b"IEND", b""));
+        v
+    }
+
+    #[test]
+    fn gps_exif_is_stripped_from_outgoing_jpeg_and_png() {
+        // JPEG: APP1(Exif/GPS) + COM must be gone; SOI/APP0/SOS/EOI survive.
+        let input = jpeg_with_gps();
+        let out = match sanitize_media(&input).expect("jpeg must sanitize") {
+            SanitizeOutcome::Rewritten(b) => b,
+            SanitizeOutcome::Unchanged => input.clone(),
+        };
+        let hay = |needle: &[u8], hay: &[u8]| hay.windows(needle.len()).any(|w| w == needle);
+        assert!(!hay(b"GPSLATITUDE", &out), "JPEG GPS EXIF leaked to outgoing bytes");
+        assert!(!hay(b"shot on my phone", &out), "JPEG COM leaked to outgoing bytes");
+        assert_eq!(&out[..2], &[0xFF, 0xD8], "SOI must survive");
+        assert!(hay(b"JFIF", &out), "APP0/JFIF must survive (not metadata)");
+        assert_eq!(&out[out.len() - 2..], &[0xFF, 0xD9], "EOI must survive");
+
+        // PNG: eXIf + tEXt must be gone; IHDR/IDAT/IEND survive.
+        let input = png_with_gps();
+        let out = match sanitize_media(&input).expect("png must sanitize") {
+            SanitizeOutcome::Rewritten(b) => b,
+            SanitizeOutcome::Unchanged => input.clone(),
+        };
+        assert!(!hay(b"GPSLATITUDE", &out), "PNG eXIf GPS leaked to outgoing bytes");
+        assert!(!hay(b"taken at my house", &out), "PNG tEXt leaked to outgoing bytes");
+        assert!(hay(b"IHDR", &out) && hay(b"IDAT", &out) && hay(b"IEND", &out));
+
+        // Incoming validate must NOT reject clean-but-unstripped media (it is
+        // the sender's job to strip; receiving GPS'd media stays displayable).
+        assert!(validate_media(&jpeg_with_gps()).is_ok());
+    }
+
+
+    /// Real-sample harness (opt-in): point GPS_SAMPLES_DIR at a directory of
+    /// GPS-tagged .jpg/.png/.mp4 files. Each is sanitized; the output must
+    /// contain no GPS bytes, still decode (images), and is written back as
+    /// <name>.sanitized.<ext> for external verification (exiftool).
+    /// Run: GPS_SAMPLES_DIR=... cargo test -p chatter-core --lib sanitize -- --ignored
+    /// This is the ONLY coverage of the MP4 moov.udta/meta GPS strip on a
+    /// real (mp4san-valid) file — a hand-crafted moov can't satisfy mp4san's
+    /// required-trak validation, so the crafted tests cover JPEG/PNG only.
+    #[test]
+    #[ignore]
+    fn real_gps_samples_are_stripped_and_still_decode() {
+        let dir = std::env::var("GPS_SAMPLES_DIR").expect("set GPS_SAMPLES_DIR");
+        let hay = |needle: &[u8], hay: &[u8]| hay.windows(needle.len()).any(|w| w == needle);
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if path.to_string_lossy().contains(".sanitized.")
+                || !matches!(ext, "jpg" | "jpeg" | "png" | "mp4")
+            {
+                continue;
+            }
+            let input = std::fs::read(&path).unwrap();
+            let out = match sanitize_media(&input)
+                .unwrap_or_else(|e| panic!("{path:?} must sanitize: {e:?}"))
+            {
+                SanitizeOutcome::Rewritten(b) => b,
+                SanitizeOutcome::Unchanged => input.clone(),
+            };
+            for needle in [&b"GPSLatitude"[..], b"48.8583", b"2.2944", b"+48.8583"] {
+                assert!(
+                    !hay(needle, &out),
+                    "{path:?}: GPS needle {:?} survived sanitize",
+                    String::from_utf8_lossy(needle)
+                );
+            }
+            if ext != "mp4" {
+                assert!(!hay(b"Exif", &out), "{path:?}: Exif block survived");
+                image::load_from_memory(&out)
+                    .unwrap_or_else(|e| panic!("{path:?}: stripped image no longer decodes: {e}"));
+            }
+            let out_path = path.with_extension(format!("sanitized.{ext}"));
+            std::fs::write(&out_path, &out).unwrap();
+            checked += 1;
+        }
+        assert!(checked >= 3, "expected at least 3 sample files, checked {checked}");
+    }
+
+
     #[test]
     fn non_covered_type_passes_through_byte_identical() {
-        // PNG magic + arbitrary bytes: not MP4, not WebP — never touched.
-        let input: Vec<u8> = [
-            &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A][..],
-            b"arbitrary-not-actually-a-png-payload",
-        ]
-        .concat();
+        // PDF magic + arbitrary bytes: not MP4/WebP/JPEG/PNG — never touched.
+        // (PNG previously played this role; it is now a covered format.)
+        let input: Vec<u8> = [&b"%PDF-1.7\n"[..], b"arbitrary-pdf-ish-payload"].concat();
         let before = input.clone();
 
         let outcome = sanitize_media(&input).expect("non-covered type must pass");
