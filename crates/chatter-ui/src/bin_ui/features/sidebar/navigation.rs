@@ -98,6 +98,7 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
     let auth_state = ui_ctx.auth_state().clone();
     let privacy_state = ui_ctx.privacy_state().clone();
     let ui_ctx_fp = ui_ctx.clone();
+    let ui_ctx_ai = ui_ctx.clone();
 
     let weak_window = window.as_weak();
 
@@ -106,6 +107,7 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
         let auth_state = auth_state.clone();
         let privacy_state = privacy_state.clone();
         let ui_ctx_fp = ui_ctx_fp.clone();
+        let ui_ctx_settings = ui_ctx_ai.clone();
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
@@ -123,6 +125,18 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                 let privacy = privacy_state.get();
                 w.set_settings_read_receipts(privacy.global_read_receipts);
                 w.set_settings_typing_indicators(privacy.global_typing_indicators);
+
+                // Cloud AI: reflect what is actually saved, so the panel never
+                // shows a preference the core would not honour.
+                use chatter_core::ai_policy::channel_ai::SiloPreference;
+                let cloud = ui_ctx_settings.cloud_ai_settings();
+                w.set_settings_ai_prefer_cloud(
+                    ui_ctx_settings.ai_silo_preference() == SiloPreference::PreferCloud,
+                );
+                w.set_settings_cloud_ai_mode(cloud.mode.as_str().into());
+                w.set_settings_cloud_ai_configured(cloud.is_available());
+                // Never echo the stored key back into the field.
+                w.set_settings_cloud_ai_api_key("".into());
 
                 w.set_active_modal("settings".into());
             }

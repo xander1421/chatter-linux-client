@@ -588,6 +588,13 @@ export component App inherits Rectangle {
 
     // AI settings properties
     in-out property <bool> settings-local-ai-enabled: false;
+    // Cloud AI (off-device)
+    in-out property <bool> settings-ai-prefer-cloud: false;
+    in-out property <string> settings-cloud-ai-mode: "direct-anthropic";
+    in-out property <string> settings-cloud-ai-api-key: "";
+    in property <bool> settings-cloud-ai-configured: false;
+    in property <string> settings-cloud-ai-status: "";
+    in property <string> settings-cloud-ai-balance: "";
     in-out property <string> settings-local-ai-model-id: "";
     in property <bool> settings-local-ai-loading: false;
     in property <string> settings-local-ai-status: "";
@@ -814,6 +821,12 @@ export component App inherits Rectangle {
     callback settings-local-ai-select-provider(string);
     callback settings-local-ai-select-model(string);
     callback settings-local-ai-download(string);
+
+    // Cloud AI settings callbacks
+    callback settings-ai-prefer-cloud-changed(bool);
+    callback settings-cloud-ai-mode-changed(string);
+    callback settings-cloud-ai-api-key-changed(string);
+    callback settings-cloud-ai-refresh-quota();
 
     // ========== Channel settings callbacks ==========
     callback channel-settings-save(string, string);  // name, description
@@ -2113,6 +2126,12 @@ export component App inherits Rectangle {
         backup-retry-error: root.settings-backup-retry-error;
         // AI settings
         local-ai-enabled <=> root.settings-local-ai-enabled;
+        ai-prefer-cloud <=> root.settings-ai-prefer-cloud;
+        cloud-ai-mode <=> root.settings-cloud-ai-mode;
+        cloud-ai-api-key <=> root.settings-cloud-ai-api-key;
+        cloud-ai-configured: root.settings-cloud-ai-configured;
+        cloud-ai-status: root.settings-cloud-ai-status;
+        cloud-ai-balance: root.settings-cloud-ai-balance;
         local-ai-model-id <=> root.settings-local-ai-model-id;
         local-ai-loading: root.settings-local-ai-loading;
         local-ai-status: root.settings-local-ai-status;
@@ -2178,6 +2197,18 @@ export component App inherits Rectangle {
         // AI callbacks
         local-ai-enabled-changed(value) => {
             root.settings-local-ai-enabled-changed(value);
+        }
+        ai-prefer-cloud-changed(value) => {
+            root.settings-ai-prefer-cloud-changed(value);
+        }
+        cloud-ai-mode-changed(mode) => {
+            root.settings-cloud-ai-mode-changed(mode);
+        }
+        cloud-ai-api-key-changed(key) => {
+            root.settings-cloud-ai-api-key-changed(key);
+        }
+        cloud-ai-refresh-quota => {
+            root.settings-cloud-ai-refresh-quota();
         }
         local-ai-load-model(model-id) => {
             root.settings-local-ai-load-model(model-id);

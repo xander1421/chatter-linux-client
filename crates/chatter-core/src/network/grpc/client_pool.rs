@@ -595,6 +595,11 @@ impl GrpcClientPool {
         super::FileClient::new(self.channel(), self.auth_clone())
     }
 
+    /// Create an authenticated AI broker client.
+    pub fn ai_client(&self) -> super::ai_client::AiClient {
+        super::ai_client::AiClient::new(self.channel(), self.auth_clone())
+    }
+
     /// Create an authenticated ChannelClient.
     pub fn channel_client(&self) -> super::ChannelClient {
         super::ChannelClient::new(self.channel(), self.auth_clone())

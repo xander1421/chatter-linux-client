@@ -83,6 +83,16 @@ export component SettingsScreen inherits Rectangle {
     in property <string> local-ai-active-model: "";
     in property <[CatalogModelData]> local-ai-catalog: [];
 
+    // Cloud AI (off-device). Separate from local AI on purpose: this is the
+    // surface where content leaves the machine, so it states plainly what goes
+    // where.
+    in-out property <bool> ai-prefer-cloud: false;
+    in-out property <string> cloud-ai-mode: "direct-anthropic";  // | "server-broker"
+    in-out property <string> cloud-ai-api-key: "";
+    in property <bool> cloud-ai-configured: false;
+    in property <string> cloud-ai-status: "";
+    in property <string> cloud-ai-balance: "";
+
     // Delete-account confirmation state
     in-out property <string> delete-password: "";
     in property <bool> delete-loading: false;
@@ -127,6 +137,12 @@ export component SettingsScreen inherits Rectangle {
     callback local-ai-select-provider(string);   // provider kind
     callback local-ai-select-model(string);      // chat model name
     callback local-ai-download(string);          // ollama tag
+
+    // Cloud AI callbacks
+    callback ai-prefer-cloud-changed(bool);
+    callback cloud-ai-mode-changed(string);      // "direct-anthropic" | "server-broker"
+    callback cloud-ai-api-key-changed(string);
+    callback cloud-ai-refresh-quota();
 
     background: Colors.background;
 
@@ -1410,6 +1426,152 @@ export component SettingsScreen inherits Rectangle {
                                         toggled(value) => {
                                             root.local-ai-enabled = value;
                                             root.local-ai-enabled-changed(value);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // ── Cloud AI ───────────────────────────────────
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+                                border-width: 1px;
+                                border-color: Colors.neo-highlight;
+                                drop-shadow-blur: Spacing.neo-blur-sm;
+                                drop-shadow-offset-x: Spacing.neo-offset-sm;
+                                drop-shadow-offset-y: Spacing.neo-offset-sm;
+                                drop-shadow-color: Colors.neo-shadow;
+
+                                VerticalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.md;
+
+                                    HorizontalLayout {
+                                        spacing: Spacing.md;
+
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            spacing: Spacing.sm;
+
+                                            Text {
+                                                text: "Use cloud AI";
+                                                color: Colors.text-primary;
+                                                font-size: Typography.sm;
+                                                font-weight: Typography.medium;
+                                            }
+
+                                            Text {
+                                                text: "Send prompts to a cloud model for better answers. Only in channels — direct messages always stay on this device.";
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                                wrap: word-wrap;
+                                            }
+                                        }
+
+                                        NeoActionToggle {
+                                            checked: root.ai-prefer-cloud;
+                                            glow-mode: "cyan";
+                                            toggled(value) => {
+                                                root.ai-prefer-cloud = value;
+                                                root.ai-prefer-cloud-changed(value);
+                                            }
+                                        }
+                                    }
+
+                                    // Who pays, and who sees the prompt.
+                                    if root.ai-prefer-cloud: VerticalLayout {
+                                        spacing: Spacing.sm;
+
+                                        Rectangle {
+                                            height: 1px;
+                                            background: Colors.text-muted.with-alpha(0.2);
+                                        }
+
+                                        HorizontalLayout {
+                                            spacing: Spacing.sm;
+
+                                            Button {
+                                                text: "My API key";
+                                                variant: root.cloud-ai-mode == "direct-anthropic" ? "primary" : "secondary";
+                                                clicked => {
+                                                    root.cloud-ai-mode = "direct-anthropic";
+                                                    root.cloud-ai-mode-changed("direct-anthropic");
+                                                }
+                                            }
+
+                                            Button {
+                                                text: "Buy tokens";
+                                                variant: root.cloud-ai-mode == "server-broker" ? "primary" : "secondary";
+                                                clicked => {
+                                                    root.cloud-ai-mode = "server-broker";
+                                                    root.cloud-ai-mode-changed("server-broker");
+                                                }
+                                            }
+                                        }
+
+                                        // Bring-your-own-key: nobody but the
+                                        // provider sees the prompt.
+                                        if root.cloud-ai-mode == "direct-anthropic": VerticalLayout {
+                                            spacing: Spacing.sm;
+
+                                            Text {
+                                                text: "Your key is stored on this device only. Prompts go straight to the provider — our servers never see them.";
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                                wrap: word-wrap;
+                                            }
+
+                                            Input {
+                                                placeholder: root.cloud-ai-configured ? "API key saved — enter a new one to replace it" : "Anthropic API key";
+                                                password: true;
+                                                text <=> root.cloud-ai-api-key;
+                                            }
+
+                                            HorizontalLayout {
+                                                alignment: start;
+                                                Button {
+                                                    text: "Save key";
+                                                    variant: "secondary";
+                                                    clicked => {
+                                                        root.cloud-ai-api-key-changed(root.cloud-ai-api-key);
+                                                        root.cloud-ai-api-key = "";
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Managed tokens: state the trade plainly.
+                                        if root.cloud-ai-mode == "server-broker": VerticalLayout {
+                                            spacing: Spacing.sm;
+
+                                            Text {
+                                                text: "No API key needed. Prompts are sent through our servers, which see them in order to meter usage.";
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                                wrap: word-wrap;
+                                            }
+
+                                            if root.cloud-ai-balance != "": Text {
+                                                text: root.cloud-ai-balance;
+                                                color: Colors.text-primary;
+                                                font-size: Typography.sm;
+                                            }
+
+                                            HorizontalLayout {
+                                                alignment: start;
+                                                Button {
+                                                    text: "Refresh balance";
+                                                    variant: "secondary";
+                                                    clicked => { root.cloud-ai-refresh-quota(); }
+                                                }
+                                            }
+                                        }
+
+                                        if root.cloud-ai-status != "": Text {
+                                            text: root.cloud-ai-status;
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            wrap: word-wrap;
                                         }
                                     }
                                 }

@@ -459,6 +459,12 @@ export component MainWindow inherits Window {
 
     // AI settings properties
     in-out property <bool> settings-local-ai-enabled <=> app.settings-local-ai-enabled;
+    in-out property <bool> settings-ai-prefer-cloud <=> app.settings-ai-prefer-cloud;
+    in-out property <string> settings-cloud-ai-mode <=> app.settings-cloud-ai-mode;
+    in-out property <string> settings-cloud-ai-api-key <=> app.settings-cloud-ai-api-key;
+    in-out property <bool> settings-cloud-ai-configured <=> app.settings-cloud-ai-configured;
+    in-out property <string> settings-cloud-ai-status <=> app.settings-cloud-ai-status;
+    in-out property <string> settings-cloud-ai-balance <=> app.settings-cloud-ai-balance;
     in-out property <string> settings-local-ai-model-id <=> app.settings-local-ai-model-id;
     in property <bool> settings-local-ai-loading <=> app.settings-local-ai-loading;
     in property <string> settings-local-ai-status <=> app.settings-local-ai-status;
@@ -699,6 +705,10 @@ export component MainWindow inherits Window {
 
     // AI settings callbacks
     callback settings-local-ai-enabled-changed <=> app.settings-local-ai-enabled-changed;
+    callback settings-ai-prefer-cloud-changed <=> app.settings-ai-prefer-cloud-changed;
+    callback settings-cloud-ai-mode-changed <=> app.settings-cloud-ai-mode-changed;
+    callback settings-cloud-ai-api-key-changed <=> app.settings-cloud-ai-api-key-changed;
+    callback settings-cloud-ai-refresh-quota <=> app.settings-cloud-ai-refresh-quota;
     callback settings-local-ai-load-model <=> app.settings-local-ai-load-model;
     callback settings-local-ai-unload-model <=> app.settings-local-ai-unload-model;
     callback settings-local-ai-refresh <=> app.settings-local-ai-refresh;

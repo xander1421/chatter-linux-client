@@ -1,6 +1,11 @@
 target
 target-android
 
+# Local secrets - never commit
+.env
+.env.*
+!.env.example
+
 # Runtime / agent state
 .claude/
 .codegraph/logs/

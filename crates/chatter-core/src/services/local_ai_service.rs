@@ -15,7 +15,7 @@ use crate::local_ai::backend::{
     AvailableModel, BackendError, ChatMessage, ChatResponse, GenerateParams, LocalAIBackend,
 };
 use crate::ai_policy::channel_ai::{self, SiloPreference};
-use crate::cloud_ai::{CloudProviderKind, CloudSettings};
+use crate::cloud_ai::{CloudMode, CloudProviderKind, CloudSettings};
 use crate::local_ai::embeddings::EmbeddingGenerator;
 use crate::local_ai::model_manager::ModelManager;
 use crate::local_ai::ollama::OllamaBackend;
@@ -283,6 +283,12 @@ impl HttpLocalAIService {
         self.settings_repo.set_string("cloud_ai.api_key", key)
     }
 
+    /// Persist whether the cloud silo uses the user's own key or the metered
+    /// server broker.
+    pub fn set_cloud_mode(&self, mode: CloudMode) -> Result<(), crate::error::StorageError> {
+        self.settings_repo.set_string("cloud_ai.mode", mode.as_str())
+    }
+
     /// Persist the model used when the active provider is a cloud one.
     pub fn set_cloud_model(&self, model: &str) -> Result<(), crate::error::StorageError> {
         self.settings_repo.set_string("cloud_ai.model", model)
@@ -301,6 +307,11 @@ impl HttpLocalAIService {
     fn load_cloud_settings(repo: &SettingsRepository) -> CloudSettings {
         let mut settings = CloudSettings::default();
 
+        if let Ok(Some(m)) = repo.get_string("cloud_ai.mode") {
+            if let Some(mode) = CloudMode::parse(&m) {
+                settings.mode = mode;
+            }
+        }
         if let Ok(Some(p)) = repo.get_string("cloud_ai.provider") {
             if let Some(kind) = CloudProviderKind::parse(&p) {
                 settings.provider = kind;
@@ -432,6 +443,7 @@ mod per_conversation_ai_tests {
     use crate::domain::message::ConversationType;
     use crate::ai_policy::channel_ai::Resolved;
     use crate::ai_policy::policy::Silo;
+    use crate::cloud_ai::CloudMode;
     use crate::local_ai::providers::ProviderKind;
     use crate::storage::Database;
 
@@ -519,6 +531,35 @@ mod per_conversation_ai_tests {
             svc.resolve_ai_for("chan-x", &ConversationType::Channel, false),
             Resolved::Use(Silo::Local),
         );
+    }
+
+    #[test]
+    fn cloud_mode_round_trips_and_changes_availability() {
+        let svc = service();
+
+        // Default is bring-your-own-key, and with no key the silo is off.
+        assert_eq!(svc.cloud_settings().mode, CloudMode::DirectAnthropic);
+        assert!(!svc.cloud_settings().is_available());
+
+        // Broker mode needs no key - the server holds the org key.
+        svc.set_cloud_mode(CloudMode::ServerBroker).expect("set mode");
+        assert_eq!(svc.cloud_settings().mode, CloudMode::ServerBroker);
+        assert!(svc.cloud_settings().is_available());
+
+        // Back to BYOK: unavailable again until a key is set.
+        svc.set_cloud_mode(CloudMode::DirectAnthropic).expect("set mode");
+        assert!(!svc.cloud_settings().is_available());
+        svc.set_anthropic_api_key("sk-ant-x").expect("set key");
+        assert!(svc.cloud_settings().is_available());
+    }
+
+    #[test]
+    fn silo_preference_round_trips_and_defaults_local(){
+        let svc = service();
+        assert_eq!(svc.silo_preference(), SiloPreference::LocalOnly);
+
+        svc.set_silo_preference(SiloPreference::PreferCloud).expect("set");
+        assert_eq!(svc.silo_preference(), SiloPreference::PreferCloud);
     }
 
     #[test]
