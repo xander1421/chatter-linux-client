@@ -939,3 +939,143 @@ fn link_approve_paste_reaches_core_parser() {
     w.invoke_link_approve_paste_changed("".into());
     assert!(w.get_link_approve_error().is_empty(), "clearing input did not clear error");
 }
+
+// ============================================================================
+// CLOUD AI SETTINGS — proves the three cloud-AI affordances reach core.
+//
+// These matter more than a typical toggle: they decide whether prompt text
+// leaves the device, and to whom. A dead wire here means the user thinks they
+// turned cloud AI off when they did not.
+// ============================================================================
+
+#[test]
+fn settings_ai_prefer_cloud_toggle_reaches_core() {
+    use chatter_core::ai_policy::channel_ai::SiloPreference;
+
+    require_element_queries();
+    let (_rt, _tmp, client, w) = wired_offline();
+
+    // Local-only until the user says otherwise: a default of PreferCloud would
+    // send prompts off-device for someone who never asked.
+    assert_eq!(
+        client.ai_silo_preference(),
+        SiloPreference::LocalOnly,
+        "precondition: cloud must be opt-in"
+    );
+
+    w.invoke_settings_ai_prefer_cloud_changed(true);
+    assert_eq!(
+        client.ai_silo_preference(),
+        SiloPreference::PreferCloud,
+        "prefer-cloud toggle did NOT reach core (dead/stub wire)"
+    );
+
+    w.invoke_settings_ai_prefer_cloud_changed(false);
+    assert_eq!(
+        client.ai_silo_preference(),
+        SiloPreference::LocalOnly,
+        "toggle did not flip back to local-only"
+    );
+}
+
+#[test]
+fn settings_cloud_ai_mode_reaches_core() {
+    use chatter_core::cloud_ai::CloudMode;
+
+    require_element_queries();
+    let (_rt, _tmp, client, w) = wired_offline();
+
+    assert_eq!(
+        client.cloud_ai_settings().mode,
+        CloudMode::DirectAnthropic,
+        "precondition: bring-your-own-key is the default"
+    );
+
+    w.invoke_settings_cloud_ai_mode_changed("server-broker".into());
+    assert_eq!(
+        client.cloud_ai_settings().mode,
+        CloudMode::ServerBroker,
+        "'Buy tokens' did NOT reach core (dead/stub wire)"
+    );
+
+    w.invoke_settings_cloud_ai_mode_changed("direct-anthropic".into());
+    assert_eq!(
+        client.cloud_ai_settings().mode,
+        CloudMode::DirectAnthropic,
+        "'My API key' did not switch the mode back"
+    );
+}
+
+#[test]
+fn settings_cloud_ai_mode_ignores_an_unknown_value() {
+    use chatter_core::cloud_ai::CloudMode;
+
+    require_element_queries();
+    let (_rt, _tmp, client, w) = wired_offline();
+
+    w.invoke_settings_cloud_ai_mode_changed("not-a-mode".into());
+
+    // Must not fall through to some default - an unparseable mode leaves the
+    // stored setting exactly as it was.
+    assert_eq!(client.cloud_ai_settings().mode, CloudMode::DirectAnthropic);
+}
+
+#[test]
+fn settings_cloud_ai_api_key_reaches_core_and_blank_clears_it() {
+    require_element_queries();
+    let (_rt, _tmp, client, w) = wired_offline();
+
+    assert!(
+        !client.cloud_ai_settings().is_available(),
+        "precondition: no key configured"
+    );
+
+    w.invoke_settings_cloud_ai_api_key_changed("sk-ant-test-key".into());
+    let saved = client.cloud_ai_settings();
+    assert!(
+        saved.is_available(),
+        "API key input did NOT reach core (dead/stub wire)"
+    );
+    assert_eq!(saved.api_key.as_deref(), Some("sk-ant-test-key"));
+
+    // Blank clears rather than storing an empty key that would 401 forever.
+    w.invoke_settings_cloud_ai_api_key_changed("   ".into());
+    assert!(
+        !client.cloud_ai_settings().is_available(),
+        "blank key did not clear the stored key"
+    );
+}
+
+/// The UI records a *preference*; policy still decides. Toggling cloud on must
+/// not make a DM resolve to the cloud silo.
+#[test]
+fn cloud_preference_does_not_override_the_dm_policy() {
+    use chatter_core::ai_policy::channel_ai::Resolved;
+    use chatter_core::ai_policy::policy::Silo;
+    use chatter_core::domain::message::ConversationType;
+
+    require_element_queries();
+    let (_rt, _tmp, client, w) = wired_offline();
+
+    // User asks for cloud everywhere and configures a key.
+    w.invoke_settings_ai_prefer_cloud_changed(true);
+    w.invoke_settings_cloud_ai_api_key_changed("sk-ant-test-key".into());
+    client.set_ai_enabled_for("dm-1", true).expect("enable");
+    client.set_ai_enabled_for("chan-1", true).expect("enable");
+
+    assert_eq!(
+        client.resolve_ai_for("dm-1", &ConversationType::ServerDm, false),
+        Resolved::Use(Silo::Local),
+        "a DM resolved to the cloud silo despite the policy clamp"
+    );
+    assert_eq!(
+        client.resolve_ai_for("chan-1", &ConversationType::Channel, false),
+        Resolved::Use(Silo::Cloud),
+        "a channel should honour the cloud preference"
+    );
+    assert_eq!(
+        client.resolve_ai_for("chan-1", &ConversationType::Channel, true),
+        Resolved::Off,
+        "mesh-delivered traffic must get no AI at all"
+    );
+}
