@@ -4,6 +4,7 @@
 
 pub mod anonymous_client;
 pub mod anonymous_mailbox_client;
+pub mod ai_client;
 pub mod auth_client;
 pub mod call_client;
 pub mod channel_client;

@@ -19,16 +19,6 @@ pub struct LocalAISettings {
     pub ollama_url: String,
     /// Chat/completion model ID.
     pub chat_model: String,
-    /// Anthropic API key. `None` disables the cloud provider entirely.
-    ///
-    /// Loaded from the settings repo alongside the other client secrets
-    /// (`auth.device_token`, `crypto.profile_key`) rather than living in a
-    /// config file. Skipped on serialize so it never lands in a settings
-    /// blob or a debug dump.
-    #[serde(skip_serializing, default)]
-    pub anthropic_api_key: Option<String>,
-    /// Model ID used when the active provider is a cloud one.
-    pub cloud_model: String,
     /// Embedding model ID.
     pub embedding_model: String,
     /// Embedding dimension (must match the embedding model).
@@ -51,9 +41,6 @@ impl Default for LocalAISettings {
             active_provider: ProviderKind::Ollama,
             ollama_url: "http://localhost:11434".to_string(),
             chat_model: "qwen3:4b".to_string(),
-            anthropic_api_key: None,
-            // Cheapest current Claude ($1/$5 per MTok, 200K context).
-            cloud_model: "claude-haiku-4-5".to_string(),
             embedding_model: "nomic-embed-text".to_string(),
             embedding_dimension: 768,
             auto_index: true,
@@ -64,7 +51,7 @@ impl Default for LocalAISettings {
     }
 }
 
-mod humantime_serde {
+pub mod humantime_serde {
     use std::time::Duration;
 
     use serde::{self, Deserialize, Deserializer, Serializer};

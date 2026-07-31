@@ -277,7 +277,7 @@ impl JarvisService {
 
         // Policy gate: a DM or anon conversation refuses a cloud engine here,
         // before any message content leaves the device.
-        let access = crate::local_ai::policy::ai_access(&context.conversation_type(), false);
+        let access = crate::ai_policy::policy::ai_access(&context.conversation_type(), false);
         let response = self
             .ai
             .complete_conversation_gated(access, messages, params)
@@ -305,7 +305,7 @@ impl JarvisService {
         message_id: Option<&str>,
     ) -> Result<(), JarvisError> {
         // 1. Extract entities
-        let access = crate::local_ai::policy::ai_access(&context.conversation_type(), false);
+        let access = crate::ai_policy::policy::ai_access(&context.conversation_type(), false);
         let entities = self.extractor.extract(access, message).await?;
 
         // 2. Store entities in the knowledge graph
@@ -399,7 +399,7 @@ Summary:"#,
             json_schema: None,
         };
 
-        let access = crate::local_ai::policy::ai_access(&context.conversation_type(), false);
+        let access = crate::ai_policy::policy::ai_access(&context.conversation_type(), false);
         self.ai
             .complete_gated(access, prompt, params)
             .await

@@ -17,7 +17,19 @@
 
 use crate::domain::message::ConversationType;
 
-use super::providers::ProviderKind;
+/// Which silo an engine belongs to.
+///
+/// The two AI silos are [`crate::local_ai`] (on-device) and
+/// [`crate::cloud_ai`] (off-device). Policy is stated in terms of silos, not
+/// concrete providers, so adding a provider to either silo cannot change what
+/// a DM is allowed to reach.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Silo {
+    /// On-device or self-hosted: content never leaves the machine.
+    Local,
+    /// Off-device: content is sent to a third party.
+    Cloud,
+}
 
 /// What inference is permitted for a given conversation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,15 +43,14 @@ pub enum AiAccess {
 }
 
 impl AiAccess {
-    /// Whether this access level permits the given provider.
-    pub fn permits(self, provider: ProviderKind) -> bool {
-        self.permits_cloud(provider.is_cloud())
+    /// Whether this access level permits a given silo.
+    pub fn permits_silo(self, silo: Silo) -> bool {
+        self.permits_cloud(silo == Silo::Cloud)
     }
 
     /// Whether an engine that does (or doesn't) leave the device is permitted.
     ///
-    /// The `ProviderKind`-free form, for call sites that hold a constructed
-    /// backend rather than a settings value.
+    /// For call sites holding a constructed backend rather than a silo value.
     pub fn permits_cloud(self, is_cloud: bool) -> bool {
         match self {
             Self::Denied => false,
@@ -156,17 +167,17 @@ mod tests {
     }
 
     #[test]
-    fn local_only_rejects_cloud_providers_and_admits_local_ones() {
+    fn local_only_rejects_the_cloud_silo_and_admits_the_local_one() {
         let dm = ai_access(&ConversationType::ServerDm, false);
-        assert!(!dm.permits(ProviderKind::Anthropic), "cloud in a DM");
-        assert!(dm.permits(ProviderKind::Ollama));
-        assert!(dm.permits(ProviderKind::MistralRs));
+        assert!(!dm.permits_silo(Silo::Cloud), "cloud silo reachable from a DM");
+        assert!(dm.permits_silo(Silo::Local));
 
         let channel = ai_access(&ConversationType::Channel, false);
-        assert!(channel.permits(ProviderKind::Anthropic));
-        assert!(channel.permits(ProviderKind::Ollama));
+        assert!(channel.permits_silo(Silo::Cloud));
+        assert!(channel.permits_silo(Silo::Local));
 
-        assert!(!AiAccess::Denied.permits(ProviderKind::Ollama));
+        assert!(!AiAccess::Denied.permits_silo(Silo::Local));
+        assert!(!AiAccess::Denied.permits_silo(Silo::Cloud));
     }
 
     #[test]

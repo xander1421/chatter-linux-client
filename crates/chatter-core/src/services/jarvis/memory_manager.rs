@@ -15,7 +15,7 @@ use crate::services::ai::SampleParams;
 use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
 
 use super::engine::SharedJarvisEngine;
-use crate::local_ai::policy::AiAccess;
+use crate::ai_policy::policy::AiAccess;
 use super::error::JarvisError;
 
 /// Memory manager for Jarvis.
@@ -120,7 +120,7 @@ impl MemoryManager {
         context: &JarvisContext,
         config: &CompressionConfig,
     ) -> Result<Option<JarvisSummary>, JarvisError> {
-        let access = crate::local_ai::policy::ai_access(&context.conversation_type(), false);
+        let access = crate::ai_policy::policy::ai_access(&context.conversation_type(), false);
         let count = self.memory_repo.count_conversations(context)?;
 
         if count < config.max_messages {

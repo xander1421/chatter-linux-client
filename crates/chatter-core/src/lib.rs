@@ -61,6 +61,10 @@ pub mod mailbox;
 pub mod ui;
 #[doc(hidden)]
 pub mod local_ai;
+/// Off-device inference providers. Siloed from `local_ai`.
+pub mod cloud_ai;
+/// Arbiter between the two AI silos — outside both by design.
+pub mod ai_policy;
 #[doc(hidden)]
 pub mod util;
 #[doc(hidden)]

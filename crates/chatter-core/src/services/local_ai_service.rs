@@ -14,7 +14,8 @@ use crate::error::ServiceError;
 use crate::local_ai::backend::{
     AvailableModel, BackendError, ChatMessage, ChatResponse, GenerateParams, LocalAIBackend,
 };
-use crate::local_ai::channel_ai;
+use crate::ai_policy::channel_ai::{self, SiloPreference};
+use crate::cloud_ai::{CloudProviderKind, CloudSettings};
 use crate::local_ai::embeddings::EmbeddingGenerator;
 use crate::local_ai::model_manager::ModelManager;
 use crate::local_ai::ollama::OllamaBackend;
@@ -276,15 +277,66 @@ impl HttpLocalAIService {
     pub fn set_anthropic_api_key(&self, key: &str) -> Result<(), crate::error::StorageError> {
         let key = key.trim();
         if key.is_empty() {
-            self.settings_repo.delete("local_ai.anthropic_api_key")?;
+            self.settings_repo.delete("cloud_ai.api_key")?;
             return Ok(());
         }
-        self.settings_repo.set_string("local_ai.anthropic_api_key", key)
+        self.settings_repo.set_string("cloud_ai.api_key", key)
     }
 
     /// Persist the model used when the active provider is a cloud one.
     pub fn set_cloud_model(&self, model: &str) -> Result<(), crate::error::StorageError> {
-        self.settings_repo.set_string("local_ai.cloud_model", model)
+        self.settings_repo.set_string("cloud_ai.model", model)
+    }
+
+    // ==================== Cloud silo ====================
+
+    /// Current cloud-silo configuration, read fresh from the repo.
+    ///
+    /// Deliberately a separate struct from `LocalAISettings`: the API key is a
+    /// cloud-only secret and has no business in the local provider's config.
+    pub fn cloud_settings(&self) -> CloudSettings {
+        Self::load_cloud_settings(&self.settings_repo)
+    }
+
+    fn load_cloud_settings(repo: &SettingsRepository) -> CloudSettings {
+        let mut settings = CloudSettings::default();
+
+        if let Ok(Some(p)) = repo.get_string("cloud_ai.provider") {
+            if let Some(kind) = CloudProviderKind::parse(&p) {
+                settings.provider = kind;
+                settings.model = kind.default_model().to_string();
+            }
+        }
+        if let Ok(Some(model)) = repo.get_string("cloud_ai.model") {
+            settings.model = model;
+        }
+        if let Ok(Some(key)) = repo.get_string("cloud_ai.api_key") {
+            let key = key.trim().to_string();
+            if !key.is_empty() {
+                settings.api_key = Some(key);
+            }
+        }
+
+        settings
+    }
+
+    /// The user's silo preference. Local-only unless explicitly changed.
+    pub fn silo_preference(&self) -> SiloPreference {
+        self.settings_repo
+            .get_string(channel_ai::SILO_PREFERENCE_KEY)
+            .ok()
+            .flatten()
+            .and_then(|s| SiloPreference::parse(&s))
+            .unwrap_or_default()
+    }
+
+    /// Persist the silo preference.
+    pub fn set_silo_preference(
+        &self,
+        preference: SiloPreference,
+    ) -> Result<(), crate::error::StorageError> {
+        self.settings_repo
+            .set_string(channel_ai::SILO_PREFERENCE_KEY, preference.as_str())
     }
 
     // ==================== Per-conversation AI ====================
@@ -319,15 +371,14 @@ impl HttpLocalAIService {
         conversation: &crate::domain::message::ConversationType,
         delivered_via_mesh: bool,
     ) -> channel_ai::Resolved {
-        let access = crate::local_ai::policy::ai_access(conversation, delivered_via_mesh);
+        let access = crate::ai_policy::policy::ai_access(conversation, delivered_via_mesh);
         let settings = self.fresh_settings();
 
+        let _ = settings;
         channel_ai::resolve(
             self.ai_enabled_for(conversation_id),
-            // Provider is a user-level preference, not per-channel; the
-            // override slot stays open for when that changes.
-            None,
-            settings.active_provider,
+            self.silo_preference(),
+            self.cloud_settings().is_available(),
             access,
         )
     }
@@ -364,17 +415,6 @@ impl HttpLocalAIService {
         if let Ok(Some(model)) = repo.get_string("local_ai.embedding_model") {
             settings.embedding_model = model;
         }
-        if let Ok(Some(model)) = repo.get_string("local_ai.cloud_model") {
-            settings.cloud_model = model;
-        }
-        // Cloud API key. Absent → `AnyBackend::for_kind` refuses to build the
-        // Anthropic backend, so the cloud provider stays off until a key is set.
-        if let Ok(Some(key)) = repo.get_string("local_ai.anthropic_api_key") {
-            let key = key.trim().to_string();
-            if !key.is_empty() {
-                settings.anthropic_api_key = Some(key);
-            }
-        }
         if let Ok(false) = repo.get_local_ai_enabled() {
             // Only disable if explicitly set to false
             if repo.get_string("local_ai.enabled").ok().flatten().is_some() {
@@ -390,7 +430,8 @@ impl HttpLocalAIService {
 mod per_conversation_ai_tests {
     use super::*;
     use crate::domain::message::ConversationType;
-    use crate::local_ai::channel_ai::Resolved;
+    use crate::ai_policy::channel_ai::Resolved;
+    use crate::ai_policy::policy::Silo;
     use crate::local_ai::providers::ProviderKind;
     use crate::storage::Database;
 
@@ -428,7 +469,7 @@ mod per_conversation_ai_tests {
 
         assert_eq!(
             svc.resolve_ai_for("chan-a", &ConversationType::Channel, false),
-            Resolved::Use(ProviderKind::Ollama)
+            Resolved::Use(Silo::Local)
         );
         assert_eq!(
             svc.resolve_ai_for("chan-b", &ConversationType::Channel, false),
@@ -448,18 +489,36 @@ mod per_conversation_ai_tests {
     }
 
     #[test]
-    fn enabled_dm_resolves_to_a_local_provider_never_a_cloud_one() {
+    fn enabled_dm_resolves_to_the_local_silo_even_with_cloud_configured() {
         let svc = service();
         svc.set_ai_enabled_for("dm-1", true).expect("set");
-        // Global provider is the cloud one; the DM must not inherit it.
-        svc.set_active_provider(ProviderKind::Anthropic).expect("set provider");
+        // Cloud fully configured and preferred — the DM must still not use it.
+        svc.set_anthropic_api_key("sk-ant-example").expect("key");
+        svc.set_silo_preference(SiloPreference::PreferCloud).expect("pref");
 
-        match svc.resolve_ai_for("dm-1", &ConversationType::ServerDm, false) {
-            Resolved::Use(p) => panic!("DM resolved to {p:?}"),
-            // No local provider configured anywhere → asks for one, rather
-            // than silently using Anthropic.
-            other => assert_eq!(other, Resolved::NeedsLocalProvider),
-        }
+        assert!(svc.cloud_settings().is_available());
+        assert_eq!(
+            svc.resolve_ai_for("dm-1", &ConversationType::ServerDm, false),
+            Resolved::Use(Silo::Local),
+        );
+        // Same configuration on a channel does reach the cloud silo.
+        svc.set_ai_enabled_for("chan-x", true).expect("set");
+        assert_eq!(
+            svc.resolve_ai_for("chan-x", &ConversationType::Channel, false),
+            Resolved::Use(Silo::Cloud),
+        );
+    }
+
+    #[test]
+    fn cloud_preference_without_a_key_stays_local_on_a_channel() {
+        let svc = service();
+        svc.set_ai_enabled_for("chan-x", true).expect("set");
+        svc.set_silo_preference(SiloPreference::PreferCloud).expect("pref");
+
+        assert_eq!(
+            svc.resolve_ai_for("chan-x", &ConversationType::Channel, false),
+            Resolved::Use(Silo::Local),
+        );
     }
 
     #[test]
@@ -475,11 +534,13 @@ mod per_conversation_ai_tests {
         let svc = service();
         svc.set_anthropic_api_key("sk-ant-example").expect("set");
         assert_eq!(
-            svc.fresh_settings().anthropic_api_key.as_deref(),
+            svc.cloud_settings().api_key.as_deref(),
             Some("sk-ant-example")
         );
+        assert!(svc.cloud_settings().is_available());
 
         svc.set_anthropic_api_key("   ").expect("clear via blank");
-        assert!(svc.fresh_settings().anthropic_api_key.is_none());
+        assert!(svc.cloud_settings().api_key.is_none());
+        assert!(!svc.cloud_settings().is_available());
     }
 }

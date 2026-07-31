@@ -15,7 +15,7 @@ use std::time::Duration;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-use super::backend::{
+use crate::local_ai::backend::{
     AvailableModel, BackendError, ChatMessage, ChatResponse, ChatRole, GenerateParams,
     LocalAIBackend,
 };
@@ -23,15 +23,33 @@ use super::backend::{
 const API_BASE: &str = "https://api.anthropic.com";
 const API_VERSION: &str = "2023-06-01";
 
+/// The only host this backend may ever contact.
+///
+/// Egress pin. There is deliberately **no** way to configure a different base
+/// URL — not from settings, not from a constructor argument, not in tests.
+/// A configurable endpoint on the one component that legitimately talks to the
+/// public internet is an exfiltration path waiting for a misconfiguration or a
+/// tampered settings row, and it buys nothing: there is exactly one Anthropic
+/// API. [`AnthropicBackend::endpoint`] is checked against this at every call.
+const ALLOWED_HOST: &str = "api.anthropic.com";
+
 /// Anthropic API client.
 pub struct AnthropicBackend {
     client: Client,
-    base_url: String,
     api_key: String,
 }
 
 // ==================== Anthropic API types ====================
 
+/// The request body.
+///
+/// **This struct deliberately has no `tools` / `tool_choice` field, and must
+/// never gain one.** Text-in / text-out is the containment property that makes
+/// the rest of the design hold: under prompt injection the worst a model can
+/// do is write something wrong into the one channel it was invoked from. Give
+/// it a callable tool and context scoping, silo policy, and the mesh rule all
+/// stop being sufficient, because the model gains a way to act rather than
+/// merely answer. `tools_are_never_sent` fails if this is reintroduced.
 #[derive(Serialize)]
 struct MessagesRequest<'a> {
     model: &'a str,
@@ -84,37 +102,48 @@ struct ModelEntry {
 
 impl AnthropicBackend {
     pub fn new(api_key: impl Into<String>, timeout: Duration) -> Self {
-        Self::with_base_url(api_key, API_BASE, timeout)
-    }
-
-    /// Explicit base URL — used by tests to point at a local stub.
-    pub fn with_base_url(
-        api_key: impl Into<String>,
-        base_url: impl Into<String>,
-        timeout: Duration,
-    ) -> Self {
         let client = Client::builder()
             .timeout(timeout)
             .connect_timeout(Duration::from_secs(5))
+            // Redirects are how a pinned host becomes an unpinned one.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("failed to build reqwest client");
 
-        Self {
-            client,
-            base_url: base_url.into().trim_end_matches('/').to_string(),
-            api_key: api_key.into(),
+        Self { client, api_key: api_key.into() }
+    }
+
+    /// Build and verify the URL for `path`.
+    ///
+    /// Fails closed if the result is not HTTPS to [`ALLOWED_HOST`]. Today that
+    /// is unreachable — the base is a constant — which is the point: the check
+    /// exists so that reintroducing a configurable endpoint breaks loudly here
+    /// and in `egress_is_pinned_to_the_anthropic_host` rather than silently
+    /// opening a path off-host.
+    fn endpoint(path: &str) -> Result<reqwest::Url, BackendError> {
+        let url = reqwest::Url::parse(&format!("{API_BASE}{path}"))
+            .map_err(|e| BackendError::InvalidResponse(format!("bad endpoint: {e}")))?;
+
+        if url.scheme() != "https" || url.host_str() != Some(ALLOWED_HOST) {
+            return Err(BackendError::Unavailable(format!(
+                "refusing to contact {} — egress is pinned to https://{ALLOWED_HOST}",
+                url.host_str().unwrap_or("<none>")
+            )));
         }
+
+        Ok(url)
     }
 
-    fn url(&self, path: &str) -> String {
-        format!("{}{}", self.base_url, path)
-    }
-
-    fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
-        self.client
-            .request(method, self.url(path))
+    fn request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+    ) -> Result<reqwest::RequestBuilder, BackendError> {
+        Ok(self
+            .client
+            .request(method, Self::endpoint(path)?)
             .header("x-api-key", &self.api_key)
-            .header("anthropic-version", API_VERSION)
+            .header("anthropic-version", API_VERSION))
     }
 }
 
@@ -141,10 +170,25 @@ fn split_system(messages: &[ChatMessage]) -> (Option<String>, Vec<WireMessage<'_
     (system, wire)
 }
 
+/// Concatenate the text blocks of a response, ignoring everything else.
+///
+/// Anything that is not a `text` block — a `tool_use` block above all — is
+/// dropped rather than interpreted. We never send tools, so a tool block can
+/// only arrive from a server-side change or a confused model; either way the
+/// safe reading is "there was no text here".
+fn text_from(blocks: Vec<ContentBlock>) -> String {
+    blocks
+        .into_iter()
+        .filter(|b| b.kind == "text")
+        .map(|b| b.text)
+        .collect::<Vec<_>>()
+        .join("")
+}
+
 impl LocalAIBackend for AnthropicBackend {
     async fn health_check(&self) -> Result<bool, BackendError> {
         // Cheapest authenticated call: lists models, bills nothing.
-        let resp = self.request(reqwest::Method::GET, "/v1/models").send().await?;
+        let resp = self.request(reqwest::Method::GET, "/v1/models")?.send().await?;
         Ok(resp.status().is_success())
     }
 
@@ -175,7 +219,7 @@ impl LocalAIBackend for AnthropicBackend {
         };
 
         let resp = self
-            .request(reqwest::Method::POST, "/v1/messages")
+            .request(reqwest::Method::POST, "/v1/messages")?
             .json(&request)
             .send()
             .await?;
@@ -207,13 +251,7 @@ impl LocalAIBackend for AnthropicBackend {
             ));
         }
 
-        let content = api
-            .content
-            .into_iter()
-            .filter(|b| b.kind == "text")
-            .map(|b| b.text)
-            .collect::<Vec<_>>()
-            .join("");
+        let content = text_from(api.content);
 
         if content.is_empty() {
             return Err(BackendError::InvalidResponse(
@@ -235,7 +273,7 @@ impl LocalAIBackend for AnthropicBackend {
     }
 
     async fn list_models(&self) -> Result<Vec<AvailableModel>, BackendError> {
-        let resp = self.request(reqwest::Method::GET, "/v1/models").send().await?;
+        let resp = self.request(reqwest::Method::GET, "/v1/models")?.send().await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -363,6 +401,57 @@ mod tests {
             .await
             .expect_err("bad key must fail");
         assert!(matches!(err, BackendError::Unavailable(_)), "{err:?}");
+    }
+
+    #[test]
+    fn egress_is_pinned_to_the_anthropic_host() {
+        let url = AnthropicBackend::endpoint("/v1/messages").expect("allowed");
+        assert_eq!(url.scheme(), "https");
+        assert_eq!(url.host_str(), Some("api.anthropic.com"));
+        assert_eq!(url.path(), "/v1/messages");
+
+        // A path that tries to escape the host via an absolute URL or authority
+        // must not produce an off-host endpoint.
+        for hostile in ["//evil.example.com/v1/messages", "/../../v1/messages"] {
+            match AnthropicBackend::endpoint(hostile) {
+                Ok(u) => assert_eq!(
+                    u.host_str(),
+                    Some("api.anthropic.com"),
+                    "escaped the pinned host via {hostile:?}"
+                ),
+                Err(_) => {} // refused outright, also fine
+            }
+        }
+    }
+
+    #[test]
+    fn tools_are_never_sent() {
+        // Containment guard: text-in/text-out. See MessagesRequest's docs.
+        let messages = vec![msg(ChatRole::User, "hi")];
+        let (system, wire) = split_system(&messages);
+        let body = serde_json::to_string(&MessagesRequest {
+            model: "claude-haiku-4-5",
+            max_tokens: 16,
+            messages: wire,
+            system,
+            stop_sequences: Vec::new(),
+        })
+        .expect("serialize");
+
+        assert!(!body.contains("tool"), "tools reintroduced: {body}");
+    }
+
+    #[test]
+    fn non_text_content_blocks_are_ignored() {
+        let blocks: Vec<ContentBlock> = serde_json::from_str(
+            r#"[{"type":"tool_use","id":"t1","name":"exfiltrate"},
+                {"type":"text","text":"hello"},
+                {"type":"thinking","text":"ignored"}]"#,
+        )
+        .expect("parse");
+
+        // Only the text block survives; a tool_use block is not interpreted.
+        assert_eq!(text_from(blocks), "hello");
     }
 
     #[test]

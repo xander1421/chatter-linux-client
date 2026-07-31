@@ -51,7 +51,7 @@ impl FactExtractor {
 
         // Derived from the context this extraction belongs to: a DM refuses
         // a cloud engine before the message text is sent anywhere.
-        let access = crate::local_ai::policy::ai_access(&context.conversation_type(), false);
+        let access = crate::ai_policy::policy::ai_access(&context.conversation_type(), false);
 
         let prompt = Self::build_prompt(message);
         // Thinking models (qwen3, deepseek-r1) spend most of the budget in

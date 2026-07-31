@@ -8,7 +8,8 @@
 use std::sync::{Arc, RwLock};
 
 use crate::local_ai::backend::{ChatMessage, ChatRole, GenerateParams, LocalAIBackend};
-use crate::local_ai::policy::AiAccess;
+use crate::ai_policy::policy::AiAccess;
+use crate::cloud_ai::{AnyCloudBackend, CloudSettings};
 use crate::local_ai::providers::{AnyBackend, ProviderKind};
 use crate::local_ai::settings::LocalAISettings;
 use crate::services::ai::{LocalAIActorHandle, SampleParams};
@@ -19,9 +20,12 @@ use super::error::JarvisError;
 pub enum JarvisEngine {
     /// In-process mistralrs actor (real with the `local-ai` feature, stub without).
     InProcess(LocalAIActorHandle),
-    /// HTTP provider with the model to use. The model is interior-mutable so
-    /// a missing-model completion can self-heal to an installed model.
+    /// Local HTTP provider with the model to use. The model is interior-mutable
+    /// so a missing-model completion can self-heal to an installed model.
     Http { backend: Arc<AnyBackend>, model: RwLock<String> },
+    /// Cloud provider. Constructed only from the cloud silo's own settings —
+    /// `from_settings` cannot produce this variant.
+    Cloud { backend: Arc<AnyCloudBackend>, model: RwLock<String> },
 }
 
 impl JarvisEngine {
@@ -39,15 +43,32 @@ impl JarvisEngine {
         Self::InProcess(actor)
     }
 
-    /// Whether this engine sends content off the device.
+    /// Build a cloud engine from the cloud silo's settings.
     ///
-    /// The in-process actor never does; an HTTP engine inherits its backend's
-    /// answer (localhost providers are local; Anthropic is not).
-    pub fn is_cloud(&self) -> bool {
+    /// `None` when the cloud silo isn't configured. This is the *only* way to
+    /// get a `Cloud` engine — the local `from_settings` above cannot.
+    pub fn from_cloud_settings(settings: &CloudSettings) -> Option<Self> {
+        AnyCloudBackend::for_settings(settings).map(|backend| Self::Cloud {
+            backend: Arc::new(backend),
+            model: RwLock::new(settings.model.clone()),
+        })
+    }
+
+    /// Which silo this engine belongs to.
+    ///
+    /// Structural, not a lookup: the local variants cannot hold a cloud
+    /// backend because the local dispatch enum has no cloud member.
+    pub fn silo(&self) -> crate::ai_policy::policy::Silo {
+        use crate::ai_policy::policy::Silo;
         match self {
-            Self::InProcess(_) => false,
-            Self::Http { backend, .. } => backend.is_cloud(),
+            Self::InProcess(_) | Self::Http { .. } => Silo::Local,
+            Self::Cloud { .. } => Silo::Cloud,
         }
+    }
+
+    /// Whether this engine sends content off the device.
+    pub fn is_cloud(&self) -> bool {
+        self.silo() == crate::ai_policy::policy::Silo::Cloud
     }
 
     /// Does this chat error mean "the model isn't installed on the provider"?
@@ -109,38 +130,51 @@ impl JarvisEngine {
                 actor.complete(full, params).await.map_err(JarvisError::from)
             }
             Self::Http { backend, model } => {
-                let gen_params = GenerateParams {
-                    max_tokens: params.max_tokens as u32,
-                    temperature: params.temperature,
-                    top_p: params.top_p,
-                    top_k: params.top_k as u32,
-                    repeat_penalty: params.repeat_penalty,
-                    stop: Vec::new(),
-                    disable_thinking: params.disable_thinking,
-                    json_schema: params.json_schema.clone(),
-                };
-                let current = model.read().expect("model lock").clone();
-                match backend.chat(&current, &messages, &gen_params).await {
-                    Ok(resp) => Ok(Self::strip_reasoning(resp.content)),
-                    // Configured model not installed (e.g. fresh setup where
-                    // the default isn't pulled yet): fall back to the first
-                    // installed chat model and remember it.
-                    Err(e) if Self::is_missing_model(&e) => {
-                        let models = backend.list_models().await?;
-                        let Some(fallback) = Self::pick_chat_model(&models) else {
-                            return Err(JarvisError::Backend(e));
-                        };
-                        tracing::info!(
-                            missing = %current, using = %fallback,
-                            "configured chat model not installed; falling back"
-                        );
-                        let resp = backend.chat(&fallback, &messages, &gen_params).await?;
-                        *model.write().expect("model lock") = fallback;
-                        Ok(Self::strip_reasoning(resp.content))
-                    }
-                    Err(e) => Err(JarvisError::Backend(e)),
-                }
+                Self::complete_via(backend.as_ref(), model, messages, params).await
             }
+            Self::Cloud { backend, model } => {
+                Self::complete_via(backend.as_ref(), model, messages, params).await
+            }
+        }
+    }
+
+    /// Completion against any backend speaking the shared inference trait.
+    async fn complete_via<B: LocalAIBackend>(
+        backend: &B,
+        model: &RwLock<String>,
+        messages: Vec<ChatMessage>,
+        params: SampleParams,
+    ) -> Result<String, JarvisError> {
+        let gen_params = GenerateParams {
+            max_tokens: params.max_tokens as u32,
+            temperature: params.temperature,
+            top_p: params.top_p,
+            top_k: params.top_k as u32,
+            repeat_penalty: params.repeat_penalty,
+            stop: Vec::new(),
+            disable_thinking: params.disable_thinking,
+            json_schema: params.json_schema.clone(),
+        };
+        let current = model.read().expect("model lock").clone();
+        match backend.chat(&current, &messages, &gen_params).await {
+            Ok(resp) => Ok(Self::strip_reasoning(resp.content)),
+            // Configured model not installed (e.g. fresh setup where the
+            // default isn't pulled yet): fall back to the first installed
+            // chat model and remember it.
+            Err(e) if Self::is_missing_model(&e) => {
+                let models = backend.list_models().await?;
+                let Some(fallback) = Self::pick_chat_model(&models) else {
+                    return Err(JarvisError::Backend(e));
+                };
+                tracing::info!(
+                    missing = %current, using = %fallback,
+                    "configured chat model not installed; falling back"
+                );
+                let resp = backend.chat(&fallback, &messages, &gen_params).await?;
+                *model.write().expect("model lock") = fallback;
+                Ok(Self::strip_reasoning(resp.content))
+            }
+            Err(e) => Err(JarvisError::Backend(e)),
         }
     }
 }
@@ -235,6 +269,9 @@ impl SharedJarvisEngine {
             JarvisEngine::Http { backend, model } => {
                 format!("{} ({})", backend.name(), model.read().expect("model lock"))
             }
+            JarvisEngine::Cloud { backend, model } => {
+                format!("{} ({})", backend.name(), model.read().expect("model lock"))
+            }
         }
     }
 }
@@ -254,14 +291,37 @@ mod tests {
 
     /// Build a cloud-backed engine (no network touched by construction).
     fn anthropic_engine() -> SharedJarvisEngine {
-        let settings = LocalAISettings {
-            active_provider: ProviderKind::Anthropic,
-            anthropic_api_key: Some("sk-ant-test".into()),
-            ..LocalAISettings::default()
+        let settings = CloudSettings {
+            api_key: Some("sk-ant-test".into()),
+            ..CloudSettings::default()
         };
-        let engine = JarvisEngine::from_settings(&settings, LocalAIActorHandle::spawn());
-        assert!(engine.is_cloud(), "anthropic settings must yield a cloud engine");
+        let engine = JarvisEngine::from_cloud_settings(&settings)
+            .expect("configured cloud silo yields an engine");
+        assert!(engine.is_cloud());
         SharedJarvisEngine::new(engine)
+    }
+
+    #[test]
+    fn the_local_silo_can_never_produce_a_cloud_engine() {
+        // Structural silo check: whatever the local settings say, the local
+        // constructor has no cloud variant available to it.
+        for kind in [
+            ProviderKind::Ollama,
+            ProviderKind::LmStudio,
+            ProviderKind::LlamaCpp,
+            ProviderKind::Vllm,
+            ProviderKind::MistralRs,
+        ] {
+            let settings = LocalAISettings { active_provider: kind, ..LocalAISettings::default() };
+            let engine = JarvisEngine::from_settings(&settings, LocalAIActorHandle::spawn());
+            assert!(!engine.is_cloud(), "{kind:?} produced a cloud engine");
+            assert_eq!(engine.silo(), crate::ai_policy::policy::Silo::Local);
+        }
+    }
+
+    #[test]
+    fn an_unconfigured_cloud_silo_yields_no_engine() {
+        assert!(JarvisEngine::from_cloud_settings(&CloudSettings::default()).is_none());
     }
 
     fn user(text: &str) -> Vec<ChatMessage> {
