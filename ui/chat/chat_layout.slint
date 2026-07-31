@@ -387,12 +387,22 @@ export component ChatLayout inherits Rectangle {
             is-mesh: MeshGlobal.active-id != "";
             // A mesh room and a geohash cell are plaintext broadcasts. Only a
             // mesh DM runs over Noise, so only it keeps the lock.
+            //
+            // A PUBLIC channel is plaintext too: the server creates it with
+            // Encrypted:false and this client ships cleartext to it on purpose
+            // (services/message/core.rs — "plaintext is the intended, visible
+            // property"). It must not claim end-to-end encryption. The
+            // channel-type default is "public", so a conversation whose type
+            // has not loaded yet understates privacy rather than overstating it.
             public-broadcast: MeshGlobal.active-kind == "room"
-                || MeshGlobal.active-kind == "geohash";
+                || MeshGlobal.active-kind == "geohash"
+                || root.channel-type == "public";
             privacy-line: MeshGlobal.active-kind == "room"
                 ? "Anyone in radio range can read this"
               : MeshGlobal.active-kind == "geohash"
                 ? "Anyone in this cell can read this"
+              : root.channel-type == "public"
+                ? "Public channel — anyone can read this"
                 : "Messages are end-to-end encrypted";
             current-playing-attachment-id: root.current-playing-attachment-id;
             is-media-playing: root.is-media-playing;

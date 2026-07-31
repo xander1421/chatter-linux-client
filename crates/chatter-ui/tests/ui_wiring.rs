@@ -1205,3 +1205,46 @@ fn channel_settings_ai_toggle_reaches_core() {
         "channel AI toggle did not switch back off"
     );
 }
+
+/// A public channel must not claim end-to-end encryption.
+///
+/// Public channels are plaintext by design — the server creates them with
+/// `Encrypted:false` and this client ships cleartext to them on purpose. The
+/// message-list privacy line used to fall through to "Messages are end-to-end
+/// encrypted" for everything that was not a mesh room or geohash cell, so a
+/// world-readable channel was labelled private.
+///
+/// Static rather than dynamic: the privacy line lives inside the message list,
+/// which is not instantiated in the headless harness (a dynamic
+/// `ElementHandle` query finds no Text and would pass vacuously — verified).
+/// This mirrors the "L2 static" checks used elsewhere in this file.
+#[test]
+fn public_channels_do_not_claim_end_to_end_encryption() {
+    let src = include_str!("../../../ui/chat/chat_layout.slint");
+
+    let binding = src
+        .split("privacy-line:")
+        .nth(1)
+        .expect("privacy-line binding present in chat_layout.slint");
+    // Only look at the ternary chain, not the rest of the file.
+    let binding = &binding[..binding.find(';').expect("privacy-line binding terminated")];
+
+    assert!(
+        binding.contains("channel-type == \"public\""),
+        "the privacy line does not branch on a public channel, so a plaintext \
+         public channel is labelled end-to-end encrypted: {binding}"
+    );
+
+    // The warning styling (globe + amber) must follow the same rule, or the
+    // text says public while the icon says locked.
+    let broadcast = src
+        .split("public-broadcast:")
+        .nth(1)
+        .expect("public-broadcast binding present");
+    let broadcast = &broadcast[..broadcast.find(';').expect("public-broadcast terminated")];
+    assert!(
+        broadcast.contains("channel-type == \"public\""),
+        "public-broadcast does not include public channels, so the lock icon \
+         contradicts the privacy text: {broadcast}"
+    );
+}
