@@ -550,6 +550,7 @@ export component App inherits Rectangle {
     in property <bool> channel-settings-is-owner: false;
     in-out property <string> channel-settings-notification-pref: "all";
     in-out property <bool> channel-settings-muted: false;
+    in-out property <bool> channel-settings-ai-enabled: false;
     in property <[ChannelMemberData]> channel-settings-members: [];
     in property <bool> channel-settings-loading: false;
     in property <string> channel-settings-error: "";
@@ -833,6 +834,7 @@ export component App inherits Rectangle {
     callback channel-settings-pick-icon();  // opens native file picker for the channel icon
     callback channel-settings-change-notification(string);   // preference
     callback channel-settings-toggle-mute(bool);
+    callback channel-settings-toggle-ai(bool);
     callback channel-settings-change-member-role(string, string);  // user-id, new-role
     callback channel-settings-remove-member(string);  // user-id
     callback channel-settings-invite-members();  // opens invite modal for private groups
@@ -1895,6 +1897,8 @@ export component App inherits Rectangle {
         is-owner: root.channel-settings-is-owner;
         notification-preference <=> root.channel-settings-notification-pref;
         is-muted <=> root.channel-settings-muted;
+        ai-enabled <=> root.channel-settings-ai-enabled;
+        toggle-ai(value) => { root.channel-settings-toggle-ai(value); }
         members: root.channel-settings-members;
         loading: root.channel-settings-loading;
         error-message: root.channel-settings-error;

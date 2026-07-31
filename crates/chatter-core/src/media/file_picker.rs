@@ -142,11 +142,40 @@ fn build_dialog(config: &FilePickerConfig) -> rfd::AsyncFileDialog {
     dialog
 }
 
+/// Whether a native file dialog can be shown at all.
+///
+/// `rfd` needs a display server. Under `cargo test`, in CI, or over a plain
+/// SSH session there is none, and asking for a dialog either blocks waiting
+/// for input nobody can give or pops a window on a developer's desktop in the
+/// middle of a test run. Both are wrong, so every entry point below
+/// short-circuits to "cancelled" instead.
+///
+/// `CHATTER_HEADLESS=1` forces this on for environments that have a display
+/// but still must not open windows (an unattended integration run on a
+/// developer machine).
+fn dialogs_available() -> bool {
+    if std::env::var_os("CHATTER_HEADLESS").is_some() {
+        return false;
+    }
+    if cfg!(test) {
+        return false;
+    }
+    if cfg!(target_os = "linux") {
+        return std::env::var_os("DISPLAY").is_some()
+            || std::env::var_os("WAYLAND_DISPLAY").is_some();
+    }
+    true
+}
+
 impl FilePicker {
     /// Open a single file selection dialog.
     ///
     /// Returns `None` if the user cancels the dialog.
     pub async fn pick_file(config: FilePickerConfig) -> Option<PathBuf> {
+        if !dialogs_available() {
+            tracing::debug!("[file_picker] headless — pick_file resolves to cancelled");
+            return None;
+        }
         tracing::info!("[file_picker] pick_file — opening rfd dialog");
         let result = build_dialog(&config)
             .pick_file()
@@ -160,6 +189,10 @@ impl FilePicker {
     ///
     /// Returns an empty vector if the user cancels the dialog.
     pub async fn pick_files(config: FilePickerConfig) -> Vec<PathBuf> {
+        if !dialogs_available() {
+            tracing::debug!("[file_picker] headless — pick_files resolves to none");
+            return Vec::new();
+        }
         tracing::info!("[file_picker] pick_files — opening rfd dialog");
         let result: Vec<PathBuf> = build_dialog(&config)
             .pick_files()
@@ -174,6 +207,10 @@ impl FilePicker {
     ///
     /// Returns `None` if the user cancels the dialog.
     pub async fn pick_folder(title: Option<&str>) -> Option<PathBuf> {
+        if !dialogs_available() {
+            tracing::debug!("[file_picker] headless — pick_folder resolves to cancelled");
+            return None;
+        }
         let mut dialog = rfd::AsyncFileDialog::new();
 
         if let Some(title) = title {
@@ -187,6 +224,10 @@ impl FilePicker {
     ///
     /// Returns `None` if the user cancels the dialog.
     pub async fn save_file(config: FilePickerConfig) -> Option<PathBuf> {
+        if !dialogs_available() {
+            tracing::debug!("[file_picker] headless — save_file resolves to cancelled");
+            return None;
+        }
         let mut dialog = rfd::AsyncFileDialog::new();
 
         if let Some(title) = &config.title {
@@ -249,5 +290,26 @@ mod tests {
         assert_eq!(config.title, Some("Select File".to_string()));
         assert!(config.multiple);
         assert_eq!(config.filters.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod headless_tests {
+    use super::*;
+
+    /// Under `cargo test` no dialog may ever be attempted: the run is
+    /// unattended, so a dialog either blocks forever or steals focus from
+    /// whoever is at the keyboard.
+    #[test]
+    fn dialogs_are_never_available_under_test() {
+        assert!(!dialogs_available());
+    }
+
+    #[tokio::test]
+    async fn pickers_resolve_to_cancelled_when_headless() {
+        assert!(FilePicker::pick_file(FilePickerConfig::new()).await.is_none());
+        assert!(FilePicker::pick_files(FilePickerConfig::new()).await.is_empty());
+        assert!(FilePicker::pick_folder(None).await.is_none());
+        assert!(FilePicker::save_file(FilePickerConfig::new()).await.is_none());
     }
 }

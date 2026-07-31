@@ -48,6 +48,7 @@ export component ChannelSettingsModal inherits Rectangle {
     // Notification settings (per user)
     in-out property <string> notification-preference: "all";  // "all", "mentions", "none"
     in-out property <bool> is-muted: false;
+    in-out property <bool> ai-enabled: false;
 
     // Member list
     in property <[ChannelMemberData]> members: [];
@@ -64,6 +65,7 @@ export component ChannelSettingsModal inherits Rectangle {
     callback pick-channel-icon();  // opens native file picker for the channel icon
     callback change-notification(string);  // preference
     callback toggle-mute(bool);
+    callback toggle-ai(bool);
     callback change-member-role(string, string);  // user-id, new-role
     callback remove-member(string);  // user-id
     callback invite-members();  // opens invite modal (private groups)
@@ -422,6 +424,33 @@ export component ChannelSettingsModal inherits Rectangle {
                                     checked: root.is-muted;
                                     toggled(value) => {
                                         root.toggle-mute(value);
+                                    }
+                                }
+                            }
+
+                            // AI assistant for this channel
+                            HorizontalLayout {
+                                spacing: Spacing.sm;
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+
+                                    Text {
+                                        text: "AI assistant";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                    }
+                                    Text {
+                                        text: "Let the AI read this channel when you ask it something here. Off by default.";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                    }
+                                }
+
+                                Toggle {
+                                    checked: root.ai-enabled;
+                                    toggled(value) => {
+                                        root.toggle-ai(value);
                                     }
                                 }
                             }

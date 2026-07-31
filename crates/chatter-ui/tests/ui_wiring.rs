@@ -13,7 +13,18 @@ use chatter_ui::MainWindow;
 /// Route the SQLCipher passphrase through the documented env override so offline
 /// `ChatterClient::build()` never touches the OS keyring / Secret Service (absent
 /// on a headless CI box). Mirrors `validated.rs::no_keyring_prompts`.
+/// Never open a native dialog from a test.
+///
+/// The picker handlers spawn a real `rfd` dialog. On a developer machine with
+/// a display that pops a window mid-run and waits for a human; in CI it just
+/// blocks. `CHATTER_HEADLESS` makes every FilePicker entry point resolve to
+/// "cancelled" instead.
+fn headless_dialogs() {
+    unsafe { std::env::set_var("CHATTER_HEADLESS", "1") };
+}
+
 fn no_keyring() {
+    headless_dialogs();
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| unsafe {
         std::env::set_var("CHATTER_DB_PASSPHRASE", "ui-wiring-harness-passphrase");
@@ -534,9 +545,23 @@ fn channel_settings_icon_picker_is_wired() {
     w.set_channel_settings_icon_path("/tmp/some-icon.png".into());
     assert_eq!(w.get_channel_settings_icon_path().as_str(), "/tmp/some-icon.png");
 
-    // L1 dynamic: the pick callback runs without panicking (the native dialog is
-    // spawned; offline/headless it just resolves to no file).
+    // L1 dynamic: the pick callback runs without panicking. Under
+    // CHATTER_HEADLESS (set by the harness) FilePicker resolves to "cancelled"
+    // rather than opening a real dialog, so this never waits for a human and
+    // never pops a window mid-test-run.
+    assert!(
+        std::env::var_os("CHATTER_HEADLESS").is_some(),
+        "the harness must force headless dialogs before invoking a picker"
+    );
     w.invoke_channel_settings_pick_icon();
+
+    // The picker resolved without a selection, so it must not have stashed a
+    // path over the one set above.
+    assert_eq!(
+        w.get_channel_settings_icon_path().as_str(),
+        "/tmp/some-icon.png",
+        "a headless picker should cancel, not overwrite the stashed path"
+    );
 
     // L2 static (Rust): pick handler stashes the path; Save reads it + uploads.
     let src = include_str!("../src/bin_ui/features/modals/channel_settings.rs");
@@ -1077,5 +1102,106 @@ fn cloud_preference_does_not_override_the_dm_policy() {
         client.resolve_ai_for("chan-1", &ConversationType::Channel, true),
         Resolved::Off,
         "mesh-delivered traffic must get no AI at all"
+    );
+}
+
+/// The per-conversation AI switch must actually gate a Jarvis turn, not just
+/// sit in settings. Before this, `conv.ai.enabled.<id>` was written by the UI
+/// and never read at ask time — a channel with AI off would still answer.
+#[test]
+fn jarvis_ask_is_gated_by_the_per_conversation_switch() {
+    use chatter_core::domain::jarvis::JarvisContext;
+    use chatter_core::services::jarvis::JarvisError;
+
+    require_element_queries();
+    let (rt, _tmp, client, _w) = wired_offline();
+
+    let channel = chatter_core::domain::ids::ChannelId::new();
+    let ctx = JarvisContext::channel(channel.clone());
+
+    // Off by default: refuse, and say *why* in a way the user can act on.
+    let err = rt
+        .block_on(client.jarvis_ask(&ctx, "hello", None))
+        .expect_err("AI answered in a channel where it was never enabled");
+    assert!(
+        matches!(err, JarvisError::NotEnabledHere),
+        "expected NotEnabledHere, got {err:?}"
+    );
+
+    // Enabled: the switch no longer blocks. It still fails offline (no model),
+    // but it must fail for a *different* reason.
+    client
+        .set_ai_enabled_for(&channel.to_string(), true)
+        .expect("enable AI for the channel");
+    match rt.block_on(client.jarvis_ask(&ctx, "hello", None)) {
+        Err(JarvisError::NotEnabledHere) => {
+            panic!("the per-conversation switch still blocks after being enabled")
+        }
+        _ => {} // any other outcome means the gate let it through
+    }
+}
+
+/// The dedicated AI channel is exempt — requiring it to be switched on would
+/// be circular, since it exists only to talk to the model.
+#[test]
+fn the_dedicated_ai_channel_needs_no_opt_in() {
+    use chatter_core::client::jarvis_channel_id;
+    use chatter_core::domain::jarvis::JarvisContext;
+    use chatter_core::services::jarvis::JarvisError;
+
+    require_element_queries();
+    let (rt, _tmp, client, _w) = wired_offline();
+
+    let ctx = JarvisContext::channel(jarvis_channel_id());
+    match rt.block_on(client.jarvis_ask(&ctx, "hello", None)) {
+        Err(JarvisError::NotEnabledHere) => {
+            panic!("the AI channel demanded an opt-in to use AI")
+        }
+        _ => {}
+    }
+}
+
+/// The per-channel AI toggle in channel settings must reach core — otherwise
+/// "addable to any channel" has settings but no affordance.
+#[test]
+fn channel_settings_ai_toggle_reaches_core() {
+    require_element_queries();
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    testing::init_no_event_loop();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+    let w = MainWindow::new().expect("MainWindow::new");
+
+    // The AI toggle lives in the channel-settings modal, so wire that handler
+    // set rather than the settings-screen one.
+    chatter_ui::bin_ui::features::modals::wire_channel_settings(&w, &client);
+
+    let channel = chatter_core::domain::ids::ChannelId::new();
+    let channel_id = channel.to_string();
+
+    // The handler reads the open channel from this property, exactly as the
+    // mute toggle does.
+    w.set_channel_settings_id(channel_id.clone().into());
+
+    assert!(
+        !client.ai_enabled_for(&channel_id),
+        "precondition: AI is off in a channel until switched on"
+    );
+
+    w.invoke_channel_settings_toggle_ai(true);
+    assert!(
+        client.ai_enabled_for(&channel_id),
+        "channel AI toggle did NOT reach core (dead/stub wire)"
+    );
+
+    w.invoke_channel_settings_toggle_ai(false);
+    assert!(
+        !client.ai_enabled_for(&channel_id),
+        "channel AI toggle did not switch back off"
     );
 }

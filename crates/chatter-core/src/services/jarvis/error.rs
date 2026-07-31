@@ -33,6 +33,14 @@ pub enum JarvisError {
     #[error("Jarvis is disabled")]
     Disabled,
 
+    /// AI is switched off for this conversation.
+    ///
+    /// Distinct from `NotPermitted`: that means policy forbids the *engine*
+    /// (cloud in a DM, anything over mesh); this means the user simply has not
+    /// enabled AI in this channel yet, which is recoverable by toggling it on.
+    #[error("AI is not enabled in this conversation")]
+    NotEnabledHere,
+
     /// The conversation's AI policy forbids this engine.
     ///
     /// Raised when a cloud provider is asked to run on a DM, or any provider

@@ -108,6 +108,9 @@ pub fn open_channel_settings(
         let channel_description = channel.description.clone().unwrap_or_default();
         let channel_id_str = channel_id.to_string();
         let is_archived = channel.archived;
+        // Read the stored per-channel AI switch so the toggle opens showing
+        // what is actually persisted, not a default.
+        let ai_enabled = ui_ctx.ai_enabled_for(&channel_id_str);
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak_window.upgrade() {
@@ -121,6 +124,7 @@ pub fn open_channel_settings(
                 // Clear any icon picked in a previous open.
                 w.set_channel_settings_icon_path("".into());
                 w.set_channel_settings_has_icon_preview(false);
+                w.set_channel_settings_ai_enabled(ai_enabled);
                 w.set_channel_settings_type(channel_type_str.into());
                 w.set_channel_settings_archived(is_archived);
                 w.set_channel_settings_created_at(created_at.into());
@@ -246,6 +250,28 @@ fn wire_notification_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() { w.set_channel_settings_notification_pref(pref_str.into()); }
         });
+    });
+
+    // Per-channel AI switch. Off by default; read at ask time by
+    // ChatterClient::jarvis_ask, so flipping it here actually changes whether
+    // the AI will answer in this channel.
+    let weak_ai = window.as_weak();
+    let ui_ctx_ai = ui_ctx.clone();
+    window.on_channel_settings_toggle_ai(move |enabled| {
+        let Some(w) = weak_ai.upgrade() else { return };
+        let channel_id = w.get_channel_settings_id().to_string();
+        if channel_id.is_empty() {
+            return;
+        }
+        match ui_ctx_ai.set_ai_enabled_for(&channel_id, enabled) {
+            Ok(()) => w.set_channel_settings_ai_enabled(enabled),
+            Err(e) => {
+                tracing::error!("Failed to save per-channel AI setting: {}", e);
+                // Snap the toggle back so it never shows a state we did not
+                // manage to persist.
+                w.set_channel_settings_ai_enabled(ui_ctx_ai.ai_enabled_for(&channel_id));
+            }
+        }
     });
 
     // Mute DOES persist: `mute_conversation` flips the local membership's

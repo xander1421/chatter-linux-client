@@ -212,7 +212,45 @@ impl ChatterClient {
         query: &str,
         author_id: Option<&crate::domain::ids::UserId>,
     ) -> Result<String, crate::services::jarvis::JarvisError> {
+        self.check_ai_allowed_in(context)?;
         self.jarvis().ask(context, query, author_id).await
+    }
+
+    /// Gate a Jarvis turn on the conversation's own AI switch.
+    ///
+    /// The dedicated AI channel is exempt — it *is* the AI surface, and
+    /// requiring it to be switched on would be circular. Everywhere else AI is
+    /// opt-in per conversation (`conv.ai.enabled.<id>`), so a channel that was
+    /// never enabled answers with a clear error rather than silently running a
+    /// model over its contents.
+    ///
+    /// This is the per-conversation switch only. Which *silo* may then run —
+    /// local vs cloud, and nothing at all over mesh — is decided separately by
+    /// `ai_policy`, enforced down in `SharedJarvisEngine`.
+    fn check_ai_allowed_in(
+        &self,
+        context: &crate::domain::jarvis::JarvisContext,
+    ) -> Result<(), crate::services::jarvis::JarvisError> {
+        use crate::ai_policy::channel_ai::Resolved;
+
+        // The dedicated AI channel, and the context-free global prompt, always
+        // work.
+        if context.context_id.is_empty()
+            || context.context_id == jarvis_channel_id().to_string()
+        {
+            return Ok(());
+        }
+
+        match self.resolve_ai_for(
+            &context.context_id,
+            &context.conversation_type(),
+            // A Jarvis turn is user-initiated from this device; mesh-delivered
+            // traffic never reaches here.
+            false,
+        ) {
+            Resolved::Use(_) => Ok(()),
+            Resolved::Off => Err(crate::services::jarvis::JarvisError::NotEnabledHere),
+        }
     }
 
     /// Execute a parsed Jarvis slash command end-to-end.

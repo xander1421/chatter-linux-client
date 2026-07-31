@@ -497,6 +497,7 @@ export component MainWindow inherits Window {
     in property <bool> channel-settings-is-owner <=> app.channel-settings-is-owner;
     in-out property <string> channel-settings-notification-pref <=> app.channel-settings-notification-pref;
     in-out property <bool> channel-settings-muted <=> app.channel-settings-muted;
+    in-out property <bool> channel-settings-ai-enabled <=> app.channel-settings-ai-enabled;
     in property <[ChannelMemberData]> channel-settings-members <=> app.channel-settings-members;
     in property <bool> channel-settings-loading <=> app.channel-settings-loading;
     in property <string> channel-settings-error <=> app.channel-settings-error;
@@ -721,6 +722,7 @@ export component MainWindow inherits Window {
     callback channel-settings-pick-icon <=> app.channel-settings-pick-icon;
     callback channel-settings-change-notification <=> app.channel-settings-change-notification;
     callback channel-settings-toggle-mute <=> app.channel-settings-toggle-mute;
+    callback channel-settings-toggle-ai <=> app.channel-settings-toggle-ai;
     callback channel-settings-change-member-role <=> app.channel-settings-change-member-role;
     callback channel-settings-remove-member <=> app.channel-settings-remove-member;
     callback channel-settings-invite-members <=> app.channel-settings-invite-members;
