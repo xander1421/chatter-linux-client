@@ -8,7 +8,7 @@
 use std::sync::{Arc, RwLock};
 
 use crate::local_ai::backend::{ChatMessage, ChatRole, GenerateParams, LocalAIBackend};
-use crate::ai_policy::policy::AiAccess;
+use crate::ai_policy::policy::{AiAccess, Silo as AiSilo};
 use crate::cloud_ai::{AnyCloudBackend, CloudSettings};
 use crate::local_ai::providers::{AnyBackend, ProviderKind};
 use crate::local_ai::settings::LocalAISettings;
@@ -52,6 +52,12 @@ impl JarvisEngine {
             backend: Arc::new(backend),
             model: RwLock::new(settings.model.clone()),
         })
+    }
+
+    /// Wrap an already-built cloud backend (e.g. the metered broker, which
+    /// needs a live authenticated client rather than settings).
+    pub fn cloud(backend: AnyCloudBackend, model: String) -> Self {
+        Self::Cloud { backend: Arc::new(backend), model: RwLock::new(model) }
     }
 
     /// Which silo this engine belongs to.
@@ -179,18 +185,50 @@ impl JarvisEngine {
     }
 }
 
-/// Clone-able handle to the (hot-swappable) Jarvis engine.
+/// Clone-able handle to the Jarvis engines, one per silo.
+///
+/// Both are held at once rather than one hot-swapped engine, because the silo
+/// is decided *per conversation*: with a single cloud engine installed, a DM
+/// would be refused outright instead of quietly falling back to the local
+/// model, which is what "DMs use local AI" is supposed to mean.
 #[derive(Clone)]
-pub struct SharedJarvisEngine(Arc<RwLock<Arc<JarvisEngine>>>);
+pub struct SharedJarvisEngine {
+    local: Arc<RwLock<Arc<JarvisEngine>>>,
+    cloud: Arc<RwLock<Option<Arc<JarvisEngine>>>>,
+}
 
 impl SharedJarvisEngine {
     pub fn new(engine: JarvisEngine) -> Self {
-        Self(Arc::new(RwLock::new(Arc::new(engine))))
+        Self {
+            local: Arc::new(RwLock::new(Arc::new(engine))),
+            cloud: Arc::new(RwLock::new(None)),
+        }
     }
 
-    /// Swap the engine (settings change).
+    /// Swap the local engine (settings change).
     pub fn set(&self, engine: JarvisEngine) {
-        *self.0.write().expect("engine lock poisoned") = Arc::new(engine);
+        *self.local.write().expect("engine lock poisoned") = Arc::new(engine);
+    }
+
+    /// Install (or clear, with `None`) the cloud engine.
+    pub fn set_cloud(&self, engine: Option<JarvisEngine>) {
+        *self.cloud.write().expect("engine lock poisoned") = engine.map(Arc::new);
+    }
+
+    /// Whether a cloud engine is currently installed.
+    pub fn has_cloud(&self) -> bool {
+        self.cloud.read().expect("engine lock poisoned").is_some()
+    }
+
+    /// The engine for a silo. Cloud falls back to local when not configured -
+    /// a missing API key should degrade to the local model, not to nothing.
+    fn engine_for(&self, silo: AiSilo) -> Arc<JarvisEngine> {
+        if silo == AiSilo::Cloud {
+            if let Some(cloud) = self.cloud.read().expect("engine lock poisoned").clone() {
+                return cloud;
+            }
+        }
+        self.local.read().expect("engine lock poisoned").clone()
     }
 
     /// Single-shot completion (entity extraction, summaries).
@@ -213,7 +251,7 @@ impl SharedJarvisEngine {
         messages: Vec<ChatMessage>,
         params: SampleParams,
     ) -> Result<String, JarvisError> {
-        let engine = self.0.read().expect("engine lock poisoned").clone();
+        let engine = self.local.read().expect("engine lock poisoned").clone();
         engine.complete(messages, params).await
     }
 
@@ -235,6 +273,38 @@ impl SharedJarvisEngine {
         .await
     }
 
+    /// Gated completion that also *selects* the silo.
+    ///
+    /// `preferred` is what the conversation resolved to; policy still has the
+    /// final say, so asking for Cloud in a DM is refused rather than honoured.
+    pub async fn complete_conversation_in(
+        &self,
+        access: AiAccess,
+        preferred: AiSilo,
+        messages: Vec<ChatMessage>,
+        params: SampleParams,
+    ) -> Result<String, JarvisError> {
+        if !access.permits_silo(preferred) {
+            return Err(JarvisError::NotPermitted(format!(
+                "{access:?} conversation cannot use the {preferred:?} silo"
+            )));
+        }
+
+        let engine = self.engine_for(preferred);
+
+        // Belt and braces: the selected engine must itself be permitted. A
+        // cloud engine reaching a local-only conversation is the failure this
+        // whole design exists to prevent.
+        if !access.permits_cloud(engine.is_cloud()) {
+            return Err(JarvisError::NotPermitted(format!(
+                "{access:?} conversation cannot use the active engine ({})",
+                if engine.is_cloud() { "cloud" } else { "local" }
+            )));
+        }
+
+        engine.complete(messages, params).await
+    }
+
     /// Completion gated by a conversation's AI policy.
     ///
     /// The enforcement point for `local_ai::policy`: refuses before any
@@ -250,7 +320,7 @@ impl SharedJarvisEngine {
         messages: Vec<ChatMessage>,
         params: SampleParams,
     ) -> Result<String, JarvisError> {
-        let engine = self.0.read().expect("engine lock poisoned").clone();
+        let engine = self.local.read().expect("engine lock poisoned").clone();
 
         if !access.permits_cloud(engine.is_cloud()) {
             return Err(JarvisError::NotPermitted(format!(
@@ -264,7 +334,7 @@ impl SharedJarvisEngine {
 
     /// Provider description for logging/UI ("ollama", "built-in", …).
     pub fn describe(&self) -> String {
-        match &**self.0.read().expect("engine lock poisoned") {
+        match &**self.local.read().expect("engine lock poisoned") {
             JarvisEngine::InProcess(_) => "built-in".to_string(),
             JarvisEngine::Http { backend, model } => {
                 format!("{} ({})", backend.name(), model.read().expect("model lock"))
@@ -467,5 +537,131 @@ mod tests {
         };
         shared.set(JarvisEngine::from_settings(&lm, LocalAIActorHandle::spawn()));
         assert_eq!(shared.describe(), "lm-studio (qwen2.5-7b)");
+    }
+}
+
+#[cfg(test)]
+mod silo_selection_tests {
+    use super::*;
+    use crate::ai_policy::policy::Silo;
+    use crate::cloud_ai::{AnyCloudBackend, CloudSettings};
+
+    fn shared_local() -> SharedJarvisEngine {
+        let settings = LocalAISettings::default();
+        SharedJarvisEngine::new(JarvisEngine::from_settings(
+            &settings,
+            LocalAIActorHandle::spawn(),
+        ))
+    }
+
+    fn cloud_engine() -> JarvisEngine {
+        let settings = CloudSettings {
+            api_key: Some("sk-ant-test".into()),
+            ..CloudSettings::default()
+        };
+        JarvisEngine::from_cloud_settings(&settings).expect("configured cloud engine")
+    }
+
+    fn user(text: &str) -> Vec<ChatMessage> {
+        vec![ChatMessage { role: ChatRole::User, content: text.into() }]
+    }
+
+    #[test]
+    fn cloud_is_absent_until_installed() {
+        let shared = shared_local();
+        assert!(!shared.has_cloud());
+
+        shared.set_cloud(Some(cloud_engine()));
+        assert!(shared.has_cloud());
+
+        shared.set_cloud(None);
+        assert!(!shared.has_cloud());
+    }
+
+    /// Asking for Cloud without one configured must degrade to the local
+    /// model, not fail. A missing API key should cost quality, not the feature.
+    #[tokio::test]
+    async fn cloud_request_without_a_cloud_engine_falls_back_to_local() {
+        let shared = shared_local();
+        assert!(!shared.has_cloud());
+
+        // Whether this succeeds depends on a local provider being up, which
+        // is not what is under test. The property is that it fell through to
+        // the local engine instead of being refused for having no cloud one.
+        match shared
+            .complete_conversation_in(
+                AiAccess::LocalOrCloud,
+                Silo::Cloud,
+                user("hi"),
+                SampleParams::default(),
+            )
+            .await
+        {
+            Ok(_) => {} // local provider answered - fallback worked
+            Err(err) => assert!(
+                !matches!(err, JarvisError::NotPermitted(_)),
+                "asking for cloud without one configured was refused instead of \
+                 falling back to local: {err:?}"
+            ),
+        }
+    }
+
+    /// The bug this whole structure prevents: a cloud engine installed
+    /// globally must not serve a DM.
+    #[tokio::test]
+    async fn a_dm_never_reaches_an_installed_cloud_engine() {
+        let shared = shared_local();
+        shared.set_cloud(Some(cloud_engine()));
+        assert!(shared.has_cloud());
+
+        let err = shared
+            .complete_conversation_in(
+                AiAccess::LocalOnly,
+                Silo::Cloud,
+                user("private"),
+                SampleParams::default(),
+            )
+            .await
+            .expect_err("a DM asked for the cloud silo");
+
+        assert!(matches!(err, JarvisError::NotPermitted(_)), "{err:?}");
+    }
+
+    /// And a DM asking for Local still works while cloud is installed.
+    #[tokio::test]
+    async fn a_dm_still_gets_the_local_engine_while_cloud_is_installed() {
+        let shared = shared_local();
+        shared.set_cloud(Some(cloud_engine()));
+
+        if let Err(err) = shared
+            .complete_conversation_in(
+                AiAccess::LocalOnly,
+                Silo::Local,
+                user("private"),
+                SampleParams::default(),
+            )
+            .await
+        {
+            assert!(!matches!(err, JarvisError::NotPermitted(_)), "{err:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn mesh_is_refused_in_either_silo() {
+        let shared = shared_local();
+        shared.set_cloud(Some(cloud_engine()));
+
+        for silo in [Silo::Local, Silo::Cloud] {
+            let err = shared
+                .complete_conversation_in(
+                    AiAccess::Denied,
+                    silo,
+                    user("mesh"),
+                    SampleParams::default(),
+                )
+                .await
+                .expect_err("mesh must get no inference");
+            assert!(matches!(err, JarvisError::NotPermitted(_)), "{silo:?}: {err:?}");
+        }
     }
 }

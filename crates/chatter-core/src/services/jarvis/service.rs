@@ -190,6 +190,22 @@ impl JarvisService {
         query: &str,
         author_id: Option<&UserId>,
     ) -> Result<String, JarvisError> {
+        self.ask_in(context, query, author_id, crate::ai_policy::policy::Silo::Local)
+            .await
+    }
+
+    /// Ask, running in an explicitly chosen silo.
+    ///
+    /// The caller resolves the silo from the conversation; policy is still
+    /// enforced inside the engine, so a Cloud request on a DM is refused here
+    /// rather than honoured.
+    pub async fn ask_in(
+        &self,
+        context: &JarvisContext,
+        query: &str,
+        author_id: Option<&UserId>,
+        silo: crate::ai_policy::policy::Silo,
+    ) -> Result<String, JarvisError> {
         // 1. Build enriched context (keyword + entity graph + semantic recall)
         let built_context = self
             .context_builder
@@ -280,7 +296,7 @@ impl JarvisService {
         let access = crate::ai_policy::policy::ai_access(&context.conversation_type(), false);
         let response = self
             .ai
-            .complete_conversation_gated(access, messages, params)
+            .complete_conversation_in(access, silo, messages, params)
             .await?;
         let response = response.trim().to_string();
 

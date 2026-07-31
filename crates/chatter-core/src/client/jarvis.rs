@@ -163,7 +163,36 @@ impl ChatterClient {
                 self.local_ai().actor(),
             ),
         );
+        self.rebuild_cloud_engine();
         tracing::info!(engine = %self.services.jarvis_engine.describe(), "jarvis engine rebuilt");
+    }
+
+    /// Install the cloud engine for the configured mode, or clear it.
+    ///
+    /// Kept separate from the local engine so both are available at once: the
+    /// silo is chosen per conversation, and a DM must still get the local
+    /// model even while cloud is configured.
+    pub fn rebuild_cloud_engine(&self) {
+        use crate::cloud_ai::{AnyCloudBackend, CloudMode};
+        use crate::services::jarvis::JarvisEngine;
+
+        let cloud = self.http_local_ai().cloud_settings();
+        let engine = match cloud.mode {
+            // Managed tokens: the server holds the key, so this needs a live
+            // authenticated client rather than settings.
+            CloudMode::ServerBroker => Some(JarvisEngine::cloud(
+                AnyCloudBackend::broker(self.services.grpc_pool.ai_client()),
+                cloud.model.clone(),
+            )),
+            // Bring-your-own-key: absent or blank key means no cloud engine.
+            CloudMode::DirectAnthropic => {
+                JarvisEngine::from_cloud_settings(&cloud)
+            }
+        };
+
+        let configured = engine.is_some();
+        self.services.jarvis_engine.set_cloud(engine);
+        tracing::info!(mode = %cloud.mode.as_str(), configured, "cloud jarvis engine rebuilt");
     }
 
     /// Pull a model through Ollama with streaming progress.
@@ -212,8 +241,15 @@ impl ChatterClient {
         query: &str,
         author_id: Option<&crate::domain::ids::UserId>,
     ) -> Result<String, crate::services::jarvis::JarvisError> {
-        self.check_ai_allowed_in(context)?;
-        self.jarvis().ask(context, query, author_id).await
+        let silo = self.check_ai_allowed_in(context)?;
+        // Make sure the silo this conversation resolved to is the one actually
+        // installed before the turn runs.
+        if silo == crate::ai_policy::policy::Silo::Cloud
+            && !self.services.jarvis_engine.has_cloud()
+        {
+            self.rebuild_cloud_engine();
+        }
+        self.jarvis().ask_in(context, query, author_id, silo).await
     }
 
     /// Gate a Jarvis turn on the conversation's own AI switch.
@@ -230,15 +266,20 @@ impl ChatterClient {
     fn check_ai_allowed_in(
         &self,
         context: &crate::domain::jarvis::JarvisContext,
-    ) -> Result<(), crate::services::jarvis::JarvisError> {
+    ) -> Result<crate::ai_policy::policy::Silo, crate::services::jarvis::JarvisError> {
         use crate::ai_policy::channel_ai::Resolved;
+        use crate::ai_policy::policy::Silo;
 
         // The dedicated AI channel, and the context-free global prompt, always
-        // work.
+        // work. They follow the user's silo preference, still clamped by
+        // policy inside the engine.
         if context.context_id.is_empty()
             || context.context_id == jarvis_channel_id().to_string()
         {
-            return Ok(());
+            use crate::ai_policy::channel_ai::SiloPreference;
+            let prefers_cloud = self.ai_silo_preference() == SiloPreference::PreferCloud;
+            let available = self.http_local_ai().cloud_settings().is_available();
+            return Ok(if prefers_cloud && available { Silo::Cloud } else { Silo::Local });
         }
 
         match self.resolve_ai_for(
@@ -248,7 +289,7 @@ impl ChatterClient {
             // traffic never reaches here.
             false,
         ) {
-            Resolved::Use(_) => Ok(()),
+            Resolved::Use(silo) => Ok(silo),
             Resolved::Off => Err(crate::services::jarvis::JarvisError::NotEnabledHere),
         }
     }
