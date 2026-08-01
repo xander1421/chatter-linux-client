@@ -9,8 +9,7 @@
 use std::sync::Arc;
 
 use crate::domain::jarvis::{
-    EntityKnowledge, JarvisContext, JarvisConversation, JarvisFact, JarvisSummary, Role,
-    SubjectType,
+    EntityKnowledge, JarvisContext, JarvisConversation, JarvisFact, JarvisSummary, SubjectType,
 };
 use crate::domain::UserId;
 use crate::local_ai::vector_store::VectorSearchResult;
@@ -265,6 +264,7 @@ impl ContextBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::jarvis::Role;
 
     #[test]
     fn test_history_is_not_rendered_into_system_prompt() {

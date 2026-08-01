@@ -544,12 +544,17 @@ impl DeviceInboxProvider {
                     //
                     // Acked whatever the outcome, not only on success. An undecryptable
                     // message cannot be recovered by handing it to us again — the
-                    // ciphertext is dead. Its recovery path is the
-                    // `DecryptionErrorMessage` we send back, which makes the *sender*
-                    // re-send a fresh one. Keeping it queued instead means replaying it
+                    // ciphertext is dead. Keeping it queued instead means replaying it
                     // at every start and reporting it again each time, which is
                     // precisely the storm this produced: 201 inbound reports and 12
                     // outbound in four minutes between two idle devices.
+                    //
+                    // Note what that costs: the message itself is lost. The
+                    // `DecryptionErrorMessage` we send back only heals the *session*
+                    // — the sender archives it (`services::gateway::decryption`,
+                    // `archive_session_for_resend`) so the next message uses a fresh
+                    // one. Nothing re-sends the message that failed, and the user is
+                    // shown no gap where it was.
                     if !handled.is_empty()
                         && let Err(error) = poller.acknowledge(handled).await
                     {
