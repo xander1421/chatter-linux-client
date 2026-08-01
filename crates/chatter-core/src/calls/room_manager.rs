@@ -885,6 +885,25 @@ impl RoomManager {
         }
     }
 
+    /// Identities of the remote participants currently in the room.
+    ///
+    /// A LiveKit identity is the peer's `user_id` — the server mints call
+    /// tokens with `SetIdentity(userID)` — so this is the live roster of who
+    /// can decrypt media right now. Key rotation must target this, not channel
+    /// membership: a peer who left the room is still a channel member.
+    ///
+    /// Empty when not connected.
+    pub fn remote_participant_identities(&self) -> Vec<String> {
+        match self.room.read().as_ref() {
+            Some(room) => room
+                .remote_participants()
+                .keys()
+                .map(|identity| identity.to_string())
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
     /// Ratchet the encryption key for forward secrecy.
     ///
     /// This advances the key to a new epoch, providing forward secrecy

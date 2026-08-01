@@ -1200,12 +1200,13 @@ impl ChatterClient {
     /// Handle a participant departing from a group call.
     ///
     /// If we are the initiator of a channel-based group call, generates a new
-    /// random encryption key, rotates it locally, and redistributes to remaining
-    /// members so the departed participant can't decrypt future frames.
+    /// random encryption key, rotates it locally, and redistributes it to the
+    /// peers still in the room so `departed_identity` can't decrypt future
+    /// frames.
     ///
     /// Only the initiator rotates to avoid race conditions.
     #[cfg(feature = "media")]
-    pub async fn handle_participant_departed(&self) -> Result<(), ClientError> {
+    pub async fn handle_participant_departed(&self, departed_identity: &str) -> Result<(), ClientError> {
         let call_worker = self.call_service().get()
             .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;
 
@@ -1241,10 +1242,29 @@ impl ChatterClient {
         // Brief delay for LiveKit key propagation before peers receive new-key frames
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
-        // Redistribute the new key to remaining channel members
+        // Redistribute to the peers actually still in the room, not to the
+        // channel membership — a departed peer is still a member, so the old
+        // membership-wide send handed the rotated key straight back to the
+        // participant this rotation exists to lock out.
+        //
+        // Sample the roster after the delay above, and subtract the departed
+        // identity explicitly rather than trusting the SDK to have evicted it
+        // before firing ParticipantLeft — not an ordering assumption this path
+        // should depend on.
+        let roster: Vec<String> = call_worker
+            .remote_participant_identities()
+            .await
+            .into_iter()
+            .filter(|id| id != departed_identity)
+            .collect();
+        if roster.is_empty() {
+            tracing::info!(epoch, "Rotated group call key; no remaining participants to redistribute to");
+            return Ok(());
+        }
+
         let call_id = call.id.to_string();
         match self.call_signaling()
-            .distribute_group_call_key(&call.channel_id, &call_id, new_key, epoch)
+            .redistribute_group_call_key(&call.channel_id, &call_id, new_key, epoch, &roster)
             .await
         {
             Ok(count) => {
