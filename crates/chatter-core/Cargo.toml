@@ -264,6 +264,10 @@ proptest = "1"
 # and version so Cargo unifies with the normal deps (no duplicate build).
 rand = { version = "0.9", features = ["os_rng"] }
 libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "c5edd3fa38bf5f13bc70a88c146cfbdd61865fe3" }
+# Needed by tests/validated.rs V50/V51 to open the SQLCipher stores directly
+# and compare backup-restored rows byte-for-byte. Same version as the normal
+# dep so Cargo unifies the build.
+rusqlite = { version = "0.36", features = ["bundled-sqlcipher", "unlock_notify", "blob"] }
 
 [[bench]]
 name = "attachment_decrypt"

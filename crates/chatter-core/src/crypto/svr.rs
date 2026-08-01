@@ -42,7 +42,7 @@ pub const MAX_PIN_LENGTH: usize = 64;
 /// If you switch to an enclave-backed SVR (see SECURITY.md, "SVR enclave
 /// gap"), these can drop back to (64 MiB, 3) - the enclave provides the
 /// throttling guarantee instead of work factor.
-fn get_argon2_params() -> Params {
+pub(crate) fn get_argon2_params() -> Params {
     Params::new(
         131072,   // m_cost (128 MiB)
         8,        // t_cost (8 iterations)

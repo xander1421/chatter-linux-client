@@ -59,6 +59,11 @@ export component SettingsScreen inherits Rectangle {
     in property <bool> backup-retry-loading: false;
     in property <string> backup-retry-error: "";
 
+    // Message-history backup (encrypted export/restore)
+    in-out property <string> message-backup-passphrase: "";
+    in-out property <string> message-backup-pin: "";
+    in property <string> message-backup-status: "";
+
     // Privacy settings
     in-out property <bool> read-receipts-enabled: true;
     in-out property <bool> typing-indicators-enabled: true;
@@ -127,6 +132,12 @@ export component SettingsScreen inherits Rectangle {
     // Security callbacks
     callback change-pin(string, string);  // current_pin, new_pin
     callback retry-backup(string);  // pin
+
+    // Message-history backup callbacks
+    callback export-message-backup(string);   // passphrase (file save picker opens in Rust)
+    callback import-message-backup(string);   // passphrase (file open picker opens in Rust)
+    callback server-message-backup(string);   // pin
+    callback restore-message-backup(string);  // pin
 
     // AI callbacks
     callback local-ai-enabled-changed(bool);
@@ -791,6 +802,100 @@ export component SettingsScreen inherits Rectangle {
                                                 }
                                             }
                                         }
+                                    }
+                                }
+                            }
+
+                            // Message Backup group (encrypted history export/restore)
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+                                border-width: 1px;
+                                border-color: Colors.neo-highlight;
+                                drop-shadow-blur: Spacing.neo-blur-sm;
+                                drop-shadow-offset-x: Spacing.neo-offset-sm;
+                                drop-shadow-offset-y: Spacing.neo-offset-sm;
+                                drop-shadow-color: Colors.neo-shadow;
+
+                                VerticalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.sm;
+
+                                    Text {
+                                        text: "Message Backup";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                    }
+
+                                    Text {
+                                        text: "Encrypted backup of your message history, conversations, and contacts. Neither the file nor the server copy can be read without your passphrase or PIN.";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                    }
+
+                                    Input {
+                                        placeholder: "Backup passphrase (for file backup)";
+                                        text <=> root.message-backup-passphrase;
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: Spacing.sm;
+                                        alignment: end;
+
+                                        Button {
+                                            text: "Export to File…";
+                                            variant: "secondary";
+                                            disabled: root.message-backup-passphrase == "";
+                                            clicked => {
+                                                root.export-message-backup(root.message-backup-passphrase);
+                                            }
+                                        }
+
+                                        Button {
+                                            text: "Restore from File…";
+                                            variant: "secondary";
+                                            disabled: root.message-backup-passphrase == "";
+                                            clicked => {
+                                                root.import-message-backup(root.message-backup-passphrase);
+                                            }
+                                        }
+                                    }
+
+                                    Input {
+                                        placeholder: "PIN (for server backup)";
+                                        text <=> root.message-backup-pin;
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: Spacing.sm;
+                                        alignment: end;
+
+                                        Button {
+                                            text: "Back Up to Server";
+                                            variant: "secondary";
+                                            disabled: root.message-backup-pin == "";
+                                            clicked => {
+                                                root.server-message-backup(root.message-backup-pin);
+                                            }
+                                        }
+
+                                        Button {
+                                            text: "Restore from Server";
+                                            variant: "secondary";
+                                            disabled: root.message-backup-pin == "";
+                                            clicked => {
+                                                root.restore-message-backup(root.message-backup-pin);
+                                            }
+                                        }
+                                    }
+
+                                    if root.message-backup-status != "": Text {
+                                        text: root.message-backup-status;
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
                                     }
                                 }
                             }

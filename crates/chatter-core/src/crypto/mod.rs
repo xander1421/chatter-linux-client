@@ -24,6 +24,7 @@ pub mod secret_string;
 pub mod secure_buffer;
 pub mod signal;
 pub mod streaming_decrypt;
+pub mod message_backup;
 pub mod svr;
 pub mod svr_backup;
 pub mod vrf;

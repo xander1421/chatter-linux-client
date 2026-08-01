@@ -2,6 +2,7 @@
 //!
 //! SQLCipher-backed persistence with proper migrations.
 
+pub mod backup_data;
 pub mod blob_stream;
 pub mod cache;
 pub mod database;

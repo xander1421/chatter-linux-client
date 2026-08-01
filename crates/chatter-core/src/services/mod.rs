@@ -50,6 +50,7 @@ pub mod anon_group;
 pub mod anon_dm;
 pub mod mesh;
 pub(crate) mod anon_shared;
+pub mod message_backup_service;
 pub mod svr_backup_service;
 #[cfg(feature = "jarvis")]
 pub mod jarvis;
@@ -143,6 +144,7 @@ pub use anon_dm::{AnonDmError, AnonDmService};
 pub use jarvis::{JarvisError, JarvisService, JarvisBackground, JarvisBackgroundBuilder};
 
 // Re-exports for SVR backup service
+pub use message_backup_service::{BackupStats, MessageBackupError, MessageBackupService};
 pub use svr_backup_service::{SvrBackupError, SvrBackupService, RestoreResult};
 
 // Re-exports for section service

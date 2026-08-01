@@ -562,8 +562,9 @@ impl ChatterClient {
 
     /// Update a channel's name, description and/or icon.
     ///
-    /// `icon` is raw image bytes (fitted server-side/service-side to ≤64KB);
-    /// `None` leaves the current icon unchanged.
+    /// `icon` is raw image bytes; oversized images are auto-resized and
+    /// re-encoded via `fit_icon_bytes` to the 64KB inline-proto cap (same
+    /// path as channel creation). `None` leaves the current icon unchanged.
     pub async fn update_channel(
         &self,
         channel_id: &crate::domain::ids::ChannelId,
@@ -571,7 +572,10 @@ impl ChatterClient {
         description: Option<&str>,
         icon: Option<&[u8]>,
     ) -> Result<Channel, crate::services::channel::ChannelError> {
-        self.channels().update_channel(channel_id, name, description, icon, None).await
+        let fitted = icon.map(Self::fit_icon_bytes).transpose()?;
+        self.channels()
+            .update_channel(channel_id, name, description, fitted.as_deref(), None)
+            .await
     }
 
     /// Archive or unarchive a channel.

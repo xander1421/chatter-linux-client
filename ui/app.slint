@@ -221,6 +221,8 @@ export component App inherits Rectangle {
     in property <image> user-avatar-source;
     in property <string> user-initials: "";
     in property <string> user-presence-status: "online";
+    // Manual presence mode chosen in the status picker ("auto" default).
+    in-out property <string> user-presence-mode: "auto";
     in property <string> user-custom-status: "";
     in-out property <bool> sidebar-collapsed: false;
     in-out property <bool> sidebar-hidden: false;
@@ -475,6 +477,10 @@ export component App inherits Rectangle {
     in property <bool> profile-is-verified: false;
     in property <string> profile-safety-number: "";
     in-out property <bool> profile-show-safety-number: false;
+    // Username link (self view)
+    in property <string> profile-share-link: "";
+    in property <image> profile-share-qr;
+    in property <string> profile-share-status: "";
 
     // Edit Profile data
     in-out property <string> edit-profile-display-name: "";
@@ -742,6 +748,9 @@ export component App inherits Rectangle {
     callback profile-edit-profile();
     callback profile-view-safety-number();
     callback profile-toggle-verified();
+    callback profile-generate-share-link();
+    callback profile-copy-share-link();
+    callback profile-reset-share-link();
     callback edit-profile-save(string, string);
     callback edit-profile-change-avatar();
 
@@ -813,6 +822,13 @@ export component App inherits Rectangle {
     callback settings-refresh-keys();
     callback settings-change-pin(string, string);  // current_pin, new_pin
     callback settings-retry-backup(string);  // pin
+
+    // Message-history backup
+    callback settings-export-message-backup(string);   // passphrase
+    callback settings-import-message-backup(string);   // passphrase
+    callback settings-server-message-backup(string);   // pin
+    callback settings-restore-message-backup(string);  // pin
+    in-out property <string> settings-message-backup-status: "";
 
     // AI settings callbacks
     callback settings-local-ai-enabled-changed(bool);
@@ -1578,14 +1594,31 @@ export component App inherits Rectangle {
         is-friend: root.profile-is-friend;
         is-blocked: root.profile-is-blocked;
         is-self: root.profile-is-self;
+        status-mode: root.user-presence-mode;
         loading: root.profile-loading;
         is-verified: root.profile-is-verified;
         safety-number: root.profile-safety-number;
         show-safety-number <=> root.profile-show-safety-number;
+        share-link: root.profile-share-link;
+        share-qr: root.profile-share-qr;
+        share-status: root.profile-share-status;
 
         close => {
             root.active-modal = "none";
             root.profile-show-safety-number = false;
+        }
+        change-status(mode) => {
+            root.user-presence-mode = mode;
+            root.change-user-status(mode);
+        }
+        generate-share-link => {
+            root.profile-generate-share-link();
+        }
+        copy-share-link => {
+            root.profile-copy-share-link();
+        }
+        reset-share-link => {
+            root.profile-reset-share-link();
         }
         send-message => {
             root.profile-send-message();
@@ -2197,6 +2230,19 @@ export component App inherits Rectangle {
         }
         retry-backup(pin) => {
             root.settings-retry-backup(pin);
+        }
+        message-backup-status: root.settings-message-backup-status;
+        export-message-backup(passphrase) => {
+            root.settings-export-message-backup(passphrase);
+        }
+        import-message-backup(passphrase) => {
+            root.settings-import-message-backup(passphrase);
+        }
+        server-message-backup(pin) => {
+            root.settings-server-message-backup(pin);
+        }
+        restore-message-backup(pin) => {
+            root.settings-restore-message-backup(pin);
         }
         // AI callbacks
         local-ai-enabled-changed(value) => {

@@ -100,14 +100,26 @@ fn smoke_can_query_elements() {
 /// Build an offline client + wired window sharing one temp data dir.
 /// A current-thread tokio runtime is entered so any `sessions()` DB access that
 /// expects a reactor context has one (we never spin the loop).
+/// One PROCESS-WIDE test runtime. `chatter_ui::rt_handle` is a global
+/// OnceLock — the first test to set it wins, and a per-test Runtime would be
+/// DROPPED when that test returns, leaving every later test spawning onto a
+/// dead runtime (observed as order-dependent "never persisted" failures under
+/// the full suite while passing standalone). A static runtime lives for the
+/// whole test process, so the handle is always valid regardless of order.
+fn test_rt() -> &'static tokio::runtime::Runtime {
+    static RT: std::sync::LazyLock<tokio::runtime::Runtime> =
+        std::sync::LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
+    &RT
+}
+
 fn wired_offline() -> (
-    tokio::runtime::Runtime,
+    &'static tokio::runtime::Runtime,
     tempfile::TempDir,
     std::sync::Arc<chatter_core::client::ChatterClient>,
     MainWindow,
 ) {
     no_keyring();
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = test_rt();
     let _guard = rt.enter();
     let tmp = tempfile::tempdir().unwrap();
     testing::init_no_event_loop();
@@ -525,7 +537,10 @@ fn channel_settings_save_reaches_core_and_drafts_are_wired() {
 //    (`get_channel_settings_icon_path`) and passes the bytes to update_channel.
 //  L2 (STATIC, Slint): the modal has a Change-Icon button invoking
 //    `pick-channel-icon`. Icon propagation to members proven by validated.rs::v30.
-// (The native file dialog itself can't run headless — same as the avatar picker.)
+//  L2 (STATIC, core): the facade `ChatterClient::update_channel` routes the
+//    icon through `fit_icon_bytes` (≤64KB inline-proto cap), same as creation.
+// (The native file dialog itself can't run headless — same as the avatar picker.
+//  The parallel dead `upload_channel_icon` CDN path was removed clean-break.)
 // ============================================================================
 #[test]
 fn channel_settings_icon_picker_is_wired() {
@@ -583,6 +598,17 @@ fn channel_settings_icon_picker_is_wired() {
     assert!(
         slint_src.contains("root.pick-channel-icon()"),
         "the modal must have a picker affordance invoking pick-channel-icon"
+    );
+
+    // L2 static (core): the facade fits oversized icons before the RPC, so a
+    // raw camera JPEG picked here can't blow the 64KB inline-proto cap.
+    let core_src = include_str!("../../chatter-core/src/client/channels.rs");
+    let upd_idx = core_src
+        .find("pub async fn update_channel")
+        .expect("facade update_channel present");
+    assert!(
+        core_src[upd_idx..].contains("fit_icon_bytes"),
+        "ChatterClient::update_channel must route picked icon bytes through fit_icon_bytes"
     );
 }
 
@@ -1246,5 +1272,199 @@ fn public_channels_do_not_claim_end_to_end_encryption() {
         broadcast.contains("channel-type == \"public\""),
         "public-broadcast does not include public channels, so the lock icon \
          contradicts the privacy text: {broadcast}"
+    );
+}
+
+// USERNAME LINK (L6) — share-link modal wire.
+//
+// The full create→upload→resolve loop needs the live server (validated.rs
+// V48). Offline, this proves the modal wiring at two layers, and NAMES which:
+//
+//  L1 (DYNAMIC, MainWindow boundary): the generate/reset/copy callbacks are
+//     declared, wired by the REAL `wire_profile_actions`, and safe to invoke;
+//     and the share-link display properties round-trip through the
+//     main.slint <=> app.slint aliases (a dead alias would read back empty).
+//
+//  L2 (STATIC, reaches-core): the production handlers wire generate/reset to
+//     `create_username_link` (core) and the Slint modal fires the callbacks
+//     from the self-view section.
+// ============================================================================
+#[test]
+fn profile_share_username_link_is_wired() {
+    // ---- L1: callbacks wired + property aliases live ------------------------
+    let (rt, _tmp, client, w) = wired_offline();
+    chatter_ui::bin_ui::features::modals::profile::wire_profile_actions(&w, &client);
+    let _guard = rt.enter();
+
+    // Property alias liveness: set through MainWindow, read back.
+    w.set_profile_share_link("chatter://u/test-id#AAAA".into());
+    assert_eq!(
+        w.get_profile_share_link().as_str(),
+        "chatter://u/test-id#AAAA",
+        "profile-share-link alias is dead (main.slint <=> app.slint)"
+    );
+    w.set_profile_share_status("status-probe".into());
+    assert_eq!(w.get_profile_share_status().as_str(), "status-probe");
+
+    // The three wires must run the real handlers without panicking. (Offline +
+    // unregistered → the async create resolves to an error surfaced on the
+    // loop; we assert the wire runs, like the delete-account test.)
+    w.invoke_profile_generate_share_link();
+    w.invoke_profile_reset_share_link();
+    // Copy with a non-empty link set: handler reads the property and sets the
+    // "copied" status synchronously on the UI thread — assert THAT hop.
+    w.set_profile_share_status("".into());
+    w.invoke_profile_copy_share_link();
+    assert!(
+        !w.get_profile_share_status().is_empty(),
+        "copy-share-link did NOT run the real handler (status not set)"
+    );
+
+    // ---- L2: static — handlers reach core; Slint fires the callbacks --------
+    let profile_src = include_str!("../src/bin_ui/features/modals/profile.rs");
+    assert!(
+        profile_src.contains("on_profile_generate_share_link")
+            && profile_src.contains("on_profile_reset_share_link")
+            && profile_src.contains("on_profile_copy_share_link"),
+        "profile.rs must register all three share-link handlers"
+    );
+    assert!(
+        profile_src.contains(".create_username_link()"),
+        "generate/reset handlers must reach ChatterClient::create_username_link (dead wire otherwise)"
+    );
+    let modal_src = include_str!("../../../ui/modals/user_profile.slint");
+    assert!(
+        modal_src.contains("root.generate-share-link()")
+            && modal_src.contains("root.copy-share-link()")
+            && modal_src.contains("root.reset-share-link()"),
+        "user_profile.slint self-view section must fire the share-link callbacks"
+    );
+}
+
+// ============================================================================
+// MESSAGE BACKUP (L7) — settings wires.
+//
+// The full encrypted round-trips are proven against the live stack by
+// validated.rs V50 (local file) / V51 (server, PIN). Offline this proves the
+// modal wiring at two layers, and NAMES which:
+//
+//  L1 (DYNAMIC, MainWindow boundary): the status property alias survives the
+//     main.slint <=> app.slint hop, and the two server-mode callbacks are
+//     declared, wired by the REAL wire_settings_callbacks, and safe to invoke
+//     (their async half errors offline into the status property). The two
+//     file-mode callbacks are NOT invoked here — their handlers open a native
+//     file picker dialog, which must never pop during a test run — L2 pins
+//     their wiring statically instead.
+//
+//  L2 (STATIC): each of the four handlers reaches its ChatterClient façade
+//     method, and the settings screen fires all four callbacks.
+// ============================================================================
+#[test]
+fn settings_message_backup_wires_reach_core() {
+    let (rt, _tmp, _client, w) = wired_offline();
+    let _guard = rt.enter(); // handlers tokio::spawn their async half
+
+    // L1: status alias liveness through MainWindow.
+    w.set_settings_message_backup_status("status-probe".into());
+    assert_eq!(
+        w.get_settings_message_backup_status().as_str(),
+        "status-probe",
+        "settings-message-backup-status alias is dead (main.slint <=> app.slint)"
+    );
+
+    // L1: server-mode wires run their real handlers without panicking.
+    w.invoke_settings_server_message_backup("Va1idPin!x9".into());
+    w.invoke_settings_restore_message_backup("Va1idPin!x9".into());
+
+    // L2 static (Rust): every handler reaches the core façade.
+    let src = include_str!("../src/bin_ui/features/modals/settings.rs");
+    for (handler, core_call) in [
+        ("on_settings_export_message_backup", ".export_message_backup("),
+        ("on_settings_import_message_backup", ".import_message_backup("),
+        ("on_settings_server_message_backup", ".enable_server_message_backup("),
+        ("on_settings_restore_message_backup", ".restore_server_message_backup("),
+    ] {
+        let i = src
+            .find(handler)
+            .unwrap_or_else(|| panic!("{handler} not registered in settings.rs"));
+        assert!(
+            src[i..].contains(core_call),
+            "{handler} must reach ChatterClient::{core_call} (dead/stub wire)"
+        );
+    }
+
+    // L2 static (Slint): the settings screen fires all four callbacks.
+    let screen = include_str!("../../../ui/settings/settings_screen.slint");
+    for cb in [
+        "root.export-message-backup(",
+        "root.import-message-backup(",
+        "root.server-message-backup(",
+        "root.restore-message-backup(",
+    ] {
+        assert!(screen.contains(cb), "settings screen must fire {cb}");
+    }
+}
+
+// ============================================================================
+// PRESENCE PICKER — the status row in the self-view profile modal
+// (ui/modals/user_profile.slint STATUS section) fires `change-user-status`,
+// which must reach the production handler chain
+// (features/status.rs → presence_integration::set_user_status): the manual
+// mode persists to core settings (survives restart) and pins the wire status.
+// Offline: settings write + in-process presence state need no server.
+// ============================================================================
+
+#[test]
+fn presence_status_picker_reaches_core() {
+    let (rt, _tmp, client, w) = wired_offline();
+    chatter_ui::init_rt_handle(rt.handle().clone());
+    chatter_ui::bin_ui::features::status::wire(&w, &client);
+
+    // Negative control: nothing persisted before the callback fires.
+    assert_eq!(
+        client.presence_mode().unwrap(),
+        None,
+        "precondition: no presence mode persisted"
+    );
+
+    // The picker's Away pill fires change-user-status("away").
+    w.invoke_change_user_status("away".into());
+    // Handler persists synchronously-adjacent on a spawned task; give it a beat.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let got = client.presence_mode().unwrap();
+        if got.as_deref() == Some("away") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "picker did NOT reach core: presence mode never persisted (dead wire), got {got:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    // Auto clears the manual override and persists as "auto".
+    w.invoke_change_user_status("auto".into());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if client.presence_mode().unwrap().as_deref()
+            == Some("auto")
+        {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "auto mode did not persist");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    // Static half: the picker row actually invokes the callback chain.
+    let modal = include_str!("../../../ui/modals/user_profile.slint");
+    assert!(
+        modal.contains("root.change-status(opt.mode)"),
+        "STATUS pills must fire change-status"
+    );
+    let app = include_str!("../../../ui/app.slint");
+    assert!(
+        app.contains("root.change-user-status(mode)"),
+        "app must forward modal change-status into change-user-status"
     );
 }

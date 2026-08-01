@@ -110,6 +110,7 @@ export component MainWindow inherits Window {
     in property <image> user-avatar-source <=> app.user-avatar-source;
     in property <string> user-initials <=> app.user-initials;
     in property <string> user-presence-status <=> app.user-presence-status;
+    in-out property <string> user-presence-mode <=> app.user-presence-mode;
     in property <string> user-custom-status <=> app.user-custom-status;
     in-out property <bool> sidebar-collapsed <=> app.sidebar-collapsed;
 
@@ -353,6 +354,9 @@ export component MainWindow inherits Window {
     in property <bool> profile-is-verified <=> app.profile-is-verified;
     in property <string> profile-safety-number <=> app.profile-safety-number;
     in-out property <bool> profile-show-safety-number <=> app.profile-show-safety-number;
+    in property <string> profile-share-link <=> app.profile-share-link;
+    in property <image> profile-share-qr <=> app.profile-share-qr;
+    in property <string> profile-share-status <=> app.profile-share-status;
 
     // Edit Profile data
     in-out property <string> edit-profile-display-name <=> app.edit-profile-display-name;
@@ -646,6 +650,9 @@ export component MainWindow inherits Window {
     callback profile-edit-profile <=> app.profile-edit-profile;
     callback profile-view-safety-number <=> app.profile-view-safety-number;
     callback profile-toggle-verified <=> app.profile-toggle-verified;
+    callback profile-generate-share-link <=> app.profile-generate-share-link;
+    callback profile-copy-share-link <=> app.profile-copy-share-link;
+    callback profile-reset-share-link <=> app.profile-reset-share-link;
     callback edit-profile-save <=> app.edit-profile-save;
     callback edit-profile-change-avatar <=> app.edit-profile-change-avatar;
     callback friend-requests-switch-tab <=> app.friend-requests-switch-tab;
@@ -703,6 +710,13 @@ export component MainWindow inherits Window {
     callback settings-refresh-keys <=> app.settings-refresh-keys;
     callback settings-change-pin <=> app.settings-change-pin;
     callback settings-retry-backup <=> app.settings-retry-backup;
+
+    // Message-history backup
+    callback settings-export-message-backup <=> app.settings-export-message-backup;
+    callback settings-import-message-backup <=> app.settings-import-message-backup;
+    callback settings-server-message-backup <=> app.settings-server-message-backup;
+    callback settings-restore-message-backup <=> app.settings-restore-message-backup;
+    in-out property <string> settings-message-backup-status <=> app.settings-message-backup-status;
 
     // AI settings callbacks
     callback settings-local-ai-enabled-changed <=> app.settings-local-ai-enabled-changed;

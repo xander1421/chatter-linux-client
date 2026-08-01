@@ -1282,6 +1282,116 @@ impl UserService {
         Ok(png_bytes)
     }
 
+    // ========================================================================
+    // Username Link Operations (Signal-style, L6)
+    // ========================================================================
+    //
+    // A username link is a shareable `chatter://u/{link_id}#{entropy}` URL/QR
+    // that resolves to our username WITHOUT the server learning it: the blob
+    // uploaded is libsignal `usernames::create_for_username` ciphertext, and
+    // the decryption entropy only ever travels in the URL fragment. See
+    // `crate::domain::username_link`.
+
+    /// Create (or rotate) the current user's username link and return the
+    /// shareable URL. Setting a new link replaces the old one server-side, so
+    /// previously shared URLs stop resolving — that IS the reset button.
+    pub async fn create_username_link(&self) -> Result<String, UserError> {
+        let _ = self.settings_repo.current_user_id()?;
+        let full_username = self
+            .settings_repo
+            .get_string(keys::FULL_USERNAME)?
+            .filter(|u| !u.is_empty())
+            .ok_or_else(|| {
+                UserError::InvalidInput(
+                    "No username registered on this device — cannot create a username link"
+                        .to_string(),
+                )
+            })?;
+
+        let (entropy, blob) =
+            usernames::create_for_username(&mut rand::rng(), full_username, None).map_err(
+                |e| UserError::InvalidInput(format!("Failed to encrypt username: {e}")),
+            )?;
+
+        let mut user_client = self.user_client();
+        let link_id = user_client.set_username_link(blob).await?;
+
+        let url = crate::domain::UsernameLink { link_id, entropy }.to_url();
+        self.settings_repo
+            .set_string(keys::USERNAME_LINK_URL, &url)?;
+        Ok(url)
+    }
+
+    /// The locally stored username-link URL, if one was created on this
+    /// device. `None` means "no active link" (never created or deleted).
+    pub fn username_link_local(&self) -> Result<Option<String>, UserError> {
+        Ok(self.settings_repo.get_string(keys::USERNAME_LINK_URL)?)
+    }
+
+    /// Render a username-link URL as a square PNG QR code.
+    pub fn username_link_qr(url: &str, size: u32) -> Result<Vec<u8>, UserError> {
+        use image::{ImageEncoder, Luma};
+        use qrcode::QrCode;
+
+        let qr = QrCode::new(url.as_bytes()).map_err(|e| {
+            UserError::InvalidInput(format!("Failed to generate QR code: {}", e))
+        })?;
+        let qr_image = qr.render::<Luma<u8>>().quiet_zone(true).build();
+        let scaled = image::imageops::resize(
+            &qr_image,
+            size,
+            size,
+            image::imageops::FilterType::Nearest,
+        );
+        let mut png_bytes = Vec::new();
+        let encoder = image::codecs::png::PngEncoder::new(&mut png_bytes);
+        encoder
+            .write_image(scaled.as_raw(), size, size, image::ExtendedColorType::L8)
+            .map_err(|e| UserError::InvalidInput(format!("Failed to encode PNG: {}", e)))?;
+        Ok(png_bytes)
+    }
+
+    /// Resolve someone else's username link: parse the URL, fetch the
+    /// ciphertext blob by link id, decrypt it locally with the fragment
+    /// entropy, then discover the account through the existing hashed
+    /// `LookupUsername` path. Returns the decrypted username and the account
+    /// id (`None` when the username no longer maps to an account).
+    pub async fn resolve_username_link(
+        &self,
+        url: &str,
+    ) -> Result<(String, Option<UserId>), UserError> {
+        let link = crate::domain::UsernameLink::parse(url)
+            .map_err(|e| UserError::InvalidInput(format!("Invalid username link: {e}")))?;
+
+        let mut user_client = self.user_client();
+        let blob = user_client
+            .get_username_link(&link.link_id)
+            .await?
+            .ok_or_else(|| {
+                UserError::InvalidInput(
+                    "This username link is no longer active (deleted or reset)".to_string(),
+                )
+            })?;
+
+        let username = usernames::decrypt_username(&link.entropy, &blob).map_err(|_| {
+            UserError::InvalidInput(
+                "Could not decrypt this username link (corrupted or wrong key)".to_string(),
+            )
+        })?;
+
+        let user_id = self.lookup_by_username(&username).await?;
+        Ok((username, user_id))
+    }
+
+    /// Delete the current user's username link (server row + local copy).
+    pub async fn delete_username_link(&self) -> Result<(), UserError> {
+        let _ = self.settings_repo.current_user_id()?;
+        let mut user_client = self.user_client();
+        user_client.delete_username_link().await?;
+        self.settings_repo.delete(keys::USERNAME_LINK_URL)?;
+        Ok(())
+    }
+
     /// Parse a friend code and extract the user ID.
     ///
     /// Accepts formats:
@@ -1317,8 +1427,17 @@ impl UserService {
         code: &str,
         message: Option<&str>,
     ) -> Result<Friendship, UserError> {
-        // Parse the friend code to get user ID
-        let friend_id = Self::parse_friend_code(code)?;
+        // Username links (`chatter://u/…#…`) resolve to an account via
+        // fetch-blob → local decrypt → hashed lookup; plain friend codes
+        // carry the user id directly.
+        let friend_id = if crate::domain::UsernameLink::is_username_link(code) {
+            let (username, id) = self.resolve_username_link(code).await?;
+            id.ok_or_else(|| {
+                UserError::InvalidInput(format!("No account found for @{username}"))
+            })?
+        } else {
+            Self::parse_friend_code(code)?
+        };
 
         // Check we're not adding ourselves
         let current_user = self.settings_repo.current_user_id()?;

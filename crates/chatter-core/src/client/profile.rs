@@ -570,20 +570,6 @@ impl ChatterClient {
         crate::services::attachment::AttachmentService::decode_gif_all_frames(gif_bytes)
     }
 
-    pub async fn upload_channel_icon(
-        &self,
-        path: &std::path::Path,
-    ) -> Result<String, crate::services::attachment::AttachmentError> {
-        self.attachments().upload_channel_icon(path).await
-    }
-
-    pub fn get_channel_icon_pixels(
-        &self,
-        cdn_key: &str,
-    ) -> Option<crate::services::attachment::DecodedImagePixels> {
-        self.attachments().get_channel_icon_pixels(cdn_key)
-    }
-
     pub fn update_attachment(
         &self,
         attachment: &crate::domain::attachment::Attachment,

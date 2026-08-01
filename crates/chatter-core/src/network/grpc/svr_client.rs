@@ -9,8 +9,23 @@ use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
     svr_service_client::SvrServiceClient, ChangePinBackupRequest, DeleteBackupRequest,
-    FetchBackupRequest, StoreBackupRequest,
+    DeleteMessageBackupRequest, FetchBackupRequest, GetMessageBackupRequest,
+    SetMessageBackupRequest, StoreBackupRequest,
 };
+
+/// Result of a successful message-backup registration.
+pub struct MessageBackupUpload {
+    /// Presigned PUT URL — upload the encrypted blob here directly.
+    pub upload_url: String,
+}
+
+/// Result of a successful message-backup lookup.
+pub struct MessageBackupDownload {
+    /// Presigned GET URL for the encrypted blob.
+    pub download_url: String,
+    /// Stored ciphertext size in bytes.
+    pub size: u64,
+}
 
 /// Result of a successful backup fetch.
 pub struct FetchBackupResult {
@@ -163,6 +178,68 @@ impl SvrClient {
             .change_pin_backup(request)
             .await
             .map(|r| r.into_inner().version)
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Register/replace the encrypted message-history backup.
+    ///
+    /// Returns a presigned PUT URL; the caller uploads the ciphertext blob
+    /// there directly (same model as attachment uploads).
+    ///
+    /// # Arguments
+    ///
+    /// * `backup_id_hash` - HMAC-SHA256(svr_secret, "MessageBackupId")
+    /// * `size` - ciphertext size in bytes the caller will PUT
+    pub async fn set_message_backup(
+        &mut self,
+        backup_id_hash: Vec<u8>,
+        size: u64,
+    ) -> Result<MessageBackupUpload, NetworkError> {
+        let request = SetMessageBackupRequest {
+            backup_id_hash,
+            size,
+        };
+
+        self.inner
+            .set_message_backup(request)
+            .await
+            .map(|r| MessageBackupUpload {
+                upload_url: r.into_inner().upload_url,
+            })
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Fetch a presigned GET URL for the stored message-history backup.
+    pub async fn get_message_backup(
+        &mut self,
+        backup_id_hash: Vec<u8>,
+    ) -> Result<MessageBackupDownload, NetworkError> {
+        let request = GetMessageBackupRequest { backup_id_hash };
+
+        self.inner
+            .get_message_backup(request)
+            .await
+            .map(|r| {
+                let r = r.into_inner();
+                MessageBackupDownload {
+                    download_url: r.download_url,
+                    size: r.size,
+                }
+            })
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Delete the message-history backup (metadata row + stored object).
+    pub async fn delete_message_backup(
+        &mut self,
+        backup_id_hash: Vec<u8>,
+    ) -> Result<(), NetworkError> {
+        let request = DeleteMessageBackupRequest { backup_id_hash };
+
+        self.inner
+            .delete_message_backup(request)
+            .await
+            .map(|_| ())
             .map_err(|s| NetworkError::from_status(&s))
     }
 }

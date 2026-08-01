@@ -179,6 +179,7 @@ impl ClientBuilder {
             push_shutdown: Mutex::new(None),
             call_signaling: std::sync::OnceLock::new(),
             svr_backup_service: std::sync::OnceLock::new(),
+            message_backup_service: std::sync::OnceLock::new(),
             outgoing_typing: crate::services::outgoing_typing::OutgoingTypingManager::new(),
             link_device_service: std::sync::OnceLock::new(),
             anon_mode: AtomicBool::new(false),
@@ -267,6 +268,9 @@ pub struct ChatterClient {
     outgoing_typing: crate::services::outgoing_typing::OutgoingTypingManager,
     /// Cached SVR backup service.
     svr_backup_service: std::sync::OnceLock<crate::services::svr_backup_service::SvrBackupService>,
+    /// Cached message-history backup service (L7 message-backup).
+    message_backup_service:
+        std::sync::OnceLock<crate::services::message_backup_service::MessageBackupService>,
     /// Cached device-linking service (lazy because deps are read-only and only
     /// touched when the user opens the link-device flow).
     link_device_service: std::sync::OnceLock<Arc<crate::services::link_device_service::LinkDeviceService>>,
@@ -646,6 +650,74 @@ impl ChatterClient {
                 self.signal().clone(),
             )
         })
+    }
+
+    /// Get the message-history backup service (lazy-initialized, persistent).
+    pub fn message_backup(&self) -> &crate::services::message_backup_service::MessageBackupService {
+        self.message_backup_service.get_or_init(|| {
+            let settings = Arc::new(
+                crate::storage::repositories::settings_repo::SettingsRepository::new(
+                    self.services.database.clone(),
+                ),
+            );
+            crate::services::message_backup_service::MessageBackupService::new(
+                self.services.database.clone(),
+                settings,
+                self.services.grpc_pool.clone(),
+            )
+        })
+    }
+
+    // ── Message-history backup façade (UI entry points) ─────────────
+
+    /// Export an encrypted message-history backup to `path` (local mode,
+    /// works offline). Passphrase must clear the SVR PIN entropy floor.
+    pub async fn export_message_backup(
+        &self,
+        path: &std::path::Path,
+        passphrase: &str,
+    ) -> Result<crate::services::message_backup_service::BackupStats, ClientError> {
+        self.message_backup()
+            .export_to_file(path, passphrase)
+            .await
+            .map_err(|e| ClientError::Validation(format!("backup export failed: {e}")))
+    }
+
+    /// Restore message history from an encrypted backup file. Idempotent
+    /// (skip-if-exists) — never clobbers newer local rows.
+    pub async fn import_message_backup(
+        &self,
+        path: &std::path::Path,
+        passphrase: &str,
+    ) -> Result<crate::storage::backup_data::ImportSummary, ClientError> {
+        self.message_backup()
+            .import_from_file(path, passphrase)
+            .await
+            .map_err(|e| ClientError::Validation(format!("backup restore failed: {e}")))
+    }
+
+    /// Create/refresh the server-side encrypted message backup (PIN-keyed,
+    /// server never sees content).
+    pub async fn enable_server_message_backup(
+        &self,
+        pin: &str,
+    ) -> Result<crate::services::message_backup_service::BackupStats, ClientError> {
+        self.message_backup()
+            .upload_to_server(pin)
+            .await
+            .map_err(|e| ClientError::Validation(format!("server backup failed: {e}")))
+    }
+
+    /// Restore message history from the server-side backup (fresh install
+    /// after login + PIN).
+    pub async fn restore_server_message_backup(
+        &self,
+        pin: &str,
+    ) -> Result<crate::storage::backup_data::ImportSummary, ClientError> {
+        self.message_backup()
+            .restore_from_server(pin)
+            .await
+            .map_err(|e| ClientError::Validation(format!("server restore failed: {e}")))
     }
 
     /// Get the call signaling service (persistent instance for pending state).
@@ -1102,6 +1174,24 @@ impl ChatterClient {
 
     pub async fn unload_local_ai_model(&self) -> Result<(), crate::services::ai::LocalAIError> {
         self.local_ai().unload_model().await
+    }
+
+    /// Persisted manual presence mode ("auto" | "online" | "away" | "dnd" |
+    /// "invisible"). `None` = never set, treat as "auto".
+    pub fn presence_mode(
+        &self,
+    ) -> Result<Option<String>, crate::services::session_service::SessionError> {
+        self.sessions()
+            .get_string_setting(crate::storage::repositories::settings_repo::keys::PRESENCE_MODE)
+    }
+
+    /// Persist the manual presence mode chosen in the status picker.
+    pub fn set_presence_mode(
+        &self,
+        mode: &str,
+    ) -> Result<(), crate::services::session_service::SessionError> {
+        self.sessions()
+            .set_string_setting(crate::storage::repositories::settings_repo::keys::PRESENCE_MODE, mode)
     }
 
     /// Toggle the "send sealed-sender messages unrestricted" privacy setting.
@@ -2634,6 +2724,48 @@ impl ChatterClient {
         username: &str,
     ) -> Result<Option<crate::domain::ids::UserId>, crate::services::user::UserError> {
         self.users().lookup_by_username(username).await
+    }
+
+    // ==================== Username links (Signal-style, L6) ====================
+
+    /// Create (or rotate) this account's username link; returns the shareable
+    /// `chatter://u/{link_id}#{entropy}` URL. Rotation kills old URLs.
+    pub async fn create_username_link(
+        &self,
+    ) -> Result<String, crate::services::user::UserError> {
+        self.users().create_username_link().await
+    }
+
+    /// The locally stored username-link URL, if one exists on this device.
+    pub fn username_link_local(
+        &self,
+    ) -> Result<Option<String>, crate::services::user::UserError> {
+        self.users().username_link_local()
+    }
+
+    /// Render a username-link URL as a square PNG QR code.
+    pub fn username_link_qr(
+        &self,
+        url: &str,
+        size: u32,
+    ) -> Result<Vec<u8>, crate::services::user::UserError> {
+        crate::services::user::UserService::username_link_qr(url, size)
+    }
+
+    /// Resolve someone's username link to their (decrypted username, account
+    /// id). The decryption happens locally with the URL-fragment entropy —
+    /// the server never learns the username.
+    pub async fn resolve_username_link(
+        &self,
+        url: &str,
+    ) -> Result<(String, Option<crate::domain::ids::UserId>), crate::services::user::UserError>
+    {
+        self.users().resolve_username_link(url).await
+    }
+
+    /// Delete this account's username link (server + local).
+    pub async fn delete_username_link(&self) -> Result<(), crate::services::user::UserError> {
+        self.users().delete_username_link().await
     }
 
     /// Get a user's profile.
