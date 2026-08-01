@@ -151,6 +151,82 @@ impl SignalService {
             .map_err(ServiceError::Storage)
     }
 
+    /// Accept a peer's NEW identity key after their key changed, and unwedge the
+    /// conversation.
+    ///
+    /// Reached from [`crate::error::CryptoError::UntrustedIdentity`], which is
+    /// raised whenever a peer presents a key other than the one pinned for their
+    /// account — normally a reinstall or device wipe. Until this runs, the pinned
+    /// key stays the old one: every inbound PreKey message from the peer fails
+    /// libsignal's `is_trusted_identity` and every fresh session with them is
+    /// refused, and nothing in the protocol can clear that by itself.
+    ///
+    /// **This is a trust decision and must only be reached from an explicit user
+    /// action.** An identity change is also exactly what an active MITM looks like;
+    /// the client cannot tell the two apart, which is why it is not automatic.
+    /// Accordingly this drops the peer's verified flag — the safety number the user
+    /// checked belongs to the old key and says nothing about this one, so the peer
+    /// must be re-verified.
+    ///
+    /// Every session with the peer is then deleted (not archived): the old ratchet
+    /// states were negotiated against the old identity key, so nothing encrypted
+    /// under them can be trusted, and archived states would only keep failing
+    /// `is_trusted_identity` on the way in. With no session left,
+    /// [`super::SignalService::ensure_session`] fetches a fresh prekey bundle and
+    /// the next send re-runs PQXDH against the accepted key.
+    ///
+    /// Returns the number of sessions dropped. A no-op (`Ok(0)`) when the key is
+    /// already the pinned one, so a duplicate accept cannot silently clear the
+    /// peer's verification.
+    pub fn accept_peer_identity_change(
+        &self,
+        peer_user_id: &str,
+        new_identity_key: &[u8],
+    ) -> Result<u32, ServiceError> {
+        // Reject anything that is not a well-formed Signal identity key BEFORE it
+        // is pinned. A malformed key stored here fails to parse in
+        // `is_trusted_identity` and turns every later message from the peer into a
+        // decode error — a worse wedge than the one being cleared.
+        libsignal_protocol::IdentityKey::decode(new_identity_key).map_err(|e| {
+            ServiceError::Crypto(crate::error::CryptoError::InvalidKey(format!(
+                "not a Signal identity key: {e}"
+            )))
+        })?;
+
+        // Identity keys are pinned per ACCOUNT, so the store address is the bare
+        // user id (see `crypto::signal::store::SignalStore::save_identity`).
+        if self.key_store.get_identity(peer_user_id).map_err(ServiceError::Storage)?
+            .as_deref()
+            == Some(new_identity_key)
+        {
+            tracing::debug!(
+                peer = %peer_user_id,
+                "Identity change accepted for a key that is already pinned — nothing to do"
+            );
+            return Ok(0);
+        }
+
+        self.key_store
+            .save_identity(peer_user_id, new_identity_key)
+            .map_err(ServiceError::Storage)?;
+        self.key_store
+            .unverify_peer(peer_user_id)
+            .map_err(ServiceError::Storage)?;
+        let dropped = self
+            .key_store
+            .delete_sessions_for_user(peer_user_id)
+            .map_err(ServiceError::Storage)?;
+
+        tracing::warn!(
+            peer = %peer_user_id,
+            sessions_dropped = dropped,
+            "ACCEPTED a peer identity key change: new key pinned, verification cleared, \
+             all sessions dropped — next send re-establishes PQXDH against the new key"
+        );
+
+        Ok(dropped)
+    }
+
     /// Derive a call key for a specific call with a peer.
     pub async fn derive_call_key(
         &self,

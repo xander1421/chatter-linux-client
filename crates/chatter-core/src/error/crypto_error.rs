@@ -38,9 +38,35 @@ pub enum CryptoError {
     #[error("key derivation failed: {0}")]
     KeyDerivationFailed(String),
 
-    /// Untrusted identity key for a remote user.
-    #[error("untrusted identity for {0}")]
-    UntrustedIdentity(String),
+    /// The peer presented a DIFFERENT identity key than the one pinned for their
+    /// account — a reinstall or device wipe, or an active MITM. The two are
+    /// indistinguishable from here, which is exactly why this is not resolved
+    /// automatically: libsignal refuses the operation
+    /// (`SignalProtocolError::UntrustedIdentity`) and the conversation stays wedged
+    /// until a human accepts the new key via
+    /// [`crate::services::SignalService::accept_peer_identity_change`].
+    ///
+    /// `new_identity_key` is the key as presented, when the failing operation
+    /// carried one: a PreKeySignalMessage and a prekey bundle both do, a Whisper
+    /// message does not (there the key comes from the stored session). It is the
+    /// key `accept_peer_identity_change` pins on accept.
+    ///
+    /// **Must not be collapsed into [`Self::SessionDesync`].** A desync is answered
+    /// with a `DecryptionErrorMessage` asking the peer to reset its session and
+    /// resend — which resends the same new identity key and fails identically,
+    /// forever. No session-layer action can change which key is pinned.
+    #[error(
+        "untrusted identity for {peer_id}:{device_id} — the peer's identity key changed \
+         (reinstall or MITM); it must be explicitly accepted"
+    )]
+    UntrustedIdentity {
+        /// Peer account id (identity keys are pinned per account).
+        peer_id: String,
+        /// Device whose message or bundle surfaced the change.
+        device_id: u32,
+        /// The new key as presented, when the failing operation carried it.
+        new_identity_key: Option<Vec<u8>>,
+    },
 
     /// Session not found for the given address.
     #[error("session not found for {0}")]

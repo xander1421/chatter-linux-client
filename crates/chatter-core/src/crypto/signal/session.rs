@@ -4,7 +4,7 @@
 
 use libsignal_protocol::{
     Fingerprint, IdentityKey, IdentityKeyStore, PreKeyBundle, ProtocolAddress,
-    SessionRecord, SessionStore, process_prekey_bundle,
+    SessionRecord, SessionStore, SignalProtocolError, process_prekey_bundle,
 };
 use rand::{CryptoRng, Rng};
 use std::time::SystemTime;
@@ -123,6 +123,17 @@ impl SessionManager {
                 error = %e,
                 "SessionManager: failed to process prekey bundle"
             );
+            // A bundle whose identity key is not the pinned one is the SENDING
+            // half of the peer-reinstall wedge (libsignal session.rs:186). It
+            // must stay distinguishable from a generic protocol failure, and it
+            // must carry the bundle's key — that is the key the user is being
+            // asked to accept.
+            if let SignalProtocolError::UntrustedIdentity(ref address) = e {
+                return super::untrusted_identity(
+                    address,
+                    Some(identity_key.serialize().to_vec()),
+                );
+            }
             CryptoError::Protocol(e.to_string())
         })?;
 

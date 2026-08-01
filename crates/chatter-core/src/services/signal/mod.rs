@@ -164,4 +164,115 @@ mod tests {
             .await
             .unwrap());
     }
+
+    /// A peer reinstall wedges the conversation, and `accept_peer_identity_change`
+    /// is the only thing that clears it.
+    ///
+    /// After a reinstall the peer's key is not the pinned one, so libsignal refuses
+    /// every inbound PreKey message and every fresh session
+    /// (`is_trusted_identity` -> false). Nothing in the protocol re-pins it:
+    /// `save_identity` is only reached AFTER the trust check passes, so the wedge
+    /// is permanent by construction. This asserts both halves — that the wedge is
+    /// real, and that accepting clears it completely: key re-pinned, stale
+    /// verification dropped (the old safety number describes the old key), and
+    /// every session for the peer deleted so the next send re-runs PQXDH.
+    #[tokio::test]
+    async fn peer_reinstall_is_wedged_until_the_new_identity_is_accepted() {
+        use libsignal_protocol::{
+            DeviceId, Direction, IdentityKeyPair, IdentityKeyStore, ProtocolAddress, SessionRecord,
+        };
+        use rand::TryRngCore;
+
+        let db_file = NamedTempFile::new().unwrap();
+        let (service, key_store, _settings) = setup_service(db_file.path()).await;
+        let mut store = SignalStore::new(key_store.clone());
+
+        let mut rng = rand::rngs::OsRng.unwrap_err();
+        let old = *IdentityKeyPair::generate(&mut rng).identity_key();
+        let reinstalled = *IdentityKeyPair::generate(&mut rng).identity_key();
+
+        let dev1 = ProtocolAddress::new("alice_uuid".to_string(), DeviceId::new(1).unwrap());
+
+        // Established conversation: key pinned, safety number verified in person,
+        // sessions on both of Alice's devices.
+        store.save_identity(&dev1, &old).await.unwrap();
+        key_store
+            .set_peer_verified("alice_uuid", "12345 67890 12345 67890", true)
+            .unwrap();
+        let fresh = SessionRecord::new_fresh().serialize().unwrap();
+        key_store.store_session("alice_uuid:1", &fresh).unwrap();
+        key_store.store_session("alice_uuid:2", &fresh).unwrap();
+
+        // Alice reinstalls. Her new key is refused in BOTH directions — inbound
+        // PreKey messages fail and no new session can be built. This is the wedge.
+        assert!(
+            !store
+                .is_trusted_identity(&dev1, &reinstalled, Direction::Receiving)
+                .await
+                .unwrap(),
+            "the reinstalled key must be untrusted, or the pin means nothing"
+        );
+        assert!(!store
+            .is_trusted_identity(&dev1, &reinstalled, Direction::Sending)
+            .await
+            .unwrap());
+
+        // A malformed key must never reach the pin — it would fail to parse on
+        // every later trust check and wedge the peer worse than the reinstall did.
+        assert!(service
+            .accept_peer_identity_change("alice_uuid", &[0u8; 7])
+            .is_err());
+        assert_eq!(
+            key_store.get_identity("alice_uuid").unwrap().as_deref(),
+            Some(old.serialize().as_ref()),
+            "a rejected key must leave the pin untouched"
+        );
+
+        // The user compares the new safety number and accepts.
+        let dropped = service
+            .accept_peer_identity_change("alice_uuid", &reinstalled.serialize())
+            .unwrap();
+        assert_eq!(dropped, 2, "both device sessions must be dropped");
+
+        // Wedge cleared: the new key is trusted and pinned.
+        assert!(
+            store
+                .is_trusted_identity(&dev1, &reinstalled, Direction::Receiving)
+                .await
+                .unwrap(),
+            "the conversation is still bricked after an explicit accept"
+        );
+        assert_eq!(
+            key_store.get_identity("alice_uuid").unwrap().as_deref(),
+            Some(reinstalled.serialize().as_ref())
+        );
+
+        // The old key is now the untrusted one, so accepting is a re-pin and not
+        // a widening of trust.
+        assert!(!store
+            .is_trusted_identity(&dev1, &old, Direction::Receiving)
+            .await
+            .unwrap());
+
+        // Verification is stale and must be cleared, or the UI would keep claiming
+        // a safety number the user never checked against this key.
+        assert!(!key_store.is_peer_verified("alice_uuid").unwrap());
+
+        // No session survives: the next send has to fetch a bundle and re-run PQXDH.
+        assert!(key_store.load_session("alice_uuid:1").unwrap().is_none());
+        assert!(key_store.load_session("alice_uuid:2").unwrap().is_none());
+
+        // Accepting the already-pinned key is a no-op — a duplicate accept must not
+        // silently clear a verification the user has since re-done.
+        key_store
+            .set_peer_verified("alice_uuid", "09876 54321 09876 54321", true)
+            .unwrap();
+        assert_eq!(
+            service
+                .accept_peer_identity_change("alice_uuid", &reinstalled.serialize())
+                .unwrap(),
+            0
+        );
+        assert!(key_store.is_peer_verified("alice_uuid").unwrap());
+    }
 }
