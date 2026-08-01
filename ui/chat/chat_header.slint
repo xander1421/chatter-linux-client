@@ -17,7 +17,6 @@ export struct ChatHeaderData {
     channel-type: string,  // "public", "private", "dm", "anon-dm", "private-group", "saved"
     member-count: int,
     topic: string,
-    is-archived: bool,
     typing-indicator: string,
     presence-status: string,  // "online", "away", "dnd", "offline" — shown for DMs only
 }
@@ -62,7 +61,6 @@ export component ChatHeader inherits Rectangle {
     in property <string> channel-type: "public";  // "public", "private", "dm", "anon-dm", "private-group", "saved"
     in property <int> member-count: 0;
     in property <string> topic: "";
-    in property <bool> is-archived: false;
     in property <string> typing-indicator: "";
     in property <string> presence-status: "offline";
 

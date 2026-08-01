@@ -41,6 +41,10 @@ pub enum SessionError {
     /// Storage operation failed.
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),
+
+    /// Device revoke/rotate failed.
+    #[error("device error: {0}")]
+    Device(#[from] crate::services::device_service::DeviceError),
 }
 
 /// Session management service.
@@ -110,34 +114,6 @@ impl SessionService {
             .collect();
 
         Ok(sessions)
-    }
-
-    /// Revoke a specific session by device ID.
-    ///
-    /// This will invalidate the session and force the device to re-authenticate.
-    /// Cannot revoke the current session - use logout instead.
-    pub async fn revoke_session(&self, device_id: u32) -> Result<(), SessionError> {
-        if !self.is_logged_in() {
-            return Err(SessionError::NotLoggedIn);
-        }
-
-        let mut auth_client = self.auth_client();
-        auth_client.revoke_session(device_id).await?;
-        Ok(())
-    }
-
-    /// Revoke all sessions except the current one.
-    ///
-    /// This will invalidate all other sessions, forcing those devices to re-authenticate.
-    /// The server automatically excludes the current session.
-    pub async fn revoke_all_other_sessions(&self) -> Result<(), SessionError> {
-        if !self.is_logged_in() {
-            return Err(SessionError::NotLoggedIn);
-        }
-
-        let mut auth_client = self.auth_client();
-        auth_client.revoke_all_sessions().await?;
-        Ok(())
     }
 
     // ==================== Settings ====================

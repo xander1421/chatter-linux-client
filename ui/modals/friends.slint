@@ -104,7 +104,6 @@ export component FriendsModal inherits Rectangle {
     callback connect-via-code(string);       // Server-managed friend request
     callback connect-private(string);        // Private anon DM (no server involvement)
     callback switch-tab(string);
-    callback switch-requests-sub-tab(string);
 
     // Friends actions
     callback view-profile(string);    // user_id
@@ -192,6 +191,7 @@ export component FriendsModal inherits Rectangle {
                         mouse-cursor: pointer;
                         clicked => {
                             root.active-tab = tab.id;
+                            root.switch-tab(tab.id);
                         }
                     }
                 }

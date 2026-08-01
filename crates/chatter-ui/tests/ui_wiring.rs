@@ -1405,6 +1405,67 @@ fn settings_message_backup_wires_reach_core() {
     }
 }
 
+// WELCOME PAGE — first-run buttons land in main view (V49)
+// ============================================================================
+
+#[test]
+fn welcome_page_buttons_are_wired() {
+    let (_rt, _tmp, _client, w) = wired_offline();
+    let client = _client.clone();
+    chatter_ui::bin_ui::features::navigation::wire(&w, &client);
+
+    // Registration parks the user on the welcome view; every button must exit it.
+    w.set_current_view("welcome".into());
+    w.invoke_welcome_get_started();
+    assert_eq!(w.get_current_view().as_str(), "main", "get-started did not reach main view");
+
+    w.set_current_view("welcome".into());
+    w.invoke_welcome_add_friends();
+    assert_eq!(w.get_current_view().as_str(), "main", "add-friends did not reach main view");
+    assert_eq!(w.get_active_modal().as_str(), "friends", "add-friends did not open friends modal");
+    assert_eq!(w.get_friends_modal_tab().as_str(), "find", "add-friends did not land on find tab");
+
+    w.set_active_modal("none".into());
+    w.set_current_view("welcome".into());
+    w.invoke_welcome_browse_channels();
+    assert_eq!(w.get_current_view().as_str(), "main", "browse-channels did not reach main view");
+    assert_eq!(w.get_active_modal().as_str(), "create-channel", "browse-channels did not open create-channel modal");
+
+    // Registration must route THROUGH welcome, not skip it (static wire proof —
+    // the async register flow needs a live server, so assert on source).
+    let src = include_str!("../src/bin_ui/features/auth/register.rs");
+    assert!(
+        src.contains(r#"set_current_view("welcome""#),
+        "register success no longer routes through the welcome view"
+    );
+}
+
+// ============================================================================
+// FRIENDS MODAL — tab clicks reach the Rust refresh hook (V50)
+// ============================================================================
+
+#[test]
+fn friends_modal_tab_switch_is_wired() {
+    let (_rt, _tmp, client, w) = wired_offline();
+    chatter_ui::bin_ui::features::modals::wire_friends_modal(&w, &client);
+
+    // The historical bug: FriendsModal set its local active-tab but never fired
+    // switch-tab, so no Rust hook could ever run. Prove the .slint now fires it.
+    let slint_src = include_str!("../../../ui/modals/friends.slint");
+    assert!(
+        slint_src.contains("root.switch-tab(tab.id)"),
+        "FriendsModal tab click no longer fires switch-tab — Rust refresh hook is unreachable"
+    );
+
+    // And the production handler is registered + survives all tab values
+    // (offline: refreshes no-op against empty stores, must not panic). The
+    // handlers tokio::spawn their refreshes, so a reactor must be entered.
+    let _guard = _rt.enter();
+    for tab in ["find", "friends", "requests", "blocked"] {
+        w.invoke_friends_modal_switch_tab(tab.into());
+    }
+}
+
 // ============================================================================
 // PRESENCE PICKER — the status row in the self-view profile modal
 // (ui/modals/user_profile.slint STATUS section) fires `change-user-status`,
@@ -1466,5 +1527,70 @@ fn presence_status_picker_reaches_core() {
     assert!(
         app.contains("root.change-user-status(mode)"),
         "app must forward modal change-status into change-user-status"
+    );
+}
+
+// FORWARD MESSAGE — confirm handler reaches core (V51)
+// ============================================================================
+
+#[test]
+fn forward_message_confirm_is_wired_to_core() {
+    let (_rt, _tmp, client, w) = wired_offline();
+    let _guard = _rt.enter();
+    chatter_ui::bin_ui::features::modals::wire_forward_message(&w, &client);
+
+    // The old handler closed the modal and logged "not yet implemented" —
+    // regression-proof its absence.
+    let src = include_str!("../src/bin_ui/features/modals/forward.rs");
+    assert!(
+        !src.contains("not yet implemented"),
+        "forward-message confirm handler is still a no-op stub"
+    );
+    assert!(
+        src.contains("forward_to"),
+        "forward-message confirm no longer calls ConversationHandle::forward_to"
+    );
+
+    // Dynamic: populate a target + source identity, fire confirm. Offline the
+    // send fails (no session), but the handler must parse, dispatch, and leave
+    // the modal OPEN on failure (only success closes it).
+    use slint::{ModelRc, VecModel};
+    let peer = "3f2c8a90-1111-2222-3333-444455556666";
+    let targets = vec![chatter_ui::ForwardTarget {
+        id: peer.into(),
+        name: "Test Peer".into(),
+        target_type: "dm".into(),
+    }];
+    w.set_forward_targets(ModelRc::new(VecModel::from(targets)));
+    w.set_forward_source_sender_id(peer.into());
+    w.set_forward_source_timestamp("123456789".into());
+    w.set_active_modal("forward-message".into());
+    w.invoke_forward_message(peer.into());
+    assert_eq!(
+        w.get_active_modal().as_str(),
+        "forward-message",
+        "modal must stay open until the async send reports success"
+    );
+}
+
+// ============================================================================
+// SESSIONS — revoke paths must rotate sender keys (V52)
+// ============================================================================
+
+#[test]
+fn session_revoke_routes_through_sender_key_rotation() {
+    // The UI's revoke buttons call client.revoke_session / revoke_all_other_sessions.
+    // Historical bug: those routed to a server-only revoke that skipped sender-key
+    // rotation, while the rotating path (revoke_and_rotate) was unreachable.
+    let core_src = include_str!("../../chatter-core/src/client/mod.rs");
+    let revoke_fn = core_src
+        .split("pub async fn revoke_session")
+        .nth(1)
+        .expect("revoke_session facade exists");
+    assert!(
+        revoke_fn[..revoke_fn.find("pub async fn").unwrap_or(revoke_fn.len())]
+            .contains("revoke_and_rotate"),
+        "revoke_session no longer routes through revoke_and_rotate — revoked \
+         devices would keep working sender keys"
     );
 }

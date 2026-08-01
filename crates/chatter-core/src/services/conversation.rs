@@ -414,6 +414,27 @@ impl ConversationHandle {
         }
     }
 
+    /// Forward a message from this conversation to another one.
+    ///
+    /// Text-only: looks up the source message by sender + timestamp and
+    /// re-sends its text to `target` as a fresh message (Signal-style —
+    /// no forwarding envelope, the recipient sees a normal message).
+    pub async fn forward_to(
+        &self,
+        target_author: &UserId,
+        target_sent_timestamp: u64,
+        target: ActiveConversation,
+    ) -> ConversationResult {
+        let text = self
+            .get_message_text(target_author, target_sent_timestamp)?
+            .ok_or_else(|| ConversationError::Other("message to forward not found".into()))?;
+        self.client
+            .send_text(target, &text)
+            .await
+            .map_err(|e| ConversationError::Other(e.to_string()))?;
+        Ok(())
+    }
+
     /// Get attachment IDs for a message by sender + timestamp across any conversation type.
     pub fn get_message_attachment_ids(
         &self,

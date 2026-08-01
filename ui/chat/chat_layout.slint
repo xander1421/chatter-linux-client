@@ -26,7 +26,6 @@ export component ChatLayout inherits Rectangle {
     in property <bool> is-dm: false;  // When true, show minimal message UI (no avatars/names)
     in property <int> member-count: 0;
     in property <string> topic: "";
-    in property <bool> is-archived: false;
     in property <string> typing-indicator: "";
     in property <string> presence-status: "offline";
     in property <image> channel-avatar-source;
@@ -162,7 +161,6 @@ export component ChatLayout inherits Rectangle {
             channel-type: root.channel-type;
             member-count: root.member-count;
             topic: root.topic;
-            is-archived: root.is-archived;
             typing-indicator: root.typing-indicator;
             presence-status: root.presence-status;
             avatar-source: root.channel-avatar-source;
