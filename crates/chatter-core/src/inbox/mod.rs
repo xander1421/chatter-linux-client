@@ -22,6 +22,7 @@
 //!    `services::inbox_processor`) parse content and emit `DomainEvent`s
 //! 5. Subscribers (state stores, UI) receive events via broadcast channel
 
+pub mod ack_policy;
 pub mod config;
 pub mod error;
 pub mod events;
