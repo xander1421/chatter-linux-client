@@ -61,6 +61,7 @@ pub mod v059_mesh_favorites;
 mod v060_mesh_delivery;
 mod v061_mesh_exempt_sender_sent_at;
 mod v062_section_sort_mode;
+mod v063_pending_identity_changes;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -125,6 +126,7 @@ pub use v059_mesh_favorites::V059MeshFavorites;
 pub use v060_mesh_delivery::V060MeshDelivery;
 pub use v061_mesh_exempt_sender_sent_at::V061MeshExemptSenderSentAt;
 pub use v062_section_sort_mode::V062SectionSortMode;
+pub use v063_pending_identity_changes::V063PendingIdentityChanges;
 
 /// Trait for database migrations.
 ///
@@ -304,4 +306,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V060MeshDelivery)
         .register(V061MeshExemptSenderSentAt)
         .register(V062SectionSortMode)
+        .register(V063PendingIdentityChanges)
 }

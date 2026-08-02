@@ -13,7 +13,7 @@ pub mod storage_error;
 pub mod system_error;
 
 pub use call_error::CallError;
-pub use crypto_error::CryptoError;
+pub use crypto_error::{CryptoError, IdentityChangeSource};
 pub use mailbox_error::{ContentError, MailboxError};
 pub use media_error::MediaError;
 pub use network_error::NetworkError;

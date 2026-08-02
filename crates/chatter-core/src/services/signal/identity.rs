@@ -5,7 +5,9 @@
 
 use libsignal_protocol::ProtocolAddress;
 use crate::network::grpc::auth_client::AuthClient;
-use crate::error::ServiceError;
+use crate::domain::ids::UserId;
+use crate::error::{CryptoError, IdentityChangeSource, ServiceError};
+use crate::storage::ChannelRepository;
 use super::SignalService;
 
 impl SignalService {
@@ -149,6 +151,133 @@ impl SignalService {
         self.key_store
             .set_peer_verified(peer_user_id, safety_number, verified)
             .map_err(ServiceError::Storage)
+    }
+
+    /// Park an identity change surfaced by a decrypt or a bundle fetch, so the
+    /// SEND path can see it too.
+    ///
+    /// No-op for anything else, and for a change that arrived without a key (a
+    /// Whisper message carries none — libsignal reads it from the stored
+    /// session), because there would be nothing for the user to accept.
+    pub(crate) fn note_identity_change(&self, err: &ServiceError) {
+        let ServiceError::Crypto(CryptoError::UntrustedIdentity {
+            peer_id,
+            device_id,
+            new_identity_key: Some(key),
+            attribution,
+        }) = err
+        else {
+            return;
+        };
+        if let Err(e) = self.key_store.record_pending_identity_change(
+            peer_id,
+            key,
+            attribution.as_db_str(),
+            *device_id,
+        ) {
+            tracing::warn!(peer = %peer_id, error = %e, "failed to park peer identity change");
+        }
+    }
+
+    /// The peer's new, unaccepted identity key and how the peer was attributed.
+    ///
+    /// `None` when there is no pending change. The [`IdentityChangeSource`] is
+    /// what lets the UI avoid presenting a server-asserted identity change as
+    /// though it had been cryptographically attributed.
+    pub fn pending_identity_change(
+        &self,
+        peer_user_id: &str,
+    ) -> Result<Option<(Vec<u8>, IdentityChangeSource)>, ServiceError> {
+        Ok(self
+            .key_store
+            .get_pending_identity_change(peer_user_id)
+            .map_err(ServiceError::Storage)?
+            .map(|(key, source, _)| (key, IdentityChangeSource::from_db_str(&source))))
+    }
+
+    /// Accept a peer's NEW identity key after a reinstall, and unwedge the
+    /// conversation in both directions.
+    ///
+    /// **A trust decision — only ever reach this from an explicit user action.**
+    /// A reinstall and an active MITM are indistinguishable from here.
+    ///
+    /// Mirrors this repo's existing response to a peer identity/device change
+    /// (`spawn_notification_listener`'s PEER_DEVICES_CHANGED arm), which is two
+    /// phases, not one: pairwise sessions are invalidated AND every shared
+    /// channel is marked for sender-key rotation. Without the second phase the
+    /// peer keeps holding a live sender key and group messages keep flowing to
+    /// the identity that just changed.
+    ///
+    /// Ordering is deliberate. Rotation marks go first because they are
+    /// idempotent and lazy (consumed by `encrypt_for_group` on the next send),
+    /// while the pin is the step that must not be half-applied. So a crash
+    /// leaves either "marked but still wedged" — which a re-run completes — or
+    /// the fully accepted state. Doing the pin first would let a crash strand a
+    /// re-run on the already-pinned no-op and skip rotation forever.
+    ///
+    /// The session delete lives inside the pin's transaction rather than going
+    /// through `SignalActorHandle::invalidate_peer_sessions`, because pinning
+    /// the new key while old sessions survive is the one hybrid that must be
+    /// impossible: inbound would recover while outbound silently kept encrypting
+    /// under the dead ratchet. Atomicity is only available inside `KeyStore`,
+    /// which owns the writer connection.
+    ///
+    /// Returns the number of sessions dropped; `0` when the key was already
+    /// pinned, so re-running cannot clear a verification the user has re-done.
+    pub fn accept_peer_identity_change(
+        &self,
+        peer_user_id: &UserId,
+        new_identity_key: &[u8],
+        channel_repo: &ChannelRepository,
+    ) -> Result<u32, ServiceError> {
+        let peer = peer_user_id.to_string();
+
+        // Reject anything that is not a well-formed Signal identity key BEFORE
+        // it is pinned. A malformed key fails to parse in `is_trusted_identity`
+        // and turns every later message from the peer into a decode error — a
+        // worse wedge than the one being cleared.
+        libsignal_protocol::IdentityKey::decode(new_identity_key).map_err(|e| {
+            ServiceError::Validation(format!("not a Signal identity key: {e}"))
+        })?;
+
+        // The user may only accept the key they were actually shown. If a change
+        // is parked, this must be it — otherwise a server that keeps injecting
+        // fresh keys could swap one in behind the prompt.
+        if let Some((parked, _, _)) = self
+            .key_store
+            .get_pending_identity_change(&peer)
+            .map_err(ServiceError::Storage)?
+            && parked != new_identity_key
+        {
+            return Err(ServiceError::Validation(
+                "identity key does not match the pending change for this peer".into(),
+            ));
+        }
+
+        // Phase 2 (see the ordering note above).
+        let channels = channel_repo
+            .list_channels_for_user(peer_user_id)
+            .map_err(ServiceError::Storage)?;
+        for channel_id in &channels {
+            self.mark_channel_for_rotation(channel_id)?;
+        }
+
+        // Phase 1, atomically: pin the new key, drop the stale verification,
+        // delete every session, clear the parked change.
+        let dropped = self
+            .key_store
+            .accept_peer_identity_change(&peer, new_identity_key)
+            .map_err(ServiceError::Storage)?;
+
+        tracing::warn!(
+            peer = %peer,
+            sessions_dropped = dropped,
+            channels_marked = channels.len(),
+            "ACCEPTED a peer identity key change: new key pinned, verification cleared, \
+             sessions dropped, shared channels marked for sender-key rotation"
+        );
+
+        Ok(dropped)
     }
 
     /// Derive a call key for a specific call with a peer.

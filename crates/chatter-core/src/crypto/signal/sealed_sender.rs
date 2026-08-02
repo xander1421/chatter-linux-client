@@ -44,7 +44,7 @@ use rand::rngs::OsRng;
 use rand::TryRngCore;
 
 use crate::config::TRUST_ROOT_PUBLIC_KEY;
-use crate::error::CryptoError;
+use crate::error::{CryptoError, IdentityChangeSource};
 
 // Re-export useful libsignal types for consumers of this module.
 pub use libsignal_protocol::{
@@ -722,6 +722,37 @@ fn classify_inner_failure(
     error: SignalProtocolError, sender_uuid: &str, sender_device_id: DeviceId,
     msg_type: CiphertextMessageType, contents: &[u8],
 ) -> CryptoError {
+    // The peer's identity key changed (reinstall, device wipe — or a MITM).
+    // NOT a desync: no session-layer action changes which key is pinned, so a
+    // DecryptionErrorMessage would only make the peer resend the same new key
+    // and fail identically, forever. It needs a human trust decision, so it has
+    // to leave here as its own error carrying the key that decision is about.
+    if let SignalProtocolError::UntrustedIdentity(ref address) = error {
+        // A PreKeySignalMessage carries the sender's new identity key inline —
+        // that IS the key the user is being asked to accept. A Whisper message
+        // carries none (libsignal reads it from the stored session).
+        let new_identity_key = match msg_type {
+            CiphertextMessageType::PreKey => PreKeySignalMessage::try_from(contents)
+                .ok()
+                .map(|m| m.identity_key().serialize().to_vec()),
+            _ => None,
+        };
+        tracing::warn!(
+            target: "chatter::crypto::decrypt_failure",
+            kind = "identity_changed",
+            sender = %sender_uuid,
+            sender_device = ?sender_device_id,
+            have_new_key = new_identity_key.is_some(),
+            "peer identity key changed — conversation wedged until the new key is accepted"
+        );
+        // Sealed sender: the uuid came from a sender certificate validated
+        // against the trust root above, so this attribution is authenticated.
+        return super::untrusted_identity(
+            address,
+            new_identity_key,
+            IdentityChangeSource::SenderCertificate,
+        );
+    }
     if let SignalProtocolError::DuplicatedMessage(chain_index, counter) = error {
         tracing::debug!(
             target: "chatter::crypto::decrypt_failure",
@@ -820,6 +851,48 @@ mod tests {
                 assert_eq!(msg_type, CiphertextMessageType::Whisper as u8);
             }
             other => panic!("a real desync was classified as {other:?}; the self-heal is dead"),
+        }
+    }
+
+    /// A peer's identity key CHANGING must not be reported as a session desync,
+    /// and the sealed path's provenance must say the sender was PROVEN.
+    ///
+    /// libsignal refuses the inner decrypt with `UntrustedIdentity`
+    /// (session.rs:61 for a PreKey message, session_cipher.rs:317 for a Whisper
+    /// one) because the key on the wire is not the key pinned for the account.
+    /// Classifying that as a desync makes the gateway ship the peer a
+    /// `DecryptionErrorMessage`; the peer archives its session and resends a
+    /// fresh PreKey message carrying the SAME new identity key, and we refuse it
+    /// again — a loop that never converges, because no amount of session
+    /// resetting changes which key is pinned.
+    #[test]
+    fn an_identity_change_is_not_a_session_desync() {
+        let device = DeviceId::new(1).expect("device id");
+        let sender = "caa49e97-690f-407d-ab9a-74bf772dbd3d";
+        let address = ProtocolAddress::new(sender.to_string(), device);
+
+        let changed = classify_inner_failure(
+            SignalProtocolError::UntrustedIdentity(address),
+            sender,
+            device,
+            CiphertextMessageType::PreKey,
+            &[0xAAu8; 8],
+        );
+
+        match changed {
+            CryptoError::UntrustedIdentity { peer_id, device_id, attribution, .. } => {
+                assert_eq!(peer_id, sender);
+                assert_eq!(device_id, 1);
+                assert!(
+                    attribution.is_authenticated(),
+                    "the sealed path authenticates its sender via the certificate; reporting it \
+                     as unproven would understate what the UI may tell the user"
+                );
+            }
+            other => panic!(
+                "a peer identity-key change was classified as {other:?}; as a desync it sends a \
+                 DecryptionErrorMessage that can never fix the pinned key"
+            ),
         }
     }
 

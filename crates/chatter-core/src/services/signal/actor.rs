@@ -24,6 +24,52 @@ use crate::crypto::{
 use crate::storage::KeyStore;
 use crate::storage::repositories::settings_repo::SettingsRepository;
 
+/// Map an identified-sender decrypt failure.
+///
+/// `UntrustedIdentity` must survive as its own error — collapsed into
+/// `Protocol` it is indistinguishable from a parse failure and the accept path
+/// can never be offered. The sender here is server-supplied envelope metadata,
+/// so that is the provenance recorded.
+fn map_identified_decrypt_err(
+    e: libsignal_protocol::SignalProtocolError,
+    new_identity_key: Option<Vec<u8>>,
+) -> ServiceError {
+    if let libsignal_protocol::SignalProtocolError::UntrustedIdentity(ref address) = e {
+        return ServiceError::Crypto(crate::crypto::signal::untrusted_identity(
+            address,
+            new_identity_key,
+            crate::error::IdentityChangeSource::ServerClaimed,
+        ));
+    }
+    ServiceError::Crypto(CryptoError::Protocol(e.to_string()))
+}
+
+/// Record one convergence attempt's failure, keeping the FIRST identity-key
+/// verdict.
+///
+/// No candidate session can fix a changed identity key — every one of them
+/// fails the same trust check — so that verdict, not a generic "all sessions
+/// failed", is what the caller needs in order to offer the accept path.
+fn note_convergence_failure(
+    e: libsignal_protocol::SignalProtocolError,
+    new_identity_key: Option<Vec<u8>>,
+    identity_change: &mut Option<CryptoError>,
+    errors: &mut Vec<String>,
+) {
+    if identity_change.is_none()
+        && let libsignal_protocol::SignalProtocolError::UntrustedIdentity(ref address) = e
+    {
+        // Identified sender: the peer id is envelope metadata the server
+        // supplied, not proven.
+        *identity_change = Some(crate::crypto::signal::untrusted_identity(
+            address,
+            new_identity_key,
+            crate::error::IdentityChangeSource::ServerClaimed,
+        ));
+    }
+    errors.push(e.to_string());
+}
+
 /// Commands sent to the Signal Actor.
 pub enum SignalCommand {
     GetIdentityFingerprint { response: oneshot::Sender<Result<String, ServiceError>> },
@@ -319,11 +365,12 @@ impl SignalActorHandle {
                             let store6 = store.clone();
                             
                             let res = if let Ok(prekey_msg) = libsignal_protocol::PreKeySignalMessage::try_from(ciphertext.as_slice()) {
+                                let new_key = prekey_msg.identity_key().serialize().to_vec();
                                 libsignal_protocol::message_decrypt_prekey(&prekey_msg, &sender_address, &mut store, &mut store2, &mut store3, &store6, &mut store4, &mut rng).await
-                                    .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))
+                                    .map_err(|e| map_identified_decrypt_err(e, Some(new_key)))
                             } else if let Ok(signal_msg) = libsignal_protocol::SignalMessage::try_from(ciphertext.as_slice()) {
                                 libsignal_protocol::message_decrypt_signal(&signal_msg, &sender_address, &mut store, &mut store2, &mut rng).await
-                                    .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))
+                                    .map_err(|e| map_identified_decrypt_err(e, None))
                             } else {
                                 Err(ServiceError::Crypto(CryptoError::Protocol("Unknown ciphertext format".into())))
                             };
@@ -361,24 +408,39 @@ impl SignalActorHandle {
                                 .ok()
                                 .flatten();
 
+                            let mut errors: Vec<String> = Vec::new();
                             let mut final_res = Ok(ConvergenceResult::AllFailed { errors: vec!["No sessions to try".into()] });
                             let mut committed = false;
-
+                            // A changed identity key is not a session problem, so no
+                            // candidate session can fix it — every one of them fails
+                            // the same trust check. Previously every per-attempt error
+                            // was dropped by `if let Ok(..)` and the caller got a
+                            // generic "convergence failed", which is why the wedge was
+                            // invisible on this path. Keep the FIRST such verdict and
+                            // return it instead of AllFailed.
+                            let mut identity_change: Option<CryptoError> = None;
                             for (session_id, record) in sessions {
                                 let mut rng = rand::rngs::OsRng.unwrap_err();
                                 if let Ok(serialized) = record.serialize() {
                                     if store2.key_store().store_session(&session_key, &serialized).is_ok() {
                                         if let Ok(prekey_msg) = libsignal_protocol::PreKeySignalMessage::try_from(envelope.as_slice()) {
-                                            if let Ok(plaintext) = libsignal_protocol::message_decrypt_prekey(&prekey_msg, &sender_address, &mut store, &mut store2, &mut store3, &store6, &mut store4, &mut rng).await {
-                                                final_res = Ok(ConvergenceResult::ActiveSession { plaintext, session_id });
-                                                committed = true;
-                                                break;
+                                            let new_key = prekey_msg.identity_key().serialize().to_vec();
+                                            match libsignal_protocol::message_decrypt_prekey(&prekey_msg, &sender_address, &mut store, &mut store2, &mut store3, &store6, &mut store4, &mut rng).await {
+                                                Ok(plaintext) => {
+                                                    final_res = Ok(ConvergenceResult::ActiveSession { plaintext, session_id });
+                                                    committed = true;
+                                                    break;
+                                                }
+                                                Err(e) => note_convergence_failure(e, Some(new_key), &mut identity_change, &mut errors),
                                             }
                                         } else if let Ok(signal_msg) = libsignal_protocol::SignalMessage::try_from(envelope.as_slice()) {
-                                            if let Ok(plaintext) = libsignal_protocol::message_decrypt_signal(&signal_msg, &sender_address, &mut store, &mut store2, &mut rng).await {
-                                                final_res = Ok(ConvergenceResult::ActiveSession { plaintext, session_id });
-                                                committed = true;
-                                                break;
+                                            match libsignal_protocol::message_decrypt_signal(&signal_msg, &sender_address, &mut store, &mut store2, &mut rng).await {
+                                                Ok(plaintext) => {
+                                                    final_res = Ok(ConvergenceResult::ActiveSession { plaintext, session_id });
+                                                    committed = true;
+                                                    break;
+                                                }
+                                                Err(e) => note_convergence_failure(e, None, &mut identity_change, &mut errors),
                                             }
                                         }
                                     }
@@ -395,6 +457,15 @@ impl SignalActorHandle {
                                         let _ = store2.key_store().delete_session(&session_key);
                                     }
                                 }
+                                // Restore first, THEN report: the identity error must
+                                // not leave a losing candidate installed as the session.
+                                final_res = match identity_change {
+                                    Some(err) => Err(ServiceError::Crypto(err)),
+                                    None if !errors.is_empty() => {
+                                        Ok(ConvergenceResult::AllFailed { errors })
+                                    }
+                                    None => final_res,
+                                };
                             }
 
                             let _ = response.send(final_res);

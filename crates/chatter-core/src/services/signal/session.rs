@@ -12,7 +12,7 @@ use tokio::sync::Mutex;
 use crate::crypto::signal::sesame::ConvergenceResult;
 use crate::network::grpc::auth_client::AuthClient;
 use crate::storage::repositories::settings_repo::keys;
-use crate::error::ServiceError;
+use crate::error::{CryptoError, ServiceError};
 use super::SignalService;
 
 /// Maximum number of encrypt locks to keep in cache.
@@ -153,6 +153,35 @@ impl SignalService {
         let device_id_struct = DeviceId::try_from(device_id).map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
         let address = ProtocolAddress::new(recipient_id.to_string(), device_id_struct);
 
+        // SEND HALF of the identity-change wedge, and it is NOT
+        // `establish_session` in the common case.
+        //
+        // After a peer reinstall a stale session is usually still on disk, so
+        // `has_session` is true, the prekey fetch is skipped, and
+        // `establish_session` is never reached. libsignal's send-side trust
+        // check (session_cipher.rs:137) then compares the SESSION's stored
+        // remote identity against the pinned identity — both are the peer's OLD
+        // key, so it passes and we happily encrypt under a ratchet the peer no
+        // longer has. The message goes out undeliverable, with nothing to
+        // signal that it is wrong.
+        //
+        // Nothing local can detect that; the change is only knowable once an
+        // inbound message or a fresh bundle has surfaced it. So this consults
+        // what those paths parked, and refuses to reuse the stale session until
+        // the user decides.
+        if let Some((key, source, device_id)) = self
+            .key_store
+            .get_pending_identity_change(recipient_id)
+            .map_err(ServiceError::Storage)?
+        {
+            return Err(ServiceError::Crypto(CryptoError::UntrustedIdentity {
+                peer_id: recipient_id.to_string(),
+                device_id,
+                new_identity_key: Some(key),
+                attribution: crate::error::IdentityChangeSource::from_db_str(&source),
+            }));
+        }
+
         // Check if we already have a usable session with this peer
         // has_session now validates structural integrity (not just existence)
         if self.actor.has_session(address.clone()).await? {
@@ -186,7 +215,10 @@ impl SignalService {
         // before establishing (rejects a server-forged identity key).
         self.verify_peer_key_transparency(auth_client, recipient_id, &bundle)
             .await?;
-        self.actor.establish_session(address, bundle).await
+        self.actor
+            .establish_session(address, bundle)
+            .await
+            .inspect_err(|e| self.note_identity_change(e))
     }
 
     /// Encrypt a message using Sealed Sender.
@@ -263,7 +295,10 @@ impl SignalService {
         let local_device_id = self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID)?.ok_or(ServiceError::NotLoggedIn)?;
         let device_id_struct = DeviceId::new(local_device_id.try_into().map_err(|_| ServiceError::Validation("ID too large".into()))?).map_err(|_| ServiceError::Validation("Invalid ID".into()))?;
 
-        self.actor.decrypt_sealed(ciphertext.to_vec(), self.trust_root, local_uuid, device_id_struct).await
+        self.actor
+            .decrypt_sealed(ciphertext.to_vec(), self.trust_root, local_uuid, device_id_struct)
+            .await
+            .inspect_err(|e| self.note_identity_change(e))
     }
 
     /// Decrypt an incoming identified sender message.
@@ -276,7 +311,10 @@ impl SignalService {
         let device_id_struct = DeviceId::try_from(sender_device_id).map_err(|_| ServiceError::Validation("Invalid ID".into()))?;
         let sender_address = ProtocolAddress::new(sender_id.to_string(), device_id_struct);
 
-        self.actor.decrypt_identified(ciphertext.to_vec(), sender_address).await
+        self.actor
+            .decrypt_identified(ciphertext.to_vec(), sender_address)
+            .await
+            .inspect_err(|e| self.note_identity_change(e))
     }
 
     /// Decrypt a message with session convergence (Sesame).
@@ -287,12 +325,15 @@ impl SignalService {
         sender_device_id: u32,
         sessions: Vec<(Vec<u8>, libsignal_protocol::SessionRecord)>,
     ) -> Result<ConvergenceResult, ServiceError> {
-        self.actor.decrypt_with_convergence(
-            envelope.to_vec(),
-            sender_id.to_string(),
-            sender_device_id,
-            sessions,
-        ).await
+        self.actor
+            .decrypt_with_convergence(
+                envelope.to_vec(),
+                sender_id.to_string(),
+                sender_device_id,
+                sessions,
+            )
+            .await
+            .inspect_err(|e| self.note_identity_change(e))
     }
 
     /// Get sender certificate from cache or request a new one.

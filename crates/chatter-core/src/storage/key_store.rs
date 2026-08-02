@@ -888,6 +888,134 @@ impl KeyStore {
         Ok(())
     }
 
+    // ── Pending identity changes ────────────────────────────────────────
+
+    /// Park a peer's new, not-yet-accepted identity key.
+    ///
+    /// libsignal only calls `save_identity` AFTER `is_trusted_identity` passes,
+    /// so a changed key is refused everywhere and the protocol itself can never
+    /// re-pin it. This row is where the refused key waits for a human decision,
+    /// and it is what the SEND path consults to stop encrypting under a stale
+    /// session (see `SignalService::ensure_session`).
+    ///
+    /// First writer wins. A later sighting must not overwrite the key the user
+    /// may already be looking at in an accept prompt — otherwise a server that
+    /// keeps injecting fresh keys could swap the key out from under the prompt
+    /// and have the user accept one they never saw.
+    pub fn record_pending_identity_change(
+        &self,
+        peer_user_id: &str,
+        new_identity_key: &[u8],
+        source: &str,
+        device_id: u32,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        conn.execute(
+            "INSERT INTO pending_identity_changes
+                 (peer_user_id, new_identity_key, source, device_id, first_seen_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(peer_user_id) DO NOTHING",
+            params![
+                peer_user_id,
+                new_identity_key,
+                source,
+                device_id,
+                Utc::now().to_rfc3339()
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// The peer's parked identity key, as `(key, source, device_id)`.
+    pub fn get_pending_identity_change(
+        &self,
+        peer_user_id: &str,
+    ) -> Result<Option<(Vec<u8>, String, u32)>, StorageError> {
+        let conn = self.db.connection()?;
+        let result: Result<(Vec<u8>, String, u32), _> = conn.query_row(
+            "SELECT new_identity_key, source, device_id
+             FROM pending_identity_changes WHERE peer_user_id = ?1",
+            params![peer_user_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        );
+        match result {
+            Ok(v) => Ok(Some(v)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::Database(e)),
+        }
+    }
+
+    /// Apply a peer's identity-key change as ONE transaction.
+    ///
+    /// The four writes are a single unit because any partial application is a
+    /// worse state than the wedge being cleared. In particular, pinning the new
+    /// key while leaving the old sessions in place produces a half-working
+    /// conversation: inbound messages start decrypting, but `ensure_session`
+    /// sees a session, skips the prekey fetch, and keeps encrypting under a
+    /// ratchet negotiated against the DEAD key — so outbound is silently
+    /// undeliverable with nothing left to signal that it is wrong. Committing
+    /// them together means a crash leaves either the old wedge (recoverable by
+    /// re-running) or the accepted state, never that hybrid.
+    ///
+    /// Sessions are deleted, not archived: they were negotiated against the old
+    /// identity key, so nothing under them can be trusted, and an archived state
+    /// would only keep failing `is_trusted_identity` on the way in.
+    ///
+    /// Returns the number of sessions dropped. `Ok(0)` with nothing written when
+    /// the key is already pinned, so a re-run cannot clear a verification the
+    /// user has since re-done.
+    ///
+    /// Callers must not use the other `KeyStore` methods to assemble this — the
+    /// writer connection is behind a non-reentrant mutex, so the SQL is inlined
+    /// against the transaction here.
+    pub fn accept_peer_identity_change(
+        &self,
+        peer_user_id: &str,
+        new_identity_key: &[u8],
+    ) -> Result<u32, StorageError> {
+        let conn = self.db.connection()?;
+        let tx = conn.unchecked_transaction()?;
+
+        let pinned: Option<Vec<u8>> = {
+            let mut stmt =
+                tx.prepare("SELECT identity_key FROM remote_identities WHERE address = ?1")?;
+            stmt.query_row(params![peer_user_id], |row| row.get(0)).ok()
+        };
+        if pinned.as_deref() == Some(new_identity_key) {
+            return Ok(0);
+        }
+
+        let now = Utc::now().to_rfc3339();
+        // Identity keys are pinned per ACCOUNT, so the address is the bare user
+        // id (see `SignalStore::is_trusted_identity`).
+        tx.execute(
+            "INSERT INTO remote_identities (address, identity_key, first_seen_at, updated_at)
+             VALUES (?1, ?2, ?3, ?3)
+             ON CONFLICT(address) DO UPDATE SET
+                 identity_key = excluded.identity_key,
+                 updated_at = excluded.updated_at",
+            params![peer_user_id, new_identity_key, now],
+        )?;
+        // The safety number the user checked describes the OLD key and says
+        // nothing about this one.
+        tx.execute(
+            "UPDATE peer_verification SET is_verified = 0, verified_at = NULL
+             WHERE peer_user_id = ?1",
+            params![peer_user_id],
+        )?;
+        let dropped = tx.execute(
+            "DELETE FROM sessions WHERE address LIKE ?1",
+            params![format!("{}:%", peer_user_id)],
+        )?;
+        tx.execute(
+            "DELETE FROM pending_identity_changes WHERE peer_user_id = ?1",
+            params![peer_user_id],
+        )?;
+
+        tx.commit()?;
+        Ok(dropped as u32)
+    }
+
     /// Get the stored safety number for a peer (if any).
     ///
     /// Returns `None` if we have never generated a safety number for this peer.

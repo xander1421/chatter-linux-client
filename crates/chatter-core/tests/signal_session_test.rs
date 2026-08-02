@@ -289,3 +289,208 @@ async fn test_session_reuse_after_message_decrypt() {
         "Session data should not be modified"
     );
 }
+
+/// The SEND half of the peer-reinstall wedge.
+///
+/// It is NOT `establish_session` in the common case. After a peer reinstalls, a
+/// stale session is normally still on disk, so `ensure_session`'s `has_session`
+/// short-circuit fires, the prekey fetch never happens, and `establish_session`
+/// is never reached. libsignal's send-side trust check
+/// (`session_cipher.rs:137`) then compares the SESSION's stored remote identity
+/// against the pinned identity — both are the peer's OLD key, so it passes and
+/// we encrypt under a ratchet the peer no longer holds. The message goes out
+/// undeliverable, with nothing to signal that anything is wrong.
+///
+/// Nothing local can detect that on its own, so once a receive path has parked
+/// the change, `ensure_session` has to consult it and refuse.
+///
+/// The auth client points at a dead port ON PURPOSE: the refusal must happen
+/// before any network use. If the gate is missing, the short-circuit returns
+/// `Ok(())` without touching it and this fails on the assert rather than
+/// hanging.
+#[tokio::test]
+async fn ensure_session_refuses_a_stale_session_when_an_identity_change_is_parked() {
+    use chatter_core::error::{CryptoError, IdentityChangeSource, ServiceError};
+    use chatter_core::network::grpc::auth_client::AuthClient;
+    use chatter_core::network::grpc::interceptors::AuthInterceptor;
+    use libsignal_protocol::IdentityKeyPair;
+
+    let (service, key_store, _settings, _db_file) = setup_test_service().await;
+
+    let peer_id = "peer-uuid";
+    let address = ProtocolAddress::new(peer_id.to_string(), DeviceId::try_from(1u32).unwrap());
+
+    // A session that can genuinely send — this is what makes ensure_session
+    // short-circuit, and the whole point of the test.
+    let session_bytes = usable_session_bytes(&address).await;
+    key_store.store_session(&format!("{peer_id}:1"), &session_bytes).unwrap();
+    assert!(
+        service.has_session(peer_id, 1).await.unwrap(),
+        "precondition: without a usable session there is no short-circuit to defeat"
+    );
+
+    let mut rng = StdRng::seed_from_u64(0x0DD_1DEA);
+    let reinstalled = *IdentityKeyPair::generate(&mut rng).identity_key();
+
+    // A receive path surfaced the change and parked it (this is what
+    // `SignalService::note_identity_change` writes).
+    key_store
+        .record_pending_identity_change(
+            peer_id,
+            &reinstalled.serialize(),
+            IdentityChangeSource::SenderCertificate.as_db_str(),
+            1,
+        )
+        .unwrap();
+
+    let channel = tonic::transport::Channel::from_static("http://127.0.0.1:1").connect_lazy();
+    let mut auth_client = AuthClient::new(channel, AuthInterceptor::new());
+
+    match service.ensure_session(&mut auth_client, peer_id, 1).await {
+        Err(ServiceError::Crypto(CryptoError::UntrustedIdentity {
+            peer_id: got, attribution, ..
+        })) => {
+            assert_eq!(got, peer_id);
+            assert!(
+                attribution.is_authenticated(),
+                "the sealed-sender provenance must survive to the send path"
+            );
+        }
+        Ok(()) => panic!(
+            "ensure_session reused the stale session despite a parked identity change — every \
+             message from here is encrypted to a key the peer no longer has, and nothing says so"
+        ),
+        Err(e) => panic!("expected UntrustedIdentity, got {e:?}"),
+    }
+}
+
+/// Build a real `PreKeySignalMessage` from `sender_identity` addressed to a
+/// throwaway recipient bundle.
+///
+/// The recipient's prekeys deliberately do NOT have to match the store that
+/// will decrypt this: libsignal checks the sender's identity FIRST in
+/// `process_prekey` (session.rs:57-63), before any prekey lookup, so a message
+/// carrying an untrusted identity key never reaches them.
+async fn prekey_message_from(sender_identity: IdentityKeyPair, seed: u64) -> Vec<u8> {
+    let mut rng = StdRng::seed_from_u64(seed);
+    let recipient = ProtocolAddress::new("recipient".to_string(), DeviceId::try_from(1u32).unwrap());
+
+    let rcpt_identity = IdentityKeyPair::generate(&mut rng);
+    let pre_key_pair = KeyPair::generate(&mut rng);
+    let signed_pre_key_pair = KeyPair::generate(&mut rng);
+    let kyber_pre_key_pair = kem::KeyPair::generate(kem::KeyType::Kyber1024, &mut rng);
+
+    let signed_sig = rcpt_identity
+        .private_key()
+        .calculate_signature(&signed_pre_key_pair.public_key.serialize(), &mut rng)
+        .unwrap();
+    let kyber_sig = rcpt_identity
+        .private_key()
+        .calculate_signature(&kyber_pre_key_pair.public_key.serialize(), &mut rng)
+        .unwrap();
+
+    let bundle = PreKeyBundle::new(
+        0x1234,
+        recipient.device_id(),
+        Some((PreKeyId::from(31337u32), pre_key_pair.public_key)),
+        SignedPreKeyId::from(22u32),
+        signed_pre_key_pair.public_key,
+        signed_sig.to_vec(),
+        8_675_309u32.into(),
+        kyber_pre_key_pair.public_key.clone(),
+        kyber_sig.to_vec(),
+        *rcpt_identity.identity_key(),
+    )
+    .unwrap();
+
+    let mut sender_store = InMemSignalProtocolStore::new(sender_identity, 0xAAAA).unwrap();
+    process_prekey_bundle(
+        &recipient,
+        &mut sender_store.session_store,
+        &mut sender_store.identity_store,
+        &bundle,
+        SystemTime::now(),
+        &mut rng,
+    )
+    .await
+    .unwrap();
+
+    let msg = libsignal_protocol::message_encrypt(
+        b"hello from the other side",
+        &recipient,
+        &mut sender_store.session_store,
+        &mut sender_store.identity_store,
+        SystemTime::now(),
+        &mut rng,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        msg.message_type(),
+        libsignal_protocol::CiphertextMessageType::PreKey,
+        "the reinstall case is a PreKey message; the fixture is wrong otherwise"
+    );
+    msg.serialize().to_vec()
+}
+
+/// RECEIVE sibling: the Sesame convergence path must surface a changed identity
+/// key too.
+///
+/// `decrypt_identified_message` routes through convergence whenever the peer has
+/// any sesame session, and that loop used to swallow every per-attempt
+/// `SignalProtocolError` with `if let Ok(..)`, reporting only a generic
+/// `AllFailed`. So on the single most common route for a peer reinstall the
+/// wedge was invisible: no candidate session can ever fix a changed identity
+/// key — every one of them fails the same trust check — yet the caller was told
+/// "session convergence failed" and offered a session-level remedy that cannot
+/// converge.
+#[tokio::test]
+async fn convergence_surfaces_a_changed_identity_instead_of_a_generic_failure() {
+    use chatter_core::error::{CryptoError, ServiceError};
+    use libsignal_protocol::SessionRecord;
+
+    let (service, key_store, _settings, _db_file) = setup_test_service().await;
+
+    let mut rng = StdRng::seed_from_u64(0xA11CE_0117);
+    let old = *IdentityKeyPair::generate(&mut rng).identity_key();
+    let reinstalled_pair = IdentityKeyPair::generate(&mut rng);
+
+    // Bob pinned Alice's OLD key; Alice reinstalled and sends under a new one.
+    key_store.save_identity("alice_uuid", &old.serialize()).unwrap();
+    let envelope = prekey_message_from(reinstalled_pair, 0xBEEF).await;
+
+    // Alice has sesame sessions, which is what routes this through convergence.
+    let candidates = vec![
+        (vec![1u8; 8], SessionRecord::new_fresh()),
+        (vec![2u8; 8], SessionRecord::new_fresh()),
+    ];
+
+    match service
+        .decrypt_with_convergence(&envelope, "alice_uuid", 1, candidates)
+        .await
+    {
+        Err(ServiceError::Crypto(CryptoError::UntrustedIdentity {
+            peer_id,
+            new_identity_key,
+            attribution,
+            ..
+        })) => {
+            assert_eq!(peer_id, "alice_uuid");
+            assert_eq!(
+                new_identity_key.as_deref(),
+                Some(reinstalled_pair.identity_key().serialize().as_ref()),
+                "the key the user is asked to accept must be the one on the wire"
+            );
+            assert!(
+                !attribution.is_authenticated(),
+                "an identified-sender peer id is server-claimed and must never read as proven"
+            );
+        }
+        Ok(other) => panic!(
+            "convergence reported {other:?} instead of the identity change — the user is \
+             offered a session-level remedy that can never converge"
+        ),
+        Err(e) => panic!("expected UntrustedIdentity, got {e:?}"),
+    }
+}
