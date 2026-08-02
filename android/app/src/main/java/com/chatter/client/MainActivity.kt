@@ -71,6 +71,21 @@ class MainActivity : GameActivity() {
     /** Implemented in Rust. Runs the in-app accept flow for an incoming call. */
     private external fun nativeAcceptIncomingCall(callId: String)
 
+    // --- Back key --------------------------------------------------------------
+    /**
+     * Called from Rust (JNI) when Back is pressed with nothing left to pop.
+     *
+     * `moveTaskToBack`, not `finish()`: the user is leaving the app, not ending
+     * their session. Finishing would tear down the Activity and the native
+     * process state behind it (open streams, decrypted session), so returning
+     * would be a cold start. Must run on the UI thread — the Back press arrives
+     * on Rust's native android_main thread.
+     */
+    @Suppress("unused")
+    fun moveAppToBack() {
+        runOnUiThread { moveTaskToBack(true) }
+    }
+
     // --- File picker (Storage Access Framework) --------------------------------
     // Registered at construction (before onStart), per the ComponentActivity
     // contract that GameActivity inherits through AppCompatActivity.

@@ -56,6 +56,8 @@ pub fn build_own_message_item(
     use slint::{ModelRc, VecModel};
 
     crate::MessageItemData {
+        // See converters::message — selection marking is applied afterwards.
+        selected: false,
         message_id: message_id.into(),
         sender_id: sender_id.into(),
         sender_name: sender_name.into(),

@@ -1640,3 +1640,183 @@ fn connection_banner_is_dismissible_without_hiding_the_outage() {
         "both the expanded and collapsed sidebar footers must carry the dot"
     );
 }
+
+// ============================================================================
+// ANDROID BACK KEY — the press must reach Rust, and must pop in-app layers
+// before it is ever allowed to leave the app.
+//
+// The shipped defect: Back was a no-op. Nothing at the UI layer consumed it, so
+// an open modal could not be closed with it, and (worse) a user in Settings —
+// whose only other exit renders as a tofu box — was stranded.
+// ============================================================================
+
+/// LAYER 1: the decision itself. Back with a modal up closes the modal.
+#[test]
+fn back_press_closes_the_open_modal() {
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+
+    w.set_active_modal("settings".into());
+    assert!(
+        chatter_ui::bin_ui::features::back::handle_back(&w),
+        "back with a modal open must report the press as consumed in-app"
+    );
+    assert_eq!(
+        w.get_active_modal().as_str(),
+        "none",
+        "back did NOT close the open modal — the Settings trap is still live"
+    );
+
+    // Through the Slint callback too (that is what the FocusScope invokes).
+    w.set_active_modal("create-channel".into());
+    w.invoke_back_pressed();
+    assert_eq!(
+        w.get_active_modal().as_str(),
+        "none",
+        "the back-pressed callback is not wired to the modal-closing handler"
+    );
+
+    // With nothing open the press falls through to backgrounding the task
+    // (a no-op off Android) and must not disturb modal state.
+    assert!(
+        !chatter_ui::bin_ui::features::back::handle_back(&w),
+        "back with no modal open must fall through to backgrounding"
+    );
+    assert_eq!(w.get_active_modal().as_str(), "none");
+}
+
+/// LAYER 2: the KEY EVENT actually reaches that decision.
+///
+/// This is the half the bug report was about — the backend already maps
+/// `Keycode::Back` to `Key::Back` (vendor/i-slint-backend-android-activity/
+/// androidwindowadapter.rs), but `WindowInner::process_key_input` only delivers
+/// a key to the focus item and its ANCESTORS. With no focus item and no
+/// top-level FocusScope, Back went nowhere. Dispatching the real event proves
+/// `forward-focus: back-scope` + the wrapping FocusScope closed that gap.
+#[test]
+fn back_key_event_reaches_the_handler() {
+    use slint::ComponentHandle;
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+    w.set_active_modal("settings".into());
+
+    // Give the window a real geometry first. `process_key_input` drops the
+    // focus item when `ItemRc::is_visible()` is false, and an unshown headless
+    // window has a zero-size root — the key would be discarded before it ever
+    // reached back-scope, for a reason that has nothing to do with the wire.
+    let scale = w.window().scale_factor();
+    w.window().dispatch_event(slint::platform::WindowEvent::Resized {
+        size: slint::LogicalSize::new(1000.0, 800.0).to_physical(scale).to_logical(scale),
+    });
+
+    w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
+        text: slint::platform::Key::Back.into(),
+    });
+
+    assert_eq!(
+        w.get_active_modal().as_str(),
+        "none",
+        "a real Key::Back window event never reached back-pressed — the top-level \
+         FocusScope is not receiving key events (check `forward-focus: back-scope`)"
+    );
+}
+
+/// The Back scope must not become a focus thief. It is an ancestor of the whole
+/// app including the message composer, so if it grabbed focus on click or on Tab
+/// the composer would lose the caret mid-typing. Both are switched off, and Back
+/// still works because unhandled keys bubble UP the focus chain rather than
+/// requiring the scope to hold focus itself.
+#[test]
+fn back_scope_does_not_steal_focus_from_text_input() {
+    let main = include_str!("../../../ui/main.slint");
+    assert!(
+        main.contains("back-scope := FocusScope"),
+        "the top-level back FocusScope is gone; Back cannot be observed"
+    );
+    assert!(
+        main.contains("forward-focus: back-scope;"),
+        "without forward-focus nothing holds focus at startup and Back is dropped"
+    );
+    assert!(
+        main.contains("focus-on-click: false;"),
+        "back-scope would steal focus from the composer on every stray tap"
+    );
+    assert!(
+        main.contains("focus-on-tab-navigation: false;"),
+        "back-scope would swallow a Tab stop over the whole window"
+    );
+    // Only Back is consumed; every other key is rejected so it keeps bubbling.
+    assert!(
+        main.contains("if (event.text == Key.Back) {") && main.contains("return reject;"),
+        "back-scope must consume ONLY Key.Back and reject everything else, or it \
+         would eat text input"
+    );
+    // The key-UP must be swallowed too. Android's default Back fires off
+    // ACTION_UP, so consuming only the press would let one physical press both
+    // close a modal AND finish the Activity.
+    assert!(
+        main.contains("key-released(event) => {")
+            && main.contains("event.text == Key.Back ? accept : reject"),
+        "back-scope does not consume the Back key-up; Android's default Back \
+         handler can still fire behind us"
+    );
+}
+
+/// Typing is unaffected: a plain character dispatched at the window is not
+/// consumed by back-scope and does not fire the back handler.
+#[test]
+fn back_scope_ignores_ordinary_typing() {
+    use slint::ComponentHandle;
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+    w.set_active_modal("settings".into());
+
+    let scale = w.window().scale_factor();
+    w.window().dispatch_event(slint::platform::WindowEvent::Resized {
+        size: slint::LogicalSize::new(1000.0, 800.0).to_physical(scale).to_logical(scale),
+    });
+
+    for text in ["a", "Z", " "] {
+        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: text.into(),
+        });
+    }
+
+    assert_eq!(
+        w.get_active_modal().as_str(),
+        "settings",
+        "an ordinary key press was treated as Back — back-scope is over-matching"
+    );
+}
+
+/// ORDERING: selection mode is the innermost layer and must pop FIRST.
+///
+/// The regression this guards: one Back press while multi-selecting inside an
+/// open modal jumping straight past the selection to close the modal (or worse,
+/// to background the app), losing the user's selection AND their place.
+#[test]
+fn back_pops_selection_mode_before_the_modal() {
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+
+    w.set_selection_mode(true);
+    w.set_active_modal("settings".into());
+
+    w.invoke_back_pressed();
+
+    assert!(
+        !w.get_selection_mode(),
+        "back did not exit message multi-select — it is the innermost layer and \
+         must pop first"
+    );
+    assert_eq!(
+        w.get_active_modal().as_str(),
+        "settings",
+        "back popped TWO layers at once: selection mode AND the modal. One press, \
+         one layer"
+    );
+
+    // Second press now takes the modal.
+    w.invoke_back_pressed();
+    assert_eq!(w.get_active_modal().as_str(), "none", "the second back press did not close the modal");
+}

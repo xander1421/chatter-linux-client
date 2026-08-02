@@ -12,6 +12,8 @@
 //! Services encapsulate all repository access - UI code never touches repos directly.
 
 pub mod auth;
+/// Android hardware/gesture Back. Compiled everywhere; inert on desktop.
+pub mod back;
 #[cfg(feature = "call-ui")]
 pub mod calls;
 pub mod chat;
@@ -43,6 +45,7 @@ use crate::MainWindow;
 /// Wire all UI callbacks to their handlers.
 pub fn wire_all(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     auth::wire(window, ui_ctx);
+    back::wire(window);
     navigation::wire(window, ui_ctx);
     chat::wire(window, ui_ctx);
     sidebar::wire(window, ui_ctx);
