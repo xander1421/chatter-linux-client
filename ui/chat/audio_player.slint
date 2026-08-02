@@ -7,6 +7,7 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+import { HoldArea } from "../components/hold_area.slint";
 
 export component AudioPlayer inherits HorizontalLayout {
     // Audio identity / metadata
@@ -23,6 +24,11 @@ export component AudioPlayer inherits HorizontalLayout {
 
     // Slightly smaller variant for the reply/quote bubble
     in property <bool> compact: false;
+
+    // Touch input. Press-and-hold is the touch route to the context menu;
+    // on a pointer device right-click already is, and arming the timer there
+    // would fire the menu on every slow click.
+    in property <bool> mobile: false;
 
     callback play-clicked(string);          // toggle playback for attachment-id
     callback audio-seek(string, float);     // attachment-id, 0..1 seek position
@@ -51,15 +57,17 @@ export component AudioPlayer inherits HorizontalLayout {
             y: (parent.height - self.height) / 2;
         }
 
-        play-touch := TouchArea {
+        play-touch := HoldArea {
             mouse-cursor: pointer;
-            clicked => { root.play-clicked(root.attachment-id); }
-            pointer-event(event) => {
-                if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
-                    root.more-clicked(self.absolute-position.x + self.mouse-x,
-                        self.absolute-position.y + self.mouse-y);
-                }
+            enabled-for-touch: root.mobile;
+            // `hold-fired` guard: the release that ends a hold also raises
+            // `clicked`, and a hold that both opens the menu and starts
+            // playback is worse than no menu at all.
+            clicked => {
+                if (self.hold-fired) { return; }
+                root.play-clicked(root.attachment-id);
             }
+            held => { root.more-clicked(self.anchor-x, self.anchor-y); }
         }
     }
 
@@ -92,16 +100,15 @@ export component AudioPlayer inherits HorizontalLayout {
                 }
             }
 
-            waveform-touch := TouchArea {
+            waveform-touch := HoldArea {
                 property <float> seek-pos: clamp(self.mouse-x / parent.width, 0.0, 1.0);
                 mouse-cursor: pointer;
-                clicked => { root.audio-seek(root.attachment-id, self.seek-pos); }
-                pointer-event(event) => {
-                    if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
-                        root.more-clicked(self.absolute-position.x + self.mouse-x,
-                            self.absolute-position.y + self.mouse-y);
-                    }
+                enabled-for-touch: root.mobile;
+                clicked => {
+                    if (self.hold-fired) { return; }
+                    root.audio-seek(root.attachment-id, self.seek-pos);
                 }
+                held => { root.more-clicked(self.anchor-x, self.anchor-y); }
             }
         }
 

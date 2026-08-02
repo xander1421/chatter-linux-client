@@ -13,6 +13,7 @@ import { Haptics } from "../components/haptics.slint";
 import { MessageAttachmentData, ReactionEntry, LinkPreviewData, RichTextSpan } from "types.slint";
 import { Icons } from "../theme/icons.slint";
 import { AudioPlayer } from "audio_player.slint";
+import { HoldArea } from "../components/hold_area.slint";
 
 export component MessageItem inherits Rectangle {
     // Message identity
@@ -642,6 +643,7 @@ export component MessageItem inherits Rectangle {
                                     // quote-touch so they consume their clicks; the rest
                                     // of the quote still falls through to jump.
                                     if root.reply-to-category == "audio": AudioPlayer {
+                                        mobile: root.mobile;
                                         compact: true;
                                         attachment-id: root.reply-to-attachment-id;
                                         filename: root.reply-to-filename;
@@ -839,17 +841,16 @@ export component MessageItem inherits Rectangle {
                                 }
                             }
 
-                            link-touch := TouchArea {
+                            link-touch := HoldArea {
+                                enabled-for-touch: root.mobile;
                                 mouse-cursor: pointer;
                                 clicked => {
+                                    if (self.hold-fired) { return; }
                                     root.link-preview-clicked(root.link-preview.url);
                                 }
-                                pointer-event(event) => {
-                                    if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
-                                        root.more-clicked(root.sender-id, root.timestamp-ns,
-                                            self.absolute-position.x + self.mouse-x,
-                                            self.absolute-position.y + self.mouse-y);
-                                    }
+                                held => {
+                                    root.more-clicked(root.sender-id, root.timestamp-ns,
+                                        self.anchor-x, self.anchor-y);
                                 }
                             }
                         }
@@ -944,21 +945,23 @@ export component MessageItem inherits Rectangle {
                                         }
                                     }
 
-                                    img-touch := TouchArea {
+                                    img-touch := HoldArea {
+                                        enabled-for-touch: root.mobile;
                                         mouse-cursor: pointer;
-                                        clicked => { root.attachment-clicked(attachment.id); }
-                                        pointer-event(event) => {
-                                            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
-                                                root.more-clicked(root.sender-id, root.timestamp-ns,
-                                                    self.absolute-position.x + self.mouse-x,
-                                                    self.absolute-position.y + self.mouse-y);
-                                            }
+                                        clicked => {
+                                            if (self.hold-fired) { return; }
+                                            root.attachment-clicked(attachment.id);
+                                        }
+                                        held => {
+                                            root.more-clicked(root.sender-id, root.timestamp-ns,
+                                                self.anchor-x, self.anchor-y);
                                         }
                                     }
                                 }
 
                                 // Audio attachments — shared inline player
                                 if attachment.category == "audio": AudioPlayer {
+                                    mobile: root.mobile;
                                     attachment-id: attachment.id;
                                     filename: attachment.filename;
                                     waveform: attachment.waveform;
@@ -1064,15 +1067,16 @@ export component MessageItem inherits Rectangle {
                                         }
                                     }
 
-                                    video-touch := TouchArea {
+                                    video-touch := HoldArea {
+                                        enabled-for-touch: root.mobile;
                                         mouse-cursor: pointer;
-                                        clicked => { root.attachment-clicked(attachment.id); }
-                                        pointer-event(event) => {
-                                            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
-                                                root.more-clicked(root.sender-id, root.timestamp-ns,
-                                                    self.absolute-position.x + self.mouse-x,
-                                                    self.absolute-position.y + self.mouse-y);
-                                            }
+                                        clicked => {
+                                            if (self.hold-fired) { return; }
+                                            root.attachment-clicked(attachment.id);
+                                        }
+                                        held => {
+                                            root.more-clicked(root.sender-id, root.timestamp-ns,
+                                                self.anchor-x, self.anchor-y);
                                         }
                                     }
                                 }
@@ -1164,15 +1168,16 @@ export component MessageItem inherits Rectangle {
                                         }
                                     }
 
-                                    file-touch := TouchArea {
+                                    file-touch := HoldArea {
+                                        enabled-for-touch: root.mobile;
                                         mouse-cursor: pointer;
-                                        clicked => { root.attachment-clicked(attachment.id); }
-                                        pointer-event(event) => {
-                                            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
-                                                root.more-clicked(root.sender-id, root.timestamp-ns,
-                                                    self.absolute-position.x + self.mouse-x,
-                                                    self.absolute-position.y + self.mouse-y);
-                                            }
+                                        clicked => {
+                                            if (self.hold-fired) { return; }
+                                            root.attachment-clicked(attachment.id);
+                                        }
+                                        held => {
+                                            root.more-clicked(root.sender-id, root.timestamp-ns,
+                                                self.anchor-x, self.anchor-y);
                                         }
                                     }
                                 }

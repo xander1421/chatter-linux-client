@@ -2,7 +2,14 @@
 """
 VALIDATED-UI static wiring lint (LAYER 2 — WIRING-STATIC backstop).
 
-Two falsifiable checks over the chatter-ui UI layer:
+Five falsifiable checks over the chatter-ui UI layer.
+
+Checks A/B ask "is this handler connected to anything". C/D/E ask the question
+that let the worst regressions through: **can a user reach it at all.** A wire
+can be perfectly CORE-WIRED and still be unreachable because the component is
+never rendered (C), nothing invokes the callback (D), or the only affordance is
+a mouse button the device does not have (E). Every one of those shipped here.
+
 
   A) DANGLING MainWindow callback surface.
      Every `callback NAME` declared on the exported `MainWindow` (ui/main.slint)
@@ -24,9 +31,31 @@ Two falsifiable checks over the chatter-ui UI layer:
                      some are legitimately UI-only (open a modal, toggle a
                      panel), so it's a WARN the ledger must eyeball, not a fail.
        - CORE-WIRED: references a core context ident (reaches chatter-core).
+       - FN-REF    : registered by function reference, not a closure
+                     (`.on_x(platform::android::haptics::long_press)`). The
+                     body is resolved and classified where it is DEFINED.
+                     Before this existed the classifier saw "no closure block"
+                     and reported STUB, which is why the gate was red on master
+                     for two correct Android JNI bindings.
 
-Exit non-zero if any STUB is found (regression gate). LOCAL-ONLY is reported
-but does not fail the build.
+  C) SLINT IMPORT THAT NEVER RENDERS.
+     `import { X } ...` with no `X` anywhere else in that file. Slint does not
+     warn — an unused import is legal — so a whole component can exist,
+     compile, and never appear. (HARD FAIL, allowlist with a written reason.)
+
+  D) CALLBACK DECLARED AND NEVER INVOKED.
+     A `callback foo()` that no Slint expression calls and no Rust
+     `invoke_foo(` fires. Binding a handler is NOT invoking it: such a wire
+     passes A and B while the user has no way to trigger it.
+     (HARD FAIL, allowlist with a written reason.)
+
+  E) RIGHT-CLICK-ONLY CONTEXT MENU.
+     A TouchArea whose menu opens only on `PointerEventButton.right`, with no
+     hold path. Android has no secondary button and no hover, so the action is
+     unreachable there — this is how mobile lost its folder menus. (HARD FAIL.)
+
+Exit non-zero if any of B-STUB / C / D / E finds something outside its
+allowlist. LOCAL-ONLY and [A] are reported but do not fail the build.
 
 Usage:  python3 scripts/ui-wiring-lint.py [--json]
 Run from the linux-client submodule root (or anywhere; paths are resolved
@@ -96,8 +125,14 @@ ON_RE = re.compile(r"\.on_([a-z0-9_]+)\s*\(")
 
 
 def extract_handlers(rust_text: str):
-    """Yield (name, body) for each `.on_NAME(` by brace-balancing to the close
-    of the closure/call. Heuristic but robust enough for classification."""
+    """Yield (name, body, reg_expr) for each `.on_NAME(` by brace-balancing to
+    the close of the closure/call. Heuristic but robust enough for
+    classification.
+
+    `body` is the closure body, or **None** when the registration passes a
+    function *reference* instead of a closure (`.on_x(some::path::fn)`). None
+    and "" are deliberately different: an empty closure is a dead wire, a
+    function reference is a live one whose body lives elsewhere."""
     for m in ON_RE.finditer(rust_text):
         name = m.group(1)
         i = m.end()  # just after '('
@@ -128,7 +163,7 @@ def extract_handlers(rust_text: str):
         reg_expr = rust_text[i:j]  # inside the on_X( ... )
         # Isolate the closure body: first '{' to its matching '}'.
         b0 = reg_expr.find("{")
-        body = ""
+        body = None
         if b0 != -1:
             d = 1
             k = b0 + 1
@@ -150,7 +185,7 @@ def extract_handlers(rust_text: str):
                         d -= 1
                 k += 1
             body = reg_expr[b0 + 1:k - 1]
-        yield name, body
+        yield name, body, reg_expr.strip()
 
 
 def strip_comments(body: str) -> str:
@@ -166,8 +201,68 @@ def strip_comments(body: str) -> str:
 # mention with no call does not count.
 CORE_CALL_RE = re.compile(r"\b(?:ui_ctx|ctx|client|core|svc|service)\w*\s*\.")
 
+# `fn NAME(` / `pub fn NAME(` — used to resolve function-REFERENCE registrations
+# (`.on_x(platform::android::haptics::long_press)`) to the body that actually
+# runs. Without this the classifier saw "no closure block" and reported STUB,
+# which is how the gate went red on two correct `#[cfg(target_os = "android")]`
+# JNI bindings: the wire is live, the body just is not inline.
+FN_DEF_RE = re.compile(r"\bfn\s+([a-z0-9_]+)\s*(?:<[^>]*>)?\s*\(")
+# A registration argument that is a bare path — `a::b::c` or `foo` — and nothing
+# else. Anything with a `{`, `|` or `(` in it is a closure or a call, not a ref.
+FN_REF_RE = re.compile(r"^(?:[A-Za-z_]\w*::)*([a-z0-9_]+)$")
 
-def classify(body: str) -> str:
+
+def balanced_block(text: str, open_idx: int) -> str:
+    """Return the contents of the `{...}` block whose `{` is at `open_idx`."""
+    d = 1
+    k = open_idx + 1
+    s = None
+    while k < len(text) and d > 0:
+        c = text[k]
+        if s:
+            if c == "\\":
+                k += 2
+                continue
+            if c == s:
+                s = None
+        else:
+            if c in ("\"", "'"):
+                s = c
+            elif c == "{":
+                d += 1
+            elif c == "}":
+                d -= 1
+        k += 1
+    return text[open_idx + 1:k - 1]
+
+
+def index_fn_bodies(rust_texts):
+    """name -> body, for every `fn name(...) { ... }` in the crate."""
+    out = {}
+    for txt in rust_texts:
+        for m in FN_DEF_RE.finditer(txt):
+            b0 = txt.find("{", m.end())
+            if b0 == -1:
+                continue
+            # Reject a match whose `{` is past the next `fn` (trait decl, etc).
+            out.setdefault(m.group(1), balanced_block(txt, b0))
+    return out
+
+
+def classify(body, reg_expr: str = "", fn_bodies=None) -> str:
+    if body is None:
+        # No closure block: this is `.on_x(EXPR)`. A bare path is a function
+        # reference — a LIVE wire whose body is defined elsewhere. Resolve it
+        # and classify what actually runs; if it cannot be resolved, say so
+        # rather than calling a real binding dead.
+        ref = FN_REF_RE.match(strip_comments(reg_expr).strip())
+        if ref and fn_bodies is not None and ref.group(1) in fn_bodies:
+            return classify(fn_bodies[ref.group(1)], "", fn_bodies)
+        if ref:
+            return "FN-REF"
+        # Not a path and not a closure (a builder chain, a macro): unclassifiable
+        # but definitely not empty.
+        return "FN-REF" if strip_comments(reg_expr).strip() else "STUB"
     code = strip_comments(body).strip()
     if code == "":
         return "STUB"
@@ -179,18 +274,214 @@ def classify(body: str) -> str:
     return "LOCAL-ONLY"
 
 
+# =============================================================================
+# C) SLINT IMPORT NEVER REFERENCED
+#
+# `import { MobileBottomNav } from "components/mobile_bottom_nav.slint";` in
+# app.slint with no `MobileBottomNav { ... }` anywhere in that file is a whole
+# component that exists, compiles, and never renders. Slint does not warn: an
+# unused import is legal. This is the cheapest possible detector for the
+# "declared but never instantiated" class, and it is exact — no heuristics.
+# =============================================================================
+
+SLINT_IMPORT_RE = re.compile(
+    r"^\s*import\s*\{([^}]*)\}\s*from\s*\"([^\"]+)\"\s*;", re.M)
+
+# Imports that are dead ON PURPOSE, each with the reason. An entry here is a
+# claim someone has to defend; it is not a way to make the gate quiet.
+KNOWN_DEAD_IMPORTS = {
+    # A whole mobile navigation bar (ui/components/mobile_bottom_nav.slint,
+    # 5 tabs + 4 callbacks) that app.slint imports and never instantiates.
+    # Left in place deliberately: deleting the import would delete the only
+    # evidence, and instantiating it is a product decision, not a lint fix.
+    # Its `calls-tab-clicked` callback shows up dead in check [D] for the same
+    # reason. Owner call: render it or delete the component.
+    ("ui/app.slint", "MobileBottomNav"),
+}
+
+
+def all_slint_files():
+    for dp, _dn, fn in os.walk(UI_DIR):
+        for f in sorted(fn):
+            if f.endswith(".slint"):
+                yield os.path.join(dp, f)
+
+
+def unused_slint_imports(slint_texts):
+    out = []
+    for path, text in slint_texts.items():
+        rel = os.path.relpath(path, ROOT)
+        for m in SLINT_IMPORT_RE.finditer(text):
+            rest = text[:m.start()] + text[m.end():]
+            for raw in m.group(1).split(","):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                name = raw.split()[-1]  # handles `X as Y`
+                if not re.search(r"\b" + re.escape(name) + r"\b", rest):
+                    out.append((rel, name, text[:m.start()].count("\n") + 1))
+    return out
+
+
+# =============================================================================
+# D) CALLBACK DECLARED AND NEVER INVOKED
+#
+# A `callback foo()` that nothing ever CALLS is a wire with no trigger. The
+# Rust side can register `.on_foo` and pass every check in [A]/[B] while the
+# user has no way to reach it — `friends.search-loading` and
+# `create-section-loading` were found exactly this way, by hand, after shipping.
+# Binding a handler (`foo => {...}`) is NOT an invocation; only `foo(...)` in
+# Slint or `invoke_foo(` in Rust is.
+# =============================================================================
+
+CB_DECL_RE = re.compile(
+    r"^[ \t]*(?:pure\s+)?callback\s+([A-Za-z0-9_\-]+)\s*(?:\(|;|<=>|->)", re.M)
+
+# Dead callbacks that are KNOWN and triaged. Each line is a finding, not an
+# exemption — the gate stays green so a NEW dead callback stands out.
+KNOWN_DEAD_CALLBACKS = {
+    # MobileBottomNav's "Calls" tab. Dead because the nav bar itself is never
+    # instantiated — see KNOWN_DEAD_IMPORTS.
+    "calls-tab-clicked",
+    # Declared on MainWindow and handled in Rust
+    # (features/calls/device_picker.rs) but no Slint element calls it: the
+    # audio OUTPUT picker has no affordance. The INPUT picker
+    # (`show-audio-device-picker`) does. Half a feature.
+    "show-audio-output-picker",
+    # `pure callback get-user-status() -> string` with a Rust handler
+    # (features/status.rs) that nothing queries.
+    "get-user-status",
+    # UnifiedSearch raises nothing when it opens, so `on_unified_search_opened`
+    # never runs and the palette cannot prefetch.
+    "opened",
+    # ThreadPanel declares `load-more-replies` and app.slint binds it to
+    # `load-more-thread-replies`, but the panel has no "load more" affordance —
+    # paging is unreachable past the first page.
+    "load-more-replies",
+    # AttachmentTray (ui/components/attachment_tray.slint) is exported from
+    # components/mod.slint and instantiated nowhere, so both of its callbacks
+    # are dead by containment.
+    "item-clicked",
+    "remove-clicked",
+}
+
+
+def dead_callbacks(slint_texts, rust_text):
+    """Callbacks declared somewhere in ui/** that nothing ever invokes."""
+    decls = {}
+    for path, text in slint_texts.items():
+        for m in CB_DECL_RE.finditer(text):
+            decls.setdefault(m.group(1), (os.path.relpath(path, ROOT),
+                                          text[:m.start()].count("\n") + 1))
+    dead = []
+    for name, site in sorted(decls.items()):
+        pat = re.compile(r"(?<![\w\-])" + re.escape(name) + r"\s*\(")
+        invoked = False
+        for text in slint_texts.values():
+            for m in pat.finditer(text):
+                head = text[text.rfind("\n", 0, m.start()) + 1:m.start()]
+                if re.search(r"\bcallback\s+$", head):
+                    continue  # the declaration itself
+                invoked = True
+                break
+            if invoked:
+                break
+        if not invoked and re.search(
+                r"\binvoke_" + re.escape(snake(name)) + r"\s*\(", rust_text):
+            invoked = True
+        if not invoked:
+            dead.append((name, site))
+    return dead
+
+
+# =============================================================================
+# E) RIGHT-CLICK-ONLY CONTEXT MENU  (touch-unreachable action)
+#
+# Android has no secondary mouse button and no hover. A `pointer-event` that
+# only opens its menu on `PointerEventButton.right` is invisible on a phone —
+# this is how the sidebar folder menus became read-only on mobile.
+# `ui/components/hold_area.slint` is the fix: it raises ONE `held()` callback
+# from either a 500ms hold or a right-click.
+#
+# The rule: any TouchArea that tests `PointerEventButton.right` must ALSO have a
+# touch path — it is a `HoldArea`, or it arms a hold timer (`... .running =
+# true`) on pointer-down. A new row component that copies only the right-click
+# branch fails here.
+# =============================================================================
+
+RIGHT_BTN = "PointerEventButton.right"
+# `foo := TouchArea {`, `TouchArea {`, `component X inherits TouchArea {`, and
+# the HoldArea forms of each.
+TOUCH_HEADER_RE = re.compile(r"(?:inherits\s+|:=\s*|^\s*)(TouchArea|HoldArea)\s*\{\s*$")
+
+
+def enclosing_touch_block(text: str, idx: int):
+    """Walk out from `idx` to the nearest enclosing TouchArea/HoldArea block.
+    Returns (kind, header_line_no, body) or None."""
+    depth = 0
+    i = idx
+    while i > 0:
+        i -= 1
+        c = text[i]
+        if c == "}":
+            depth += 1
+        elif c == "{":
+            if depth == 0:
+                head = text[text.rfind("\n", 0, i) + 1:i + 1]
+                m = TOUCH_HEADER_RE.search(head.rstrip() + "\n")
+                if m:
+                    return (m.group(1), text[:i].count("\n") + 1,
+                            balanced_block(text, i))
+                depth = 0  # keep climbing: a plain Rectangle/layout in between
+            else:
+                depth -= 1
+    return None
+
+
+# Arming a Timer is the shape every hold path in this tree uses.
+TIMER_ARM_RE = re.compile(r"\.running\s*=\s*true|running\s*:\s*true")
+
+
+def right_click_only_areas(slint_texts):
+    out = []
+    for path, text in slint_texts.items():
+        rel = os.path.relpath(path, ROOT)
+        seen = set()
+        for m in re.finditer(re.escape(RIGHT_BTN), text):
+            blk = enclosing_touch_block(text, m.start())
+            if blk is None:
+                out.append((rel, m.start() and text[:m.start()].count("\n") + 1,
+                            "no enclosing TouchArea"))
+                continue
+            kind, line, body = blk
+            if line in seen:
+                continue
+            seen.add(line)
+            if kind == "HoldArea":
+                continue                      # HoldArea IS the touch path
+            if TIMER_ARM_RE.search(body):
+                continue                      # rolls its own hold timer
+            out.append((rel, line, "TouchArea with right-click and no hold path"))
+    return out
+
+
 def main():
     as_json = "--json" in sys.argv
 
+    rust_texts = [read(p) for p in all_rust_files()]
+    slint_texts = {p: read(p) for p in all_slint_files()}
+    all_rust = "\n".join(rust_texts)
+    fn_bodies = index_fn_bodies(rust_texts)
+
     # Collect all Rust handlers across the tree, keep the "richest" classification
     # per name (a name may be registered once; if multiple, prefer CORE-WIRED).
-    rank = {"STUB": 0, "LOCAL-ONLY": 1, "CORE-WIRED": 2}
+    rank = {"STUB": 0, "LOCAL-ONLY": 1, "FN-REF": 2, "CORE-WIRED": 3}
     handler_class = {}
     handler_file = {}
     for path in all_rust_files():
         txt = read(path)
-        for name, body in extract_handlers(txt):
-            cls = classify(body)
+        for name, body, reg in extract_handlers(txt):
+            cls = classify(body, reg, fn_bodies)
             if name not in handler_class or rank[cls] > rank[handler_class[name]]:
                 handler_class[name] = cls
                 handler_file[name] = os.path.relpath(path, ROOT)
@@ -207,6 +498,22 @@ def main():
     known_stubs = [n for n in all_stubs if n in KNOWN_INTENTIONAL_STUBS]
     local_only = sorted([n for n, c in handler_class.items() if c == "LOCAL-ONLY"])
     core_wired = sorted([n for n, c in handler_class.items() if c == "CORE-WIRED"])
+    fn_refs = sorted([n for n, c in handler_class.items() if c == "FN-REF"])
+
+    # C) imports that render nothing
+    all_imports = unused_slint_imports(slint_texts)
+    dead_imports = [(f, n, l) for f, n, l in all_imports
+                    if (f, n) not in KNOWN_DEAD_IMPORTS]
+    known_imports = [(f, n, l) for f, n, l in all_imports
+                     if (f, n) in KNOWN_DEAD_IMPORTS]
+
+    # D) callbacks nothing invokes
+    all_dead_cb = dead_callbacks(slint_texts, all_rust)
+    dead_cb = [(n, s) for n, s in all_dead_cb if n not in KNOWN_DEAD_CALLBACKS]
+    known_cb = [(n, s) for n, s in all_dead_cb if n in KNOWN_DEAD_CALLBACKS]
+
+    # E) menus a finger cannot open
+    touch_gaps = right_click_only_areas(slint_texts)
 
     if as_json:
         print(json.dumps({
@@ -215,7 +522,11 @@ def main():
             "mainwindow_no_rust_handler": [n for n, _ in no_handler],
             "stub_handlers": stubs,
             "local_only_handlers": local_only,
+            "fn_ref_handlers": fn_refs,
             "core_wired_count": len(core_wired),
+            "unused_slint_imports": dead_imports,
+            "dead_callbacks": [n for n, _ in dead_cb],
+            "right_click_only_touchareas": touch_gaps,
         }, indent=2))
     else:
         print("=" * 70)
@@ -242,9 +553,33 @@ def main():
         print(f"[B] NEW STUB handlers (HARD FAIL): {len(stubs)}")
         for n in stubs:
             print(f"      - {n}  ({handler_file[n]})")
+        print()
+        print(f"[C] Slint imports never referenced — component never renders")
+        print(f"    known/triaged (allow): {len(known_imports)}")
+        for f, n, l in known_imports:
+            print(f"      - {n}  ({f}:{l})")
+        print(f"    NEW (HARD FAIL): {len(dead_imports)}")
+        for f, n, l in dead_imports:
+            print(f"      - {n}  ({f}:{l})")
+        print()
+        print(f"[D] Callbacks declared and NEVER invoked (no trigger exists)")
+        print(f"    known/triaged (allow): {len(known_cb)}")
+        for n, (f, l) in known_cb:
+            print(f"      - {n}  ({f}:{l})")
+        print(f"    NEW (HARD FAIL): {len(dead_cb)}")
+        for n, (f, l) in dead_cb:
+            print(f"      - {n}  ({f}:{l})")
+        print()
+        print(f"[E] Right-click-only menus (unreachable on touch) (HARD FAIL): "
+              f"{len(touch_gaps)}")
+        for f, l, why in touch_gaps:
+            print(f"      - {f}:{l}  {why}")
+        if touch_gaps:
+            print("    Fix: use HoldArea (ui/components/hold_area.slint) — it")
+            print("    raises one `held()` from a hold OR a right-click.")
         print("=" * 70)
 
-    return 1 if stubs else 0
+    return 1 if (stubs or dead_imports or dead_cb or touch_gaps) else 0
 
 
 if __name__ == "__main__":
