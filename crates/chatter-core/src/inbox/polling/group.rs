@@ -25,34 +25,11 @@ use crate::storage::MessageRepository;
 /// user is looking when the gap appears. `peer_id` is `Some` only when the
 /// failure authenticated a sender before dying (an identity change or a
 /// desync); a sealed-sender envelope that failed to open names nobody.
-pub(crate) fn group_failure_decision(
-    group_id: ChannelId,
-    peer_id: Option<crate::domain::UserId>,
-    envelope_ts_ns: u64,
-    err: &crate::error::ServiceError,
-    message_repo: &Arc<MessageRepository>,
-    domain_tx: Option<&tokio::sync::broadcast::Sender<DomainEvent>>,
-) -> AckDecision {
-    ack_policy::decide_after_failure(
-        err,
-        MarkerTarget {
-            conversation_id: group_id,
-            conversation_type: ConversationType::Channel,
-            peer_id,
-            envelope_ts_ns,
-        },
-        message_repo,
-        domain_tx,
-    )
-}
-
-/// [`group_failure_decision`] with the retain budget applied.
 ///
-/// Without it a group envelope that keeps failing transiently is re-fetched and
-/// re-decrypted on every poll forever — and the group mailbox has no cursor at
-/// all, so nothing else bounds it.
+/// Bounded, because the group mailbox has no cursor at all — nothing else
+/// stops a permanently-failing envelope being re-decrypted on every poll.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn group_failure_decision_bounded(
+pub(crate) fn group_failure_decision(
     group_id: ChannelId,
     peer_id: Option<crate::domain::UserId>,
     envelope_ts_ns: u64,
@@ -241,7 +218,7 @@ async fn process_sealed_sender_group_message(
             );
             // No authenticated sender: the sealed sender envelope is what
             // failed, so the marker names the group but nobody in it.
-            return group_failure_decision_bounded(
+            return group_failure_decision(
                 group_id,
                 None,
                 envelope_ts_ns,

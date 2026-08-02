@@ -27,28 +27,11 @@ use crate::storage::{AttachmentRepository, ChannelRepository, MessageRepository,
 /// Decide what to do with a DM envelope whose decrypt failed.
 ///
 /// The single seam `poll_dm_mailboxes` calls for every failure, so the policy
-/// is one place rather than an emergent property of where the ack list is built.
+/// is one place rather than an emergent property of where the ack list is
+/// built. Bounded: without the budget a permanently-undecryptable envelope
+/// stays on the server to be re-fetched and re-decrypted on every poll for the
+/// life of the process.
 pub(crate) fn dm_failure_decision(
-    peer_id: UserId,
-    envelope_ts_ns: u64,
-    err: &crate::error::ServiceError,
-    message_repo: &Arc<MessageRepository>,
-    domain_tx: Option<&broadcast::Sender<DomainEvent>>,
-) -> AckDecision {
-    ack_policy::decide_after_failure(
-        err,
-        ack_policy::dm_target(peer_id, envelope_ts_ns),
-        message_repo,
-        domain_tx,
-    )
-}
-
-/// [`dm_failure_decision`] with the retain budget applied.
-///
-/// The unbounded version leaves a permanently-undecryptable envelope on the
-/// server to be re-fetched and re-decrypted on every poll for the life of the
-/// process; this one gives up on it eventually, with a marker.
-pub(crate) fn dm_failure_decision_bounded(
     peer_id: UserId,
     envelope_ts_ns: u64,
     err: &crate::error::ServiceError,
@@ -216,7 +199,7 @@ pub async fn poll_dm_mailboxes(
                                     error: error_str,
                                     convergence_failed,
                                 });
-                                dm_failure_decision_bounded(
+                                dm_failure_decision(
                                     peer_id,
                                     msg.server_timestamp,
                                     &e,

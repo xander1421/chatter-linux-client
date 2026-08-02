@@ -91,6 +91,8 @@ fn device_inbox_permanent_failure_is_marked_before_it_is_acked() {
         &permanent_error(),
         &repo,
         None,
+        "envelope-dev-perm",
+        &crate::inbox::ack_policy::RetryBudget::new(),
     );
 
     let found = markers(&repo, &peer.into(), ConversationType::ServerDm);
@@ -114,6 +116,8 @@ fn device_inbox_transient_failure_is_not_acked() {
         &transient_error(),
         &repo,
         None,
+        "envelope-dev-transient",
+        &crate::inbox::ack_policy::RetryBudget::new(),
     );
 
     assert_eq!(
@@ -251,7 +255,7 @@ fn an_identified_sender_message_with_no_session_yet_is_not_deleted() {
     let peer = UserId::new();
 
     assert_eq!(
-        super::device::device_failure_decision_bounded(
+        super::device::device_failure_decision(
             Some(peer),
             1_777_000_000_000_000_000,
             &transient_error(),
@@ -311,6 +315,8 @@ fn dm_permanent_failure_is_marked_before_it_is_acked() {
         &permanent_error(),
         &repo,
         None,
+        "envelope-dm-perm",
+        &crate::inbox::ack_policy::RetryBudget::new(),
     );
 
     let found = markers(&repo, &peer.into(), ConversationType::ServerDm);
@@ -334,6 +340,8 @@ fn dm_identity_change_gets_its_own_marker_not_the_delivery_issue_one() {
         &identity_change_error(),
         &repo,
         None,
+        "envelope-dm-identity",
+        &crate::inbox::ack_policy::RetryBudget::new(),
     );
 
     assert_eq!(
@@ -356,6 +364,8 @@ fn dm_transient_failure_is_not_acked() {
             &transient_error(),
             &repo,
             None,
+            "envelope-dm-transient",
+            &crate::inbox::ack_policy::RetryBudget::new(),
         ),
         AckDecision::Retain,
         "the DM loop acks the whole batch regardless of outcome, so a message \
@@ -375,6 +385,8 @@ fn dm_storage_failure_is_not_acked() {
             &storage_error(),
             &repo,
             None,
+            "envelope-dm-storage",
+            &crate::inbox::ack_policy::RetryBudget::new(),
         ),
         AckDecision::Retain,
         "a locked database is our problem, not the ciphertext's"
@@ -397,6 +409,8 @@ fn group_permanent_failure_is_marked_in_the_group_before_it_is_acked() {
         &permanent_error(),
         &repo,
         None,
+        "envelope-grp-perm",
+        &crate::inbox::ack_policy::RetryBudget::new(),
     );
 
     assert_eq!(
@@ -421,6 +435,8 @@ fn group_transient_failure_is_not_acked() {
             &transient_error(),
             &repo,
             None,
+            "envelope-grp-transient",
+            &crate::inbox::ack_policy::RetryBudget::new(),
         ),
         AckDecision::Retain,
         "a group message whose sender key has not arrived yet decrypts on a \
@@ -766,7 +782,15 @@ fn a_replayed_envelope_does_not_stack_markers() {
     let ts = 1_777_000_000_000_000_000;
 
     for _ in 0..3 {
-        super::dm::dm_failure_decision(peer, ts, &permanent_error(), &repo, None);
+        super::dm::dm_failure_decision(
+            peer,
+            ts,
+            &permanent_error(),
+            &repo,
+            None,
+            "envelope-dm-replay",
+            &crate::inbox::ack_policy::RetryBudget::new(),
+        );
     }
 
     assert_eq!(

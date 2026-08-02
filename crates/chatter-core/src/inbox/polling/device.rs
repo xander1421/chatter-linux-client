@@ -84,46 +84,14 @@ pub fn identity_changed_message(
 
 /// Decide what to do with a device-inbox envelope whose processing failed.
 ///
-/// `peer_id` is `Some` only when the failure authenticated a sender first.
-pub(crate) fn device_failure_decision(
-    peer_id: Option<UserId>,
-    envelope_ts_ns: u64,
-    err: &ServiceError,
-    message_repo: &Arc<MessageRepository>,
-    domain_tx: Option<&broadcast::Sender<DomainEvent>>,
-) -> crate::inbox::ack_policy::AckDecision {
-    use crate::inbox::ack_policy;
-    // A device-inbox failure that authenticated nobody has no conversation to
-    // land in — the envelope is what failed. Fall back to a marker in the
-    // peer's DM when we have one, and to a bare retain/ack when we do not:
-    // writing "someone sent you something unreadable" into an arbitrary
-    // conversation would be worse than the log line.
-    let Some(peer) = peer_id else {
-        return match ack_policy::classify_service(err) {
-            ack_policy::Durability::Transient => ack_policy::AckDecision::Retain,
-            // Nothing to mark, but retaining replays a dead envelope forever.
-            ack_policy::Durability::Permanent => {
-                tracing::warn!(
-                    error = %err,
-                    "[INBOX] permanent failure with no authenticated sender — draining \
-                     the envelope with no marker, because there is no conversation to \
-                     put one in"
-                );
-                ack_policy::AckDecision::Ack
-            }
-        };
-    };
-    ack_policy::decide_after_failure(
-        err,
-        ack_policy::dm_target(peer, envelope_ts_ns),
-        message_repo,
-        domain_tx,
-    )
-}
-
-/// [`device_failure_decision`] with the retain budget applied.
+/// `peer_id` is `Some` only when the failure authenticated a sender first. A
+/// device-inbox failure that authenticated nobody has no conversation to land
+/// in — the envelope is what failed. Fall back to a marker in the peer's DM
+/// when we have one, and to a bare retain/ack when we do not: writing "someone
+/// sent you something unreadable" into an arbitrary conversation would be worse
+/// than the log line.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn device_failure_decision_bounded(
+pub(crate) fn device_failure_decision(
     peer_id: Option<UserId>,
     envelope_ts_ns: u64,
     err: &ServiceError,
@@ -1211,7 +1179,7 @@ async fn process_identified_sender_message(
             // it is the only conversation this envelope can belong to, and the
             // alternative was acking a `SessionNotFound` — deleting a message
             // that would have decrypted once the session existed.
-            return device_failure_decision_bounded(
+            return device_failure_decision(
                 Some(sender_id),
                 msg.server_timestamp,
                 &e,
@@ -1813,7 +1781,7 @@ async fn process_sealed_sender_message(
                 }
                 _ => msg.source_user_id.parse::<UserId>().ok(),
             };
-            return device_failure_decision_bounded(
+            return device_failure_decision(
                 peer,
                 msg.server_timestamp,
                 &e,
