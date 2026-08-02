@@ -329,6 +329,17 @@ impl SvrBackupService {
     /// - `BackupNotFound` if no backup exists for this secret
     /// - `RateLimited` if no fetch attempts remain
     /// - `Crypto` if decryption fails (wrong PIN or corrupted backup)
+    /// Whether the account has an SVR key backup at all, independent of the PIN.
+    ///
+    /// Used to classify a failed restore: with no backup on file, "restore
+    /// failed" means there is nothing to recover and a new identity is the only
+    /// way forward; with one on file it means the PIN was wrong and minting
+    /// would destroy a live key.
+    pub async fn has_key_backup(&self) -> Result<bool, SvrBackupError> {
+        let mut client = self.grpc_pool.svr_client();
+        client.has_key_backup().await.map_err(SvrBackupError::Network)
+    }
+
     pub async fn fetch_and_restore_backup(
         &self,
         svr_secret: &[u8; 32],

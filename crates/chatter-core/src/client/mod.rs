@@ -209,6 +209,16 @@ pub enum ClientError {
     Auth(#[from] AuthError),
     #[error("validation: {0}")]
     Validation(String),
+    /// Login authenticated, but this device has no Signal identity key and one
+    /// could not be recovered.
+    ///
+    /// Deliberately an error and not a flag on a successful result: the
+    /// previous design returned `Ok` with `keys_missing = true`, every caller
+    /// ignored it, and total key loss looked exactly like a normal login. The
+    /// payload says which of "retype the PIN", "wait", or "accept a new
+    /// identity" applies — see [`KeyRecoveryNeed::user_message`].
+    #[error("{}", .0.user_message())]
+    IdentityRecoveryRequired(crate::services::key_recovery::KeyRecoveryNeed),
 }
 
 /// Result of a successful recovery code usage.

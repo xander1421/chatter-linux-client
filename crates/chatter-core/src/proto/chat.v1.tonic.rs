@@ -406,8 +406,6 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "UseRecoveryCode"));
             self.inner.unary(req, path, codec).await
         }
-        /** Regenerate recovery codes (requires authentication + password confirmation)
-*/
         pub async fn regenerate_recovery_codes(
             &mut self,
             request: impl tonic::IntoRequest<super::RegenerateRecoveryCodesRequest>,
@@ -693,6 +691,31 @@ pub mod auth_service_client {
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("chat.v1.AuthService", "UploadPreKeyBundle"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn republish_identity_key(
+            &mut self,
+            request: impl tonic::IntoRequest<super::RepublishIdentityKeyRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RepublishIdentityKeyResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.AuthService/RepublishIdentityKey",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("chat.v1.AuthService", "RepublishIdentityKey"));
             self.inner.unary(req, path, codec).await
         }
         pub async fn request_sender_certificate(
@@ -4155,6 +4178,35 @@ pub mod svr_service_client {
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("chat.v1.SvrService", "FetchBackup"));
+            self.inner.unary(req, path, codec).await
+        }
+        /** Whether this account has a key backup at all, independent of any PIN.
+ See HasKeyBackupRequest — this is what lets a client tell "wrong PIN" from
+ "nothing to recover" without guessing.
+*/
+        pub async fn has_key_backup(
+            &mut self,
+            request: impl tonic::IntoRequest<super::HasKeyBackupRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::HasKeyBackupResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.SvrService/HasKeyBackup",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("chat.v1.SvrService", "HasKeyBackup"));
             self.inner.unary(req, path, codec).await
         }
         /** Remove encrypted backup

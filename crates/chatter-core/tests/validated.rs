@@ -45,6 +45,15 @@ use chatter_core::events::DomainEvent;
 use chatter_core::state::ActiveConversation;
 
 const SERVER_URL: &str = "http://localhost:50051";
+
+/// The server under test.
+///
+/// Overridable via `CHATTER_SERVER_URL` so a proof can be run against a
+/// purpose-built server on another port without disturbing whatever is already
+/// listening on 50051.
+fn server_url() -> String {
+    std::env::var("CHATTER_SERVER_URL").unwrap_or_else(|_| SERVER_URL.to_string())
+}
 const REPO: &str = "/home/alex/Documents/chatter";
 const EVENT_TIMEOUT: Duration = Duration::from_secs(30);
 // Must clear crypto::svr::MIN_PIN_ENTROPY_BITS (30.0).
@@ -146,7 +155,7 @@ fn no_keyring_prompts() {
 
 fn build_client(dir: &std::path::Path) -> Arc<ChatterClient> {
     ChatterClient::builder()
-        .server_url(SERVER_URL)
+        .server_url(&server_url())
         .data_dir(dir.to_str().unwrap())
         .build()
         .expect("Failed to build ChatterClient")
@@ -10348,8 +10357,8 @@ async fn v51_server_message_backup_restores_on_fresh_install_via_pin() {
         .await
         .expect("fresh-install login failed");
     println!(
-        "  fresh install logged in (keys_restored={}, keys_missing={})",
-        login.keys_restored, login.keys_missing
+        "  fresh install logged in (keys_restored={}, key_recovery={:?})",
+        login.keys_restored, login.key_recovery
     );
 
     // NEGATIVE: wrong PIN first — it derives a different backup_id, the server
@@ -10377,4 +10386,267 @@ async fn v51_server_message_backup_restores_on_fresh_install_via_pin() {
 
     client_fresh.shutdown().await;
     client_b.shutdown().await;
+}
+
+// ============================================================================
+// V52 — a reinstall must recover the ORIGINAL identity key, and the server must
+//       agree with the device about what that key is.
+//
+// THE DEFECT THIS PINS. `login` used to mint a brand-new Signal identity key
+// before the SVR restore ran (auth_service.rs `do_login` -> `generate_identity`).
+// The restore then found a local identity, decided this was an existing device,
+// logged "SVR restore skipped: local identity keys already exist", and returned
+// without ever fetching the PIN backup. The user's real key was gone. Nothing
+// published the replacement either — no RPC carried an identity key and the
+// upload path refused a changed one — while the background replenisher
+// overwrote the server's signed prekey with one signed by the NEW key. The
+// account then served OLD identity key + NEW signed prekey: signature
+// verification failed for every peer, permanently, silently.
+//
+// POSITIVE CONTROL: before the reinstall, assert the server's identity_key
+// really is this device's key. Comparing two values that are both absent would
+// pass against an empty table.
+//
+// MUTATION CHECK: move `attempt_svr_restore` back after the identity mint in
+// `client/auth.rs::login`, or restore the unconditional `generate_identity` in
+// `do_login`, and the fresh install gets a different key — this fails.
+// ============================================================================
+#[tokio::test]
+async fn v52_reinstall_recovers_the_original_identity_key() {
+    skip_if_no_server!();
+    println!("\n=== V52: reinstall with PIN recovers the ORIGINAL identity key ===\n");
+
+    let user = unique_user("v52ident");
+    let dir_a = tempfile::tempdir().unwrap();
+    let client_a = build_client(dir_a.path());
+    let uid = register_and_start(&client_a, &user, "V52 Original").await;
+    println!("  registered {user} as {uid}");
+
+    let original_key = client_a
+        .signal()
+        .get_identity_public_key()
+        .await
+        .expect("no local identity after registration");
+    let original_hex: String = original_key.iter().map(|b| format!("{b:02x}")).collect();
+
+    // POSITIVE CONTROL: the server holds this exact key, so the comparison
+    // after the reinstall is against something real.
+    let server_hex = psql(&format!(
+        "SELECT encode(identity_key,'hex') FROM signal_prekey_bundles WHERE user_id = '{uid}'"
+    ));
+    assert_eq!(
+        server_hex, original_hex,
+        "POSITIVE CONTROL FAILED: server identity_key does not match the registering device"
+    );
+    println!("  positive control: server identity_key == device key ({}…)", &original_hex[..16]);
+
+    client_a.shutdown().await;
+    drop(client_a);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // ---- REINSTALL: brand-new data dir, login with the PIN -----------------
+    let dir_fresh = tempfile::tempdir().unwrap();
+    let client_fresh = build_client(dir_fresh.path());
+    client_fresh.connect().await.expect("fresh connect failed");
+    client_fresh
+        .login(&user, PASSWORD, "validated-reinstall", Some(PIN))
+        .await
+        .expect("reinstall login failed");
+    println!("  reinstalled and logged in with PIN");
+
+    let restored_key = client_fresh
+        .signal()
+        .get_identity_public_key()
+        .await
+        .expect("reinstalled device has no identity key");
+    let restored_hex: String = restored_key.iter().map(|b| format!("{b:02x}")).collect();
+
+    assert_eq!(
+        restored_hex, original_hex,
+        "the PIN backup was not restored — the device minted a NEW identity key and the \
+         original is unrecoverable"
+    );
+    println!("  restored identity key matches the original");
+
+    // The server must still serve that same key, and the prekeys it serves
+    // must be signed by it. A mismatch here is the permanently-unreachable
+    // state in its final form.
+    let server_after = psql(&format!(
+        "SELECT encode(identity_key,'hex') FROM signal_prekey_bundles WHERE user_id = '{uid}'"
+    ));
+    assert_eq!(
+        server_after, original_hex,
+        "server identity_key diverged from the device's key: peers can never verify this account"
+    );
+    println!("  server still serves the same identity key");
+
+    println!("\nV52 PASS — a PIN reinstall recovers the original identity key; device and server agree\n");
+    client_fresh.shutdown().await;
+}
+
+// ============================================================================
+// V53 — when there is genuinely no backup, the user is TOLD, nothing is minted
+//       behind their back, and the explicit reset publishes a key the server
+//       actually serves.
+//
+// THE DEFECT THIS PINS. There was no wire on which to publish a rotated
+// identity key at all: `LoginRequest` and `RefreshPreKeysRequest` carry none,
+// `UploadPreKeyBundle` had zero production callers, and the repository refused
+// any bundle whose identity key differed from the one on file
+// ("identity key mismatch: all devices for a user must share the same identity
+// key"). So a device that legitimately held a new key could never publish it,
+// while the replenisher overwrote the signed prekey with one signed by that
+// unpublishable key.
+//
+// POSITIVE CONTROL: the account starts with a real identity key on the server,
+// and the assertions below are against that value, not against absence.
+//
+// MUTATION CHECK: drop the `is_retryable` guard in `accept_new_identity` and
+// the wrong-PIN half fails; drop the `RepublishIdentityKey` RPC (or revert the
+// repository to refusing a changed identity key) and the reset half fails.
+// ============================================================================
+#[tokio::test]
+async fn v53_identity_reset_publishes_a_key_the_server_serves() {
+    skip_if_no_server!();
+    println!("\n=== V53: no backup → told, not silently re-keyed; explicit reset publishes ===\n");
+
+    let user = unique_user("v53reset");
+    let dir_a = tempfile::tempdir().unwrap();
+    let client_a = build_client(dir_a.path());
+    let uid = register_and_start(&client_a, &user, "V53 Original").await;
+
+    let original_key = client_a.signal().get_identity_public_key().await.unwrap();
+    let original_hex: String = original_key.iter().map(|b| format!("{b:02x}")).collect();
+
+    let server_hex = psql(&format!(
+        "SELECT encode(identity_key,'hex') FROM signal_prekey_bundles WHERE user_id = '{uid}'"
+    ));
+    assert_eq!(
+        server_hex, original_hex,
+        "POSITIVE CONTROL FAILED: server has no identity key for this account"
+    );
+    println!("  positive control: server identity_key == device key");
+
+    client_a.shutdown().await;
+    drop(client_a);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // ---- NEGATIVE HALF: wrong PIN must never authorise a re-key ------------
+    // The backup id is PIN-derived, so a typo and a missing backup look
+    // identical to the fetch. Getting this wrong destroys a recoverable
+    // account, so it is checked before anything destructive is allowed.
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let c = build_client(dir.path());
+        c.connect().await.expect("connect failed");
+        let err = c
+            .login(&user, PASSWORD, "validated-wrongpin", Some("Wr0ngPin!x7"))
+            .await
+            .expect_err("a reinstall with the WRONG PIN must not report success");
+
+        let need = match &err {
+            chatter_core::client::ClientError::IdentityRecoveryRequired(n) => *n,
+            other => panic!("expected IdentityRecoveryRequired, got {other:?}"),
+        };
+        assert!(
+            need.is_retryable(),
+            "a wrong PIN leaves the real key recoverable; got {need:?}"
+        );
+        println!("  wrong PIN: login refused with {need:?} — {err}");
+
+        let refused = c.accept_new_identity(need).await;
+        assert!(
+            refused.is_err(),
+            "minting a new identity on a wrong PIN would destroy a recoverable account"
+        );
+        println!("  wrong PIN: identity reset refused ({})", refused.err().unwrap());
+
+        let unchanged = psql(&format!(
+            "SELECT encode(identity_key,'hex') FROM signal_prekey_bundles WHERE user_id = '{uid}'"
+        ));
+        assert_eq!(unchanged, original_hex, "a failed login must not touch server key material");
+        println!("  wrong PIN: server identity_key untouched");
+        c.shutdown().await;
+    }
+
+    // ---- Remove the backup ------------------------------------------------
+    // Not contrived: `perform_svr_backup` is best-effort and non-fatal at
+    // registration, and a recovery-code login destroys the backup outright, so
+    // "registered account, no key backup" is genuinely reachable.
+    psql(&format!("DELETE FROM svr_backups WHERE user_id = '{uid}'"));
+    println!("  removed the account's SVR key backup");
+
+    // ---- POSITIVE HALF: no backup → told, then an explicit reset ----------
+    let dir_fresh = tempfile::tempdir().unwrap();
+    let client_fresh = build_client(dir_fresh.path());
+    client_fresh.connect().await.expect("connect failed");
+
+    let err = client_fresh
+        .login(&user, PASSWORD, "validated-reset", Some(PIN))
+        .await
+        .expect_err("login with no recoverable keys must not report success");
+    let need = match &err {
+        chatter_core::client::ClientError::IdentityRecoveryRequired(n) => *n,
+        other => panic!("expected IdentityRecoveryRequired, got {other:?}"),
+    };
+    assert_eq!(
+        need,
+        chatter_core::services::key_recovery::KeyRecoveryNeed::NoBackup,
+        "the server knows this account has no backup; the user must be told that, \
+         not left guessing at their PIN"
+    );
+    println!("  no backup: login refused with {need:?} — {err}");
+
+    // Nothing may have been published on the user's behalf.
+    let still_original = psql(&format!(
+        "SELECT encode(identity_key,'hex') FROM signal_prekey_bundles WHERE user_id = '{uid}'"
+    ));
+    assert_eq!(
+        still_original, original_hex,
+        "a failed login silently re-keyed the account — the exact defect being fixed"
+    );
+    println!("  no backup: server identity_key still the original (nothing minted behind the user)");
+
+    // The explicit, user-driven decision.
+    client_fresh
+        .accept_new_identity(need)
+        .await
+        .expect("identity reset failed — there is still no way to publish a rotated key");
+
+    let new_key = client_fresh.signal().get_identity_public_key().await.unwrap();
+    let new_hex: String = new_key.iter().map(|b| format!("{b:02x}")).collect();
+    assert_ne!(new_hex, original_hex, "reset produced the same key");
+
+    let published = psql(&format!(
+        "SELECT encode(identity_key,'hex') FROM signal_prekey_bundles WHERE user_id = '{uid}'"
+    ));
+    assert_eq!(
+        published, new_hex,
+        "the rotated identity key was not published — peers would still fetch the dead one"
+    );
+    println!("  reset: server now serves the NEW identity key");
+
+    // Exactly one device bundle survives, and the prekeys it serves were
+    // signed by the key served alongside them. A row count above one would mean
+    // a stale device is still handing out prekeys signed by a dead key.
+    let rows = psql(&format!(
+        "SELECT count(*) FROM signal_prekey_bundles WHERE user_id = '{uid}'"
+    ));
+    assert_eq!(rows, "1", "stale device bundles survived the rotation");
+
+    // Key Transparency must witness the change, or the log asserts a key the
+    // server no longer serves.
+    let kt_latest = psql(&format!(
+        "SELECT encode(identity_key,'hex') FROM kt_log_entries WHERE user_id = '{uid}' \
+         ORDER BY leaf_index DESC LIMIT 1"
+    ));
+    assert_eq!(kt_latest, new_hex, "Key Transparency did not witness the rotation");
+    let kt_count = psql(&format!(
+        "SELECT count(*) FROM kt_log_entries WHERE user_id = '{uid}'"
+    ));
+    assert_eq!(kt_count, "2", "expected one leaf for registration and one for the rotation");
+    println!("  reset: KT log witnessed the new key ({kt_count} leaves)");
+
+    println!("\nV53 PASS — no backup is reported, never silently re-keyed; an explicit reset publishes a rotated identity key atomically and KT records it\n");
+    client_fresh.shutdown().await;
 }

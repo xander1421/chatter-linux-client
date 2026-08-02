@@ -21,6 +21,12 @@ export component LoginPage inherits Rectangle {
     // (`ConnectionState::is_unreachable`) rather than string-matched here.
     in property <bool> server-unreachable: false;
     in property <bool> account-free-surfaces: false;
+    // Set when login failed because this device has no Signal identity key and
+    // the original is provably unrecoverable (no backup, or a destroyed one).
+    // Only then is starting over the right offer — for a wrong PIN or an
+    // unreachable server the real key is still out there, and chatter-core
+    // refuses the reset rather than letting the UI decide.
+    in property <bool> identity-reset-available: false;
 
     property <bool> submitted: false;
 
@@ -29,6 +35,7 @@ export component LoginPage inherits Rectangle {
     callback go-to-recovery();
     callback go-to-link-device();
     callback continue-without-account();
+    callback accept-new-identity();
 
     background: Colors.background;
 
@@ -138,6 +145,26 @@ export component LoginPage inherits Rectangle {
                         color: Colors.error;
                         font-size: Typography.sm;
                         wrap: word-wrap;
+                    }
+
+                    // Destructive and irreversible, so it is a deliberate
+                    // second action rather than something login does for you.
+                    if root.identity-reset-available: VerticalLayout {
+                        spacing: Spacing.sm;
+
+                        Text {
+                            text: "Starting over gives this device new encryption keys. Your old messages stay unreadable, and each of your contacts will be asked to verify you again.";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            wrap: word-wrap;
+                        }
+
+                        Button {
+                            text: "Start over with new keys";
+                            variant: "danger";
+                            disabled: root.loading;
+                            clicked => { root.accept-new-identity(); }
+                        }
                     }
 
                     // Next to the error, because when the server is down the

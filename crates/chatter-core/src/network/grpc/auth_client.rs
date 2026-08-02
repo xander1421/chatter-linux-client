@@ -28,6 +28,7 @@ use crate::proto::chat_v1::{
     InvalidateSessionRequest, ListDevicesRequest, ListDevicesResponse, LoginRequest, LogoutRequest,
     RefreshPreKeysRequest, RegenerateRecoveryCodesRequest, RegisterRequest, RegistrationResult,
     RenameDeviceRequest, RequestSenderCertificateRequest, RequestSenderCertificateResponse,
+    RepublishIdentityKeyRequest, RepublishIdentityKeyResponse,
     RevokeDeviceRequest, SignalPreKeyBundle,
     UploadPreKeyBundleRequest, UseRecoveryCodeRequest,
 };
@@ -534,6 +535,45 @@ impl AuthClient {
             .upload_pre_key_bundle(request)
             .await
             .map(|_| ())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Replace this account's ENTIRE Signal key material with the bundle from
+    /// this device.
+    ///
+    /// The one RPC by which an account's identity key may change, and the
+    /// missing half of "I lost my phone, restore with my PIN":
+    ///
+    ///   - After a PIN restore the identity key is the ORIGINAL one, but the
+    ///     private halves of every prekey the account ever published died with
+    ///     the old device. Those rows must be replaced or the account keeps
+    ///     handing out prekeys nobody can complete a handshake with.
+    ///   - When no backup existed, the user explicitly accepted a NEW identity
+    ///     key. Publishing it is what lets peers see a safety-number change
+    ///     instead of an account that silently stopped working.
+    ///
+    /// The server applies it atomically and drops every other device's bundle,
+    /// because they are signed by key material this device does not hold.
+    ///
+    /// Never call this from a background task: it changes every contact's
+    /// safety number, which is a user-visible trust event.
+    pub async fn republish_identity_key(
+        &mut self,
+        bundle: SignalPreKeyBundle,
+        one_time_prekeys: Vec<signal_pre_key_bundle::PreKeyRecord>,
+        kyber_one_time_prekeys: Vec<signal_pre_key_bundle::KyberPreKeyRecord>,
+    ) -> Result<RepublishIdentityKeyResponse, NetworkError> {
+        let request = RepublishIdentityKeyRequest {
+            bundle: Some(bundle),
+            one_time_prekeys,
+            kyber_one_time_prekeys,
+            request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        self.inner
+            .republish_identity_key(request)
+            .await
+            .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
     }
 
