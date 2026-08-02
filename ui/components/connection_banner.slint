@@ -19,6 +19,7 @@
 // — delivery is the context bar's subject, not this one's.
 
 import { Colors } from "../theme/colors.slint";
+import { Icons } from "../theme/icons.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { AnonMode, TorStatus } from "../anon_mode/anon_mode_global.slint";
@@ -34,6 +35,13 @@ export component ConnectionBanner inherits Rectangle {
     in property <bool> server-unreachable: false;
     in property <int> reconnect-attempt: 0;
     in property <int> queue-count: 0;
+
+    // Dismissing hides the banner, not the fact. The caller keeps a red dot on
+    // the sidebar's settings button for as long as the server is unreachable,
+    // so closing this trades a paragraph for a pixel rather than for silence.
+    // The caller also clears the dismissal on reconnect, so a *later* outage
+    // gets a fresh banner instead of being swallowed by an old dismissal.
+    callback dismissed();
 
     // Internal: tracks "just reconnected" for the green flash
     property <bool> just-reconnected: false;
@@ -171,6 +179,32 @@ export component ConnectionBanner inherits Rectangle {
                 font-weight: Typography.medium;
                 vertical-alignment: center;
                 wrap: word-wrap;
+                horizontal-stretch: 1;
+            }
+
+            // Close. 44px touch target — this sits at the top of the screen on a
+            // phone, where a 16px icon is a miss more often than a hit.
+            Rectangle {
+                width: 44px;
+                height: 44px;
+                horizontal-stretch: 0;
+                border-radius: 6px;
+                background: close-touch.has-hover ? root.banner-color.with-alpha(0.15) : transparent;
+
+                Image {
+                    source: Icons.x;
+                    width: 14px;
+                    height: 14px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: root.banner-color;
+                }
+
+                close-touch := TouchArea {
+                    clicked => { root.dismissed(); }
+                }
+                accessible-role: button;
+                accessible-label: "Dismiss the connection banner";
             }
         }
 

@@ -44,6 +44,10 @@ export component Sidebar inherits Rectangle {
     in-out property <bool> collapsed: false;
     in-out property <bool> hidden: false;
     in property <bool> mobile-mode: false;
+    // The server is settled-unreachable. Shown as a dot on the settings button,
+    // mirroring how the anon-mode button carries its Tor dot, so the connection
+    // banner can be dismissed without the outage becoming invisible.
+    in property <bool> server-unreachable: false;
     in property <length> mobile-width: 360px;
 
     // ── Properties: Badges ──
@@ -815,6 +819,14 @@ export component Sidebar inherits Rectangle {
                         width: 24px; height: 24px; border-radius: 4px;
                         background: sett-touch.has-hover ? Colors.surface-hover : transparent;
                         Image { source: Icons.settings; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
+                        if root.server-unreachable: Rectangle {
+                            x: parent.width - self.width - 1px; y: 1px;
+                            width: 7px; height: 7px; border-radius: 3.5px;
+                            border-width: 1px; border-color: Colors.surface;
+                            background: Colors.error;
+                            accessible-role: text;
+                            accessible-label: "Server unreachable";
+                        }
                         sett-touch := TouchArea { clicked => { root.settings-clicked(); } }
                     }
                 }
@@ -855,6 +867,14 @@ export component Sidebar inherits Rectangle {
                     height: 32px; width: 44px; x: (parent.width - self.width) / 2; tooltip-text: "Settings"; tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: 32px; height: 32px; border-radius: 16px; background: Colors.surface;
                         Image { source: Icons.settings; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        if root.server-unreachable: Rectangle {
+                            x: parent.width - self.width - 1px; y: 1px;
+                            width: 7px; height: 7px; border-radius: 3.5px;
+                            border-width: 1px; border-color: Colors.surface;
+                            background: Colors.error;
+                            accessible-role: text;
+                            accessible-label: "Server unreachable";
+                        }
                         TouchArea { clicked => { root.settings-clicked(); } }
                     } }
                 }

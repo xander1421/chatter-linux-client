@@ -117,6 +117,16 @@ export component App inherits Rectangle {
     // computed in core, so the auth screens and the banner cannot disagree.
     in property <bool> server-unreachable: false;
 
+    // The user closed the connection banner. Purely presentational — the red dot
+    // on the sidebar's settings button keeps reporting the outage — and cleared
+    // again on reconnect below, so dismissing one outage never hides the next.
+    property <bool> connection-banner-dismissed: false;
+    changed connection-status => {
+        if (root.connection-status == "connected") {
+            root.connection-banner-dismissed = false;
+        }
+    }
+
     // ========== Working without an account ==========
     // Whether chatter-core says there is anything usable with no account
     // (`ChatterClient::has_account_free_surfaces` — in practice, a running
@@ -1081,11 +1091,12 @@ export component App inherits Rectangle {
 
             // Connection status banner (auto-hides when connected). Also carries
             // the "and the mesh still works" half — see the component.
-            ConnectionBanner {
+            if !root.connection-banner-dismissed: ConnectionBanner {
                 connection-state: root.connection-status;
                 server-unreachable: root.server-unreachable;
                 reconnect-attempt: root.connection-reconnect-attempt;
                 queue-count: root.connection-queue-count;
+                dismissed => { root.connection-banner-dismissed = true; }
             }
 
             // Only for a session-less main view (mesh-only entry). Auto-hides the
@@ -1103,6 +1114,9 @@ export component App inherits Rectangle {
             // Hidden entirely in call-fullscreen so the call view fills the whole
             // window width — a landscape viewport for a landscape screen share.
             if !root.active-call-fullscreen: Sidebar {
+                // Survives dismissing the connection banner: the dot on the
+                // settings button is what keeps saying the server is down.
+                server-unreachable: root.server-unreachable;
                 // Mobile treated as narrow desktop: always-visible split view
                 // with collapse toggle. No full-screen swap on conversation open.
                 mobile-mode: false;

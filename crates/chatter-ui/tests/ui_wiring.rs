@@ -1594,3 +1594,49 @@ fn session_revoke_routes_through_sender_key_rotation() {
          devices would keep working sender keys"
     );
 }
+
+// ============================================================================
+// CONNECTION BANNER DISMISSAL — the banner can be closed, the outage cannot.
+//
+// Dismissing is presentational only. If the dot on the sidebar's settings button
+// ever stops being conditional on server-unreachable, closing the banner starts
+// hiding the fact that the server is down, which is the one thing this must not
+// do. STATIC, because both halves live in .slint.
+// ============================================================================
+#[test]
+fn connection_banner_is_dismissible_without_hiding_the_outage() {
+    let app = include_str!("../../../ui/app.slint");
+    let banner = include_str!("../../../ui/components/connection_banner.slint");
+    let sidebar = include_str!("../../../ui/sidebar/sidebar.slint");
+
+    // The banner offers a way out...
+    assert!(
+        banner.contains("callback dismissed()"),
+        "connection banner has no dismissed callback — nothing to close it with"
+    );
+    assert!(
+        app.contains("dismissed => { root.connection-banner-dismissed = true; }"),
+        "app does not handle the banner's dismissed callback (dead close button)"
+    );
+    assert!(
+        app.contains("if !root.connection-banner-dismissed: ConnectionBanner"),
+        "the banner is not gated on the dismissal flag, so closing it does nothing"
+    );
+
+    // ...that resets, so a later outage is not swallowed by an old dismissal.
+    assert!(
+        app.contains("root.connection-banner-dismissed = false;"),
+        "dismissal is never cleared — one dismissal would silence every future outage"
+    );
+
+    // ...and the fact survives the dismissal.
+    assert!(
+        sidebar.contains("if root.server-unreachable: Rectangle"),
+        "sidebar has no server-unreachable indicator, so a dismissed banner hides the outage"
+    );
+    assert_eq!(
+        sidebar.matches("accessible-label: \"Server unreachable\"").count(),
+        2,
+        "both the expanded and collapsed sidebar footers must carry the dot"
+    );
+}

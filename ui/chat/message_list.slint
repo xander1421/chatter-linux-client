@@ -42,6 +42,13 @@ export component MessageList inherits Rectangle {
 
     // Internal animated scroll target
     property <length> scroll-target: 0px;
+    // Opening a conversation fills the viewport in one step, and animating that
+    // snap is what made a channel appear to load from the top and then scroll
+    // itself down to the newest message. An append (a message arriving, or a
+    // page of history) grows the viewport by less than a screen and still
+    // animates. So: no animation when the growth is bigger than the screen.
+    property <length> previous-viewport-height: 0px;
+    property <bool> jump-without-animation: false;
     property <bool> animating: false;
 
     // Callbacks - Signal-style identification (sender_id, timestamp_ns)
@@ -185,9 +192,10 @@ export component MessageList inherits Rectangle {
             viewport-height: messages-layout.preferred-height;
             viewport-y <=> root.scroll-position;
 
-            // Animate scroll position for smooth scrolling
+            // Animate scroll position for smooth scrolling — except when the
+            // content arrived all at once, see `jump-without-animation`.
             animate viewport-y {
-                duration: 300ms;
+                duration: root.jump-without-animation ? 0ms : 300ms;
                 easing: ease-out;
             }
 
@@ -208,6 +216,12 @@ export component MessageList inherits Rectangle {
             // Flickable scope, where `self.height` and `self.viewport-height` are
             // both concrete.
             changed viewport-height => {
+                // Decide before writing viewport-y: the animation reads its
+                // duration at the moment the property changes.
+                root.jump-without-animation =
+                    (self.viewport-height - root.previous-viewport-height) > self.height;
+                root.previous-viewport-height = self.viewport-height;
+
                 if (root.should-auto-scroll && root.is-at-bottom) {
                     self.viewport-y = min(0px, self.height - self.viewport-height);
                 }
