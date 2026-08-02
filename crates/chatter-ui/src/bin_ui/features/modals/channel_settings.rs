@@ -728,14 +728,51 @@ fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                 }
             }
 
-            // Close modal
+            // Report, then close.
+            //
+            // Before this, a run where every invite failed set loading back to
+            // false and left the modal exactly as the user had filled it in —
+            // same names ticked, same button — with the failures only in the log.
+            // The obvious read is that the button did nothing, so people pressed
+            // it again. A partial run was worse: it closed, which reads as "all
+            // done", while some of the people picked were never invited.
+            let attempted = selected_user_ids.len();
             let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    w.set_invite_member_loading(false);
-                    if success_count > 0 {
-                        w.set_active_modal("none".into());
-                    }
+                let Some(w) = weak.upgrade() else { return };
+                w.set_invite_member_loading(false);
+
+                if success_count == 0 {
+                    // Stay open: the selection is still there and retrying is
+                    // one tap, which is the right thing to offer here.
+                    w.set_toast_message(
+                        if attempted == 1 { "The invite was not sent.".to_string() }
+                        else { format!("None of the {attempted} invites were sent.") }
+                        .into(),
+                    );
+                    w.set_toast_variant("error".into());
+                    w.set_toast_visible(true);
+                    w.global::<crate::Haptics>().invoke_error();
+                    return;
                 }
+
+                if success_count < attempted {
+                    let failed = attempted - success_count;
+                    w.set_toast_message(
+                        format!("{success_count} of {attempted} invites sent — {failed} failed.").into(),
+                    );
+                    w.set_toast_variant("warning".into());
+                } else {
+                    // The modal closing is the only other evidence, and it looks
+                    // identical to dismissing it.
+                    w.set_toast_message(
+                        if attempted == 1 { "Invite sent.".to_string() }
+                        else { format!("{attempted} invites sent.") }
+                        .into(),
+                    );
+                    w.set_toast_variant("success".into());
+                }
+                w.set_toast_visible(true);
+                w.set_active_modal("none".into());
             });
         });
     });

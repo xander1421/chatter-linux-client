@@ -10,8 +10,6 @@
 //! Constants are inlined rather than read back over JNI — they are frozen ABI
 //! in `android.view.HapticFeedbackConstants` and have been since API 3.
 
-use jni::objects::JObject;
-
 use super::activity::{activity, clear_exception, jni_env};
 
 /// `HapticFeedbackConstants.LONG_PRESS` — the tick Android itself uses when a
@@ -69,8 +67,6 @@ fn perform(effect: i32) {
         clear_exception(&mut env);
         tracing::warn!("haptics: performHapticFeedback failed ({e})");
     }
-    // Keep the borrow checker honest about `JObject` lifetimes above.
-    let _ = JObject::null();
 }
 
 /// A hold gesture just armed and its menu is about to open.
