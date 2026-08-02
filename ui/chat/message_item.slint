@@ -9,6 +9,7 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Avatar } from "../components/avatar.slint";
+import { Haptics } from "../components/haptics.slint";
 import { MessageAttachmentData, ReactionEntry, LinkPreviewData, RichTextSpan } from "types.slint";
 import { Icons } from "../theme/icons.slint";
 import { AudioPlayer } from "audio_player.slint";
@@ -179,6 +180,11 @@ export component MessageItem inherits Rectangle {
         triggered => {
             self.running = false;
             root.hold-tier = 1;
+            // Same tick as every other hold in the app (ui/components/hold_area.slint).
+            // The bubble gesture predates that component and keeps its own timer,
+            // so the feedback has to be repeated here or holds would feel
+            // different depending on what you held.
+            Haptics.long-press();
             root.open-menu();
         }
     }
@@ -990,16 +996,37 @@ export component MessageItem inherits Rectangle {
                                         image-fit: contain;
                                     }
 
+                                    // No thumbnail: the play button IS the icon, stacked
+                                    // above the filename rather than floated over it.
+                                    // Previously this branch centred icon+name+size in
+                                    // the tile and the overlay below centred a 56px
+                                    // opaque circle on the same point, so the one thing
+                                    // identifying the file — its name — was underneath
+                                    // the button. A video with no thumbnail is exactly
+                                    // the case where the name is all the user has.
                                     if !attachment.has-thumbnail: VerticalLayout {
                                         alignment: center;
                                         spacing: Spacing.xs;
 
-                                        Image {
-                                            width: 40px;
-                                            height: 40px;
-                                            source: Icons.video;
-                                            colorize: Colors.text-muted;
-                                            horizontal-alignment: center;
+                                        // Wrapped: a Rectangle has no alignment of its
+                                        // own, so the row centres it.
+                                        HorizontalLayout {
+                                            alignment: center;
+                                            Rectangle {
+                                                width: 56px;
+                                                height: 56px;
+                                                border-radius: 28px;
+                                                background: video-touch.has-hover ? Colors.primary : Colors.primary.transparentize(0.2);
+
+                                                Image {
+                                                    width: 24px;
+                                                    height: 24px;
+                                                    source: Icons.play;
+                                                    colorize: Colors.text-primary;
+                                                    x: (parent.width - self.width) / 2;
+                                                    y: (parent.height - self.height) / 2;
+                                                }
+                                            }
                                         }
                                         Text {
                                             text: attachment.filename;
@@ -1016,8 +1043,10 @@ export component MessageItem inherits Rectangle {
                                         }
                                     }
 
-                                    // Play button overlay
-                                    Rectangle {
+                                    // Play button overlay — only over a thumbnail, where
+                                    // there is a picture to float it on. Without one it
+                                    // is drawn inline above, by the branch just above.
+                                    if attachment.has-thumbnail: Rectangle {
                                         x: (parent.width - 56px) / 2;
                                         y: (parent.height - 56px) / 2;
                                         width: 56px;
