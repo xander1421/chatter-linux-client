@@ -312,6 +312,10 @@ enum CallCommand {
     GetRoomState {
         response: oneshot::Sender<RoomState>,
     },
+    /// Get the identities (user ids) of the remote peers currently in the room.
+    GetRemoteParticipants {
+        response: oneshot::Sender<Vec<String>>,
+    },
     /// Publish microphone.
     PublishMicrophone {
         device_id: Option<String>,
@@ -869,6 +873,19 @@ impl CallWorkerHandle {
         rx.await.unwrap_or(false)
     }
 
+    /// Identities (user ids) of the remote peers currently in the LiveKit room.
+    ///
+    /// This is the real room roster. `Call::participants` is not — nothing
+    /// tracks remote joins/leaves into it — so anything that must act on "who
+    /// is actually in the call right now" (notably key rotation) reads this.
+    pub async fn remote_participant_identities(&self) -> Vec<String> {
+        let (tx, rx) = oneshot::channel();
+        if self.cmd_tx.try_send(CallCommand::GetRemoteParticipants { response: tx }).is_err() {
+            return Vec::new();
+        }
+        rx.await.unwrap_or_default()
+    }
+
     /// Get room connection state.
     pub async fn room_state(&self) -> RoomState {
         let (tx, rx) = oneshot::channel();
@@ -1319,6 +1336,10 @@ fn run_call_worker(
 
                 CallCommand::GetRoomState { response } => {
                     let _ = response.send(room_manager.state());
+                }
+
+                CallCommand::GetRemoteParticipants { response } => {
+                    let _ = response.send(room_manager.remote_participant_identities());
                 }
 
                 CallCommand::PublishMicrophone { device_id, response } => {

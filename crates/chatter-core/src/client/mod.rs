@@ -1980,8 +1980,8 @@ impl ChatterClient {
             use crate::calls::LiveKitRoomEvent;
             loop {
                 match rx.recv().await {
-                    Ok(LiveKitRoomEvent::ParticipantLeft { .. }) => {
-                        if let Err(e) = client.handle_participant_departed().await {
+                    Ok(LiveKitRoomEvent::ParticipantLeft { identity }) => {
+                        if let Err(e) = client.handle_participant_departed(&identity).await {
                             tracing::error!(error = %e, "Failed to handle participant departure");
                         }
                     }

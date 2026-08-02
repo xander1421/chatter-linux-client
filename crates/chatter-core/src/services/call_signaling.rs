@@ -235,6 +235,63 @@ impl CallSignalingService {
         Ok(())
     }
 
+    /// Redistribute a rotated group call key to the peers actually in the room.
+    ///
+    /// Unlike [`Self::distribute_group_call_key`] — which invites the whole
+    /// channel to a call that is starting — rotation exists to lock a departed
+    /// participant *out*. A peer who leaves the LiveKit room is still a channel
+    /// member, so sending the rotated key to the membership list hands it
+    /// straight back to the attacker the rotation targets. Recipients are the
+    /// live room roster intersected with channel membership: room identities
+    /// that are not entitled to the channel are dropped, never sent to.
+    pub async fn redistribute_group_call_key(
+        &self,
+        channel_id: &ChannelId,
+        call_id: &str,
+        key: [u8; 32],
+        epoch: u32,
+        room_identities: &[String],
+    ) -> Result<usize, CallSignalingError> {
+        let current_user = self.channel_service.current_user_id()?;
+        let members = self.channel_service.get_channel_members(channel_id, 100, 0).await?;
+        // A full page means the membership list was truncated, so a member past
+        // the first 100 who IS in the room would be silently skipped and left
+        // unable to decrypt. Rare, but silent — say so.
+        if members.len() >= 100 {
+            tracing::warn!(
+                call_id, epoch, members = members.len(),
+                "Channel membership page is full during key rotation — a participant beyond the \
+                 first 100 members would not receive the rotated key"
+            );
+        }
+        let recipients = rotation_recipients(&members, room_identities, &current_user);
+        let channel_id_str = channel_id.to_string();
+
+        let mut sent_count = 0;
+        for peer_id in &recipients {
+            let content = build_group_call_key_content(call_id, key, epoch, &channel_id_str);
+            if let Err(e) = self.message_service
+                .send_dm(peer_id, content, &self.mailbox_manager)
+                .await
+            {
+                tracing::warn!(
+                    call_id, epoch, peer_id = %peer_id, error = %e,
+                    "Failed to redistribute rotated group call key to participant"
+                );
+            } else {
+                sent_count += 1;
+            }
+        }
+
+        tracing::info!(
+            call_id, epoch, sent_count,
+            roster = room_identities.len(),
+            members = members.len(),
+            "Completed rotated group call key redistribution"
+        );
+        Ok(sent_count)
+    }
+
     /// Distribute a group call encryption key to all channel members.
     ///
     /// Sends the key pairwise via sealed sender DM to each member
@@ -1793,5 +1850,101 @@ impl CallSignalingService {
         self.anon_dm_service.store_pending_anon_call(room_name.to_string(), active_pending);
 
         Ok(result)
+    }
+}
+
+/// Recipients for a rotated group call key.
+///
+/// The live LiveKit room roster (`room_identities`, each entry a peer's
+/// `user_id` — the server mints call tokens with `SetIdentity(user_id)`)
+/// intersected with channel membership, minus ourselves. The roster decides
+/// *who still needs the key*; membership decides *who is entitled to it*, so a
+/// room identity that is not a channel member is dropped rather than sent to.
+fn rotation_recipients(
+    members: &[crate::domain::channel::Membership],
+    room_identities: &[String],
+    current_user: &UserId,
+) -> Vec<UserId> {
+    let in_room: std::collections::HashSet<&str> =
+        room_identities.iter().map(|s| s.as_str()).collect();
+    members
+        .iter()
+        .filter(|m| &m.user_id != current_user)
+        .filter(|m| in_room.contains(m.user_id.to_string().as_str()))
+        .map(|m| m.user_id)
+        .collect()
+}
+
+#[cfg(test)]
+mod rotation_recipient_tests {
+    use super::*;
+    use crate::domain::channel::{MemberRole, Membership, NotificationPreference};
+
+    fn member(channel_id: &ChannelId, user_id: &UserId) -> Membership {
+        Membership {
+            channel_id: *channel_id,
+            user_id: user_id.clone(),
+            role: MemberRole::Member,
+            joined_at: chrono::Utc::now(),
+            last_read_message_id: None,
+            is_muted: false,
+            muted_until: None,
+            notification_preference: NotificationPreference::default(),
+        }
+    }
+
+    /// A participant who left the LiveKit room is still a channel member.
+    /// Rotation exists to lock them out, so they must NOT be a recipient.
+    #[test]
+    fn departed_member_does_not_receive_the_rotated_key() {
+        let channel_id = ChannelId::new();
+        let me = UserId::new();
+        let stayed = UserId::new();
+        let departed = UserId::new();
+
+        let members = vec![
+            member(&channel_id, &me),
+            member(&channel_id, &stayed),
+            member(&channel_id, &departed),
+        ];
+        // Roster sampled after the departure: only `stayed` is still in the room.
+        let roster = vec![stayed.to_string()];
+
+        let recipients = rotation_recipients(&members, &roster, &me);
+
+        assert!(
+            !recipients.contains(&departed),
+            "rotated key was sent to the departed participant {departed} — rotation is a no-op"
+        );
+        assert_eq!(recipients, vec![stayed.clone()]);
+    }
+
+    /// Authorisation: a room identity with no channel membership is not
+    /// entitled to the channel's call key, so it is dropped.
+    #[test]
+    fn room_identity_without_membership_is_not_sent_to() {
+        let channel_id = ChannelId::new();
+        let me = UserId::new();
+        let stayed = UserId::new();
+        let intruder = UserId::new();
+
+        let members = vec![member(&channel_id, &me), member(&channel_id, &stayed)];
+        let roster = vec![stayed.to_string(), intruder.to_string()];
+
+        let recipients = rotation_recipients(&members, &roster, &me);
+
+        assert_eq!(recipients, vec![stayed.clone()]);
+        assert!(!recipients.contains(&intruder));
+    }
+
+    /// We rotate our own key locally; never DM it to ourselves.
+    #[test]
+    fn self_is_excluded_even_when_on_the_roster() {
+        let channel_id = ChannelId::new();
+        let me = UserId::new();
+        let members = vec![member(&channel_id, &me)];
+        let roster = vec![me.to_string()];
+
+        assert!(rotation_recipients(&members, &roster, &me).is_empty());
     }
 }
