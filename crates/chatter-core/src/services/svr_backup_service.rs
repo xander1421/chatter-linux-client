@@ -450,6 +450,29 @@ impl SvrBackupService {
         Ok(())
     }
 
+    /// Clear the local backup version counter.
+    ///
+    /// Called when the SERVER's row has gone away, so the two counters agree
+    /// again. `StoreBackup` accepts a version of exactly stored+1, so a client
+    /// whose counter outlives the row it was counting is rejected on every
+    /// subsequent backup — a permanent `ErrVersionConflict` that surfaces only
+    /// as a "backup failed (non-fatal)" log line.
+    ///
+    /// The one caller that matters is the recovery-code login: it replaces the
+    /// PIN, and the server drops the backup that was keyed to the old one.
+    ///
+    /// Associated (not `&self`) so the recovery path, which runs before a
+    /// session exists, can clear it with only the settings repository.
+    pub fn clear_local_backup_version(
+        settings: &Arc<SettingsRepository>,
+    ) -> Result<(), SvrBackupError> {
+        settings.delete(SVR_BACKUP_VERSION_KEY)?;
+        tracing::info!(
+            "Local SVR backup version counter cleared — the next backup will be version 1"
+        );
+        Ok(())
+    }
+
     /// Delete a backup from the server.
     ///
     /// Derives the backup ID and requests deletion. Also clears the local
@@ -472,5 +495,66 @@ impl SvrBackupService {
         tracing::info!("SVR backup deleted successfully");
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    use crate::storage::Database;
+    use tempfile::TempDir;
+
+    fn settings() -> (TempDir, Arc<SettingsRepository>) {
+        let dir = TempDir::new().unwrap();
+        let db = Database::open(&dir.path().join("test.db"), "test_passphrase").unwrap();
+        db.run_migrations().unwrap();
+        (dir, Arc::new(SettingsRepository::new(Arc::new(db))))
+    }
+
+    /// A recovery-code login replaces the PIN, so the server drops the backup
+    /// row that was keyed to the old one (auth `UseRecoveryCode` step 9b). The
+    /// server's stored version therefore goes back to 0, and `StoreBackup`
+    /// accepts exactly stored+1 — so the only version that will ever be
+    /// accepted afterwards is 1.
+    ///
+    /// A client that keeps its old counter posts N+1 and is rejected forever
+    /// with `ErrVersionConflict`, which is precisely the "backup failed
+    /// (non-fatal)" line the user never sees. The counter has to be cleared on
+    /// the client at the same moment it is cleared on the server.
+    #[test]
+    fn a_recovery_login_clears_the_local_backup_version_counter() {
+        let (_d, settings) = settings();
+
+        // This device had backed up several times before the account was lost.
+        settings.set(SVR_BACKUP_VERSION_KEY, &7u32).unwrap();
+
+        SvrBackupService::clear_local_backup_version(&settings)
+            .expect("clearing the counter must not fail");
+
+        let stored: Option<u32> = settings.get::<u32>(SVR_BACKUP_VERSION_KEY).unwrap();
+        assert!(
+            stored.is_none() || stored == Some(0),
+            "the local counter stayed at {stored:?}; the next backup would post \
+             {}, and the server — whose row was just deleted — only accepts 1",
+            stored.unwrap_or(0) + 1
+        );
+    }
+
+    /// And the counter that results must actually produce version 1, not just
+    /// "something small". This is the assertion that ties the reset to the
+    /// server's `stored+1` rule.
+    #[test]
+    fn the_next_backup_after_a_recovery_login_is_version_one() {
+        let (_d, settings) = settings();
+        settings.set(SVR_BACKUP_VERSION_KEY, &7u32).unwrap();
+
+        SvrBackupService::clear_local_backup_version(&settings).unwrap();
+
+        let next = settings.get::<u32>(SVR_BACKUP_VERSION_KEY).unwrap().unwrap_or(0) + 1;
+        assert_eq!(
+            next, 1,
+            "the server deleted the row, so its stored version is 0 and only 1 is \
+             accepted; posting {next} is a deterministic ErrVersionConflict"
+        );
     }
 }

@@ -160,8 +160,21 @@ impl ChatterClient {
     /// This is called when the user has lost their password but has a recovery code
     /// from registration. It resets the password and SVR key material on the server.
     ///
-    /// After this succeeds, the user should login with `new_password` + `new_pin`.
-    /// The SVR backup will be created automatically during that login flow.
+    /// **The user's SVR key backup does not survive this.** The backup is
+    /// encrypted with, and indexed by, a secret derived from the PIN alone
+    /// (`Argon2id(PIN, username)`), so setting a new PIN leaves the stored row
+    /// unreadable by everyone. The server drops it (auth `UseRecoveryCode`
+    /// step 9b) rather than orphaning it, and this call clears the matching
+    /// local version counter so the next backup can be written at version 1.
+    ///
+    /// If this account's identity keys existed only in that backup, they are
+    /// gone: [`RecoveryResult::key_backup_invalidated`] says so, and the caller
+    /// must tell the user rather than discarding it.
+    ///
+    /// (This used to claim "the SVR backup will be created automatically
+    /// during that login flow". It is not: `login` only ever calls
+    /// `attempt_svr_restore`, and the sole caller of `perform_svr_backup` is
+    /// `register`.)
     ///
     /// # Arguments
     ///
@@ -183,7 +196,34 @@ impl ChatterClient {
             .use_recovery_code(&mut auth_client, username, recovery_code, new_password, new_pin)
             .await
             .map_err(ClientError::Auth)?;
-        Ok(RecoveryResult { remaining_codes })
+
+        // The server just deleted the backup that was keyed to the OLD PIN, so
+        // its stored version is back to 0 and `StoreBackup` will only accept 1.
+        // A stale local counter would post N+1 and be rejected forever — the
+        // deterministic ErrVersionConflict that this whole path used to end in.
+        let settings = std::sync::Arc::new(
+            crate::storage::repositories::settings_repo::SettingsRepository::new(
+                self.services.database.clone(),
+            ),
+        );
+        if let Err(e) =
+            crate::services::svr_backup_service::SvrBackupService::clear_local_backup_version(
+                &settings,
+            )
+        {
+            // Not fatal to the recovery itself — the password IS reset — but it
+            // must not be silent: every later backup on this device fails.
+            tracing::error!(
+                error = %e,
+                "Recovery succeeded but the local SVR version counter could not be \
+                 cleared; backups from this device will be rejected until it is"
+            );
+        }
+
+        Ok(RecoveryResult {
+            remaining_codes,
+            key_backup_invalidated: true,
+        })
     }
 
     /// Regenerate recovery codes for the authenticated user.
