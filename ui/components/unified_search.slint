@@ -40,7 +40,10 @@ component ConvRow inherits Rectangle {
     in property <bool> selected: false;
     callback clicked(string, string);
 
-    height: 40px;
+    // 48px, matching every other tappable row in the app. Search is opened by
+    // someone who already knows where they are going, so mis-tapping here costs
+    // them the whole trip — and at 40px this was the shortest target on screen.
+    height: Spacing.touch-target-min;
     border-radius: Spacing.radius-sm;
     background: root.selected ? Colors.neo-inset-bg : touch.has-hover ? Colors.surface-hover : transparent;
 
@@ -147,7 +150,7 @@ component PersonRow inherits Rectangle {
     in property <string> handle;
     callback clicked();
 
-    height: 44px;
+    height: Spacing.touch-target-min;
     border-radius: Spacing.radius-sm;
     background: touch.has-hover ? Colors.surface-hover : transparent;
 
@@ -256,7 +259,11 @@ export component UnifiedSearch inherits Rectangle {
 
             // Search input — focused when the overlay appears.
             Rectangle {
-                height: 40px;
+                // The one field on this overlay, and it was 40px: shorter than
+                // the rows beneath it and under the touch minimum. Auto-focus
+                // hides that on first open and not at all afterwards, when the
+                // user taps it to correct a query.
+                height: Spacing.touch-target-min;
                 border-radius: Spacing.radius-md;
                 background: Colors.neo-inset-bg;
                 border-width: 1px;
