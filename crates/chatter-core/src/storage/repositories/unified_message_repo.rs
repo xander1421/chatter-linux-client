@@ -234,6 +234,36 @@ impl UnifiedMessageRepository {
         }
     }
 
+    /// List messages sent strictly after `after_sent_at`, oldest first.
+    ///
+    /// The forward-looking counterpart to `list()`. Used to walk a conversation
+    /// downward from a known message — e.g. finding the next voice note to play
+    /// once the current one ends.
+    pub fn list_after_asc(
+        &self,
+        conversation_id: &ChannelId,
+        conversation_type: &ConversationType,
+        after_sent_at: u64,
+        limit: u32,
+    ) -> Result<Vec<Message>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM messages \
+             WHERE conversation_id = ?1 AND conversation_type = ?2 \
+               AND sent_at > ?3 AND is_deleted = 0 \
+             ORDER BY sent_at ASC, sender_id ASC \
+             LIMIT ?4",
+            MSG_COLS
+        ))?;
+        let mut rows = stmt.query(params![
+            conversation_id.to_string(),
+            conversation_type.as_str(),
+            after_sent_at as i64,
+            limit,
+        ])?;
+        collect_messages(&mut rows)
+    }
+
     /// Get the latest message in a conversation (for preview in conversation list).
     pub fn get_latest(
         &self,

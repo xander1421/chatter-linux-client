@@ -10,6 +10,7 @@
 //! - `pin` - Pin operations
 //! - `saved` - Saved messages (Note to Self)
 
+pub mod audio;
 mod dm;
 mod dm_bootstrap;
 mod group;

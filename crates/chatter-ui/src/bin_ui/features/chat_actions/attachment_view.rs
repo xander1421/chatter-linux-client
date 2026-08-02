@@ -22,7 +22,8 @@ use crate::bin_ui::preview_state;
 use crate::bin_ui::video_state;
 use crate::MainWindow;
 
-use super::timers::{start_audio_progress_timer, start_video_progress_timer};
+use super::mini_player;
+use super::timers::start_video_progress_timer;
 use super::transfer_status::update_attachment_transfer_status;
 
 /// Wire the view attachment callback.
@@ -253,6 +254,7 @@ fn handle_local_attachment(
                     weak,
                     std::sync::Arc::new(dec),
                     &attachment_id.to_string(),
+                    &filename,
                     &mime_type,
                 );
                 return;
@@ -304,7 +306,7 @@ fn toggle_audio_playback(weak: &slint::Weak<MainWindow>) {
                     let weak_for_resume = weak.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak_for_resume.upgrade() {
-                            w.set_is_media_playing(true);
+                            mini_player::apply_state(&w);
                         }
                     });
                 }
@@ -314,7 +316,7 @@ fn toggle_audio_playback(weak: &slint::Weak<MainWindow>) {
                 let weak_for_pause = weak.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak_for_pause.upgrade() {
-                        w.set_is_media_playing(false);
+                        mini_player::apply_state(&w);
                     }
                 });
             }
@@ -373,7 +375,7 @@ fn display_decrypted_content(
     let is_pdf = mime_type == "application/pdf" || filename.to_lowercase().ends_with(".pdf");
 
     if is_audio {
-        play_audio_from_buffer(weak, secure_buffer, attachment_id);
+        play_audio_from_buffer(weak, secure_buffer, attachment_id, filename);
     } else if is_image {
         display_image_from_buffer(weak, secure_buffer, attachment_id, filename, file_size);
     } else if is_video {
@@ -393,6 +395,7 @@ fn play_audio_from_buffer(
     weak: slint::Weak<MainWindow>,
     secure_buffer: chatter_core::prelude::SecureBuffer,
     attachment_id: &str,
+    filename: &str,
 ) {
     let player_arc = audio_state::get_audio_player();
     match player_arc.lock() {
@@ -405,14 +408,16 @@ fn play_audio_from_buffer(
                         if let Err(e) = player.play() {
                             tracing::error!("Failed to play audio: {}", e);
                         } else {
-                            let att_id_for_state = attachment_id.to_string();
-                            audio_state::set_playing_with_duration(&att_id_for_state, duration);
                             let att_id_for_ui = attachment_id.to_string();
+                            let filename_for_ui = filename.to_string();
                             let _ = slint::invoke_from_event_loop(move || {
                                 if let Some(w) = weak.upgrade() {
-                                    w.set_current_playing_attachment_id(att_id_for_ui.into());
-                                    w.set_is_media_playing(true);
-                                    start_audio_progress_timer(&w);
+                                    mini_player::track_started(
+                                        &w,
+                                        &att_id_for_ui,
+                                        &filename_for_ui,
+                                        duration,
+                                    );
                                 }
                             });
                         }
@@ -436,6 +441,7 @@ fn play_audio_from_range(
     weak: slint::Weak<MainWindow>,
     dec: std::sync::Arc<chatter_core::services::attachment::CbcRangeDecryptor>,
     attachment_id: &str,
+    filename: &str,
     mime_type: &str,
 ) {
     let player_arc = audio_state::get_audio_player();
@@ -448,14 +454,16 @@ fn play_audio_from_range(
                         if let Err(e) = player.play() {
                             tracing::error!("Failed to play streaming audio: {}", e);
                         } else {
-                            let att_id_for_state = attachment_id.to_string();
-                            audio_state::set_playing_with_duration(&att_id_for_state, duration);
                             let att_id_for_ui = attachment_id.to_string();
+                            let filename_for_ui = filename.to_string();
                             let _ = slint::invoke_from_event_loop(move || {
                                 if let Some(w) = weak.upgrade() {
-                                    w.set_current_playing_attachment_id(att_id_for_ui.into());
-                                    w.set_is_media_playing(true);
-                                    start_audio_progress_timer(&w);
+                                    mini_player::track_started(
+                                        &w,
+                                        &att_id_for_ui,
+                                        &filename_for_ui,
+                                        duration,
+                                    );
                                 }
                             });
                         }

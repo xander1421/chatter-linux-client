@@ -46,13 +46,11 @@ pub fn start_audio_progress_timer(window: &MainWindow) {
 
                     // Check if playback finished (progress >= 1.0 or sink empty)
                     if progress >= 0.999 {
-                        // Stop timer and clear state
+                        // The strip decides what happens next: chain to the
+                        // following voice note in the conversation this one
+                        // came from, or clear itself when there is none.
                         stop_audio_progress_timer();
-                        audio_state::clear_state();
-                        w.set_current_playing_attachment_id("".into());
-                        w.set_is_media_playing(false);
-                        w.set_audio_progress(0.0);
-                        w.set_audio_elapsed("0:00".into());
+                        w.invoke_audio_track_finished();
                     }
                 }
             },

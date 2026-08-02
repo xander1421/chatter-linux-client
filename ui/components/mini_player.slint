@@ -1,0 +1,185 @@
+// Persistent audio strip. Playback outlives the conversation it started in,
+// so these controls live in the app chrome rather than in the message bubble:
+// wherever the user navigates, the track stays reachable.
+//
+// Anchored twice in app.slint — foot of the sidebar column on wide windows,
+// bottom edge of the chat column on narrow ones (thumb reach). Both instances
+// render the same state; only one is ever visible.
+//
+// Height is bound rather than wrapped in an `if`: a conditional child inside a
+// Slint layout doesn't re-allocate its siblings, so `active ? H : 0px` is what
+// actually gives the space back to the messages when nothing is playing.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+
+export component MiniPlayer inherits Rectangle {
+    // Track state
+    in property <bool> active: false;
+    in property <bool> is-playing: false;
+    in property <string> title: "";
+    in property <string> sender: "";
+    in property <float> progress: 0.0;
+    in property <string> elapsed: "0:00";
+    in property <string> duration: "";
+    // Compact form for the collapsed sidebar: button only, no labels.
+    in property <bool> compact: false;
+
+    callback toggle();          // play / pause
+    callback close();           // stop and dismiss
+    callback jump();            // scroll to the message this came from
+    callback seek(float);       // 0..1 position
+
+    out property <length> bar-height: root.active ? (root.compact ? 44px : 56px) : 0px;
+
+    height: root.bar-height;
+    visible: root.active;
+    background: Colors.surface;
+    clip: true;
+
+    // Hairline separating the strip from whatever it docks against.
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: 1px;
+        background: Colors.border;
+    }
+
+    // Tap the body (not the buttons) to jump back to the source message.
+    body-touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.jump(); }
+    }
+
+    HorizontalLayout {
+        padding-left: Spacing.sm;
+        padding-right: Spacing.sm;
+        spacing: Spacing.sm;
+        alignment: start;
+
+        // Play / pause
+        Rectangle {
+            width: 32px;
+            height: 32px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 16px;
+            background: play-touch.has-hover ? Colors.primary-hover : Colors.primary;
+
+            Image {
+                width: 14px;
+                height: 14px;
+                source: root.is-playing ? Icons.pause : Icons.play;
+                colorize: Colors.text-primary;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+
+            play-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.toggle(); }
+            }
+        }
+
+        // Title + scrubber. Dropped entirely in compact form, where there is
+        // no horizontal room for either.
+        if !root.compact: VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 3px;
+
+            HorizontalLayout {
+                spacing: Spacing.xs;
+
+                Text {
+                    text: root.title;
+                    color: Colors.text-primary;
+                    font-size: Typography.xs;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+
+                Text {
+                    text: root.sender == "" ? "" : "· " + root.sender;
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    overflow: elide;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: Spacing.sm;
+
+                track := Rectangle {
+                    height: 4px;
+                    y: (parent.height - self.height) / 2;
+                    horizontal-stretch: 1;
+                    border-radius: 2px;
+                    background: Colors.surface-hover;
+
+                    Rectangle {
+                        x: 0;
+                        y: 0;
+                        width: parent.width * root.progress;
+                        height: parent.height;
+                        border-radius: 2px;
+                        background: Colors.primary;
+                    }
+
+                    // Playhead, sized for a fingertip rather than a cursor.
+                    Rectangle {
+                        x: parent.width * root.progress - self.width / 2;
+                        y: (parent.height - self.height) / 2;
+                        width: 10px;
+                        height: 10px;
+                        border-radius: 5px;
+                        background: Colors.text-primary;
+                    }
+
+                    seek-touch := TouchArea {
+                        // Taller than the 4px track so the strip is scrubbable
+                        // with a thumb, not just a mouse.
+                        y: -10px;
+                        height: parent.height + 20px;
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.seek(clamp(self.mouse-x / parent.width, 0.0, 1.0));
+                        }
+                    }
+                }
+
+                Text {
+                    text: root.elapsed + (root.duration == "" ? "" : " / " + root.duration);
+                    color: Colors.text-muted;
+                    font-size: Typography.xxs;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Dismiss
+        Rectangle {
+            width: 28px;
+            height: 28px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 14px;
+            background: close-touch.has-hover ? Colors.surface-hover : transparent;
+
+            Image {
+                width: 12px;
+                height: 12px;
+                source: Icons.x;
+                colorize: Colors.text-muted;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+
+            close-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.close(); }
+            }
+        }
+    }
+}

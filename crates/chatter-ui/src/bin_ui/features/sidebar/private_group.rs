@@ -10,7 +10,6 @@ use chatter_core::domain::ids::ChannelId;
 
 use crate::{MainWindow, PrivateGroupListItemData, run_ui};
 
-use super::stop_audio_playback;
 use std::str::FromStr;
 
 /// Load and display messages for a private group.
@@ -143,8 +142,6 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx.clone();
 
-        // Stop any playing audio when switching
-        stop_audio_playback();
         crate::bin_ui::gif_state::clear_inline_gifs();
 
         // Commit active-conversation state SYNCHRONOUSLY on the UI thread

@@ -16,6 +16,10 @@ pub fn wire_logout(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let ui_ctx = ui_ctx.clone();
         let weak = weak_window.clone();
 
+        // Playback survives conversation switches, so nothing else would end
+        // it — a voice note would keep playing over the login screen.
+        crate::bin_ui::audio_state::stop_playback();
+
         tokio::spawn(async move {
             // Attempt logout (ignore errors - we logout locally regardless)
             let _ = ui_ctx.do_logout().await;

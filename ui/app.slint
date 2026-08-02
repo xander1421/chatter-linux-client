@@ -49,6 +49,7 @@ import { CodePreviewPanel } from "components/mod.slint";
 import { PdfPreviewPanel } from "components/mod.slint";
 import { VideoPlayer } from "components/mod.slint";
 import { MobileBottomNav } from "components/mobile_bottom_nav.slint";
+import { MiniPlayer } from "components/mini_player.slint";
 
 // Import call UI
 import { IncomingCallModal, ActiveCallView, DevicePicker, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData } from "calls/mod.slint";
@@ -275,6 +276,21 @@ export component App inherits Rectangle {
     in-out property <bool> is-media-playing: false;  // True when audio is actively playing (not paused)
     in-out property <float> audio-progress: 0.0;  // Playback progress 0.0-1.0
     in-out property <string> audio-elapsed: "0:00";  // Elapsed time display
+
+    // Persistent player strip. Playback survives leaving the conversation it
+    // started in, so these describe the track wherever the user has navigated
+    // to. `audio-player-active` stays true while paused — the strip is how the
+    // user resumes.
+    in-out property <bool> audio-player-active: false;
+    in-out property <string> audio-title: "";
+    in-out property <string> audio-sender: "";
+    in-out property <string> audio-duration-display: "";
+    callback audio-toggle-playback();
+    callback audio-dismiss();
+    callback audio-jump-to-source();
+    // Invoked from Rust when a track reaches its end; the handler decides
+    // whether another voice note follows it in the same conversation.
+    callback audio-track-finished();
 
     // ========== Image viewer state ==========
     in-out property <bool> image-viewer-visible: false;
@@ -1113,134 +1129,157 @@ export component App inherits Rectangle {
             // Sidebar (width controlled by collapsed state; mobile-mode for full-width).
             // Hidden entirely in call-fullscreen so the call view fills the whole
             // window width — a landscape viewport for a landscape screen share.
-            if !root.active-call-fullscreen: Sidebar {
-                // Survives dismissing the connection banner: the dot on the
-                // settings button is what keeps saying the server is down.
-                server-unreachable: root.server-unreachable;
-                // Mobile treated as narrow desktop: always-visible split view
-                // with collapse toggle. No full-screen swap on conversation open.
-                mobile-mode: false;
-                mobile-width: root.width;
-                channels: root.channels;
-                dm-conversations: root.dm-conversations;
-                private-groups: root.private-groups;
-                custom-sections: root.custom-sections;
-                section-conversations: root.section-conversations;
-                user-display-name: root.user-display-name;
-                user-avatar-source: root.user-avatar-source;
-                user-initials: root.user-initials;
-                user-presence-status: root.user-presence-status;
-                collapsed: root.is-small-screen || root.sidebar-collapsed;
-                hidden: root.sidebar-hidden;
-                pending-friend-requests: root.friends-received-requests.length;
-                pending-message-requests: root.pending-message-requests;
-                pending-group-invites: root.pending-group-invites;
-                pending-channel-invites: root.pending-channel-invites;
+            // Sidebar column: the conversation list with the persistent audio
+            // strip docked at its foot. The strip lives here on wide windows
+            // because this column is the one region that doesn't re-render when
+            // the user switches conversations — the controls never move.
+            if !root.active-call-fullscreen: VerticalLayout {
+                Sidebar {
+                    // Survives dismissing the connection banner: the dot on the
+                    // settings button is what keeps saying the server is down.
+                    server-unreachable: root.server-unreachable;
+                    // Mobile treated as narrow desktop: always-visible split view
+                    // with collapse toggle. No full-screen swap on conversation open.
+                    mobile-mode: false;
+                    mobile-width: root.width;
+                    channels: root.channels;
+                    dm-conversations: root.dm-conversations;
+                    private-groups: root.private-groups;
+                    custom-sections: root.custom-sections;
+                    section-conversations: root.section-conversations;
+                    user-display-name: root.user-display-name;
+                    user-avatar-source: root.user-avatar-source;
+                    user-initials: root.user-initials;
+                    user-presence-status: root.user-presence-status;
+                    collapsed: root.is-small-screen || root.sidebar-collapsed;
+                    hidden: root.sidebar-hidden;
+                    pending-friend-requests: root.friends-received-requests.length;
+                    pending-message-requests: root.pending-message-requests;
+                    pending-group-invites: root.pending-group-invites;
+                    pending-channel-invites: root.pending-channel-invites;
 
-                channel-selected(id) => {
-                    root.channel-selected(id);
+                    channel-selected(id) => {
+                        root.channel-selected(id);
+                    }
+                    dm-selected(id) => {
+                        root.dm-selected(id);
+                    }
+                    private-group-selected(id) => {
+                        root.private-group-selected(id);
+                    }
+                    search-clicked => {
+                        root.unified-search-query = "";
+                        root.unified-search-selected-index = 0;
+                        root.unified-search-open = true;
+                        root.unified-search-opened();
+                    }
+                    saved-messages-clicked => {
+                        root.saved-messages-clicked();
+                    }
+                    friends-clicked => {
+                        root.active-modal = "friends";
+                    }
+                    friend-requests-clicked => {
+                        // Open friends modal on Requests → Received. The Received tab
+                        // is populated by the FriendRequestsUpdated event path (with
+                        // decrypted sender name/avatar/note), so no refresh callback
+                        // is needed here — just reveal it.
+                        root.friends-modal-tab = "requests";
+                        root.friends-requests-sub-tab = "received";
+                        root.active-modal = "friends";
+                    }
+                    message-requests-clicked => {
+                        // Open friends modal with requests tab and private sub-tab selected
+                        root.friends-modal-tab = "requests";
+                        root.friends-requests-sub-tab = "private";
+                        root.active-modal = "friends";
+                        root.message-requests-clicked();
+                    }
+                    group-invites-clicked => {
+                        // Open friends modal with requests tab and groups sub-tab selected
+                        root.friends-modal-tab = "requests";
+                        root.friends-requests-sub-tab = "groups";
+                        root.active-modal = "friends";
+                        root.group-invites-clicked();
+                    }
+                    channel-invites-clicked => {
+                        // Open friends modal with requests tab and channels sub-tab selected
+                        root.friends-modal-tab = "requests";
+                        root.friends-requests-sub-tab = "channels";
+                        root.active-modal = "friends";
+                        root.channel-invites-clicked();
+                    }
+                    profile-clicked => {
+                        root.profile-clicked();
+                    }
+                    create-channel-clicked => {
+                        root.create-channel-initial-tab = 0;
+                        root.active-modal = "create-channel";
+                        root.open-create-channel();
+                    }
+                    join-channel-clicked => {
+                        root.create-channel-initial-tab = 1;
+                        root.active-modal = "create-channel";
+                        root.open-join-channel();
+                    }
+                    toggle-collapsed => {
+                        // Track user's explicit collapse choice for smart auto-expand
+                        root.sidebar-user-collapsed = !root.sidebar-collapsed;
+                        root.toggle-sidebar();
+                    }
+                    create-section-clicked => {
+                        root.create-section-rename-mode = false;
+                        root.create-section-name = "";
+                        root.create-section-emoji = "📁";
+                        root.create-section-id = "";
+                        root.active-modal = "create-section";
+                    }
+                    section-toggle-expanded(id) => {
+                        root.section-toggle-expanded(id);
+                    }
+                    section-conversation-selected(conv-id, conv-type) => {
+                        root.section-conversation-selected(conv-id, conv-type);
+                    }
+                    delete-section-clicked(id) => {
+                        root.delete-section-clicked(id);
+                    }
+                    rename-section-clicked(id) => {
+                        root.create-section-rename-mode = true;
+                        root.create-section-id = id;
+                        // Rust side should set name/emoji before opening
+                        root.rename-section-clicked(id);
+                        root.active-modal = "create-section";
+                    }
+                    move-to-section(conv-id, conv-type, section-id) => {
+                        root.move-to-section(conv-id, conv-type, section-id);
+                    }
+                    remove-from-section(conv-id) => {
+                        root.remove-from-section(conv-id);
+                    }
+                    settings-clicked => {
+                        root.active-modal = "settings";
+                        root.settings-clicked();
+                    }
+                    anon-mode-clicked => {
+                        root.toggle-anon-mode();
+                    }
                 }
-                dm-selected(id) => {
-                    root.dm-selected(id);
-                }
-                private-group-selected(id) => {
-                    root.private-group-selected(id);
-                }
-                search-clicked => {
-                    root.unified-search-query = "";
-                    root.unified-search-selected-index = 0;
-                    root.unified-search-open = true;
-                    root.unified-search-opened();
-                }
-                saved-messages-clicked => {
-                    root.saved-messages-clicked();
-                }
-                friends-clicked => {
-                    root.active-modal = "friends";
-                }
-                friend-requests-clicked => {
-                    // Open friends modal on Requests → Received. The Received tab
-                    // is populated by the FriendRequestsUpdated event path (with
-                    // decrypted sender name/avatar/note), so no refresh callback
-                    // is needed here — just reveal it.
-                    root.friends-modal-tab = "requests";
-                    root.friends-requests-sub-tab = "received";
-                    root.active-modal = "friends";
-                }
-                message-requests-clicked => {
-                    // Open friends modal with requests tab and private sub-tab selected
-                    root.friends-modal-tab = "requests";
-                    root.friends-requests-sub-tab = "private";
-                    root.active-modal = "friends";
-                    root.message-requests-clicked();
-                }
-                group-invites-clicked => {
-                    // Open friends modal with requests tab and groups sub-tab selected
-                    root.friends-modal-tab = "requests";
-                    root.friends-requests-sub-tab = "groups";
-                    root.active-modal = "friends";
-                    root.group-invites-clicked();
-                }
-                channel-invites-clicked => {
-                    // Open friends modal with requests tab and channels sub-tab selected
-                    root.friends-modal-tab = "requests";
-                    root.friends-requests-sub-tab = "channels";
-                    root.active-modal = "friends";
-                    root.channel-invites-clicked();
-                }
-                profile-clicked => {
-                    root.profile-clicked();
-                }
-                create-channel-clicked => {
-                    root.create-channel-initial-tab = 0;
-                    root.active-modal = "create-channel";
-                    root.open-create-channel();
-                }
-                join-channel-clicked => {
-                    root.create-channel-initial-tab = 1;
-                    root.active-modal = "create-channel";
-                    root.open-join-channel();
-                }
-                toggle-collapsed => {
-                    // Track user's explicit collapse choice for smart auto-expand
-                    root.sidebar-user-collapsed = !root.sidebar-collapsed;
-                    root.toggle-sidebar();
-                }
-                create-section-clicked => {
-                    root.create-section-rename-mode = false;
-                    root.create-section-name = "";
-                    root.create-section-emoji = "📁";
-                    root.create-section-id = "";
-                    root.active-modal = "create-section";
-                }
-                section-toggle-expanded(id) => {
-                    root.section-toggle-expanded(id);
-                }
-                section-conversation-selected(conv-id, conv-type) => {
-                    root.section-conversation-selected(conv-id, conv-type);
-                }
-                delete-section-clicked(id) => {
-                    root.delete-section-clicked(id);
-                }
-                rename-section-clicked(id) => {
-                    root.create-section-rename-mode = true;
-                    root.create-section-id = id;
-                    // Rust side should set name/emoji before opening
-                    root.rename-section-clicked(id);
-                    root.active-modal = "create-section";
-                }
-                move-to-section(conv-id, conv-type, section-id) => {
-                    root.move-to-section(conv-id, conv-type, section-id);
-                }
-                remove-from-section(conv-id) => {
-                    root.remove-from-section(conv-id);
-                }
-                settings-clicked => {
-                    root.active-modal = "settings";
-                    root.settings-clicked();
-                }
-                anon-mode-clicked => {
-                    root.toggle-anon-mode();
+
+                // Wide windows only; narrow ones dock the strip at the bottom
+                // of the chat column instead, within thumb reach.
+                MiniPlayer {
+                    active: root.audio-player-active && !root.is-small-screen;
+                    compact: root.sidebar-collapsed;
+                    is-playing: root.is-media-playing;
+                    title: root.audio-title;
+                    sender: root.audio-sender;
+                    progress: root.audio-progress;
+                    elapsed: root.audio-elapsed;
+                    duration: root.audio-duration-display;
+                    toggle => { root.audio-toggle-playback(); }
+                    close => { root.audio-dismiss(); }
+                    jump => { root.audio-jump-to-source(); }
+                    seek(pos) => { root.audio-seek(root.current-playing-attachment-id, pos); }
                 }
             }
 
@@ -1423,6 +1462,25 @@ export component App inherits Rectangle {
                     process-text(text) => { return root.process-text(text); }
                     scroll-to-bottom-clicked => { root.scroll-to-bottom-clicked(); }
                 }
+
+                        // Narrow windows only — the sidebar is collapsed to icons
+                        // there, so the strip docks to the bottom edge of the chat
+                        // column instead: the far easier reach for one thumb. It
+                        // takes its height from the composer rather than covering
+                        // it, which an overlay would.
+                        MiniPlayer {
+                            active: root.audio-player-active && root.is-small-screen;
+                            is-playing: root.is-media-playing;
+                            title: root.audio-title;
+                            sender: root.audio-sender;
+                            progress: root.audio-progress;
+                            elapsed: root.audio-elapsed;
+                            duration: root.audio-duration-display;
+                            toggle => { root.audio-toggle-playback(); }
+                            close => { root.audio-dismiss(); }
+                            jump => { root.audio-jump-to-source(); }
+                            seek(pos) => { root.audio-seek(root.current-playing-attachment-id, pos); }
+                        }
                     } // end VerticalLayout (call dock + ChatLayout)
 
                 // Thread panel (side panel on desktop, full-screen overlay on mobile).

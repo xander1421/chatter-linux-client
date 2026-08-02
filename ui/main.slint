@@ -158,6 +158,16 @@ export component MainWindow inherits Window {
     in-out property <float> audio-progress <=> app.audio-progress;
     in-out property <string> audio-elapsed <=> app.audio-elapsed;
 
+    // Persistent player strip — visible while a track is loaded, playing or not.
+    in-out property <bool> audio-player-active <=> app.audio-player-active;
+    in-out property <string> audio-title <=> app.audio-title;
+    in-out property <string> audio-sender <=> app.audio-sender;
+    in-out property <string> audio-duration-display <=> app.audio-duration-display;
+    callback audio-toggle-playback <=> app.audio-toggle-playback;
+    callback audio-dismiss <=> app.audio-dismiss;
+    callback audio-jump-to-source <=> app.audio-jump-to-source;
+    callback audio-track-finished <=> app.audio-track-finished;
+
     // ========== Image viewer state ==========
     in-out property <bool> image-viewer-visible <=> app.image-viewer-visible;
     in property <image> image-viewer-source <=> app.image-viewer-source;

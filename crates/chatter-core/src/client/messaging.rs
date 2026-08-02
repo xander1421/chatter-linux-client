@@ -51,6 +51,24 @@ use crate::system::Directories;
 use super::{ChatterClient, ClientError};
 
 impl ChatterClient {
+    /// Next audio attachment in a conversation after a given message.
+    ///
+    /// Drives autoplay in the persistent player: when a voice note ends, the
+    /// UI asks storage what follows it in the conversation it came from —
+    /// which is usually not the conversation on screen.
+    pub fn next_audio_after(
+        &self,
+        conversation_id: &crate::domain::ids::ChannelId,
+        conversation_type: &crate::domain::message::ConversationType,
+        after_sent_at: u64,
+    ) -> Result<
+        Option<crate::services::message::audio::AudioTrack>,
+        crate::services::message::MessageError,
+    > {
+        self.messages()
+            .next_audio_after(conversation_id, conversation_type, after_sent_at)
+    }
+
     // ── Messages façade ──────────────────────────────────────────────────
 
     pub fn get_messages_local(

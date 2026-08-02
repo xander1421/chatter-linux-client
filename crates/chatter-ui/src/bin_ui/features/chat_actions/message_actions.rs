@@ -56,53 +56,59 @@ fn try_jump_to_message(w: &MainWindow, parent_id: &str) -> bool {
     false
 }
 
-/// Wire quote/reply-bubble click callback.
+/// Scroll to a message by id, flashing it once it lands.
 ///
-/// Jumps the message list to the quoted parent and flashes it. If the parent
-/// isn't loaded yet, pulls older history via `load-more` and re-resolves a few
-/// times as the model repopulates; if it still isn't found, logs and no-ops.
+/// If it isn't in the visible model yet, pulls older history via `load-more`
+/// and re-resolves a few times as the model repopulates; if it still isn't
+/// found, logs and gives up. Shared by quote taps and the audio player strip,
+/// which jumps back to the message a playing track came from.
+pub(crate) fn jump_to_message(w: &MainWindow, target_id: &str) {
+    if target_id.is_empty() {
+        return;
+    }
+
+    // Fast path: already in the visible model.
+    if try_jump_to_message(w, target_id) {
+        return;
+    }
+
+    // Not loaded — request older history, then re-resolve as the model
+    // repopulates. Bounded, self-owning single-shot timers avoid a
+    // retained-Timer reference cycle.
+    tracing::debug!(target = %target_id, "Jump target not loaded; requesting older history");
+    w.invoke_load_more();
+
+    let done = Rc::new(Cell::new(false));
+    for &delay_ms in &[200u64, 450, 750, 1100, 1500] {
+        let weak_try = w.as_weak();
+        let target = target_id.to_string();
+        let done = done.clone();
+        let is_last = delay_ms == 1500;
+        Timer::single_shot(Duration::from_millis(delay_ms), move || {
+            if done.get() {
+                return;
+            }
+            if let Some(w) = weak_try.upgrade() {
+                if try_jump_to_message(&w, &target) {
+                    done.set(true);
+                } else if is_last {
+                    tracing::info!(
+                        target = %target,
+                        "Jump target still not loaded after fetching older history"
+                    );
+                }
+            }
+        });
+    }
+}
+
+/// Wire quote/reply-bubble click callback.
 pub fn wire_quote_clicked(window: &MainWindow) {
     let weak_window = window.as_weak();
 
     window.on_quote_clicked(move |parent_id: SharedString| {
-        let parent_id = parent_id.to_string();
-        if parent_id.is_empty() {
-            return;
-        }
-        let Some(w) = weak_window.upgrade() else { return };
-
-        // Fast path: parent already in the visible model.
-        if try_jump_to_message(&w, &parent_id) {
-            return;
-        }
-
-        // Parent not loaded — request older history, then re-resolve as the
-        // model repopulates. Bounded, self-owning single-shot timers avoid a
-        // retained-Timer reference cycle.
-        tracing::debug!(parent = %parent_id, "Quote target not loaded; requesting older history");
-        w.invoke_load_more();
-
-        let done = Rc::new(Cell::new(false));
-        for &delay_ms in &[200u64, 450, 750, 1100, 1500] {
-            let weak_try = w.as_weak();
-            let target = parent_id.clone();
-            let done = done.clone();
-            let is_last = delay_ms == 1500;
-            Timer::single_shot(Duration::from_millis(delay_ms), move || {
-                if done.get() {
-                    return;
-                }
-                if let Some(w) = weak_try.upgrade() {
-                    if try_jump_to_message(&w, &target) {
-                        done.set(true);
-                    } else if is_last {
-                        tracing::info!(
-                            parent = %target,
-                            "Quote parent still not loaded after fetching older history"
-                        );
-                    }
-                }
-            });
+        if let Some(w) = weak_window.upgrade() {
+            jump_to_message(&w, parent_id.as_str());
         }
     });
 }

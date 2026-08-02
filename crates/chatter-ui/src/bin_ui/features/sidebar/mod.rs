@@ -13,7 +13,6 @@ use std::sync::Arc;
 
 use chatter_core::client::ChatterClient;
 
-use crate::bin_ui::audio_state;
 use crate::{MainWindow, run_ui};
 
 // Re-export public functions
@@ -405,14 +404,3 @@ pub(crate) fn create_dm_sidebar_entry(
     );
 }
 
-/// Stop any currently playing audio and clear state.
-pub(crate) fn stop_audio_playback() {
-    // Stop the audio player
-    if let Ok(mut guard) = audio_state::get_audio_player().lock() {
-        if let Some(ref mut player) = *guard {
-            player.stop();
-        }
-    }
-    // Clear the audio state
-    audio_state::clear_state();
-}

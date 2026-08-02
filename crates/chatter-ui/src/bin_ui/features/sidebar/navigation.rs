@@ -10,7 +10,6 @@ use chatter_core::domain::ids::ChannelId;
 use crate::{MainWindow, run_ui};
 
 use super::channel::load_channel_into_ui;
-use super::stop_audio_playback;
 
 pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
@@ -21,9 +20,6 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
         let ui_ctx = ui_ctx_clone.clone();
         let auth_state = ui_ctx.auth_state().clone();
         let chat_state = ui_ctx.chat_state().clone();
-
-        // Stop any playing audio when switching channels
-        stop_audio_playback();
 
         // Clear inline GIF animations to free memory
         crate::bin_ui::gif_state::clear_inline_gifs();

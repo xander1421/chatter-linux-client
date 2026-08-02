@@ -13,7 +13,6 @@ use chatter_core::domain::AnonDmId;
 use crate::{MainWindow, run_ui};
 use crate::bin_ui::converters::messages_to_display_batch;
 
-use super::stop_audio_playback;
 
 /// Wire DM selected callback.
 pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -29,9 +28,6 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let ui_ctx = ui_ctx_clone.clone();
         let weak = weak_window.clone();
         
-        // Stop any playing audio
-        stop_audio_playback();
-
         // Clear inline GIF animations
         crate::bin_ui::gif_state::clear_inline_gifs();
 

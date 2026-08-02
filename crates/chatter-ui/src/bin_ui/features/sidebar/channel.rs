@@ -11,8 +11,6 @@ use chatter_core::domain::ids::ChannelId;
 use crate::{MainWindow, run_ui};
 use crate::bin_ui::converters::messages_to_display_batch;
 
-use super::stop_audio_playback;
-
 /// Wire channel selected callback.
 pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx_clone = ui_ctx.clone();
@@ -22,9 +20,6 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let channel_id_str = channel_id.to_string();
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx_clone.clone();
-
-        // Stop any playing audio when switching channels
-        stop_audio_playback();
 
         // Clear inline GIF animations to free memory
         crate::bin_ui::gif_state::clear_inline_gifs();

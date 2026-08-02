@@ -38,7 +38,6 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
         .chat_state()
         .set_active_conversation(ActiveConversation::None);
 
-    crate::bin_ui::features::sidebar::stop_audio_playback();
     crate::bin_ui::gif_state::clear_inline_gifs();
 
     // The mesh carries no attachments, and the composer hides the attach
