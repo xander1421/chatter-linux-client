@@ -44,16 +44,20 @@ strip = true
 opt-level = "z"
 
 # =============================================================================
-# Release-Dev Profile — Optimized binary that still uses the dev trust root.
-# Use for perf/RSS testing against the local docker-compose dev server.
-# debug-assertions=true keeps cfg(debug_assertions) active, which selects the
-# development sealed-sender trust root (config.rs). Without this, release
-# builds reject sealed sender messages signed by the dev Vault key (GRA-249).
+# Release-Dev Profile — Optimized binary for perf/RSS testing against the local
+# docker-compose dev server.
+#
+# The sealed-sender trust root is NOT selected by this profile. It used to be:
+# `debug-assertions = true` existed solely to keep cfg(debug_assertions) active
+# so config.rs would pick the dev trust root, which meant an optimized "release"
+# build silently trusted a key whose private half is in this repository. The
+# trust root is now the explicit `dev-trust-root` cargo feature — pass
+# `--features chatter-core/dev-trust-root` (or chatter-ui/dev-trust-root) when
+# pointing this profile at the dev Vault.
 # =============================================================================
 [profile.release-dev]
 inherits = "release"
 opt-level = 3
-debug-assertions = true
 overflow-checks = false
 strip = "debuginfo"
 lto = "thin"

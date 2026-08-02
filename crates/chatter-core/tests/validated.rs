@@ -23,8 +23,14 @@
 //! the client can read what the server cannot, and those accessors are
 //! `pub(crate)` without it.
 //!
+//! `dev-trust-root` is likewise not optional: this suite talks to the local
+//! docker-compose server, whose Vault signs sender certificates with the dev
+//! keypair. Integration tests link the lib without `cfg(test)`, so without the
+//! feature the trust root is unconfigured and the first `SignalService` panics.
+//!
 //! Run:
-//!   INTEGRATION_TESTS=1 cargo test -p chatter-core --features testing \
+//!   INTEGRATION_TESTS=1 cargo test -p chatter-core \
+//!     --features testing,dev-trust-root \
 //!     --test validated -- --nocapture --test-threads=1
 
 #[macro_use]
