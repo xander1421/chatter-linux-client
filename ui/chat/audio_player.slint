@@ -25,6 +25,11 @@ export component AudioPlayer inherits HorizontalLayout {
     // Slightly smaller variant for the reply/quote bubble
     in property <bool> compact: false;
 
+    // Touch input. Press-and-hold is the touch route to the context menu;
+    // on a pointer device right-click already is, and arming the timer there
+    // would fire the menu on every slow click.
+    in property <bool> mobile: false;
+
     callback play-clicked(string);          // toggle playback for attachment-id
     callback audio-seek(string, float);     // attachment-id, 0..1 seek position
     callback more-clicked(length, length);  // absolute x, y for the context menu
@@ -54,6 +59,7 @@ export component AudioPlayer inherits HorizontalLayout {
 
         play-touch := HoldArea {
             mouse-cursor: pointer;
+            enabled-for-touch: root.mobile;
             // `hold-fired` guard: the release that ends a hold also raises
             // `clicked`, and a hold that both opens the menu and starts
             // playback is worse than no menu at all.
@@ -97,6 +103,7 @@ export component AudioPlayer inherits HorizontalLayout {
             waveform-touch := HoldArea {
                 property <float> seek-pos: clamp(self.mouse-x / parent.width, 0.0, 1.0);
                 mouse-cursor: pointer;
+                enabled-for-touch: root.mobile;
                 clicked => {
                     if (self.hold-fired) { return; }
                     root.audio-seek(root.attachment-id, self.seek-pos);

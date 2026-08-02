@@ -643,6 +643,7 @@ export component MessageItem inherits Rectangle {
                                     // quote-touch so they consume their clicks; the rest
                                     // of the quote still falls through to jump.
                                     if root.reply-to-category == "audio": AudioPlayer {
+                                        mobile: root.mobile;
                                         compact: true;
                                         attachment-id: root.reply-to-attachment-id;
                                         filename: root.reply-to-filename;
@@ -841,6 +842,7 @@ export component MessageItem inherits Rectangle {
                             }
 
                             link-touch := HoldArea {
+                                enabled-for-touch: root.mobile;
                                 mouse-cursor: pointer;
                                 clicked => {
                                     if (self.hold-fired) { return; }
@@ -944,6 +946,7 @@ export component MessageItem inherits Rectangle {
                                     }
 
                                     img-touch := HoldArea {
+                                        enabled-for-touch: root.mobile;
                                         mouse-cursor: pointer;
                                         clicked => {
                                             if (self.hold-fired) { return; }
@@ -958,6 +961,7 @@ export component MessageItem inherits Rectangle {
 
                                 // Audio attachments — shared inline player
                                 if attachment.category == "audio": AudioPlayer {
+                                    mobile: root.mobile;
                                     attachment-id: attachment.id;
                                     filename: attachment.filename;
                                     waveform: attachment.waveform;
@@ -1064,6 +1068,7 @@ export component MessageItem inherits Rectangle {
                                     }
 
                                     video-touch := HoldArea {
+                                        enabled-for-touch: root.mobile;
                                         mouse-cursor: pointer;
                                         clicked => {
                                             if (self.hold-fired) { return; }
@@ -1164,6 +1169,7 @@ export component MessageItem inherits Rectangle {
                                     }
 
                                     file-touch := HoldArea {
+                                        enabled-for-touch: root.mobile;
                                         mouse-cursor: pointer;
                                         clicked => {
                                             if (self.hold-fired) { return; }
