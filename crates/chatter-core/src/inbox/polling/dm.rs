@@ -1046,7 +1046,7 @@ async fn try_parse_bootstrap_response(
         })
         .ok()?;
 
-    let (sender_identity, signal_ciphertext) = match decrypt_envelope(envelope, &mailbox_seed, None) {
+    let signal_ciphertext = match decrypt_envelope(envelope, &mailbox_seed) {
         Ok(result) => result,
         Err(e) => {
             tracing::warn!(
@@ -1061,7 +1061,6 @@ async fn try_parse_bootstrap_response(
 
     tracing::info!(
         peer_id = %peer_id,
-        sender_identity_len = sender_identity.len(),
         signal_ciphertext_len = signal_ciphertext.len(),
         "BOOTSTRAP[4/4] Layer 1 (envelope) decrypted, now decrypting Layer 2 (Signal)"
     );

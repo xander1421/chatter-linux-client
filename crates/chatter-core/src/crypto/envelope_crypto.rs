@@ -1,15 +1,32 @@
 //! Sealed Sender envelope encryption for NDSS '21 mailbox system.
 //!
 //! Implements the transport layer encryption for ephemeral mailboxes.
-//! The envelope is encrypted using ECDH between the sender's identity key
-//! and the recipient's mailbox ephemeral key.
+//! The envelope is encrypted using ECDH between a FRESH per-message ephemeral
+//! keypair and the recipient's mailbox key.
 //!
 //! This is STATELESS - no Signal session store required.
 //!
 //! # Protocol (NDSS '21)
 //!
-//! - Sender encrypts: `ECDH(sender_identity_private, recipient_mailbox_public)`
-//! - Recipient decrypts: `ECDH(recipient_mailbox_private, sender_identity_public)`
+//! - Sender encrypts: `ECDH(fresh_ephemeral_private, recipient_mailbox_public)`
+//! - Recipient decrypts: `ECDH(recipient_mailbox_private, ephemeral_public)`
+//!
+//! # Why the prefix is ephemeral
+//!
+//! The envelope is deposited on the UNAUTHENTICATED ephemeral-mailbox
+//! endpoint, so its first 32 bytes are readable by the server on every
+//! deposit. An earlier revision put the sender's long-term Signal identity
+//! public key there — the exact bytes the server publishes as that user's
+//! `identity_key` — which named the sender of the one flow whose entire
+//! purpose is sender anonymity. The prefix is now a fresh X25519 public key
+//! generated per envelope, matching sealed sender v2 (libsignal
+//! `rust/protocol/src/sealed_sender.rs`, `UnidentifiedSenderMessage::V2`).
+//!
+//! This layer therefore provides NO sender authentication and never did:
+//! anyone can deposit a well-formed envelope in a mailbox whose public key
+//! they know. Sender authentication lives in the inner Signal layer (sealed
+//! sender certificate + Double Ratchet), which is where it is actually
+//! checked.
 //!
 //! # Key Conversion
 //!
@@ -38,12 +55,15 @@ use crate::error::CryptoError;
 const NONCE_SIZE: usize = 24;
 
 /// HKDF info label for envelope key derivation. The derived key is bound to
-/// both endpoints by appending `sender_x25519_pub || recipient_x25519_pub`
+/// both endpoints by appending `ephemeral_x25519_pub || recipient_x25519_pub`
 /// after this label per RFC 5869 §3.3 — this prevents cross-mailbox key
 /// reuse when a sender talks to multiple anonymous mailboxes that share an
 /// X25519 keypair, and gives explicit destination binding the inner Signal
 /// layer was previously relied on to provide.
-const ENVELOPE_HKDF_INFO: &[u8] = b"NDSS21-MailboxEnvelope-v2";
+///
+/// v3 = ephemeral sender prefix. v2 envelopes (long-term identity prefix) do
+/// not decrypt under this label and are not supported.
+const ENVELOPE_HKDF_INFO: &[u8] = b"NDSS21-MailboxEnvelope-v3";
 
 /// Convert an Ed25519 public key to X25519 public key.
 ///
@@ -95,26 +115,36 @@ pub fn ed25519_to_x25519_private(ed25519_seed: &[u8; 32]) -> X25519PrivateKey {
 
 /// Encrypt an envelope for a mailbox recipient.
 ///
+/// A fresh X25519 keypair is generated for every call; its public half is the
+/// envelope prefix. Nothing about the sender is carried at this layer — see
+/// the module docs.
+///
 /// # Arguments
 ///
 /// * `plaintext` - The content to encrypt (Signal ciphertext)
-/// * `sender_identity_private` - Sender's X25519 identity private key
 /// * `recipient_mailbox_public` - Recipient's mailbox public key (Ed25519, will be converted)
 ///
 /// # Returns
 ///
-/// Encrypted envelope: `sender_identity_public (32) || nonce (24) || ciphertext || tag (16)`
+/// Encrypted envelope: `ephemeral_public (32) || nonce (24) || ciphertext || tag (16)`
 pub fn encrypt_envelope(
     plaintext: &[u8],
-    sender_identity_private: &X25519PrivateKey,
     recipient_mailbox_public: &[u8; 32],
 ) -> Result<Vec<u8>, CryptoError> {
     // Convert recipient's Ed25519 mailbox key to X25519
     let recipient_x25519 = ed25519_to_x25519_public(recipient_mailbox_public)?;
     let recipient_pk = X25519PublicKey::from(recipient_x25519);
 
+    // Fresh per-envelope sender key. Drawn straight from the OS CSPRNG rather
+    // than a userspace PRG so a memory disclosure cannot reproduce the series.
+    let mut ephemeral_seed = [0u8; 32];
+    {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut ephemeral_seed).expect("OS CSPRNG must not fail");}
+    let ephemeral_private = X25519PrivateKey::from(ephemeral_seed);
+    ephemeral_seed.zeroize();
+    let ephemeral_public = X25519PublicKey::from(&ephemeral_private);
+
     // Compute ECDH shared secret
-    let shared_secret = sender_identity_private.diffie_hellman(&recipient_pk);
+    let shared_secret = ephemeral_private.diffie_hellman(&recipient_pk);
 
     // RFC 7748 §6.1: reject low-order public keys that collapse ECDH to a
     // constant. Without this gate an attacker can submit a low-order
@@ -126,14 +156,12 @@ pub fn encrypt_envelope(
         ));
     }
 
-    let sender_public = X25519PublicKey::from(sender_identity_private);
-
     // Derive encryption key using HKDF, binding both endpoint public keys
     // into the info parameter (see ENVELOPE_HKDF_INFO doc comment).
     let hkdf = Hkdf::<Sha256>::new(None, shared_secret.as_bytes());
     let mut info = Vec::with_capacity(ENVELOPE_HKDF_INFO.len() + 64);
     info.extend_from_slice(ENVELOPE_HKDF_INFO);
-    info.extend_from_slice(sender_public.as_bytes());
+    info.extend_from_slice(ephemeral_public.as_bytes());
     info.extend_from_slice(recipient_pk.as_bytes());
     let mut encryption_key = [0u8; 32];
     hkdf.expand(&info, &mut encryption_key)
@@ -155,9 +183,9 @@ pub fn encrypt_envelope(
         .encrypt(nonce, plaintext)
         .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
 
-    // Build envelope: sender_public (32) || nonce (24) || ciphertext
+    // Build envelope: ephemeral_public (32) || nonce (24) || ciphertext
     let mut envelope = Vec::with_capacity(32 + NONCE_SIZE + ciphertext.len());
-    envelope.extend_from_slice(sender_public.as_bytes());
+    envelope.extend_from_slice(ephemeral_public.as_bytes());
     envelope.extend_from_slice(&nonce_bytes);
     envelope.extend_from_slice(&ciphertext);
 
@@ -170,17 +198,17 @@ pub fn encrypt_envelope(
 ///
 /// * `envelope` - The encrypted envelope
 /// * `recipient_mailbox_private` - Recipient's mailbox private key (Ed25519 seed, will be converted)
-/// * `expected_sender_identity` - Optional: expected sender's X25519 identity public key for verification
 ///
 /// # Returns
 ///
-/// Tuple of (sender_identity_public, decrypted_plaintext)
+/// The decrypted plaintext. There is deliberately no sender output: the
+/// prefix is a per-message ephemeral key that identifies nobody, and sender
+/// authentication is the inner Signal layer's job (see module docs).
 pub fn decrypt_envelope(
     envelope: &[u8],
     recipient_mailbox_private: &[u8; 32],
-    expected_sender_identity: Option<&[u8; 32]>,
-) -> Result<([u8; 32], Vec<u8>), CryptoError> {
-    // Minimum size: sender_pk (32) + nonce (24) + tag (16)
+) -> Result<Vec<u8>, CryptoError> {
+    // Minimum size: ephemeral_pk (32) + nonce (24) + tag (16)
     if envelope.len() < 32 + NONCE_SIZE + 16 {
         let err = CryptoError::DecryptionFailed("Envelope too short".into());
         tracing::warn!(
@@ -192,23 +220,9 @@ pub fn decrypt_envelope(
         return Err(err);
     }
 
-    // Extract sender's public key
-    let mut sender_public = [0u8; 32];
-    sender_public.copy_from_slice(&envelope[..32]);
-
-    // Verify sender if expected
-    if let Some(expected) = expected_sender_identity {
-        if sender_public != *expected {
-            let err = CryptoError::DecryptionFailed("Sender identity mismatch".into());
-            tracing::warn!(
-                target: "chatter::crypto::decrypt_failure",
-                kind = "sealed_sender",
-                error = %err,
-                "decryption failure"
-            );
-            return Err(err);
-        }
-    }
+    // Extract the sender's per-message ephemeral public key
+    let mut ephemeral_public = [0u8; 32];
+    ephemeral_public.copy_from_slice(&envelope[..32]);
 
     // Extract nonce and ciphertext
     let nonce = XNonce::from_slice(&envelope[32..32 + NONCE_SIZE]);
@@ -219,8 +233,8 @@ pub fn decrypt_envelope(
     let recipient_x25519_public = X25519PublicKey::from(&recipient_x25519);
 
     // Compute ECDH shared secret
-    let sender_pk = X25519PublicKey::from(sender_public);
-    let shared_secret = recipient_x25519.diffie_hellman(&sender_pk);
+    let ephemeral_pk = X25519PublicKey::from(ephemeral_public);
+    let shared_secret = recipient_x25519.diffie_hellman(&ephemeral_pk);
 
     // RFC 7748 §6.1: reject low-order sender public keys that collapse
     // ECDH to a constant. Without this gate an attacker can blast envelopes
@@ -244,7 +258,7 @@ pub fn decrypt_envelope(
     let hkdf = Hkdf::<Sha256>::new(None, shared_secret.as_bytes());
     let mut info = Vec::with_capacity(ENVELOPE_HKDF_INFO.len() + 64);
     info.extend_from_slice(ENVELOPE_HKDF_INFO);
-    info.extend_from_slice(&sender_public);
+    info.extend_from_slice(&ephemeral_public);
     info.extend_from_slice(recipient_x25519_public.as_bytes());
     let mut decryption_key = [0u8; 32];
     hkdf.expand(&info, &mut decryption_key)
@@ -288,7 +302,7 @@ pub fn decrypt_envelope(
             err
         })?;
 
-    Ok((sender_public, plaintext))
+    Ok(plaintext)
 }
 
 #[cfg(test)]
@@ -318,11 +332,6 @@ mod tests {
 
     #[test]
     fn test_envelope_roundtrip() {
-        // Generate sender identity (X25519)
-        let mut sender_seed = [0u8; 32];
-        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut sender_seed).expect("OS CSPRNG must not fail");}
-        let sender_private = X25519PrivateKey::from(sender_seed);
-
         // Generate recipient mailbox (Ed25519)
         let mut recipient_seed = [0u8; 32];
         {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut recipient_seed).expect("OS CSPRNG must not fail");}
@@ -331,31 +340,16 @@ mod tests {
 
         // Encrypt
         let plaintext = b"Hello, this is a secret message!";
-        let envelope = encrypt_envelope(
-            plaintext,
-            &sender_private,
-            recipient_public.as_bytes(),
-        )
-        .unwrap();
+        let envelope = encrypt_envelope(plaintext, recipient_public.as_bytes()).unwrap();
 
         // Decrypt
-        let (sender_pk, decrypted) =
-            decrypt_envelope(&envelope, &recipient_seed, None).unwrap();
+        let decrypted = decrypt_envelope(&envelope, &recipient_seed).unwrap();
 
         assert_eq!(decrypted, plaintext);
-
-        // Verify sender public key
-        let expected_sender = X25519PublicKey::from(&sender_private);
-        assert_eq!(sender_pk, *expected_sender.as_bytes());
     }
 
     #[test]
     fn test_envelope_wrong_recipient() {
-        // Generate sender identity
-        let mut sender_seed = [0u8; 32];
-        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut sender_seed).expect("OS CSPRNG must not fail");}
-        let sender_private = X25519PrivateKey::from(sender_seed);
-
         // Generate recipient mailbox
         let mut recipient_seed = [0u8; 32];
         {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut recipient_seed).expect("OS CSPRNG must not fail");}
@@ -367,54 +361,61 @@ mod tests {
         {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut wrong_seed).expect("OS CSPRNG must not fail");}
 
         // Encrypt to correct recipient
-        let plaintext = b"Secret message";
-        let envelope = encrypt_envelope(
-            plaintext,
-            &sender_private,
-            recipient_public.as_bytes(),
-        )
-        .unwrap();
+        let envelope = encrypt_envelope(b"Secret message", recipient_public.as_bytes()).unwrap();
 
         // Try to decrypt with wrong recipient - should fail
-        let result = decrypt_envelope(&envelope, &wrong_seed, None);
+        let result = decrypt_envelope(&envelope, &wrong_seed);
         assert!(result.is_err());
     }
 
+    /// The whole point of the ephemeral-mailbox deposit is that the server
+    /// cannot tell who sent it. The 32-byte envelope prefix is public to the
+    /// server, so it must be a per-message ephemeral key — never the sender's
+    /// long-term Signal identity public key, which the server itself publishes
+    /// under `identity_key` and can index by.
     #[test]
-    fn test_envelope_sender_verification() {
-        // Generate sender identity
-        let mut sender_seed = [0u8; 32];
-        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut sender_seed).expect("OS CSPRNG must not fail");}
-        let sender_private = X25519PrivateKey::from(sender_seed);
-        let sender_public = X25519PublicKey::from(&sender_private);
+    fn test_envelope_prefix_is_ephemeral_not_sender_identity() {
+        // The sender's long-term identity, as the server publishes it.
+        let mut identity_seed = [0u8; 32];
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut identity_seed).expect("OS CSPRNG must not fail");}
+        let sender_identity = X25519PrivateKey::from(identity_seed);
+        let published_identity = *X25519PublicKey::from(&sender_identity).as_bytes();
 
-        // Generate recipient mailbox
+        // Recipient mailbox (Ed25519).
         let mut recipient_seed = [0u8; 32];
         {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut recipient_seed).expect("OS CSPRNG must not fail");}
-        let recipient_signing = SigningKey::from_bytes(&recipient_seed);
-        let recipient_public = recipient_signing.verifying_key();
+        let recipient_public = SigningKey::from_bytes(&recipient_seed).verifying_key();
 
-        // Encrypt
-        let plaintext = b"Verified message";
-        let envelope = encrypt_envelope(
-            plaintext,
-            &sender_private,
-            recipient_public.as_bytes(),
-        )
-        .unwrap();
+        let first = encrypt_envelope(b"bootstrap", recipient_public.as_bytes()).unwrap();
+        let second = encrypt_envelope(b"bootstrap", recipient_public.as_bytes()).unwrap();
 
-        // Decrypt with correct sender verification
-        let (_, decrypted) = decrypt_envelope(
-            &envelope,
-            &recipient_seed,
-            Some(sender_public.as_bytes()),
-        )
-        .unwrap();
-        assert_eq!(decrypted, plaintext);
+        assert_ne!(
+            first[..32],
+            published_identity[..],
+            "envelope prefix leaks the sender's published identity key"
+        );
+        assert_ne!(
+            first[..32],
+            second[..32],
+            "envelope prefix must be fresh per message, not a reusable linker"
+        );
 
-        // Decrypt with wrong sender verification - should fail
-        let wrong_sender = [0u8; 32];
-        let result = decrypt_envelope(&envelope, &recipient_seed, Some(&wrong_sender));
-        assert!(result.is_err());
+        // Still decryptable by the mailbox owner.
+        let decrypted = decrypt_envelope(&first, &recipient_seed).unwrap();
+        assert_eq!(decrypted, b"bootstrap");
+    }
+
+    /// A tampered prefix must fail the AEAD, not silently decrypt: the prefix
+    /// is bound into the HKDF info, so swapping it changes the key.
+    #[test]
+    fn test_envelope_tampered_prefix_rejected() {
+        let mut recipient_seed = [0u8; 32];
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut recipient_seed).expect("OS CSPRNG must not fail");}
+        let recipient_public = SigningKey::from_bytes(&recipient_seed).verifying_key();
+
+        let mut envelope = encrypt_envelope(b"Verified message", recipient_public.as_bytes()).unwrap();
+        envelope[0] ^= 0x01;
+
+        assert!(decrypt_envelope(&envelope, &recipient_seed).is_err());
     }
 }

@@ -163,14 +163,11 @@ fn test_ed25519_to_x25519_deterministic() {
 /// Envelope encryption roundtrip via the full NDSS'21 path.
 ///
 /// Security property: ECDH shared secret + HKDF + XChaCha20-Poly1305 provides
-///   confidentiality, integrity, and forward secrecy per message.
+///   confidentiality, integrity, and forward secrecy per message. The sender
+///   half of the ECDH is a fresh per-envelope ephemeral key, so the envelope
+///   carries no long-term sender identifier.
 #[test]
 fn test_envelope_encrypt_decrypt_roundtrip() {
-    // Sender: Ed25519 identity key (converted to X25519 for ECDH)
-    let sender_ed = ed25519_dalek::SigningKey::from_bytes(&rand::random::<[u8; 32]>());
-    let sender_ed_pk_bytes = sender_ed.verifying_key().to_bytes();
-    let sender_x25519_private = envelope_crypto::ed25519_to_x25519_private(&sender_ed.to_bytes());
-
     // Recipient: Ed25519 mailbox keypair
     let recipient_ed = ed25519_dalek::SigningKey::from_bytes(&rand::random::<[u8; 32]>());
     let recipient_ed_pk_bytes = recipient_ed.verifying_key().to_bytes();
@@ -178,62 +175,48 @@ fn test_envelope_encrypt_decrypt_roundtrip() {
     let plaintext = b"Envelope encrypted message for NDSS'21 mailbox";
 
     // encrypt_envelope takes Ed25519 public key (converts to X25519 internally)
-    let envelope = envelope_crypto::encrypt_envelope(
-        plaintext,
-        &sender_x25519_private,
-        &recipient_ed_pk_bytes,
-    ).expect("Envelope encryption should succeed");
+    let envelope = envelope_crypto::encrypt_envelope(plaintext, &recipient_ed_pk_bytes)
+        .expect("Envelope encryption should succeed");
 
     // Decrypt with recipient's Ed25519 seed (decrypt_envelope converts internally)
-    let sender_x25519_public = envelope_crypto::ed25519_to_x25519_public(&sender_ed_pk_bytes).unwrap();
     let recipient_seed = recipient_ed.to_bytes();
 
-    let (recovered_sender_pk, decrypted) = envelope_crypto::decrypt_envelope(
-        &envelope,
-        &recipient_seed,
-        Some(&sender_x25519_public), // verify sender
-    ).expect("Envelope decryption should succeed");
+    let decrypted = envelope_crypto::decrypt_envelope(&envelope, &recipient_seed)
+        .expect("Envelope decryption should succeed");
 
     assert_eq!(decrypted, plaintext, "Decrypted should match original");
-    assert_eq!(recovered_sender_pk, sender_x25519_public, "Sender PK should be recovered");
 }
 
 /// Envelope: wrong recipient key cannot decrypt.
 #[test]
 fn test_envelope_wrong_recipient_fails() {
-    let sender_ed = ed25519_dalek::SigningKey::from_bytes(&rand::random::<[u8; 32]>());
-    let sender_x25519_private = envelope_crypto::ed25519_to_x25519_private(&sender_ed.to_bytes());
-
     let recipient_ed = ed25519_dalek::SigningKey::from_bytes(&rand::random::<[u8; 32]>());
     let recipient_ed_pk = recipient_ed.verifying_key().to_bytes();
 
     let wrong_recipient = ed25519_dalek::SigningKey::from_bytes(&rand::random::<[u8; 32]>());
     let wrong_seed = wrong_recipient.to_bytes();
 
-    let envelope = envelope_crypto::encrypt_envelope(b"secret", &sender_x25519_private, &recipient_ed_pk).unwrap();
+    let envelope = envelope_crypto::encrypt_envelope(b"secret", &recipient_ed_pk).unwrap();
 
-    let result = envelope_crypto::decrypt_envelope(&envelope, &wrong_seed, None);
+    let result = envelope_crypto::decrypt_envelope(&envelope, &wrong_seed);
     assert!(result.is_err(), "Wrong recipient key must fail decryption");
 }
 
 /// Envelope: tampered ciphertext detected.
 #[test]
 fn test_envelope_tampered_ciphertext_detected() {
-    let sender_ed = ed25519_dalek::SigningKey::from_bytes(&rand::random::<[u8; 32]>());
-    let sender_x25519_private = envelope_crypto::ed25519_to_x25519_private(&sender_ed.to_bytes());
-
     let recipient_ed = ed25519_dalek::SigningKey::from_bytes(&rand::random::<[u8; 32]>());
     let recipient_ed_pk = recipient_ed.verifying_key().to_bytes();
     let recipient_seed = recipient_ed.to_bytes();
 
-    let mut envelope = envelope_crypto::encrypt_envelope(b"tamper test", &sender_x25519_private, &recipient_ed_pk).unwrap();
+    let mut envelope = envelope_crypto::encrypt_envelope(b"tamper test", &recipient_ed_pk).unwrap();
 
     // Flip a byte in the ciphertext
     if let Some(byte) = envelope.last_mut() {
         *byte ^= 0xFF;
     }
 
-    let result = envelope_crypto::decrypt_envelope(&envelope, &recipient_seed, None);
+    let result = envelope_crypto::decrypt_envelope(&envelope, &recipient_seed);
     assert!(result.is_err(), "Tampered envelope must be rejected");
 }
 

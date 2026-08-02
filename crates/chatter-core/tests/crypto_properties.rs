@@ -157,7 +157,7 @@ proptest! {
 // =============================================================================
 //
 // Property: for any byte slice of length 0..=10_000 and any 32-byte
-// "private key", `decrypt_envelope(slice, &key, None)` MUST NOT panic.
+// "private key", `decrypt_envelope(slice, &key)` MUST NOT panic.
 // It must always return Ok or Err — never abort the process.
 //
 // The chance of random bytes successfully decrypting under a random ECDH
@@ -184,7 +184,7 @@ proptest! {
         // panic on logic bugs — proptest itself will surface a panic as a
         // failure with the offending seed.  We rely on proptest's failure
         // reporting and just call the function: any panic = test failure.
-        let result = decrypt_envelope(&envelope, &recipient_seed, None);
+        let result = decrypt_envelope(&envelope, &recipient_seed);
 
         // Either Ok (astronomically unlikely) or Err — both fine. The
         // property is "no panic", which is enforced by control reaching
