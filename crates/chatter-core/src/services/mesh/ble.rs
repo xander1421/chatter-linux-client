@@ -1798,6 +1798,36 @@ impl BleRuntime {
         let Ok(request) = RequestSyncPacket::decode(&packet.payload) else {
             return;
         };
+
+        // A sync response can replay the entire store, and the filter does not
+        // constrain that: a GCS filter that is empty or undecodable matches
+        // nothing, so `handle_request_sync` reads it as "the requester holds none
+        // of it" and answers with everything. Content is not the exposure —
+        // public messages are already public and private ones are sealed — but
+        // announces and prekey bundles are *keyed by their owner's identity*, and
+        // handing the set of them to a stranger hands over the list of everyone
+        // this device has met, plus the material to start a session with each.
+        //
+        // So a request is only answered for a peer that has proved an identity to
+        // us: a verified announce, which since it must derive the sender ID from
+        // the Noise key it carries is a real binding rather than a claim. Honest
+        // peers announce on connect before they ask, so this costs a real device
+        // nothing.
+        let known = self.state.with(|state| {
+            state
+                .peers
+                .info(claimed)
+                .is_some_and(|record| record.verified_nickname)
+        });
+        if !known {
+            tracing::debug!(
+                target: "mesh::ble",
+                peer = %claimed,
+                "sync request from a peer with no verified announce ignored"
+            );
+            return;
+        }
+
         let sends = self
             .gossip
             .handle_request_sync(claimed, &request, now_secs());
@@ -3560,6 +3590,139 @@ mod tests {
         assert!(
             state.with(|inner| inner.links.peer_for(&link).is_none()),
             "and must not bind the attacker's link to the victim's identity"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sync_request_from_a_peer_that_never_announced_is_not_answered() {
+        // A REQUEST_SYNC carrying an empty or undecodable GCS filter matches
+        // nothing, so `handle_request_sync` reads it as "this peer holds none of
+        // it" and replies with the whole store. The requester is whatever sender
+        // ID the packet claimed, and answering it needs no session, no announce
+        // and no binding of any kind — so anyone in radio range could ask once
+        // and be handed every announce and prekey bundle we hold, each keyed by
+        // its owner's identity. That is a social graph of everyone we have met.
+        let (mut runtime, radio, state) = runtime();
+
+        // Something identity-bearing in the store: one real peer's announce.
+        let subject = MeshIdentity::generate(&mut OsRng);
+        let subject_peer = subject.peer_id();
+        let announcement = AnnouncementPacket::new(
+            "subject".to_string(),
+            subject.static_public().to_vec(),
+            subject.signing_public().to_vec(),
+            None,
+            None,
+            None,
+        );
+        let mut announce = BitchatPacket::new(
+            MessageType::Announce,
+            subject_peer.to_routing_bytes().expect("routing bytes"),
+            None,
+            now_millis(),
+            announcement.encode().expect("encodes"),
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        announce.signature = Some(sign_packet(&subject, &announce).expect("signs"));
+        let subject_link = LinkId::new("/mock/subject");
+        state.with(|inner| {
+            inner.links.link_up(subject_link.clone(), LinkRole::Central);
+            inner.links.set_writable(&subject_link, true);
+            inner.max_write.insert(subject_link.clone(), 512);
+        });
+        runtime.on_packet(&subject_link, announce).await;
+        // Flush whatever the announce itself set in motion, so the only writes
+        // the assertion can see are the answer to the stranger's request.
+        runtime.drain_writes().await;
+        assert!(
+            runtime.gossip.has_announcement(&subject_peer),
+            "the fixture must really have something worth leaking"
+        );
+
+        // A stranger we have never heard an announce from asks for everything.
+        let stranger = PeerId::from_str("cccccccccccccccc");
+        let link = LinkId::new("/mock/stranger");
+        state.with(|inner| {
+            inner.links.link_up(link.clone(), LinkRole::Central);
+            inner.links.set_writable(&link, true);
+            inner.max_write.insert(link.clone(), 512);
+            inner.links.bind_if_unbound(&link, &stranger);
+        });
+        let mut request = RequestSyncPacket::new(19, 4096, Vec::new());
+        request.types = Some(u64::MAX);
+        let packet = BitchatPacket::new(
+            MessageType::RequestSync,
+            stranger.to_routing_bytes().expect("routing bytes"),
+            None,
+            now_millis(),
+            request.encode().expect("encodes"),
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+
+        let before = radio.write_count();
+        runtime.on_request_sync(&packet, &stranger).await;
+        runtime.drain_writes().await;
+
+        assert_eq!(
+            radio.write_count(),
+            before,
+            "a peer that has never proved an identity to us gets no sync response"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sync_request_from_a_peer_that_did_announce_is_still_answered() {
+        // The gate must not break sync itself: an honest peer announces on
+        // connect and then asks, and that request has to be served or two
+        // devices in a room never exchange history at all.
+        let (mut runtime, radio, state) = runtime();
+
+        let subject = MeshIdentity::generate(&mut OsRng);
+        let subject_peer = subject.peer_id();
+        let announcement = AnnouncementPacket::new(
+            "subject".to_string(),
+            subject.static_public().to_vec(),
+            subject.signing_public().to_vec(),
+            None,
+            None,
+            None,
+        );
+        let mut announce = BitchatPacket::new(
+            MessageType::Announce,
+            subject_peer.to_routing_bytes().expect("routing bytes"),
+            None,
+            now_millis(),
+            announcement.encode().expect("encodes"),
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        announce.signature = Some(sign_packet(&subject, &announce).expect("signs"));
+        let link = LinkId::new("/mock/subject");
+        state.with(|inner| {
+            inner.links.link_up(link.clone(), LinkRole::Central);
+            inner.links.set_writable(&link, true);
+            inner.max_write.insert(link.clone(), 512);
+        });
+        runtime.on_packet(&link, announce).await;
+        runtime.drain_writes().await;
+
+        let mut request = RequestSyncPacket::new(19, 4096, Vec::new());
+        request.types = Some(u64::MAX);
+        let packet = BitchatPacket::new(
+            MessageType::RequestSync,
+            subject_peer.to_routing_bytes().expect("routing bytes"),
+            None,
+            now_millis(),
+            request.encode().expect("encodes"),
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+
+        let before = radio.write_count();
+        runtime.on_request_sync(&packet, &subject_peer).await;
+        runtime.drain_writes().await;
+
+        assert!(
+            radio.write_count() > before,
+            "an announced peer must still get its diff"
         );
     }
 
