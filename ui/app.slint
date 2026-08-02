@@ -1117,9 +1117,12 @@ export component App inherits Rectangle {
                 // Survives dismissing the connection banner: the dot on the
                 // settings button is what keeps saying the server is down.
                 server-unreachable: root.server-unreachable;
-                // Mobile treated as narrow desktop: always-visible split view
-                // with collapse toggle. No full-screen swap on conversation open.
-                mobile-mode: false;
+                // Mobile is a two-view swap: the conversation list owns the whole
+                // width, and opening a conversation hands the whole width to the
+                // chat (see `sidebar-hidden` below). Treating a 411dp phone as a
+                // narrow desktop gave two permanently half-broken columns — the
+                // list took ~58% and the chat clipped mid-sentence.
+                mobile-mode: root.is-mobile-platform;
                 mobile-width: root.width;
                 channels: root.channels;
                 dm-conversations: root.dm-conversations;
@@ -1130,20 +1133,27 @@ export component App inherits Rectangle {
                 user-avatar-source: root.user-avatar-source;
                 user-initials: root.user-initials;
                 user-presence-status: root.user-presence-status;
-                collapsed: root.is-small-screen || root.sidebar-collapsed;
+                // Never the 60px icon rail on mobile: at 411dp that rail ate 15%
+                // of the screen and showed nothing readable.
+                collapsed: root.is-mobile-platform ? false : (root.is-small-screen || root.sidebar-collapsed);
                 hidden: root.sidebar-hidden;
                 pending-friend-requests: root.friends-received-requests.length;
                 pending-message-requests: root.pending-message-requests;
                 pending-group-invites: root.pending-group-invites;
                 pending-channel-invites: root.pending-channel-invites;
 
+                // Mobile: picking a conversation swaps the list out for the chat.
+                // The header's back button (below) swaps it back.
                 channel-selected(id) => {
+                    if (root.is-mobile-platform) { root.sidebar-hidden = true; }
                     root.channel-selected(id);
                 }
                 dm-selected(id) => {
+                    if (root.is-mobile-platform) { root.sidebar-hidden = true; }
                     root.dm-selected(id);
                 }
                 private-group-selected(id) => {
+                    if (root.is-mobile-platform) { root.sidebar-hidden = true; }
                     root.private-group-selected(id);
                 }
                 search-clicked => {
@@ -1153,6 +1163,7 @@ export component App inherits Rectangle {
                     root.unified-search-opened();
                 }
                 saved-messages-clicked => {
+                    if (root.is-mobile-platform) { root.sidebar-hidden = true; }
                     root.saved-messages-clicked();
                 }
                 friends-clicked => {
@@ -1217,6 +1228,7 @@ export component App inherits Rectangle {
                     root.section-toggle-expanded(id);
                 }
                 section-conversation-selected(conv-id, conv-type) => {
+                    if (root.is-mobile-platform) { root.sidebar-hidden = true; }
                     root.section-conversation-selected(conv-id, conv-type);
                 }
                 delete-section-clicked(id) => {
@@ -1245,8 +1257,11 @@ export component App inherits Rectangle {
             }
 
             // Right side area (Chat + Panels)
-            // On mobile: hidden when sidebar is showing full-width (chat list view)
-            chat-panel-area := Rectangle {
+            // On mobile this is the *other* half of the two-view swap: removed
+            // from the tree entirely while the full-width list is up. `if`, not
+            // `visible`, because a Slint element hidden with `visible: false`
+            // still claims its layout slot and would squeeze the list.
+            if !root.is-mobile-platform || root.sidebar-hidden: chat-panel-area := Rectangle {
                 horizontal-stretch: 1;
                 vertical-stretch: 1;
                 visible: true;
@@ -1317,8 +1332,10 @@ export component App inherits Rectangle {
                         && !(root.is-small-screen && root.thread-panel-visible): ChatLayout {
                     vertical-stretch: 1;
                     hide-header: false;
-                    show-back-button: false;
-                    back-clicked => { }
+                    // Mobile: the only way back to the conversation list, since
+                    // the list is swapped out entirely while a chat is open.
+                    show-back-button: root.is-mobile-platform;
+                    back-clicked => { root.sidebar-hidden = false; }
                     channel-id: root.channel-id;
                     channel-name: root.channel-name;
                     channel-type: root.channel-type;
