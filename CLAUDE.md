@@ -35,16 +35,40 @@ stale.
 
 ## Before trusting a security claim in this crate
 
-Two controls that read as implemented are not reachable from production code.
-Check for callers before citing either:
+Some controls that read as implemented are not reachable from production code.
+Check for callers before citing any of them.
 
-- `chatter-mesh-link/src/announce.rs` — the announce trust policy
-  (`preflight_announce`, `evaluate_announce_trust`, `evaluate_announce`) has
-  zero callers outside its own `#[cfg(test)]` module. Mesh peers are
-  unauthenticated on the live path.
+`crates/chatter-core/tests/production_wiring.rs` now holds this list as an
+executable table and fails when an entry changes in either direction — a wired
+control losing its last caller, or a dead one gaining its first. Prefer it over
+this prose, which has already gone stale once.
+
+- **CORRECTED (was wrong here):** the announce trust policy
+  (`chatter-mesh-link/src/announce.rs`: `preflight_announce`,
+  `evaluate_announce_trust`, `evaluate_announce`) **is** wired now —
+  `services/mesh/ble.rs:782` calls `evaluate_announce`, which drives the other
+  two. Mesh peers are authenticated on the live path, including the
+  sender-ID-equals-`SHA256(noise key)[..8]` derivation check.
+- Still dead in that crate: `plan_announce_response` and
+  `announce_back_dedup_id` (the announce-back / initial-sync / afterglow half of
+  the ported handler), and the whole
+  `chatter-mesh-noise/src/sign.rs` `sign_announce` / `verify_announce` /
+  `canonical_announce_bytes` trio — production authenticates announces with the
+  packet-level `verify_packet` instead, so anyone citing the announce-specific
+  preimage is reading dead code.
 - `crypto/keytransparency.rs::verify_consistency_proof` — only called from
   `tests/validated.rs`. Inclusion proofs *are* verified in production
-  (`services/signal/session.rs:76`, `:664`); consistency proofs are not.
+  (`services/signal/session.rs:76`, `:712`); consistency proofs are not.
+  V25 in `VALIDATED.md` reads as though the client monitors the log; it does
+  not — the test calls the verifier by hand.
+- `services/signal/identity.rs::accept_peer_identity_change` and
+  `pending_identity_change` — zero production callers, and this one wedges.
+  Production writes `pending_identity_changes` rows (`note_identity_change`,
+  from the four send paths in `session.rs`) and reads them (`session.rs:172`,
+  which refuses the send with `UntrustedIdentity`), but `accept_…` holds the
+  only `DELETE` and nothing outside `identity.rs` reaches it. A peer
+  reinstalling therefore breaks that conversation permanently, with no shipped
+  path — UI or otherwise — that can clear the row.
 
 The full list, with citations, is `docs/OPEN-ITEMS.md` in the server repo.
 

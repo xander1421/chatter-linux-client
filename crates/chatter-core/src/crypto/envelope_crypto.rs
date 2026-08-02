@@ -418,4 +418,116 @@ mod tests {
 
         assert!(decrypt_envelope(&envelope, &recipient_seed).is_err());
     }
+
+    /// Build an envelope exactly as `encrypt_envelope` does, but derive the key
+    /// under a caller-chosen HKDF label. This is how a v2 sender behaved.
+    fn envelope_under_label(
+        plaintext: &[u8],
+        recipient_mailbox_public: &[u8; 32],
+        label: &[u8],
+    ) -> Vec<u8> {
+        let recipient_pk = X25519PublicKey::from(
+            ed25519_to_x25519_public(recipient_mailbox_public).unwrap(),
+        );
+
+        let mut ephemeral_seed = [0u8; 32];
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut ephemeral_seed).expect("OS CSPRNG must not fail");}
+        let ephemeral_private = X25519PrivateKey::from(ephemeral_seed);
+        let ephemeral_public = X25519PublicKey::from(&ephemeral_private);
+        let shared_secret = ephemeral_private.diffie_hellman(&recipient_pk);
+
+        let hkdf = Hkdf::<Sha256>::new(None, shared_secret.as_bytes());
+        let mut info = Vec::new();
+        info.extend_from_slice(label);
+        info.extend_from_slice(ephemeral_public.as_bytes());
+        info.extend_from_slice(recipient_pk.as_bytes());
+        let mut key = [0u8; 32];
+        hkdf.expand(&info, &mut key).unwrap();
+
+        let mut nonce_bytes = [0u8; NONCE_SIZE];
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut nonce_bytes).expect("OS CSPRNG must not fail");}
+        let cipher = XChaCha20Poly1305::new_from_slice(&key).unwrap();
+        let ciphertext = cipher
+            .encrypt(XNonce::from_slice(&nonce_bytes), plaintext)
+            .unwrap();
+
+        let mut envelope = Vec::new();
+        envelope.extend_from_slice(ephemeral_public.as_bytes());
+        envelope.extend_from_slice(&nonce_bytes);
+        envelope.extend_from_slice(&ciphertext);
+        envelope
+    }
+
+    /// A v2 envelope must be REJECTED, never mis-decrypted.
+    ///
+    /// This wire format moved v2 -> v3, and the version lives nowhere on the
+    /// wire: there is no version byte, no length change, no structural tell.
+    /// `ephemeral_public(32) || nonce(24) || ciphertext||tag` is byte-identical
+    /// between the two. The ONLY thing separating them is the HKDF `info` label,
+    /// so the entire version check is "the AEAD tag fails".
+    ///
+    /// That is sound but load-bearing and undefended: anyone adding a
+    /// compatibility retry under the v2 label — the obvious thing to reach for
+    /// when old envelopes start failing in the field — silently restores the
+    /// long-term-identity prefix this version bump existed to remove, and the
+    /// existing round-trip tests all still pass, because they only ever
+    /// exercise v3 talking to v3.
+    ///
+    /// MUTATION: add a v2 fallback to `decrypt_envelope` (retry key derivation
+    /// with `b"NDSS21-MailboxEnvelope-v2"` when the v3 open fails). Every other
+    /// test in this module stays green; this one goes red.
+    #[test]
+    fn v2_envelope_is_rejected_not_silently_accepted() {
+        let mut recipient_seed = [0u8; 32];
+        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut recipient_seed).expect("OS CSPRNG must not fail");}
+        let recipient_public = SigningKey::from_bytes(&recipient_seed).verifying_key();
+
+        let v2 = envelope_under_label(
+            b"a message from a v2 sender",
+            recipient_public.as_bytes(),
+            b"NDSS21-MailboxEnvelope-v2",
+        );
+
+        // POSITIVE CONTROL. If the hand-rolled builder were wrong in some way
+        // unrelated to the label, the rejection below would prove nothing —
+        // every malformed blob is "rejected". Same builder, current label,
+        // must decrypt.
+        let v3 = envelope_under_label(
+            b"a message from a v3 sender",
+            recipient_public.as_bytes(),
+            ENVELOPE_HKDF_INFO,
+        );
+        assert_eq!(
+            decrypt_envelope(&v3, &recipient_seed).expect("v3 control must decrypt"),
+            b"a message from a v3 sender",
+            "positive control failed: the test's envelope builder does not match \
+             encrypt_envelope, so the v2 rejection below is meaningless"
+        );
+
+        assert!(
+            decrypt_envelope(&v2, &recipient_seed).is_err(),
+            "a v2 envelope decrypted under the v3 label — the version bump is not \
+             actually enforced, and old envelopes are being accepted"
+        );
+    }
+
+    /// The HKDF label IS the version. Pin its exact bytes.
+    ///
+    /// Nothing else can catch a change here. Both sides of a round-trip test use
+    /// whatever the constant currently says, so every test in this file stays
+    /// green while the client silently stops being able to read any envelope
+    /// written by a peer or server build that was not recompiled in lockstep.
+    /// A typo in this string is an undetectable interop break.
+    ///
+    /// Changing this constant is a wire-format break: bump the version
+    /// deliberately, and update this test in the same commit.
+    #[test]
+    fn envelope_version_label_is_pinned() {
+        assert_eq!(
+            ENVELOPE_HKDF_INFO, b"NDSS21-MailboxEnvelope-v3",
+            "the mailbox envelope HKDF label changed. That is a wire-format break: \
+             every envelope written by a peer on the old label stops decrypting, and \
+             no round-trip test can see it because both halves move together."
+        );
+    }
 }
