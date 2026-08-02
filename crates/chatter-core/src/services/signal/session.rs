@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use libsignal_protocol::{ProtocolAddress, DeviceId, SenderCertificate, PublicKey};
+use libsignal_protocol::{CiphertextMessageType, ProtocolAddress, DeviceId, SenderCertificate, PublicKey};
 use tokio::sync::Mutex;
 
 use crate::crypto::signal::sesame::ConvergenceResult;
@@ -255,10 +255,17 @@ impl SignalService {
     }
 
     /// Decrypt an incoming Sealed Sender message.
+    ///
+    /// Returns the authenticated sender, the plaintext, and the inner
+    /// `CiphertextMessageType`. Callers MUST reject
+    /// `CiphertextMessageType::Plaintext` unless they are the
+    /// DecryptionErrorMessage handler: those bytes skipped the Double Ratchet,
+    /// so nothing checked the sender's identity key, replayed counters, or
+    /// forward secrecy.
     pub async fn decrypt_message(
         &self,
         ciphertext: &[u8],
-    ) -> Result<(ProtocolAddress, Vec<u8>), ServiceError> {
+    ) -> Result<(ProtocolAddress, Vec<u8>, CiphertextMessageType), ServiceError> {
         let local_uuid = self.settings_repo.get_string(keys::CURRENT_USER_ID)?.ok_or(ServiceError::NotLoggedIn)?;
         let local_device_id = self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID)?.ok_or(ServiceError::NotLoggedIn)?;
         let device_id_struct = DeviceId::new(local_device_id.try_into().map_err(|_| ServiceError::Validation("ID too large".into()))?).map_err(|_| ServiceError::Validation("Invalid ID".into()))?;

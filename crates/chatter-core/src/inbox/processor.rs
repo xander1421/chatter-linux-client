@@ -484,7 +484,25 @@ impl MessageProcessor {
         .await;
 
         match result {
-            Ok(decrypted) => {
+            // `Plaintext` skipped `message_decrypt_*`: no is_trusted_identity,
+            // no replay protection, no forward secrecy. Only the gateway's
+            // DecryptionErrorMessage handler may accept that shape, and this
+            // path is not it.
+            Ok((_, libsignal_protocol::CiphertextMessageType::Plaintext)) => {
+                tracing::warn!(
+                    target: "chatter::crypto::decrypt_failure",
+                    kind = "sealed_sender",
+                    message_id = %message.id,
+                    "rejected unratcheted Plaintext sealed-sender message"
+                );
+                Err(ProcessingError::DecryptionFailed {
+                    message_id: message.id.clone(),
+                    error: "sealed sender message bypassed the ratchet \
+                            (CiphertextMessageType::Plaintext)"
+                        .to_string(),
+                })
+            }
+            Ok((decrypted, _)) => {
                 let sender_address = self.extract_sender_from_sealed(&decrypted);
                 let content_type = self.determine_content_type(&decrypted.message);
 

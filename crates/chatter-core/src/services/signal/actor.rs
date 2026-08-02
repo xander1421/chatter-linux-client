@@ -52,12 +52,17 @@ pub enum SignalCommand {
         recipient_address: ProtocolAddress,
         response: oneshot::Sender<Result<(Vec<u8>, u8), ServiceError>>,
     },
+    /// The `CiphertextMessageType` rides back with the plaintext on purpose:
+    /// `Plaintext` means the bytes bypassed the Double Ratchet entirely and
+    /// only the DecryptionErrorMessage handler may accept them.
     DecryptSealed {
         ciphertext: Vec<u8>,
         trust_root: PublicKey,
         local_uuid: String,
         local_device_id: DeviceId,
-        response: oneshot::Sender<Result<(ProtocolAddress, Vec<u8>), ServiceError>>,
+        response: oneshot::Sender<
+            Result<(ProtocolAddress, Vec<u8>, CiphertextMessageType), ServiceError>,
+        >,
     },
     DecryptIdentified {
         ciphertext: Vec<u8>,
@@ -301,7 +306,7 @@ impl SignalActorHandle {
                                 None, local_uuid, local_device_id,
                                 &mut store, &mut store2, &mut store3, &store6, &mut store4,
                             ).await {
-                                Ok(result) => Ok((ProtocolAddress::new(result.sender_uuid, result.device_id), result.message)),
+                                Ok((result, msg_type)) => Ok((ProtocolAddress::new(result.sender_uuid, result.device_id), result.message, msg_type)),
                                 // Preserve the STRUCTURED CryptoError (notably
                                 // SessionDesync, which carries the failed inner
                                 // ciphertext for the DecryptionErrorMessage
@@ -802,7 +807,7 @@ impl SignalActorHandle {
         self.send(|tx| SignalCommand::EncryptIdentified { plaintext, recipient_address, response: tx }).await?
     }
 
-    pub async fn decrypt_sealed(&self, ciphertext: Vec<u8>, trust_root: libsignal_protocol::PublicKey, local_uuid: String, local_device_id: DeviceId) -> Result<(ProtocolAddress, Vec<u8>), ServiceError> {
+    pub async fn decrypt_sealed(&self, ciphertext: Vec<u8>, trust_root: libsignal_protocol::PublicKey, local_uuid: String, local_device_id: DeviceId) -> Result<(ProtocolAddress, Vec<u8>, CiphertextMessageType), ServiceError> {
         self.send(|tx| SignalCommand::DecryptSealed { ciphertext, trust_root, local_uuid, local_device_id, response: tx }).await?
     }
 

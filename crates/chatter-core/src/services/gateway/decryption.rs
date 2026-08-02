@@ -19,6 +19,28 @@ use crate::proto::content_v1::{Content, DataMessage, GroupEncrypted, content};
 /// DecryptionErrorMessage ride-along.
 const PLAINTEXT_CONTENT_IDENTIFIER_BYTE: u8 = 0xC0;
 
+/// Refusal for a sealed-sender message whose inner type is
+/// `CiphertextMessageType::Plaintext` on a path that is not the
+/// DecryptionErrorMessage handler.
+///
+/// Such bytes never entered `message_decrypt_*`, so nothing checked the
+/// sender's identity key, nothing rejected a replay, and there is no forward
+/// secrecy. Pinned libsignal refuses the type outright in
+/// `sealed_sender_decrypt`; we only carve out the DEM ride-along.
+pub(crate) fn unratcheted_plaintext_rejected(sender: &str) -> ServiceError {
+    tracing::warn!(
+        target: "chatter::crypto::decrypt_failure",
+        kind = "sealed_sender",
+        sender = %sender,
+        "rejected unratcheted Plaintext sealed-sender message outside the DEM path"
+    );
+    ServiceError::Crypto(CryptoError::Protocol(
+        "sealed sender message bypassed the ratchet (CiphertextMessageType::Plaintext) \
+         and is not a DecryptionErrorMessage"
+            .into(),
+    ))
+}
+
 use super::{CallHangupReason, DecryptResult, DmContent, MessageGateway, SealedSenderResult};
 use super::inbound::content_type_name;
 
@@ -37,7 +59,7 @@ impl MessageGateway {
         // into a DecryptionErrorMessage report instead of a dead error, so the
         // sender can archive its broken session and re-establish (Signal's
         // 1:1 self-heal).
-        let (sender_address, mut plaintext) = match self
+        let (sender_address, mut plaintext, msg_type) = match self
             .signal_service
             .decrypt_message(&envelope.sealed_body)
             .await
@@ -76,13 +98,19 @@ impl MessageGateway {
             Err(e) => return Err(e),
         };
 
-        // A `PlaintextContent` ride-along (0xC0-prefixed) is a peer's
-        // DecryptionErrorMessage about a message WE sent — handle the
-        // self-heal instead of parsing it as Content.
-        if plaintext.first() == Some(&PLAINTEXT_CONTENT_IDENTIFIER_BYTE) {
-            let result = self
-                .handle_decryption_error_report(&sender_address, &plaintext)
-                .await;
+        // A `Plaintext` USMC skipped the ratchet: no is_trusted_identity, no
+        // replay protection, no forward secrecy. The ONLY thing we accept in
+        // that shape is a peer's DecryptionErrorMessage about a message WE
+        // sent — a `PlaintextContent` ride-along (0xC0-prefixed). Anything else
+        // of that type is unratcheted attacker-chosen bytes; drop it rather
+        // than let it reach `Content::decode`.
+        if msg_type == CiphertextMessageType::Plaintext {
+            let result = if plaintext.first() == Some(&PLAINTEXT_CONTENT_IDENTIFIER_BYTE) {
+                self.handle_decryption_error_report(&sender_address, &plaintext)
+                    .await
+            } else {
+                Err(unratcheted_plaintext_rejected(&sender_address.name().to_string()))
+            };
             plaintext.zeroize();
             return result;
         }
@@ -685,10 +713,17 @@ impl MessageGateway {
         let signal_ciphertext = decrypt_dm_bytes(mailbox_encrypted, shared_secret)?;
 
         // Layer 2: Decrypt Signal layer (sealed sender with Double Ratchet)
-        let (sender_address, mut plaintext) = self
+        let (sender_address, mut plaintext, msg_type) = self
             .signal_service
             .decrypt_message(&signal_ciphertext)
             .await?;
+
+        // No DEM ride-along is expected on the DM path, so `Plaintext` here is
+        // simply ratchet-bypassing bytes. Refuse before `Content::decode`.
+        if msg_type == CiphertextMessageType::Plaintext {
+            plaintext.zeroize();
+            return Err(unratcheted_plaintext_rejected(sender_address.name()));
+        }
 
         // Extract sender ID from protocol address
         let sender_id: UserId = sender_address.name().parse().map_err(|e| {

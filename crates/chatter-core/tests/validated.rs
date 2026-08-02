@@ -1579,7 +1579,7 @@ async fn v6_delivered_message_key_is_destroyed() {
     //       for a forward-secrecy break.
     let res_undelivered = client_b2.signal().decrypt_message(&bytes_undelivered).await;
     match &res_undelivered {
-        Ok((_addr, plaintext)) => {
+        Ok((_addr, plaintext, _)) => {
             let hay = String::from_utf8_lossy(plaintext);
             assert!(
                 hay.contains(&m_undelivered),
@@ -4162,7 +4162,7 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
     // Run FIRST, against the pristine healed session, before any overwrite.
     let live_post = client_b2.signal().decrypt_message(&bytes_post).await;
     match &live_post {
-        Ok((_addr, pt)) => {
+        Ok((_addr, pt, _)) => {
             let hay = String::from_utf8_lossy(pt);
             assert!(
                 hay.contains(&m_post),
@@ -4194,7 +4194,7 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
     );
     let stolen_pre = client_b2.signal().decrypt_message(&bytes_pre).await;
     match &stolen_pre {
-        Ok((_addr, pt)) => {
+        Ok((_addr, pt, _)) => {
             let hay = String::from_utf8_lossy(pt);
             assert!(
                 hay.contains(&m_pre),
@@ -6074,7 +6074,7 @@ async fn v23_message_ordering_reorder_and_gap() {
         let c = client_b2.clone();
         async move {
             match c.signal().decrypt_message(&bytes).await {
-                Ok((_addr, plaintext)) => {
+                Ok((_addr, plaintext, _)) => {
                     let hay = String::from_utf8_lossy(&plaintext);
                     assert!(
                         hay.contains(&want),

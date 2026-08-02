@@ -174,7 +174,15 @@ impl SealedSenderManager {
     ///
     /// # Returns
     ///
-    /// The decryption result containing sender identity and decrypted message.
+    /// The decryption result containing sender identity and decrypted message,
+    /// paired with the inner `CiphertextMessageType`.
+    ///
+    /// The type is NOT incidental. `Plaintext` means the bytes never went
+    /// through the Double Ratchet — no `is_trusted_identity`, no replay
+    /// protection, no forward secrecy — and is legitimate only for a
+    /// `DecryptionErrorMessage` ride-along. Every other caller must refuse it;
+    /// without the label, unratcheted attacker-chosen bytes look exactly like
+    /// ratchet-authenticated plaintext.
     #[allow(clippy::too_many_arguments)]
     pub async fn decrypt<I, S, P, SP, K>(
         ciphertext: &[u8],
@@ -188,7 +196,7 @@ impl SealedSenderManager {
         pre_key_store: &mut P,
         signed_pre_key_store: &SP,
         kyber_pre_key_store: &mut K,
-    ) -> Result<SealedSenderDecryptionResult, CryptoError>
+    ) -> Result<(SealedSenderDecryptionResult, CiphertextMessageType), CryptoError>
     where
         I: IdentityKeyStore,
         S: SessionStore,
@@ -320,6 +328,8 @@ impl SealedSenderManager {
             // A DecryptionErrorMessage ride-along: the "message" is the
             // serialized `PlaintextContent` (0xC0-prefixed), not ratchet
             // ciphertext. Return it verbatim — the gateway extracts the DEM.
+            // The `Plaintext` type travels back with it so every caller that
+            // is NOT the DEM handler can refuse these unratcheted bytes.
             CiphertextMessageType::Plaintext => contents.to_vec(),
             other => {
                 return Err(map_envelope_err(SignalProtocolError::InvalidMessage(
@@ -340,9 +350,10 @@ impl SealedSenderManager {
             sender = %result.sender_uuid,
             sender_device = ?result.device_id,
             message_len = result.message.len(),
+            ?msg_type,
             "SealedSender: decryption complete"
         );
-        Ok(result)
+        Ok((result, msg_type))
     }
 
     /// Create UnidentifiedSenderMessageContent from pre-encrypted message.
@@ -821,6 +832,137 @@ mod tests {
             }
             other => panic!("a real desync was classified as {other:?}; the self-heal is dead"),
         }
+    }
+
+    /// `CiphertextMessageType::Plaintext` bypasses the ratchet entirely — no
+    /// `is_trusted_identity`, no replay protection, no forward secrecy. Pinned
+    /// libsignal refuses it outright (`sealed_sender.rs`, "unexpected message
+    /// type for sealed_sender_decrypt"); we accept it only as a
+    /// `DecryptionErrorMessage` ride-along.
+    ///
+    /// So the decrypt result MUST tell the caller which type it got. Without
+    /// that label, unratcheted attacker-chosen bytes are indistinguishable from
+    /// ratchet-authenticated plaintext and go straight into `Content::decode`
+    /// on the DM and anon-DM paths.
+    #[tokio::test]
+    async fn sealed_sender_decrypt_labels_unratcheted_plaintext() {
+        use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+        use libsignal_protocol::{
+            IdentityKeyPair, InMemSignalProtocolStore, KeyPair, PrivateKey,
+            sealed_sender_encrypt_from_usmc,
+        };
+
+        let mut rng = OsRng.unwrap_err();
+
+        // The dev trust root's private key is committed in
+        // deploy/vault/init-and-unseal.sh, which is what makes this test
+        // possible at all — and is separately why config.rs now demands an
+        // explicit feature to pin it.
+        let trust_root_private = PrivateKey::deserialize(
+            &BASE64
+                .decode("ELMk0o1RlhsHCk8vQ/bWbtRDeQvcC4PuN8+U1Xg90Ek=")
+                .expect("known-good base64"),
+        )
+        .expect("dev trust root private key");
+        assert_eq!(
+            trust_root_private.public_key().expect("public"),
+            *TRUST_ROOT_PUBLIC_KEY,
+            "test cert chain must validate under the trust root this build pins"
+        );
+
+        // Server cert signed by the trust root, sender cert signed by it.
+        let server_keys = KeyPair::generate(&mut rng);
+        let server_cert =
+            ServerCertificate::new(1, server_keys.public_key, &trust_root_private, &mut rng)
+                .expect("server certificate");
+
+        let sender_identity = IdentityKeyPair::generate(&mut rng);
+        let sender_uuid = "11111111-1111-4111-8111-111111111111";
+        let sender_device = DeviceId::new(1).expect("device id");
+        let expiration = Timestamp::from_epoch_millis(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64
+                + 3_600_000,
+        );
+        let sender_cert = SenderCertificate::new(
+            sender_uuid.to_string(),
+            None,
+            *sender_identity.public_key(),
+            sender_device,
+            expiration,
+            server_cert,
+            &server_keys.private_key,
+            &mut rng,
+        )
+        .expect("sender certificate");
+
+        // A USMC whose payload never touches the Double Ratchet.
+        let unratcheted = b"\xc0not ratchet output".to_vec();
+        let usmc = UnidentifiedSenderMessageContent::new(
+            CiphertextMessageType::Plaintext,
+            sender_cert,
+            unratcheted.clone(),
+            ContentHint::Implicit,
+            None,
+        )
+        .expect("usmc");
+
+        let recipient_uuid = "22222222-2222-4222-8222-222222222222";
+        let recipient_device = DeviceId::new(1).expect("device id");
+        let recipient_address =
+            ProtocolAddress::new(recipient_uuid.to_string(), recipient_device);
+        let recipient_identity = IdentityKeyPair::generate(&mut rng);
+        let mut recipient_store = InMemSignalProtocolStore::new(recipient_identity, 1234)
+            .expect("recipient store");
+
+        // Sender-side store, just to hand the recipient's identity to encrypt.
+        let mut sender_store =
+            InMemSignalProtocolStore::new(sender_identity, 5678).expect("sender store");
+        sender_store
+            .save_identity(&recipient_address, recipient_identity.identity_key())
+            .await
+            .expect("save recipient identity");
+
+        let sealed = sealed_sender_encrypt_from_usmc(
+            &recipient_address,
+            &usmc,
+            &sender_store,
+            &mut rng,
+        )
+        .await
+        .expect("seal");
+
+        let mut s2 = recipient_store.clone();
+        let mut s3 = recipient_store.clone();
+        let mut s4 = recipient_store.clone();
+        let s6 = recipient_store.clone();
+        let (result, msg_type) = SealedSenderManager::decrypt(
+            &sealed,
+            &TRUST_ROOT_PUBLIC_KEY,
+            Timestamp::from_epoch_millis(0),
+            None,
+            recipient_uuid.to_string(),
+            recipient_device,
+            &mut recipient_store,
+            &mut s2,
+            &mut s3,
+            &s6,
+            &mut s4,
+        )
+        .await
+        .expect("envelope opens — the cert chain is valid");
+
+        assert_eq!(
+            result.message, unratcheted,
+            "the Plaintext branch returns contents verbatim, as the DEM handler needs"
+        );
+        assert_eq!(
+            msg_type,
+            CiphertextMessageType::Plaintext,
+            "decrypt must label unratcheted bytes so non-DEM callers can refuse them"
+        );
     }
 
     #[test]
