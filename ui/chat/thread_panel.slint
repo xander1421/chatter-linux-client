@@ -388,12 +388,16 @@ export component ThreadPanel inherits Rectangle {
                     border-radius: Spacing.radius-md;
                     background: root.composer-text != "" ? Colors.primary : Colors.text-muted.with-alpha(0.3);
 
-                    Text {
-                        text: "\u{27A4}"; // Arrow symbol
-                        color: root.composer-text != "" ? Colors.text-primary : Colors.text-muted;
-                        font-size: Typography.base;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                    // Icons.send, not U+27A4: Inter has no glyph for that
+                    // dingbat, so the thread reply button drew a notdef box —
+                    // and it is the only way to post a reply in this panel.
+                    Image {
+                        source: Icons.send;
+                        colorize: root.composer-text != "" ? Colors.text-primary : Colors.text-muted;
+                        width: 18px;
+                        height: 18px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
                     }
 
                     TouchArea {

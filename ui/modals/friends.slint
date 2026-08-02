@@ -4,6 +4,7 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
 import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
@@ -334,14 +335,16 @@ export component FriendsModal inherits Rectangle {
                                             border-radius: Spacing.radius-sm;
                                             background: more-touch.has-hover ? Colors.surface : transparent;
 
-                                            Text {
-                                                text: "\u{22EE}";  // Vertical ellipsis
-                                                color: Colors.text-secondary;
-                                                font-size: Typography.lg;
-                                                horizontal-alignment: center;
-                                                vertical-alignment: center;
-                                                width: 100%;
-                                                height: 100%;
+                                            // Icons.more-vertical, not U+22EE:
+                                            // Inter has no vertical-ellipsis glyph
+                                            // and the fallback drew a notdef box.
+                                            Image {
+                                                source: Icons.more-vertical;
+                                                colorize: Colors.text-secondary;
+                                                width: 16px;
+                                                height: 16px;
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
                                             }
 
                                             more-touch := TouchArea {
