@@ -23,6 +23,7 @@ use crate::crypto::signal::identity::IdentityKeyManager;
 use crate::crypto::signal::prekey::PreKeyManager;
 use crate::crypto::DeviceCredentials;
 use crate::domain::ids::UserId;
+use crate::services::key_recovery::KeyRecoveryNeed;
 use crate::domain::user::{PresenceStatus, Profile, User};
 use crate::error::{CryptoError, NetworkError, StorageError};
 use crate::network::grpc::auth_client::AuthClient;
@@ -79,13 +80,16 @@ pub struct LoginResult {
     pub display_name: String,
     /// Whether initial prekey upload is still needed.
     pub needs_prekey_upload: bool,
-    /// Whether identity keys were restored from SVR backup during login.
+    /// Whether identity keys were restored from an SVR backup during login.
     pub keys_restored: bool,
-    /// Whether identity keys are missing locally (no backup available or restore failed).
-    pub keys_missing: bool,
-    /// Whether the SVR backup was permanently destroyed (too many failed PIN attempts).
-    /// When true, user must re-register their PIN to create a new backup.
-    pub backup_destroyed: bool,
+    /// Set when this device could not establish a Signal identity key.
+    ///
+    /// Replaces the old `keys_missing` / `backup_destroyed` booleans, which
+    /// every caller in the tree ignored — the login looked successful, the UI
+    /// dropped the result on the floor, and the user was never told their keys
+    /// were gone. `ChatterClient::login` now refuses to return `Ok` while this
+    /// is set, so the condition cannot be silently discarded again.
+    pub key_recovery: Option<KeyRecoveryNeed>,
     /// One-time recovery codes returned during registration (shown once to user).
     pub recovery_codes: Option<Vec<String>>,
 }
@@ -344,15 +348,24 @@ impl AuthService {
             return Err(AuthError::RegistrationFailed("PIN is required for account recovery".to_string()));
         };
 
-        // Get or generate identity key pair
-        let (_registration_id, identity_key_pair) = if self.identity_manager.has_identity()? {
-            self.identity_manager
-                .get_identity()?
-                .ok_or(CryptoError::NoIdentity)?
-        } else {
-            // Generate new identity for this device
-            self.identity_manager.generate_identity(&mut rand::rngs::OsRng.unwrap_err())?
-        };
+        // Load the local identity key pair — and DO NOT create one if it is
+        // absent.
+        //
+        // This used to mint a fresh identity here. That single line was the
+        // root of the worst defect in the product: on a reinstall it produced
+        // a local identity BEFORE the post-login SVR restore ran, so the
+        // restore saw `has_local_identity() == true`, concluded this was an
+        // existing device, logged "SVR restore skipped: local identity keys
+        // already exist" and returned without ever fetching the PIN backup.
+        // The user's real identity key was destroyed by the act of logging in
+        // to recover it, and nothing said so.
+        //
+        // A missing identity is now carried out of here as a fact for the
+        // caller to resolve (`ChatterClient::login` runs the SVR restore, and
+        // only mints on an explicit user decision once recovery is ruled out).
+        // Login itself needs no identity key: the request carries a device auth
+        // token and a UAK, both derived from the profile key, not from this.
+        let identity_key_pair = self.identity_manager.get_identity()?.map(|(_, kp)| kp);
 
         // For login, device_id might come from settings (re-auth) or be assigned by server
         let stored_device_id: Option<u32> = self.settings_repo.get(keys::CURRENT_DEVICE_ID).ok().flatten();
@@ -390,7 +403,7 @@ impl AuthService {
                 _ => AuthError::Network(e),
             })?;
 
-        let identity_public_key = identity_key_pair.identity_key().serialize();
+        let identity_public_key = identity_key_pair.as_ref().map(|kp| kp.identity_key().serialize());
 
         // Extract session and user profile
         let session = response.session.ok_or_else(|| {
@@ -467,9 +480,14 @@ impl AuthService {
         // SECURITY: done with the PIN-derived secret — drop it now.
         svr_secret.zeroize();
 
-        // Store identity public key for NDSS'21 private friend codes
-        // This allows generating friend codes without accessing the SignalStore
-        self.settings_repo.set_bytes(keys::IDENTITY_KEY_PUBLIC, identity_public_key.as_ref())?;
+        // Store identity public key for NDSS'21 private friend codes.
+        // This allows generating friend codes without accessing the SignalStore.
+        // Absent on a reinstall until the SVR restore (or an explicit identity
+        // reset) supplies one — writing a placeholder would hand out friend
+        // codes for a key that does not exist.
+        if let Some(pk) = identity_public_key.as_ref() {
+            self.settings_repo.set_bytes(keys::IDENTITY_KEY_PUBLIC, pk.as_ref())?;
+        }
 
         // Configure auth interceptor for Basic auth
         self.auth_interceptor.set_basic(
@@ -504,11 +522,41 @@ impl AuthService {
             device_id,
             display_name,
             needs_prekey_upload: stored_device_id.is_none(), // New device needs prekey upload
-            keys_restored: false,    // Set by caller after SVR restore attempt
-            keys_missing: false,     // Set by caller after SVR restore attempt
-            backup_destroyed: false, // Set by caller after SVR restore attempt
-            recovery_codes: None,    // Login never returns recovery codes
+            keys_restored: false, // Set by caller after the SVR restore attempt
+            // No local identity yet. The caller must resolve this before the
+            // login can be called successful — see `ChatterClient::login`.
+            key_recovery: identity_key_pair
+                .is_none()
+                .then_some(KeyRecoveryNeed::NoPinProvided),
+            recovery_codes: None, // Login never returns recovery codes
         })
+    }
+
+    /// Mint a Signal identity key for a device that has none, after key
+    /// recovery has been ruled out.
+    ///
+    /// Separate from `register`'s mint on purpose: this runs against an
+    /// account that already exists on the server, so the new key must be
+    /// PUBLISHED (see `SignalService::republish_identity_bundle`) or the
+    /// account is left serving a key nobody holds — the exact corruption this
+    /// change exists to eliminate. Callers must publish immediately after.
+    ///
+    /// `generate_identity` refuses to overwrite an existing identity, so this
+    /// cannot silently destroy a working device.
+    pub fn generate_identity_for_recovery(&self) -> Result<(), AuthError> {
+        let (_, identity_key_pair) = self
+            .identity_manager
+            .generate_identity(&mut rand::rngs::OsRng.unwrap_err())?;
+
+        // Friend-code generation reads this without touching the SignalStore;
+        // leaving the previous device's key here would mint codes for a key
+        // this device cannot prove it holds.
+        self.settings_repo.set_bytes(
+            keys::IDENTITY_KEY_PUBLIC,
+            identity_key_pair.identity_key().serialize().as_ref(),
+        )?;
+
+        Ok(())
     }
 
     /// Register a new user account.
@@ -925,8 +973,7 @@ impl AuthService {
             display_name: server_display_name,
             needs_prekey_upload: false, // Prekeys already generated (upload them next)
             keys_restored: false, // Not applicable for registration (keys are freshly generated)
-            keys_missing: false,
-            backup_destroyed: false,
+            key_recovery: None,
             recovery_codes,
         })
     }

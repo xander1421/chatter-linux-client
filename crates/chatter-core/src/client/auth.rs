@@ -16,6 +16,8 @@ use crate::domain::message::{ConversationType, Message};
 use crate::error::NetworkError;
 use crate::events::{DomainEvent, EventBus};
 use crate::services::auth_service::{AuthError, LoginResult};
+use crate::services::key_recovery::KeyRecoveryNeed;
+use crate::storage::repositories::settings_repo::keys;
 use crate::inbox::DeviceInboxProvider;
 use crate::mailbox::group::GroupFanout;
 use crate::proto::content_v1::AttachmentPointer;
@@ -73,9 +75,14 @@ impl ChatterClient {
     /// This is the one-call entry point: authenticates, sets auth state,
     /// and starts inbox polling + event handlers.
     ///
-    /// If `pin` is provided and this is a new device (no local identity keys),
-    /// the method attempts to restore keys from an SVR backup. The result
-    /// fields `keys_restored` / `keys_missing` indicate the outcome.
+    /// On a device with no local identity keys (a reinstall), the SVR restore
+    /// runs BEFORE any identity key is minted, so the user recovers their real
+    /// key instead of silently being given a fresh, unreachable one. If the
+    /// restore cannot establish an identity — no PIN, wrong PIN, unreachable
+    /// server, or no backup at all — this returns
+    /// [`ClientError::IdentityRecoveryRequired`] carrying the reason, and the
+    /// user must either retry or explicitly call
+    /// [`Self::accept_new_identity`].
     pub async fn login(
         self: &Arc<Self>,
         username: &str,
@@ -96,13 +103,151 @@ impl ChatterClient {
             result.display_name.clone(),
         );
 
-        // Attempt SVR key restore if this is a new device (no local identity keys)
-        if let Some(p) = pin {
-            self.attempt_svr_restore(p, username, &mut result).await;
+        // ORDER IS THE FIX. `do_login` no longer mints an identity key, so a
+        // reinstall arrives here with none and the SVR restore below actually
+        // runs. It used to be the other way round: the mint happened first,
+        // this restore saw a local identity, skipped, and the user's real key
+        // was destroyed by the act of logging in to recover it.
+        if result.key_recovery.is_some() {
+            match pin {
+                Some(p) => self.attempt_svr_restore(p, username, &mut result).await,
+                // Nothing to attempt. Left as NoPinProvided so the caller is
+                // told to ask for the PIN rather than being handed a working
+                // -looking session with no keys.
+                None => tracing::warn!("no local identity and no PIN supplied — cannot restore keys"),
+            }
+        }
+
+        // Refuse to report success while this device has no identity key.
+        //
+        // The previous design returned Ok with `keys_missing = true`, and every
+        // caller in the tree — including the only UI login handler — discarded
+        // the result. That is what made total, permanent key loss look like a
+        // successful login. An Err cannot be discarded.
+        if let Some(need) = result.key_recovery {
+            return Err(ClientError::IdentityRecoveryRequired(need));
+        }
+
+        // A device that just obtained its identity from a backup holds none of
+        // the prekey private keys the account previously published — those died
+        // with the old device. Replace the account's key material with this
+        // device's, or peers keep fetching prekeys that can never complete a
+        // handshake.
+        // Also retried when a previous attempt was interrupted after the local
+        // keys landed: without that, the next login sees a local identity,
+        // skips the restore, and the account is left serving prekeys nobody
+        // holds the private half of.
+        if result.keys_restored || self.key_republish_pending() {
+            self.republish_identity_keys().await?;
         }
 
         self.start().await?;
         Ok(result)
+    }
+
+    /// Accept a NEW Signal identity key after key recovery has been ruled out.
+    ///
+    /// **Destructive and irreversible.** It abandons every existing session,
+    /// makes past messages undecryptable, and changes the safety number every
+    /// contact has verified. Only ever reach this from an explicit user
+    /// decision, never from a retry loop or a background task — which is why
+    /// `login` returns an error rather than doing this for the user.
+    ///
+    /// Refused while [`KeyRecoveryNeed::is_retryable`] holds: a wrong PIN, an
+    /// unreachable SVR server or a PIN that was never entered all still lead
+    /// back to the real key, and minting over it is exactly the silent
+    /// destruction this whole change exists to stop.
+    ///
+    /// On success the new key is published atomically with prekeys signed by
+    /// it, so peers see one coherent bundle and get the safety-number-change
+    /// prompt (`pending_identity_changes`) instead of an account that quietly
+    /// stopped working.
+    pub async fn accept_new_identity(
+        self: &Arc<Self>,
+        need: KeyRecoveryNeed,
+    ) -> Result<(), ClientError> {
+        if need.is_retryable() {
+            return Err(ClientError::Validation(format!(
+                "refusing to mint a new identity while the original may still be recoverable: {}",
+                need.user_message()
+            )));
+        }
+
+        if self
+            .signal()
+            .key_store
+            .has_local_identity()
+            .map_err(|e| ClientError::Validation(format!("failed to read local identity: {e}")))?
+        {
+            return Err(ClientError::Validation(
+                "this device already has an identity key; refusing to overwrite it".into(),
+            ));
+        }
+
+        self.auth()
+            .generate_identity_for_recovery()
+            .map_err(ClientError::Auth)?;
+
+        self.republish_identity_keys().await?;
+
+        tracing::warn!("minted and published a NEW identity key — every contact's safety number has changed");
+        Ok(())
+    }
+
+    /// Replace the account's server-side key material with this device's.
+    ///
+    /// One RPC, applied atomically by the server: identity key, signed prekey,
+    /// Kyber prekey and both one-time pools land together, and every other
+    /// device's stale bundle is dropped. Publishing them separately is what
+    /// produced the original corruption — an identity key from one generation
+    /// served next to a signed prekey from another.
+    async fn republish_identity_keys(self: &Arc<Self>) -> Result<(), ClientError> {
+        let mut auth_client = self
+            .auth()
+            .try_auth_client()
+            .ok_or(ClientError::NotConnected)?;
+
+        // Mark the debt BEFORE incurring it. If this call dies halfway, the
+        // next login retries; the alternative is a device whose local keys are
+        // fine while the server serves prekeys for a device that is gone.
+        self.set_key_republish_pending(true);
+
+        let outcome = self
+            .signal()
+            .republish_identity_bundle(&mut auth_client)
+            .await
+            .map_err(|e| ClientError::Validation(format!("failed to publish key material: {e}")))?;
+
+        self.set_key_republish_pending(false);
+
+        tracing::info!(
+            identity_key_changed = outcome.identity_key_changed,
+            devices_reset = outcome.devices_reset,
+            "published this device's key material"
+        );
+        Ok(())
+    }
+
+    /// Whether a previous republish was interrupted after the local keys landed.
+    fn key_republish_pending(&self) -> bool {
+        self.signal()
+            .settings_repo
+            .get::<bool>(keys::KEY_REPUBLISH_PENDING)
+            .ok()
+            .flatten()
+            .unwrap_or(false)
+    }
+
+    fn set_key_republish_pending(&self, pending: bool) {
+        if let Err(e) = self
+            .signal()
+            .settings_repo
+            .set(keys::KEY_REPUBLISH_PENDING, &pending)
+        {
+            // Not fatal, but worth saying: losing this flag is how an
+            // interrupted republish becomes a permanent one.
+            tracing::warn!("failed to record pending key republish: {}", e);
+        }
     }
 
     /// Register a new account and start all background services.
@@ -295,7 +440,6 @@ impl ChatterClient {
         use crate::crypto::svr::{
             derive_registration_lock, derive_svr_secret, validate_pin, SvrKeypair,
         };
-        use crate::storage::repositories::settings_repo::keys;
         use zeroize::Zeroize;
 
         validate_pin(old_pin).map_err(|e| ClientError::Validation(format!("old PIN: {e}")))?;
@@ -439,8 +583,10 @@ impl ChatterClient {
     /// the SVR secret from PIN + username and fetches the encrypted backup.
     ///
     /// On success, hydrates the local identity key store and profile key.
-    /// On failure, logs a warning and sets `keys_missing = true` so the UI
-    /// can inform the user. Restore failure NEVER blocks login.
+    /// On failure, sets `result.key_recovery` to the classified reason. That
+    /// is not advisory: `login` turns it into an error, because a device with
+    /// no identity key cannot send or receive anything and reporting success
+    /// is what made the loss invisible.
     async fn attempt_svr_restore(
         &self,
         pin: &str,
@@ -448,22 +594,21 @@ impl ChatterClient {
         result: &mut LoginResult,
     ) {
         use crate::crypto::svr::derive_svr_secret;
-        use crate::storage::repositories::settings_repo::keys;
         use zeroize::Zeroize;
 
-        // 1. Check if local identity keys already exist
-        let has_identity = match self.signal().key_store.has_local_identity() {
-            Ok(exists) => exists,
-            Err(e) => {
-                tracing::warn!("SVR restore: failed to check local identity: {}", e);
-                // Assume keys exist to avoid accidentally overwriting
+        // 1. Never overwrite an identity this device already holds.
+        match self.signal().key_store.has_local_identity() {
+            Ok(false) => {}
+            Ok(true) => {
+                tracing::debug!("SVR restore skipped: local identity keys already exist");
+                result.key_recovery = None;
                 return;
             }
-        };
-
-        if has_identity {
-            tracing::debug!("SVR restore skipped: local identity keys already exist");
-            return;
+            Err(e) => {
+                tracing::warn!("SVR restore: failed to check local identity: {}", e);
+                result.key_recovery = Some(KeyRecoveryNeed::Unavailable);
+                return;
+            }
         }
 
         tracing::info!("New device detected (no local identity keys) — attempting SVR restore");
@@ -473,7 +618,7 @@ impl ChatterClient {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!("SVR restore failed: could not derive svr_secret: {}", e);
-                result.keys_missing = true;
+                result.key_recovery = Some(KeyRecoveryNeed::Unavailable);
                 return;
             }
         };
@@ -484,14 +629,35 @@ impl ChatterClient {
             Err(crate::services::svr_backup_service::SvrBackupError::BackupDestroyed) => {
                 svr_secret.zeroize();
                 tracing::error!("SVR backup permanently destroyed (too many failed PIN attempts). User must re-register PIN.");
-                result.keys_missing = true;
-                result.backup_destroyed = true;
+                result.key_recovery = Some(KeyRecoveryNeed::BackupDestroyed);
                 return;
             }
             Err(e) => {
                 svr_secret.zeroize();
-                tracing::warn!("SVR restore failed (non-fatal): {}", e);
-                result.keys_missing = true;
+                // Classify rather than collapse. Which failure this was decides
+                // whether the user retypes a PIN, waits, or accepts losing
+                // their conversations — see `key_recovery::classify_restore_failure`.
+                let mut need = crate::services::key_recovery::classify_restore_failure(&e);
+                // A miss is ambiguous by construction — the backup id is
+                // PIN-derived, so "wrong PIN" and "no backup at all" both land
+                // here. `classify_restore_failure` takes the cautious reading
+                // (never authorise minting on a typo); ask the server, which is
+                // the only party that can actually tell, before settling.
+                if need == KeyRecoveryNeed::WrongPin {
+                    match self.svr_backup().has_key_backup().await {
+                        Ok(false) => need = KeyRecoveryNeed::NoBackup,
+                        Ok(true) => {}
+                        // Unknown: keep the cautious reading rather than
+                        // upgrading a network blip into permission to destroy
+                        // the user's identity key.
+                        Err(probe_err) => tracing::warn!(
+                            "could not determine whether a key backup exists: {}",
+                            probe_err
+                        ),
+                    }
+                }
+                tracing::warn!(?need, "SVR restore failed: {}", e);
+                result.key_recovery = Some(need);
                 return;
             }
         };
@@ -541,7 +707,7 @@ impl ChatterClient {
             tracing::warn!("SVR restore: failed to hydrate identity keypair: {}", e);
             restored_keypair.zeroize();
             restored_profile_key.zeroize();
-            result.keys_missing = true;
+            result.key_recovery = Some(KeyRecoveryNeed::Unavailable);
             return;
         }
 
@@ -556,7 +722,7 @@ impl ChatterClient {
             restored_keypair.zeroize();
             restored_profile_key.zeroize();
             result.keys_restored = true;
-            result.keys_missing = false;
+            result.key_recovery = None;
             return;
         }
 
@@ -565,7 +731,7 @@ impl ChatterClient {
         restored_profile_key.zeroize();
 
         result.keys_restored = true;
-        result.keys_missing = false;
+        result.key_recovery = None;
 
         tracing::info!(
             remaining_attempts = restore_result.remaining_attempts,

@@ -10,6 +10,7 @@ use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
     svr_service_client::SvrServiceClient, ChangePinBackupRequest, DeleteBackupRequest,
     DeleteMessageBackupRequest, FetchBackupRequest, GetMessageBackupRequest,
+    HasKeyBackupRequest,
     SetMessageBackupRequest, StoreBackupRequest,
 };
 
@@ -117,6 +118,22 @@ impl SvrClient {
             version: response.version,
             remaining_attempts: response.remaining_attempts,
         })
+    }
+
+    /// Whether this account has an SVR key backup AT ALL, independent of any
+    /// PIN.
+    ///
+    /// A failed [`Self::fetch_backup`] cannot tell a wrong PIN from an account
+    /// that never had a backup: the backup id is derived from the PIN, so both
+    /// simply miss. The two demand opposite responses — retype the PIN, versus
+    /// accept a new identity key and lose every existing conversation — so the
+    /// client must not guess. This is the bit that decides.
+    pub async fn has_key_backup(&mut self) -> Result<bool, NetworkError> {
+        self.inner
+            .has_key_backup(HasKeyBackupRequest {})
+            .await
+            .map(|r| r.into_inner().exists)
+            .map_err(|s| NetworkError::from_status(&s))
     }
 
     /// Delete an encrypted backup from the server.

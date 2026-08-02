@@ -63,6 +63,17 @@ pub mod keys {
     /// Our identity public key (33 bytes - 0x05 + Curve25519, base64 encoded)
     /// Used for NDSS'21 private friend codes that embed cryptographic material.
     pub const IDENTITY_KEY_PUBLIC: &str = "crypto.identity_key_public";
+    /// Set while this device owes the server a key-material republish, and
+    /// cleared once the server has acknowledged it.
+    ///
+    /// A recovery hands this device an identity key whose published prekeys
+    /// belong to a device that no longer exists. If the republish that fixes
+    /// that is interrupted — server down, connection dropped — the local keys
+    /// are already in place, so the next login would see a local identity, skip
+    /// the restore, and never retry. The account would sit there serving
+    /// prekeys nobody can complete a handshake with: the original bug, reached
+    /// by a different road. This flag is what makes the retry happen.
+    pub const KEY_REPUBLISH_PENDING: &str = "crypto.key_republish_pending";
     /// Cached sender certificate (serialized bytes, base64 encoded)
     pub const SENDER_CERTIFICATE: &str = "crypto.sender_certificate";
     /// When to refresh sender certificate (Unix timestamp ms)

@@ -53,6 +53,7 @@ pub mod mesh;
 pub(crate) mod anon_shared;
 pub mod message_backup_service;
 pub mod svr_backup_service;
+pub mod key_recovery;
 #[cfg(feature = "jarvis")]
 pub mod jarvis;
 pub mod validation;

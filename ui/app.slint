@@ -147,6 +147,8 @@ export component App inherits Rectangle {
     in-out property <string> login-pin: "";
     in property <bool> login-loading: false;
     in property <string> login-error: "";
+    in property <bool> login-identity-reset-available: false;
+    callback accept-new-identity();
 
     in-out property <string> register-display-name: "";
     in-out property <string> register-username: "";
@@ -1013,6 +1015,8 @@ export component App inherits Rectangle {
             pin <=> root.login-pin;
             loading: root.login-loading;
             error: root.login-error;
+            identity-reset-available: root.login-identity-reset-available;
+            accept-new-identity => { root.accept-new-identity(); }
 
             server-unreachable: root.server-unreachable;
             account-free-surfaces: root.account-free-surfaces;

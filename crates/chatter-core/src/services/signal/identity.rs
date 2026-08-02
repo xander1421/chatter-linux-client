@@ -10,6 +10,17 @@ use crate::error::{CryptoError, IdentityChangeSource, ServiceError};
 use crate::storage::ChannelRepository;
 use super::SignalService;
 
+/// What a whole-account key republish did on the server.
+#[derive(Debug, Clone, Copy)]
+pub struct RepublishOutcome {
+    /// The account's identity key changed, so every contact will be prompted
+    /// about a changed safety number. False after a PIN restore, which
+    /// recovers the ORIGINAL key.
+    pub identity_key_changed: bool,
+    /// How many stale device bundles the server dropped.
+    pub devices_reset: u32,
+}
+
 impl SignalService {
     /// Get the local identity key fingerprint.
     pub async fn get_identity_fingerprint(&self) -> Result<String, ServiceError> {
@@ -96,6 +107,111 @@ impl SignalService {
 
         tracing::info!("Rotated signed prekey + Kyber prekey (PQXDH pair)");
         Ok(())
+    }
+
+    /// Replace the account's ENTIRE server-side Signal key material with this
+    /// device's, in one atomic RPC.
+    ///
+    /// # Why this exists
+    ///
+    /// Two recovery situations leave the server holding key material nobody
+    /// can use, and neither had any way to fix itself:
+    ///
+    ///   - **PIN restore.** The identity key comes back from the SVR backup,
+    ///     but the private halves of every prekey the account ever published
+    ///     died with the old device. Peers keep fetching those prekeys and
+    ///     completing handshakes the new device cannot decrypt.
+    ///   - **Identity reset.** No backup existed, so a NEW identity key is the
+    ///     only way forward. `UploadPreKeyBundle` refuses a changed identity
+    ///     key outright (the cross-device consistency check), and neither
+    ///     `LoginRequest` nor `RefreshPreKeysRequest` carries one — so before
+    ///     this method there was literally no wire on which to publish it.
+    ///
+    /// # Why one call
+    ///
+    /// The identity key and the prekeys signed by it are published together or
+    /// not at all. Splitting them is precisely how accounts became permanently
+    /// unreachable: the replenisher rotated the signed prekey through
+    /// `RefreshPreKeys` while `identity_key` stayed at its old value, so the
+    /// server served a signed prekey whose signature could never verify
+    /// against the identity key it was served with. The server applies this in
+    /// a single transaction for the same reason.
+    ///
+    /// Not a routine rotation — it changes every contact's safety number.
+    /// Reached only from `ChatterClient::login`'s post-restore step and from
+    /// the explicit `accept_new_identity`.
+    pub async fn republish_identity_bundle(
+        &self,
+        auth_client: &mut AuthClient,
+    ) -> Result<RepublishOutcome, ServiceError> {
+        use crate::proto::chat_v1::SignalPreKeyBundle;
+        use crate::storage::repositories::settings_repo::keys;
+
+        let identity_key = self.actor.get_identity_public_key().await?;
+
+        let registration_id = crate::crypto::signal::IdentityKeyManager::new(self.key_store.clone())
+            .get_registration_id()
+            .map_err(ServiceError::Crypto)?;
+
+        // Fresh signed prekey + Kyber prekey, both signed by the identity key
+        // that is going up in the same message.
+        let (signed_prekey, kyber_prekey) = self.actor.rotate_signed_prekey().await?;
+
+        // Both one-time pools, refilled in lockstep. PQXDH §3.2 has the server
+        // pop a PQOPK for every classical OPK, so seeding only one leaves every
+        // handshake falling back to the last-resort PQSPK.
+        let one_time_prekeys = self.actor.refresh_prekeys(100).await?;
+        let kyber_one_time_prekeys = self.actor.refresh_kyber_prekeys(100).await?;
+
+        // The UAK is derived from the profile key, which an SVR restore brings
+        // back alongside the identity key. Omitting it would silently disable
+        // sealed sender for the recovered account.
+        let unidentified_access_key = self
+            .settings_repo
+            .get_bytes(keys::PROFILE_KEY)
+            .ok()
+            .flatten()
+            .and_then(|pk| <[u8; 32]>::try_from(pk.as_slice()).ok())
+            .map(|pk| crate::crypto::device_credentials::derive_uak(&pk).to_vec());
+
+        let device_id: u32 = self
+            .settings_repo
+            .get(keys::CURRENT_DEVICE_ID)
+            .ok()
+            .flatten()
+            .unwrap_or(1);
+
+        let bundle = SignalPreKeyBundle {
+            identity_key: identity_key.to_vec(),
+            registration_id,
+            device_id,
+            signed_prekey: Some(signed_prekey),
+            // The bundle's own one-time prekey slot stays empty: the server
+            // pops from the pool uploaded alongside it, and duplicating one
+            // here would hand the same OPK out twice.
+            one_time_prekey: None,
+            kyber_prekey: Some(kyber_prekey),
+            unidentified_access_key,
+            // Per NDSS '21, first contact goes through blind-signed anonymous
+            // credentials rather than unrestricted sealed sender.
+            unrestricted_unidentified_access: Some(false),
+        };
+
+        let response = auth_client
+            .republish_identity_key(bundle, one_time_prekeys, kyber_one_time_prekeys)
+            .await
+            .map_err(ServiceError::Network)?;
+
+        tracing::info!(
+            identity_key_changed = response.identity_key_changed,
+            devices_reset = response.devices_reset,
+            "republished this device's Signal key material"
+        );
+
+        Ok(RepublishOutcome {
+            identity_key_changed: response.identity_key_changed,
+            devices_reset: response.devices_reset,
+        })
     }
 
     /// Derive a shared secret for call encryption with a peer.
