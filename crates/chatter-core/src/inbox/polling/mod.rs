@@ -7,6 +7,9 @@
 //! - Anonymous DM mailboxes (stranger messaging)
 //! - Friend requests (periodic polling for new requests)
 
+#[cfg(test)]
+mod ack_tests;
+
 pub mod anon_dm;
 pub mod device;
 pub mod dm;

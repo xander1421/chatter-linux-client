@@ -518,7 +518,12 @@ impl DeviceInboxProvider {
                     let mut handled: Vec<String> = Vec::with_capacity(count);
                     for msg in messages {
                         let guid = msg.message_guid.clone();
-                        process_device_message(
+                        // Acking DELETES it server-side, so the guid only goes
+                        // into `handled` when `process_device_message` says it
+                        // is safe to destroy — either it was processed, or it
+                        // failed permanently AND a marker is already durably
+                        // written. This used to push unconditionally.
+                        let decision = process_device_message(
                             &msg,
                             &pipeline,
                             &event_tx,
@@ -531,7 +536,16 @@ impl DeviceInboxProvider {
                             domain_tx.as_ref(),
                         )
                         .await;
-                        handled.push(guid);
+                        if decision.should_ack() {
+                            handled.push(guid);
+                        } else {
+                            tracing::info!(
+                                cycle = poll_cycle,
+                                message_guid = %guid,
+                                "Device inbox: retaining envelope for redelivery (transient \
+                                 failure, or its failure marker could not be written)"
+                            );
+                        }
                     }
 
                     // Drain the server queue. `AcknowledgeMessages` is documented in
@@ -629,6 +643,8 @@ impl DeviceInboxProvider {
                 &event_tx,
                 &channel_repo,
                 &attachment_repo,
+                &message_repo,
+                domain_tx.as_ref(),
             )
             .await;
 
@@ -673,7 +689,17 @@ impl DeviceInboxProvider {
                                     .unwrap_or(false)
                             };
                             // Use deduplicator to prevent re-decryption when ack fails
-                            let processed = process_anon_dm_results(results, pairwise, &tx, &dm_deduplicator, current_user_id.as_ref(), &is_blocked).await;
+                            let processed = process_anon_dm_results(
+                                results,
+                                pairwise,
+                                &tx,
+                                &dm_deduplicator,
+                                current_user_id.as_ref(),
+                                &is_blocked,
+                                &message_repo,
+                                domain_tx.as_ref(),
+                            )
+                            .await;
                             drop(tx); // Close sender so receiver knows when done
 
                             // Forward events to broadcast channel

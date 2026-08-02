@@ -26,6 +26,44 @@ use crate::mailbox::anon_dm::AnonDmPollResult;
 use crate::network::validation::MessageDeduplicator;
 use crate::proto::content_v1::{self, Content};
 use crate::services::pairwise::PairwiseService;
+use crate::domain::ids::ChannelId;
+use crate::domain::message::ConversationType;
+use crate::inbox::ack_policy::{self, AckDecision, MarkerTarget};
+use crate::inbox::handlers::DomainEvent;
+use crate::storage::MessageRepository;
+
+/// Decide what to do with an anonymous-DM envelope whose decrypt or decode
+/// failed.
+///
+/// This loop's bug is the mirror image of the other three: it `continue`s
+/// without adding the id to the ack batch, so a peer on the old v2 envelope
+/// format redelivers something that can never decrypt, forever.
+pub(crate) fn anon_dm_failure_decision(
+    conversation_id: AnonDmId,
+    envelope_ts_ns: u64,
+    reason: &str,
+    message_repo: &Arc<MessageRepository>,
+    domain_tx: Option<&tokio::sync::broadcast::Sender<DomainEvent>>,
+) -> AckDecision {
+    // Every failure this loop can reach is deterministic in the bytes: the
+    // sealed-sender open failed, the sender uuid would not parse, or the
+    // Content proto would not decode. None of them depend on local state that
+    // a later poll could supply, so all of them are permanent — which is why
+    // retaining them produced the infinite redelivery.
+    ack_policy::decide_after_malformed(
+        reason,
+        MarkerTarget {
+            conversation_id: ChannelId::from(conversation_id),
+            conversation_type: ConversationType::AnonDm,
+            // Sealed sender failed, so nobody was authenticated. The entry is
+            // written anyway; it just cannot name a sender.
+            peer_id: None,
+            envelope_ts_ns,
+        },
+        message_repo,
+        domain_tx,
+    )
+}
 
 /// Result of processing anonymous DM poll results.
 /// Maps conversation_id -> list of processed message IDs for acknowledgment.
@@ -51,6 +89,8 @@ pub async fn process_anon_dm_results(
     deduplicator: &MessageDeduplicator,
     current_user_id: Option<&UserId>,
     is_blocked: &(dyn Fn(&UserId, &AnonDmId) -> bool + Send + Sync),
+    message_repo: &Arc<MessageRepository>,
+    domain_tx: Option<&tokio::sync::broadcast::Sender<DomainEvent>>,
 ) -> ProcessedAnonDmMessages {
     let mut processed: ProcessedAnonDmMessages = HashMap::new();
 
@@ -63,7 +103,9 @@ pub async fn process_anon_dm_results(
             // Check if we've already processed this message ID.
             // This prevents "old counter" errors when acknowledgment fails
             // and the server re-delivers the same message.
-            if !deduplicator.mark_processed(&message_id) {
+            // Read-only: marking here would mean a message we chose to retain
+            // is skipped on its redelivery and never retried.
+            if deduplicator.is_duplicate(&message_id) {
                 tracing::debug!(
                     conversation_id = %conversation_id,
                     message_id = %message_id,
@@ -87,6 +129,20 @@ pub async fn process_anon_dm_results(
                         error = %e,
                         "Failed to decrypt anonymous DM message"
                     );
+                    // Was: `continue` with no ack, so an old-build peer on the
+                    // v2 envelope format redelivered this forever.
+                    if anon_dm_failure_decision(
+                        conversation_id,
+                        msg.server_timestamp,
+                        &format!("sealed sender decrypt failed: {e}"),
+                        message_repo,
+                        domain_tx,
+                    )
+                    .should_ack()
+                    {
+                        deduplicator.mark_processed(&message_id);
+                        processed.entry(conversation_id).or_default().push(message_id);
+                    }
                     continue;
                 }
             };
@@ -100,6 +156,18 @@ pub async fn process_anon_dm_results(
                         sender_uuid = %sender_uuid,
                         "Invalid sender UUID in anonymous DM"
                     );
+                    if anon_dm_failure_decision(
+                        conversation_id,
+                        msg.server_timestamp,
+                        &format!("unparseable sender id: {e}"),
+                        message_repo,
+                        domain_tx,
+                    )
+                    .should_ack()
+                    {
+                        deduplicator.mark_processed(&message_id);
+                        processed.entry(conversation_id).or_default().push(message_id);
+                    }
                     continue;
                 }
             };
@@ -113,6 +181,7 @@ pub async fn process_anon_dm_results(
                     message_id = %message_id,
                     "Skipping own message echoed back from anon DM mailbox poll"
                 );
+                deduplicator.mark_processed(&message_id);
                 processed.entry(conversation_id).or_default().push(message_id);
                 continue;
             }
@@ -126,6 +195,7 @@ pub async fn process_anon_dm_results(
                     sender_id = %sender_id,
                     "Dropping message from blocked sender/conversation"
                 );
+                deduplicator.mark_processed(&message_id);
                 processed.entry(conversation_id).or_default().push(message_id);
                 continue;
             }
@@ -146,6 +216,20 @@ pub async fn process_anon_dm_results(
                         conversation_id = %conversation_id,
                         "Failed to decode Content proto in anonymous DM"
                     );
+                    // Deterministic in the bytes — this is the v2/v3 format
+                    // change, and retaining it is the infinite redelivery.
+                    if anon_dm_failure_decision(
+                        conversation_id,
+                        msg.server_timestamp,
+                        &format!("Content proto would not decode: {e}"),
+                        message_repo,
+                        domain_tx,
+                    )
+                    .should_ack()
+                    {
+                        deduplicator.mark_processed(&message_id);
+                        processed.entry(conversation_id).or_default().push(message_id);
+                    }
                     continue;
                 }
             };
@@ -382,6 +466,7 @@ pub async fn process_anon_dm_results(
 
             // Track processed message for acknowledgment
             if was_processed {
+                deduplicator.mark_processed(&message_id);
                 processed
                     .entry(conversation_id)
                     .or_default()

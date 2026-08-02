@@ -8,6 +8,7 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 
 use crate::crypto::envelope_crypto::decrypt_envelope;
+use crate::inbox::ack_policy::{self, AckDecision};
 use crate::domain::ids::{AttachmentId, ChannelId, MessageId};
 use crate::domain::message::{ConversationType, Message};
 use crate::domain::UserId;
@@ -22,6 +23,25 @@ use crate::services::attachment::AttachmentService;
 use crate::storage::repositories::settings_repo::keys;
 use crate::storage::repositories::user_repo::UserRepository;
 use crate::storage::{AttachmentRepository, ChannelRepository, MessageRepository, SettingsRepository};
+
+/// Decide what to do with a DM envelope whose decrypt failed.
+///
+/// The single seam `poll_dm_mailboxes` calls for every failure, so the policy
+/// is one place rather than an emergent property of where the ack list is built.
+pub(crate) fn dm_failure_decision(
+    peer_id: UserId,
+    envelope_ts_ns: u64,
+    err: &crate::error::ServiceError,
+    message_repo: &Arc<MessageRepository>,
+    domain_tx: Option<&broadcast::Sender<DomainEvent>>,
+) -> AckDecision {
+    ack_policy::decide_after_failure(
+        err,
+        ack_policy::dm_target(peer_id, envelope_ts_ns),
+        message_repo,
+        domain_tx,
+    )
+}
 
 /// Poll all DM mailboxes and process received messages.
 ///
@@ -88,12 +108,12 @@ pub async fn poll_dm_mailboxes(
             for result in poll_results {
                 let peer_id = result.peer_id;
 
-                // Collect message IDs for potential acknowledgment
-                let message_ids: Vec<String> = result
-                    .messages
-                    .iter()
-                    .map(|m| m.message_id.clone())
-                    .collect();
+                // Acking makes the SERVER DELETE the message, so ids go in here
+                // per-message, only once `ack_policy` has decided this one is
+                // safe to destroy. Collecting them all up front — which is what
+                // this did — acked failures too, and a failed DM vanished with
+                // no marker of any kind.
+                let mut message_ids: Vec<String> = Vec::with_capacity(result.messages.len());
 
                 // Per-direction key: inbound mailbox-layer decryption uses
                 // recv_key so the peer's send_key matches.
@@ -113,19 +133,25 @@ pub async fn poll_dm_mailboxes(
                 for msg in result.messages {
                     total_messages += 1;
 
-                    // Check if we've already processed this message ID.
-                    // This prevents "old counter" errors when acknowledgment fails
-                    // and the server re-delivers the same message.
-                    if !deduplicator.mark_processed(&msg.message_id) {
+                    // Already handled earlier in this session — the server just
+                    // re-delivered it because an `acknowledge` failed. Don't
+                    // decrypt it again ("old counter" errors), but DO ack it:
+                    // it was processed, so draining it loses nothing.
+                    //
+                    // Note this only *reads* the dedup set. Marking here (which
+                    // is what `mark_processed` did) meant a message we chose to
+                    // retain was skipped on its redelivery and never retried.
+                    if deduplicator.is_duplicate(&msg.message_id) {
                         tracing::debug!(
                             peer_id = %peer_id,
                             message_id = %msg.message_id,
                             "DM message already processed, skipping decryption"
                         );
+                        message_ids.push(msg.message_id.clone());
                         continue;
                     }
 
-                    if let Some(ref secret) = shared_secret {
+                    let decision = if let Some(ref secret) = shared_secret {
                         // Decrypt with Signal Protocol (forward secrecy via Double Ratchet)
                         match message_gateway
                             .process_dm_message(&msg.encrypted_envelope, secret)
@@ -147,6 +173,7 @@ pub async fn poll_dm_mailboxes(
                                     conversation_manager,
                                     domain_tx,
                                 );
+                                AckDecision::Ack
                             }
                             Err(e) => {
                                 let error_str = e.to_string();
@@ -163,6 +190,13 @@ pub async fn poll_dm_mailboxes(
                                     error: error_str,
                                     convergence_failed,
                                 });
+                                dm_failure_decision(
+                                    peer_id,
+                                    msg.server_timestamp,
+                                    &e,
+                                    message_repo,
+                                    domain_tx,
+                                )
                             }
                         }
                     } else {
@@ -214,18 +248,39 @@ pub async fn poll_dm_mailboxes(
                             );
                             // Emit bootstrap completed event so UI can retry pending messages
                             let _ = event_tx.send(InboxEvent::DmBootstrapCompleted { peer_id });
+                            AckDecision::Ack
                         } else {
                             tracing::warn!(
                                 peer_id = %peer_id,
                                 message_id = %msg.message_id,
-                                "BOOTSTRAP[4/4] FAILED - Message is not a valid bootstrap response"
+                                "BOOTSTRAP[4/4] FAILED - Message is not a valid bootstrap \
+                                 response; leaving it queued until the session exists"
                             );
                             let _ = event_tx.send(InboxEvent::DmDecryptionFailed {
                                 peer_id,
                                 error: "No shared secret established".to_string(),
                                 convergence_failed: false, // Not a convergence failure - no session exists
                             });
+                            // TRANSIENT, and the clearest case of it: we have no
+                            // session yet. The bootstrap can still complete via
+                            // the device inbox, and then these same bytes
+                            // decrypt. Acking here deleted every message that
+                            // arrived before its own bootstrap landed.
+                            AckDecision::Retain
                         }
+                    };
+
+                    match decision {
+                        // Safe to destroy the server's copy. Record it so a
+                        // failed `acknowledge` does not make us decrypt it
+                        // twice on the replay.
+                        AckDecision::Ack => {
+                            deduplicator.mark_processed(&msg.message_id);
+                            message_ids.push(msg.message_id.clone());
+                        }
+                        // Deliberately NOT marked processed — it must be
+                        // decrypted again when the server re-delivers it.
+                        AckDecision::Retain => {}
                     }
                 }
 

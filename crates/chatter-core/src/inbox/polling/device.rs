@@ -82,44 +82,62 @@ pub fn identity_changed_message(
     )
 }
 
+/// Decide what to do with a device-inbox envelope whose processing failed.
+///
+/// `peer_id` is `Some` only when the failure authenticated a sender first.
+pub(crate) fn device_failure_decision(
+    peer_id: Option<UserId>,
+    envelope_ts_ns: u64,
+    err: &ServiceError,
+    message_repo: &Arc<MessageRepository>,
+    domain_tx: Option<&broadcast::Sender<DomainEvent>>,
+) -> crate::inbox::ack_policy::AckDecision {
+    use crate::inbox::ack_policy;
+    // A device-inbox failure that authenticated nobody has no conversation to
+    // land in — the envelope is what failed. Fall back to a marker in the
+    // peer's DM when we have one, and to a bare retain/ack when we do not:
+    // writing "someone sent you something unreadable" into an arbitrary
+    // conversation would be worse than the log line.
+    let Some(peer) = peer_id else {
+        return match ack_policy::classify_service(err) {
+            ack_policy::Durability::Transient => ack_policy::AckDecision::Retain,
+            // Nothing to mark, but retaining replays a dead envelope forever.
+            ack_policy::Durability::Permanent => {
+                tracing::warn!(
+                    error = %err,
+                    "[INBOX] permanent failure with no authenticated sender — draining \
+                     the envelope with no marker, because there is no conversation to \
+                     put one in"
+                );
+                ack_policy::AckDecision::Ack
+            }
+        };
+    };
+    ack_policy::decide_after_failure(
+        err,
+        ack_policy::dm_target(peer, envelope_ts_ns),
+        message_repo,
+        domain_tx,
+    )
+}
+
 /// Shared shape for the system entries the device inbox writes into a DM.
+///
+/// Delegates to the one builder in [`crate::inbox::ack_policy`] so the four
+/// loops cannot drift into writing four differently-shaped markers.
 fn system_dm_marker(
     peer_id: UserId,
     envelope_ts_ns: u64,
     system: crate::domain::message::SystemMessage,
 ) -> Message {
-    let now = chrono::Utc::now();
-    Message {
-        id: MessageId::new(),
-        conversation_id: peer_id.into(),
-        conversation_type: ConversationType::ServerDm,
-        // Drives the UI's name lookup — system entries render as
-        // "{sender_name} {description}".
-        sender_id: Some(peer_id),
-        device_id: None,
-        content: crate::domain::message::MessageContent::System(system),
-        encrypted_content: None,
-        thread_id: None,
-        reply_to: None,
-        reply_to_author_id: None,
-        reply_to_text: None,
-        reply_to_thumbnail: None,
-        reply_to_thumbnail_mime: None,
-        attachments: Vec::new(),
-        is_pinned: false,
-        is_edited: false,
-        is_deleted: false,
-        is_read: false,
-        sent_at: envelope_ts_ns,
-        created_at: now,
-        updated_at: now,
-        edited_at: None,
-        reaction_counts: Vec::new(),
-        current_user_reactions: Vec::new(),
-        mentioned_integrations: Vec::new(),
-        targets_ai_bot: false,
-        delivery_status: String::new(),
-    }
+    use crate::inbox::ack_policy::{self, FailureMarker};
+    let marker = match system {
+        crate::domain::message::SystemMessage::IdentityChanged { attributed } => {
+            FailureMarker::IdentityChanged { attributed }
+        }
+        _ => FailureMarker::DeliveryIssue,
+    };
+    ack_policy::marker_message(ack_policy::dm_target(peer_id, envelope_ts_ns), marker)
 }
 
 /// Process a single message through the validation pipeline.
@@ -141,7 +159,8 @@ pub async fn process_device_message(
     ephemeral_repo: &Arc<EphemeralRepository>,
     group_coordinator: &Arc<GroupCoordinator>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
-) {
+) -> crate::inbox::ack_policy::AckDecision {
+    use crate::inbox::ack_policy::AckDecision;
     tracing::info!(
         message_guid = %msg.message_guid,
         source_user_id = %msg.source_user_id,
@@ -190,7 +209,10 @@ pub async fn process_device_message(
                         error: format!("Invalid sender ID: {}", e),
                     });
                     stats.write().messages_failed += 1;
-                    return;
+                    // Malformed and deterministic in the bytes — and with no
+                    // parseable sender there is no conversation to mark.
+                    // Retaining it would replay forever.
+                    return AckDecision::Ack;
                 }
             };
 
@@ -216,7 +238,7 @@ pub async fn process_device_message(
                 domain_tx,
             )
             .await;
-            return;
+            return AckDecision::Ack;
         } else {
             tracing::debug!(
                 message_guid = %msg.message_guid,
@@ -244,7 +266,7 @@ pub async fn process_device_message(
             "[INBOX] Processing as identified sender message (PreKey/Ciphertext)"
         );
         process_identified_sender_message(msg, event_tx, stats, message_gateway, domain_tx).await;
-        return;
+        return AckDecision::Ack;
     }
 
     // Check for ECIES_INIT (HPKE-encrypted initial contact, NDSS'21 compliant)
@@ -255,7 +277,7 @@ pub async fn process_device_message(
             "[INBOX] Processing as ECIES init message (NDSS'21 private contact)"
         );
         process_ecies_init_message(msg, event_tx, stats, message_gateway, domain_tx).await;
-        return;
+        return AckDecision::Ack;
     }
 
     // Fall back to sealed sender processing
@@ -272,7 +294,7 @@ pub async fn process_device_message(
         message_repo,
         domain_tx,
     )
-    .await;
+    .await
 }
 
 /// Process a sender key encrypted message.
@@ -1085,7 +1107,8 @@ async fn process_sealed_sender_message(
     message_gateway: &Arc<MessageGateway>,
     message_repo: &Arc<MessageRepository>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
-) {
+) -> crate::inbox::ack_policy::AckDecision {
+    use crate::inbox::ack_policy::{self, AckDecision};
     let sealed_sender_msg = SealedSenderMessage {
         sealed_body: msg.envelope.clone(),
         server_key_id: 0,
@@ -1274,36 +1297,23 @@ async fn process_sealed_sender_message(
                 error: "session desync — DecryptionErrorMessage reported to sender".to_string(),
             });
 
-            // The report above heals the SESSION; this message is already
-            // gone (it gets acked with the rest of the batch and the server
-            // drops it). Leave a visible entry so the gap is explained
-            // instead of silent — Signal's "Delivery issue" update.
-            let marker = delivery_issue_message(sender_id, msg.server_timestamp);
-            match message_repo.insert_or_ignore(&marker) {
-                // Inserted: this envelope's failure is news. Announce it so the
-                // open conversation shows the gap without waiting for a reload.
-                Ok(true) => {
-                    if let Some(tx) = domain_tx {
-                        let _ = tx.send(DomainEvent::MessageReceived { message: marker });
-                    }
-                }
-                // Already present: a failed `acknowledge` replayed this same
-                // envelope at the next start. The marker is there; saying it
-                // twice would spam the conversation.
-                Ok(false) => {}
-                Err(error) => {
-                    tracing::warn!(
-                        sender_id = %sender_id,
-                        %error,
-                        "[INBOX] could not record the delivery-issue marker — this \
-                         decrypt failure will be invisible to the user"
-                    );
-                }
+            {
+                let mut s = stats.write();
+                s.messages_received += 1;
+                s.messages_failed += 1;
             }
 
-            let mut s = stats.write();
-            s.messages_received += 1;
-            s.messages_failed += 1;
+            // The report above heals the SESSION; this message is dead either
+            // way, so the envelope is drained — but only once the marker is
+            // durably written. If that write fails we RETAIN instead: deleting
+            // the server's copy of a message we can neither show nor explain
+            // loses the message and the evidence at once.
+            return ack_policy::record_marker_then_ack(
+                message_repo,
+                domain_tx,
+                ack_policy::dm_target(sender_id, msg.server_timestamp),
+                ack_policy::FailureMarker::DeliveryIssue,
+            );
         }
         // SENDER half of the 1:1 self-heal: a peer's DecryptionErrorMessage
         // about a message we sent was processed (session archived when
@@ -1458,45 +1468,36 @@ async fn process_sealed_sender_message(
                 error: "peer identity changed — awaiting the user's decision".to_string(),
             });
 
-            if let Ok(peer) = peer_id.parse::<UserId>() {
-                if let Some(tx) = domain_tx {
-                    let _ = tx.send(DomainEvent::PeerIdentityChanged {
-                        peer_user_id: peer,
-                        attributed,
-                    });
-                }
-                let marker =
-                    identity_changed_message(peer, msg.server_timestamp, attributed);
-                match message_repo.insert_or_ignore(&marker) {
-                    // News: announce it so an open conversation shows the gap
-                    // without waiting for a reload.
-                    Ok(true) => {
-                        if let Some(tx) = domain_tx {
-                            let _ = tx.send(DomainEvent::MessageReceived { message: marker });
-                        }
-                    }
-                    // A replayed envelope after a failed `acknowledge`. Saying
-                    // it twice would spam the conversation.
-                    Ok(false) => {}
-                    Err(error) => {
-                        tracing::warn!(
-                            peer_id = %peer_id,
-                            %error,
-                            "[INBOX] could not record the identity-change marker — the \
-                             message that wedged this conversation will be invisible"
-                        );
-                    }
-                }
-            } else {
-                tracing::warn!(
-                    peer_id = %peer_id,
-                    "[INBOX] identity change for an unparseable peer id — no marker written"
-                );
+            {
+                let mut s = stats.write();
+                s.messages_received += 1;
+                s.messages_failed += 1;
             }
 
-            let mut s = stats.write();
-            s.messages_received += 1;
-            s.messages_failed += 1;
+            let Ok(peer) = peer_id.parse::<UserId>() else {
+                tracing::warn!(
+                    peer_id = %peer_id,
+                    "[INBOX] identity change for an unparseable peer id — no marker \
+                     written, but the envelope is still drained: a resend re-presents \
+                     the same key, so retaining it replays forever"
+                );
+                return AckDecision::Ack;
+            };
+            if let Some(tx) = domain_tx {
+                let _ = tx.send(DomainEvent::PeerIdentityChanged {
+                    peer_user_id: peer,
+                    attributed,
+                });
+            }
+            // `IdentityChanged`, never `DeliveryIssue`: no DecryptionErrorMessage
+            // was sent, a resend re-presents the same key and fails identically,
+            // and only a human accepting it clears the wedge.
+            return ack_policy::record_marker_then_ack(
+                message_repo,
+                domain_tx,
+                ack_policy::dm_target(peer, msg.server_timestamp),
+                ack_policy::FailureMarker::IdentityChanged { attributed },
+            );
         }
         Err(e) => {
             let e: ServiceError = e;
@@ -1504,12 +1505,37 @@ async fn process_sealed_sender_message(
                 message_id: msg.message_guid.clone(),
                 error: e.to_string(),
             });
-            let mut s = stats.write();
-            s.messages_received += 1;
-            s.messages_failed += 1;
+            {
+                let mut s = stats.write();
+                s.messages_received += 1;
+                s.messages_failed += 1;
+            }
             tracing::error!(message_id = %msg.message_guid, error = %e, "Failed to decrypt message");
+            // Was: log and fall through, while `provider` acked the guid anyway
+            // — the generic branch destroyed the message with no marker at all.
+            // A sealed sender envelope that failed to open authenticated
+            // nobody, so the sender is only known when the error carries one.
+            let peer = match &e {
+                ServiceError::Crypto(CryptoError::UntrustedIdentity { peer_id, .. }) => {
+                    peer_id.parse::<UserId>().ok()
+                }
+                ServiceError::Crypto(CryptoError::SessionDesync { sender_uuid, .. }) => {
+                    sender_uuid.parse::<UserId>().ok()
+                }
+                _ => msg.source_user_id.parse::<UserId>().ok(),
+            };
+            return device_failure_decision(
+                peer,
+                msg.server_timestamp,
+                &e,
+                message_repo,
+                domain_tx,
+            );
         }
     }
+
+    // Every other arm handled the message.
+    AckDecision::Ack
 }
 
 /// Dispatch channel control content based on type.
