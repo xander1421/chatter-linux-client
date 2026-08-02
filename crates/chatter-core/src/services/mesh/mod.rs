@@ -76,7 +76,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
-use crate::domain::ids::ChannelId;
+use crate::domain::ids::{ChannelId, UserId};
 use crate::domain::message::Message;
 use crate::domain::UnifiedConversation;
 use crate::storage::mesh_identity_store::MeshIdentityStore;
@@ -428,6 +428,36 @@ impl MeshService {
     #[must_use]
     pub fn peers(&self) -> Vec<MeshPeer> {
         self.state.peers()
+    }
+
+    /// The nickname behind a mesh-derived `UserId`, if this device knows one.
+    ///
+    /// Mesh messages are stored with `mapping::peer_user_id(peer)` as their
+    /// sender — a hash of the peer ID, so it lives in the same `UserId` space as
+    /// every other message and needs no special case in storage or in the
+    /// timeline. The human-readable nickname deliberately does not travel with
+    /// it (`mapping.rs`), which is fine while a message is in flight — the live
+    /// path carries the nickname alongside — and wrong the moment it is read
+    /// back from the store, where all that survived is the hash. Re-opening a
+    /// mesh conversation therefore listed every sender as a raw UUID.
+    ///
+    /// `peer_user_id` is one-way, so this recovers the name by recomputing it
+    /// over the peers this device knows rather than by inverting anything. That
+    /// is O(peers) per lookup, over a set bounded by Bluetooth range and by the
+    /// geohash cells joined — tens, not thousands.
+    ///
+    /// `None` means exactly what it says: no peer we currently know hashes to
+    /// this id. A peer that has gone out of range and was never named is not
+    /// something this can invent a name for, and callers must render that case
+    /// rather than let a UUID through.
+    #[must_use]
+    pub fn sender_display_name(&self, sender: &UserId) -> Option<String> {
+        self.state
+            .peers()
+            .into_iter()
+            .find(|p| mapping::peer_user_id(&p.peer) == *sender)
+            .map(|p| p.nickname)
+            .filter(|n| !n.is_empty())
     }
 
     /// Transport status across both halves.

@@ -74,7 +74,8 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
 
         let display = messages_to_display_batch(
             &messages,
-            |m| ui_ctx.message_sender_display_name(m),
+            // Mesh senders, not chatter accounts — see `core_api::sender_display_name`.
+            |m| core_api::sender_display_name(&ui_ctx, m),
             |att_id| ui_ctx.get_attachment(att_id),
             |m| ui_ctx.reply_author_display_name(m),
             |m| ui_ctx.reply_parent_missing_for(m),

@@ -238,3 +238,20 @@ pub fn mark_read(
 ) -> Result<(), MeshError> {
     ui_ctx.mesh_mark_conversation_read(conversation)
 }
+
+/// How a mesh message's author should be named.
+///
+/// The generic `message_sender_display_name` cannot answer this — a mesh peer
+/// exists in no user repository, so that path ends at `user_id.to_string()` and
+/// history rendered every sender as a raw UUID. Core matches the id back to a
+/// known peer; when it knows none, the fallback is a word, not an identifier.
+pub fn sender_display_name(ui_ctx: &Arc<ChatterClient>, message: &Message) -> String {
+    message
+        .sender_id
+        .as_ref()
+        .and_then(|id| ui_ctx.mesh_sender_display_name(id))
+        // A peer that has drifted out of range since it spoke. Its id is a hash
+        // of a routing address and means nothing to anyone, so showing it is
+        // strictly worse than admitting we no longer know who this was.
+        .unwrap_or_else(|| "Unknown peer".to_string())
+}
