@@ -17,6 +17,7 @@ use crate::error::NetworkError;
 use crate::events::{DomainEvent, EventBus};
 use crate::services::auth_service::{AuthError, LoginResult};
 use crate::services::key_recovery::KeyRecoveryNeed;
+use crate::storage::repositories::settings_repo::keys;
 use crate::inbox::DeviceInboxProvider;
 use crate::mailbox::group::GroupFanout;
 use crate::proto::content_v1::AttachmentPointer;
@@ -132,7 +133,11 @@ impl ChatterClient {
         // with the old device. Replace the account's key material with this
         // device's, or peers keep fetching prekeys that can never complete a
         // handshake.
-        if result.keys_restored {
+        // Also retried when a previous attempt was interrupted after the local
+        // keys landed: without that, the next login sees a local identity,
+        // skips the restore, and the account is left serving prekeys nobody
+        // holds the private half of.
+        if result.keys_restored || self.key_republish_pending() {
             self.republish_identity_keys().await?;
         }
 
@@ -202,11 +207,18 @@ impl ChatterClient {
             .try_auth_client()
             .ok_or(ClientError::NotConnected)?;
 
+        // Mark the debt BEFORE incurring it. If this call dies halfway, the
+        // next login retries; the alternative is a device whose local keys are
+        // fine while the server serves prekeys for a device that is gone.
+        self.set_key_republish_pending(true);
+
         let outcome = self
             .signal()
             .republish_identity_bundle(&mut auth_client)
             .await
             .map_err(|e| ClientError::Validation(format!("failed to publish key material: {e}")))?;
+
+        self.set_key_republish_pending(false);
 
         tracing::info!(
             identity_key_changed = outcome.identity_key_changed,
@@ -214,6 +226,28 @@ impl ChatterClient {
             "published this device's key material"
         );
         Ok(())
+    }
+
+    /// Whether a previous republish was interrupted after the local keys landed.
+    fn key_republish_pending(&self) -> bool {
+        self.signal()
+            .settings_repo
+            .get::<bool>(keys::KEY_REPUBLISH_PENDING)
+            .ok()
+            .flatten()
+            .unwrap_or(false)
+    }
+
+    fn set_key_republish_pending(&self, pending: bool) {
+        if let Err(e) = self
+            .signal()
+            .settings_repo
+            .set(keys::KEY_REPUBLISH_PENDING, &pending)
+        {
+            // Not fatal, but worth saying: losing this flag is how an
+            // interrupted republish becomes a permanent one.
+            tracing::warn!("failed to record pending key republish: {}", e);
+        }
     }
 
     /// Register a new account and start all background services.
@@ -406,7 +440,6 @@ impl ChatterClient {
         use crate::crypto::svr::{
             derive_registration_lock, derive_svr_secret, validate_pin, SvrKeypair,
         };
-        use crate::storage::repositories::settings_repo::keys;
         use zeroize::Zeroize;
 
         validate_pin(old_pin).map_err(|e| ClientError::Validation(format!("old PIN: {e}")))?;
@@ -561,7 +594,6 @@ impl ChatterClient {
         result: &mut LoginResult,
     ) {
         use crate::crypto::svr::derive_svr_secret;
-        use crate::storage::repositories::settings_repo::keys;
         use zeroize::Zeroize;
 
         // 1. Never overwrite an identity this device already holds.
