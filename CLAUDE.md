@@ -56,19 +56,17 @@ this prose, which has already gone stale once.
   `canonical_announce_bytes` trio — production authenticates announces with the
   packet-level `verify_packet` instead, so anyone citing the announce-specific
   preimage is reading dead code.
-- `crypto/keytransparency.rs::verify_consistency_proof` — only called from
-  `tests/validated.rs`. Inclusion proofs *are* verified in production
-  (`services/signal/session.rs:76`, `:712`); consistency proofs are not.
-  V25 in `VALIDATED.md` reads as though the client monitors the log; it does
-  not — the test calls the verifier by hand.
-- `services/signal/identity.rs::accept_peer_identity_change` and
-  `pending_identity_change` — zero production callers, and this one wedges.
-  Production writes `pending_identity_changes` rows (`note_identity_change`,
-  from the four send paths in `session.rs`) and reads them (`session.rs:172`,
-  which refuses the send with `UntrustedIdentity`), but `accept_…` holds the
-  only `DELETE` and nothing outside `identity.rs` reaches it. A peer
-  reinstalling therefore breaks that conversation permanently, with no shipped
-  path — UI or otherwise — that can clear the row.
+- **CORRECTED:** `crypto/keytransparency.rs::verify_consistency_proof` is wired
+  as of 2026-08-03. `services/signal/kt_anchor.rs` pins the highest tree head
+  this device has accepted and requires a consistency proof before advancing;
+  `session.rs` calls it on every KT-verified send, so forks and rollbacks are
+  now rejected rather than invisible.
+- **CORRECTED (was wrong here, in the dangerous direction):**
+  `services/signal/identity.rs::accept_peer_identity_change` **is** wired now,
+  end to end: `ui/chat/identity_change_bar.slint:35` → `chat_layout.slint:213`
+  → `app.slint:1464` → `features/chat/identity_change.rs:75,84` →
+  `client/mod.rs:931` → `identity.rs:227`. A peer reinstalling no longer wedges
+  the conversation permanently. `production_wiring.rs` pins both directions.
 
 The full list, with citations, is `docs/OPEN-ITEMS.md` in the server repo.
 

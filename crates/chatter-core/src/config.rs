@@ -83,8 +83,33 @@ const SHIPPED_TRUST_ROOT_BYTES: Option<[u8; 32]> =
 /// leak an insecure key into anything shippable.
 pub const TRUST_ROOT_PUBLIC_KEY_BYTES: Option<[u8; 32]> = match SHIPPED_TRUST_ROOT_BYTES {
     Some(configured) => Some(configured),
-    None if cfg!(test) => Some(DEV_TRUST_ROOT_BYTES),
+    None if cfg!(test) || cfg!(feature = "testing") => Some(DEV_TRUST_ROOT_BYTES),
     None => None,
+};
+
+/// Fail the BUILD when no trust root is configured, not the first session.
+///
+/// Without this the build succeeds and `TRUST_ROOT_PUBLIC_KEY` panics on first
+/// use inside a `LazyLock` — so an unprovisioned artifact ships, installs, and
+/// dies on the user's machine instead of on the machine that built it. The KT
+/// tree-head anchor below already fails at compile time; this makes the two
+/// pinned keys behave the same way, which is the whole point of having one
+/// provisioning step for both.
+///
+/// `cfg(test)` / `feature = "testing"` are excluded because those harnesses
+/// legitimately fall back to the dev key above.
+#[cfg(all(not(feature = "dev-trust-root"), not(test), not(feature = "testing")))]
+const _: () = {
+    assert!(
+        TRUST_ROOT_PUBLIC_KEY_BYTES.is_some(),
+        "no sealed-sender trust root is baked into this build.\n\n\
+         Sender certificates could not be verified against anything, so this \
+         binary would panic at startup.\n\n\
+         Build with the production key:\n\n  \
+         CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX=<64 hex chars> cargo build --release\n\n\
+         Generate it with `make provision-keys` in the server repo.\n\n\
+         For local development only, build with --features dev-trust-root."
+    );
 };
 
 /// GRA-249, enforced at build time: a production build must not be handed the
