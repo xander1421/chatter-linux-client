@@ -498,6 +498,14 @@ impl DeviceInboxProvider {
             "Starting polling loop with timing obfuscation (NDSS '21)"
         );
 
+        // One retain budget for the whole polling loop. Retaining is otherwise
+        // unbounded: an envelope that keeps failing transiently is re-fetched
+        // and re-decrypted every cycle for as long as the client runs, and
+        // `classify_crypto` defaults to transient, so that is the common case
+        // rather than the rare one. Shared across the loops because each of
+        // them keys on the same server-side message id.
+        let retry_budget = crate::inbox::ack_policy::RetryBudget::new();
+
         let mut poll_cycle: u64 = 0;
         loop {
             poll_cycle += 1;
@@ -516,8 +524,16 @@ impl DeviceInboxProvider {
                         tracing::info!(cycle = poll_cycle, "Device inbox: empty");
                     }
                     let mut handled: Vec<String> = Vec::with_capacity(count);
+                    // The pagination cursor moves with these decisions, not
+                    // ahead of them: `after_id` is exclusive, so leaving a
+                    // retained id below it means the server keeps the envelope
+                    // (we never acked) and we never ask for it again (the
+                    // cursor passed it). That made `Retain` a no-op.
+                    let batch_max = messages.iter().map(|m| m.queue_id).max().unwrap_or(0);
+                    let mut lowest_retained: Option<i64> = None;
                     for msg in messages {
                         let guid = msg.message_guid.clone();
+                        let queue_id = msg.queue_id;
                         // Acking DELETES it server-side, so the guid only goes
                         // into `handled` when `process_device_message` says it
                         // is safe to destroy — either it was processed, or it
@@ -534,18 +550,27 @@ impl DeviceInboxProvider {
                             &ephemeral_repo,
                             &group_coordinator,
                             domain_tx.as_ref(),
+                            &retry_budget,
                         )
                         .await;
                         if decision.should_ack() {
                             handled.push(guid);
                         } else {
+                            lowest_retained = Some(
+                                lowest_retained.map_or(queue_id, |lo: i64| lo.min(queue_id)),
+                            );
                             tracing::info!(
                                 cycle = poll_cycle,
                                 message_guid = %guid,
+                                queue_id,
                                 "Device inbox: retaining envelope for redelivery (transient \
                                  failure, or its failure marker could not be written)"
                             );
                         }
+                    }
+
+                    if count > 0 {
+                        poller.advance_after_id(batch_max, lowest_retained);
                     }
 
                     // Drain the server queue. `AcknowledgeMessages` is documented in
@@ -578,13 +603,13 @@ impl DeviceInboxProvider {
                     if !handled.is_empty()
                         && let Err(error) = poller.acknowledge(handled).await
                     {
-                        // Not fatal, but not self-correcting within this session
-                        // either: the cursor has already advanced past these, so
-                        // the next poll asks for a higher `after_id` and skips
-                        // them. They come back on the next start, when the cursor
-                        // begins at 0 again, and processing is idempotent. Loud
-                        // because a persistent failure here is invisible except as
-                        // a queue that never shrinks.
+                        // Not fatal. The cursor has advanced past these (they
+                        // were decided ackable, so nothing is retaining them),
+                        // which means the next poll skips them; they come back
+                        // on the next start, when the cursor begins at 0 again,
+                        // and processing is idempotent. Loud because a
+                        // persistent failure here is invisible except as a
+                        // queue that never shrinks.
                         tracing::warn!(
                             cycle = poll_cycle,
                             %error,
@@ -624,6 +649,7 @@ impl DeviceInboxProvider {
                 &user_repo,
                 domain_tx.as_ref(),
                 &dm_deduplicator,
+                &retry_budget,
             )
             .await;
 
@@ -645,6 +671,7 @@ impl DeviceInboxProvider {
                 &attachment_repo,
                 &message_repo,
                 domain_tx.as_ref(),
+                &retry_budget,
             )
             .await;
 

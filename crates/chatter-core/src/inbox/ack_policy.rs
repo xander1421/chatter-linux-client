@@ -13,21 +13,37 @@
 //! | decrypted | yes | no |
 //! | permanently failed | yes, **after** the marker is durably stored | yes |
 //! | transiently failed | **no** — let it redeliver | no |
+//! | transiently failed for too long | yes, **after** the marker | yes |
 //! | duplicate / self-echo / blocked | yes | no (nothing was lost) |
 //!
 //! Marker first, then ack, never the reverse. If the marker cannot be written
 //! the failure is downgraded to [`AckDecision::Retain`]: a message we can
 //! neither show nor explain must not also be deleted.
 //!
+//! # Retain has to actually redeliver, and has to end
+//!
+//! Two things make `Retain` a real answer rather than a way of losing a message
+//! quietly, and both of them live outside this module:
+//!
+//! - **The cursor must not pass a retained envelope.** The device inbox
+//!   paginates on `after_id`, which is exclusive, so a retained id below it is
+//!   held by the server and never asked for again. See
+//!   [`crate::inbox::poller::next_after_id`].
+//! - **Retaining must be bounded.** Otherwise an envelope that keeps failing is
+//!   re-fetched and re-decrypted on every poll for as long as the client runs —
+//!   and [`classify_crypto`] defaults to transient, so that is the common case
+//!   rather than the rare one. See [`RetryBudget`] and
+//!   [`decide_after_failure_bounded`].
+//!
 //! # Why a permanent failure is acked at all
 //!
 //! Because not acking is its own bug. A dead ciphertext handed to us again
 //! fails identically, and on the device inbox each replay also re-sent a
 //! `DecryptionErrorMessage` — measured at 201 inbound reports and 12 outbound
-//! in four minutes between two idle devices. `polling::anon_dm` still has the
-//! other half of that: it never acks a failure, so a peer on an old envelope
-//! format redelivers forever. Acking terminates it; the marker is what keeps
-//! the termination from being silent.
+//! in four minutes between two idle devices. `polling::anon_dm` had the other
+//! half of that: it never acked a failure, so a peer on an old envelope format
+//! redelivered forever. Acking terminates it; the marker is what keeps the
+//! termination from being silent.
 //!
 //! # How transient is decided
 //!
@@ -219,6 +235,56 @@ pub fn marker_for_service(e: &ServiceError) -> FailureMarker {
     }
 }
 
+/// How much of the timeline one marker speaks for.
+///
+/// Markers are collapsed to one per (conversation, marker kind) per hour. Two
+/// separate reasons:
+///
+/// 1. **Dedup that actually covers these rows.** The anti-stacking arm of
+///    [`record_marker_then_ack`] was resting on the UNIQUE index over
+///    `(conversation_type, conversation_id, sender_id, sent_at)`, which is
+///    partial — `WHERE sender_id IS NOT NULL AND sent_at > 0` — and SQLite
+///    treats NULLs in a unique index as distinct regardless. Every anon-DM
+///    marker and every group sealed-sender-open failure names nobody, so the
+///    index never applied to exactly the paths that produce the most markers,
+///    and a failing `acknowledge` stacked a fresh copy on every replay.
+/// 2. **A ceiling an attacker cannot raise.** Distinct `sent_at` values defeat
+///    that index even where it does apply, so N undecryptable envelopes wrote N
+///    markers — and anon-DM mailboxes take mail from strangers, which makes N
+///    the sender's choice.
+///
+/// An hour is chosen against what the marker is *for*: it says "there is a gap
+/// here, ask for a resend", which is one piece of advice however many messages
+/// fell in it. Ten failures in a row are one problem, and Signal-Android
+/// likewise renders a single "Delivery issue" update rather than one per
+/// message. It bounds a conversation at 24 markers per kind per day.
+const MARKER_BUCKET_NS: u64 = 3_600_000_000_000;
+
+/// The marker's own primary key, derived from what it says rather than randomly.
+///
+/// `insert_or_ignore` is `INSERT OR IGNORE`, so a deterministic id makes the
+/// primary key itself the dedup — which works for the `sender_id IS NULL`
+/// markers that no index can collapse, and lets the `Ok(false)` arm of
+/// [`record_marker_then_ack`] fire on the paths that need it. See
+/// [`MARKER_BUCKET_NS`] for why the timestamp is bucketed rather than exact.
+fn marker_id(target: &MarkerTarget, marker: FailureMarker) -> MessageId {
+    let kind = match marker {
+        FailureMarker::DeliveryIssue => "delivery_issue",
+        FailureMarker::IdentityChanged { .. } => "identity_changed",
+    };
+    // `attributed` is deliberately NOT in the key: the same identity change
+    // seen once with a certificate and once server-claimed is one event.
+    let key = format!(
+        "inbox_marker:{}:{}:{}:{}:{}",
+        target.conversation_type.as_str(),
+        target.conversation_id,
+        target.peer_id.map_or_else(|| "-".to_string(), |p| p.to_string()),
+        target.envelope_ts_ns / MARKER_BUCKET_NS,
+        kind,
+    );
+    MessageId(uuid::Uuid::new_v5(&uuid::Uuid::nil(), key.as_bytes()))
+}
+
 /// Build the system entry that stands in for the message we lost.
 #[must_use]
 pub fn marker_message(target: MarkerTarget, marker: FailureMarker) -> Message {
@@ -228,9 +294,10 @@ pub fn marker_message(target: MarkerTarget, marker: FailureMarker) -> Message {
             SystemMessage::IdentityChanged { attributed }
         }
     };
+    let id = marker_id(&target, marker);
     let now = chrono::Utc::now();
     Message {
-        id: MessageId::new(),
+        id,
         conversation_id: target.conversation_id,
         conversation_type: target.conversation_type,
         // Drives the UI's name lookup — system entries render as
@@ -333,6 +400,171 @@ pub fn decide_after_failure(
             record_marker_then_ack(message_repo, domain_tx, target.clone(), marker)
         }
     }
+}
+
+/// How many times one envelope may be re-offered before a retain is treated as
+/// a loss instead.
+///
+/// [`MAX_RETAIN_AGE_NS`] is the real bound; this one is a runaway guard for the
+/// case where the loop is somehow spinning far faster than its configured
+/// pacing. It is set above what a day of the *fastest* configured interval can
+/// produce — `InboxConfig::poll_interval` is 5s, so 24h is at most ~17_280
+/// deliveries — precisely so that it does not fire first in normal operation
+/// and shorten the window an SKDM or a bootstrap response has to arrive in.
+pub const MAX_RETAIN_ATTEMPTS: u32 = 20_000;
+
+/// How long we keep re-offering an envelope to ourselves before giving up.
+///
+/// Measured from the first time WE saw the envelope, not from the envelope's
+/// own `server_timestamp`. Those are different clocks and only one of them is
+/// about the bug being fixed here. A client that was offline for a week comes
+/// back to a queue full of legitimately old messages; billing their age against
+/// the budget would delete them on their very first delivery, before the SKDM
+/// fetch that opens them has had a single chance to run. What is actually being
+/// bounded is *our retry loop*, so the clock starts when the loop does.
+///
+/// Every transient cause the policy names — the SKDM, the bootstrap response,
+/// our own identity after registration, a locked database — resolves in seconds
+/// to minutes when it resolves at all. A day of retrying is two orders of
+/// magnitude of headroom on that, and past it the honest reading is not "this
+/// will decrypt soon" but "this will never decrypt": `classify_crypto`'s
+/// catch-all arms send every unrecognised libsignal error here
+/// (`CryptoError::Protocol` alone absorbs ~40 causes), so "transient" is a
+/// hedge, not a diagnosis.
+///
+/// A restart resets it, which is the safe direction: a restart also stops the
+/// loop, and the failure mode being bounded — re-fetch and re-decrypt on every
+/// poll for as long as the client runs — is a within-process one.
+pub const MAX_RETAIN_AGE_NS: u64 = 24 * 60 * 60 * 1_000_000_000;
+
+/// Per-envelope retain counters for the mailbox loops.
+///
+/// Retaining is unbounded on its own: no cursor, no counter, no age. A
+/// permanently-undecryptable envelope that classifies transient is therefore
+/// re-fetched and re-decrypted on every poll for as long as the client runs,
+/// and `classify_crypto`'s deliberate default-transient bias makes that the
+/// common case rather than the rare one.
+///
+/// Lives for the process. An envelope that survives a restart starts its count
+/// again, which is the safe direction: the age cap still bounds it.
+#[derive(Debug, Default)]
+pub struct RetryBudget {
+    /// envelope id -> (deliveries seen, when we first saw it).
+    attempts: parking_lot::Mutex<std::collections::HashMap<String, (u32, u64)>>,
+}
+
+impl RetryBudget {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Count one more delivery of `envelope_id`.
+    ///
+    /// Returns `(deliveries so far, when we first saw it)`. The first delivery
+    /// stamps `now_ns`, so the age bound measures our own retrying rather than
+    /// how long the message sat on the server before we ever fetched it.
+    pub fn record_attempt(&self, envelope_id: &str, now_ns: u64) -> (u32, u64) {
+        let mut attempts = self.attempts.lock();
+        let entry = attempts
+            .entry(envelope_id.to_string())
+            .or_insert((0, now_ns));
+        entry.0 += 1;
+        *entry
+    }
+
+    /// Drop the counter — call this whenever the envelope is acked, so the map
+    /// only ever holds envelopes the server still has.
+    pub fn forget(&self, envelope_id: &str) {
+        self.attempts.lock().remove(envelope_id);
+    }
+
+    /// How many envelopes are currently being retained.
+    #[must_use]
+    pub fn tracked(&self) -> usize {
+        self.attempts.lock().len()
+    }
+}
+
+/// Wall clock in nanoseconds, for the age half of the retain budget.
+#[must_use]
+pub fn now_ns() -> u64 {
+    u64::try_from(chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)).unwrap_or(0)
+}
+
+/// [`decide_after_failure`], with a ceiling on how long a retain may go on.
+///
+/// Same rules for a permanent failure. A transient one is retained as before,
+/// but only while it is still plausibly transient: past
+/// [`MAX_RETAIN_ATTEMPTS`] deliveries or [`MAX_RETAIN_AGE_NS`] of age the
+/// verdict is downgraded to permanent — marker first, then drain — because a
+/// retain that never ends is not a redelivery, it is an unbounded re-decrypt of
+/// the same dead bytes with nothing in the conversation to show for it.
+#[allow(clippy::too_many_arguments)]
+pub fn decide_after_failure_bounded(
+    err: &ServiceError,
+    target: MarkerTarget,
+    message_repo: &Arc<MessageRepository>,
+    domain_tx: Option<&broadcast::Sender<DomainEvent>>,
+    envelope_id: &str,
+    budget: &RetryBudget,
+    now_ns: u64,
+) -> AckDecision {
+    let decision = decide_after_failure(err, target.clone(), message_repo, domain_tx);
+    if decision == AckDecision::Ack {
+        budget.forget(envelope_id);
+        return decision;
+    }
+
+    retain_within_budget(
+        target,
+        message_repo,
+        domain_tx,
+        envelope_id,
+        budget,
+        now_ns,
+        &err.to_string(),
+    )
+}
+
+/// Retain, but only while the retain is still plausibly going to pay off.
+///
+/// Counts this delivery against [`MAX_RETAIN_ATTEMPTS`] and
+/// [`MAX_RETAIN_AGE_NS`], and once either is spent stops retaining: marker
+/// first, then drain. Used for the transient half of
+/// [`decide_after_failure_bounded`] and for the loops' bare retains (a DM whose
+/// bootstrap has not landed) which carry no [`ServiceError`] at all.
+#[allow(clippy::too_many_arguments)]
+pub fn retain_within_budget(
+    target: MarkerTarget,
+    message_repo: &Arc<MessageRepository>,
+    domain_tx: Option<&broadcast::Sender<DomainEvent>>,
+    envelope_id: &str,
+    budget: &RetryBudget,
+    now_ns: u64,
+    reason: &str,
+) -> AckDecision {
+    let (attempts, first_seen_ns) = budget.record_attempt(envelope_id, now_ns);
+    let retrying_for_ns = now_ns.saturating_sub(first_seen_ns);
+    if attempts < MAX_RETAIN_ATTEMPTS && retrying_for_ns <= MAX_RETAIN_AGE_NS {
+        return AckDecision::Retain;
+    }
+
+    tracing::warn!(
+        conversation_id = %target.conversation_id,
+        reason,
+        attempts,
+        retrying_for_ns,
+        "[INBOX] retain budget exhausted — this envelope has been re-offered and \
+         re-decrypted long enough that 'a later attempt can succeed' is no longer \
+         a description of it. Recording a marker, then draining."
+    );
+    let decision =
+        record_marker_then_ack(message_repo, domain_tx, target, FailureMarker::DeliveryIssue);
+    if decision == AckDecision::Ack {
+        budget.forget(envelope_id);
+    }
+    decision
 }
 
 /// A permanent failure that carries no [`ServiceError`] — a proto that will not
@@ -466,6 +698,39 @@ mod tests {
                 "{e} is a pure function of the bytes; retaining it replays forever"
             );
         }
+    }
+
+    /// `Validation ⇒ Permanent` is only sound while `Validation` means "the
+    /// bytes are bad". `store_synced_sent_message` broke that: it turned a
+    /// failed settings-DB read into
+    /// `Validation("SyncSent received but no current user: …")`, so a locked
+    /// database while a linked device's sync copy arrived was classified
+    /// permanent — the copy deleted server-side and a bogus DeliveryIssue
+    /// written in its place. The reading of the ciphertext never entered into
+    /// it.
+    #[test]
+    fn a_failed_settings_read_is_not_dressed_up_as_a_bad_message() {
+        let cause = crate::services::current_user::CurrentUserError::Storage(
+            StorageError::ConnectionPool("database is locked".into()),
+        );
+        // The conversion `services/gateway/mod.rs` now uses via `?`.
+        let raised: ServiceError = cause.into();
+        assert_eq!(
+            classify_service(&raised),
+            Durability::Transient,
+            "our disk, not their ciphertext — and precisely the case where the \
+             marker write fails too, so acking would delete the message and the \
+             trace of it together"
+        );
+    }
+
+    /// The other half: not-logged-in is local state that a later poll resolves,
+    /// so it must not be permanent either.
+    #[test]
+    fn not_being_logged_in_yet_is_not_a_reason_to_delete_mail() {
+        let raised: ServiceError =
+            crate::services::current_user::CurrentUserError::NotLoggedIn.into();
+        assert_eq!(classify_service(&raised), Durability::Transient);
     }
 
     #[test]

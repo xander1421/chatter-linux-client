@@ -46,10 +46,11 @@ pub(crate) fn anon_dm_failure_decision(
     domain_tx: Option<&tokio::sync::broadcast::Sender<DomainEvent>>,
 ) -> AckDecision {
     // Every failure this loop can reach is deterministic in the bytes: the
-    // sealed-sender open failed, the sender uuid would not parse, or the
-    // Content proto would not decode. None of them depend on local state that
-    // a later poll could supply, so all of them are permanent — which is why
-    // retaining them produced the infinite redelivery.
+    // sealed-sender open failed, the sender uuid would not parse, the Content
+    // proto would not decode, or an `AnonDmMessage` arrived with no
+    // `inner_content`. None of them depend on local state that a later poll
+    // could supply, so all of them are permanent — which is why retaining them
+    // produced the infinite redelivery.
     ack_policy::decide_after_malformed(
         reason,
         MarkerTarget {
@@ -63,6 +64,218 @@ pub(crate) fn anon_dm_failure_decision(
         message_repo,
         domain_tx,
     )
+}
+
+/// What the loop must do with a decrypted, decoded anon-DM `Content`.
+///
+/// Extracted from the routing match so the decision is testable without a
+/// `PairwiseService`, a mailbox client, or a real sealed-sender envelope.
+#[derive(Debug)]
+pub(crate) enum AnonDmRoute {
+    /// Emit these events, then drain the envelope.
+    Deliver(Vec<InboxEvent>),
+    /// Nothing to deliver, and nothing a later poll can change: the failure is
+    /// a pure function of the bytes. Marker, then drain.
+    Malformed(&'static str),
+}
+
+/// Route a decoded anon-DM `Content` to the events it produces.
+///
+/// Pure: takes the decrypted content and the authenticated sender, returns the
+/// events the loop should emit. No I/O, so the whole routing table can be
+/// tested directly.
+pub(crate) fn route_anon_dm_content(
+    content: Content,
+    sender_id: UserId,
+    conversation_id: AnonDmId,
+) -> AnonDmRoute {
+    // Kept for the envelopes that are re-wrapped into a fresh `Content` below.
+    let outer_timestamp = content.timestamp;
+    let outer_ephemeral_reply_to = content.ephemeral_reply_to;
+    let outer_padding = content.padding;
+    let conversation_bytes = conversation_id.as_bytes().to_vec();
+
+    let rewrap = |inner: content_v1::content::Content| InboxEvent::AnonDmMessage {
+        peer_id: sender_id,
+        conversation_id: conversation_bytes.clone(),
+        inner_content: Box::new(Content {
+            content: Some(inner),
+            timestamp: outer_timestamp,
+            ephemeral_reply_to: outer_ephemeral_reply_to,
+            padding: outer_padding.clone(),
+        }),
+    };
+
+    match content.content {
+        Some(content_v1::content::Content::AnonDmAccept(accept)) => {
+            tracing::info!(
+                sender_id = %sender_id,
+                conversation_id = %conversation_id,
+                "Received anonymous DM acceptance from mailbox poll"
+            );
+
+            // Use plaintext display name if non-empty, otherwise None
+            let display_name = if accept.responder_display_name.is_empty() {
+                None
+            } else {
+                Some(accept.responder_display_name)
+            };
+
+            AnonDmRoute::Deliver(vec![InboxEvent::AnonDmAccept {
+                peer_id: sender_id,
+                conversation_id: conversation_bytes,
+                responder_mailbox_pk: accept.responder_mailbox_pk,
+                profile_key: accept.profile_key,
+                responder_display_name: display_name,
+                encrypted_display_name: accept.encrypted_display_name,
+                encrypted_avatar: accept.encrypted_avatar,
+                timestamp: accept.timestamp,
+            }])
+        }
+        Some(content_v1::content::Content::AnonDmMessage(dm_msg)) => {
+            tracing::info!(
+                sender_id = %sender_id,
+                conversation_id = %conversation_id,
+                has_inner = dm_msg.inner_content.is_some(),
+                "Received anonymous DM message from mailbox poll"
+            );
+
+            // No inner content is not "wait for more" — the field is simply
+            // absent from the bytes, so every redelivery reproduces it. The
+            // pre-fix loop returned `was_processed = false` here: no ack, no
+            // marker, no dedup entry, which meant a single crafted envelope
+            // was re-fetched and re-decrypted on every poll forever. Anon-DM
+            // mailboxes take mail from strangers, so that loop was one
+            // unauthenticated message away.
+            let Some(inner) = dm_msg.inner_content else {
+                return AnonDmRoute::Malformed("AnonDmMessage carried no inner_content");
+            };
+
+            // Check if the inner content is an anon group management message
+            match inner.content.as_ref() {
+                Some(content_v1::content::Content::AnonGroupInvite(invite)) => {
+                    tracing::info!(
+                        sender_id = %sender_id,
+                        group_id = %hex::encode(&invite.group_id),
+                        "Received anonymous group invite inside anon DM"
+                    );
+                    AnonDmRoute::Deliver(vec![InboxEvent::AnonGroupInvite {
+                        peer_id: sender_id,
+                        group_id: invite.group_id.clone(),
+                        group_name: invite.group_name.clone(),
+                        inviter_mailbox_pk: invite.inviter_mailbox_pk.clone(),
+                        timestamp: invite.timestamp,
+                        profile_key: invite.profile_key.clone(),
+                        encrypted_display_name: invite.encrypted_display_name.clone(),
+                        encrypted_avatar: invite.encrypted_avatar.clone(),
+                    }])
+                }
+                Some(content_v1::content::Content::AnonGroupJoinAck(ack)) => {
+                    tracing::info!(
+                        sender_id = %sender_id,
+                        group_id = %hex::encode(&ack.group_id),
+                        has_profile = ack.profile_key.is_some(),
+                        "Received anonymous group join ack inside anon DM"
+                    );
+                    AnonDmRoute::Deliver(vec![InboxEvent::AnonGroupJoinAck {
+                        peer_id: sender_id,
+                        group_id: ack.group_id.clone(),
+                        joiner_mailbox_pk: ack.joiner_mailbox_pk.clone(),
+                        timestamp: ack.timestamp,
+                        profile_key: ack.profile_key.clone(),
+                        encrypted_display_name: ack.encrypted_display_name.clone(),
+                        encrypted_avatar: ack.encrypted_avatar.clone(),
+                    }])
+                }
+                Some(content_v1::content::Content::AnonGroupMemberList(list)) => {
+                    tracing::info!(
+                        sender_id = %sender_id,
+                        group_id = %hex::encode(&list.group_id),
+                        "Received anonymous group member list inside anon DM"
+                    );
+                    AnonDmRoute::Deliver(vec![InboxEvent::AnonGroupMemberList {
+                        peer_id: sender_id,
+                        group_id: list.group_id.clone(),
+                        members: list.members.clone(),
+                        timestamp: list.timestamp,
+                    }])
+                }
+                _ => {
+                    // Default handling for other messages
+                    AnonDmRoute::Deliver(vec![InboxEvent::AnonDmMessage {
+                        peer_id: sender_id,
+                        conversation_id: conversation_bytes,
+                        inner_content: inner,
+                    }])
+                }
+            }
+        }
+        Some(content_v1::content::Content::Receipt(receipt)) => {
+            // Handle read/delivery receipts
+            tracing::info!(
+                sender_id = %sender_id,
+                conversation_id = %conversation_id,
+                receipt_type = receipt.r#type,
+                timestamp_count = receipt.timestamps.len(),
+                timestamps = ?receipt.timestamps,
+                "[ANON_DM_RECEIPT] Received receipt from peer"
+            );
+            AnonDmRoute::Deliver(vec![rewrap(content_v1::content::Content::Receipt(receipt))])
+        }
+        Some(content_v1::content::Content::Typing(typing)) => {
+            // Handle typing indicators
+            tracing::debug!(
+                sender_id = %sender_id,
+                conversation_id = %conversation_id,
+                "[ANON_DM] Received typing indicator from peer"
+            );
+            AnonDmRoute::Deliver(vec![rewrap(content_v1::content::Content::Typing(typing))])
+        }
+        Some(content_v1::content::Content::AnonDmPresence(presence)) => {
+            // Handle presence updates
+            tracing::debug!(
+                sender_id = %sender_id,
+                conversation_id = %conversation_id,
+                status = ?presence.status,
+                "[ANON_DM] Received presence update from peer"
+            );
+            AnonDmRoute::Deliver(vec![rewrap(
+                content_v1::content::Content::AnonDmPresence(presence),
+            )])
+        }
+        Some(content_v1::content::Content::AnonDmProfileUpdate(profile_update)) => {
+            // Handle profile updates
+            tracing::info!(
+                sender_id = %sender_id,
+                conversation_id = %conversation_id,
+                has_display_name = profile_update.display_name.is_some(),
+                has_avatar = profile_update.encrypted_avatar.is_some(),
+                has_avatar_url = profile_update.avatar_url.is_some(),
+                has_bio = profile_update.bio.is_some(),
+                "[ANON_DM] Received profile update from peer"
+            );
+            AnonDmRoute::Deliver(vec![rewrap(
+                content_v1::content::Content::AnonDmProfileUpdate(profile_update),
+            )])
+        }
+        other => {
+            let content_type = match &other {
+                Some(content_v1::content::Content::DataMessage(_)) => "DataMessage",
+                Some(content_v1::content::Content::Reaction(_)) => "Reaction",
+                Some(content_v1::content::Content::AnonDmRequest(_)) => "AnonDmRequest",
+                None => "None",
+                _ => "Other",
+            };
+            tracing::warn!(
+                sender_id = %sender_id,
+                conversation_id = %conversation_id,
+                content_type = content_type,
+                "[ANON_DM] Unexpected content type in anonymous DM mailbox"
+            );
+            // Nothing to emit, but nothing a later poll changes either — drain.
+            AnonDmRoute::Deliver(Vec::new())
+        }
+    }
 }
 
 /// Result of processing anonymous DM poll results.
@@ -234,238 +447,27 @@ pub async fn process_anon_dm_results(
                 }
             };
 
-            // Route based on content type
-            let was_processed = match content.content {
-                Some(content_v1::content::Content::AnonDmAccept(accept)) => {
-                    tracing::info!(
-                        sender_id = %sender_id,
-                        conversation_id = %conversation_id,
-                        "Received anonymous DM acceptance from mailbox poll"
-                    );
-
-                    // Use plaintext display name if non-empty, otherwise None
-                    let display_name = if accept.responder_display_name.is_empty() {
-                        None
-                    } else {
-                        Some(accept.responder_display_name)
-                    };
-
-                    let _ = event_tx
-                        .send(InboxEvent::AnonDmAccept {
-                            peer_id: sender_id,
-                            conversation_id: conversation_id.as_bytes().to_vec(),
-                            responder_mailbox_pk: accept.responder_mailbox_pk,
-                            profile_key: accept.profile_key,
-                            responder_display_name: display_name,
-                            encrypted_display_name: accept.encrypted_display_name,
-                            encrypted_avatar: accept.encrypted_avatar,
-                            timestamp: accept.timestamp,
-                        })
-                        .await;
-                    true
-                }
-                Some(content_v1::content::Content::AnonDmMessage(dm_msg)) => {
-                    tracing::info!(
-                        sender_id = %sender_id,
-                        conversation_id = %conversation_id,
-                        has_inner = dm_msg.inner_content.is_some(),
-                        "Received anonymous DM message from mailbox poll"
-                    );
-
-                    if let Some(inner) = dm_msg.inner_content {
-                        // Check if the inner content is an anon group management message
-                        
-                        match inner.content.as_ref() {
-                            Some(content_v1::content::Content::AnonGroupInvite(invite)) => {
-                                tracing::info!(
-                                    sender_id = %sender_id,
-                                    group_id = %hex::encode(&invite.group_id),
-                                    "Received anonymous group invite inside anon DM"
-                                );
-                                let _ = event_tx
-                                    .send(InboxEvent::AnonGroupInvite {
-                                        peer_id: sender_id,
-                                        group_id: invite.group_id.clone(),
-                                        group_name: invite.group_name.clone(),
-                                        inviter_mailbox_pk: invite.inviter_mailbox_pk.clone(),
-                                        timestamp: invite.timestamp,
-                                        profile_key: invite.profile_key.clone(),
-                                        encrypted_display_name: invite.encrypted_display_name.clone(),
-                                        encrypted_avatar: invite.encrypted_avatar.clone(),
-                                    })
-                                    .await;
-                                true
-                            }
-                            Some(content_v1::content::Content::AnonGroupJoinAck(ack)) => {
-                                tracing::info!(
-                                    sender_id = %sender_id,
-                                    group_id = %hex::encode(&ack.group_id),
-                                    has_profile = ack.profile_key.is_some(),
-                                    "Received anonymous group join ack inside anon DM"
-                                );
-                                let _ = event_tx
-                                    .send(InboxEvent::AnonGroupJoinAck {
-                                        peer_id: sender_id,
-                                        group_id: ack.group_id.clone(),
-                                        joiner_mailbox_pk: ack.joiner_mailbox_pk.clone(),
-                                        timestamp: ack.timestamp,
-                                        profile_key: ack.profile_key.clone(),
-                                        encrypted_display_name: ack.encrypted_display_name.clone(),
-                                        encrypted_avatar: ack.encrypted_avatar.clone(),
-                                    })
-                                    .await;
-                                true
-                            }
-                            Some(content_v1::content::Content::AnonGroupMemberList(list)) => {
-                                tracing::info!(
-                                    sender_id = %sender_id,
-                                    group_id = %hex::encode(&list.group_id),
-                                    "Received anonymous group member list inside anon DM"
-                                );
-                                let _ = event_tx
-                                    .send(InboxEvent::AnonGroupMemberList {
-                                        peer_id: sender_id,
-                                        group_id: list.group_id.clone(),
-                                        members: list.members.clone(),
-                                        timestamp: list.timestamp,
-                                    })
-                                    .await;
-                                true
-                            }
-                            _ => {
-                                // Default handling for other messages
-                                let _ = event_tx
-                                    .send(InboxEvent::AnonDmMessage {
-                                        peer_id: sender_id,
-                                        conversation_id: conversation_id.as_bytes().to_vec(),
-                                        inner_content: inner,
-                                    })
-                                    .await;
-                                true
-                            }
-                        }
-                    } else {
-                        false
+            // Route based on content type. The routing table itself is
+            // `route_anon_dm_content`, so every outcome is one value the ack
+            // policy can be applied to instead of a bare bool.
+            let decision = match route_anon_dm_content(content, sender_id, conversation_id) {
+                AnonDmRoute::Deliver(events) => {
+                    for event in events {
+                        let _ = event_tx.send(event).await;
                     }
+                    AckDecision::Ack
                 }
-                Some(content_v1::content::Content::Receipt(receipt)) => {
-                    // Handle read/delivery receipts
-                    tracing::info!(
-                        sender_id = %sender_id,
-                        conversation_id = %conversation_id,
-                        receipt_type = receipt.r#type,
-                        timestamp_count = receipt.timestamps.len(),
-                        timestamps = ?receipt.timestamps,
-                        "[ANON_DM_RECEIPT] Received receipt from peer"
-                    );
-
-                    // Send to inbox event handler
-                    let _ = event_tx
-                        .send(InboxEvent::AnonDmMessage {
-                            peer_id: sender_id,
-                            conversation_id: conversation_id.as_bytes().to_vec(),
-                            inner_content: Box::new(Content {
-                                content: Some(content_v1::content::Content::Receipt(receipt)),
-                                timestamp: content.timestamp,
-                                ephemeral_reply_to: content.ephemeral_reply_to,
-                                padding: content.padding,
-                            }),
-                        })
-                        .await;
-                    true
-                }
-                Some(content_v1::content::Content::Typing(typing)) => {
-                    // Handle typing indicators
-                    tracing::debug!(
-                        sender_id = %sender_id,
-                        conversation_id = %conversation_id,
-                        "[ANON_DM] Received typing indicator from peer"
-                    );
-
-                    let _ = event_tx
-                        .send(InboxEvent::AnonDmMessage {
-                            peer_id: sender_id,
-                            conversation_id: conversation_id.as_bytes().to_vec(),
-                            inner_content: Box::new(Content {
-                                content: Some(content_v1::content::Content::Typing(typing)),
-                                timestamp: content.timestamp,
-                                ephemeral_reply_to: content.ephemeral_reply_to,
-                                padding: content.padding,
-                            }),
-                        })
-                        .await;
-                    true
-                }
-                Some(content_v1::content::Content::AnonDmPresence(presence)) => {
-                    // Handle presence updates
-                    tracing::debug!(
-                        sender_id = %sender_id,
-                        conversation_id = %conversation_id,
-                        status = ?presence.status,
-                        "[ANON_DM] Received presence update from peer"
-                    );
-
-                    let _ = event_tx
-                        .send(InboxEvent::AnonDmMessage {
-                            peer_id: sender_id,
-                            conversation_id: conversation_id.as_bytes().to_vec(),
-                            inner_content: Box::new(Content {
-                                content: Some(content_v1::content::Content::AnonDmPresence(presence)),
-                                timestamp: content.timestamp,
-                                ephemeral_reply_to: content.ephemeral_reply_to,
-                                padding: content.padding,
-                            }),
-                        })
-                        .await;
-                    true
-                }
-                Some(content_v1::content::Content::AnonDmProfileUpdate(profile_update)) => {
-                    // Handle profile updates
-                    tracing::info!(
-                        sender_id = %sender_id,
-                        conversation_id = %conversation_id,
-                        has_display_name = profile_update.display_name.is_some(),
-                        has_avatar = profile_update.encrypted_avatar.is_some(),
-                        has_avatar_url = profile_update.avatar_url.is_some(),
-                        has_bio = profile_update.bio.is_some(),
-                        "[ANON_DM] Received profile update from peer"
-                    );
-
-                    let _ = event_tx
-                        .send(InboxEvent::AnonDmMessage {
-                            peer_id: sender_id,
-                            conversation_id: conversation_id.as_bytes().to_vec(),
-                            inner_content: Box::new(Content {
-                                content: Some(content_v1::content::Content::AnonDmProfileUpdate(profile_update)),
-                                timestamp: content.timestamp,
-                                ephemeral_reply_to: content.ephemeral_reply_to,
-                                padding: content.padding,
-                            }),
-                        })
-                        .await;
-                    true
-                }
-                other => {
-                    let content_type = match &other {
-                        Some(content_v1::content::Content::DataMessage(_)) => "DataMessage",
-                        Some(content_v1::content::Content::Reaction(_)) => "Reaction",
-                        Some(content_v1::content::Content::AnonDmRequest(_)) => "AnonDmRequest",
-                        None => "None",
-                        _ => "Other",
-                    };
-                    tracing::warn!(
-                        sender_id = %sender_id,
-                        conversation_id = %conversation_id,
-                        content_type = content_type,
-                        "[ANON_DM] Unexpected content type in anonymous DM mailbox"
-                    );
-                    // Still acknowledge to avoid re-processing
-                    true
-                }
+                AnonDmRoute::Malformed(reason) => anon_dm_failure_decision(
+                    conversation_id,
+                    msg.server_timestamp,
+                    reason,
+                    message_repo,
+                    domain_tx,
+                ),
             };
 
             // Track processed message for acknowledgment
-            if was_processed {
+            if decision.should_ack() {
                 deduplicator.mark_processed(&message_id);
                 processed
                     .entry(conversation_id)

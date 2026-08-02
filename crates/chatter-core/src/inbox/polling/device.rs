@@ -121,6 +121,206 @@ pub(crate) fn device_failure_decision(
     )
 }
 
+/// [`device_failure_decision`] with the retain budget applied.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn device_failure_decision_bounded(
+    peer_id: Option<UserId>,
+    envelope_ts_ns: u64,
+    err: &ServiceError,
+    message_repo: &Arc<MessageRepository>,
+    domain_tx: Option<&broadcast::Sender<DomainEvent>>,
+    envelope_id: &str,
+    budget: &crate::inbox::ack_policy::RetryBudget,
+) -> crate::inbox::ack_policy::AckDecision {
+    use crate::inbox::ack_policy::{self, AckDecision};
+    let Some(peer) = peer_id else {
+        return match ack_policy::classify_service(err) {
+            ack_policy::Durability::Transient => ack_policy::retain_within_budget(
+                // No conversation to mark, so the target only carries the
+                // budget's timestamp. If the budget runs out the marker write
+                // is attempted against this synthetic conversation and fails
+                // to be useful — so give up quietly instead.
+                ack_policy::dm_target(UserId::from_uuid(uuid::Uuid::nil()), envelope_ts_ns),
+                message_repo,
+                domain_tx,
+                envelope_id,
+                budget,
+                ack_policy::now_ns(),
+                &err.to_string(),
+            ),
+            ack_policy::Durability::Permanent => {
+                tracing::warn!(
+                    error = %err,
+                    "[INBOX] permanent failure with no authenticated sender — draining \
+                     the envelope with no marker, because there is no conversation to \
+                     put one in"
+                );
+                budget.forget(envelope_id);
+                AckDecision::Ack
+            }
+        };
+    };
+    ack_policy::decide_after_failure_bounded(
+        err,
+        ack_policy::dm_target(peer, envelope_ts_ns),
+        message_repo,
+        domain_tx,
+        envelope_id,
+        budget,
+        ack_policy::now_ns(),
+    )
+}
+
+/// The conversation a channel/group failure marker belongs in.
+///
+/// A sender-key envelope is a CHANNEL message, so its marker goes in the
+/// channel — not in a DM with the sender, which is a different conversation the
+/// user would read as "I lost a private message".
+fn channel_marker_target(
+    channel_repo: &Arc<ChannelRepository>,
+    channel_id: ChannelId,
+    peer_id: Option<UserId>,
+    envelope_ts_ns: u64,
+) -> crate::inbox::ack_policy::MarkerTarget {
+    let conversation_type = match channel_repo.get(&channel_id) {
+        Ok(Some(channel)) => channel.conversation_type(),
+        _ => ConversationType::AnonGroup,
+    };
+    crate::inbox::ack_policy::MarkerTarget {
+        conversation_id: channel_id,
+        conversation_type,
+        peer_id,
+        envelope_ts_ns,
+    }
+}
+
+/// Decide what to do with a sender-key (channel) envelope whose routing failed.
+///
+/// `channel_id` is `Some` only when the failure got far enough to name one.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sender_key_failure_decision(
+    channel_id: Option<ChannelId>,
+    sender_id: UserId,
+    envelope_ts_ns: u64,
+    err: &ServiceError,
+    message_repo: &Arc<MessageRepository>,
+    channel_repo: &Arc<ChannelRepository>,
+    domain_tx: Option<&broadcast::Sender<DomainEvent>>,
+    envelope_id: &str,
+    budget: &crate::inbox::ack_policy::RetryBudget,
+) -> crate::inbox::ack_policy::AckDecision {
+    use crate::inbox::ack_policy::{self, AckDecision};
+    // Without a channel there is nowhere honest to put the marker: the sender's
+    // DM is a different conversation, and "you lost a private message" is not
+    // what happened. Classify only.
+    let Some(channel_id) = channel_id else {
+        return match ack_policy::classify_service(err) {
+            ack_policy::Durability::Transient => ack_policy::retain_within_budget(
+                ack_policy::dm_target(sender_id, envelope_ts_ns),
+                message_repo,
+                domain_tx,
+                envelope_id,
+                budget,
+                ack_policy::now_ns(),
+                &err.to_string(),
+            ),
+            ack_policy::Durability::Permanent => {
+                tracing::warn!(
+                    sender_id = %sender_id,
+                    error = %err,
+                    "[INBOX_SK] permanent failure on an envelope whose channel could \
+                     not be recovered — draining it with no marker, because the only \
+                     conversation we could write to is the wrong one"
+                );
+                budget.forget(envelope_id);
+                AckDecision::Ack
+            }
+        };
+    };
+    ack_policy::decide_after_failure_bounded(
+        err,
+        channel_marker_target(channel_repo, channel_id, Some(sender_id), envelope_ts_ns),
+        message_repo,
+        domain_tx,
+        envelope_id,
+        budget,
+        ack_policy::now_ns(),
+    )
+}
+
+/// Decide what to do when a channel message arrives before the sender key that
+/// opens it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sender_key_missing_decision(
+    channel_id: ChannelId,
+    sender_id: UserId,
+    envelope_ts_ns: u64,
+    message_repo: &Arc<MessageRepository>,
+    channel_repo: &Arc<ChannelRepository>,
+    domain_tx: Option<&broadcast::Sender<DomainEvent>>,
+    envelope_id: &str,
+    budget: &crate::inbox::ack_policy::RetryBudget,
+) -> crate::inbox::ack_policy::AckDecision {
+    use crate::inbox::ack_policy;
+    // The policy names this case itself: "the SKDM … may land on a later poll
+    // and then the same bytes decrypt". The path emitted `SenderKeyNeeded`,
+    // logged "will succeed on retry after SKDM arrives" — and then acked, so
+    // the server deleted the message before the key it was waiting for could
+    // arrive. Nothing buffers the ciphertext on this path either;
+    // `defer_pending_group_decrypt` is only reached from the channel-history
+    // path in `client/channels.rs`.
+    ack_policy::retain_within_budget(
+        channel_marker_target(channel_repo, channel_id, Some(sender_id), envelope_ts_ns),
+        message_repo,
+        domain_tx,
+        envelope_id,
+        budget,
+        ack_policy::now_ns(),
+        "waiting on the sender key that opens this channel message",
+    )
+}
+
+/// Why an ECIES init envelope could not be opened.
+#[derive(Debug)]
+pub(crate) enum EciesInitFailure<'a> {
+    /// We could not read our own identity key — our state, not their bytes.
+    IdentityKeyUnavailable(&'a ServiceError),
+    /// The envelope, the HPKE open, or the inner init message would not parse.
+    Malformed(&'a str),
+}
+
+/// Decide what to do with an ECIES init envelope that could not be opened.
+///
+/// There is no conversation yet — an ECIES init IS the first contact — so no
+/// marker can be written either way; the decision is purely whether to keep the
+/// envelope for a later attempt.
+pub(crate) fn ecies_init_decision(
+    failure: &EciesInitFailure<'_>,
+) -> crate::inbox::ack_policy::AckDecision {
+    use crate::inbox::ack_policy::{classify_service, AckDecision, Durability};
+    match failure {
+        // OUR identity key. A storage error or a registration that has not
+        // finished writing it are both answered by a later poll; the stranger's
+        // contact request is intact and will open then.
+        EciesInitFailure::IdentityKeyUnavailable(e) => match classify_service(e) {
+            Durability::Transient => AckDecision::Retain,
+            Durability::Permanent => AckDecision::Ack,
+        },
+        // The envelope, the HPKE open against a key we did read, or the inner
+        // init message. All pure functions of the bytes, so retaining replays
+        // forever — and there is no conversation yet to mark, because an ECIES
+        // init IS the first contact.
+        EciesInitFailure::Malformed(reason) => {
+            tracing::warn!(
+                reason,
+                "[INBOX_ECIES] malformed private-contact request — draining it; \
+                 there is no conversation yet in which to record the loss"
+            );
+            AckDecision::Ack
+        }
+    }
+}
+
 /// Shared shape for the system entries the device inbox writes into a DM.
 ///
 /// Delegates to the one builder in [`crate::inbox::ack_policy`] so the four
@@ -159,6 +359,7 @@ pub async fn process_device_message(
     ephemeral_repo: &Arc<EphemeralRepository>,
     group_coordinator: &Arc<GroupCoordinator>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
+    retry_budget: &crate::inbox::ack_policy::RetryBudget,
 ) -> crate::inbox::ack_policy::AckDecision {
     use crate::inbox::ack_policy::AckDecision;
     tracing::info!(
@@ -223,8 +424,10 @@ pub async fn process_device_message(
                 "[INBOX] Routing to sender key message handler"
             );
 
-            // Route through message gateway
-            process_sender_key_message(
+            // Route through message gateway. Its answer decides the ack: this
+            // used to discard the outcome and `return AckDecision::Ack`, so a
+            // missing sender key or a failed store read deleted the message.
+            return process_sender_key_message(
                 msg,
                 &encrypted_data,
                 &sender_id,
@@ -236,9 +439,9 @@ pub async fn process_device_message(
                 ephemeral_repo,
                 group_coordinator,
                 domain_tx,
+                retry_budget,
             )
             .await;
-            return AckDecision::Ack;
         } else {
             tracing::debug!(
                 message_guid = %msg.message_guid,
@@ -265,8 +468,16 @@ pub async fn process_device_message(
             envelope_type = msg.envelope_type,
             "[INBOX] Processing as identified sender message (PreKey/Ciphertext)"
         );
-        process_identified_sender_message(msg, event_tx, stats, message_gateway, domain_tx).await;
-        return AckDecision::Ack;
+        return process_identified_sender_message(
+            msg,
+            event_tx,
+            stats,
+            message_gateway,
+            message_repo,
+            domain_tx,
+            retry_budget,
+        )
+        .await;
     }
 
     // Check for ECIES_INIT (HPKE-encrypted initial contact, NDSS'21 compliant)
@@ -276,8 +487,7 @@ pub async fn process_device_message(
             envelope_len = msg.envelope.len(),
             "[INBOX] Processing as ECIES init message (NDSS'21 private contact)"
         );
-        process_ecies_init_message(msg, event_tx, stats, message_gateway, domain_tx).await;
-        return AckDecision::Ack;
+        return process_ecies_init_message(msg, event_tx, stats, message_gateway, domain_tx).await;
     }
 
     // Fall back to sealed sender processing
@@ -293,6 +503,7 @@ pub async fn process_device_message(
         message_gateway,
         message_repo,
         domain_tx,
+        retry_budget,
     )
     .await
 }
@@ -311,13 +522,22 @@ async fn process_sender_key_message(
     ephemeral_repo: &Arc<EphemeralRepository>,
     group_coordinator: &Arc<GroupCoordinator>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
-) {
+    retry_budget: &crate::inbox::ack_policy::RetryBudget,
+) -> crate::inbox::ack_policy::AckDecision {
+    use crate::inbox::ack_policy::AckDecision;
     tracing::info!(
         message_guid = %msg.message_guid,
         sender_id = %sender_id,
         source_device_id = msg.source_device_id,
         "[INBOX_SK] Processing sender key message"
     );
+
+    // Recovered for the marker target: a sender-key failure belongs in the
+    // CHANNEL, and the gateway's error does not carry one.
+    let channel_id: Option<ChannelId> =
+        crate::proto::content_v1::GroupEncrypted::decode(encrypted_data.ciphertext.as_slice())
+            .ok()
+            .and_then(|ge| ge.channel_id.parse().ok());
 
     match message_gateway
         .route_encrypted_message(encrypted_data, sender_id, msg.source_device_id)
@@ -410,6 +630,16 @@ async fn process_sender_key_message(
                 error: format!("Missing sender key from {}", sender_id),
             });
             stats.write().messages_failed += 1;
+            return sender_key_missing_decision(
+                channel_id,
+                sender_id,
+                msg.server_timestamp,
+                message_repo,
+                channel_repo,
+                domain_tx,
+                &msg.message_guid,
+                retry_budget,
+            );
         }
         Ok(RouteResult::RespondWithSkdm { channel_id, requester_id, skdm }) => {
             tracing::info!(
@@ -463,8 +693,23 @@ async fn process_sender_key_message(
                 error: e.to_string(),
             });
             stats.write().messages_failed += 1;
+            return sender_key_failure_decision(
+                channel_id,
+                *sender_id,
+                msg.server_timestamp,
+                &e,
+                message_repo,
+                channel_repo,
+                domain_tx,
+                &msg.message_guid,
+                retry_budget,
+            );
         }
     }
+
+    // Every other arm handled the message.
+    retry_budget.forget(&msg.message_guid);
+    AckDecision::Ack
 }
 
 /// Process a decrypted DataMessage.
@@ -678,13 +923,17 @@ fn process_decrypted_data_message(
 ///
 /// This is the fallback path when sealed sender is not used.
 /// The server knows the sender (from Basic auth) and includes source_user_id.
+#[allow(clippy::too_many_arguments)]
 async fn process_identified_sender_message(
     msg: &DeviceMessage,
     event_tx: &broadcast::Sender<InboxEvent>,
     stats: &Arc<RwLock<InboxStats>>,
     message_gateway: &Arc<MessageGateway>,
+    message_repo: &Arc<MessageRepository>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
-) {
+    retry_budget: &crate::inbox::ack_policy::RetryBudget,
+) -> crate::inbox::ack_policy::AckDecision {
+    use crate::inbox::ack_policy::AckDecision;
     // Self-send detection: skip messages from ourselves
     // This prevents "Key already requested" errors when trying to decrypt our own messages
     // (we don't have a valid session with ourselves, and Kyber keys were consumed during encryption)
@@ -702,7 +951,8 @@ async fn process_identified_sender_message(
             message_id: msg.message_guid.clone(),
         });
         stats.write().messages_processed += 1;
-        return;
+        retry_budget.forget(&msg.message_guid);
+        return AckDecision::Ack;
     }
 
     // Parse sender address
@@ -720,7 +970,10 @@ async fn process_identified_sender_message(
                 error: format!("Invalid source_user_id: {}", e),
             });
             stats.write().messages_failed += 1;
-            return;
+            // Deterministic in the bytes, and with no parseable sender there is
+            // no conversation to mark. Retaining it would replay forever.
+            retry_budget.forget(&msg.message_guid);
+            return AckDecision::Ack;
         }
     };
 
@@ -949,11 +1202,30 @@ async fn process_identified_sender_message(
                 message_id: msg.message_guid.clone(),
                 error: e.to_string(),
             });
-            let mut s = stats.write();
-            s.messages_received += 1;
-            s.messages_failed += 1;
+            {
+                let mut s = stats.write();
+                s.messages_received += 1;
+                s.messages_failed += 1;
+            }
+            // The sender on this path is server-claimed rather than proved, but
+            // it is the only conversation this envelope can belong to, and the
+            // alternative was acking a `SessionNotFound` — deleting a message
+            // that would have decrypted once the session existed.
+            return device_failure_decision_bounded(
+                Some(sender_id),
+                msg.server_timestamp,
+                &e,
+                message_repo,
+                domain_tx,
+                &msg.message_guid,
+                retry_budget,
+            );
         }
     }
+
+    // Every other arm handled the message.
+    retry_budget.forget(&msg.message_guid);
+    AckDecision::Ack
 }
 
 /// Process an ECIES init message (NDSS'21 private contact).
@@ -970,7 +1242,8 @@ async fn process_ecies_init_message(
     stats: &Arc<RwLock<InboxStats>>,
     message_gateway: &Arc<MessageGateway>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
-) {
+) -> crate::inbox::ack_policy::AckDecision {
+    use crate::inbox::ack_policy::AckDecision;
     use crate::crypto::ecies;
     use crate::domain::anon_dm_init::AnonDmInitMessage;
 
@@ -988,7 +1261,7 @@ async fn process_ecies_init_message(
                 error: format!("Failed to get identity key: {}", e),
             });
             stats.write().messages_failed += 1;
-            return;
+            return ecies_init_decision(&EciesInitFailure::IdentityKeyUnavailable(&e));
         }
     };
 
@@ -1006,7 +1279,7 @@ async fn process_ecies_init_message(
                 error: format!("Invalid ECIES message: {}", e),
             });
             stats.write().messages_failed += 1;
-            return;
+            return ecies_init_decision(&EciesInitFailure::Malformed("ECIES envelope would not parse"));
         }
     };
 
@@ -1024,7 +1297,7 @@ async fn process_ecies_init_message(
                 error: format!("ECIES decryption failed: {}", e),
             });
             stats.write().messages_failed += 1;
-            return;
+            return ecies_init_decision(&EciesInitFailure::Malformed("HPKE open failed against our identity key"));
         }
     };
 
@@ -1042,7 +1315,7 @@ async fn process_ecies_init_message(
                 error: format!("Invalid init message: {}", e),
             });
             stats.write().messages_failed += 1;
-            return;
+            return ecies_init_decision(&EciesInitFailure::Malformed("AnonDmInitMessage would not parse"));
         }
     };
 
@@ -1095,6 +1368,7 @@ async fn process_ecies_init_message(
         envelope_type: EnvelopeType::EciesInit,
     });
     stats.write().messages_processed += 1;
+    AckDecision::Ack
 }
 
 /// Process a sealed sender message.
@@ -1107,6 +1381,7 @@ async fn process_sealed_sender_message(
     message_gateway: &Arc<MessageGateway>,
     message_repo: &Arc<MessageRepository>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
+    retry_budget: &crate::inbox::ack_policy::RetryBudget,
 ) -> crate::inbox::ack_policy::AckDecision {
     use crate::inbox::ack_policy::{self, AckDecision};
     let sealed_sender_msg = SealedSenderMessage {
@@ -1380,6 +1655,20 @@ async fn process_sealed_sender_message(
             });
             stats.write().messages_processed += 1;
         }
+        // `MessageStored` is the gateway's "handled, caller need do no more":
+        // either the row is already in the database (`store_data_message` →
+        // `message_repo.insert`) or there was nothing to store at all (a
+        // duplicate inner message, a `DecryptionErrorMessage` addressed to
+        // another of our devices, a content type with no bubble). The pipeline
+        // below therefore decides nothing about the message's survival — it
+        // dedups and orders a SYNTHETIC proto (`channel_id: "pending"`, body =
+        // the sealed envelope) purely to gate the UI events. So every arm of it
+        // acks, including `Buffered` and `Dropped`: the payload is on disk
+        // before we get here and there is nothing left to lose.
+        //
+        // Worth knowing about the orderer it feeds, though: `get_ready` and
+        // `flush_stale` have no production callers, so anything it buffers is
+        // never drained. That leaks UI events (and memory), not messages.
         Ok(SealedSenderResult::MessageStored) => {
             let envelope_type = EnvelopeType::SealedSender;
 
@@ -1524,17 +1813,20 @@ async fn process_sealed_sender_message(
                 }
                 _ => msg.source_user_id.parse::<UserId>().ok(),
             };
-            return device_failure_decision(
+            return device_failure_decision_bounded(
                 peer,
                 msg.server_timestamp,
                 &e,
                 message_repo,
                 domain_tx,
+                &msg.message_guid,
+                retry_budget,
             );
         }
     }
 
     // Every other arm handled the message.
+    retry_budget.forget(&msg.message_guid);
     AckDecision::Ack
 }
 

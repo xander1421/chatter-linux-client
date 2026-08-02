@@ -45,6 +45,38 @@ pub(crate) fn group_failure_decision(
         domain_tx,
     )
 }
+
+/// [`group_failure_decision`] with the retain budget applied.
+///
+/// Without it a group envelope that keeps failing transiently is re-fetched and
+/// re-decrypted on every poll forever — and the group mailbox has no cursor at
+/// all, so nothing else bounds it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn group_failure_decision_bounded(
+    group_id: ChannelId,
+    peer_id: Option<crate::domain::UserId>,
+    envelope_ts_ns: u64,
+    err: &crate::error::ServiceError,
+    message_repo: &Arc<MessageRepository>,
+    domain_tx: Option<&tokio::sync::broadcast::Sender<DomainEvent>>,
+    envelope_id: &str,
+    budget: &ack_policy::RetryBudget,
+) -> AckDecision {
+    ack_policy::decide_after_failure_bounded(
+        err,
+        MarkerTarget {
+            conversation_id: group_id,
+            conversation_type: ConversationType::Channel,
+            peer_id,
+            envelope_ts_ns,
+        },
+        message_repo,
+        domain_tx,
+        envelope_id,
+        budget,
+        ack_policy::now_ns(),
+    )
+}
 use crate::mailbox::group::{GroupCoordinator, GroupFanout};
 use crate::proto::chat_v1::SealedSenderMessage;
 use crate::services::attachment::AttachmentService;
@@ -72,6 +104,7 @@ pub async fn poll_group_mailboxes(
     attachment_repo: &Arc<AttachmentRepository>,
     message_repo: &Arc<MessageRepository>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
+    retry_budget: &ack_policy::RetryBudget,
 ) {
     match group_fanout.poll_all_group_mailboxes().await {
         Ok(poll_results) => {
@@ -123,10 +156,12 @@ pub async fn poll_group_mailboxes(
                         message_repo,
                         domain_tx,
                         msg.server_timestamp,
+                        retry_budget,
                     )
                     .await;
 
                     if decision.should_ack() {
+                        retry_budget.forget(&msg.message_id);
                         message_ids.push(msg.message_id.clone());
                     }
                 }
@@ -178,6 +213,7 @@ async fn process_sealed_sender_group_message(
     message_repo: &Arc<MessageRepository>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
     envelope_ts_ns: u64,
+    retry_budget: &ack_policy::RetryBudget,
 ) -> AckDecision {
     // Create SealedSenderMessage from raw envelope
     let sealed_sender_msg = SealedSenderMessage {
@@ -205,13 +241,15 @@ async fn process_sealed_sender_group_message(
             );
             // No authenticated sender: the sealed sender envelope is what
             // failed, so the marker names the group but nobody in it.
-            return group_failure_decision(
+            return group_failure_decision_bounded(
                 group_id,
                 None,
                 envelope_ts_ns,
                 &e,
                 message_repo,
                 domain_tx,
+                message_id,
+                retry_budget,
             );
         }
     };

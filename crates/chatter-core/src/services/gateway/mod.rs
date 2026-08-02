@@ -358,9 +358,12 @@ impl MessageGateway {
     ) -> Result<SealedSenderResult, crate::error::ServiceError> {
         use crate::error::ServiceError;
 
-        let current_user = self.settings_repo.current_user_id().map_err(|e| {
-            ServiceError::Validation(format!("SyncSent received but no current user: {e}"))
-        })?;
+        // NOT `Validation`. This is a settings-DB read: a failure here is our
+        // disk or a login that has not happened yet, and the inbox ack policy
+        // reads `Validation` as "the bytes are bad, delete it". Laundering the
+        // cause into a string deleted a linked device's sync copy whenever the
+        // database was momentarily unreadable.
+        let current_user: UserId = self.settings_repo.current_user_id()?;
         if sealed_sender_id != current_user {
             return Err(ServiceError::Validation(format!(
                 "SyncSent sealed-sender identity {sealed_sender_id} != current user \
