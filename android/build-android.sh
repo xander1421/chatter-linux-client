@@ -84,21 +84,37 @@ if [ "${MESH:-0}" = "1" ]; then
     echo ">> mesh enabled (BLE radio + Kotlin bridge)"
 fi
 
-# Sealed-sender trust root. This script targets the local docker-compose stack,
-# whose Vault signs with the committed dev keypair, so it opts into the dev
-# trust root EXPLICITLY. That opt-in is the whole point: certificates signed by
-# that key are forgeable by anyone with a copy of this repository.
+# Pinned keys. This script targets the local docker-compose stack, whose Vault
+# signs with the committed dev keypairs, so it opts into the dev keys
+# EXPLICITLY. That opt-in is the whole point: both keys are forgeable by anyone
+# with a copy of this repository.
 #
-# For a real build, set CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX (64 hex chars, the
-# public half of the server's Vault signing key) and export DEV_TRUST_ROOT=0.
+# The `dev-trust-root` feature selects the dev value for BOTH pinned keys:
+#   - the sealed-sender trust root (forged sender certificates = impersonation)
+#   - the KT tree-head key         (forged signed tree heads = KT defeated)
+#
+# For a real build, export DEV_TRUST_ROOT=0 and both hex values. Get them from
+# `scripts/provision-trust-root.sh` in the server repo, which derives both from
+# Vault and refuses to emit a dev value.
 TRUST_ROOT_FEATURE=""
 if [ "${DEV_TRUST_ROOT:-1}" = "1" ]; then
     TRUST_ROOT_FEATURE=",dev-trust-root"
-    echo ">> !! DEV sealed-sender trust root — forgeable certs, local dev only"
-elif [ -z "${CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX:-}" ]; then
-    echo "FATAL: DEV_TRUST_ROOT=0 but CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX is unset."
-    echo "The APK would build and then panic at startup with no trust root."
-    exit 1
+    echo ">> !! DEV pinned keys (trust root + KT tree head) — forgeable, local dev only"
+else
+    missing=""
+    [ -z "${CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX:-}" ] && missing="$missing CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX"
+    [ -z "${CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX:-}" ] && missing="$missing CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX"
+    if [ -n "$missing" ]; then
+        echo "FATAL: DEV_TRUST_ROOT=0 but unset:$missing"
+        echo
+        echo "Both are compile-time pins. Without them the cargo build fails"
+        echo "(config.rs refuses to fall back to a dev key), so this stops here"
+        echo "with a better message than a const-eval panic."
+        echo
+        echo "Generate both:  ./scripts/provision-trust-root.sh   (server repo)"
+        exit 1
+    fi
+    echo ">> production pinned keys from the environment"
 fi
 
 ( cd "$PROJECT_ROOT" && cargo ndk -t arm64-v8a build -p chatter-ui \
