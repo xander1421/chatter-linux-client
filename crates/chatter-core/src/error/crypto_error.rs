@@ -6,6 +6,66 @@ use thiserror::Error;
 
 use super::StorageError;
 
+/// Who said this peer is the peer, for an identity change we are about to show
+/// a human.
+///
+/// The three sites that can surface a changed identity key do not attribute the
+/// peer equally well, and the difference is the whole security value of the
+/// prompt: a user asked to accept a new key for "Alice" is entitled to know
+/// whether "Alice" was proven or merely asserted by the server. Collapsing them
+/// would let a malicious server present its own key change as though it had been
+/// cryptographically attributed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentityChangeSource {
+    /// Sealed sender. The peer id comes from a sender certificate this client
+    /// validated against the pinned trust root, so it is authenticated.
+    SenderCertificate,
+    /// Identified sender. The peer id is envelope metadata the SERVER supplied
+    /// and nothing authenticates it.
+    ServerClaimed,
+    /// A prekey bundle fetched to open an outgoing session. Server-supplied, and
+    /// only as trustworthy as the key-transparency gate that admitted it.
+    PreKeyBundle,
+}
+
+impl IdentityChangeSource {
+    /// True only when the peer id was proven cryptographically. The UI must not
+    /// name the peer as a fact when this is false.
+    pub fn is_authenticated(&self) -> bool {
+        matches!(self, Self::SenderCertificate)
+    }
+
+    /// Stable token for the `pending_identity_changes.source` column.
+    pub fn as_db_str(&self) -> &'static str {
+        match self {
+            Self::SenderCertificate => "sender_certificate",
+            Self::ServerClaimed => "server_claimed",
+            Self::PreKeyBundle => "prekey_bundle",
+        }
+    }
+
+    /// Inverse of [`Self::as_db_str`]. An unrecognised token degrades to the
+    /// LEAST trusted variant — a row we cannot interpret must never be shown to
+    /// the user as an authenticated attribution.
+    pub fn from_db_str(s: &str) -> Self {
+        match s {
+            "sender_certificate" => Self::SenderCertificate,
+            "prekey_bundle" => Self::PreKeyBundle,
+            _ => Self::ServerClaimed,
+        }
+    }
+}
+
+impl std::fmt::Display for IdentityChangeSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::SenderCertificate => "sender certificate (authenticated)",
+            Self::ServerClaimed => "server-claimed envelope (unauthenticated)",
+            Self::PreKeyBundle => "prekey bundle (server-supplied)",
+        })
+    }
+}
+
 /// Crypto error types.
 #[derive(Debug, Error)]
 pub enum CryptoError {
@@ -38,9 +98,32 @@ pub enum CryptoError {
     #[error("key derivation failed: {0}")]
     KeyDerivationFailed(String),
 
-    /// Untrusted identity key for a remote user.
-    #[error("untrusted identity for {0}")]
-    UntrustedIdentity(String),
+    /// The peer presented a DIFFERENT identity key than the one pinned for their
+    /// account — a reinstall or device wipe, or an active MITM. The two are
+    /// indistinguishable from here, which is why it is never resolved
+    /// automatically: libsignal refuses the operation and the conversation stays
+    /// wedged until a human accepts the new key via
+    /// [`crate::services::SignalService::accept_peer_identity_change`].
+    ///
+    /// **Must not be collapsed into [`Self::SessionDesync`].** A desync is answered
+    /// with a `DecryptionErrorMessage` asking the peer to reset its session and
+    /// resend — which resends the same new identity key and fails identically,
+    /// forever. No session-layer action can change which key is pinned.
+    #[error(
+        "untrusted identity for {peer_id}:{device_id} — the peer's identity key changed \
+         (reinstall or MITM), attributed by {attribution}; it must be explicitly accepted"
+    )]
+    UntrustedIdentity {
+        /// Peer account id (identity keys are pinned per account).
+        peer_id: String,
+        /// Device whose message or bundle surfaced the change.
+        device_id: u32,
+        /// The new key as presented, when the failing operation carried one.
+        new_identity_key: Option<Vec<u8>>,
+        /// How `peer_id` was attributed. Load-bearing for what the UI may claim.
+        /// (Not named `source`: thiserror would read that as an error cause.)
+        attribution: IdentityChangeSource,
+    },
 
     /// Session not found for the given address.
     #[error("session not found for {0}")]
