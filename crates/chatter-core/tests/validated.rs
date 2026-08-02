@@ -104,6 +104,27 @@ fn psql(sql: &str) -> String {
     .to_string()
 }
 
+/// Read a value out of the server repo's generated `.env`.
+///
+/// Credentials are generated per-machine by `scripts/dev-secrets.sh`, so a
+/// literal here goes stale the first time anyone regenerates them — which is
+/// exactly what happened: this file carried a hardcoded RustFS key pair, and
+/// after the secrets move every S3 GET below returned a 170-byte
+/// `UnauthorizedAccess` XML body instead of the object. The positive control
+/// caught it, but note what would have happened without one: the
+/// "no plaintext in raw storage" assertion greps an error document, finds no
+/// marker, and passes.
+fn env_value(key: &str) -> String {
+    let v = sh(&format!("grep -E '^{key}=' .env | head -1 | cut -d= -f2-"))
+        .trim()
+        .to_string();
+    assert!(
+        !v.is_empty(),
+        "{key} is not set in {REPO}/.env — run ./scripts/dev-secrets.sh"
+    );
+    v
+}
+
 // ============================================================================
 // Client helpers (mirrors e2e_two_user_suite.rs)
 // ============================================================================
@@ -10282,7 +10303,11 @@ async fn v51_server_message_backup_restores_on_fresh_install_via_pin() {
                 "--aws-sigv4",
                 "aws:amz:us-east-1:s3",
                 "--user",
-                "rustfs_54f7cd2abf5e9ead:ugEo8pd2oCwa2GXuaiBTfmA2rZ86SDNVpk7mFR4XcLc=",
+                &format!(
+                    "{}:{}",
+                    env_value("MINIO_ACCESS_KEY"),
+                    env_value("MINIO_SECRET_KEY")
+                ),
                 &format!("http://127.0.0.1:9000/chatter-files/{object_key}"),
             ])
             .output()
