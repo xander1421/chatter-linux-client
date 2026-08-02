@@ -36,6 +36,9 @@ use chatter_mesh::tlv::file_stream::{
 use chatter_mesh::tlv::hex_encode;
 use chatter_mesh::tlv::private_message::PrivateMessagePacket;
 use chatter_mesh::tlv::request_sync::RequestSyncPacket;
+use chatter_mesh_link::announce::{
+    AnnounceLinkContext, AnnouncePreflightConfig, evaluate_announce,
+};
 use chatter_mesh_link::backpressure::{
     InboundAppend, InboundAppendMetadata, InboundChunk, InboundLimits,
     PENDING_WRITE_BUFFER_CAP_BYTES, should_buffer, WriteEnqueue,
@@ -637,9 +640,9 @@ impl BleRuntime {
             state.peers.update_last_seen(&accepted.received_from, now_ms);
         });
 
-        self.dispatch(link, &packet, &claimed, now_s).await;
+        let retainable = self.dispatch(link, &packet, &claimed, now_s).await;
 
-        if packet.is_broadcast() {
+        if packet.is_broadcast() && retainable {
             self.gossip.on_public_packet_seen(&packet, now_s);
         }
         self.relay(link, &packet, &local).await;
@@ -650,38 +653,55 @@ impl BleRuntime {
     /// Deliberately not recursive. The fragmenter never nests fragments, so one
     /// level of unwrapping is the whole truth — and expressing it as one level
     /// means a hostile peer cannot make us descend at all.
+    ///
+    /// Returns whether the packet may be retained and re-gossiped. Only an
+    /// announce ever says no — see [`Self::handle_typed`].
     async fn dispatch(
         &mut self,
         link: &LinkId,
         packet: &BitchatPacket,
         claimed: &PeerId,
         now_s: u64,
-    ) {
+    ) -> bool {
         if packet.message_type() != Some(MessageType::Fragment) {
-            self.handle_typed(link, packet, claimed).await;
-            return;
+            return self.handle_typed(link, packet, claimed).await;
         }
 
         let reassembled = self
             .state
             .with(|state| state.fragments.accept(packet, now_s));
         let Ok(Some(bytes)) = reassembled else {
-            return;
+            return true;
         };
         let Ok(inner) = codec::decode(&bytes) else {
-            return;
+            return true;
         };
         if inner.message_type() == Some(MessageType::Fragment) {
             // A fragment carrying a fragment is not something the fragmenter
             // produces; it is someone trying to make us loop.
-            return;
+            return true;
         }
-        self.handle_typed(link, &inner, claimed).await;
+        self.handle_typed(link, &inner, claimed).await
     }
 
-    async fn handle_typed(&mut self, link: &LinkId, packet: &BitchatPacket, claimed: &PeerId) {
+    /// Handle one decoded packet, and say whether the gossip store may keep it.
+    ///
+    /// The flag exists for announces alone. An announce we refused is an identity
+    /// forgery, and retaining it would make this device re-serve that forgery to
+    /// every peer that syncs with us; worse, `on_public_packet_seen` reads a
+    /// *stale* announce as "this peer left" and purges the store's state for the
+    /// claimed sender, so an unauthenticated old announce is a remote wipe of a
+    /// real peer's gossip state. Genuine staleness is still collected by
+    /// `cleanup_stale_announcements_if_needed` on the maintenance tick, which
+    /// needs no packet from anyone to do its job.
+    async fn handle_typed(
+        &mut self,
+        link: &LinkId,
+        packet: &BitchatPacket,
+        claimed: &PeerId,
+    ) -> bool {
         match packet.message_type() {
-            Some(MessageType::Announce) => self.on_announce(link, packet, claimed).await,
+            Some(MessageType::Announce) => return self.on_announce(link, packet, claimed).await,
             Some(MessageType::Message) => self.on_public_message(packet, claimed),
             Some(MessageType::Leave) => {
                 self.state.with(|state| {
@@ -705,44 +725,103 @@ impl BleRuntime {
             // `on_packet` still runs.
             _ => {}
         }
+        true
     }
 
-    async fn on_announce(&mut self, link: &LinkId, packet: &BitchatPacket, claimed: &PeerId) {
-        // Our own announce, come back to us. The ingress guard lets a
-        // self-authored TTL-0 sync response through on purpose — that is how a
-        // reinstalled device recovers its own history from a peer's archive — so
-        // this is the one place that has to say no to it. Without the check we
-        // register *ourselves* as a peer, which inflates the "N nearby" count the
-        // whole mesh UI is built around and binds a link to our own identity.
-        // bitchat refuses it in its announce preflight, as `.reject(.selfAnnounce)`.
-        if claimed == &self.identity.peer_id() {
-            return;
-        }
-
-        let Ok(announcement) = AnnouncementPacket::decode(&packet.payload) else {
-            return;
-        };
-        let Ok(signing_key) = <[u8; 32]>::try_from(announcement.signing_public_key.as_slice())
-        else {
-            return;
-        };
-        let verified = verify_packet(packet, &signing_key);
-        if !verified {
-            // bitchat drops an unverified announce outright rather than
-            // recording the peer unverified (`BLEAnnounceHandler.swift:167`).
-            // Recording it would be worse than useless: an unverified announce
-            // carries an attacker-chosen noise key and nickname, so accepting it
-            // is exactly the identity-poisoning their handler exists to prevent.
-            tracing::debug!(target: "mesh::ble", peer = %claimed, "unverified announce ignored");
-            return;
-        }
-
+    /// Returns whether the announce was accepted, which is also the answer to
+    /// "may the gossip store keep this packet".
+    async fn on_announce(
+        &mut self,
+        link: &LinkId,
+        packet: &BitchatPacket,
+        claimed: &PeerId,
+    ) -> bool {
+        let local = self.identity.peer_id();
         let now_ms = now_millis();
         let now_s = now_secs();
+
+        // What the trust decision needs from our own tables, read before it runs.
+        //
+        // `presence` and `peer_for` are facts about *our* connection state and so
+        // are not forgeable; the recorded Noise key is what a key substitution
+        // would be trying to overwrite, which is why the policy wants it before
+        // it looks at the signature.
+        let (presence, link_bound_elsewhere, existing_noise_key) = self.state.with(|state| {
+            (
+                state.links.presence(claimed),
+                state
+                    .links
+                    .peer_for(link)
+                    .is_some_and(|bound| bound != claimed),
+                state
+                    .peers
+                    .info(claimed)
+                    .and_then(|record| record.noise_public_key.clone()),
+            )
+        });
+
+        // The whole inbound announce policy, in one call: decode, derive the peer
+        // ID from the announced Noise key and refuse a sender that does not match
+        // it, refuse our own announce coming back, refuse a stale one, refuse a
+        // swapped key, and only then spend a signature verification.
+        //
+        // The derivation check is the load-bearing one and it was missing. A
+        // packet signature verified against the signing key the announcement
+        // itself carries proves only that whoever wrote the announce holds that
+        // key — which every attacker does. The mesh ID *is*
+        // `SHA256(noise static key)[..8]` (`MeshIdentity::peer_id`), so binding
+        // the sender ID to the key is free and is what stops a device in radio
+        // range announcing any identity it likes.
+        let context = AnnounceLinkContext {
+            direct_announce_ttl: DIRECT_ANNOUNCE_TTL,
+            has_peripheral_link: presence.as_peripheral,
+            has_central_link: presence.as_central,
+            link_bound_to_other_peer: link_bound_elsewhere,
+            existing_noise_public_key: existing_noise_key.as_deref(),
+        };
+        let accepted = match evaluate_announce(
+            packet,
+            claimed,
+            &local,
+            now_ms,
+            &context,
+            &AnnouncePreflightConfig::default(),
+            |packet, signing_key| {
+                <[u8; 32]>::try_from(signing_key).is_ok_and(|key| verify_packet(packet, &key))
+            },
+        ) {
+            Ok(accepted) => accepted,
+            Err(rejection) => {
+                tracing::debug!(
+                    target: "mesh::ble",
+                    peer = %claimed,
+                    ?rejection,
+                    "announce rejected before the trust check"
+                );
+                return false;
+            }
+        };
+
+        // bitchat drops an unverified announce outright rather than recording the
+        // peer unverified (`BLEAnnounceHandler.swift:167`, `MessageHandler.kt:259`).
+        // Recording it would be worse than useless: an unverified announce carries
+        // an attacker-chosen noise key and nickname, so accepting it is exactly the
+        // identity-poisoning their handler exists to prevent.
+        if !accepted.should_upsert_peer() {
+            tracing::debug!(
+                target: "mesh::ble",
+                peer = %claimed,
+                distrust = ?accepted.trust.distrust(),
+                "unverified announce ignored"
+            );
+            return false;
+        }
+
+        let announcement = accepted.announcement.clone();
         let direct = VerifiedDirectAnnounce::from_packet(
             claimed.clone(),
             packet,
-            verified,
+            accepted.is_verified(),
             DIRECT_ANNOUNCE_TTL,
         );
 
@@ -765,13 +844,7 @@ impl BleRuntime {
             // guarded: the TTL is unsigned, so a replayed announce can look direct
             // on the replayer's link, and that must not shortcut an absent peer
             // into "connected".
-            let has_own_link = !state.links.links_to(claimed).is_empty();
-            let link_bound_elsewhere = state
-                .links
-                .peer_for(link)
-                .is_some_and(|bound| bound != claimed);
-            let connected =
-                has_own_link || (direct.is_some() && !link_bound_elsewhere);
+            let connected = accepted.connected_flag().unwrap_or(false);
 
             let update = state
                 .peers
@@ -879,6 +952,8 @@ impl BleRuntime {
                 self.dispatch_sync(send).await;
             }
         }
+
+        true
     }
 
     fn on_public_message(&mut self, packet: &BitchatPacket, claimed: &PeerId) {
@@ -3372,7 +3447,6 @@ mod tests {
         // "We heard from it" is not "it is reachable on a link of its own".
         let (mut runtime, _radio, state) = runtime();
         let relay = PeerId::from_str("aaaaaaaaaaaaaaaa");
-        let distant = PeerId::from_str("bbbbbbbbbbbbbbbb");
 
         // One link, owned by the relay.
         let link = LinkId::new("/mock/relay");
@@ -3384,7 +3458,10 @@ mod tests {
         });
 
         // A signed announce authored by the distant peer, arriving on that link.
+        // Its ID has to be the one its own Noise key derives, as a real device's
+        // is — an announce that claims any other ID is now refused outright.
         let identity = MeshIdentity::generate(&mut OsRng);
+        let distant = identity.peer_id();
         let announcement = AnnouncementPacket::new(
             "distant".to_string(),
             identity.static_public().to_vec(),
@@ -3414,6 +3491,191 @@ mod tests {
         assert!(
             !state.with(|inner| inner.peers.info(&distant).expect("known").connected),
             "but not one we can reach on a link of its own"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_announce_claiming_a_peer_id_it_cannot_derive_is_rejected() {
+        // The mesh ID *is* SHA256(noise static key)[..8] — that is how our own
+        // is built (`MeshIdentity::peer_id`). An announce is therefore checkable
+        // without any crypto at all: derive the ID from the key it carries and
+        // compare it to the sender ID on the packet.
+        //
+        // Verifying only the packet signature against the signing key the
+        // announcement itself supplies proves nothing about *who* sent it — it
+        // proves whoever wrote the announce holds the key they put in it, which
+        // every attacker does. Anyone in radio range could announce any peer ID
+        // with their own keys and take over that identity in our registry.
+        let (mut runtime, _radio, state) = runtime();
+
+        // A real peer, whose ID genuinely derives from its own Noise key.
+        let victim_identity = MeshIdentity::generate(&mut OsRng);
+        let victim = victim_identity.peer_id();
+
+        // The attacker claims the victim's ID and supplies its own two keys,
+        // then signs with the matching signing secret.
+        let attacker = MeshIdentity::generate(&mut OsRng);
+        let announcement = AnnouncementPacket::new(
+            "victim".to_string(),
+            attacker.static_public().to_vec(),
+            attacker.signing_public().to_vec(),
+            None,
+            None,
+            None,
+        );
+        let mut packet = BitchatPacket::new(
+            MessageType::Announce,
+            victim.to_routing_bytes().expect("routing bytes"),
+            None,
+            now_millis(),
+            announcement.encode().expect("encodes"),
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        packet.signature = Some(sign_packet(&attacker, &packet).expect("signs"));
+
+        // The forgery is *signature valid*. That is the point: the signature is
+        // the attacker's own, over their own key, and it verifies.
+        let signing_key = <[u8; 32]>::try_from(announcement.signing_public_key.as_slice())
+            .expect("32 bytes");
+        assert!(
+            verify_packet(&packet, &signing_key),
+            "the fixture must be a self-signature that really verifies"
+        );
+
+        let link = LinkId::new("/mock/attacker");
+        state.with(|inner| {
+            inner.links.link_up(link.clone(), LinkRole::Central);
+            inner.links.set_writable(&link, true);
+            inner.max_write.insert(link.clone(), 512);
+        });
+
+        let accepted = runtime.on_announce(&link, &packet, &victim).await;
+
+        assert!(!accepted, "the announce must be refused");
+        assert!(
+            state.with(|inner| inner.peers.info(&victim).is_none()),
+            "an announce whose sender ID is not derivable from the Noise key it \
+             carries must not enter the peer registry"
+        );
+        assert!(
+            state.with(|inner| inner.links.peer_for(&link).is_none()),
+            "and must not bind the attacker's link to the victim's identity"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_announce_is_not_kept_or_re_served_by_the_gossip_store() {
+        // Refusing a forgery from our own registry is only half the job. The
+        // gossip store keeps the latest announce per peer and serves it to
+        // everyone who syncs with us, so retaining one we just refused turns this
+        // device into a relay for the forgery. And `on_public_packet_seen` reads
+        // an announce older than the stale-peer timeout as "this peer left" and
+        // purges the store's state for the claimed sender — which would make an
+        // old forged announce a remote wipe of a real peer's gossip state.
+        let (mut runtime, _radio, state) = runtime();
+
+        let victim_identity = MeshIdentity::generate(&mut OsRng);
+        let victim = victim_identity.peer_id();
+        let attacker = MeshIdentity::generate(&mut OsRng);
+        let announcement = AnnouncementPacket::new(
+            "victim".to_string(),
+            attacker.static_public().to_vec(),
+            attacker.signing_public().to_vec(),
+            None,
+            None,
+            None,
+        );
+        let mut packet = BitchatPacket::new(
+            MessageType::Announce,
+            victim.to_routing_bytes().expect("routing bytes"),
+            None,
+            now_millis(),
+            announcement.encode().expect("encodes"),
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        packet.signature = Some(sign_packet(&attacker, &packet).expect("signs"));
+
+        let link = LinkId::new("/mock/attacker");
+        state.with(|inner| {
+            inner.links.link_up(link.clone(), LinkRole::Central);
+            inner.links.set_writable(&link, true);
+            inner.max_write.insert(link.clone(), 512);
+        });
+
+        runtime.on_packet(&link, packet).await;
+
+        assert!(
+            !runtime.gossip.has_announcement(&victim),
+            "a refused announce must not be retained for re-gossip"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_announce_may_not_swap_the_noise_key_recorded_for_a_peer() {
+        // Defence in depth behind the derivation check: the sender ID is only
+        // eight bytes of the digest, so a second key hashing into the same ID is
+        // 2^64 work rather than impossible. Once we have recorded a Noise key
+        // for a peer, an announce carrying a *different* one is a key
+        // substitution attempt and is refused before the signature is even
+        // checked — a valid signature over a swapped key is exactly what the
+        // attack looks like (`BLEAnnounceTrustPolicy`, `MessageHandler.kt:252`).
+        let (mut runtime, _radio, state) = runtime();
+
+        let honest = MeshIdentity::generate(&mut OsRng);
+        let peer = honest.peer_id();
+        let first = AnnouncementPacket::new(
+            "honest".to_string(),
+            honest.static_public().to_vec(),
+            honest.signing_public().to_vec(),
+            None,
+            None,
+            None,
+        );
+        state.with(|inner| {
+            inner
+                .peers
+                .upsert_verified_announce(&peer, &first, true, now_millis());
+        });
+
+        // Same peer ID, attacker's keys, signed by the attacker.
+        let attacker = MeshIdentity::generate(&mut OsRng);
+        let swapped = AnnouncementPacket::new(
+            "honest".to_string(),
+            attacker.static_public().to_vec(),
+            attacker.signing_public().to_vec(),
+            None,
+            None,
+            None,
+        );
+        let mut packet = BitchatPacket::new(
+            MessageType::Announce,
+            peer.to_routing_bytes().expect("routing bytes"),
+            None,
+            now_millis(),
+            swapped.encode().expect("encodes"),
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        packet.signature = Some(sign_packet(&attacker, &packet).expect("signs"));
+
+        let link = LinkId::new("/mock/swap");
+        state.with(|inner| {
+            inner.links.link_up(link.clone(), LinkRole::Central);
+            inner.links.set_writable(&link, true);
+            inner.max_write.insert(link.clone(), 512);
+        });
+
+        runtime.on_announce(&link, &packet, &peer).await;
+
+        assert_eq!(
+            state.with(|inner| inner
+                .peers
+                .info(&peer)
+                .expect("still known")
+                .noise_public_key
+                .clone()),
+            Some(honest.static_public().to_vec()),
+            "the recorded Noise key must survive an announce that tries to \
+             replace it — that key is what courier mail is sealed to"
         );
     }
 

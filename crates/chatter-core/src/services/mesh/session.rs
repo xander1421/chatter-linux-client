@@ -115,29 +115,37 @@ impl SessionManager {
     ) -> Result<HandshakeStep, NoiseError> {
         let is_opening = message.len() == OPENING_MESSAGE_LEN;
 
-        // A peer that restarts — reinstalled, wiped, or simply lost its state —
-        // opens a new handshake while we still hold a session. Keeping the old
-        // session would leave us encrypting to a key the peer no longer has.
-        if is_opening && self.sessions.contains_key(peer) {
-            self.sessions.remove(peer);
-            self.handshakes.remove(peer);
-        }
-
-        if is_opening
-            && matches!(
+        // A peer that restarts — wiped, or simply lost its state — opens a new
+        // handshake while we still hold a session. Its half-finished predecessor
+        // is worthless and is dropped now, so the new exchange starts from a
+        // fresh responder state rather than failing to read out of turn.
+        //
+        // The established *session*, however, stays until the restart actually
+        // completes and authenticates (below). An opening XX message is 32 bytes
+        // of ephemeral key with nothing bound to it, and the sender ID that
+        // carried it is whatever the sender typed, so tearing a session down on
+        // receipt of one hands any device in radio range a way to sever every
+        // private conversation we hold, one forged frame at a time. Deferring the
+        // teardown to the completing message costs the honest restart nothing:
+        // the replacement lands one round trip later either way.
+        if is_opening {
+            if matches!(
                 self.handshakes.get(peer),
                 Some((_, HandshakeRole::Initiator))
-            )
-        {
-            // Simultaneous initiation. Both sides hold an initiator state and
-            // neither can read the other's opening message, so one has to yield.
-            // The rule has to be symmetric and computable from data both sides
-            // already have: the lower peer ID keeps its initiator role, the
-            // higher yields and becomes responder. Without this, both sides sit
-            // on dead handshakes until something else evicts them.
-            if local_peer < peer {
+            ) && local_peer < peer
+            {
+                // Simultaneous initiation. Both sides hold an initiator state and
+                // neither can read the other's opening message, so one has to
+                // yield. The rule has to be symmetric and computable from data
+                // both sides already have: the lower peer ID keeps its initiator
+                // role, the higher yields and becomes responder. Without this,
+                // both sides sit on dead handshakes until something else evicts
+                // them.
                 return Ok(HandshakeStep::default());
             }
+            // Either we just yielded the initiator role or this is a restart, and
+            // in both cases whatever we held is unreadable from here. Drop it so
+            // the exchange begins from a fresh responder state.
             self.handshakes.remove(peer);
         }
 
@@ -152,9 +160,7 @@ impl SessionManager {
         handshake.read_message(message)?;
 
         if handshake.is_complete() {
-            let session = handshake.into_session()?;
-            let remote = session.remote_static();
-            self.sessions.insert(peer.clone(), session);
+            let remote = self.establish(peer, handshake)?;
             return Ok(HandshakeStep {
                 reply: None,
                 established: Some(remote),
@@ -164,9 +170,7 @@ impl SessionManager {
         let reply = handshake.write_message(&[])?;
 
         if handshake.is_complete() {
-            let session = handshake.into_session()?;
-            let remote = session.remote_static();
-            self.sessions.insert(peer.clone(), session);
+            let remote = self.establish(peer, handshake)?;
             return Ok(HandshakeStep {
                 reply: Some(reply),
                 established: Some(remote),
@@ -178,6 +182,43 @@ impl SessionManager {
             reply: Some(reply),
             established: None,
         })
+    }
+
+    /// Turn a completed handshake into the session for `peer` — but only if the
+    /// key it authenticated is actually that peer's.
+    ///
+    /// XX authenticates the remote *static key*, and the mesh peer ID is
+    /// `SHA256(static key)[..8]` (`MeshIdentity::peer_id`, and our own ID is built
+    /// that way). So at the moment a handshake completes we hold cryptographic
+    /// proof of who the far side is, and the sender ID that its packets claimed is
+    /// still just a claim. Keying the session on the claim rather than the proof
+    /// is a session hijack: an attacker runs a completely valid handshake with
+    /// their own static key while every frame claims the victim's ID, and from
+    /// then on every private message we address to the victim is encrypted to the
+    /// attacker and reads as delivered.
+    ///
+    /// Refusing is safe: an honest peer's ID always derives from its own key, so
+    /// this rejects nothing a real device does. It is the same rule the offline
+    /// path already applies to courier envelopes, where the sender is *derived*
+    /// from the authenticated key rather than read off the packet.
+    fn establish(
+        &mut self,
+        peer: &PeerId,
+        handshake: NoiseHandshake,
+    ) -> Result<[u8; 32], NoiseError> {
+        let session = handshake.into_session()?;
+        let remote = session.remote_static();
+        if PeerId::from_noise_key(&remote) != *peer {
+            // Drop everything for this peer: the handshake state is spent, and
+            // leaving it around would let the impersonator retry against a
+            // half-consumed exchange.
+            self.handshakes.remove(peer);
+            return Err(NoiseError::WrongState(
+                "handshake authenticated a key that does not derive the claimed peer ID",
+            ));
+        }
+        self.sessions.insert(peer.clone(), session);
+        Ok(remote)
     }
 
     /// Encrypt for an established session.
@@ -339,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn a_peer_restart_replaces_the_stale_session() {
+    fn a_peer_restart_replaces_the_stale_session_once_it_completes() {
         let (alice_id, bob_id) = (identity(), identity());
         let (mut alice, mut bob) = (SessionManager::new(), SessionManager::new());
         let (alice_peer, bob_peer) = complete(&mut alice, &alice_id, &mut bob, &bob_id);
@@ -353,9 +394,103 @@ mod tests {
         let step = bob
             .on_handshake(&alice_peer, &bob_peer, &bob_id, &m1)
             .expect("bob accepts the restart");
-        assert!(step.reply.is_some());
-        // The stale session is gone rather than left encrypting to a dead key.
-        assert!(!bob.has_session(&alice_peer));
+        let m2 = step.reply.expect("bob replies with m2");
+        // The old session is still there: nothing has been authenticated yet.
+        assert!(bob.has_session(&alice_peer));
+
+        let m3 = restarted
+            .on_handshake(&bob_peer, &alice_peer, &alice_id, &m2)
+            .expect("alice reads m2")
+            .reply
+            .expect("alice replies with m3");
+        let step = bob
+            .on_handshake(&alice_peer, &bob_peer, &bob_id, &m3)
+            .expect("bob completes the restart");
+        assert!(step.established.is_some());
+
+        // And now the replacement is in force: the *new* session decrypts.
+        let sealed = restarted.encrypt(&bob_peer, b"back").expect("encrypt");
+        assert_eq!(
+            bob.decrypt(&alice_peer, &sealed).expect("decrypt"),
+            b"back",
+            "the completed restart must have replaced the stale session"
+        );
+    }
+
+    #[test]
+    fn a_bare_opening_message_from_a_stranger_cannot_tear_down_a_session() {
+        // The opening XX message carries no proof of anything — it is 32 bytes
+        // of ephemeral key, and the sender ID on the packet that wrapped it is
+        // whatever the sender typed. Dropping an established session on receipt
+        // of one lets any device in radio range sever every private conversation
+        // we hold, one forged 32-byte frame at a time.
+        let (alice_id, bob_id) = (identity(), identity());
+        let (mut alice, mut bob) = (SessionManager::new(), SessionManager::new());
+        let (alice_peer, bob_peer) = complete(&mut alice, &alice_id, &mut bob, &bob_id);
+
+        // A stranger opens a handshake while claiming to be Alice.
+        let stranger_id = identity();
+        let mut stranger = SessionManager::new();
+        let forged = stranger
+            .initiate(&bob_peer, &stranger_id)
+            .expect("opening message");
+        let _ = bob.on_handshake(&alice_peer, &bob_peer, &bob_id, &forged);
+
+        assert!(
+            bob.has_session(&alice_peer),
+            "an unauthenticated opening message must not evict a live session"
+        );
+        let sealed = alice.encrypt(&bob_peer, b"still here").expect("encrypt");
+        assert_eq!(
+            bob.decrypt(&alice_peer, &sealed).expect("decrypt"),
+            b"still here",
+            "and Alice's traffic must still open"
+        );
+    }
+
+    #[test]
+    fn a_handshake_that_authenticates_to_another_peer_id_establishes_nothing() {
+        // XX authenticates the remote *static key*, and the mesh peer ID is
+        // SHA256 of exactly that key. So once the handshake completes there is
+        // no excuse for keying the session on the sender ID the packet claimed:
+        // the authenticated key says who this really is. Without the check, an
+        // attacker completes a perfectly valid handshake under the victim's peer
+        // ID and every subsequent DM to the victim is encrypted to the attacker.
+        let victim_id = identity();
+        let victim_peer = victim_id.peer_id();
+
+        let local_id = identity();
+        let local_peer = local_id.peer_id();
+        let mut local = SessionManager::new();
+
+        let attacker_id = identity();
+        let attacker_peer = attacker_id.peer_id();
+        let mut attacker = SessionManager::new();
+
+        // Every frame the attacker sends claims to come from the victim.
+        let m1 = attacker.initiate(&local_peer, &attacker_id).expect("m1");
+        let m2 = local
+            .on_handshake(&victim_peer, &local_peer, &local_id, &m1)
+            .expect("local replies to the opening message")
+            .reply
+            .expect("m2");
+        let m3 = attacker
+            .on_handshake(&local_peer, &attacker_peer, &attacker_id, &m2)
+            .expect("attacker reads m2")
+            .reply
+            .expect("m3");
+
+        let result = local.on_handshake(&victim_peer, &local_peer, &local_id, &m3);
+
+        assert!(
+            result.is_err(),
+            "a handshake whose authenticated static key does not derive the \
+             claimed peer ID must fail rather than establish"
+        );
+        assert!(
+            !local.has_session(&victim_peer),
+            "and no session may be keyed on the impersonated ID"
+        );
     }
 
     #[test]
