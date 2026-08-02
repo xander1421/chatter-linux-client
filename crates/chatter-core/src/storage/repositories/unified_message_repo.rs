@@ -15,6 +15,7 @@ use crate::storage::serialization::{db_deserialize, db_serialize};
 use crate::storage::Database;
 use chrono::{DateTime, Utc};
 use rusqlite::params;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Unified message repository for all conversation types.
@@ -936,6 +937,10 @@ impl UnifiedMessageRepository {
     ///
     /// Returns messages in reverse chronological order (newest first).
     /// Use `before` to paginate - pass the last message's ID to get the next page.
+    ///
+    /// Thread replies (`thread_id IS NOT NULL`) are excluded — they belong to
+    /// the thread panel (`list_for_thread`), not the main conversation, and
+    /// showing them in both places double-renders every reply.
     pub fn list_for_channel(
         &self,
         channel_id: &ChannelId,
@@ -949,6 +954,7 @@ impl UnifiedMessageRepository {
             let mut stmt = conn.prepare(&format!(
                 "SELECT {} FROM messages m \
                  WHERE m.conversation_id = ?1 AND m.conversation_type = ?2 \
+                   AND m.thread_id IS NULL \
                    AND (m.sent_at, m.sender_id) < (SELECT sent_at, sender_id FROM messages WHERE id = ?3) \
                  ORDER BY m.sent_at DESC, m.sender_id DESC \
                  LIMIT ?4",
@@ -960,6 +966,7 @@ impl UnifiedMessageRepository {
             let mut stmt = conn.prepare(&format!(
                 "SELECT {} FROM messages \
                  WHERE conversation_id = ?1 AND conversation_type = ?2 \
+                   AND thread_id IS NULL \
                  ORDER BY sent_at DESC, sender_id DESC \
                  LIMIT ?3",
                 MSG_COLS,
@@ -967,6 +974,36 @@ impl UnifiedMessageRepository {
             let mut rows = stmt.query(params![channel_id.to_string(), conversation_type.as_str(), limit])?;
             collect_messages(&mut rows)
         }
+    }
+
+    /// Reply counts per thread root for one conversation.
+    ///
+    /// Feeds the "N replies" indicator on the root bubble. Derived from the
+    /// messages table (the `threads` table is never written).
+    pub fn reply_counts_for_channel(
+        &self,
+        channel_id: &ChannelId,
+        conversation_type: &ConversationType,
+    ) -> Result<HashMap<MessageId, u32>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT thread_id, COUNT(*) FROM messages \
+             WHERE conversation_id = ?1 AND conversation_type = ?2 \
+               AND thread_id IS NOT NULL AND is_deleted = 0 \
+             GROUP BY thread_id",
+        )?;
+        let rows = stmt.query_map(
+            params![channel_id.to_string(), conversation_type.as_str()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )?;
+        let mut counts = HashMap::new();
+        for row in rows {
+            let (root, count) = row?;
+            if let Ok(root_id) = root.parse::<MessageId>() {
+                counts.insert(root_id, count as u32);
+            }
+        }
+        Ok(counts)
     }
 
     /// List messages for a conversation by channel_id and conversation_type.

@@ -151,13 +151,17 @@ pub async fn load_channel_into_ui(
     let message_timestamps: Vec<String> = messages.iter().map(|m| m.sent_at.to_string()).collect();
 
     // 3. Convert to display format
-    let display_messages = messages_to_display_batch(
+    let mut display_messages = messages_to_display_batch(
         &messages,
         |m| ui_ctx.message_sender_display_name(m),
         |att_id| ui_ctx.get_attachment(att_id),
         |m| ui_ctx.reply_author_display_name(m),
         |m| ui_ctx.reply_parent_missing_for(m),
         |m| ui_ctx.reply_parent_media(m),
+    );
+    crate::bin_ui::converters::apply_reply_counts(
+        &mut display_messages,
+        &ui_ctx.thread_reply_counts(&channel_id, &conv_type),
     );
 
     // 4. Update UI

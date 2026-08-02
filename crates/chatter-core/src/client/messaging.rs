@@ -768,6 +768,18 @@ impl ChatterClient {
         self.channels().search_channels(query, limit, offset, type_filter).await
     }
 
+    /// Reply count per thread root in a conversation, for the "N replies"
+    /// indicator on root message bubbles.
+    pub fn thread_reply_counts(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        conversation_type: &crate::domain::message::ConversationType,
+    ) -> std::collections::HashMap<crate::domain::ids::MessageId, u32> {
+        self.messages()
+            .thread_reply_counts(channel_id, conversation_type)
+            .unwrap_or_default()
+    }
+
     pub fn list_thread_replies(
         &self,
         thread_root_id: &crate::domain::ids::MessageId,

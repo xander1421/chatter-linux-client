@@ -111,12 +111,34 @@ pub(super) fn handle_message_received(
     let ui_ctx_ui = ui_ctx.clone();
     let peer_id_opt = sender_id;
 
+    // A thread reply belongs to the thread panel, not the main message list.
+    // Route it there (and bump the root bubble's reply pill) instead of
+    // inserting it inline, which used to render every reply twice.
+    let thread_root = message.thread_id;
+    let panel_shows_this_thread = thread_root
+        .zip(ui_ctx.chat_state().active_thread())
+        .map(|(root, panel)| panel.root_message_id == root)
+        .unwrap_or(false);
+
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
 
         // Clear typing indicator for sender
         if let Some(sid) = peer_id_opt {
             super::super::typing::clear_typing_for_peer(&w, &sid.to_string());
+        }
+
+        if let Some(root_id) = thread_root {
+            if is_active {
+                let reply = display_data.to_slint_with_user(&current_user_id);
+                crate::bin_ui::features::thread::apply_live_thread_reply(
+                    &w, &root_id, reply, panel_shows_this_thread,
+                );
+            }
+            crate::bin_ui::features::sidebar::update_sidebar_preview(
+                &w, &ui_ctx_ui, sidebar_conversation, &preview, &timestamp_str, true,
+            );
+            return;
         }
 
         if is_active {

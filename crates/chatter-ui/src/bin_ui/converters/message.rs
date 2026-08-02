@@ -534,6 +534,27 @@ pub fn apply_reply_parent_media(
     }
 }
 
+/// Stamp thread reply counts onto a converted batch so root bubbles render the
+/// "N replies" indicator. Counts come from core
+/// (`ChatterClient::thread_reply_counts`); messages with no replies keep 0.
+pub fn apply_reply_counts(
+    display_messages: &mut [MessageDisplayData],
+    counts: &std::collections::HashMap<chatter_core::domain::ids::MessageId, u32>,
+) {
+    if counts.is_empty() {
+        return;
+    }
+    for display in display_messages.iter_mut() {
+        let Ok(id) = display.message_id.parse::<chatter_core::domain::ids::MessageId>() else {
+            continue;
+        };
+        if let Some(count) = counts.get(&id) {
+            display.reply_count = *count as i32;
+            display.reply_count_text = format_count(display.reply_count, "reply", "replies");
+        }
+    }
+}
+
 pub fn messages_to_display_batch(
     messages: &[Message],
     sender_name: impl Fn(&Message) -> String,

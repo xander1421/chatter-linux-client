@@ -299,6 +299,18 @@ impl MessageService {
         Ok(messages)
     }
 
+    /// Reply count per thread root for a conversation (drives the "N replies"
+    /// indicator on root bubbles).
+    pub fn thread_reply_counts(
+        &self,
+        channel_id: &ChannelId,
+        conversation_type: &ConversationType,
+    ) -> Result<std::collections::HashMap<crate::domain::ids::MessageId, u32>, MessageError> {
+        self.message_repo
+            .reply_counts_for_channel(channel_id, conversation_type)
+            .map_err(MessageError::from)
+    }
+
     /// Get sent_at timestamps of messages from a specific peer in a conversation.
     ///
     /// Used for sending read receipts — returns the peer's message timestamps

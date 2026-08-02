@@ -1587,3 +1587,66 @@ fn test_pagination_isolation_across_types() {
         assert_eq!(m.conversation_type, ConversationType::ServerDm);
     }
 }
+
+/// Thread replies live in the thread panel, not the main conversation.
+///
+/// Guards the two halves of the duplicate-render bug: `list_for_channel` must
+/// hide replies, and `reply_counts_for_channel` must report them so the root
+/// bubble can render its "N replies" indicator.
+#[test]
+fn test_thread_replies_excluded_from_channel_list() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+    let sender = UserId::new();
+
+    let root = Message::new_text(
+        channel.id, ConversationType::Channel, Some(sender),
+        "thread root".to_string(), next_timestamp_ns(),
+    );
+    message_repo.insert(&root).unwrap();
+
+    for i in 0..3 {
+        let mut reply = Message::new_text(
+            channel.id, ConversationType::Channel, Some(sender),
+            format!("reply {i}"), next_timestamp_ns(),
+        );
+        reply.thread_id = Some(root.id);
+        message_repo.insert(&reply).unwrap();
+    }
+
+    // A plain (non-thread) message stays visible in the main list.
+    let plain = Message::new_text(
+        channel.id, ConversationType::Channel, Some(sender),
+        "main channel message".to_string(), next_timestamp_ns(),
+    );
+    message_repo.insert(&plain).unwrap();
+
+    let main_list = message_repo
+        .list_for_channel(&channel.id, &ConversationType::Channel, None, 100)
+        .unwrap();
+    let main_ids: Vec<_> = main_list.iter().map(|m| m.id).collect();
+    assert_eq!(main_list.len(), 2, "main list = root + plain message, no replies");
+    assert!(main_ids.contains(&root.id));
+    assert!(main_ids.contains(&plain.id));
+    assert!(main_list.iter().all(|m| m.thread_id.is_none()));
+
+    // Paginated path must filter too.
+    let page = message_repo
+        .list_for_channel(&channel.id, &ConversationType::Channel, Some(&plain.id), 100)
+        .unwrap();
+    assert!(page.iter().all(|m| m.thread_id.is_none()), "cursor page leaked thread replies");
+
+    // The replies are still reachable through the thread query...
+    let replies = message_repo.list_for_thread(&root.id, None, 100).unwrap();
+    assert_eq!(replies.len(), 3);
+
+    // ...and counted for the root bubble's indicator.
+    let counts = message_repo
+        .reply_counts_for_channel(&channel.id, &ConversationType::Channel)
+        .unwrap();
+    assert_eq!(counts.get(&root.id), Some(&3));
+    assert_eq!(counts.get(&plain.id), None);
+}

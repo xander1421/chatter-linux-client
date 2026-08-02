@@ -101,6 +101,11 @@ impl MessageService {
                 // rode only the sender's local echo, so recipients saw plain
                 // text). Mirrors the DM path (build_reply_content).
                 quote: self.build_wire_quote(quote),
+                // Thread root on the wire. The server-side `parent_id` below is
+                // only seen by clients that fetch through GetMessages; mailbox
+                // recipients decode this DataMessage, so without this field a
+                // thread reply lands in their main channel.
+                thread_id: thread_id.map(|id| id.to_string()).unwrap_or_default(),
                 // Arm the E2E disappearing marker so recipients (and our own
                 // linked devices) can expire their local copy on their own clock.
                 ephemeral: disappearing_ttl_secs.is_some(),

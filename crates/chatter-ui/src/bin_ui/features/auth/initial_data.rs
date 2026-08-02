@@ -450,13 +450,17 @@ async fn load_channel_into_ui_from_services(
     };
 
     // Convert messages to display data
-    let display_messages = messages_to_display_batch(
+    let mut display_messages = messages_to_display_batch(
         &messages,
         |m| ui_ctx.message_sender_display_name(m),
         |att_id| ui_ctx.get_attachment_metadata(att_id),
         |m| ui_ctx.reply_author_display_name(m),
         |m| ui_ctx.reply_parent_missing_for(m),
         |m| ui_ctx.reply_parent_media(m),
+    );
+    crate::bin_ui::converters::apply_reply_counts(
+        &mut display_messages,
+        &ui_ctx.thread_reply_counts(channel_id, &conversation_type),
     );
 
     // Get current user ID for is_own calculation in to_slint_with_user

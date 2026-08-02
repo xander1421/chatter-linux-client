@@ -246,7 +246,10 @@ impl MessageGateway {
             device_id: None,
             content,
             encrypted_content: None,
-            thread_id: None,
+            // Thread root rides on the wire (DataMessage.thread_id). Mailbox
+            // delivery never sees the server's parent_id, so without this a
+            // thread reply would be filed into the main channel.
+            thread_id: data_message.thread_id.parse().ok(),
             reply_to: None,
             reply_to_author_id: None,
             reply_to_text: None,
@@ -403,7 +406,10 @@ impl MessageGateway {
             device_id: None,
             content: MessageContent::Text(data_message.body.clone()),
             encrypted_content: None,
-            thread_id: None,
+            // Thread root rides on the wire (DataMessage.thread_id). Mailbox
+            // delivery never sees the server's parent_id, so without this a
+            // thread reply would be filed into the main channel.
+            thread_id: data_message.thread_id.parse().ok(),
             reply_to: None,
             reply_to_author_id: None,
             reply_to_text: None,
