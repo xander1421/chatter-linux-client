@@ -78,6 +78,15 @@ pub enum KtError {
     /// An old leaf is NOT present unchanged in the new tree — the log was
     /// rewritten (not append-only). THIS is the fork being rejected.
     ConsistencyLeafNotPreserved,
+    /// The consistency proof could not be obtained at all.
+    ///
+    /// Treated as a REJECT, not a shrug. The server can rebuild state at any
+    /// epoch on demand (`loadStateAtEpoch`, keytransparency/service.go), so it
+    /// has no honest reason to fail — and a server that could suppress this
+    /// check by erroring could fork the log undetectably, which is the same
+    /// reasoning that already makes a transport error on `GetProof` a reject
+    /// rather than a "no leaf".
+    ConsistencyUnavailable,
 }
 
 impl std::fmt::Display for KtError {
@@ -110,6 +119,11 @@ impl std::fmt::Display for KtError {
             KtError::ConsistencyOldRootUnreconstructable => write!(
                 f,
                 "KT consistency proof old leaves do not reconstruct the signed old root (log may be forked)"
+            ),
+            KtError::ConsistencyUnavailable => write!(
+                f,
+                "KT consistency proof could not be obtained — refusing to advance the pinned \
+                 tree head (a server that can suppress this check can fork the log undetected)"
             ),
             KtError::ConsistencyLeafNotPreserved => write!(
                 f,

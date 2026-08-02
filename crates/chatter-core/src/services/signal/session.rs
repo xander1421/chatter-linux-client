@@ -13,7 +13,8 @@ use crate::crypto::signal::sesame::ConvergenceResult;
 use crate::network::grpc::auth_client::AuthClient;
 use crate::storage::repositories::settings_repo::keys;
 use crate::error::{CryptoError, ServiceError};
-use super::SignalService;
+use super::{kt_anchor, SignalService};
+use crate::crypto::keytransparency::KtError;
 
 /// Maximum number of encrypt locks to keep in cache.
 const MAX_ENCRYPT_LOCKS: usize = 500;
@@ -60,6 +61,94 @@ impl SignalService {
     /// * any other transport/server error -> REJECT (an error is not evidence of
     ///   an absent leaf; a malicious server must not be able to error its way
     ///   past the check).
+    /// Hold the KT log to one history over time.
+    ///
+    /// `verify_kt_proof` verifies a peer's key against the head in the SAME
+    /// response, so a server that signs heads can serve a different tree per
+    /// user or per request and every proof still verifies. This compares the
+    /// offered head against the highest one this device ever accepted and, when
+    /// it is newer, requires a consistency proof from the pinned head to it.
+    ///
+    /// Failures REJECT the session rather than warn. The server can rebuild
+    /// state at any epoch on demand (`loadStateAtEpoch`), so it has no honest
+    /// reason to fail — and a server able to suppress this check by erroring
+    /// could fork the log undetectably, which is the same reasoning that
+    /// already makes a transport error on `GetProof` a reject rather than a
+    /// "no leaf".
+    async fn check_tree_head_consistency(
+        &self,
+        auth_client: &mut AuthClient,
+        recipient_id: &str,
+        proof: &crate::proto::chat_v1::GetProofResponse,
+    ) -> Result<(), ServiceError> {
+        let Some(sth) = proof.signed_tree_head.as_ref() else {
+            return Err(ServiceError::Validation(
+                "KT proof has no signed tree head".to_string(),
+            ));
+        };
+
+        let action = kt_anchor::classify_head(&self.settings_repo, sth).map_err(|e| {
+            tracing::error!(
+                recipient = %recipient_id,
+                offered_epoch = sth.epoch,
+                error = %e,
+                "KT REJECT: the offered tree head contradicts the head this device already \
+                 accepted — fork, rollback or split view"
+            );
+            ServiceError::Validation(format!(
+                "Key Transparency consistency check failed for {recipient_id}: {e}"
+            ))
+        })?;
+
+        let (old_epoch, new_epoch) = match action {
+            kt_anchor::AnchorAction::Settled(kt_anchor::AnchorOutcome::FirstPin) => {
+                tracing::info!(
+                    epoch = sth.epoch,
+                    "KT: pinned the transparency log's tree head for the first time"
+                );
+                return Ok(());
+            }
+            kt_anchor::AnchorAction::Settled(_) => return Ok(()),
+            kt_anchor::AnchorAction::NeedsProof { old_epoch, new_epoch } => (old_epoch, new_epoch),
+        };
+
+        let resp = auth_client
+            .get_consistency_proof(old_epoch, new_epoch)
+            .await
+            .map_err(|e| {
+                tracing::error!(
+                    old_epoch, new_epoch, error = %e,
+                    "KT REJECT: could not fetch the consistency proof"
+                );
+                ServiceError::Validation(format!(
+                    "Key Transparency consistency check failed for {recipient_id}: {}",
+                    KtError::ConsistencyUnavailable
+                ))
+            })?;
+
+        match kt_anchor::accept_advance(&self.settings_repo, sth, &resp) {
+            Ok(_) => {
+                tracing::info!(
+                    old_epoch,
+                    new_epoch,
+                    "KT: advanced the pinned tree head; log verified append-only"
+                );
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!(
+                    recipient = %recipient_id,
+                    old_epoch, new_epoch, error = %e,
+                    "KT REJECT: the transparency log is NOT append-only between the head this \
+                     device pinned and the one now offered — the log was rewritten"
+                );
+                Err(ServiceError::Validation(format!(
+                    "Key Transparency consistency check failed for {recipient_id}: {e}"
+                )))
+            }
+        }
+    }
+
     async fn verify_peer_key_transparency(
         &self,
         auth_client: &mut AuthClient,
@@ -85,7 +174,11 @@ impl SignalService {
                             epoch,
                             "KT: peer identity key verified against the signed transparency log"
                         );
-                        Ok(())
+                        // The inclusion proof says the key is in the tree the
+                        // server just signed. It says nothing about WHICH tree,
+                        // so on its own it cannot see a fork or a rollback.
+                        // Pin the head across time as well.
+                        self.check_tree_head_consistency(auth_client, recipient_id, &proof).await
                     }
                     Err(e) => {
                         tracing::error!(

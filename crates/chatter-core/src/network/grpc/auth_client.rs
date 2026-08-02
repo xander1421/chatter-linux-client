@@ -21,7 +21,8 @@ use crate::proto::chat_v1::{
     AccountDeletionEvent, AuthEvent, AuthResponse, ChangePasswordRequest,
     DeleteAccountRequest,
     GetActiveSessionsRequest, GetActiveSessionsResponse, GetPreKeyBundleRequest,
-    GetPreKeyBundleResponse, GetPreKeyStatsRequest, GetPreKeyStatsResponse, GetProofRequest,
+    GetConsistencyProofRequest, GetConsistencyProofResponse, GetPreKeyBundleResponse,
+    GetPreKeyStatsRequest, GetPreKeyStatsResponse, GetProofRequest,
     GetProofResponse, GetSealedSenderPolicyRequest, GetSealedSenderPolicyResponse,
     SetSealedSenderPolicyRequest, SetSealedSenderPolicyResponse,
     InvalidateAllSessionsRequest,
@@ -86,6 +87,26 @@ impl AuthClient {
         match self.kt.get_proof(request).await {
             Ok(resp) => Ok(Some(resp.into_inner())),
             Err(status) if status.code() == tonic::Code::NotFound => Ok(None),
+            Err(status) => Err(NetworkError::from_status(&status)),
+        }
+    }
+
+    /// Fetch a consistency proof between two tree-head epochs.
+    ///
+    /// Used by `services::signal::kt_anchor` to prove the KT log only GREW
+    /// between the head this device pinned and a newer one. Mirrors
+    /// `AnonymousKtClient::get_consistency_proof` for the identified path.
+    pub async fn get_consistency_proof(
+        &mut self,
+        old_epoch: u64,
+        new_epoch: u64,
+    ) -> Result<GetConsistencyProofResponse, NetworkError> {
+        let request = GetConsistencyProofRequest {
+            old_epoch,
+            new_epoch,
+        };
+        match self.kt.get_consistency_proof(request).await {
+            Ok(resp) => Ok(resp.into_inner()),
             Err(status) => Err(NetworkError::from_status(&status)),
         }
     }

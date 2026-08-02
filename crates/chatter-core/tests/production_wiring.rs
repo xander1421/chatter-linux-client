@@ -9,8 +9,9 @@
 //!     production callers, so peers in radio range were unauthenticated, while
 //!     `announce.rs`'s own unit tests were a wall of green.
 //!   * `verify_consistency_proof` — called only from `tests/validated.rs`, which
-//!     is why V25 reads as "the client verifies the log is append-only" when no
-//!     client code does.
+//!     is why V25 read as "the client verifies the log is append-only" when no
+//!     client code did. Wired on 2026-08-03; the entry below is now `Wired`, and
+//!     this file is what will notice if that caller ever disappears.
 //!
 //! Every one of those had passing unit tests. Unit tests prove a function does
 //! what it says; they cannot prove anyone asks. Nothing in the suite failed when
@@ -92,12 +93,13 @@ const TABLE: &[Entry] = &[
     Entry {
         symbol: "verify_consistency_proof",
         defined_in: "chatter-core/src/crypto/keytransparency.rs",
-        expect: Expect::Dead,
-        why: "KNOWN DEFECT. The append-only/fork check has no production caller — the \
-              only invocation is tests/validated.rs V25, which imports the verifier and \
-              calls it by hand. The client therefore never monitors log consistency, so \
-              a server that rewrites a committed key between epochs is not detected. \
-              V25's headline overstates this; see VALIDATED.md.",
+        expect: Expect::Wired,
+        why: "The append-only/fork check. Called from services/signal/kt_anchor.rs, which \
+              services/signal/session.rs invokes on every KT-verified send. Lose this \
+              caller and inclusion proofs are verified against whatever head the server \
+              supplied in the same response — each one valid, all of them possibly from \
+              different trees — so a fork, a rollback and a per-user split view all become \
+              undetectable again. Dead until 2026-08-03; that is why this file exists.",
     },
     // ---- Signal: identity change ----------------------------------------
     Entry {

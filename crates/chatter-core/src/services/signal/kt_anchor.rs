@@ -1,0 +1,364 @@
+//! Pin the key-transparency log across time.
+//!
+//! # What was missing
+//!
+//! [`crate::crypto::verify_kt_proof`] checks that a peer's identity key is in
+//! the tree whose root the server just signed. Every part of that is verified
+//! — except *which tree*. Each proof was checked in isolation against a head
+//! the server supplied in the same response, so a server free to sign heads is
+//! free to serve a different tree per user, per device, or per request:
+//!
+//! - **Fork / split view.** Sign tree A for the victim and tree B for everyone
+//!   else. Both verify. The victim's contact sees an identity key nobody else
+//!   can observe, which is exactly the attack KT exists to make public.
+//! - **Rollback.** Serve an older epoch whose leaf held a key the attacker
+//!   controls. The signature is valid; it is simply the wrong point in time.
+//!
+//! `verify_consistency_proof` — the check that catches both — existed, was
+//! correct, and had zero production callers. This module is the caller.
+//!
+//! # The rule
+//!
+//! Keep the highest tree head this device has ever accepted. For each new head:
+//!
+//! | relation to pinned | action |
+//! |---|---|
+//! | no pin yet | pin it (trust on first use, like the log itself) |
+//! | same epoch, same root | accept |
+//! | same epoch, **different root** | REJECT — signed fork at one epoch |
+//! | older epoch | REJECT — rollback |
+//! | newer epoch | fetch a consistency proof pinned→new, verify, then advance |
+//!
+//! # The binding that is easy to omit
+//!
+//! [`crate::crypto::verify_consistency_proof`] proves the *response* is
+//! internally coherent: both heads signed, epochs ordered, proof roots equal to
+//! the signed roots, old leaves reconstructing the old root. It knows nothing
+//! about what THIS device previously trusted, so on its own a server can answer
+//! with a perfectly valid proof between two epochs of a tree we never saw.
+//!
+//! [`advance_pinned_head`] therefore compares `old_root` against the pinned
+//! root itself, and `new_root`/`new_epoch` against the head being offered.
+//! Without those three comparisons the consistency proof is decoration.
+
+use serde::{Deserialize, Serialize};
+
+use crate::crypto::keytransparency::{verify_consistency_proof, KtError};
+use crate::proto::chat_v1::{GetConsistencyProofResponse, SignedTreeHead};
+use crate::storage::repositories::SettingsRepository;
+
+/// Settings key holding [`PinnedTreeHead`].
+pub const KT_PINNED_TREE_HEAD: &str = "kt.pinned_tree_head";
+
+/// The highest KT tree head this device has accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PinnedTreeHead {
+    pub epoch: u64,
+    pub root: [u8; 32],
+}
+
+/// What [`advance_pinned_head`] did, for logging and for tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorOutcome {
+    /// No pin existed; this head is now pinned. Trust on first use.
+    FirstPin,
+    /// Same epoch and same root as the pin.
+    Unchanged,
+    /// Newer epoch, consistency proof verified, pin advanced.
+    Advanced,
+}
+
+fn root_of(sth: &SignedTreeHead) -> Result<[u8; 32], KtError> {
+    sth.root_hash
+        .as_slice()
+        .try_into()
+        .map_err(|_| KtError::Malformed("tree head root is not 32 bytes"))
+}
+
+/// Read the pinned head, if any.
+pub fn pinned_head(settings: &SettingsRepository) -> Option<PinnedTreeHead> {
+    settings.get::<PinnedTreeHead>(KT_PINNED_TREE_HEAD).ok().flatten()
+}
+
+/// What the caller must do about an offered tree head.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnchorAction {
+    /// Nothing to fetch; the head is already accounted for.
+    Settled(AnchorOutcome),
+    /// The head is newer than the pin. Fetch a consistency proof for this epoch
+    /// range and hand it to [`accept_advance`].
+    NeedsProof { old_epoch: u64, new_epoch: u64 },
+}
+
+/// Classify an offered tree head against the pinned one.
+///
+/// Deliberately synchronous and transport-free: the caller owns the network
+/// call. An earlier version took an async callback, which forced a `RefCell`
+/// around the client and made the resulting future `!Send`, breaking every
+/// `tokio::spawn` downstream. Splitting the decision from the fetch is both
+/// simpler and `Send`.
+///
+/// `Settled(FirstPin)` also WRITES the pin — first use is the one case with
+/// nothing to prove against.
+pub fn classify_head(
+    settings: &SettingsRepository,
+    sth: &SignedTreeHead,
+) -> Result<AnchorAction, KtError> {
+    let offered_root = root_of(sth)?;
+    let offered_epoch = sth.epoch;
+
+    let Some(pin) = pinned_head(settings) else {
+        store(settings, offered_epoch, offered_root)?;
+        return Ok(AnchorAction::Settled(AnchorOutcome::FirstPin));
+    };
+
+    if offered_epoch < pin.epoch {
+        // Rollback: a validly signed head from before the one we accepted.
+        // Nothing about the signature is wrong; the epoch is.
+        return Err(KtError::ConsistencyEpochOrder);
+    }
+
+    if offered_epoch == pin.epoch {
+        return if offered_root == pin.root {
+            Ok(AnchorAction::Settled(AnchorOutcome::Unchanged))
+        } else {
+            // Two different signed roots at one epoch. The only way to produce
+            // this is to sign two trees, so it is a fork by definition.
+            Err(KtError::ConsistencyRootMismatch)
+        };
+    }
+
+    // A pin at epoch 0 cannot anchor a proof — the server rejects
+    // `old_epoch == 0` (keytransparency/service.go:166) — and epoch 0 is never
+    // a signed head in practice. Re-pin rather than wedge the client forever.
+    if pin.epoch == 0 {
+        store(settings, offered_epoch, offered_root)?;
+        return Ok(AnchorAction::Settled(AnchorOutcome::FirstPin));
+    }
+
+    Ok(AnchorAction::NeedsProof {
+        old_epoch: pin.epoch,
+        new_epoch: offered_epoch,
+    })
+}
+
+/// Verify a fetched consistency proof and advance the pin.
+///
+/// Call only with the response for the range [`classify_head`] asked for.
+pub fn accept_advance(
+    settings: &SettingsRepository,
+    sth: &SignedTreeHead,
+    resp: &GetConsistencyProofResponse,
+) -> Result<AnchorOutcome, KtError> {
+    let offered_root = root_of(sth)?;
+    let pin = pinned_head(settings).ok_or(KtError::Malformed("pin vanished mid-advance"))?;
+
+    verify_consistency_proof(resp)?;
+    bind_proof_to_pin(resp, pin, sth.epoch, offered_root)?;
+
+    store(settings, sth.epoch, offered_root)?;
+    Ok(AnchorOutcome::Advanced)
+}
+
+/// Tie a verified consistency proof to THIS device's history.
+///
+/// [`verify_consistency_proof`] proves the response is internally coherent, and
+/// nothing more — it has no idea what we previously trusted. Without the three
+/// comparisons below, a server answers with a genuine, correctly signed proof
+/// between two epochs of a tree this device never saw, and the whole check
+/// becomes decoration. Kept separate from the transport so it can be tested
+/// without minting signed tree heads.
+fn bind_proof_to_pin(
+    resp: &GetConsistencyProofResponse,
+    pin: PinnedTreeHead,
+    offered_epoch: u64,
+    offered_root: [u8; 32],
+) -> Result<(), KtError> {
+    let old_sth = resp
+        .old_signed_tree_head
+        .as_ref()
+        .ok_or(KtError::Malformed("missing old_signed_tree_head"))?;
+    let new_sth = resp
+        .new_signed_tree_head
+        .as_ref()
+        .ok_or(KtError::Malformed("missing new_signed_tree_head"))?;
+
+    // The proof must START at the exact head we pinned...
+    if old_sth.epoch != pin.epoch || root_of(old_sth)? != pin.root {
+        return Err(KtError::ConsistencyRootMismatch);
+    }
+    // ...and END at the head actually being offered, so a server cannot prove
+    // consistency to some third head and have us accept a different one.
+    if new_sth.epoch != offered_epoch || root_of(new_sth)? != offered_root {
+        return Err(KtError::ConsistencyRootMismatch);
+    }
+    Ok(())
+}
+
+fn store(settings: &SettingsRepository, epoch: u64, root: [u8; 32]) -> Result<(), KtError> {
+    settings
+        .set(KT_PINNED_TREE_HEAD, &PinnedTreeHead { epoch, root })
+        .map_err(|_| KtError::Malformed("could not persist the pinned tree head"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn settings() -> (SettingsRepository, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Arc::new(
+            crate::storage::Database::open(&dir.path().join("kt.db"), "testpass").expect("open"),
+        );
+        db.run_migrations().expect("migrate");
+        (SettingsRepository::new(db), dir)
+    }
+
+    fn sth(epoch: u64, root: [u8; 32]) -> SignedTreeHead {
+        SignedTreeHead {
+            epoch,
+            root_hash: root.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn first_head_is_pinned_on_first_use() {
+        let (s, _dir) = settings();
+        let a = classify_head(&s, &sth(7, [1u8; 32])).unwrap();
+        assert_eq!(a, AnchorAction::Settled(AnchorOutcome::FirstPin));
+        assert_eq!(pinned_head(&s).unwrap(), PinnedTreeHead { epoch: 7, root: [1u8; 32] });
+    }
+
+    #[test]
+    fn the_same_head_again_is_accepted_without_a_proof() {
+        let (s, _dir) = settings();
+        classify_head(&s, &sth(7, [1u8; 32])).unwrap();
+        assert_eq!(
+            classify_head(&s, &sth(7, [1u8; 32])).unwrap(),
+            AnchorAction::Settled(AnchorOutcome::Unchanged)
+        );
+    }
+
+    /// The split-view attack: two different roots signed at one epoch.
+    #[test]
+    fn a_second_root_at_the_same_epoch_is_a_fork_and_is_rejected() {
+        let (s, _dir) = settings();
+        classify_head(&s, &sth(7, [1u8; 32])).unwrap();
+
+        assert_eq!(
+            classify_head(&s, &sth(7, [2u8; 32])).unwrap_err(),
+            KtError::ConsistencyRootMismatch
+        );
+        assert_eq!(
+            pinned_head(&s).unwrap().root,
+            [1u8; 32],
+            "a rejected head must not overwrite the pin"
+        );
+    }
+
+    /// The rollback attack: a validly signed but older head.
+    #[test]
+    fn an_older_epoch_is_rejected_as_a_rollback() {
+        let (s, _dir) = settings();
+        classify_head(&s, &sth(7, [1u8; 32])).unwrap();
+
+        assert_eq!(
+            classify_head(&s, &sth(6, [9u8; 32])).unwrap_err(),
+            KtError::ConsistencyEpochOrder
+        );
+        assert_eq!(pinned_head(&s).unwrap().epoch, 7);
+    }
+
+    /// A newer head must not be silently accepted; it must demand a proof for
+    /// exactly the pinned->offered range.
+    #[test]
+    fn a_newer_epoch_demands_a_proof_for_the_pinned_range() {
+        let (s, _dir) = settings();
+        classify_head(&s, &sth(7, [1u8; 32])).unwrap();
+
+        assert_eq!(
+            classify_head(&s, &sth(9, [2u8; 32])).unwrap(),
+            AnchorAction::NeedsProof { old_epoch: 7, new_epoch: 9 }
+        );
+        assert_eq!(
+            pinned_head(&s).unwrap().epoch,
+            7,
+            "classify must not advance the pin before the proof is checked"
+        );
+    }
+
+    /// A bad proof must leave the pin where it was.
+    #[test]
+    fn a_failed_advance_leaves_the_pin_untouched() {
+        let (s, _dir) = settings();
+        classify_head(&s, &sth(7, [1u8; 32])).unwrap();
+
+        let bogus = GetConsistencyProofResponse::default();
+        assert!(accept_advance(&s, &sth(8, [2u8; 32]), &bogus).is_err());
+        assert_eq!(pinned_head(&s).unwrap().epoch, 7);
+    }
+
+    /// The binding this module exists to add, tested directly: a consistency
+    /// proof that is internally valid but does not start at OUR pinned root.
+    /// Testing `bind_proof_to_pin` rather than the whole path keeps this from
+    /// needing a real signing key, and keeps it failing for the right reason.
+    #[test]
+    fn a_proof_that_does_not_start_at_our_pin_is_rejected() {
+        let pin = PinnedTreeHead { epoch: 7, root: [1u8; 32] };
+        let resp = GetConsistencyProofResponse {
+            // Correctly signed, correctly ordered — but of a tree we never saw.
+            old_signed_tree_head: Some(sth(7, [0xAAu8; 32])),
+            new_signed_tree_head: Some(sth(8, [2u8; 32])),
+            ..Default::default()
+        };
+        assert_eq!(
+            bind_proof_to_pin(&resp, pin, 8, [2u8; 32]).unwrap_err(),
+            KtError::ConsistencyRootMismatch
+        );
+    }
+
+    /// A proof to a DIFFERENT new head than the one being offered. Without the
+    /// second comparison the server proves consistency to head X and then has
+    /// us pin head Y.
+    #[test]
+    fn a_proof_that_does_not_end_at_the_offered_head_is_rejected() {
+        let pin = PinnedTreeHead { epoch: 7, root: [1u8; 32] };
+        let resp = GetConsistencyProofResponse {
+            old_signed_tree_head: Some(sth(7, [1u8; 32])),
+            new_signed_tree_head: Some(sth(8, [0xBBu8; 32])),
+            ..Default::default()
+        };
+        assert_eq!(
+            bind_proof_to_pin(&resp, pin, 8, [2u8; 32]).unwrap_err(),
+            KtError::ConsistencyRootMismatch
+        );
+    }
+
+    /// Same roots, wrong epoch labels — the epoch half of both comparisons.
+    #[test]
+    fn a_proof_with_mismatched_epochs_is_rejected() {
+        let pin = PinnedTreeHead { epoch: 7, root: [1u8; 32] };
+        let resp = GetConsistencyProofResponse {
+            old_signed_tree_head: Some(sth(6, [1u8; 32])),
+            new_signed_tree_head: Some(sth(8, [2u8; 32])),
+            ..Default::default()
+        };
+        assert_eq!(
+            bind_proof_to_pin(&resp, pin, 8, [2u8; 32]).unwrap_err(),
+            KtError::ConsistencyRootMismatch
+        );
+    }
+
+    #[test]
+    fn a_proof_from_our_pin_to_the_offered_head_is_accepted() {
+        let pin = PinnedTreeHead { epoch: 7, root: [1u8; 32] };
+        let resp = GetConsistencyProofResponse {
+            old_signed_tree_head: Some(sth(7, [1u8; 32])),
+            new_signed_tree_head: Some(sth(8, [2u8; 32])),
+            ..Default::default()
+        };
+        assert!(bind_proof_to_pin(&resp, pin, 8, [2u8; 32]).is_ok());
+    }
+}

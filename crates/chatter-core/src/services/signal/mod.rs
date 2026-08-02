@@ -9,6 +9,7 @@
 //! - `sender_key` - Group sender key operations
 //! - `identity` - Identity and key management
 
+pub mod kt_anchor;
 mod session;
 mod sender_key;
 mod identity;
