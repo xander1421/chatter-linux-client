@@ -7,6 +7,7 @@ pub mod audio_state;
 pub mod converters;
 pub mod features;
 pub mod gif_state;
+pub mod haptics;
 pub mod preview_state;
 pub mod slint_conversions;
 pub mod ui_helpers;

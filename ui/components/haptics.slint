@@ -1,0 +1,30 @@
+// Haptic feedback — the one output channel this app never used.
+//
+// Why it exists at all: the press-and-hold gesture has a 500ms threshold that
+// the user cannot see. Before this, crossing it looked identical to not
+// crossing it right up until a menu appeared, so the only way to learn the
+// gesture was to hold too long on purpose. A tick at the threshold is the
+// feedback the visual layer structurally cannot give — the finger is covering
+// the thing that would have shown it.
+//
+// Deliberately two events, not a palette. Haptics stop carrying information the
+// moment everything buzzes, so the rule here is: fire only where the user
+// crossed a boundary they could not see, or where something failed and the
+// visual signal is a small coloured toast that may be off-screen.
+//
+//   long-press  — a hold gesture just armed. The menu is about to open.
+//   error       — an action failed. Pairs with an error toast, never alone.
+//
+// Anything the user can plainly see happen does not get a buzz.
+//
+// Wiring: Rust binds these in `crate::bin_ui::haptics` to the platform. On
+// Android that is `View.performHapticFeedback`, which routes through the
+// system's own haptics setting — a user who has turned touch feedback off in
+// Android settings gets nothing, which is correct and is why this does not use
+// the Vibrator service (that would override the preference and need the VIBRATE
+// permission). On desktop nothing binds them and an unhandled Slint callback is
+// a no-op, so this costs those builds a virtual call that returns.
+export global Haptics {
+    callback long-press();
+    callback error();
+}

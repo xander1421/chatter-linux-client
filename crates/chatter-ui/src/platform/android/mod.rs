@@ -9,6 +9,7 @@ pub mod activity;
 pub mod call_actions;
 pub mod camera;
 pub mod file_picker;
+pub mod haptics;
 pub mod notifications;
 pub mod permissions;
 

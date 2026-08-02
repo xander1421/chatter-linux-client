@@ -7,6 +7,7 @@ import { TextFormat } from "chat/message_composer.slint";
 import { AnonMode, TorStatus } from "anon_mode/anon_mode_global.slint";
 import { MeshGlobal, MeshConversationData } from "mesh/mesh_global.slint";
 import { Typography } from "theme/typography.slint";
+import { Haptics } from "components/haptics.slint";
 
 // Re-export all types for Rust binding
 export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem }
@@ -17,6 +18,8 @@ export { TorStatus }
 // bitchat mesh: runtime feature flag + the sidebar row shape. Written from
 // `bin_ui::features::mesh`; inert when the `mesh` Cargo feature is off.
 export { MeshGlobal, MeshConversationData }
+// Touch feedback. Bound in `bin_ui::haptics`; unbound (and so a no-op) on desktop.
+export { Haptics }
 
 export component MainWindow inherits Window {
     title: "Chatter";
@@ -144,6 +147,7 @@ export component MainWindow inherits Window {
     in property <bool> should-auto-scroll <=> app.should-auto-scroll;  // Enable auto-scroll
     in-out property <string> composer-text <=> app.composer-text;
     in property <string> composer-placeholder <=> app.composer-placeholder;
+    in property <string> composer-send-status <=> app.composer-send-status;
     in property <bool> composer-disabled <=> app.composer-disabled;
     in property <[PendingAttachmentData]> pending-attachments <=> app.pending-attachments;
     in-out property <bool> composer-is-editing <=> app.composer-is-editing;
