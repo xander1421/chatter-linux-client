@@ -13,6 +13,11 @@
 # SLINT_EMIT_DEBUG_INFO=1 is REQUIRED: the ElementHandle query API is inert
 # without Slint debug info compiled into the generated code.
 #
+# --features chatter-core/dev-trust-root is REQUIRED: integration tests link
+# WITHOUT `cfg(test)` set on chatter-core, so its `cfg!(test)` dev-key fallback
+# (crates/chatter-core/src/config.rs) does not apply and the TRUST_ROOT_PUBLIC_KEY
+# LazyLock panics the moment any test calls ChatterClient::build().
+#
 # Usage:  ./scripts/test-ui.sh            (from the linux-client submodule root)
 # Exit non-zero if either layer fails.
 
@@ -31,7 +36,9 @@ echo " VALIDATED-UI  ·  LAYER 1 — headless slint::testing suite"
 echo "=================================================================="
 # The debug-info flag changes codegen, so the first run rebuilds; subsequent
 # runs are incremental. Filter the benign per-query debug-info notice.
-SLINT_EMIT_DEBUG_INFO=1 cargo test -p chatter-ui --test ui_wiring 2>&1 \
+FEATURES=chatter-core/dev-trust-root
+
+SLINT_EMIT_DEBUG_INFO=1 cargo test -p chatter-ui --features $FEATURES --test ui_wiring 2>&1 \
     | grep -v 'requires the presence of debug info'
 TEST_RC=${PIPESTATUS[0]}
 
@@ -41,7 +48,7 @@ echo " VALIDATED-UI  ·  LAYER 1 — geometry/layout suite"
 echo "=================================================================="
 # Separate binary: the integration testing backend (real layout passes) is
 # once-per-process and ui_wiring already claims it.
-SLINT_EMIT_DEBUG_INFO=1 cargo test -p chatter-ui --test ui_layout 2>&1 \
+SLINT_EMIT_DEBUG_INFO=1 cargo test -p chatter-ui --features $FEATURES --test ui_layout 2>&1 \
     | grep -v 'requires the presence of debug info'
 LAYOUT_RC=${PIPESTATUS[0]}
 

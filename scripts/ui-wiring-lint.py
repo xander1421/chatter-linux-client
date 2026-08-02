@@ -24,6 +24,12 @@ Two falsifiable checks over the chatter-ui UI layer:
                      some are legitimately UI-only (open a modal, toggle a
                      panel), so it's a WARN the ledger must eyeball, not a fail.
        - CORE-WIRED: references a core context ident (reaches chatter-core).
+       - FN-REF    : registered by function reference, not a closure
+                     (`.on_x(platform::android::haptics::long_press)`). The
+                     body is resolved and classified where it is DEFINED.
+                     Before this existed the classifier saw "no closure block"
+                     and reported STUB, which is why the gate was red on master
+                     for two correct Android JNI bindings.
 
 Exit non-zero if any STUB is found (regression gate). LOCAL-ONLY is reported
 but does not fail the build.
@@ -96,8 +102,15 @@ ON_RE = re.compile(r"\.on_([a-z0-9_]+)\s*\(")
 
 
 def extract_handlers(rust_text: str):
-    """Yield (name, body) for each `.on_NAME(` by brace-balancing to the close
-    of the closure/call. Heuristic but robust enough for classification."""
+    """Yield (name, body, reg_expr) for each `.on_NAME(` by brace-balancing to
+    the close of the closure/call. Heuristic but robust enough for
+    classification.
+
+    `body` is the closure body, or **None** when the registration passes a
+    function *reference* instead of a closure (`.on_x(some::path::fn)`). None
+    and "" are deliberately different: an empty closure is a dead wire, a
+    function reference is a live one whose body lives elsewhere."""
+
     for m in ON_RE.finditer(rust_text):
         name = m.group(1)
         i = m.end()  # just after '('
@@ -128,7 +141,7 @@ def extract_handlers(rust_text: str):
         reg_expr = rust_text[i:j]  # inside the on_X( ... )
         # Isolate the closure body: first '{' to its matching '}'.
         b0 = reg_expr.find("{")
-        body = ""
+        body = None
         if b0 != -1:
             d = 1
             k = b0 + 1
@@ -150,7 +163,7 @@ def extract_handlers(rust_text: str):
                         d -= 1
                 k += 1
             body = reg_expr[b0 + 1:k - 1]
-        yield name, body
+        yield name, body, reg_expr.strip()
 
 
 def strip_comments(body: str) -> str:
@@ -166,8 +179,68 @@ def strip_comments(body: str) -> str:
 # mention with no call does not count.
 CORE_CALL_RE = re.compile(r"\b(?:ui_ctx|ctx|client|core|svc|service)\w*\s*\.")
 
+# `fn NAME(` / `pub fn NAME(` — used to resolve function-REFERENCE registrations
+# (`.on_x(platform::android::haptics::long_press)`) to the body that actually
+# runs. Without this the classifier saw "no closure block" and reported STUB,
+# which is how the gate went red on two correct `#[cfg(target_os = "android")]`
+# JNI bindings: the wire is live, the body just is not inline.
+FN_DEF_RE = re.compile(r"\bfn\s+([a-z0-9_]+)\s*(?:<[^>]*>)?\s*\(")
+# A registration argument that is a bare path — `a::b::c` or `foo` — and nothing
+# else. Anything with a `{`, `|` or `(` in it is a closure or a call, not a ref.
+FN_REF_RE = re.compile(r"^(?:[A-Za-z_]\w*::)*([a-z0-9_]+)$")
 
-def classify(body: str) -> str:
+
+def balanced_block(text: str, open_idx: int) -> str:
+    """Return the contents of the `{...}` block whose `{` is at `open_idx`."""
+    d = 1
+    k = open_idx + 1
+    s = None
+    while k < len(text) and d > 0:
+        c = text[k]
+        if s:
+            if c == "\\":
+                k += 2
+                continue
+            if c == s:
+                s = None
+        else:
+            if c in ("\"", "'"):
+                s = c
+            elif c == "{":
+                d += 1
+            elif c == "}":
+                d -= 1
+        k += 1
+    return text[open_idx + 1:k - 1]
+
+
+def index_fn_bodies(rust_texts):
+    """name -> body, for every `fn name(...) { ... }` in the crate."""
+    out = {}
+    for txt in rust_texts:
+        for m in FN_DEF_RE.finditer(txt):
+            b0 = txt.find("{", m.end())
+            if b0 == -1:
+                continue
+            # Reject a match whose `{` is past the next `fn` (trait decl, etc).
+            out.setdefault(m.group(1), balanced_block(txt, b0))
+    return out
+
+
+def classify(body, reg_expr: str = "", fn_bodies=None) -> str:
+    if body is None:
+        # No closure block: this is `.on_x(EXPR)`. A bare path is a function
+        # reference — a LIVE wire whose body is defined elsewhere. Resolve it
+        # and classify what actually runs; if it cannot be resolved, say so
+        # rather than calling a real binding dead.
+        ref = FN_REF_RE.match(strip_comments(reg_expr).strip())
+        if ref and fn_bodies is not None and ref.group(1) in fn_bodies:
+            return classify(fn_bodies[ref.group(1)], "", fn_bodies)
+        if ref:
+            return "FN-REF"
+        # Not a path and not a closure (a builder chain, a macro): unclassifiable
+        # but definitely not empty.
+        return "FN-REF" if strip_comments(reg_expr).strip() else "STUB"
     code = strip_comments(body).strip()
     if code == "":
         return "STUB"
@@ -184,13 +257,14 @@ def main():
 
     # Collect all Rust handlers across the tree, keep the "richest" classification
     # per name (a name may be registered once; if multiple, prefer CORE-WIRED).
-    rank = {"STUB": 0, "LOCAL-ONLY": 1, "CORE-WIRED": 2}
+    rank = {"STUB": 0, "LOCAL-ONLY": 1, "FN-REF": 2, "CORE-WIRED": 3}
+    fn_bodies = index_fn_bodies([read(p) for p in all_rust_files()])
     handler_class = {}
     handler_file = {}
     for path in all_rust_files():
         txt = read(path)
-        for name, body in extract_handlers(txt):
-            cls = classify(body)
+        for name, body, reg in extract_handlers(txt):
+            cls = classify(body, reg, fn_bodies)
             if name not in handler_class or rank[cls] > rank[handler_class[name]]:
                 handler_class[name] = cls
                 handler_file[name] = os.path.relpath(path, ROOT)
@@ -207,6 +281,7 @@ def main():
     known_stubs = [n for n in all_stubs if n in KNOWN_INTENTIONAL_STUBS]
     local_only = sorted([n for n, c in handler_class.items() if c == "LOCAL-ONLY"])
     core_wired = sorted([n for n, c in handler_class.items() if c == "CORE-WIRED"])
+    fn_refs = sorted([n for n, c in handler_class.items() if c == "FN-REF"])
 
     if as_json:
         print(json.dumps({
@@ -215,6 +290,7 @@ def main():
             "mainwindow_no_rust_handler": [n for n, _ in no_handler],
             "stub_handlers": stubs,
             "local_only_handlers": local_only,
+            "fn_ref_handlers": fn_refs,
             "core_wired_count": len(core_wired),
         }, indent=2))
     else:
