@@ -1,8 +1,17 @@
 // Multi-select action bar.
 //
-// Overlays the top of the window while selection mode is active: how many
-// messages are selected, the bulk actions, and the explicit way out. Android
-// Back is the other way out and is handled in Rust, ahead of modal dismissal.
+// Stands in for the channel's own header while selection mode is active: how
+// many messages are selected, the bulk actions, and the explicit way out.
+// Android Back is the other way out and is handled in Rust, ahead of modal
+// dismissal.
+//
+// Lives INSIDE the chat column, not at App root. As a root-level overlay it
+// spanned the whole window and sat on top of the sidebar and the chat header at
+// once — the count floated above nav it was not part of. Here it replaces
+// ChatHeader (`hide-header: root.selection-mode`), which is also why it does not
+// apply `safe-area-top`: ChatHeader does not either, and insetting one of the
+// two would misalign them. The property is kept, defaulted to 0, so the element
+// still works if it is ever hoisted back to the root.
 //
 // Delete is the only bulk action for now, deliberately. Bulk copy would be a
 // no-op on the platform this was built for: the clipboard path in
@@ -10,10 +19,6 @@
 // "Clipboard not yet supported on Android". Bulk forward has no backing flow
 // either — the forward modal takes a single message. Neither ships as a dead
 // button.
-//
-// Sits at App root level (a sibling of the main content rectangle, like the
-// other overlays), so it applies `safe-area-top` itself rather than inheriting
-// an already-inset parent.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";

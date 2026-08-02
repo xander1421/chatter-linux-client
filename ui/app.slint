@@ -1135,11 +1135,13 @@ export component App inherits Rectangle {
                 // Survives dismissing the connection banner: the dot on the
                 // settings button is what keeps saying the server is down.
                 server-unreachable: root.server-unreachable;
-                // Mobile is a two-view swap: the conversation list owns the whole
-                // width, and opening a conversation hands the whole width to the
-                // chat (see `sidebar-hidden` below). Treating a 411dp phone as a
-                // narrow desktop gave two permanently half-broken columns — the
-                // list took ~58% and the chat clipped mid-sentence.
+                // `mobile-mode` means "touch input" — it sizes the panel's
+                // targets, it does NOT change the layout. The panel stays on
+                // screen on every platform, Discord-style: an icon rail by
+                // default, expanded to the full list by the toggle in its
+                // footer. A phone-style swap-the-whole-screen navigation was
+                // tried and rejected: it costs a tap for every glance at the
+                // conversation list.
                 mobile-mode: root.is-mobile-platform;
                 mobile-width: root.width;
                 channels: root.channels;
@@ -1151,27 +1153,23 @@ export component App inherits Rectangle {
                 user-avatar-source: root.user-avatar-source;
                 user-initials: root.user-initials;
                 user-presence-status: root.user-presence-status;
-                // Never the 60px icon rail on mobile: at 411dp that rail ate 15%
-                // of the screen and showed nothing readable.
-                collapsed: root.is-mobile-platform ? false : (root.is-small-screen || root.sidebar-collapsed);
+                // Narrow screens start on the rail and expand on demand. The
+                // user drives this — `sidebar-user-collapsed` keeps their choice
+                // from being undone by a resize.
+                collapsed: root.is-small-screen || root.sidebar-collapsed;
                 hidden: root.sidebar-hidden;
                 pending-friend-requests: root.friends-received-requests.length;
                 pending-message-requests: root.pending-message-requests;
                 pending-group-invites: root.pending-group-invites;
                 pending-channel-invites: root.pending-channel-invites;
 
-                // Mobile: picking a conversation swaps the list out for the chat.
-                // The header's back button (below) swaps it back.
                 channel-selected(id) => {
-                    if (root.is-mobile-platform) { root.sidebar-hidden = true; }
                     root.channel-selected(id);
                 }
                 dm-selected(id) => {
-                    if (root.is-mobile-platform) { root.sidebar-hidden = true; }
                     root.dm-selected(id);
                 }
                 private-group-selected(id) => {
-                    if (root.is-mobile-platform) { root.sidebar-hidden = true; }
                     root.private-group-selected(id);
                 }
                 search-clicked => {
@@ -1181,7 +1179,6 @@ export component App inherits Rectangle {
                     root.unified-search-opened();
                 }
                 saved-messages-clicked => {
-                    if (root.is-mobile-platform) { root.sidebar-hidden = true; }
                     root.saved-messages-clicked();
                 }
                 friends-clicked => {
@@ -1246,7 +1243,6 @@ export component App inherits Rectangle {
                     root.section-toggle-expanded(id);
                 }
                 section-conversation-selected(conv-id, conv-type) => {
-                    if (root.is-mobile-platform) { root.sidebar-hidden = true; }
                     root.section-conversation-selected(conv-id, conv-type);
                 }
                 delete-section-clicked(id) => {
@@ -1274,12 +1270,9 @@ export component App inherits Rectangle {
                 }
             }
 
-            // Right side area (Chat + Panels)
-            // On mobile this is the *other* half of the two-view swap: removed
-            // from the tree entirely while the full-width list is up. `if`, not
-            // `visible`, because a Slint element hidden with `visible: false`
-            // still claims its layout slot and would squeeze the list.
-            if !root.is-mobile-platform || root.sidebar-hidden: chat-panel-area := Rectangle {
+            // Right side area (Chat + Panels). Always present — the sidebar is
+            // a panel beside it, never a view that replaces it.
+            chat-panel-area := Rectangle {
                 horizontal-stretch: 1;
                 vertical-stretch: 1;
                 visible: true;
@@ -1346,14 +1339,34 @@ export component App inherits Rectangle {
                     // still occupies its layout slot, so in fullscreen the hidden
                     // ChatLayout reserved black space below the call dock. `if`
                     // removes it from the layout tree entirely.
+                    // Selection mode takes over the channel's own header rather
+                    // than floating above everything: as a root-level overlay it
+                    // covered the sidebar and the header at once, so the count sat
+                    // on top of the nav it was not part of. Sitting here it lines
+                    // up with the header it replaces, which is also why it does not
+                    // apply safe-area-top — ChatHeader does not either, and an
+                    // inset on one of the two would misalign them.
+                    if root.selection-mode
+                        && !root.active-call-fullscreen
+                        && !(root.is-small-screen && root.thread-panel-visible): SelectionBar {
+                        show: true;
+                        count: root.selected-message-count;
+                        cleared => {
+                            root.selection-mode = false;
+                            root.selection-cleared();
+                        }
+                        delete-clicked => { root.selection-delete-clicked(); }
+                    }
+
                     if !root.active-call-fullscreen
                         && !(root.is-small-screen && root.thread-panel-visible): ChatLayout {
                     vertical-stretch: 1;
-                    hide-header: false;
-                    // Mobile: the only way back to the conversation list, since
-                    // the list is swapped out entirely while a chat is open.
-                    show-back-button: root.is-mobile-platform;
-                    back-clicked => { root.sidebar-hidden = false; }
+                    hide-header: root.selection-mode;
+                    // No back button: the conversation list is always on
+                    // screen beside this, so there is nothing to go back to —
+                    // and the header is tight enough already.
+                    show-back-button: false;
+                    back-clicked => { }
                     selection-mode: root.selection-mode;
                     // Press-and-hold on a bubble is a touch gesture only.
                     mobile: root.is-mobile-platform;
@@ -2570,24 +2583,6 @@ export component App inherits Rectangle {
         close => {
             root.mention-autocomplete-visible = false;
         }
-    }
-
-    // Message context menu overlay
-    // Multi-select bar — overlays the top of the window while selection mode is
-    // on. Root-level overlay (like the menus below), so it insets itself.
-    SelectionBar {
-        show: root.selection-mode;
-        count: root.selected-message-count;
-        safe-area-top: root.safe-area-top;
-        x: 0;
-        y: 0;
-        width: root.width;
-
-        cleared => {
-            root.selection-mode = false;
-            root.selection-cleared();
-        }
-        delete-clicked => { root.selection-delete-clicked(); }
     }
 
     MessageContextMenu {
