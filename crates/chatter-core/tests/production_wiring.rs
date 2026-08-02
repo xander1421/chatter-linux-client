@@ -118,22 +118,25 @@ const TABLE: &[Entry] = &[
     Entry {
         symbol: "accept_peer_identity_change",
         defined_in: "chatter-core/src/services/signal/identity.rs",
-        expect: Expect::Dead,
-        why: "KNOWN DEFECT, and the most consequential entry here. This is the ONLY code \
-              that DELETEs a `pending_identity_changes` row, and nothing outside \
-              identity.rs calls it — no ChatterClient method, no UI handler, no Slint \
-              callback. Production writes rows (note_identity_change) and reads them \
-              (session.rs:172, which returns UntrustedIdentity), but can never clear \
-              one. A peer reinstalling therefore wedges that conversation permanently: \
-              every later send fails and no shipped path can recover it.",
+        expect: Expect::Wired,
+        why: "FIXED — this entry was recorded as DEAD and this test caught it coming \
+              alive, which is the outcome it exists for. It is the ONLY code that \
+              DELETEs a `pending_identity_changes` row. While unwired, production wrote \
+              rows (note_identity_change) and read them (session.rs, returning \
+              UntrustedIdentity) but could never clear one, so a peer reinstall wedged \
+              that conversation permanently. Now reached from ChatterClient and the \
+              in-conversation accept prompt. If this loses its caller again the wedge \
+              comes straight back, silently — that is what this entry now guards.",
     },
     Entry {
         symbol: "pending_identity_change",
         defined_in: "chatter-core/src/services/signal/identity.rs",
-        expect: Expect::Dead,
-        why: "KNOWN DEFECT, same chain. The API that would SHOW the user the pending \
-              change so they could accept it has no production caller either, so the \
-              wedge above is not merely unfixable — it is invisible.",
+        expect: Expect::Wired,
+        why: "FIXED alongside the entry above. This is the read-back API that SHOWS the \
+              user a pending change; while it was unwired the wedge was not merely \
+              unfixable but invisible. Now read by the conversation's identity-change \
+              prompt. Losing this caller would hide the prompt while still refusing to \
+              send — the worst of both states.",
     },
     // ---- Signal: session recovery ---------------------------------------
     Entry {
