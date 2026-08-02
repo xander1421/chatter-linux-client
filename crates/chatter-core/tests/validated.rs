@@ -1606,7 +1606,7 @@ async fn v6_delivered_message_key_is_destroyed() {
         Err(e) => format!("REJECTED: {e:?}"),
     });
 
-    if let Ok((_addr, plaintext)) = &res_delivered {
+    if let Ok((_addr, plaintext, _msg_type)) = &res_delivered {
         let hay = String::from_utf8_lossy(plaintext);
         if hay.contains(&m_delivered) {
             panic!(
@@ -4224,7 +4224,7 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
         Ok(_) => "DECRYPTED (!!)".to_string(),
         Err(e) => format!("REJECTED: {e:?}"),
     });
-    if let Ok((_addr, pt)) = &stolen_post {
+    if let Ok((_addr, pt, _msg_type)) = &stolen_post {
         let hay = String::from_utf8_lossy(pt);
         if hay.contains(&m_post) {
             panic!(
