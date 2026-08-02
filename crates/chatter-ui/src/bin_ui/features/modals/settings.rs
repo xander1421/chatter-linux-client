@@ -290,21 +290,36 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         let weak = weak_mb_export.clone();
         let passphrase = passphrase.to_string();
         tokio::spawn(async move {
-            use chatter_core::media::{FileFilter, FilePicker, FilePickerConfig};
-            let Some(path) = FilePicker::save_file(
-                FilePickerConfig::new()
-                    .with_title("Export message backup")
-                    .with_filter(FileFilter::new("Chatter backup", vec!["chbk"])),
-            )
-            .await
-            else {
-                return; // user cancelled
-            };
-            let status = match ui_ctx.export_message_backup(&path, &passphrase).await {
-                Ok(stats) => format!("Backup exported ({} rows)", stats.rows),
-                Err(e) => format!("Export failed: {e}"),
-            };
-            set_message_backup_status(&weak, status);
+            // `FilePicker` is `#[cfg(not(target_os = "android"))]` in core
+            // (media/mod.rs:33). Without this gate the Android target does not
+            // compile at all — which is how it has been on this branch since
+            // the backup UI landed. Tell the user instead of failing the build.
+            #[cfg(target_os = "android")]
+            {
+                let _ = (&ui_ctx, &passphrase);
+                set_message_backup_status(
+                    &weak,
+                    "Export to a file is not available on Android yet — use \"Back up to server\"".to_string(),
+                );
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                use chatter_core::media::{FileFilter, FilePicker, FilePickerConfig};
+                let Some(path) = FilePicker::save_file(
+                    FilePickerConfig::new()
+                        .with_title("Export message backup")
+                        .with_filter(FileFilter::new("Chatter backup", vec!["chbk"])),
+                )
+                .await
+                else {
+                    return; // user cancelled
+                };
+                let status = match ui_ctx.export_message_backup(&path, &passphrase).await {
+                    Ok(stats) => format!("Backup exported ({} rows)", stats.rows),
+                    Err(e) => format!("Export failed: {e}"),
+                };
+                set_message_backup_status(&weak, status);
+            }
         });
     });
 
@@ -316,21 +331,33 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         let weak = weak_mb_import.clone();
         let passphrase = passphrase.to_string();
         tokio::spawn(async move {
-            use chatter_core::media::{FileFilter, FilePicker, FilePickerConfig};
-            let Some(path) = FilePicker::pick_file(
-                FilePickerConfig::new()
-                    .with_title("Restore message backup")
-                    .with_filter(FileFilter::new("Chatter backup", vec!["chbk"])),
-            )
-            .await
-            else {
-                return; // user cancelled
-            };
-            let status = match ui_ctx.import_message_backup(&path, &passphrase).await {
-                Ok(s) => format!("Restored {} of {} rows (rest already present)", s.rows_inserted, s.rows_seen),
-                Err(e) => format!("Restore failed: {e}"),
-            };
-            set_message_backup_status(&weak, status);
+            // See the export closure above — same cfg gate, same reason.
+            #[cfg(target_os = "android")]
+            {
+                let _ = (&ui_ctx, &passphrase);
+                set_message_backup_status(
+                    &weak,
+                    "Restore from a file is not available on Android yet".to_string(),
+                );
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                use chatter_core::media::{FileFilter, FilePicker, FilePickerConfig};
+                let Some(path) = FilePicker::pick_file(
+                    FilePickerConfig::new()
+                        .with_title("Restore message backup")
+                        .with_filter(FileFilter::new("Chatter backup", vec!["chbk"])),
+                )
+                .await
+                else {
+                    return; // user cancelled
+                };
+                let status = match ui_ctx.import_message_backup(&path, &passphrase).await {
+                    Ok(s) => format!("Restored {} of {} rows (rest already present)", s.rows_inserted, s.rows_seen),
+                    Err(e) => format!("Restore failed: {e}"),
+                };
+                set_message_backup_status(&weak, status);
+            }
         });
     });
 

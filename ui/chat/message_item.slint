@@ -135,10 +135,15 @@ export component MessageItem inherits Rectangle {
 
     // ── Press-and-hold gesture (touch only) ──
     //
-    // Two tiers off one press, per the product spec:
-    //   >= 500ms   tier 1 — the message menu opens, anchored under the bubble.
-    //   >= 1200ms  tier 2 — the menu dismisses and the message becomes selected.
-    // Moving more than the slop cancels both: it was a scroll, not a hold.
+    // >= 500ms opens the message menu, anchored under the bubble. Moving more
+    // than the slop cancels: it was a scroll, not a hold.
+    //
+    // A second tier (>= 1200ms escalating into multi-select) was built and
+    // removed. It cannot work while tier 1 shows a full-screen-backdrop menu:
+    // the backdrop takes the pointer grab the instant it appears, Slint
+    // delivers the loss as PointerEventKind::Cancel, and the gesture ends
+    // there. Verified on device — a 1600ms hold produced the menu and nothing
+    // else. Multi-select is reached by "Select" in that menu instead.
     //
     // Driven by our own timers rather than by the platform long-press, because
     // there is no platform long-press to ride: the Android backend in this tree
@@ -162,7 +167,6 @@ export component MessageItem inherits Rectangle {
     function cancel-hold() {
         root.holding = false;
         tier1-timer.running = false;
-        tier2-timer.running = false;
     }
 
     function open-menu() {
@@ -176,21 +180,6 @@ export component MessageItem inherits Rectangle {
             self.running = false;
             root.hold-tier = 1;
             root.open-menu();
-            // Keep counting: staying down escalates to selection.
-            tier2-timer.running = true;
-        }
-    }
-
-    tier2-timer := Timer {
-        // 700ms after tier 1 fired, i.e. 1200ms from touch-down.
-        interval: 700ms;
-        running: false;
-        triggered => {
-            self.running = false;
-            root.hold-tier = 2;
-            // The app-level handler closes the tier-1 menu as it turns
-            // selection on, so the two never overlap on screen.
-            root.selection-toggled(root.message-id);
         }
     }
 
@@ -443,6 +432,7 @@ export component MessageItem inherits Rectangle {
 
                             // Release, or a grab stolen by the scrolling
                             // Flickable (Slint delivers that as Cancel).
+                            //
                             if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
                                 root.cancel-hold();
                             }

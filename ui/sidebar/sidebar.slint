@@ -82,11 +82,23 @@ export component Sidebar inherits Rectangle {
     callback remove-from-section(/* conversation-id */ string);
 
     // ── Internal state ──
-    // Quick-link rows are 34px on desktop for density; on a touch screen that is
-    // under a finger's width, so mobile gets the 48px minimum instead.
+    // Quick-link rows are 34px for mouse density; on a touch screen that is
+    // under a finger's width, so touch gets the 48px minimum instead.
     property <length> quick-link-height: root.mobile-mode ? Spacing.touch-target-min : 34px;
-    // Same for the footer icon buttons, which were 24px square.
-    property <length> footer-icon-size: root.mobile-mode ? Spacing.touch-target-min : 24px;
+    // The expanded panel's footer row. 36px on touch, not the full 48px
+    // minimum: the panel is capped at 45% of a phone's width, and three 48px
+    // buttons plus the avatar and name overflowed it — which silently pushed
+    // the LAST button (collapse) off the right edge, stranding the user in the
+    // expanded state. 36px is the largest that fits with the collapse control
+    // still on screen; the rail's buttons, which have the whole width to
+    // themselves, keep the full 48px.
+    property <length> footer-icon-size: root.mobile-mode ? 36px : 24px;
+    // One size for every button in the collapsed rail's bottom cluster, so the
+    // container height below stays in step with them.
+    property <length> rail-icon-size: root.mobile-mode ? Spacing.touch-target-min : 32px;
+    property <bool> rail-has-mesh: MeshGlobal.enabled && MeshGlobal.conversations.length > 0;
+    // AI, Mesh (conditional), expand, Settings, anon shield, profile.
+    property <int> rail-button-count: root.rail-has-mesh ? 6 : 5;
     property <bool> channels-expanded: true;
     property <bool> messages-expanded: true;
 
@@ -105,13 +117,17 @@ export component Sidebar inherits Rectangle {
     property <string> section-header-ctx-menu-section-id: "";
 
     // ── Sizing ──
-    // Mobile is a two-view swap, not a split: the list takes the whole width,
-    // and opening a conversation sets `hidden` so the chat gets the whole width
-    // instead. Keeping the sidebar unconditionally visible in mobile-mode (as
-    // this did) left it covering the screen with no way to reach the chat.
-    width: root.mobile-mode ? (root.hidden ? 0px : root.mobile-width)
-         : root.hidden ? Spacing.sidebar-width-hidden
+    // Always a side panel, on every platform: collapsed to the icon rail or
+    // expanded to the list, never a full-screen view that swaps the chat out.
+    // `mobile-mode` here means "touch input", and sizes the targets below; it
+    // does NOT change the layout.
+    // Expanded, the desktop width (240px) is 58% of a 411dp phone, which leaves
+    // the chat too narrow to read. On touch, cap it at 45% of the window so the
+    // conversation stays the larger pane — the panel is for navigating, not for
+    // living in. `mobile-width` is fed the window width by app.slint.
+    width: root.hidden ? Spacing.sidebar-width-hidden
          : root.collapsed ? Spacing.sidebar-width-collapsed
+         : root.mobile-mode ? min(Spacing.sidebar-width, root.mobile-width * 0.45)
          : Spacing.sidebar-width;
     visible: !root.hidden;
     // Neo 2.0: sidebar is a raised surface with right-edge highlight.
@@ -128,6 +144,7 @@ export component Sidebar inherits Rectangle {
 
     VerticalLayout {
         padding-top: Spacing.sm;
+
         // ════════════════════════════════════════
         // SCROLLABLE CENTRAL CONTENT
         // ════════════════════════════════════════
@@ -778,7 +795,15 @@ export component Sidebar inherits Rectangle {
 
         // 7. BOTTOM UTILITY BAR — Neo 2.0 glass surface
         Rectangle {
-            height: root.collapsed ? 140px : 44px;
+            // Derived, not a magic number: this was hardcoded at 140px, which
+            // fit the three 32px buttons the rail used to have and silently
+            // clipped everything past them off the bottom of the screen once
+            // the cluster grew. 8px inter-item spacing + 8px padding-bottom,
+            // matching the layout below.
+            height: root.collapsed
+                ? root.rail-button-count * root.rail-icon-size
+                    + (root.rail-button-count - 1) * 8px + 16px
+                : 44px;
             background: Colors.surface.with-alpha(0.85);
             border-width: 1px;
             border-color: Colors.neo-highlight;
@@ -787,8 +812,13 @@ export component Sidebar inherits Rectangle {
             drop-shadow-color: Colors.neo-shadow;
 
             // Expanded view: Profile + Jarvis + Settings on same row
+            // No `alignment` — under any alignment other than stretch, Slint
+            // sizes every child to its PREFERRED width and ignores
+            // horizontal-stretch, so the display name pushed the icons past the
+            // right edge and the last one (collapse) was clipped away entirely.
+            // Stretching lets the name elide and keeps the buttons on screen.
             if !root.collapsed: HorizontalLayout {
-                padding-left: Spacing.sm; padding-right: Spacing.sm; alignment: center; spacing: Spacing.sm;
+                padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm;
                 TouchArea {
                     horizontal-stretch: 1;
                     mouse-cursor: pointer;
@@ -839,14 +869,17 @@ export component Sidebar inherits Rectangle {
                         sett-touch := TouchArea { clicked => { root.settings-clicked(); } }
                     }
                 }
-                // Collapse toggle — desktop only. Mobile has no collapsed rail
-                // (see `collapsed` in app.slint), so the control would do nothing
-                // while still occupying a footer slot.
-                if !root.mobile-mode: VerticalLayout { alignment: center; horizontal-stretch: 0;
+                // Collapse back to the rail. The expanded panel needs its own
+                // copy: the rail's cluster only exists while collapsed, so
+                // without this, expanding was a one-way trip.
+                VerticalLayout { alignment: center; horizontal-stretch: 0;
                     Rectangle {
-                        width: root.footer-icon-size; height: root.footer-icon-size;
-                        Image { source: Icons.chevron-left; width: 14px; height: 14px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
-                        TouchArea { clicked => { root.collapsed = !root.collapsed; root.toggle-collapsed(); } }
+                        width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
+                        background: collapse-touch.has-hover ? Colors.surface-hover : transparent;
+                        accessible-role: button;
+                        accessible-label: "Collapse sidebar";
+                        Image { source: Icons.chevron-left; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
+                        collapse-touch := TouchArea { clicked => { root.collapsed = !root.collapsed; root.toggle-collapsed(); } }
                     }
                 }
             }
@@ -855,7 +888,7 @@ export component Sidebar inherits Rectangle {
             if root.collapsed: VerticalLayout {
                 alignment: end; spacing: 8px; padding-bottom: 8px;
                 TooltipArea {
-                    height: 32px; width: 44px; x: (parent.width - self.width) / 2;
+                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: AnonMode.enabled ? "Anon Mode (active) - tap to disable" : "Anon Mode";
                     tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: 32px; height: 32px; border-radius: 16px;
@@ -875,8 +908,47 @@ export component Sidebar inherits Rectangle {
                         TouchArea { clicked => { root.anon-mode-clicked(); } }
                     } }
                 }
+                // Bottom cluster, in order: AI, Mesh, expand, Settings.
+                // The expand chevron lives here rather than in the panel header
+                // so the three things reached most often on a phone — the AI
+                // channel, the mesh room, and the full conversation list — sit
+                // together under the thumb.
                 TooltipArea {
-                    height: 32px; width: 44px; x: (parent.width - self.width) / 2; tooltip-text: "Settings"; tooltip-enabled: true; placement: "right";
+                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
+                    tooltip-text: "AI"; tooltip-enabled: true; placement: "right";
+                    HorizontalLayout { alignment: center; Rectangle { width: 32px; height: 32px; border-radius: 16px; background: Colors.surface;
+                        Image { source: Icons.jarvis; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        // The local AI channel's fixed id is the nil UUID
+                        // (chatter-core client/jarvis.rs jarvis_channel_id).
+                        TouchArea { clicked => { root.channel-selected("00000000-0000-0000-0000-000000000000"); } }
+                    } }
+                }
+
+                if root.rail-has-mesh: TooltipArea {
+                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
+                    tooltip-text: "Mesh"; tooltip-enabled: true; placement: "right";
+                    HorizontalLayout { alignment: center; Rectangle { width: 32px; height: 32px; border-radius: 16px; background: Colors.surface;
+                        Image { source: Icons.radio; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                            colorize: !MeshGlobal.radio-running ? Colors.warning
+                                : MeshGlobal.peer-count > 0 ? Colors.glow-cyan
+                                : Colors.text-secondary; }
+                        // First entry is the public room — the mesh list is
+                        // built with it at the head.
+                        TouchArea { clicked => { MeshGlobal.conversation-selected(MeshGlobal.conversations[0].id); } }
+                    } }
+                }
+
+                TooltipArea {
+                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
+                    tooltip-text: root.collapsed ? "Expand sidebar" : "Collapse sidebar"; tooltip-enabled: true; placement: "right";
+                    HorizontalLayout { alignment: center; Rectangle { width: 32px; height: 32px; border-radius: 16px; background: Colors.surface;
+                        Image { source: root.collapsed ? Icons.chevron-right : Icons.chevron-left; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
+                        TouchArea { clicked => { root.collapsed = !root.collapsed; root.toggle-collapsed(); } }
+                    } }
+                }
+
+                TooltipArea {
+                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2; tooltip-text: "Settings"; tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: 32px; height: 32px; border-radius: 16px; background: Colors.surface;
                         Image { source: Icons.settings; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
                         if root.server-unreachable: Rectangle {
@@ -891,17 +963,14 @@ export component Sidebar inherits Rectangle {
                     } }
                 }
                 TouchArea {
-                    height: 32px; clicked => { root.profile-clicked(); }
+                    height: root.rail-icon-size; clicked => { root.profile-clicked(); }
                     HorizontalLayout { alignment: center;
                         Avatar { size: 28px; source: root.user-avatar-source; fallback-text: root.user-initials; show-presence: true;
                             presence-color: root.user-presence-status == "online" ? Colors.online : Colors.offline;
                         }
                     }
                 }
-                TouchArea {
-                    height: 24px; clicked => { root.collapsed = !root.collapsed; root.toggle-collapsed(); }
-                    HorizontalLayout { alignment: center; Image { source: Icons.chevron-right; width: 14px; height: 14px; colorize: Colors.text-muted; } }
-                }
+
             }
         }
     }

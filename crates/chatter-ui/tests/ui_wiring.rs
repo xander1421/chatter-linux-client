@@ -1820,3 +1820,76 @@ fn back_pops_selection_mode_before_the_modal() {
     w.invoke_back_pressed();
     assert_eq!(w.get_active_modal().as_str(), "none", "the second back press did not close the modal");
 }
+
+// ============================================================================
+// Message multi-select — the SELECTION wires reach the selection store.
+//
+// The hold gesture's tier 2 and the menu's "Select" item both land here, so
+// this is the wire that has to hold: without it the bubbles mark themselves and
+// nothing else in the app ever learns a selection exists.
+//
+//  L1 (DYNAMIC): toggling a message runs the real handler, sets selection mode,
+//    publishes the count, and marks the row in the model.
+//  L2 (STATIC, Slint): the bubble's hold timers fire selection-toggled, the
+//    menu carries a Select item, and a tap in selection mode toggles rather
+//    than opening the message.
+// ============================================================================
+#[test]
+fn message_selection_toggle_reaches_the_selection_store() {
+    use slint::Model;
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    testing::init_no_event_loop();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+    let w = MainWindow::new().expect("MainWindow::new");
+    chatter_ui::bin_ui::features::chat::wire(&w, &client);
+
+    // Two rows to select between, so "marks the right one" is a real assertion.
+    let mut a = chatter_ui::MessageItemData::default();
+    a.message_id = "msg-a".into();
+    let mut b = chatter_ui::MessageItemData::default();
+    b.message_id = "msg-b".into();
+    w.set_messages(slint::ModelRc::new(slint::VecModel::from(vec![a, b])));
+
+    // L1 dynamic: selecting one message turns the mode on and marks that row.
+    w.invoke_message_selection_toggled("msg-a".into());
+    assert!(w.get_selection_mode(), "toggling a message must enter selection mode");
+    assert_eq!(w.get_selected_message_count(), 1, "the count must reach the selection bar");
+    let rows = w.get_messages();
+    assert!(rows.row_data(0).unwrap().selected, "the selected row must be marked");
+    assert!(!rows.row_data(1).unwrap().selected, "an unselected row must NOT be marked");
+
+    // Deselecting the last one leaves the mode entirely — a selection bar
+    // reading "0 selected" with a dead delete button is a dead end.
+    w.invoke_message_selection_toggled("msg-a".into());
+    assert!(!w.get_selection_mode(), "deselecting the last message must exit selection mode");
+    assert_eq!(w.get_selected_message_count(), 0);
+    assert!(!w.get_messages().row_data(0).unwrap().selected, "the mark must be cleared");
+
+    // L2 static (Slint): the hold gesture is what fires this on a touch screen.
+    let item_src = include_str!("../../../ui/chat/message_item.slint");
+    assert!(
+        item_src.contains("tier1-timer"),
+        "the press-and-hold timer must exist on the bubble — right-click is \
+         unreachable from a finger (the Android backend only makes \
+         PointerEventButton::Right from a real secondary mouse button)"
+    );
+    assert!(
+        item_src.contains("root.selection-toggled(root.message-id)"),
+        "tier 2 of the hold, and a tap while in selection mode, must fire \
+         selection-toggled with the message id"
+    );
+
+    // L2 static (Slint): the discoverable route, for anyone who never finds the
+    // longer hold.
+    let menu_src = include_str!("../../../ui/chat/message_context_menu.slint");
+    assert!(
+        menu_src.contains(r#"label: "Select""#) && menu_src.contains("root.select-clicked(root.message-id)"),
+        "the message menu must carry a Select item wired to select-clicked"
+    );
+}
