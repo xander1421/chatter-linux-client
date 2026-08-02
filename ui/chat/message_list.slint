@@ -52,6 +52,13 @@ export component MessageList inherits Rectangle {
     property <bool> animating: false;
 
     // Callbacks - Signal-style identification (sender_id, timestamp_ns)
+    // Multi-select: while on, a plain tap toggles selection instead of opening
+    // the message, and each bubble renders its `selected` flag.
+    in property <bool> selection-mode: false;
+    // Touch platform — gates the press-and-hold gesture so a desktop
+    // left-button hold does not open the message menu.
+    in property <bool> mobile: false;
+    callback selection-toggled(string);
     callback message-clicked(string);
     callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
     callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
@@ -349,6 +356,13 @@ export component MessageList inherits Rectangle {
                 show-sender: item.show-sender;
                 delivery-status: item.delivery-status;
                 is-continuation: item.is-continuation;
+                selected: item.selected;
+                selection-mode: root.selection-mode;
+                mobile: root.mobile;
+
+                selection-toggled(id) => {
+                    root.selection-toggled(id);
+                }
 
                 message-clicked(id) => {
                     root.message-clicked(id);

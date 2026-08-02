@@ -1,0 +1,103 @@
+// Multi-select action bar.
+//
+// Overlays the top of the window while selection mode is active: how many
+// messages are selected, the bulk actions, and the explicit way out. Android
+// Back is the other way out and is handled in Rust, ahead of modal dismissal.
+//
+// Delete is the only bulk action for now, deliberately. Bulk copy would be a
+// no-op on the platform this was built for: the clipboard path in
+// features/chat/actions.rs is `#[cfg(not(target_os = "android"))]` and logs
+// "Clipboard not yet supported on Android". Bulk forward has no backing flow
+// either — the forward modal takes a single message. Neither ships as a dead
+// button.
+//
+// Sits at App root level (a sibling of the main content rectangle, like the
+// other overlays), so it applies `safe-area-top` itself rather than inheriting
+// an already-inset parent.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+
+component BarButton inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> destructive: false;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    width: Spacing.touch-target-min;
+    height: Spacing.touch-target-min;
+    border-radius: Spacing.radius-sm;
+    background: touch.has-hover ? Colors.surface-hover : transparent;
+    opacity: root.enabled ? 1.0 : 0.4;
+    accessible-role: button;
+    accessible-label: root.label;
+
+    Image {
+        source: root.icon;
+        width: 20px;
+        height: 20px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        colorize: root.destructive ? Colors.error : Colors.text-primary;
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { if (root.enabled) { root.clicked(); } }
+    }
+}
+
+export component SelectionBar inherits Rectangle {
+    in property <bool> show: false;
+    in property <int> count: 0;
+    in property <length> safe-area-top: 0px;
+
+    callback cleared();
+    callback delete-clicked();
+
+    visible: root.show;
+    height: Spacing.touch-target-min + Spacing.sm * 2 + root.safe-area-top;
+    background: Colors.surface;
+    border-width: 1px;
+    border-color: Colors.neo-highlight;
+    drop-shadow-blur: Spacing.neo-blur-md;
+    drop-shadow-offset-y: Spacing.neo-offset-md;
+    drop-shadow-color: Colors.neo-shadow;
+
+    HorizontalLayout {
+        y: root.safe-area-top;
+        height: parent.height - root.safe-area-top;
+        padding-left: Spacing.sm;
+        padding-right: Spacing.sm;
+        spacing: Spacing.xs;
+        alignment: start;
+
+        // Exit selection mode. Mirrors what Android Back does.
+        BarButton {
+            icon: Icons.x;
+            label: "Exit selection";
+            clicked => { root.cleared(); }
+        }
+
+        Text {
+            text: root.count == 1 ? "1 selected" : root.count + " selected";
+            color: Colors.text-primary;
+            font-size: Typography.base;
+            font-weight: Typography.semibold;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+
+        BarButton {
+            icon: Icons.trash;
+            label: "Delete selected";
+            destructive: true;
+            enabled: root.count > 0;
+            clicked => { root.delete-clicked(); }
+        }
+    }
+}

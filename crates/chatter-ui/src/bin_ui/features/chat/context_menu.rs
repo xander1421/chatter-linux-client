@@ -111,6 +111,21 @@ fn find_message_ui_state(w: &MainWindow, sender_id: &str, timestamp_ns: &str) ->
     (false, false)
 }
 
+/// Resolve the message id for a (sender_id, timestamp_ns) pair from the UI
+/// model. The menu is keyed Signal-style, but "Reply in Thread" and "Select"
+/// are keyed by message id, so the menu has to carry both.
+fn find_message_id(w: &MainWindow, sender_id: &str, timestamp_ns: &str) -> String {
+    let model = w.get_messages();
+    for i in 0..model.row_count() {
+        if let Some(m) = model.row_data(i) {
+            if m.sender_id.as_str() == sender_id && m.timestamp_ns.as_str() == timestamp_ns {
+                return m.message_id.to_string();
+            }
+        }
+    }
+    String::new()
+}
+
 /// Set all context menu properties on the window.
 fn set_context_menu(
     w: &MainWindow,
@@ -123,6 +138,7 @@ fn set_context_menu(
     menu_x: f32,
     menu_y: f32,
 ) {
+    w.set_context_menu_message_id(find_message_id(w, &sender_id, &timestamp_ns).into());
     w.set_context_menu_sender_id(sender_id.into());
     w.set_context_menu_timestamp_ns(timestamp_ns.into());
     w.set_context_menu_is_own_message(is_own_message);

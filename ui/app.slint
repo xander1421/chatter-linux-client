@@ -20,6 +20,7 @@ import { ChatLayout, MessageItemData, MessageAttachmentData, PendingAttachmentDa
 import { ThreadPanel } from "chat/thread_panel.slint";
 import { ReactionPicker } from "chat/reaction_picker.slint";
 import { MessageContextMenu } from "chat/message_context_menu.slint";
+import { SelectionBar } from "chat/selection_bar.slint";
 import { EmojiPicker, EmojiData } from "components/emoji_picker.slint";
 import { GifPicker, GifData } from "components/gif_picker.slint";
 import { MentionAutocomplete, MentionSuggestion } from "components/mention_autocomplete.slint";
@@ -365,10 +366,27 @@ export component App inherits Rectangle {
     in-out property <int> mention-selected-index: 0;
     callback mention-suggestion-selected(string, string);  // (id, display_text)
 
+    // ========== Message multi-select ==========
+    // Entered by the long hold on a bubble (tier 2) or by "Select" in the
+    // message menu. While active, a plain tap toggles selection instead of
+    // doing whatever a tap normally does, and Android Back exits the mode
+    // before it closes any modal — see the back-press handler in Rust.
+    //
+    // The set of selected ids lives in Rust (the per-row `selected` flag on
+    // MessageItemData is what the UI renders); Slint holds only the mode flag
+    // and the count, so there is one owner of the set.
+    in-out property <bool> selection-mode: false;
+    in property <int> selected-message-count: 0;
+    callback message-selection-toggled(string);   // (message_id)
+    callback selection-cleared();
+    callback selection-delete-clicked();
+
     // ========== Message context menu state ==========
     in-out property <bool> context-menu-visible: false;
     in-out property <string> context-menu-sender-id: "";
     in-out property <string> context-menu-timestamp-ns: "";
+    // Thread and selection are keyed by message id, not (sender, timestamp).
+    in-out property <string> context-menu-message-id: "";
     in-out property <length> context-menu-x: 0px;
     in-out property <length> context-menu-y: 0px;
     in property <bool> context-menu-is-own-message: false;
@@ -1336,6 +1354,18 @@ export component App inherits Rectangle {
                     // the list is swapped out entirely while a chat is open.
                     show-back-button: root.is-mobile-platform;
                     back-clicked => { root.sidebar-hidden = false; }
+                    selection-mode: root.selection-mode;
+                    // Press-and-hold on a bubble is a touch gesture only.
+                    mobile: root.is-mobile-platform;
+                    // Tier 2 of the hold escalates out of tier 1: close the menu
+                    // as selection engages, so the two are never on screen at
+                    // once. The menu fades (see MessageContextMenu) while the
+                    // row tint animates in, so it reads as an escalation the
+                    // user caused rather than a menu that glitched away.
+                    selection-toggled(id) => {
+                        root.context-menu-visible = false;
+                        root.message-selection-toggled(id);
+                    }
                     channel-id: root.channel-id;
                     channel-name: root.channel-name;
                     channel-type: root.channel-type;
@@ -2543,12 +2573,32 @@ export component App inherits Rectangle {
     }
 
     // Message context menu overlay
+    // Multi-select bar — overlays the top of the window while selection mode is
+    // on. Root-level overlay (like the menus below), so it insets itself.
+    SelectionBar {
+        show: root.selection-mode;
+        count: root.selected-message-count;
+        safe-area-top: root.safe-area-top;
+        x: 0;
+        y: 0;
+        width: root.width;
+
+        cleared => {
+            root.selection-mode = false;
+            root.selection-cleared();
+        }
+        delete-clicked => { root.selection-delete-clicked(); }
+    }
+
     MessageContextMenu {
         show: root.context-menu-visible;
         sender-id: root.context-menu-sender-id;
         timestamp-ns: root.context-menu-timestamp-ns;
+        message-id: root.context-menu-message-id;
         position-x: root.context-menu-x;
         position-y: root.context-menu-y;
+        safe-area-top: root.safe-area-top;
+        safe-area-bottom: root.safe-area-bottom;
         is-own-message: root.context-menu-is-own-message;
         can-delete-for-everyone: root.context-menu-can-delete-for-everyone;
         is-pinned: root.context-menu-is-pinned;
@@ -2556,6 +2606,29 @@ export component App inherits Rectangle {
 
         close => {
             root.context-menu-visible = false;
+        }
+        quick-react(sender-id, timestamp-ns, emoji) => {
+            root.context-menu-visible = false;
+            root.reaction-selected(sender-id, timestamp-ns, root.context-menu-message-id, emoji);
+        }
+        more-reactions-clicked(sender-id, timestamp-ns) => {
+            root.context-menu-visible = false;
+            root.reaction-picker-sender-id = sender-id;
+            root.reaction-picker-timestamp-ns = timestamp-ns;
+            root.reaction-picker-message-id = root.context-menu-message-id;
+            root.reaction-picker-anchor-x = root.context-menu-x;
+            root.reaction-picker-anchor-y = root.context-menu-y;
+            root.reaction-picker-visible = true;
+            root.react-clicked(sender-id, timestamp-ns, root.context-menu-x, root.context-menu-y);
+        }
+        thread-clicked(id) => {
+            root.context-menu-visible = false;
+            root.thread-clicked(id);
+        }
+        select-clicked(id) => {
+            root.context-menu-visible = false;
+            root.selection-mode = true;
+            root.message-selection-toggled(id);
         }
         reply-clicked(sender-id, timestamp-ns) => {
             root.context-menu-visible = false;

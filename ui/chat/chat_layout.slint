@@ -102,6 +102,9 @@ export component ChatLayout inherits Rectangle {
     callback pinned-show-clicked();  // Re-show dismissed pinned bar
 
     // Message list callbacks
+    in property <bool> selection-mode: false;
+    in property <bool> mobile: false;
+    callback selection-toggled(string);
     callback message-clicked(string);
     callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
     callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
@@ -381,6 +384,8 @@ export component ChatLayout inherits Rectangle {
             vertical-stretch: 1;
             messages: root.messages;
             loading: root.loading-messages;
+            selection-mode: root.selection-mode;
+            mobile: root.mobile;
             is-dm: root.is-dm;
             is-mesh: MeshGlobal.active-id != "";
             // A mesh room and a geohash cell are plaintext broadcasts. Only a
@@ -410,6 +415,10 @@ export component ChatLayout inherits Rectangle {
             highlighted-message-id: root.highlighted-message-id;
             scroll-position <=> root.message-scroll-position;
             should-auto-scroll: root.should-auto-scroll;
+
+            selection-toggled(id) => {
+                root.selection-toggled(id);
+            }
 
             message-clicked(id) => {
                 root.message-clicked(id);
