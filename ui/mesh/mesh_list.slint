@@ -26,9 +26,11 @@ export component MeshList inherits Rectangle {
     // and a section that repainted over that would fight it.
     VerticalLayout {
         // ── Section header ──
+        // Same header rhythm as the sidebar's own sections — see sidebar.slint.
         if !root.collapsed: Rectangle {
-            height: 32px;
+            height: 42px;
             HorizontalLayout {
+                padding-top: 10px;
                 padding-left: 6px;
                 padding-right: 4px;
 

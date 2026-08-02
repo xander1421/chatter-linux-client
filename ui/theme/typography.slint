@@ -29,11 +29,32 @@ export global Typography {
     // covers U+1F600+) and emoji render as white outlines.
     out property <string> font-family-emoji: "Noto Color Emoji";
 
-    // Font sizes
-    out property <length> xxs: 10px;
-    out property <length> xs2: 11px;
+    // Font sizes.
+    //
+    // Eight rendered steps — 12 / 14 / 16 / 18 / 20 / 24 / 32 / 48 — behind
+    // eleven names. The names all survive because they are spread over ~700
+    // call sites and renaming them would be a diff nobody could review; what
+    // changed is what they resolve to.
+    //
+    // Two things were wrong with the old scale:
+    //
+    //   1. It bottomed out at 10px. That is below every mainstream floor
+    //      (Material's smallest label is 11sp) and it was used in 28 places —
+    //      timestamps, badges, the bottom-nav labels, the mesh peer list — i.e.
+    //      exactly the text a phone user reads at arm's length in bad light.
+    //   2. Four of the eleven steps (10/11/12/13) sat inside a 3px band. At
+    //      arm's length those are not four levels, they are one level rendered
+    //      four slightly different ways, which is why the hierarchy read flat:
+    //      there was no step big enough to be perceived as a step.
+    //
+    // So the bottom of the scale collapses onto 12 and the 13 collapses onto
+    // 14. Small text now separates from body text by a real 2px, and hierarchy
+    // below `base` is carried by weight and colour — which is the right lever
+    // at these sizes anyway, and which the components already vary.
+    out property <length> xxs: 12px;
+    out property <length> xs2: 12px;
     out property <length> xs: 12px;
-    out property <length> sm2: 13px;
+    out property <length> sm2: 14px;
     out property <length> sm: 14px;
     out property <length> base: 16px;
     out property <length> lg: 18px;

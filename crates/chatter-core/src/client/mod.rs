@@ -426,6 +426,20 @@ impl ChatterClient {
         crate::services::mesh::mapping::peer_user_id(&self.mesh().local_peer())
     }
 
+    /// The nickname behind a mesh sender id, or `None` if no known peer matches.
+    ///
+    /// Only meaningful for messages that came off the mesh. The ordinary
+    /// display-name path cannot resolve these: a mesh peer has no row in any
+    /// user repository, so `UserService::get_display_name` falls through to
+    /// stringifying the id and the UI showed a raw UUID.
+    #[cfg(feature = "mesh")]
+    pub fn mesh_sender_display_name(
+        &self,
+        sender: &crate::domain::ids::UserId,
+    ) -> Option<String> {
+        self.mesh().sender_display_name(sender)
+    }
+
     /// Start the mesh. Deliberately **not** part of [`start`](Self::start).
     ///
     /// `start` is the authenticated client coming up: inbox polling, channel

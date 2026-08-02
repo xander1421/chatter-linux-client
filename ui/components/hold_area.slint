@@ -21,6 +21,7 @@
 // this is fixing.
 
 import { Spacing } from "../theme/spacing.slint";
+import { Haptics } from "./haptics.slint";
 
 export component HoldArea inherits TouchArea {
     // Where the menu should be anchored, in window coordinates. Reported at
@@ -51,6 +52,12 @@ export component HoldArea inherits TouchArea {
         triggered => {
             self.running = false;
             root.hold-fired = true;
+            // Before the callback, not after: the menu the callback opens is
+            // what the tick is announcing, and a tick that lands after the
+            // thing it announces is just noise. This threshold is invisible —
+            // the finger is on top of the row — so it is the one moment in the
+            // app where touch is the only channel left.
+            Haptics.long-press();
             root.held();
         }
     }

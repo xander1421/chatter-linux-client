@@ -283,6 +283,9 @@ pub async fn app_init() -> AppState {
         window.global::<AnonMode>().set_enabled(false);
     }
 
+    // Touch feedback. One binding site for the whole app — see the module docs.
+    bin_ui::haptics::install(&window);
+
     if bin_ui::video::init_hw_video(&window) {
         tracing::info!("Hardware-accelerated video enabled");
     } else {

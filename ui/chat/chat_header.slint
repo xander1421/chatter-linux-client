@@ -116,6 +116,12 @@ export component ChatHeader inherits Rectangle {
     // would be offering something that cannot happen.
     property <bool> is-mesh: MeshGlobal.active-id != "";
 
+    // Whether the trailing button group will draw anything. Mirrors the three
+    // `if`s on that group exactly; used by the mesh divider above it, which
+    // otherwise hangs off the right edge with nothing to separate.
+    property <bool> has-utility-actions:
+        root.show-invite || (has-channel && root.has-any-pinned) || root.show-settings;
+
     // Mesh status wording. Kept here rather than in the strip below because this
     // is where it is now shown; the strip's remaining line is the one that has to
     // wrap, and these are the ones that must not.
@@ -220,7 +226,13 @@ export component ChatHeader inherits Rectangle {
                 }
             }
 
-            if has-channel && !root.has-avatar && channel-type == "public": Text {
+            // Mesh conversations are pushed in as `channel-type == "public"` so
+            // they inherit the public-channel treatment, but their names already
+            // carry the mark: core labels them "#mesh" and "#<geohash>"
+            // (services/mesh/timeline.rs). Drawing the header's own "#" on top of
+            // that produced "# #mesh". The name keeps its hash — it is part of
+            // the name a user would type — so the glyph yields.
+            if has-channel && !root.has-avatar && channel-type == "public" && !root.is-mesh: Text {
                 text: "#";
                 color: Colors.text-muted;
                 font-size: Typography.lg;
@@ -458,7 +470,13 @@ export component ChatHeader inherits Rectangle {
             if root.is-mesh: HorizontalLayout {
                 spacing: Spacing.xs;
                 alignment: center;
-                if !root.mesh-tight: Text {
+                // Always labelled. This used to be dropped below 520px, which
+                // left an unexplained pill switch in the corner of the one
+                // screen where flipping the wrong thing costs the user their
+                // only transport. "Mesh" is four characters; what the narrow
+                // header gives up is the standing claim beside the title, which
+                // is a sentence, not this.
+                Text {
                     text: "Mesh";
                     color: Colors.text-muted;
                     font-size: Typography.xs;
@@ -477,7 +495,12 @@ export component ChatHeader inherits Rectangle {
                         toggled(value) => { MeshGlobal.set-mesh-on(value); }
                     }
                 }
-                Rectangle {
+                // Separates the switch from the utility buttons — and only when
+                // there are any. In a mesh conversation invite, pin and settings
+                // are all suppressed (they are server operations), so this drew a
+                // rule against the right edge with nothing on the other side of
+                // it. A divider that divides one thing from nothing is a smudge.
+                if root.has-utility-actions: Rectangle {
                     width: 1px;
                     height: 20px;
                     background: Colors.text-muted.with-alpha(0.3);

@@ -30,13 +30,34 @@ use crate::{MainWindow, PendingAttachmentData};
 ///
 /// The message text itself comes from chatter-core (`format_send_error`); this
 /// only carries it to the surface.
+/// Say that a send is on the wire, or (with "") that it no longer is.
+///
+/// The composer is cleared the instant send is tapped and the message is not
+/// appended until the round trip returns — a window of up to 10s + 30s per
+/// attachment during which the app showed no evidence that anything had been
+/// sent. This is the evidence. It is deliberately a status line rather than an
+/// optimistic bubble: a bubble that might still fail is a claim we cannot make
+/// yet, and this app has an explicit rule against saying a thing arrived before
+/// it has.
+fn set_send_status(weak: &slint::Weak<MainWindow>, status: &str) {
+    let weak = weak.clone();
+    let status = status.to_string();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak.upgrade() {
+            w.set_composer_send_status(status.into());
+        }
+    });
+}
+
 fn report_send_failure(weak: &slint::Weak<MainWindow>, message: String) {
     let weak = weak.clone();
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
+        w.set_composer_send_status("".into());
         w.set_toast_message(message.into());
         w.set_toast_variant("error".into());
         w.set_toast_visible(true);
+        w.global::<crate::Haptics>().invoke_error();
     });
 }
 
@@ -196,6 +217,19 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 std::time::Duration::from_secs(10 + 30 * pending_attachments.len() as u64)
             };
 
+            // Attachments are the case that hurts — they carry the long timeout
+            // and the big upload — so they get counted. A plain text send is
+            // usually sub-second, but it is the same black hole when the server
+            // is slow, so it says so too.
+            set_send_status(
+                &weak,
+                &match pending_attachments.len() {
+                    0 => "Sending\u{2026}".to_string(),
+                    1 => "Sending 1 attachment\u{2026}".to_string(),
+                    n => format!("Sending {n} attachments\u{2026}"),
+                },
+            );
+
             tracing::info!(?conversation, text_len = text.len(), "[UI_SEND] entering send_message_ui");
             let ui_result = match tokio::time::timeout(
                 send_timeout,
@@ -255,6 +289,10 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     tracing::error!("[UI_SEND] weak.upgrade() returned None; own bubble dropped");
                     return;
                 };
+                // The bubble is about to be appended, so the status line has
+                // done its job. Cleared here rather than earlier so the two
+                // never both go missing for a frame.
+                w.set_composer_send_status("".into());
                 {
                     let slint_attachments: Vec<_> = attachment_display.iter().map(|a| a.to_slint()).collect();
                     let (reply_thumbnail, reply_has_thumbnail, reply_thumb_w, reply_thumb_h) = reply_thumbnail_bytes

@@ -458,7 +458,7 @@ export component SettingsScreen inherits Rectangle {
                                             spacing: Spacing.xs;
 
                                             Text {
-                                                text: "Change Password";
+                                                text: "Password";
                                                 color: Colors.text-primary;
                                                 font-size: Typography.sm;
                                                 font-weight: Typography.medium;
@@ -473,7 +473,7 @@ export component SettingsScreen inherits Rectangle {
                                         }
 
                                         if !show-password-form && !root.compact-mode: Button {
-                                            text: "Change Password";
+                                            text: "Change";
                                             variant: "secondary";
                                             clicked => { show-password-form = true; }
                                         }
@@ -481,7 +481,7 @@ export component SettingsScreen inherits Rectangle {
 
                                     // Compact: full-width button stacked below
                                     if !show-password-form && root.compact-mode: Button {
-                                        text: "Change Password";
+                                        text: "Change";
                                         variant: "secondary";
                                         clicked => { show-password-form = true; }
                                     }
@@ -612,7 +612,7 @@ export component SettingsScreen inherits Rectangle {
                                         }
 
                                         if !root.compact-mode: Button {
-                                            text: "View All Sessions";
+                                            text: "View All";
                                             variant: "secondary";
                                             clicked => { root.view-sessions-clicked(); }
                                         }
@@ -620,7 +620,7 @@ export component SettingsScreen inherits Rectangle {
 
                                     // Compact: full-width button stacked below
                                     if root.compact-mode: Button {
-                                        text: "View All Sessions";
+                                        text: "View All";
                                         variant: "secondary";
                                         clicked => { root.view-sessions-clicked(); }
                                     }
@@ -650,7 +650,7 @@ export component SettingsScreen inherits Rectangle {
                                             spacing: Spacing.xs;
 
                                             Text {
-                                                text: "Change PIN";
+                                                text: "Backup PIN";
                                                 color: Colors.text-primary;
                                                 font-size: Typography.sm;
                                                 font-weight: Typography.medium;
@@ -665,7 +665,7 @@ export component SettingsScreen inherits Rectangle {
                                         }
 
                                         if !show-pin-form && !root.compact-mode: Button {
-                                            text: "Change PIN";
+                                            text: "Change";
                                             variant: "secondary";
                                             clicked => { show-pin-form = true; }
                                         }
@@ -673,7 +673,7 @@ export component SettingsScreen inherits Rectangle {
 
                                     // Compact: full-width button stacked below
                                     if !show-pin-form && root.compact-mode: Button {
-                                        text: "Change PIN";
+                                        text: "Change";
                                         variant: "secondary";
                                         clicked => { show-pin-form = true; }
                                     }
@@ -800,7 +800,7 @@ export component SettingsScreen inherits Rectangle {
                                         }
 
                                         if !show-backup-retry && !root.compact-mode: Button {
-                                            text: "Retry Backup";
+                                            text: "Retry";
                                             variant: "secondary";
                                             clicked => { show-backup-retry = true; }
                                         }
@@ -808,7 +808,7 @@ export component SettingsScreen inherits Rectangle {
 
                                     // Compact: full-width button stacked below
                                     if !show-backup-retry && root.compact-mode: Button {
-                                        text: "Retry Backup";
+                                        text: "Retry";
                                         variant: "secondary";
                                         clicked => { show-backup-retry = true; }
                                     }
@@ -988,7 +988,7 @@ export component SettingsScreen inherits Rectangle {
                                             spacing: Spacing.xs;
 
                                             Text {
-                                                text: "Log Out";
+                                                text: "Session on this device";
                                                 color: Colors.text-primary;
                                                 font-size: Typography.sm;
                                                 font-weight: Typography.medium;
@@ -1029,7 +1029,9 @@ export component SettingsScreen inherits Rectangle {
                                             spacing: Spacing.xs;
 
                                             Text {
-                                                text: "Delete Account";
+                                                // Not plain "Account" — that is the
+                                                // section header a few rows up.
+                                                text: "This account";
                                                 color: Colors.text-primary;
                                                 font-size: Typography.sm;
                                                 font-weight: Typography.medium;
@@ -1541,7 +1543,7 @@ export component SettingsScreen inherits Rectangle {
                                         }
 
                                         if !root.compact-mode: Button {
-                                            text: "Refresh Keys";
+                                            text: "Refresh";
                                             variant: "secondary";
                                             clicked => { root.refresh-keys-clicked(); }
                                         }
@@ -1549,7 +1551,7 @@ export component SettingsScreen inherits Rectangle {
 
                                     // Compact: full-width button stacked below
                                     if root.compact-mode: Button {
-                                        text: "Refresh Keys";
+                                        text: "Refresh";
                                         variant: "secondary";
                                         clicked => { root.refresh-keys-clicked(); }
                                     }

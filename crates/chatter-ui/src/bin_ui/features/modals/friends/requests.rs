@@ -58,7 +58,7 @@ pub(crate) fn wire_send_request(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
                 }
                 Err(e) => {
                     tracing::error!("Failed to send friend request: {}", e);
-                    set_loading(&weak, false);
+                    report_failure(&weak, "The friend request was not sent.");
                 }
             }
         });
@@ -124,6 +124,7 @@ pub(crate) fn wire_accept_request(window: &MainWindow, ui_ctx: &Arc<ChatterClien
                 }
                 Err(e) => {
                     tracing::error!("Failed to accept friend request: {}", e);
+                    report_failure(&weak, "The request was not accepted — it is still pending.");
                 }
             }
             set_loading(&weak, false);
@@ -154,7 +155,10 @@ pub(crate) fn wire_decline_request(window: &MainWindow, ui_ctx: &Arc<ChatterClie
 
             match ui_ctx.respond_friend_request(&friend_id, false).await {
                 Ok(_) => tracing::info!("Declined friend request from {}", user_id_str),
-                Err(e) => tracing::error!("Failed to decline friend request: {}", e),
+                Err(e) => {
+                    tracing::error!("Failed to decline friend request: {}", e);
+                    report_failure(&weak, "The request was not declined — it is still pending.");
+                }
             }
             set_loading(&weak, false);
         });
@@ -184,10 +188,34 @@ pub(crate) fn wire_cancel_request(window: &MainWindow, ui_ctx: &Arc<ChatterClien
 
             match ui_ctx.remove_friend(&friend_id).await {
                 Ok(_) => tracing::info!("Cancelled friend request to {}", user_id_str),
-                Err(e) => tracing::error!("Failed to cancel friend request: {}", e),
+                Err(e) => {
+                    tracing::error!("Failed to cancel friend request: {}", e);
+                    report_failure(&weak, "The request was not cancelled — it is still pending.");
+                }
             }
             set_loading(&weak, false);
         });
+    });
+}
+
+/// Put a failed friend action in front of the user.
+///
+/// Accepting or declining a request is usually the very first thing a new
+/// account does, and every failure path here used to be a `tracing::error!` and
+/// nothing else: the row stayed exactly as it was, so the only reading available
+/// was "the button does not work". The toast is the app's existing error surface
+/// (see `features::chat::send_message`); the haptic is there because on a phone
+/// the toast can be behind the modal that is still open.
+fn report_failure(weak: &slint::Weak<MainWindow>, message: &str) {
+    let weak = weak.clone();
+    let message = message.to_string();
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(w) = weak.upgrade() else { return };
+        w.set_friends_loading(false);
+        w.set_toast_message(message.into());
+        w.set_toast_variant("error".into());
+        w.set_toast_visible(true);
+        w.global::<crate::Haptics>().invoke_error();
     });
 }
 
