@@ -219,6 +219,19 @@ pub enum ClientError {
 pub struct RecoveryResult {
     /// Number of unused recovery codes remaining on the account.
     pub remaining_codes: i32,
+    /// The account's SVR key backup was dropped by this recovery.
+    ///
+    /// Always true, and carried explicitly rather than left implicit because
+    /// the consequence is not recoverable: the backup was encrypted and indexed
+    /// by a secret derived from the OLD PIN alone, so a recovery-code login
+    /// makes it unreadable by everyone, including its owner. Signal's SVR does
+    /// the same thing whenever the PIN can no longer open the data — it
+    /// destroys it rather than leaving a row nobody can decrypt.
+    ///
+    /// If this device has no local identity keys, they were in that backup and
+    /// are now gone. The caller must say so; swallowing this is what made the
+    /// loss invisible.
+    pub key_backup_invalidated: bool,
 }
 
 /// What to put in front of the user when a peer's identity key changed and the
