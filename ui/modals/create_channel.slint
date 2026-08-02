@@ -213,6 +213,19 @@ export component CreateChannelModal inherits Rectangle {
             // CREATE TAB
             // ============================================================
             if root.active-tab == 0: VerticalLayout {
+            spacing: Spacing.md;
+
+            // ============================================================
+            // Scrollable body. The error banner and the Create/Cancel footer
+            // live OUTSIDE this Flickable so they stay pinned and reachable
+            // even when the viewport is short (Android landscape).
+            // ============================================================
+            Flickable {
+            vertical-stretch: 1;
+            viewport-width: self.width;
+            viewport-height: create-body.preferred-height;
+
+            create-body := VerticalLayout {
             spacing: Spacing.lg;
 
             // ============================================================
@@ -639,8 +652,19 @@ export component CreateChannelModal inherits Rectangle {
                         spacing: Spacing.xs;
                         alignment: start;
 
+                        // Disclosure chevron — SVG, not a Unicode triangle
+                        // (the glyph renders as a solid block on Android).
+                        // Points right when collapsed, down when expanded.
+                        Image {
+                            source: Icons.chevron-right;
+                            width: 14px;
+                            height: 14px;
+                            colorize: Colors.text-secondary;
+                            transform-rotation: root.more-options-expanded ? 90deg : 0deg;
+                        }
+
                         Text {
-                            text: root.more-options-expanded ? "▼ More options" : "▶ More options";
+                            text: "More options";
                             color: Colors.text-secondary;
                             font-size: Typography.sm;
                             font-weight: Typography.medium;
@@ -901,6 +925,9 @@ export component CreateChannelModal inherits Rectangle {
                 }
             }
 
+            } // create-body
+            } // Flickable
+
             // ============================================================
             // Error banner
             // ============================================================
@@ -1000,10 +1027,11 @@ export component CreateChannelModal inherits Rectangle {
                     }
                 }
 
-                // Results area
+                // Results area. No min-height: it already scrolls internally,
+                // and a floor here would push the Join footer off-screen in
+                // landscape. vertical-stretch still gives it all spare room.
                 Rectangle {
                     vertical-stretch: 1;
-                    min-height: 200px;
                     max-height: 320px;
 
                     // Loading state

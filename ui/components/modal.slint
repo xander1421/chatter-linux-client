@@ -4,6 +4,7 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
 import { ModalContainer } from "modal_container.slint";
 
 export component Modal inherits Rectangle {
@@ -15,10 +16,16 @@ export component Modal inherits Rectangle {
 
     callback close();
 
+    // The backdrop always covers the whole window, so root.height is the
+    // viewport height. Safe-area insets are not plumbed down to modals, so a
+    // conservative constant stands in for the Android status + navigation bars
+    // (~24dp + ~48dp) so the card can never run off-screen in landscape.
+    property <length> viewport-height-cap: max(240px, root.height - 96px);
+
     ModalContainer {
         show: root.show;
         modal-width: root.modal-width;
-        max-modal-height: root.max-modal-height;
+        max-modal-height: min(root.max-modal-height, root.viewport-height-cap);
         fill-height: root.fill-height;
         close => { root.close(); }
 
@@ -53,15 +60,16 @@ export component Modal inherits Rectangle {
                     accessible-role: button;
                     accessible-label: "Close dialog";
 
-                    // X icon using Unicode character
-                    Text {
-                        text: "\u{2715}";
-                        color: Colors.text-secondary;
-                        font-size: Typography.base;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                        width: 100%;
-                        height: 100%;
+                    // X icon — SVG, not a Unicode glyph (the glyph is missing
+                    // from the Android font and renders as a tofu box)
+                    Image {
+                        source: Icons.x;
+                        width: 18px;
+                        height: 18px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        colorize: close-area.pressed ? Colors.text-muted :
+                                  (close-area.has-hover ? Colors.text-primary : Colors.text-secondary);
                     }
 
                     close-area := TouchArea {

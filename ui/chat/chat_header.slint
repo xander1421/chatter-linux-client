@@ -162,12 +162,17 @@ export component ChatHeader inherits Rectangle {
         padding-left: Spacing.sm;
         padding-right: Spacing.sm;
         spacing: Spacing.sm;
-        alignment: space-between;
+        // No `alignment` here, and none on the left section below. Under any
+        // alignment other than stretch, Slint sizes every child to its preferred
+        // width and turns the leftover into gaps between them — horizontal-stretch
+        // is never consulted (i-slint-core layout.rs, solve_box_layout). So the
+        // name could only ever shrink, never grow into the space beside it, and
+        // on a phone it elided to one character ("# j…") with a wide gap to its
+        // right. Stretching hands that space to the child that asked for it.
 
         // Left section: Back button + Icon + Name
         HorizontalLayout {
             spacing: Spacing.sm;
-            alignment: start;
 
             // Mobile back button (returns to chat list)
             if root.show-back-button: IconButton {
@@ -348,8 +353,11 @@ export component ChatHeader inherits Rectangle {
             }
         }
 
-        // Center section: Topic / Typing
-        Rectangle {
+        // Center section: Topic / Typing — only when there is something to put
+        // in it. An unconditional centre claimed width in the middle of the row
+        // and then drew nothing, which is the gap the name beside it was eliding
+        // to make room for.
+        if root.topic != "" || root.typing-indicator != "" || (JarvisGlobal.enabled && root.jarvis-thinking): Rectangle {
             horizontal-stretch: 1;
             // Topic text
             if root.topic != "" && root.typing-indicator == "" && !(JarvisGlobal.enabled && root.jarvis-thinking): Text {
@@ -395,10 +403,13 @@ export component ChatHeader inherits Rectangle {
             }
         }
 
-        // Right section: Action buttons
+        // Right section: Action buttons. stretch 0 so the row's spare width goes
+        // to the name rather than being split with a group of fixed-size icons;
+        // being the last child, it still ends flush with the right edge.
         HorizontalLayout {
             spacing: 2px;
             alignment: end;
+            horizontal-stretch: 0;
 
             // Call buttons group
             if root.show-calls: HorizontalLayout {

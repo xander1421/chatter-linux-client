@@ -104,22 +104,102 @@ export component MessageItem inherits Rectangle {
     in property <int> reply-to-thumbnail-width: 0;      // Quoted thumbnail natural dims for aspect sizing (0 = unknown)
     in property <int> reply-to-thumbnail-height: 0;
 
-    // Internal hover state — touch covers entire message row
+    // Internal hover state — touch covers entire message row.
+    //
+    // NOTE for anyone reading this on a touch device: `has-hover` is true while
+    // a finger is DOWN, not just under a mouse. Slint sets it from any pointer
+    // event carrying a position (i-slint-core input_items.rs), so on Android
+    // the hover action bar below appears mid-press and vanishes on release.
+    // That is why it was never a usable touch affordance — you had to predict
+    // where it would draw and land on it blind. Hold-to-open (below) is the
+    // real touch entry point; this stays hover-gated for the mouse.
     property <bool> is-hovered: touch.has-hover;
+
+    // Multi-select
+    in property <bool> selected: false;
+    in property <bool> selection-mode: false;
+    // Touch platform. Gates the hold gesture so a desktop left-button hold
+    // does not open the menu (desktop keeps right-click).
+    in property <bool> mobile: false;
 
     // Callbacks
     callback reply-clicked(string, string);
     callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback thread-clicked(string);
     callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
+    callback selection-toggled(string);
     callback message-clicked(string);
     callback attachment-clicked(string);
     callback audio-seek(string, float);
     callback quote-clicked(string);  // (reply-to-message-id) — jump to quoted original
 
+    // ── Press-and-hold gesture (touch only) ──
+    //
+    // Two tiers off one press, per the product spec:
+    //   >= 500ms   tier 1 — the message menu opens, anchored under the bubble.
+    //   >= 1200ms  tier 2 — the menu dismisses and the message becomes selected.
+    // Moving more than the slop cancels both: it was a scroll, not a hold.
+    //
+    // Driven by our own timers rather than by the platform long-press, because
+    // there is no platform long-press to ride: the Android backend in this tree
+    // only ever produces PointerEventButton::Right from a real secondary mouse
+    // button (androidwindowadapter.rs button_for_event — a finger goes through
+    // MotionAction::Down and yields Left). The right-button branch below is
+    // therefore desktop-only, and the two paths cannot both fire.
+    property <length> hold-slop: 12px;
+    property <length> press-x: 0px;
+    property <length> press-y: 0px;
+    // Where the menu should anchor. Captured at touch-down from the bubble's
+    // own TouchArea: `bubble` sits inside a conditional subtree, so its id is
+    // not reachable from a component-level function.
+    property <length> anchor-x: 0px;
+    property <length> anchor-y: 0px;
+    property <bool> holding: false;
+    // 0 = nothing fired yet, 1 = menu opened, 2 = selection engaged. Also used
+    // to swallow the release-tap, so a hold never doubles as a click.
+    property <int> hold-tier: 0;
+
+    function cancel-hold() {
+        root.holding = false;
+        tier1-timer.running = false;
+        tier2-timer.running = false;
+    }
+
+    function open-menu() {
+        root.more-clicked(root.sender-id, root.timestamp-ns, root.anchor-x, root.anchor-y);
+    }
+
+    tier1-timer := Timer {
+        interval: 500ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.hold-tier = 1;
+            root.open-menu();
+            // Keep counting: staying down escalates to selection.
+            tier2-timer.running = true;
+        }
+    }
+
+    tier2-timer := Timer {
+        // 700ms after tier 1 fired, i.e. 1200ms from touch-down.
+        interval: 700ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.hold-tier = 2;
+            // The app-level handler closes the tier-1 menu as it turns
+            // selection on, so the two never overlap on screen.
+            root.selection-toggled(root.message-id);
+        }
+    }
+
     // Styling
     min-height: main-layout.preferred-height;
-    background: transparent;
+    // Selected rows tint rather than outline: the bubbles already carry Neo
+    // borders, and a second border on top read as a rendering artefact.
+    background: root.selected ? Colors.primary.with-alpha(0.18) : transparent;
+    animate background { duration: 150ms; easing: ease-out; }
 
     // Wrap entire content in TouchArea for reliable hover detection.
     // Width/Height 100% ensures it covers the whole row.
@@ -128,6 +208,12 @@ export component MessageItem inherits Rectangle {
         height: 100%;
         mouse-cursor: pointer;
         clicked => {
+            // In selection mode a plain tap anywhere on the row toggles this
+            // message instead of doing whatever a tap normally does.
+            if (root.selection-mode) {
+                root.selection-toggled(root.message-id);
+                return;
+            }
             root.message-clicked(root.message-id);
         }
 
@@ -324,13 +410,64 @@ export component MessageItem inherits Rectangle {
 
                     bubble-touch := TouchArea {
                         mouse-cursor: pointer;
+
                         pointer-event(event) => {
-                            // Right-click opens context menu at cursor position
+                            // Desktop: right-click opens the menu at the cursor.
+                            // Unreachable from a finger — see the note on the
+                            // hold timers above.
                             if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
                                 root.more-clicked(root.sender-id, root.timestamp-ns,
                                     self.absolute-position.x + self.mouse-x,
                                     self.absolute-position.y + self.mouse-y);
+                                return;
                             }
+
+                            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                root.press-x = self.mouse-x;
+                                root.press-y = self.mouse-y;
+                                // Anchor under the bubble, not under the finger,
+                                // so the menu does not open beneath the thumb
+                                // that opened it.
+                                root.anchor-x = self.absolute-position.x;
+                                root.anchor-y = self.absolute-position.y + self.height;
+                                root.hold-tier = 0;
+                                // No hold while already selecting: there, a tap
+                                // is the toggle and a hold would re-open a menu
+                                // over the selection bar.
+                                if (root.mobile && !root.selection-mode
+                                    && !root.is-system && !root.is-deleted && !root.is-call) {
+                                    root.holding = true;
+                                    tier1-timer.running = true;
+                                }
+                            }
+
+                            // Release, or a grab stolen by the scrolling
+                            // Flickable (Slint delivers that as Cancel).
+                            if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                                root.cancel-hold();
+                            }
+                        }
+
+                        moved => {
+                            if (root.holding
+                                && (abs(self.mouse-x - root.press-x) > root.hold-slop
+                                    || abs(self.mouse-y - root.press-y) > root.hold-slop)) {
+                                root.cancel-hold();
+                            }
+                        }
+
+                        clicked => {
+                            if (root.selection-mode) {
+                                root.selection-toggled(root.message-id);
+                                return;
+                            }
+                            // Swallow the release that ends a hold, so opening
+                            // the menu does not also count as a tap.
+                            if (root.hold-tier != 0) {
+                                root.hold-tier = 0;
+                                return;
+                            }
+                            root.message-clicked(root.message-id);
                         }
                     }
 
@@ -1088,15 +1225,40 @@ export component MessageItem inherits Rectangle {
                                         : "Handed to a live link; not yet acknowledged";
                                 }
 
-                                // Delivery status checkmarks
-                                if !root.mesh-delivery: Text {
-                                    text: root.delivery-status == "sent" ? "✓" : "✓✓";
-                                    color: root.delivery-status == "read" ? Colors.primary : Colors.text-muted;
-                                    font-size: Typography.xs;
+                                // Delivery status checkmarks. SVG, not "✓": the
+                                // glyph has no coverage in the Android system
+                                // font and rendered as a tofu box on every
+                                // message. Fixed 12px so the row — and the
+                                // bubble — keeps the height the text tick had.
+                                if !root.mesh-delivery: ticks := Rectangle {
+                                    property <bool> double-tick: root.delivery-status != "sent";
+                                    property <color> tick-color: root.delivery-status == "read" ? Colors.primary : Colors.text-muted;
+                                    width: self.double-tick ? 17px : 12px;
+                                    height: 12px;
                                     accessible-role: text;
                                     accessible-label: root.delivery-status == "sent" ? "Sent"
                                         : root.delivery-status == "delivered" ? "Delivered"
                                         : root.delivery-status == "read" ? "Read" : "";
+
+                                    // Second tick behind, offset left, so the
+                                    // pair reads as the usual overlapping ✓✓.
+                                    if ticks.double-tick: Image {
+                                        source: Icons.check;
+                                        width: 12px;
+                                        height: 12px;
+                                        x: 0px;
+                                        y: 0px;
+                                        colorize: ticks.tick-color;
+                                    }
+
+                                    Image {
+                                        source: Icons.check;
+                                        width: 12px;
+                                        height: 12px;
+                                        x: parent.width - self.width;
+                                        y: 0px;
+                                        colorize: ticks.tick-color;
+                                    }
                                 }
                             }
 

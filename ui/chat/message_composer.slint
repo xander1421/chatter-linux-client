@@ -50,7 +50,10 @@ export component MessageComposer inherits Rectangle {
 
     // Line height and sizing constants
     property <length> line-height: 22px;
-    property <length> min-input-height: 36px;
+    // The input row's floor, and with it the height of the emoji / attach /
+    // send boxes beside it: those are touch targets, so the floor is the touch
+    // minimum. A shorter row was what made them 36dp on a phone.
+    property <length> min-input-height: Spacing.touch-target-min;
     // ~18 lines. Beyond this the message list above would collapse to nothing.
     // Past this cap, the inner Rectangle clips and the cursor stays in view.
     property <length> max-input-height: 400px;
@@ -115,8 +118,9 @@ export component MessageComposer inherits Rectangle {
     // persistent chrome for a rare action wastes a row otherwise.
     property <bool> show-formatting: text-input.has-focus || root.text != "";
 
-    // Formatting bar height
-    property <length> format-bar-height: show-formatting ? 32px : 0px;
+    // Formatting bar height — 44px so the B/I/S/code buttons inside can be
+    // 44px touch targets rather than the 28px boxes measured on a phone.
+    property <length> format-bar-height: show-formatting ? 44px : 0px;
 
     // Bento Box — expands when user is actively typing (text is non-empty)
 
@@ -294,7 +298,7 @@ export component MessageComposer inherits Rectangle {
         // Formatting toolbar (toggled)
         if root.show-formatting: Rectangle {
             width: 100%;
-            height: 32px;
+            height: root.format-bar-height;
             background: Colors.background;
 
             HorizontalLayout {
@@ -307,8 +311,8 @@ export component MessageComposer inherits Rectangle {
                 VerticalLayout {
                     alignment: center;
                     Rectangle {
-                        width: 28px;
-                        height: 28px;
+                        width: 44px;
+                        height: 44px;
                         border-radius: Spacing.radius-sm;
                         background: fmt-bold-touch.has-hover ? Colors.surface-hover : transparent;
                         accessible-role: button;
@@ -334,8 +338,8 @@ export component MessageComposer inherits Rectangle {
                 VerticalLayout {
                     alignment: center;
                     Rectangle {
-                        width: 28px;
-                        height: 28px;
+                        width: 44px;
+                        height: 44px;
                         border-radius: Spacing.radius-sm;
                         background: fmt-italic-touch.has-hover ? Colors.surface-hover : transparent;
                         accessible-role: button;
@@ -361,8 +365,8 @@ export component MessageComposer inherits Rectangle {
                 VerticalLayout {
                     alignment: center;
                     Rectangle {
-                        width: 28px;
-                        height: 28px;
+                        width: 44px;
+                        height: 44px;
                         border-radius: Spacing.radius-sm;
                         background: fmt-strike-touch.has-hover ? Colors.surface-hover : transparent;
                         accessible-role: button;
@@ -396,8 +400,8 @@ export component MessageComposer inherits Rectangle {
                 VerticalLayout {
                     alignment: center;
                     Rectangle {
-                        width: 28px;
-                        height: 28px;
+                        width: 44px;
+                        height: 44px;
                         border-radius: Spacing.radius-sm;
                         background: fmt-code-touch.has-hover ? Colors.surface-hover : transparent;
                         accessible-role: button;
@@ -432,8 +436,8 @@ export component MessageComposer inherits Rectangle {
                 VerticalLayout {
                     alignment: center;
                     Rectangle {
-                        width: 28px;
-                        height: 28px;
+                        width: 44px;
+                        height: 44px;
                         border-radius: Spacing.radius-sm;
                         background: fmt-codeblock-touch.has-hover ? Colors.surface-hover : transparent;
                         accessible-role: button;
@@ -679,7 +683,10 @@ export component MessageComposer inherits Rectangle {
                 // events on desktop, leaving the field unclickable.
                 text-input := TextInput {
                     x: Spacing.md;
-                    y: Spacing.sm;
+                    // Centred while the row is at its floor, top-anchored once the
+                    // text grows past it — otherwise the first line would sit
+                    // Spacing.sm above the placeholder it replaces.
+                    y: max(Spacing.sm, (parent.height - self.preferred-height) / 2);
                     width: parent.width - Spacing.md * 2;
                     height: parent.height - Spacing.sm * 2;
                     color: Colors.text-primary;
@@ -739,10 +746,12 @@ export component MessageComposer inherits Rectangle {
                 }
             }
 
-            // Emoji & GIF button (unified — pickers toggle via tabs inside)
+            // Emoji & GIF button (unified — pickers toggle via tabs inside).
+            // 48px, not 36px: measured on a phone the old box was a 36dp target,
+            // under the 48dp minimum. The icon keeps its size; only the box grows.
             Rectangle {
-                width: 36px;
-                height: 36px;
+                width: Spacing.touch-target-min;
+                height: Spacing.touch-target-min;
                 background: emoji-touch.has-hover ? Colors.surface-hover : transparent;
                 border-radius: Spacing.radius-sm;
                 opacity: root.disabled ? 0.5 : 1.0;
@@ -780,8 +789,8 @@ export component MessageComposer inherits Rectangle {
             // directed file for exactly that reason. Offering the button there
             // would be an offer the transport declines.
             if MeshGlobal.active-id == "" || MeshGlobal.active-kind != "dm": Rectangle {
-                width: 36px;
-                height: 36px;
+                width: Spacing.touch-target-min;
+                height: Spacing.touch-target-min;
                 background: attachment-touch.has-hover ? Colors.surface-hover : transparent;
                 border-radius: Spacing.radius-sm;
                 opacity: root.disabled ? 0.5 : 1.0;
@@ -808,8 +817,8 @@ export component MessageComposer inherits Rectangle {
 
             // Send button — Neo convex with glow on hover
             if root.can-send: Rectangle {
-                width: 36px;
-                height: 36px;
+                width: Spacing.touch-target-min;
+                height: Spacing.touch-target-min;
                 background: send-touch.has-hover ? Colors.primary-hover : Colors.primary;
                 border-radius: Spacing.radius-md;
                 border-width: 1px;
@@ -822,12 +831,15 @@ export component MessageComposer inherits Rectangle {
                 accessible-role: button;
                 accessible-label: "Send message";
 
-                Text {
-                    text: "\u{27A4}";  // Right arrow
-                    color: Colors.text-primary;
-                    font-size: Typography.base;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                // SVG, not a glyph: "\u{27A4}" has no coverage in the Android
+                // system font and rendered as a tofu box on device.
+                Image {
+                    source: Icons.send;
+                    width: 18px;
+                    height: 18px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: Colors.text-primary;
                 }
 
                 send-touch := TouchArea {
