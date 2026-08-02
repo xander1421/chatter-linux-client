@@ -20,6 +20,7 @@ export struct ChannelListItemData {
     timestamp: string,
     avatar-source: image,
     has-avatar: bool,
+    is-pinned: bool,         // local-only pin; core sorts pinned rows first
     is-selected: bool,       // Rust-computed selection flag; drives highlight
 }
 
@@ -37,7 +38,7 @@ export component ChannelList inherits Rectangle {
     callback channel-selected(string);
     callback create-channel-clicked();
     callback join-channel-clicked();
-    callback channel-context-menu-requested(/* channel-id */ string, /* x */ length, /* y */ length);
+    callback channel-context-menu-requested(/* channel-id */ string, /* is-pinned */ bool, /* x */ length, /* y */ length);
     // Tooltip callbacks removed — ChannelListItem now uses self-contained TooltipArea
 
     // Layout
@@ -191,12 +192,13 @@ export component ChannelList inherits Rectangle {
                     collapsed: root.collapsed;
                     avatar-source: item.avatar-source;
                     has-avatar: item.has-avatar;
+                    is-pinned: item.is-pinned;
 
                     clicked => {
                         root.channel-selected(item.channel-id);
                     }
                     context-menu-requested(x, y) => {
-                        root.channel-context-menu-requested(item.channel-id, x, y);
+                        root.channel-context-menu-requested(item.channel-id, item.is-pinned, x, y);
                     }
                 }
             }

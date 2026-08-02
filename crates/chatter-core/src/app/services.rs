@@ -31,6 +31,7 @@ use crate::services::pairwise::PairwiseService;
 use crate::services::pin_service::PinService;
 use crate::services::session_service::SessionService;
 use crate::services::signal_service::SignalService;
+use crate::services::conversation_pins::ConversationPins;
 use crate::services::section_service::SectionService;
 use crate::services::device_service::DeviceService;
 use crate::services::user::UserService;
@@ -104,6 +105,7 @@ pub struct ServiceContainer {
     pub jarvis_engine: SharedJarvisEngine,
     /// Section service for custom sidebar sections.
     pub section_service: Arc<SectionService>,
+    pub conversation_pins: Arc<ConversationPins>,
     /// HTTP-backed local AI service (Ollama/OpenAI-compat chat, models, semantic search).
     pub http_local_ai_service: Arc<HttpLocalAIService>,
     /// Semantic search service for E2E encrypted channel search.
@@ -447,10 +449,14 @@ impl ServiceContainer {
             infra.group_mailbox_manager.clone(),
         ));
 
-        // 23. Section service for custom sidebar sections
+        // 23. Local-only conversation pinning (settings-backed, never synced)
+        let conversation_pins = Arc::new(ConversationPins::new(infra.settings_repo.clone()));
+
+        // 23b. Section service for custom sidebar sections
         let section_service = Arc::new(SectionService::new(
             infra.section_repo.clone(),
             infra.unified_conversation_repo.clone(),
+            conversation_pins.clone(),
         ));
 
         // 24. Device service for multi-device management
@@ -494,6 +500,7 @@ impl ServiceContainer {
             jarvis_engine,
             channel_bootstrap_service,
             section_service,
+            conversation_pins,
             http_local_ai_service,
             semantic_search_service,
             device_service,

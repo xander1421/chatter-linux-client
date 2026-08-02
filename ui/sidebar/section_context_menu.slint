@@ -1,6 +1,7 @@
 // Section context menu for sidebar conversations — Neo 2.0
 //
-// Right-click popup with strong neo surface depth.
+// Opened by right-click on desktop and by press-and-hold on touch (HoldArea
+// raises the same `held` callback for both).
 // Uses full-screen backdrop pattern (same as MessageContextMenu).
 
 import { Colors } from "../theme/colors.slint";
@@ -15,9 +16,13 @@ component MenuItem inherits Rectangle {
     in property <string> label;
     in property <string> emoji: "";
     in property <bool> destructive: false;
+    in property <bool> selected: false;
+    in property <bool> mobile-mode: false;
+    // The icon set has no up/down chevron; the right-facing one is rotated.
+    in property <angle> icon-rotation: 0deg;
     callback clicked();
 
-    height: 36px;
+    height: root.mobile-mode ? Spacing.touch-target-min : 36px;
     background: touch.has-hover ? Colors.surface-hover : transparent;
     border-radius: Spacing.radius-sm;
     border-width: touch.has-hover ? 1px : 0px;
@@ -45,6 +50,7 @@ component MenuItem inherits Rectangle {
             height: 16px;
             y: (parent.height - self.height) / 2;
             colorize: root.destructive ? Colors.error : Colors.text-secondary;
+            transform-rotation: root.icon-rotation;
         }
 
         Text {
@@ -55,6 +61,15 @@ component MenuItem inherits Rectangle {
             overflow: elide;
             horizontal-stretch: 1;
         }
+
+        // Current-choice tick (sort modes)
+        if root.selected: Image {
+            source: Icons.check;
+            width: 14px;
+            height: 14px;
+            y: (parent.height - self.height) / 2;
+            colorize: Colors.primary;
+        }
     }
 
     touch := TouchArea {
@@ -63,14 +78,24 @@ component MenuItem inherits Rectangle {
     }
 }
 
-// Right-click menu for a section header itself (acts on the section, not a conversation).
+// Menu for a section header itself (acts on the section, not a conversation).
+//
+// Ordering lives here rather than in a drag gesture: there is no drag-and-drop
+// anywhere in this UI, and dragging a row inside a scrolling list is a poor
+// first gesture on a phone. Move up / move down is reachable by the same hold
+// that opens this menu.
 export component SectionHeaderContextMenu inherits Rectangle {
     in property <bool> show: false;
     in property <length> position-x: 0;
     in property <length> position-y: 0;
     in property <string> section-id: "";
+    in property <string> section-sort-mode: "recent";
+    in property <bool> mobile-mode: false;
 
+    callback rename-section(/* section-id */ string);
     callback remove-section(/* section-id */ string);
+    callback move-section(/* section-id */ string, /* delta */ int);
+    callback set-sort-mode(/* section-id */ string, /* mode */ string);
     callback close();
 
     visible: root.show;
@@ -89,7 +114,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
     Rectangle {
         x: min(root.position-x, parent.width - self.width - Spacing.md);
         y: min(root.position-y, parent.height - self.height - Spacing.md);
-        width: 180px;
+        width: 220px;
         height: header-menu-layout.preferred-height + Spacing.sm * 2;
         background: Colors.surface;
         border-radius: Spacing.radius-md;
@@ -108,9 +133,102 @@ export component SectionHeaderContextMenu inherits Rectangle {
             spacing: 2px;
 
             MenuItem {
+                icon: Icons.chevron-right;
+                icon-rotation: -90deg;
+                label: "Move up";
+                mobile-mode: root.mobile-mode;
+                clicked => {
+                    root.move-section(root.section-id, -1);
+                    root.close();
+                }
+            }
+
+            MenuItem {
+                icon: Icons.chevron-right;
+                icon-rotation: 90deg;
+                label: "Move down";
+                mobile-mode: root.mobile-mode;
+                clicked => {
+                    root.move-section(root.section-id, 1);
+                    root.close();
+                }
+            }
+
+            Rectangle {
+                height: 1px;
+                background: Colors.text-muted.with-alpha(0.15);
+            }
+
+            Rectangle {
+                height: 24px;
+                HorizontalLayout {
+                    padding-left: Spacing.md;
+                    Text {
+                        text: "Sort by";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs2;
+                        font-weight: 600;
+                        letter-spacing: 0.5px;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            MenuItem {
+                icon: Icons.clock;
+                label: "Recent";
+                mobile-mode: root.mobile-mode;
+                selected: root.section-sort-mode == "recent";
+                clicked => {
+                    root.set-sort-mode(root.section-id, "recent");
+                    root.close();
+                }
+            }
+
+            MenuItem {
+                icon: Icons.message-circle;
+                label: "Unread first";
+                mobile-mode: root.mobile-mode;
+                selected: root.section-sort-mode == "unread";
+                clicked => {
+                    root.set-sort-mode(root.section-id, "unread");
+                    root.close();
+                }
+            }
+
+            MenuItem {
+                icon: Icons.menu;
+                label: "Name (A–Z)";
+                mobile-mode: root.mobile-mode;
+                selected: root.section-sort-mode == "alphabetical";
+                clicked => {
+                    root.set-sort-mode(root.section-id, "alphabetical");
+                    root.close();
+                }
+            }
+
+            Rectangle {
+                height: 1px;
+                background: Colors.text-muted.with-alpha(0.15);
+            }
+
+            // Rename is only otherwise reachable through a hover button, which
+            // does not exist on touch.
+            MenuItem {
+                icon: Icons.edit;
+                label: "Rename folder";
+                mobile-mode: root.mobile-mode;
+                clicked => {
+                    root.rename-section(root.section-id);
+                    root.close();
+                }
+            }
+
+            MenuItem {
                 icon: Icons.trash;
                 label: "Remove section";
                 destructive: true;
+                mobile-mode: root.mobile-mode;
                 clicked => {
                     root.remove-section(root.section-id);
                     root.close();
@@ -125,11 +243,17 @@ export component SectionContextMenu inherits Rectangle {
     in property <bool> show: false;
     in property <length> position-x: 0;
     in property <length> position-y: 0;
+    in property <bool> mobile-mode: false;
 
     // Conversation being acted on
     in property <string> conversation-id: "";
-    in property <string> conversation-type: "";   // "channel", "dm", "private_group"
+    in property <string> conversation-type: "";   // ConversationType::as_str
     in property <string> current-section-id: "";   // non-empty => already in a section
+    in property <bool> is-pinned: false;
+    // Pinning reorders the list core builds. Private groups are built without
+    // a core ordering pass, so the entry is hidden there rather than shipping a
+    // control that toggles a flag nothing reads.
+    in property <bool> can-pin: true;
 
     // Available sections
     in property <[CustomSectionData]> sections: [];
@@ -137,6 +261,7 @@ export component SectionContextMenu inherits Rectangle {
     // Callbacks
     callback move-to-section(/* conv-id */ string, /* conv-type */ string, /* section-id */ string);
     callback remove-from-section(/* conv-id */ string);
+    callback set-pinned(/* conv-id */ string, /* pinned */ bool);
     callback create-section-clicked();
     callback close();
 
@@ -174,6 +299,22 @@ export component SectionContextMenu inherits Rectangle {
             padding: Spacing.sm;
             spacing: 2px;
 
+            // Pin / Unpin — local-only, never synced to the server.
+            if root.can-pin: MenuItem {
+                icon: Icons.pin;
+                label: root.is-pinned ? "Unpin" : "Pin to top";
+                mobile-mode: root.mobile-mode;
+                clicked => {
+                    root.set-pinned(root.conversation-id, !root.is-pinned);
+                    root.close();
+                }
+            }
+
+            if root.can-pin: Rectangle {
+                height: 1px;
+                background: Colors.text-muted.with-alpha(0.15);
+            }
+
             // Header label
             Rectangle {
                 height: 24px;
@@ -195,6 +336,7 @@ export component SectionContextMenu inherits Rectangle {
                 emoji: section.icon-emoji;
                 icon: Icons.folder;
                 label: section.name;
+                mobile-mode: root.mobile-mode;
                 clicked => {
                     root.move-to-section(root.conversation-id, root.conversation-type, section.section-id);
                     root.close();
@@ -211,6 +353,7 @@ export component SectionContextMenu inherits Rectangle {
             MenuItem {
                 icon: Icons.plus;
                 label: "New section...";
+                mobile-mode: root.mobile-mode;
                 clicked => {
                     root.create-section-clicked();
                     root.close();
@@ -222,6 +365,7 @@ export component SectionContextMenu inherits Rectangle {
                 icon: Icons.x;
                 label: "Remove from section";
                 destructive: true;
+                mobile-mode: root.mobile-mode;
                 clicked => {
                     root.remove-from-section(root.conversation-id);
                     root.close();

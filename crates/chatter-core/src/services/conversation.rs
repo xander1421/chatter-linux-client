@@ -647,13 +647,13 @@ impl ConversationHandle {
     /// Pin or unpin this conversation in the conversation list.
     ///
     /// This is a local-only preference (not the same as pinning a message).
-    /// The pinned state is stored in the settings repo as a per-conversation key.
+    /// Keyed by `sidebar_key`, not `channel_id`: a server DM's sidebar row is
+    /// keyed by the peer id, and a pin the sidebar cannot find is invisible.
     pub fn pin_conversation(&self, pinned: bool) -> ConversationResult {
-        let channel_id = self.conversation.channel_id()
+        let key = self.conversation.sidebar_key()
             .ok_or(ConversationError::NoConversation)?;
-        let key = format!("conv.pinned.{}", channel_id);
-        self.client.channels().settings_repo
-            .set(&key, &pinned)
+        self.client.conversation_pins()
+            .set_pinned(&key, pinned)
             .map_err(|e| ConversationError::Other(e.to_string()))
     }
 

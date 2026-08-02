@@ -123,7 +123,6 @@ export component MainWindow inherits Window {
 
     // ========== Custom sections properties ==========
     in property <[CustomSectionData]> custom-sections <=> app.custom-sections;
-    in property <[SectionConversationData]> section-conversations <=> app.section-conversations;
 
     // ========== Chat properties ==========
     in property <string> channel-id <=> app.channel-id;
@@ -614,6 +613,12 @@ export component MainWindow inherits Window {
     callback rename-section-clicked <=> app.rename-section-clicked;
     callback move-to-section <=> app.move-to-section;
     callback remove-from-section <=> app.remove-from-section;
+    callback set-conversation-pinned <=> app.set-conversation-pinned;
+    callback move-section <=> app.move-section;
+    callback set-section-sort-mode <=> app.set-section-sort-mode;
+    // Declared on App since the modal was written but never bridged, so the
+    // create-folder modal's spinner could never turn on.
+    in-out property <bool> create-section-loading <=> app.create-section-loading;
 
     // ========== Chat callbacks ==========
     callback chat-settings-clicked <=> app.chat-settings-clicked;

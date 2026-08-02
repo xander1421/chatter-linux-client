@@ -185,6 +185,9 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
             // Mark messages as read
             let handle = ui_ctx.conversation(chatter_core::state::ActiveConversation::AnonGroup(group_id));
             let _ = handle.mark_as_read().await;
+            // Reading a foldered group has to clear its folder badge too.
+            let ui_ctx_badges = ui_ctx.clone();
+            run_ui!(weak, |w| super::refresh_section_badges(&w, &ui_ctx_badges));
 
             load_private_group_messages_internal(weak, group_id, ui_ctx).await;
         });

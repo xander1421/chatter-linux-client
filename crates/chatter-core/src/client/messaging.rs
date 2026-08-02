@@ -389,9 +389,32 @@ impl ChatterClient {
                 unread_count,
                 is_typing: false,
                 is_anon: false,
+                is_pinned: false,
             });
         }
-        out
+        self.finish_dm_sidebar(out)
+    }
+
+    /// Final pass every DM sidebar list goes through: drop rows that live in a
+    /// custom section (they render inside that folder — showing them here too
+    /// rendered the same conversation twice) and float pinned rows to the top.
+    /// Idempotent, so the anon and non-anon paths can both call it.
+    fn finish_dm_sidebar(
+        &self,
+        mut rows: Vec<crate::ui::sidebar_data::DMListItemSendData>,
+    ) -> Vec<crate::ui::sidebar_data::DMListItemSendData> {
+        let sectioned = self
+            .sections()
+            .all_sectioned_conversation_ids()
+            .unwrap_or_default();
+        rows.retain(|r| !sectioned.contains(&r.channel_id));
+
+        let pinned = self.conversation_pins().pinned_ids();
+        for row in rows.iter_mut() {
+            row.is_pinned = pinned.contains(&row.channel_id);
+        }
+        rows.sort_by_key(|r| !r.is_pinned);
+        rows
     }
 
     /// Build the complete DM sidebar list — regular DMs plus anon DMs
@@ -455,6 +478,7 @@ impl ChatterClient {
                 unread_count: dm.unread_count,
                 is_typing: false,
                 is_anon: true,
+                is_pinned: false,
             });
         }
 
@@ -487,6 +511,7 @@ impl ChatterClient {
                 unread_count: 1,
                 is_typing: false,
                 is_anon: true,
+                is_pinned: false,
             });
         }
 
@@ -526,10 +551,11 @@ impl ChatterClient {
                 unread_count: 0,
                 is_typing: false,
                 is_anon: true,
+                is_pinned: false,
             });
         }
 
-            out
+            self.finish_dm_sidebar(out)
         } else {
             // Non-anon mode: only identified, friend-keyed DMs.
             self.list_regular_dm_sidebar()

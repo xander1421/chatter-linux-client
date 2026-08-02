@@ -293,6 +293,7 @@ fn add_anon_dm_to_sidebar(
         unread_count: 0,
         is_typing: false,
         is_anon: true,
+        is_pinned: false,
     };
 
     // Pre-decode avatar before entering UI thread to avoid blocking

@@ -6,8 +6,9 @@ use std::sync::Arc;
 
 use crate::domain::ids::SectionId;
 use crate::domain::message::ConversationType;
-use crate::domain::section::{CustomSection, SectionConversation};
+use crate::domain::section::{CustomSection, SectionConversation, SectionSortMode};
 use crate::error::StorageError;
+use crate::services::conversation_pins::ConversationPins;
 use crate::storage::repositories::section_repo::SectionRepository;
 use crate::storage::repositories::unified_conversation_repo::UnifiedConversationRepository;
 
@@ -30,6 +31,7 @@ pub enum SectionError {
 pub struct SectionService {
     section_repo: Arc<SectionRepository>,
     conversation_repo: Arc<UnifiedConversationRepository>,
+    pins: Arc<ConversationPins>,
 }
 
 impl SectionService {
@@ -37,10 +39,12 @@ impl SectionService {
     pub fn new(
         section_repo: Arc<SectionRepository>,
         conversation_repo: Arc<UnifiedConversationRepository>,
+        pins: Arc<ConversationPins>,
     ) -> Self {
         Self {
             section_repo,
             conversation_repo,
+            pins,
         }
     }
 
@@ -53,6 +57,7 @@ impl SectionService {
             icon_emoji: section.icon_emoji,
             sort_order: section.sort_order as u32,
             is_expanded: section.is_expanded,
+            sort_mode: section.sort_mode,
             conversations: Vec::new(),
             unread_count: 0,
         })
@@ -98,31 +103,57 @@ impl SectionService {
         })
     }
 
-    /// List all sections with their conversations and computed unread counts.
-    /// List all custom sections with their conversations and unread counts.
+    /// List all custom sections with their conversations, enriched and ordered.
+    ///
+    /// Metadata (name, unread, last-message time) comes from two whole-table
+    /// queries, not one `get_conversation` per membership. That N+1 is why
+    /// folder badges could not be refreshed on message arrival without making
+    /// the sidebar crawl.
+    /// Conversations come back already sorted by the section's `sort_mode`,
+    /// pinned first — the UI renders the order it is handed.
     pub fn list_sections_with_conversations(&self) -> Result<Vec<CustomSection>, SectionError> {
         let sections = self.section_repo.list_sections()?;
-        let mut result = Vec::with_capacity(sections.len());
+        if sections.is_empty() {
+            return Ok(Vec::new());
+        }
 
+        // Two queries total, regardless of how many folders or rows exist.
+        // Names come from the unified view; unread + last-message come straight
+        // from the messages table, which also covers channel-free server DMs —
+        // those have no `channels` row, so the unified view cannot emit them and
+        // a foldered DM would show no badge at all.
+        let names: std::collections::HashMap<(String, ConversationType), String> = self
+            .conversation_repo
+            .list_all()?
+            .into_iter()
+            .map(|c| ((c.id, c.conversation_type), c.name))
+            .collect();
+        let stats = self.conversation_repo.conversation_stats()?;
+        let pinned = self.pins.pinned_ids();
+
+        let mut result = Vec::with_capacity(sections.len());
         for section in sections {
             let memberships = self.section_repo.get_section_conversations(&section.id)?;
             let mut unread_count: u32 = 0;
 
-            let conversations: Vec<SectionConversation> = memberships
+            let mut conversations: Vec<SectionConversation> = memberships
                 .into_iter()
                 .map(|m| {
-                    if let Ok(Some(conv)) = self.conversation_repo.get_conversation(
-                        &m.conversation_id,
-                        &m.conversation_type,
-                    ) {
-                        unread_count += conv.unread_count;
-                    }
+                    let key = (m.conversation_id.clone(), m.conversation_type.clone());
+                    let stat = stats.get(&key).copied().unwrap_or_default();
+                    unread_count += stat.unread_count;
                     SectionConversation {
+                        is_pinned: pinned.contains(&m.conversation_id),
+                        display_name: names.get(&key).cloned().unwrap_or_default(),
+                        unread_count: stat.unread_count,
+                        last_message_at: stat.last_message_at.map(|t| t.timestamp_millis()),
                         conversation_id: m.conversation_id,
                         conversation_type: m.conversation_type,
                     }
                 })
                 .collect();
+
+            sort_conversations(&mut conversations, section.sort_mode);
 
             result.push(CustomSection {
                 id: section.id,
@@ -130,6 +161,7 @@ impl SectionService {
                 icon_emoji: section.icon_emoji,
                 sort_order: section.sort_order as u32,
                 is_expanded: section.is_expanded,
+                sort_mode: section.sort_mode,
                 conversations,
                 unread_count,
             });
@@ -185,6 +217,38 @@ impl SectionService {
         Ok(())
     }
 
+    /// Move one section up (`delta` -1) or down (`delta` +1) in the sidebar.
+    ///
+    /// This is the caller `reorder_sections` never had. Drag-and-drop does not
+    /// exist anywhere in this UI and is a poor first gesture on a phone, so the
+    /// folder header menu drives ordering one step at a time.
+    /// A move off either end is a no-op, not an error.
+    pub fn move_section(&self, id: &SectionId, delta: i32) -> Result<(), SectionError> {
+        let sections = self.section_repo.list_sections()?;
+        let from = sections
+            .iter()
+            .position(|s| s.id == *id)
+            .ok_or(SectionError::NotFound)?;
+
+        let to = from as i32 + delta;
+        if to < 0 || to as usize >= sections.len() {
+            return Ok(());
+        }
+
+        let mut ids: Vec<SectionId> = sections.iter().map(|s| s.id).collect();
+        let moved = ids.remove(from);
+        ids.insert(to as usize, moved);
+        self.reorder_sections(&ids)
+    }
+
+    /// Set how a section orders the conversations inside it.
+    pub fn set_sort_mode(&self, id: &SectionId, mode: SectionSortMode) -> Result<(), SectionError> {
+        self.section_repo.set_sort_mode(id, mode).map_err(|e| match e {
+            StorageError::NotFound(_) => SectionError::NotFound,
+            other => SectionError::Storage(other),
+        })
+    }
+
     /// Toggle the expanded/collapsed state of a section.
     pub fn toggle_expanded(&self, id: &SectionId, expanded: bool) -> Result<(), SectionError> {
         self.section_repo
@@ -218,5 +282,95 @@ impl SectionService {
                 .remove_from_section(&section_id, conversation_id)?;
         }
         Ok(())
+    }
+}
+
+/// Order one section's conversations. Pinned rows always come first; the mode
+/// decides the order within each group.
+fn sort_conversations(conversations: &mut [SectionConversation], mode: SectionSortMode) {
+    conversations.sort_by(|a, b| {
+        b.is_pinned
+            .cmp(&a.is_pinned)
+            .then_with(|| match mode {
+                // Newest first; conversations with no messages sink to the bottom.
+                SectionSortMode::Recent => b.last_message_at.cmp(&a.last_message_at),
+                SectionSortMode::Unread => (b.unread_count > 0)
+                    .cmp(&(a.unread_count > 0))
+                    .then_with(|| b.last_message_at.cmp(&a.last_message_at)),
+                SectionSortMode::Alphabetical => a
+                    .display_name
+                    .to_lowercase()
+                    .cmp(&b.display_name.to_lowercase()),
+            })
+            // Ties resolve by id so the order never flickers between refreshes.
+            .then_with(|| a.conversation_id.cmp(&b.conversation_id))
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn conv(id: &str, name: &str, unread: u32, at: Option<i64>, pinned: bool) -> SectionConversation {
+        SectionConversation {
+            conversation_id: id.to_string(),
+            conversation_type: ConversationType::Channel,
+            display_name: name.to_string(),
+            unread_count: unread,
+            last_message_at: at,
+            is_pinned: pinned,
+        }
+    }
+
+    fn ids(list: &[SectionConversation]) -> Vec<&str> {
+        list.iter().map(|c| c.conversation_id.as_str()).collect()
+    }
+
+    #[test]
+    fn recent_puts_the_newest_first_and_the_silent_ones_last() {
+        let mut list = vec![
+            conv("old", "Old", 0, Some(100), false),
+            conv("never", "Never", 0, None, false),
+            conv("new", "New", 0, Some(900), false),
+        ];
+        sort_conversations(&mut list, SectionSortMode::Recent);
+        assert_eq!(ids(&list), ["new", "old", "never"]);
+    }
+
+    #[test]
+    fn pinned_beats_every_sort_mode() {
+        for mode in [
+            SectionSortMode::Recent,
+            SectionSortMode::Unread,
+            SectionSortMode::Alphabetical,
+        ] {
+            let mut list = vec![
+                conv("zzz", "Zulu", 9, Some(900), false),
+                conv("aaa", "Alpha", 0, None, true),
+            ];
+            sort_conversations(&mut list, mode);
+            assert_eq!(ids(&list)[0], "aaa", "pinned must lead in {mode:?}");
+        }
+    }
+
+    #[test]
+    fn unread_mode_floats_unread_then_falls_back_to_recency() {
+        let mut list = vec![
+            conv("read-new", "A", 0, Some(900), false),
+            conv("unread-old", "B", 3, Some(100), false),
+            conv("unread-new", "C", 1, Some(800), false),
+        ];
+        sort_conversations(&mut list, SectionSortMode::Unread);
+        assert_eq!(ids(&list), ["unread-new", "unread-old", "read-new"]);
+    }
+
+    #[test]
+    fn alphabetical_ignores_case() {
+        let mut list = vec![
+            conv("b", "beta", 0, Some(900), false),
+            conv("a", "Alpha", 0, Some(100), false),
+        ];
+        sort_conversations(&mut list, SectionSortMode::Alphabetical);
+        assert_eq!(ids(&list), ["a", "b"]);
     }
 }

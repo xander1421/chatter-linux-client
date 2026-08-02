@@ -629,6 +629,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         unread_count: 0,
                         is_typing: false,
                         is_anon: false,
+        is_pinned: false,
                     };
 
                     // Update UI to show the DM and add to sidebar

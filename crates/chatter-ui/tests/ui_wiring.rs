@@ -1893,3 +1893,329 @@ fn message_selection_toggle_reaches_the_selection_store() {
         "the message menu must carry a Select item wired to select-clicked"
     );
 }
+
+// ============================================================================
+// FOLDERS (custom sections). Everything below was either dead or silently
+// broken before: `pin_conversation` existed in core with no UI path at all,
+// `reorder_sections` had zero callers, folders sorted by filing order forever,
+// a foldered channel rendered in BOTH the folder and the Channels list, and
+// the folder badges were frozen from app launch.
+// ============================================================================
+
+/// A pinned conversation had no route from the UI to core: `pin_conversation`
+/// (services/conversation.rs) existed with no Slint callback and no handler.
+///
+///  L1 (DYNAMIC): the callback exists on MainWindow and the real handler runs.
+///  L2 (STATIC, Rust): the handler reaches `set_conversation_pinned` on core.
+///  L2 (STATIC, Slint): the conversation menu carries the entry that fires it,
+///    and the three lists that render pin order pass the row's flag up so the
+///    menu can say Pin or Unpin.
+#[test]
+fn pin_conversation_reaches_core_from_the_sidebar_menu() {
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    testing::init_no_event_loop();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+    let w = MainWindow::new().expect("MainWindow::new");
+    chatter_ui::bin_ui::features::sidebar::wire(&w, &client);
+
+    // Must not panic: the persist runs on tokio, which this harness does not pump.
+    w.invoke_set_conversation_pinned("00000000-0000-0000-0000-000000000001".into(), true);
+
+    // L2 static (Rust): the handler is not a Slint-only bool.
+    let src = include_str!("../src/bin_ui/features/sidebar/sections.rs");
+    let idx = src.find("on_set_conversation_pinned").expect("pin handler present");
+    assert!(
+        src[idx..].contains(".set_conversation_pinned("),
+        "the pin entry must call ChatterClient::set_conversation_pinned"
+    );
+
+    // L2 static (Slint): the menu item, and the flag the label depends on.
+    let menu = include_str!("../../../ui/sidebar/section_context_menu.slint");
+    assert!(
+        menu.contains("root.set-pinned(root.conversation-id, !root.is-pinned)"),
+        "the conversation menu must carry a Pin/Unpin entry firing set-pinned"
+    );
+    assert!(
+        menu.contains(r#"label: root.is-pinned ? "Unpin" : "Pin to top""#),
+        "the entry must name the action it will actually perform"
+    );
+
+    let channels = include_str!("../../../ui/sidebar/channel_list.slint");
+    let dms = include_str!("../../../ui/sidebar/dm_list.slint");
+    assert!(
+        channels.contains("root.channel-context-menu-requested(item.channel-id, item.is-pinned, x, y)"),
+        "the channel row must carry its pin state into the menu"
+    );
+    assert!(
+        dms.contains("root.dm-context-menu-requested(item.channel-id, item.is-pinned, x, y)"),
+        "the DM row must carry its pin state into the menu"
+    );
+}
+
+/// Pin state is settings-backed and local-only. This proves the round trip
+/// through core (no UI involved) and that unpinning clears the set rather than
+/// leaving a `false` behind.
+#[test]
+fn pinning_round_trips_through_core_and_is_local_only() {
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+
+    let id = "11111111-1111-1111-1111-111111111111";
+    assert!(!client.is_conversation_pinned(id), "nothing is pinned by default");
+
+    assert!(client.set_conversation_pinned(id, true));
+    assert!(client.is_conversation_pinned(id), "the pin must survive the write");
+    assert!(
+        client.pinned_conversation_ids().contains(id),
+        "the bulk query the lists use must see the same pin as the single lookup"
+    );
+
+    assert!(client.set_conversation_pinned(id, false));
+    assert!(!client.is_conversation_pinned(id));
+    assert!(
+        !client.pinned_conversation_ids().contains(id),
+        "unpinning must remove the id from the set, not store a false"
+    );
+}
+
+/// `reorder_sections` (section_service.rs) was fully implemented with ZERO
+/// callers — the back half of a drag-to-reorder nobody finished.
+///
+/// Deliberately NOT drag-and-drop: there is no DropArea anywhere in `ui/`, and
+/// dragging a row inside a scrolling list is the worst gesture to debut on a
+/// phone. Move up / move down rides the press-and-hold menu that already exists.
+#[test]
+fn folder_reorder_is_wired_and_reaches_reorder_sections() {
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    testing::init_no_event_loop();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+    let w = MainWindow::new().expect("MainWindow::new");
+    chatter_ui::bin_ui::features::sidebar::wire(&w, &client);
+
+    w.invoke_move_section("00000000-0000-0000-0000-000000000001".into(), -1);
+
+    let src = include_str!("../src/bin_ui/features/sidebar/sections.rs");
+    let idx = src.find("on_move_section").expect("move-section handler present");
+    assert!(
+        src[idx..].contains(".move_section("),
+        "the folder menu's Move up/down must reach ChatterClient::move_section"
+    );
+
+    // The core method is what finally calls the orphaned reorder.
+    let core = include_str!("../../chatter-core/src/services/section_service.rs");
+    let core_idx = core.find("pub fn move_section").expect("move_section in core");
+    assert!(
+        core[core_idx..].contains("self.reorder_sections(&ids)"),
+        "move_section must be the caller reorder_sections never had"
+    );
+
+    let menu = include_str!("../../../ui/sidebar/section_context_menu.slint");
+    assert!(
+        menu.contains("root.move-section(root.section-id, -1)")
+            && menu.contains("root.move-section(root.section-id, 1)"),
+        "the folder header menu must offer both directions"
+    );
+}
+
+/// Folders sorted by `added_at ASC` forever, so filing a channel into one
+/// silently swapped it from MRU to filing order. Order is now a per-folder
+/// choice, defaulting to Recent so a folder matches the list it came from.
+#[test]
+fn folder_sort_mode_reaches_core_and_defaults_to_recent() {
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    testing::init_no_event_loop();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+    let w = MainWindow::new().expect("MainWindow::new");
+    chatter_ui::bin_ui::features::sidebar::wire(&w, &client);
+
+    // L1 dynamic through core: a new folder is Recent, and the mode persists.
+    let section = client.create_section("Work", "\u{1F4C1}").expect("create_section");
+    assert_eq!(
+        section.sort_mode,
+        chatter_core::domain::section::SectionSortMode::Recent,
+        "a new folder must sort like the rest of the sidebar, not by filing order"
+    );
+
+    client
+        .set_section_sort_mode(&section.id, chatter_core::domain::section::SectionSortMode::Alphabetical)
+        .expect("set_section_sort_mode");
+    let reloaded = client.list_sections_with_conversations().expect("list sections");
+    assert_eq!(
+        reloaded[0].sort_mode,
+        chatter_core::domain::section::SectionSortMode::Alphabetical,
+        "the sort mode must survive a reload (migration v062 column)"
+    );
+
+    // L1 dynamic through the UI callback.
+    w.invoke_set_section_sort_mode(section.id.to_string().into(), "unread".into());
+
+    let src = include_str!("../src/bin_ui/features/sidebar/sections.rs");
+    let idx = src.find("on_set_section_sort_mode").expect("sort-mode handler present");
+    assert!(
+        src[idx..].contains(".set_section_sort_mode("),
+        "the sort picker must reach ChatterClient::set_section_sort_mode"
+    );
+
+    let menu = include_str!("../../../ui/sidebar/section_context_menu.slint");
+    for mode in ["recent", "unread", "alphabetical"] {
+        assert!(
+            menu.contains(&format!(r#"root.set-sort-mode(root.section-id, "{mode}")"#)),
+            "the folder menu must offer the {mode} sort"
+        );
+    }
+}
+
+/// A channel filed into a folder used to render in BOTH the folder and the
+/// Channels list: `sidebar_channels` never excluded sectioned conversations,
+/// and `all_sectioned_conversation_ids` / `is_in_section` — written for exactly
+/// this — had zero callers.
+#[test]
+fn foldered_conversations_are_excluded_from_the_loose_lists() {
+    let core = include_str!("../../chatter-core/src/client/mod.rs");
+    let idx = core.find("pub fn sidebar_channels").expect("sidebar_channels present");
+    let body = &core[idx..idx + 2000];
+    assert!(
+        body.contains("all_sectioned_conversation_ids"),
+        "sidebar_channels must drop conversations that live in a folder"
+    );
+    assert!(
+        body.contains("sort_pinned_first"),
+        "sidebar_channels must put pinned channels first — ordering is core's job"
+    );
+
+    let messaging = include_str!("../../chatter-core/src/client/messaging.rs");
+    let dm_idx = messaging.find("fn finish_dm_sidebar").expect("finish_dm_sidebar present");
+    let dm_body = &messaging[dm_idx..dm_idx + 1200];
+    assert!(
+        dm_body.contains("all_sectioned_conversation_ids") && dm_body.contains("is_pinned"),
+        "the DM sidebar must apply the same folder exclusion and pin order"
+    );
+}
+
+/// `load_sections` ran once at startup and `refresh_sections_ui` only fired
+/// after a folder MUTATION, so both the per-conversation badge and the header
+/// aggregate were frozen from app launch. The aggregate was also an N+1 (one
+/// `get_conversation` per membership), which is why it could not be refreshed
+/// on a hot path — that is now a single unified-conversation query.
+#[test]
+fn folder_badges_refresh_on_message_arrival_and_on_read() {
+    let sidebar = include_str!("../src/bin_ui/features/sidebar/mod.rs");
+    let idx = sidebar
+        .find("pub(crate) fn update_sidebar_preview")
+        .expect("update_sidebar_preview present");
+    assert!(
+        sidebar[idx..].contains("refresh_section_badges(window, ui_ctx)"),
+        "every sent and received message funnels through update_sidebar_preview; \
+         the folder badges must be rebuilt there or they stay frozen from launch"
+    );
+
+    let channel = include_str!("../src/bin_ui/features/sidebar/channel.rs");
+    let read_idx = channel.find("mark_as_read()").expect("mark_as_read present");
+    assert!(
+        channel[read_idx..].contains("refresh_section_badges"),
+        "reading a foldered channel must clear its folder badge too"
+    );
+
+    // The N+1 that made this impossible is gone.
+    let core = include_str!("../../chatter-core/src/services/section_service.rs");
+    let list_idx = core
+        .find("pub fn list_sections_with_conversations")
+        .expect("list_sections_with_conversations present");
+    let body = &core[list_idx..list_idx + 2500];
+    assert!(
+        body.contains("list_all()"),
+        "folder metadata must come from ONE unified-conversation query, not a \
+         get_conversation per membership"
+    );
+    assert!(
+        !body.contains("self.conversation_repo.get_conversation("),
+        "the per-membership get_conversation N+1 must not come back"
+    );
+}
+
+/// Each section looped the WHOLE flat conversation list and hid non-matches
+/// with `visible:` + `height: 0px` — ten folders over two hundred conversations
+/// instantiated two thousand elements. Rows are now pre-grouped in Rust so a
+/// section's model holds only its own.
+#[test]
+fn folder_rows_are_pre_grouped_per_section() {
+    let list = include_str!("../../../ui/sidebar/custom_section_list.slint");
+    assert!(
+        list.contains("conversations: [SectionConversationData]"),
+        "each section must own its rows"
+    );
+    assert!(
+        list.contains("for conv in section.conversations:"),
+        "a section must loop only its own rows"
+    );
+    assert!(
+        !list.contains("conv.section-id == section.section-id"),
+        "the visible/height:0 filter over the whole flat list must be gone"
+    );
+
+    // Rust must be the thing that groups them.
+    let src = include_str!("../src/bin_ui/features/sidebar/sections.rs");
+    assert!(
+        src.contains("conversations: ModelRc::new(VecModel::from(rows))"),
+        "the per-section model must be built in Rust"
+    );
+}
+
+/// `CustomSectionList` never received `mobile-mode`, so folder headers stayed
+/// 32px and rows 36px against a 48px touch minimum, and 24px hover buttons sat
+/// on a surface that has no hover.
+#[test]
+fn folder_ui_sizes_up_for_touch() {
+    let sidebar = include_str!("../../../ui/sidebar/sidebar.slint");
+    let idx = sidebar.find("CustomSectionList {").expect("CustomSectionList instantiated");
+    assert!(
+        sidebar[idx..idx + 600].contains("mobile-mode: root.mobile-mode"),
+        "the folder list must be told whether it is being touched"
+    );
+
+    let list = include_str!("../../../ui/sidebar/custom_section_list.slint");
+    assert!(
+        list.contains("height: root.mobile-mode ? Spacing.touch-target-min : 36px"),
+        "folder conversation rows must meet the touch minimum"
+    );
+    assert!(
+        list.contains("height: root.mobile-mode ? Spacing.touch-target-min : 32px"),
+        "folder headers must meet the touch minimum"
+    );
+    assert!(
+        list.contains("if !root.mobile-mode && header-hover.has-hover:"),
+        "the hover-reveal rename/delete buttons are desktop-only — hold opens \
+         a menu carrying both, and a 24px button is unhittable by a finger"
+    );
+
+    // Which means the touch route to rename must exist in that menu.
+    let menu = include_str!("../../../ui/sidebar/section_context_menu.slint");
+    assert!(
+        menu.contains("root.rename-section(root.section-id)"),
+        "with the hover buttons desktop-only, Rename must live in the hold menu"
+    );
+}

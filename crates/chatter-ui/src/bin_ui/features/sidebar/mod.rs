@@ -7,7 +7,7 @@ pub mod channel;
 pub mod dm;
 mod navigation;
 pub mod private_group;
-mod sections;
+pub mod sections;
 
 use std::sync::Arc;
 
@@ -119,40 +119,96 @@ pub(crate) fn refresh_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
     }
 
     // Custom-section conversations mirror the above across all kinds.
-    {
-        let model = window.get_section_conversations();
-        let rows: Vec<_> = (0..model.row_count())
-            .filter_map(|i| model.row_data(i))
-            .map(|mut item| {
-                let kind = item.conversation_type.as_str();
-                let conv_id = item.conversation_id.as_str();
-                item.is_selected = match kind {
-                    "channel" => conv_id
-                        .parse()
-                        .map(|id| active.matches_channel(&id))
-                        .unwrap_or(false),
-                    "dm" => {
-                        // Section rows may carry anon_dm_id, channel_id, or peer_id
-                        // in `conversation_id`. Match against all shapes.
-                        let anon = conv_id.parse().map(|id| active.matches_anon_dm(&id)).unwrap_or(false);
-                        let peer = conv_id.parse().map(|p| active.matches_dm_peer(&p)).unwrap_or(false);
-                        let chan = match (conv_id.parse(), conv_id.parse()) {
-                            (Ok(cid), Ok(pid)) => active.matches_dm(&cid, &pid),
-                            _ => false,
-                        };
-                        anon || peer || chan
-                    }
-                    "private_group" => conv_id
-                        .parse()
-                        .map(|id| active.matches_anon_group(&id))
-                        .unwrap_or(false),
-                    _ => false,
-                };
-                item
-            })
-            .collect();
-        window.set_section_conversations(slint::ModelRc::new(slint::VecModel::from(rows)));
+    refresh_section_selection(window, ui_ctx);
+}
+
+/// Re-mark the open conversation inside the folder models.
+///
+/// Rows now hang off their own section (pre-grouped in Rust), so this walks a
+/// model of models rather than one flat list. Split out because rebuilding the
+/// folders always clears the flag, and the rebuild happens on paths that must
+/// not pay for the whole `refresh_selection` sweep.
+pub(crate) fn refresh_section_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    use slint::Model;
+
+    let active = ui_ctx.active_conversation();
+    let sections = window.get_custom_sections();
+    let updated: Vec<_> = (0..sections.row_count())
+        .filter_map(|i| sections.row_data(i))
+        .map(|mut section| {
+            let rows = section.conversations.clone();
+            let marked: Vec<_> = (0..rows.row_count())
+                .filter_map(|j| rows.row_data(j))
+                .map(|mut item| {
+                    item.is_selected = section_row_is_active(
+                        &active,
+                        item.conversation_type.as_str(),
+                        item.conversation_id.as_str(),
+                    );
+                    item
+                })
+                .collect();
+            section.conversations = slint::ModelRc::new(slint::VecModel::from(marked));
+            section
+        })
+        .collect();
+    window.set_custom_sections(slint::ModelRc::new(slint::VecModel::from(updated)));
+}
+
+/// Does this folder row point at the currently open conversation?
+///
+/// `conversation_type` carries core's vocabulary (`ConversationType::as_str`),
+/// not the UI's — the old arms matched "dm" and "private_group", which core has
+/// never produced, so a foldered DM never highlighted.
+fn section_row_is_active(
+    active: &chatter_core::state::ActiveConversation,
+    kind: &str,
+    conv_id: &str,
+) -> bool {
+    match kind {
+        "channel" | "saved_messages" => conv_id
+            .parse()
+            .map(|id| active.matches_channel(&id))
+            .unwrap_or(false),
+        "server_dm" | "mailbox_dm" | "anon_dm" => {
+            // Folder rows may carry an anon_dm_id, a channel_id, or a peer_id
+            // in `conversation_id`. Match against all shapes.
+            let anon = conv_id.parse().map(|id| active.matches_anon_dm(&id)).unwrap_or(false);
+            let peer = conv_id.parse().map(|p| active.matches_dm_peer(&p)).unwrap_or(false);
+            let chan = match (conv_id.parse(), conv_id.parse()) {
+                (Ok(cid), Ok(pid)) => active.matches_dm(&cid, &pid),
+                _ => false,
+            };
+            anon || peer || chan
+        }
+        "anon_group" => conv_id
+            .parse()
+            .map(|id| active.matches_anon_group(&id))
+            .unwrap_or(false),
+        _ => false,
     }
+}
+
+/// Rebuild the folder models, but only when folders exist.
+///
+/// Folder badges (per-row and the header aggregate) used to be frozen from app
+/// launch: `load_sections` ran once at startup and only a folder MUTATION
+/// refreshed them, so no message arrival or read ever moved them. This is the
+/// hook the message and read paths call.
+///
+/// The row-count guard keeps the common case free — a user with no folders
+/// pays nothing. With folders it is one unified-conversation query plus one
+/// membership query per folder, not the `get_conversation`-per-membership N+1
+/// this used to be.
+pub(crate) fn refresh_section_badges(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    use slint::Model;
+    if window.get_custom_sections().row_count() == 0 {
+        return;
+    }
+    // Synchronous rebuild — we are already on the UI thread. The rebuild
+    // clears every row's selection flag, so re-mark the open one after it.
+    sections::load_sections(window, ui_ctx);
+    refresh_section_selection(window, ui_ctx);
 }
 
 /// Apply pinned message state to the UI.
@@ -209,6 +265,10 @@ pub(crate) fn update_sidebar_preview(
     // Determine if the conversation being updated is the one currently viewed
     // by comparing against the typed `ActiveConversation` in chat_state.
     // Avoids stringly-typed window-prop comparisons.
+    // Every received and sent message funnels through here, so this is where
+    // a foldered conversation's badge gets a chance to move.
+    refresh_section_badges(window, ui_ctx);
+
     let is_currently_viewed = if increment_unread {
         conversation == ui_ctx.chat_state().active_conversation()
     } else {
@@ -388,6 +448,7 @@ pub(crate) fn create_dm_sidebar_entry(
         unread_count: 1,
         is_typing: false,
         is_anon: false,
+        is_pinned: false,
         is_selected: false,
     };
 

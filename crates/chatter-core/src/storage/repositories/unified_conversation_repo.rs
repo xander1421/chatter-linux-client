@@ -200,6 +200,61 @@ impl UnifiedConversationRepository {
             Err(e) => Err(StorageError::Database(e)),
         }
     }
+
+    /// Unread count and last-message time for EVERY conversation, in one query.
+    ///
+    /// This is `list_all`'s `conv_stats` CTE on its own. It reads the messages
+    /// table directly, so it also covers conversations with no parent row —
+    /// notably channel-free server DMs, which `list_all` cannot emit because it
+    /// starts from `channels`. Sidebar folders need those stats or a foldered
+    /// DM shows no badge and sorts as if it had never received a message.
+    pub fn conversation_stats(
+        &self,
+    ) -> Result<std::collections::HashMap<(String, ConversationType), ConversationStats>, StorageError>
+    {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT conversation_id,
+                   conversation_type,
+                   MAX(created_at) as last_msg_at,
+                   SUM(CASE WHEN is_read = 0 AND is_deleted = 0 THEN 1 ELSE 0 END) as unread_cnt
+            FROM messages
+            GROUP BY conversation_id, conversation_type
+            "#,
+        )?;
+
+        let mut rows = stmt.query([])?;
+        let mut out = std::collections::HashMap::new();
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let type_str: String = row.get(1)?;
+            let Ok(conv_type) = ConversationType::from_str_value(&type_str) else {
+                continue;
+            };
+            let last_message_at: Option<String> = row.get(2)?;
+            let unread_count: i64 = row.get(3).unwrap_or(0);
+            out.insert(
+                (id, conv_type),
+                ConversationStats {
+                    last_message_at: last_message_at
+                        .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                        .map(|dt| dt.with_timezone(&Utc)),
+                    unread_count: unread_count.max(0) as u32,
+                },
+            );
+        }
+        Ok(out)
+    }
+}
+
+/// Per-conversation activity, read straight from the messages table.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ConversationStats {
+    /// When the last message landed, if any.
+    pub last_message_at: Option<DateTime<Utc>>,
+    /// Unread, undeleted messages.
+    pub unread_count: u32,
 }
 
 fn row_to_unified(row: &Row) -> rusqlite::Result<UnifiedConversation> {

@@ -22,6 +22,7 @@ export component DMListItem inherits Rectangle {
     in property <string> timestamp: "";
     in property <int> unread-count: 0;
     in property <bool> is-typing: false;
+    in property <bool> is-pinned: false;
     in property <bool> selected: false;
     in property <bool> collapsed: false;
 
@@ -124,6 +125,20 @@ export component DMListItem inherits Rectangle {
                     font-weight: root.unread-count > 0 ? 600 : 400;
                     overflow: elide;
                     horizontal-stretch: 1;
+                }
+
+                // Pin marker — explains why this row sits above the rest.
+                if root.is-pinned: VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    Image {
+                        source: Icons.pin;
+                        width: 11px;
+                        height: 11px;
+                        colorize: Colors.text-muted;
+                        accessible-role: text;
+                        accessible-label: "Pinned";
+                    }
                 }
             }
 

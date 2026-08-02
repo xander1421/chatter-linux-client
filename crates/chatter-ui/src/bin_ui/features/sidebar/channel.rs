@@ -99,6 +99,9 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // Mark as read
             let handle = ui_ctx.conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
             let _ = handle.mark_as_read().await;
+            // Reading a foldered channel has to clear its folder badge too.
+            let ui_ctx_badges = ui_ctx.clone();
+            run_ui!(weak, |w| super::refresh_section_badges(&w, &ui_ctx_badges));
 
             // Load pinned messages for this channel from DB
             let (msg_ids, preview) = match ui_ctx.load_pinned_for_channel(&channel_id, &chatter_core::domain::message::ConversationType::Channel).await {

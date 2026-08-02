@@ -122,7 +122,10 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 };
 
                 let ui_ctx_for_sel = ui_ctx.clone();
-                run_ui!(weak, |w| super::refresh_selection(&w, &ui_ctx_for_sel));
+                run_ui!(weak, |w| {
+                    super::refresh_selection(&w, &ui_ctx_for_sel);
+                    super::refresh_section_badges(&w, &ui_ctx_for_sel);
+                });
 
                 // Load pins for anon DM
                 let pinned = ui_ctx.list_anon_dm_pinned(&anon_dm_id);
@@ -213,7 +216,10 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let conv_type = chatter_core::domain::message::ConversationType::ServerDm;
 
             let ui_ctx_for_sel = ui_ctx.clone();
-            run_ui!(weak, |w| super::refresh_selection(&w, &ui_ctx_for_sel));
+            run_ui!(weak, |w| {
+                super::refresh_selection(&w, &ui_ctx_for_sel);
+                super::refresh_section_badges(&w, &ui_ctx_for_sel);
+            });
 
             // Load pins
             let (msg_ids, preview) = match ui_ctx.load_pinned_for_channel(&channel_id, &conv_type).await {

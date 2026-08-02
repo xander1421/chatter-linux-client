@@ -32,7 +32,6 @@ export component Sidebar inherits Rectangle {
     in property <[DMListItemData]> dm-conversations: [];
     in property <[PrivateGroupListItemData]> private-groups: [];
     in property <[CustomSectionData]> custom-sections: [];
-    in property <[SectionConversationData]> section-conversations: [];
 
     // ── Properties: User profile ──
     in property <string> user-display-name: "User";
@@ -80,6 +79,9 @@ export component Sidebar inherits Rectangle {
     callback rename-section-clicked(/* section-id */ string);
     callback move-to-section(/* conversation-id */ string, /* conversation-type */ string, /* section-id */ string);
     callback remove-from-section(/* conversation-id */ string);
+    callback set-conversation-pinned(/* conversation-id */ string, /* pinned */ bool);
+    callback move-section(/* section-id */ string, /* delta */ int);
+    callback set-section-sort-mode(/* section-id */ string, /* mode */ string);
 
     // ── Internal state ──
     // Quick-link rows are 34px for mouse density; on a touch screen that is
@@ -114,12 +116,17 @@ export component Sidebar inherits Rectangle {
     property <string> ctx-menu-conv-id: "";
     property <string> ctx-menu-conv-type: "";
     property <string> ctx-menu-current-section-id: "";
+    property <bool> ctx-menu-is-pinned: false;
+    // Private groups are the one list core does not order, so a pin there
+    // would set a flag nothing reads. Hide the entry rather than lie.
+    property <bool> ctx-menu-can-pin: true;
 
     // Section header context menu state
     property <bool> section-header-ctx-menu-show: false;
     property <length> section-header-ctx-menu-x: 0;
     property <length> section-header-ctx-menu-y: 0;
     property <string> section-header-ctx-menu-section-id: "";
+    property <string> section-header-ctx-menu-sort-mode: "recent";
 
     // ── Sizing ──
     // Always a side panel, on every platform: collapsed to the icon rail or
@@ -616,8 +623,10 @@ export component Sidebar inherits Rectangle {
                     show-header: false;
                     conversation-selected(id) => { root.dm-selected(id); }
                     add-friend-clicked => { root.friends-clicked(); }
-                    dm-context-menu-requested(id, x, y) => {
+                    dm-context-menu-requested(id, pinned, x, y) => {
                         root.ctx-menu-conv-id = id;
+                        root.ctx-menu-is-pinned = pinned;
+                        root.ctx-menu-can-pin = true;
                         // Core's vocabulary, not the UI's: ConversationType
                         // (domain/message.rs) has never accepted "dm", so this
                         // menu silently no-oped on every DM.
@@ -737,12 +746,14 @@ export component Sidebar inherits Rectangle {
                     show-header: false;
                     has-sibling-content: root.private-groups.length > 0;
                     channel-selected(id) => { root.channel-selected(id); }
-                    channel-context-menu-requested(id, x, y) => {
+                    channel-context-menu-requested(id, pinned, x, y) => {
                         root.ctx-menu-conv-id = id;
                         root.ctx-menu-conv-type = "channel";
                         root.ctx-menu-x = x;
                         root.ctx-menu-y = y;
                         root.ctx-menu-current-section-id = "";
+                        root.ctx-menu-is-pinned = pinned;
+                        root.ctx-menu-can-pin = true;
                         root.ctx-menu-show = true;
                     }
                 }
@@ -755,6 +766,8 @@ export component Sidebar inherits Rectangle {
                     group-selected(id) => { root.private-group-selected(id); }
                     group-context-menu-requested(id, x, y) => {
                         root.ctx-menu-conv-id = id;
+                        root.ctx-menu-is-pinned = false;
+                        root.ctx-menu-can-pin = false;
                         // A private group is an anon_group in core. "private_group" is not
                         // a ConversationType and silently no-oped.
                         root.ctx-menu-conv-type = "anon_group";
@@ -779,25 +792,30 @@ export component Sidebar inherits Rectangle {
                 CustomSectionList {
                     vertical-stretch: 0;
                     sections: root.custom-sections;
-                    section-conversations: root.section-conversations;
                     collapsed: root.collapsed;
+                    mobile-mode: root.mobile-mode;
                     create-section-clicked => { root.create-section-clicked(); }
                     section-toggle-expanded(id) => { root.section-toggle-expanded(id); }
                     section-conversation-selected(conv-id, conv-type) => { root.section-conversation-selected(conv-id, conv-type); }
                     delete-section-clicked(id) => { root.delete-section-clicked(id); }
                     rename-section-clicked(id) => { root.rename-section-clicked(id); }
-                    section-conversation-context-menu-requested(conv-id, conv-type, section-id, x, y) => {
+                    section-conversation-context-menu-requested(conv-id, conv-type, section-id, pinned, x, y) => {
                         root.ctx-menu-conv-id = conv-id;
                         root.ctx-menu-conv-type = conv-type;
                         root.ctx-menu-x = x;
                         root.ctx-menu-y = y;
                         root.ctx-menu-current-section-id = section-id;
+                        root.ctx-menu-is-pinned = pinned;
+                        root.ctx-menu-can-pin = conv-type != "anon_group";
                         root.ctx-menu-show = true;
                     }
-                    section-header-context-menu-requested(section-id, x, y) => {
+                    section-header-context-menu-requested(section-id, sort-mode, x, y) => {
                         root.section-header-ctx-menu-section-id = section-id;
                         root.section-header-ctx-menu-x = x;
                         root.section-header-ctx-menu-y = y;
+                        // Carried up from the row rather than looked up: Slint
+                        // has no way to search a model from a callback body.
+                        root.section-header-ctx-menu-sort-mode = sort-mode;
                         root.section-header-ctx-menu-show = true;
                     }
                 }
@@ -996,6 +1014,9 @@ export component Sidebar inherits Rectangle {
         conversation-id: root.ctx-menu-conv-id;
         conversation-type: root.ctx-menu-conv-type;
         current-section-id: root.ctx-menu-current-section-id;
+        is-pinned: root.ctx-menu-is-pinned;
+        can-pin: root.ctx-menu-can-pin;
+        mobile-mode: root.mobile-mode;
         sections: root.custom-sections;
 
         close => {
@@ -1010,6 +1031,9 @@ export component Sidebar inherits Rectangle {
         create-section-clicked => {
             root.create-section-clicked();
         }
+        set-pinned(conv-id, pinned) => {
+            root.set-conversation-pinned(conv-id, pinned);
+        }
     }
 
     // Section header context menu overlay (right-click on section header)
@@ -1018,12 +1042,23 @@ export component Sidebar inherits Rectangle {
         position-x: root.section-header-ctx-menu-x;
         position-y: root.section-header-ctx-menu-y;
         section-id: root.section-header-ctx-menu-section-id;
+        section-sort-mode: root.section-header-ctx-menu-sort-mode;
+        mobile-mode: root.mobile-mode;
 
         close => {
             root.section-header-ctx-menu-show = false;
         }
         remove-section(section-id) => {
             root.delete-section-clicked(section-id);
+        }
+        rename-section(section-id) => {
+            root.rename-section-clicked(section-id);
+        }
+        move-section(section-id, delta) => {
+            root.move-section(section-id, delta);
+        }
+        set-sort-mode(section-id, mode) => {
+            root.set-section-sort-mode(section-id, mode);
         }
     }
 }

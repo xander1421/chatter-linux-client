@@ -253,6 +253,7 @@ fn spawn_request_stream(
                                 unread_count: 0,
                                 is_typing: false,
                                 is_anon: true,
+        is_pinned: false,
                                 is_selected: false,
                             });
 

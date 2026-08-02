@@ -225,7 +225,6 @@ export component App inherits Rectangle {
     in property <[DMListItemData]> dm-conversations: [];
     in property <[PrivateGroupListItemData]> private-groups: [];
     in property <[CustomSectionData]> custom-sections: [];
-    in property <[SectionConversationData]> section-conversations: [];
     in property <int> total-unread-count: 0;
     in property <string> user-display-name: "User";
     in property <image> user-avatar-source;
@@ -480,7 +479,7 @@ export component App inherits Rectangle {
     in-out property <string> create-section-name: "";
     in-out property <string> create-section-emoji: "📁";
     in-out property <string> create-section-id: "";  // set for rename
-    in property <bool> create-section-loading: false;
+    in-out property <bool> create-section-loading: false;
 
     // Create-channel modal: which tab to open on (0 = Create, 1 = Join)
     in-out property <int> create-channel-initial-tab: 0;
@@ -713,6 +712,9 @@ export component App inherits Rectangle {
     callback rename-section-clicked(/* section-id */ string);
     callback move-to-section(/* conversation-id */ string, /* conversation-type */ string, /* section-id */ string);
     callback remove-from-section(/* conversation-id */ string);
+    callback set-conversation-pinned(/* conversation-id */ string, /* pinned */ bool);
+    callback move-section(/* section-id */ string, /* delta */ int);
+    callback set-section-sort-mode(/* section-id */ string, /* mode */ string);
 
     // ========== Toast notification properties ==========
     in-out property <bool> toast-visible: false;
@@ -1154,7 +1156,6 @@ export component App inherits Rectangle {
                 dm-conversations: root.dm-conversations;
                 private-groups: root.private-groups;
                 custom-sections: root.custom-sections;
-                section-conversations: root.section-conversations;
                 user-display-name: root.user-display-name;
                 user-avatar-source: root.user-avatar-source;
                 user-initials: root.user-initials;
@@ -1263,6 +1264,15 @@ export component App inherits Rectangle {
                 }
                 move-to-section(conv-id, conv-type, section-id) => {
                     root.move-to-section(conv-id, conv-type, section-id);
+                }
+                set-conversation-pinned(conv-id, pinned) => {
+                    root.set-conversation-pinned(conv-id, pinned);
+                }
+                move-section(section-id, delta) => {
+                    root.move-section(section-id, delta);
+                }
+                set-section-sort-mode(section-id, mode) => {
+                    root.set-section-sort-mode(section-id, mode);
                 }
                 remove-from-section(conv-id) => {
                     root.remove-from-section(conv-id);
