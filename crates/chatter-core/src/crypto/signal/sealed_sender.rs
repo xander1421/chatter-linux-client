@@ -905,6 +905,7 @@ mod tests {
                  DecryptionErrorMessage that can never fix the pinned key"
             ),
         }
+    }
 
     /// `CiphertextMessageType::Plaintext` bypasses the ratchet entirely — no
     /// `is_trusted_identity`, no replay protection, no forward secrecy. Pinned
