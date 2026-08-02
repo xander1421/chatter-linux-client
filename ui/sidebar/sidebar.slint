@@ -552,8 +552,14 @@ export component Sidebar inherits Rectangle {
                 // 4. MESSAGES SECTION — header label/expander only meaningful when expanded.
                 // In collapsed mode the row would render as 32px of empty space, so zero it.
                 Rectangle {
-                    height: root.collapsed ? 0px : 32px;
+                    // 42px, not 32, with the label pushed to the bottom of it.
+                    // A section header centred in its own box sits the same
+                    // distance from the group above as from the group it names,
+                    // so it binds to neither and the list reads as one long run
+                    // of rows. The extra space goes above the label only.
+                    height: root.collapsed ? 0px : 42px;
                     if !root.collapsed: HorizontalLayout {
+                        padding-top: 10px;
                         padding-left: 6px;
                         padding-right: 4px;
                         TouchArea {
@@ -643,8 +649,14 @@ export component Sidebar inherits Rectangle {
                 // Hidden entirely in Anon Mode — anon groups live below in a
                 // separate model so this filter only kills server channels.
                 if !AnonMode.enabled : Rectangle {
-                    height: root.collapsed ? 0px : 32px;
+                    // 42px, not 32, with the label pushed to the bottom of it.
+                    // A section header centred in its own box sits the same
+                    // distance from the group above as from the group it names,
+                    // so it binds to neither and the list reads as one long run
+                    // of rows. The extra space goes above the label only.
+                    height: root.collapsed ? 0px : 42px;
                     if !root.collapsed: HorizontalLayout {
+                        padding-top: 10px;
                         padding-left: 6px;
                         padding-right: 4px;
                         TouchArea {
