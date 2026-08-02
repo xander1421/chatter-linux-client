@@ -2219,3 +2219,36 @@ fn folder_ui_sizes_up_for_touch() {
         "with the hover buttons desktop-only, Rename must live in the hold menu"
     );
 }
+
+/// FOUND ON DEVICE: press-and-hold on a folder header collapsed the folder and
+/// never opened the menu. The header had TWO pointer surfaces — a full-size
+/// `HoldArea` and, declared after it, a `TouchArea` over the name whose
+/// `clicked` toggled expansion. The later one wins the grab, so the hold timer
+/// was cancelled every time and every folder action was unreachable on touch.
+///
+/// One surface, both gestures. This is the exact trap `HoldArea`'s own comment
+/// warns about ("replaces the row's TouchArea rather than nesting inside it").
+#[test]
+fn folder_header_has_one_pointer_surface_not_two() {
+    let list = include_str!("../../../ui/sidebar/custom_section_list.slint");
+    let start = list
+        .find("component CustomSectionHeader")
+        .expect("CustomSectionHeader present");
+    let end = list[start..]
+        .find("export component CustomSectionList")
+        .map(|i| start + i)
+        .unwrap_or(list.len());
+    let header = &list[start..end];
+
+    assert!(
+        header.contains("if (!self.hold-fired) { root.toggle-expanded(); }"),
+        "the header's tap-to-toggle must hang off the HoldArea, guarded by \
+         hold-fired so the release of a hold is not also read as a tap"
+    );
+    assert!(
+        !header.contains("clicked => { root.toggle-expanded(); }"),
+        "a second TouchArea whose clicked toggles expansion steals the pointer \
+         grab from the HoldArea — that is what made the folder menu unreachable \
+         on touch (verified on an S25 Ultra: the hold just collapsed the folder)"
+    );
+}

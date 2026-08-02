@@ -234,12 +234,23 @@ component CustomSectionHeader inherits Rectangle {
 
     height: root.mobile-mode ? Spacing.touch-target-min : 32px;
 
-    // Hover detector — always present (not inside conditional).
-    // Also captures right-click / press-and-hold to open the section menu.
+    // The header's ONE pointer surface: tap toggles, hold (or right-click)
+    // opens the menu. There used to be a second TouchArea over the name inside
+    // the layout below, and being declared later it won the pointer grab — a
+    // press-and-hold on a folder header just collapsed the folder and the menu
+    // was unreachable on touch. Same "two stacked TouchAreas fight over the
+    // grab" trap HoldArea exists to avoid.
+    //
+    // Declared FIRST so the hover buttons below stay on top and keep their own
+    // clicks; the Texts and Images between are not interactive, so this still
+    // receives everything else.
     header-hover := HoldArea {
         width: 100%;
         height: 100%;
-        mouse-cursor: default;
+        mouse-cursor: pointer;
+        clicked => {
+            if (!self.hold-fired) { root.toggle-expanded(); }
+        }
         held => { root.context-menu-requested(self.anchor-x, self.anchor-y); }
     }
 
@@ -247,10 +258,8 @@ component CustomSectionHeader inherits Rectangle {
         padding-left: 6px;
         padding-right: 4px;
 
-        TouchArea {
+        Rectangle {
             horizontal-stretch: 1;
-            mouse-cursor: pointer;
-            clicked => { root.toggle-expanded(); }
 
             HorizontalLayout {
                 padding-left: 2px;
