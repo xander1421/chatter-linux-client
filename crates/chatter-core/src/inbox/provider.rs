@@ -553,8 +553,14 @@ impl DeviceInboxProvider {
                     // `DecryptionErrorMessage` we send back only heals the *session*
                     // — the sender archives it (`services::gateway::decryption`,
                     // `archive_session_for_resend`) so the next message uses a fresh
-                    // one. Nothing re-sends the message that failed, and the user is
-                    // shown no gap where it was.
+                    // one. Nothing re-sends the message that failed.
+                    //
+                    // So the loss is made VISIBLE instead: the failure branch in
+                    // `polling::device` writes a `SystemMessage::DeliveryIssue` entry
+                    // into that peer's conversation (Signal-Android's "Delivery
+                    // issue" update), keyed to the envelope timestamp so a replay
+                    // does not stack duplicates. The user sees where the gap is and
+                    // that the fix is to ask the peer to send it again.
                     if !handled.is_empty()
                         && let Err(error) = poller.acknowledge(handled).await
                     {

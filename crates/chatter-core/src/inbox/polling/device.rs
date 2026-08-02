@@ -28,6 +28,61 @@ use crate::services::gateway::{MessageGateway, RouteResult, SealedSenderResult};
 use crate::storage::repositories::ephemeral_repo::EphemeralRepository;
 use crate::storage::{ChannelRepository, MessageRepository};
 
+/// Build the conversation entry that marks a DM we could not decrypt.
+///
+/// The inbox acks every polled envelope whatever the outcome, so an
+/// undecryptable message is deleted from the server queue and never comes
+/// back. The `DecryptionErrorMessage` we return heals the SESSION (the sender
+/// archives it, so the next message decrypts) but does nothing for the message
+/// that failed. Without this entry the user sees an unexplained gap.
+///
+/// Signal does the same thing on the receiving side: Signal-Android inserts a
+/// "Delivery issue" conversation update on a bad decrypt.
+///
+/// `envelope_ts_ns` is the envelope's own server timestamp, used as `sent_at`
+/// for two reasons: the marker sorts where the lost message would have been,
+/// and the existing UNIQUE index on
+/// (conversation_type, conversation_id, sender_id, sent_at) collapses repeats
+/// when a failed `acknowledge` causes the same envelope to be replayed at the
+/// next start.
+#[must_use]
+pub fn delivery_issue_message(peer_id: UserId, envelope_ts_ns: u64) -> Message {
+    let now = chrono::Utc::now();
+    Message {
+        id: MessageId::new(),
+        conversation_id: peer_id.into(),
+        conversation_type: ConversationType::ServerDm,
+        // Drives the UI's name lookup — system entries render as
+        // "{sender_name} {description}".
+        sender_id: Some(peer_id),
+        device_id: None,
+        content: crate::domain::message::MessageContent::System(
+            crate::domain::message::SystemMessage::DeliveryIssue,
+        ),
+        encrypted_content: None,
+        thread_id: None,
+        reply_to: None,
+        reply_to_author_id: None,
+        reply_to_text: None,
+        reply_to_thumbnail: None,
+        reply_to_thumbnail_mime: None,
+        attachments: Vec::new(),
+        is_pinned: false,
+        is_edited: false,
+        is_deleted: false,
+        is_read: false,
+        sent_at: envelope_ts_ns,
+        created_at: now,
+        updated_at: now,
+        edited_at: None,
+        reaction_counts: Vec::new(),
+        current_user_reactions: Vec::new(),
+        mentioned_integrations: Vec::new(),
+        targets_ai_bot: false,
+        delivery_status: String::new(),
+    }
+}
+
 /// Process a single message through the validation pipeline.
 ///
 /// Handles:
@@ -169,7 +224,16 @@ pub async fn process_device_message(
         message_guid = %msg.message_guid,
         "[INBOX] Processing as sealed sender message"
     );
-    process_sealed_sender_message(msg, pipeline, event_tx, stats, message_gateway, domain_tx).await;
+    process_sealed_sender_message(
+        msg,
+        pipeline,
+        event_tx,
+        stats,
+        message_gateway,
+        message_repo,
+        domain_tx,
+    )
+    .await;
 }
 
 /// Process a sender key encrypted message.
@@ -973,12 +1037,14 @@ async fn process_ecies_init_message(
 }
 
 /// Process a sealed sender message.
+#[allow(clippy::too_many_arguments)]
 async fn process_sealed_sender_message(
     msg: &DeviceMessage,
     pipeline: &MessageValidationPipeline,
     event_tx: &broadcast::Sender<InboxEvent>,
     stats: &Arc<RwLock<InboxStats>>,
     message_gateway: &Arc<MessageGateway>,
+    message_repo: &Arc<MessageRepository>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
 ) {
     let sealed_sender_msg = SealedSenderMessage {
@@ -1168,6 +1234,34 @@ async fn process_sealed_sender_message(
                 message_id: msg.message_guid.clone(),
                 error: "session desync — DecryptionErrorMessage reported to sender".to_string(),
             });
+
+            // The report above heals the SESSION; this message is already
+            // gone (it gets acked with the rest of the batch and the server
+            // drops it). Leave a visible entry so the gap is explained
+            // instead of silent — Signal's "Delivery issue" update.
+            let marker = delivery_issue_message(sender_id, msg.server_timestamp);
+            match message_repo.insert_or_ignore(&marker) {
+                // Inserted: this envelope's failure is news. Announce it so the
+                // open conversation shows the gap without waiting for a reload.
+                Ok(true) => {
+                    if let Some(tx) = domain_tx {
+                        let _ = tx.send(DomainEvent::MessageReceived { message: marker });
+                    }
+                }
+                // Already present: a failed `acknowledge` replayed this same
+                // envelope at the next start. The marker is there; saying it
+                // twice would spam the conversation.
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        sender_id = %sender_id,
+                        %error,
+                        "[INBOX] could not record the delivery-issue marker — this \
+                         decrypt failure will be invisible to the user"
+                    );
+                }
+            }
+
             let mut s = stats.write();
             s.messages_received += 1;
             s.messages_failed += 1;

@@ -510,6 +510,15 @@ pub enum SystemMessage {
     ChannelRenamed { old_name: String, new_name: String },
     UserAdded { by: UserId, added: UserId },
     UserRemoved { by: UserId, removed: UserId },
+    /// A message from this peer arrived but could not be decrypted, and the
+    /// ciphertext is gone (the inbox acks every polled envelope, so it is not
+    /// redelivered). The session has been healed via `DecryptionErrorMessage`,
+    /// but THAT message is lost — without this entry the user just sees a gap.
+    ///
+    /// Signal's own receiver-side answer to a bad decrypt: Signal-Android
+    /// inserts a "Delivery issue" conversation update
+    /// (`ThreadRecord_delivery_issue`).
+    DeliveryIssue,
 }
 
 impl SystemMessage {
@@ -525,6 +534,11 @@ impl SystemMessage {
             }
             Self::UserAdded { .. } => "added a member".to_string(),
             Self::UserRemoved { .. } => "removed a member".to_string(),
+            // Rendered as "{sender_name} {description}", so this reads
+            // "Alice sent a message that couldn't be delivered. ...".
+            Self::DeliveryIssue => "sent a message that couldn't be delivered. The secure \
+                 session has been reset — ask them to send it again."
+                .to_string(),
         }
     }
 }
