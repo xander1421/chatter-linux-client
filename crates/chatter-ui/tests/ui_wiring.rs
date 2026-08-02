@@ -1640,3 +1640,615 @@ fn connection_banner_is_dismissible_without_hiding_the_outage() {
         "both the expanded and collapsed sidebar footers must carry the dot"
     );
 }
+
+// ============================================================================
+// ANDROID BACK KEY — the press must reach Rust, and must pop in-app layers
+// before it is ever allowed to leave the app.
+//
+// The shipped defect: Back was a no-op. Nothing at the UI layer consumed it, so
+// an open modal could not be closed with it, and (worse) a user in Settings —
+// whose only other exit renders as a tofu box — was stranded.
+// ============================================================================
+
+/// LAYER 1: the decision itself. Back with a modal up closes the modal.
+#[test]
+fn back_press_closes_the_open_modal() {
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+
+    w.set_active_modal("settings".into());
+    assert!(
+        chatter_ui::bin_ui::features::back::handle_back(&w),
+        "back with a modal open must report the press as consumed in-app"
+    );
+    assert_eq!(
+        w.get_active_modal().as_str(),
+        "none",
+        "back did NOT close the open modal — the Settings trap is still live"
+    );
+
+    // Through the Slint callback too (that is what the FocusScope invokes).
+    w.set_active_modal("create-channel".into());
+    w.invoke_back_pressed();
+    assert_eq!(
+        w.get_active_modal().as_str(),
+        "none",
+        "the back-pressed callback is not wired to the modal-closing handler"
+    );
+
+    // With nothing open the press falls through to backgrounding the task
+    // (a no-op off Android) and must not disturb modal state.
+    assert!(
+        !chatter_ui::bin_ui::features::back::handle_back(&w),
+        "back with no modal open must fall through to backgrounding"
+    );
+    assert_eq!(w.get_active_modal().as_str(), "none");
+}
+
+/// LAYER 2: the KEY EVENT actually reaches that decision.
+///
+/// This is the half the bug report was about — the backend already maps
+/// `Keycode::Back` to `Key::Back` (vendor/i-slint-backend-android-activity/
+/// androidwindowadapter.rs), but `WindowInner::process_key_input` only delivers
+/// a key to the focus item and its ANCESTORS. With no focus item and no
+/// top-level FocusScope, Back went nowhere. Dispatching the real event proves
+/// `forward-focus: back-scope` + the wrapping FocusScope closed that gap.
+#[test]
+fn back_key_event_reaches_the_handler() {
+    use slint::ComponentHandle;
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+    w.set_active_modal("settings".into());
+
+    // Give the window a real geometry first. `process_key_input` drops the
+    // focus item when `ItemRc::is_visible()` is false, and an unshown headless
+    // window has a zero-size root — the key would be discarded before it ever
+    // reached back-scope, for a reason that has nothing to do with the wire.
+    let scale = w.window().scale_factor();
+    w.window().dispatch_event(slint::platform::WindowEvent::Resized {
+        size: slint::LogicalSize::new(1000.0, 800.0).to_physical(scale).to_logical(scale),
+    });
+
+    w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
+        text: slint::platform::Key::Back.into(),
+    });
+
+    assert_eq!(
+        w.get_active_modal().as_str(),
+        "none",
+        "a real Key::Back window event never reached back-pressed — the top-level \
+         FocusScope is not receiving key events (check `forward-focus: back-scope`)"
+    );
+}
+
+/// The Back scope must not become a focus thief. It is an ancestor of the whole
+/// app including the message composer, so if it grabbed focus on click or on Tab
+/// the composer would lose the caret mid-typing. Both are switched off, and Back
+/// still works because unhandled keys bubble UP the focus chain rather than
+/// requiring the scope to hold focus itself.
+#[test]
+fn back_scope_does_not_steal_focus_from_text_input() {
+    let main = include_str!("../../../ui/main.slint");
+    assert!(
+        main.contains("back-scope := FocusScope"),
+        "the top-level back FocusScope is gone; Back cannot be observed"
+    );
+    assert!(
+        main.contains("forward-focus: back-scope;"),
+        "without forward-focus nothing holds focus at startup and Back is dropped"
+    );
+    assert!(
+        main.contains("focus-on-click: false;"),
+        "back-scope would steal focus from the composer on every stray tap"
+    );
+    assert!(
+        main.contains("focus-on-tab-navigation: false;"),
+        "back-scope would swallow a Tab stop over the whole window"
+    );
+    // Only Back is consumed; every other key is rejected so it keeps bubbling.
+    assert!(
+        main.contains("if (event.text == Key.Back) {") && main.contains("return reject;"),
+        "back-scope must consume ONLY Key.Back and reject everything else, or it \
+         would eat text input"
+    );
+    // The key-UP must be swallowed too. Android's default Back fires off
+    // ACTION_UP, so consuming only the press would let one physical press both
+    // close a modal AND finish the Activity.
+    assert!(
+        main.contains("key-released(event) => {")
+            && main.contains("event.text == Key.Back ? accept : reject"),
+        "back-scope does not consume the Back key-up; Android's default Back \
+         handler can still fire behind us"
+    );
+}
+
+/// Typing is unaffected: a plain character dispatched at the window is not
+/// consumed by back-scope and does not fire the back handler.
+#[test]
+fn back_scope_ignores_ordinary_typing() {
+    use slint::ComponentHandle;
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+    w.set_active_modal("settings".into());
+
+    let scale = w.window().scale_factor();
+    w.window().dispatch_event(slint::platform::WindowEvent::Resized {
+        size: slint::LogicalSize::new(1000.0, 800.0).to_physical(scale).to_logical(scale),
+    });
+
+    for text in ["a", "Z", " "] {
+        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: text.into(),
+        });
+    }
+
+    assert_eq!(
+        w.get_active_modal().as_str(),
+        "settings",
+        "an ordinary key press was treated as Back — back-scope is over-matching"
+    );
+}
+
+/// ORDERING: selection mode is the innermost layer and must pop FIRST.
+///
+/// The regression this guards: one Back press while multi-selecting inside an
+/// open modal jumping straight past the selection to close the modal (or worse,
+/// to background the app), losing the user's selection AND their place.
+#[test]
+fn back_pops_selection_mode_before_the_modal() {
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+
+    w.set_selection_mode(true);
+    w.set_active_modal("settings".into());
+
+    w.invoke_back_pressed();
+
+    assert!(
+        !w.get_selection_mode(),
+        "back did not exit message multi-select — it is the innermost layer and \
+         must pop first"
+    );
+    assert_eq!(
+        w.get_active_modal().as_str(),
+        "settings",
+        "back popped TWO layers at once: selection mode AND the modal. One press, \
+         one layer"
+    );
+
+    // Second press now takes the modal.
+    w.invoke_back_pressed();
+    assert_eq!(w.get_active_modal().as_str(), "none", "the second back press did not close the modal");
+}
+
+// ============================================================================
+// Message multi-select — the SELECTION wires reach the selection store.
+//
+// The hold gesture's tier 2 and the menu's "Select" item both land here, so
+// this is the wire that has to hold: without it the bubbles mark themselves and
+// nothing else in the app ever learns a selection exists.
+//
+//  L1 (DYNAMIC): toggling a message runs the real handler, sets selection mode,
+//    publishes the count, and marks the row in the model.
+//  L2 (STATIC, Slint): the bubble's hold timers fire selection-toggled, the
+//    menu carries a Select item, and a tap in selection mode toggles rather
+//    than opening the message.
+// ============================================================================
+#[test]
+fn message_selection_toggle_reaches_the_selection_store() {
+    use slint::Model;
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    testing::init_no_event_loop();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+    let w = MainWindow::new().expect("MainWindow::new");
+    chatter_ui::bin_ui::features::chat::wire(&w, &client);
+
+    // Two rows to select between, so "marks the right one" is a real assertion.
+    let mut a = chatter_ui::MessageItemData::default();
+    a.message_id = "msg-a".into();
+    let mut b = chatter_ui::MessageItemData::default();
+    b.message_id = "msg-b".into();
+    w.set_messages(slint::ModelRc::new(slint::VecModel::from(vec![a, b])));
+
+    // L1 dynamic: selecting one message turns the mode on and marks that row.
+    w.invoke_message_selection_toggled("msg-a".into());
+    assert!(w.get_selection_mode(), "toggling a message must enter selection mode");
+    assert_eq!(w.get_selected_message_count(), 1, "the count must reach the selection bar");
+    let rows = w.get_messages();
+    assert!(rows.row_data(0).unwrap().selected, "the selected row must be marked");
+    assert!(!rows.row_data(1).unwrap().selected, "an unselected row must NOT be marked");
+
+    // Deselecting the last one leaves the mode entirely — a selection bar
+    // reading "0 selected" with a dead delete button is a dead end.
+    w.invoke_message_selection_toggled("msg-a".into());
+    assert!(!w.get_selection_mode(), "deselecting the last message must exit selection mode");
+    assert_eq!(w.get_selected_message_count(), 0);
+    assert!(!w.get_messages().row_data(0).unwrap().selected, "the mark must be cleared");
+
+    // L2 static (Slint): the hold gesture is what fires this on a touch screen.
+    let item_src = include_str!("../../../ui/chat/message_item.slint");
+    assert!(
+        item_src.contains("tier1-timer"),
+        "the press-and-hold timer must exist on the bubble — right-click is \
+         unreachable from a finger (the Android backend only makes \
+         PointerEventButton::Right from a real secondary mouse button)"
+    );
+    assert!(
+        item_src.contains("root.selection-toggled(root.message-id)"),
+        "tier 2 of the hold, and a tap while in selection mode, must fire \
+         selection-toggled with the message id"
+    );
+
+    // L2 static (Slint): the discoverable route, for anyone who never finds the
+    // longer hold.
+    let menu_src = include_str!("../../../ui/chat/message_context_menu.slint");
+    assert!(
+        menu_src.contains(r#"label: "Select""#) && menu_src.contains("root.select-clicked(root.message-id)"),
+        "the message menu must carry a Select item wired to select-clicked"
+    );
+}
+
+// ============================================================================
+// FOLDERS (custom sections). Everything below was either dead or silently
+// broken before: `pin_conversation` existed in core with no UI path at all,
+// `reorder_sections` had zero callers, folders sorted by filing order forever,
+// a foldered channel rendered in BOTH the folder and the Channels list, and
+// the folder badges were frozen from app launch.
+// ============================================================================
+
+/// A pinned conversation had no route from the UI to core: `pin_conversation`
+/// (services/conversation.rs) existed with no Slint callback and no handler.
+///
+///  L1 (DYNAMIC): the callback exists on MainWindow and the real handler runs.
+///  L2 (STATIC, Rust): the handler reaches `set_conversation_pinned` on core.
+///  L2 (STATIC, Slint): the conversation menu carries the entry that fires it,
+///    and the three lists that render pin order pass the row's flag up so the
+///    menu can say Pin or Unpin.
+#[test]
+fn pin_conversation_reaches_core_from_the_sidebar_menu() {
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    testing::init_no_event_loop();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+    let w = MainWindow::new().expect("MainWindow::new");
+    chatter_ui::bin_ui::features::sidebar::wire(&w, &client);
+
+    // Must not panic: the persist runs on tokio, which this harness does not pump.
+    w.invoke_set_conversation_pinned("00000000-0000-0000-0000-000000000001".into(), true);
+
+    // L2 static (Rust): the handler is not a Slint-only bool.
+    let src = include_str!("../src/bin_ui/features/sidebar/sections.rs");
+    let idx = src.find("on_set_conversation_pinned").expect("pin handler present");
+    assert!(
+        src[idx..].contains(".set_conversation_pinned("),
+        "the pin entry must call ChatterClient::set_conversation_pinned"
+    );
+
+    // L2 static (Slint): the menu item, and the flag the label depends on.
+    let menu = include_str!("../../../ui/sidebar/section_context_menu.slint");
+    assert!(
+        menu.contains("root.set-pinned(root.conversation-id, !root.is-pinned)"),
+        "the conversation menu must carry a Pin/Unpin entry firing set-pinned"
+    );
+    assert!(
+        menu.contains(r#"label: root.is-pinned ? "Unpin" : "Pin to top""#),
+        "the entry must name the action it will actually perform"
+    );
+
+    let channels = include_str!("../../../ui/sidebar/channel_list.slint");
+    let dms = include_str!("../../../ui/sidebar/dm_list.slint");
+    assert!(
+        channels.contains("root.channel-context-menu-requested(item.channel-id, item.is-pinned, x, y)"),
+        "the channel row must carry its pin state into the menu"
+    );
+    assert!(
+        dms.contains("root.dm-context-menu-requested(item.channel-id, item.is-pinned, x, y)"),
+        "the DM row must carry its pin state into the menu"
+    );
+}
+
+/// Pin state is settings-backed and local-only. This proves the round trip
+/// through core (no UI involved) and that unpinning clears the set rather than
+/// leaving a `false` behind.
+#[test]
+fn pinning_round_trips_through_core_and_is_local_only() {
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+
+    let id = "11111111-1111-1111-1111-111111111111";
+    assert!(!client.is_conversation_pinned(id), "nothing is pinned by default");
+
+    assert!(client.set_conversation_pinned(id, true));
+    assert!(client.is_conversation_pinned(id), "the pin must survive the write");
+    assert!(
+        client.pinned_conversation_ids().contains(id),
+        "the bulk query the lists use must see the same pin as the single lookup"
+    );
+
+    assert!(client.set_conversation_pinned(id, false));
+    assert!(!client.is_conversation_pinned(id));
+    assert!(
+        !client.pinned_conversation_ids().contains(id),
+        "unpinning must remove the id from the set, not store a false"
+    );
+}
+
+/// `reorder_sections` (section_service.rs) was fully implemented with ZERO
+/// callers — the back half of a drag-to-reorder nobody finished.
+///
+/// Deliberately NOT drag-and-drop: there is no DropArea anywhere in `ui/`, and
+/// dragging a row inside a scrolling list is the worst gesture to debut on a
+/// phone. Move up / move down rides the press-and-hold menu that already exists.
+#[test]
+fn folder_reorder_is_wired_and_reaches_reorder_sections() {
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    testing::init_no_event_loop();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+    let w = MainWindow::new().expect("MainWindow::new");
+    chatter_ui::bin_ui::features::sidebar::wire(&w, &client);
+
+    w.invoke_move_section("00000000-0000-0000-0000-000000000001".into(), -1);
+
+    let src = include_str!("../src/bin_ui/features/sidebar/sections.rs");
+    let idx = src.find("on_move_section").expect("move-section handler present");
+    assert!(
+        src[idx..].contains(".move_section("),
+        "the folder menu's Move up/down must reach ChatterClient::move_section"
+    );
+
+    // The core method is what finally calls the orphaned reorder.
+    let core = include_str!("../../chatter-core/src/services/section_service.rs");
+    let core_idx = core.find("pub fn move_section").expect("move_section in core");
+    assert!(
+        core[core_idx..].contains("self.reorder_sections(&ids)"),
+        "move_section must be the caller reorder_sections never had"
+    );
+
+    let menu = include_str!("../../../ui/sidebar/section_context_menu.slint");
+    assert!(
+        menu.contains("root.move-section(root.section-id, -1)")
+            && menu.contains("root.move-section(root.section-id, 1)"),
+        "the folder header menu must offer both directions"
+    );
+}
+
+/// Folders sorted by `added_at ASC` forever, so filing a channel into one
+/// silently swapped it from MRU to filing order. Order is now a per-folder
+/// choice, defaulting to Recent so a folder matches the list it came from.
+#[test]
+fn folder_sort_mode_reaches_core_and_defaults_to_recent() {
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    testing::init_no_event_loop();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+    let w = MainWindow::new().expect("MainWindow::new");
+    chatter_ui::bin_ui::features::sidebar::wire(&w, &client);
+
+    // L1 dynamic through core: a new folder is Recent, and the mode persists.
+    let section = client.create_section("Work", "\u{1F4C1}").expect("create_section");
+    assert_eq!(
+        section.sort_mode,
+        chatter_core::domain::section::SectionSortMode::Recent,
+        "a new folder must sort like the rest of the sidebar, not by filing order"
+    );
+
+    client
+        .set_section_sort_mode(&section.id, chatter_core::domain::section::SectionSortMode::Alphabetical)
+        .expect("set_section_sort_mode");
+    let reloaded = client.list_sections_with_conversations().expect("list sections");
+    assert_eq!(
+        reloaded[0].sort_mode,
+        chatter_core::domain::section::SectionSortMode::Alphabetical,
+        "the sort mode must survive a reload (migration v062 column)"
+    );
+
+    // L1 dynamic through the UI callback.
+    w.invoke_set_section_sort_mode(section.id.to_string().into(), "unread".into());
+
+    let src = include_str!("../src/bin_ui/features/sidebar/sections.rs");
+    let idx = src.find("on_set_section_sort_mode").expect("sort-mode handler present");
+    assert!(
+        src[idx..].contains(".set_section_sort_mode("),
+        "the sort picker must reach ChatterClient::set_section_sort_mode"
+    );
+
+    let menu = include_str!("../../../ui/sidebar/section_context_menu.slint");
+    for mode in ["recent", "unread", "alphabetical"] {
+        assert!(
+            menu.contains(&format!(r#"root.set-sort-mode(root.section-id, "{mode}")"#)),
+            "the folder menu must offer the {mode} sort"
+        );
+    }
+}
+
+/// A channel filed into a folder used to render in BOTH the folder and the
+/// Channels list: `sidebar_channels` never excluded sectioned conversations,
+/// and `all_sectioned_conversation_ids` / `is_in_section` — written for exactly
+/// this — had zero callers.
+#[test]
+fn foldered_conversations_are_excluded_from_the_loose_lists() {
+    let core = include_str!("../../chatter-core/src/client/mod.rs");
+    let idx = core.find("pub fn sidebar_channels").expect("sidebar_channels present");
+    let body = &core[idx..idx + 2000];
+    assert!(
+        body.contains("all_sectioned_conversation_ids"),
+        "sidebar_channels must drop conversations that live in a folder"
+    );
+    assert!(
+        body.contains("sort_pinned_first"),
+        "sidebar_channels must put pinned channels first — ordering is core's job"
+    );
+
+    let messaging = include_str!("../../chatter-core/src/client/messaging.rs");
+    let dm_idx = messaging.find("fn finish_dm_sidebar").expect("finish_dm_sidebar present");
+    let dm_body = &messaging[dm_idx..dm_idx + 1200];
+    assert!(
+        dm_body.contains("all_sectioned_conversation_ids") && dm_body.contains("is_pinned"),
+        "the DM sidebar must apply the same folder exclusion and pin order"
+    );
+}
+
+/// `load_sections` ran once at startup and `refresh_sections_ui` only fired
+/// after a folder MUTATION, so both the per-conversation badge and the header
+/// aggregate were frozen from app launch. The aggregate was also an N+1 (one
+/// `get_conversation` per membership), which is why it could not be refreshed
+/// on a hot path — that is now a single unified-conversation query.
+#[test]
+fn folder_badges_refresh_on_message_arrival_and_on_read() {
+    let sidebar = include_str!("../src/bin_ui/features/sidebar/mod.rs");
+    let idx = sidebar
+        .find("pub(crate) fn update_sidebar_preview")
+        .expect("update_sidebar_preview present");
+    assert!(
+        sidebar[idx..].contains("refresh_section_badges(window, ui_ctx)"),
+        "every sent and received message funnels through update_sidebar_preview; \
+         the folder badges must be rebuilt there or they stay frozen from launch"
+    );
+
+    let channel = include_str!("../src/bin_ui/features/sidebar/channel.rs");
+    let read_idx = channel.find("mark_as_read()").expect("mark_as_read present");
+    assert!(
+        channel[read_idx..].contains("refresh_section_badges"),
+        "reading a foldered channel must clear its folder badge too"
+    );
+
+    // The N+1 that made this impossible is gone.
+    let core = include_str!("../../chatter-core/src/services/section_service.rs");
+    let list_idx = core
+        .find("pub fn list_sections_with_conversations")
+        .expect("list_sections_with_conversations present");
+    let body = &core[list_idx..list_idx + 2500];
+    assert!(
+        body.contains("list_all()"),
+        "folder metadata must come from ONE unified-conversation query, not a \
+         get_conversation per membership"
+    );
+    assert!(
+        !body.contains("self.conversation_repo.get_conversation("),
+        "the per-membership get_conversation N+1 must not come back"
+    );
+}
+
+/// Each section looped the WHOLE flat conversation list and hid non-matches
+/// with `visible:` + `height: 0px` — ten folders over two hundred conversations
+/// instantiated two thousand elements. Rows are now pre-grouped in Rust so a
+/// section's model holds only its own.
+#[test]
+fn folder_rows_are_pre_grouped_per_section() {
+    let list = include_str!("../../../ui/sidebar/custom_section_list.slint");
+    assert!(
+        list.contains("conversations: [SectionConversationData]"),
+        "each section must own its rows"
+    );
+    assert!(
+        list.contains("for conv in section.conversations:"),
+        "a section must loop only its own rows"
+    );
+    assert!(
+        !list.contains("conv.section-id == section.section-id"),
+        "the visible/height:0 filter over the whole flat list must be gone"
+    );
+
+    // Rust must be the thing that groups them.
+    let src = include_str!("../src/bin_ui/features/sidebar/sections.rs");
+    assert!(
+        src.contains("conversations: ModelRc::new(VecModel::from(rows))"),
+        "the per-section model must be built in Rust"
+    );
+}
+
+/// `CustomSectionList` never received `mobile-mode`, so folder headers stayed
+/// 32px and rows 36px against a 48px touch minimum, and 24px hover buttons sat
+/// on a surface that has no hover.
+#[test]
+fn folder_ui_sizes_up_for_touch() {
+    let sidebar = include_str!("../../../ui/sidebar/sidebar.slint");
+    let idx = sidebar.find("CustomSectionList {").expect("CustomSectionList instantiated");
+    assert!(
+        sidebar[idx..idx + 600].contains("mobile-mode: root.mobile-mode"),
+        "the folder list must be told whether it is being touched"
+    );
+
+    let list = include_str!("../../../ui/sidebar/custom_section_list.slint");
+    assert!(
+        list.contains("height: root.mobile-mode ? Spacing.touch-target-min : 36px"),
+        "folder conversation rows must meet the touch minimum"
+    );
+    assert!(
+        list.contains("height: root.mobile-mode ? Spacing.touch-target-min : 32px"),
+        "folder headers must meet the touch minimum"
+    );
+    assert!(
+        list.contains("if !root.mobile-mode && header-hover.has-hover:"),
+        "the hover-reveal rename/delete buttons are desktop-only — hold opens \
+         a menu carrying both, and a 24px button is unhittable by a finger"
+    );
+
+    // Which means the touch route to rename must exist in that menu.
+    let menu = include_str!("../../../ui/sidebar/section_context_menu.slint");
+    assert!(
+        menu.contains("root.rename-section(root.section-id)"),
+        "with the hover buttons desktop-only, Rename must live in the hold menu"
+    );
+}
+
+/// FOUND ON DEVICE: press-and-hold on a folder header collapsed the folder and
+/// never opened the menu. The header had TWO pointer surfaces — a full-size
+/// `HoldArea` and, declared after it, a `TouchArea` over the name whose
+/// `clicked` toggled expansion. The later one wins the grab, so the hold timer
+/// was cancelled every time and every folder action was unreachable on touch.
+///
+/// One surface, both gestures. This is the exact trap `HoldArea`'s own comment
+/// warns about ("replaces the row's TouchArea rather than nesting inside it").
+#[test]
+fn folder_header_has_one_pointer_surface_not_two() {
+    let list = include_str!("../../../ui/sidebar/custom_section_list.slint");
+    let start = list
+        .find("component CustomSectionHeader")
+        .expect("CustomSectionHeader present");
+    let end = list[start..]
+        .find("export component CustomSectionList")
+        .map(|i| start + i)
+        .unwrap_or(list.len());
+    let header = &list[start..end];
+
+    assert!(
+        header.contains("if (!self.hold-fired) { root.toggle-expanded(); }"),
+        "the header's tap-to-toggle must hang off the HoldArea, guarded by \
+         hold-fired so the release of a hold is not also read as a tap"
+    );
+    assert!(
+        !header.contains("clicked => { root.toggle-expanded(); }"),
+        "a second TouchArea whose clicked toggles expansion steals the pointer \
+         grab from the HoldArea — that is what made the folder menu unreachable \
+         on touch (verified on an S25 Ultra: the hold just collapsed the folder)"
+    );
+}

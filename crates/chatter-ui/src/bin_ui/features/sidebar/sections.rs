@@ -1,7 +1,7 @@
 //! Custom section callbacks for the sidebar.
 //!
-//! Wires section management (create, delete, rename, toggle, move) and
-//! loads section data on startup.
+//! Wires section management (create, delete, rename, toggle, move, reorder,
+//! sort mode, pin) and loads section data on startup.
 
 use std::sync::Arc;
 
@@ -10,23 +10,22 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::SectionId;
 use chatter_core::domain::message::ConversationType;
+use chatter_core::domain::section::SectionSortMode;
 
 use chatter_core::services::attachment::DecodedImagePixels;
 
-use crate::bin_ui::converters::{channel_to_slint, get_initials};
+use crate::bin_ui::converters::{DMListItemExt, channel_to_slint, get_initials};
 use crate::{CustomSectionData, MainWindow, SectionConversationData, run_ui};
 
 /// Send-safe intermediate for `SectionConversationData`.
 struct SectionConvSendData {
     conversation_id: String,
-    section_id: String,
     conversation_type: String,
     display_name: String,
     avatar_decoded: Option<DecodedImagePixels>,
     initials: String,
-    last_message: String,
-    timestamp: String,
     unread_count: i32,
+    is_pinned: bool,
 }
 
 impl SectionConvSendData {
@@ -43,16 +42,43 @@ impl SectionConvSendData {
 
         SectionConversationData {
             conversation_id: self.conversation_id.into(),
-            section_id: self.section_id.into(),
             conversation_type: self.conversation_type.into(),
             display_name: self.display_name.into(),
             avatar_source,
             has_avatar,
             initials: self.initials.into(),
-            last_message: self.last_message.into(),
-            timestamp: self.timestamp.into(),
+            last_message: SharedString::new(),
+            timestamp: SharedString::new(),
             unread_count: self.unread_count,
+            is_pinned: self.is_pinned,
             is_selected: false,
+        }
+    }
+}
+
+/// Send-safe intermediate for one section and the rows it owns.
+struct SectionSendData {
+    section_id: String,
+    name: String,
+    icon_emoji: String,
+    is_expanded: bool,
+    unread_count: i32,
+    sort_mode: String,
+    conversations: Vec<SectionConvSendData>,
+}
+
+impl SectionSendData {
+    fn to_slint(self) -> CustomSectionData {
+        let rows: Vec<SectionConversationData> =
+            self.conversations.into_iter().map(|c| c.to_slint()).collect();
+        CustomSectionData {
+            section_id: self.section_id.into(),
+            name: self.name.into(),
+            icon_emoji: self.icon_emoji.into(),
+            is_expanded: self.is_expanded,
+            unread_count: self.unread_count,
+            sort_mode: self.sort_mode.into(),
+            conversations: ModelRc::new(VecModel::from(rows)),
         }
     }
 }
@@ -61,15 +87,10 @@ impl SectionConvSendData {
 pub(crate) fn load_sections(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     match ui_ctx.list_sections_with_conversations() {
         Ok(sections) => {
-            let (section_models, send_data) =
-                build_section_data(&sections, ui_ctx);
-
+            let send_data = build_section_data(&sections, ui_ctx);
             // On startup we're on the UI thread, so convert directly.
-            let conversation_models: Vec<_> =
-                send_data.into_iter().map(|d| d.to_slint()).collect();
-
-            window.set_custom_sections(ModelRc::new(VecModel::from(section_models)));
-            window.set_section_conversations(ModelRc::new(VecModel::from(conversation_models)));
+            let models: Vec<_> = send_data.into_iter().map(|s| s.to_slint()).collect();
+            window.set_custom_sections(ModelRc::new(VecModel::from(models)));
         }
         Err(e) => {
             tracing::error!(error = %e, "Failed to load custom sections");
@@ -86,6 +107,9 @@ pub(crate) fn wire_section_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterCl
     wire_move_to_section(window, ui_ctx);
     wire_remove_from_section(window, ui_ctx);
     wire_section_conversation_selected(window, ui_ctx);
+    wire_move_section(window, ui_ctx);
+    wire_set_sort_mode(window, ui_ctx);
+    wire_set_conversation_pinned(window, ui_ctx);
 }
 
 fn wire_create_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -98,15 +122,21 @@ fn wire_create_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let ui_ctx = ui_ctx.clone();
         let weak_clone = weak.clone();
 
+        run_ui!(weak, |w| w.set_create_section_loading(true));
+
         tokio::spawn(async move {
             match ui_ctx.create_section(&name_str, &emoji_str) {
                 Ok(section) => {
                     tracing::info!(section_id = %section.id, name = %name_str, "Created custom section");
-                    run_ui!(weak_clone, |w| w.set_active_modal("none".into()));
+                    run_ui!(weak_clone, |w| {
+                        w.set_create_section_loading(false);
+                        w.set_active_modal("none".into());
+                    });
                     refresh_sections_ui(&weak_clone, &ui_ctx);
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to create section");
+                    run_ui!(weak_clone, |w| w.set_create_section_loading(false));
                 }
             }
         });
@@ -132,6 +162,8 @@ fn wire_delete_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Ok(()) => {
                     tracing::info!(section_id = %section_id_str, "Deleted custom section");
                     refresh_sections_ui(&weak_clone, &ui_ctx);
+                    // The folder's conversations become loose again.
+                    refresh_conversation_lists(&weak_clone, &ui_ctx);
                 }
                 Err(e) => {
                     tracing::error!(error = %e, section_id = %section_id_str, "Failed to delete section");
@@ -212,6 +244,78 @@ fn wire_toggle_expanded(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 }
 
+/// Move a folder one place up or down.
+///
+/// `SectionService::reorder_sections` was fully implemented with zero callers —
+/// the back half of a drag-to-reorder nobody finished. This is its caller.
+/// Deliberately not drag-and-drop: nothing in this UI has ever had a DropArea,
+/// and dragging a row inside a scrolling list is the worst gesture to debut on
+/// a phone. Two menu entries do the same job with no new gesture vocabulary.
+fn wire_move_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let ui_ctx = ui_ctx.clone();
+    let weak = window.as_weak();
+
+    window.on_move_section(move |section_id: SharedString, delta: i32| {
+        let section_id_str = section_id.to_string();
+        let ui_ctx = ui_ctx.clone();
+        let weak_clone = weak.clone();
+
+        tokio::spawn(async move {
+            let Ok(id) = section_id_str.parse::<SectionId>() else {
+                tracing::error!(section_id = %section_id_str, "move section: unparseable section id");
+                return;
+            };
+            match ui_ctx.move_section(&id, delta) {
+                Ok(()) => refresh_sections_ui(&weak_clone, &ui_ctx),
+                Err(e) => tracing::error!(error = %e, section_id = %section_id_str, delta, "Failed to move section"),
+            }
+        });
+    });
+}
+
+/// Choose how one folder orders the conversations inside it.
+fn wire_set_sort_mode(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let ui_ctx = ui_ctx.clone();
+    let weak = window.as_weak();
+
+    window.on_set_section_sort_mode(move |section_id: SharedString, mode: SharedString| {
+        let section_id_str = section_id.to_string();
+        let mode = SectionSortMode::from_str_value(mode.as_str());
+        let ui_ctx = ui_ctx.clone();
+        let weak_clone = weak.clone();
+
+        tokio::spawn(async move {
+            let Ok(id) = section_id_str.parse::<SectionId>() else { return };
+            match ui_ctx.set_section_sort_mode(&id, mode) {
+                Ok(()) => refresh_sections_ui(&weak_clone, &ui_ctx),
+                Err(e) => tracing::error!(error = %e, section_id = %section_id_str, "Failed to set section sort mode"),
+            }
+        });
+    });
+}
+
+/// Pin or unpin a conversation. Local-only by design — no server call.
+fn wire_set_conversation_pinned(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let ui_ctx = ui_ctx.clone();
+    let weak = window.as_weak();
+
+    window.on_set_conversation_pinned(move |conv_id: SharedString, pinned: bool| {
+        let conv_id_str = conv_id.to_string();
+        let ui_ctx = ui_ctx.clone();
+        let weak_clone = weak.clone();
+
+        tokio::spawn(async move {
+            if !ui_ctx.set_conversation_pinned(&conv_id_str, pinned) {
+                return;
+            }
+            tracing::info!(conversation_id = %conv_id_str, pinned, "conversation pin toggled (local only)");
+            // Pin order is core's; every list that renders it has to be rebuilt.
+            refresh_sections_ui(&weak_clone, &ui_ctx);
+            refresh_conversation_lists(&weak_clone, &ui_ctx);
+        });
+    });
+}
+
 fn wire_move_to_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak = window.as_weak();
@@ -224,12 +328,30 @@ fn wire_move_to_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak_clone = weak.clone();
 
         tokio::spawn(async move {
-            let Ok(sid) = section_id_str.parse::<SectionId>() else { return };
-            let Ok(conv_type) = ConversationType::from_str_value(&conv_type_str) else { return };
+            let Ok(sid) = section_id_str.parse::<SectionId>() else {
+                tracing::error!(section_id = %section_id_str, "move to folder: unparseable section id");
+                return;
+            };
+            // This bare `return` used to be silent, and the UI was sending "dm"
+            // and "private_group" — neither of which ConversationType accepts.
+            // Every attempt to file a DM or a private group into a folder did
+            // nothing at all: no log, no toast, the menu just closed.
+            let conv_type = match ConversationType::from_str_value(&conv_type_str) {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::error!(
+                        conversation_type = %conv_type_str,
+                        error = %e,
+                        "move to folder: the UI sent a conversation type core does not know — \
+                         the move was dropped. This is a wiring bug, not user error."
+                    );
+                    return;
+                }
+            };
 
             if let Ok(()) = ui_ctx.move_conversation_to_section(&conv_id_str, conv_type, &sid) {
                 refresh_sections_ui(&weak_clone, &ui_ctx);
-                refresh_channel_list(&weak_clone, &ui_ctx);
+                refresh_conversation_lists(&weak_clone, &ui_ctx);
             }
         });
     });
@@ -247,7 +369,7 @@ fn wire_remove_from_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         tokio::spawn(async move {
             if let Ok(()) = ui_ctx.remove_conversation_from_section(&conv_id_str) {
                 refresh_sections_ui(&weak_clone, &ui_ctx);
-                refresh_channel_list(&weak_clone, &ui_ctx);
+                refresh_conversation_lists(&weak_clone, &ui_ctx);
             }
         });
     });
@@ -275,35 +397,43 @@ fn refresh_sections_ui(
     ui_ctx: &Arc<ChatterClient>,
 ) {
     if let Ok(sections) = ui_ctx.list_sections_with_conversations() {
-        let (section_models, send_data) = build_section_data(&sections, ui_ctx);
+        let send_data = build_section_data(&sections, ui_ctx);
         run_ui!(weak, |w| {
-            let conversation_models: Vec<_> = send_data.into_iter().map(|d| d.to_slint()).collect();
-            w.set_custom_sections(ModelRc::new(VecModel::from(section_models)));
-            w.set_section_conversations(ModelRc::new(VecModel::from(conversation_models)));
+            let models: Vec<_> = send_data.into_iter().map(|s| s.to_slint()).collect();
+            w.set_custom_sections(ModelRc::new(VecModel::from(models)));
         });
     }
 }
 
-fn refresh_channel_list(
+/// Rebuild the loose Channels and Messages lists.
+///
+/// Both exclude anything that lives in a folder and both put pinned rows first,
+/// so any change to folder membership or to a pin has to redraw them.
+fn refresh_conversation_lists(
     weak: &slint::Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
 ) {
-    // Sidebar-inclusion rule (Public/Private, anon-mode aware) lives in core.
+    // Sidebar-inclusion rules (Public/Private, anon-mode aware, folder-aware,
+    // pinned-first) live in core.
     let filtered = ui_ctx.sidebar_channels();
+    let mut dms = ui_ctx.list_dm_sidebar();
+    for dm in dms.iter_mut() {
+        dm.pre_decode_avatar();
+    }
     let ui_ctx_convert = ui_ctx.clone();
     run_ui!(weak, |w| {
         let channel_list: Vec<_> = filtered.iter().map(|c| channel_to_slint(c, &ui_ctx_convert)).collect();
         w.set_channels(ModelRc::new(VecModel::from(channel_list)));
+        let dm_list: Vec<_> = dms.into_iter().map(|d| d.to_slint()).collect();
+        w.set_dm_conversations(ModelRc::new(VecModel::from(dm_list)));
+        crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx_convert);
     });
 }
 
 fn build_section_data(
     sections: &[chatter_core::domain::section::CustomSection],
     ui_ctx: &Arc<ChatterClient>,
-) -> (Vec<CustomSectionData>, Vec<SectionConvSendData>) {
-    let mut section_models = Vec::with_capacity(sections.len());
-    let mut conversation_models = Vec::new();
-
+) -> Vec<SectionSendData> {
     // Channel icons are raw bytes on the Channel record (BLOB since v54), not
     // a CDN URL — fetch them once, keyed by id, for enrich to decode per row.
     let channel_icons: std::collections::HashMap<String, Vec<u8>> = ui_ctx
@@ -312,58 +442,54 @@ fn build_section_data(
         .filter_map(|c| c.icon.filter(|b| !b.is_empty()).map(|b| (c.id.to_string(), b)))
         .collect();
 
-    for section in sections {
-        section_models.push(CustomSectionData {
-            section_id: section.id.to_string().into(),
-            name: section.name.clone().into(),
-            icon_emoji: section.icon_emoji.clone().into(),
+    sections
+        .iter()
+        .map(|section| SectionSendData {
+            section_id: section.id.to_string(),
+            name: section.name.clone(),
+            icon_emoji: section.icon_emoji.clone(),
             is_expanded: section.is_expanded,
             unread_count: section.unread_count as i32,
-        });
-
-        for conv in &section.conversations {
-            conversation_models.push(enrich_conversation_send(
-                &conv.conversation_id,
-                &conv.conversation_type,
-                &section.id,
-                ui_ctx,
-                &channel_icons,
-            ));
-        }
-    }
-
-    (section_models, conversation_models)
+            sort_mode: section.sort_mode.as_str().to_string(),
+            conversations: section
+                .conversations
+                .iter()
+                .map(|conv| enrich_conversation_send(conv, ui_ctx, &channel_icons))
+                .collect(),
+        })
+        .collect()
 }
 
 fn enrich_conversation_send(
-    conversation_id: &str,
-    conversation_type: &ConversationType,
-    section_id: &SectionId,
+    conv: &chatter_core::domain::section::SectionConversation,
     ui_ctx: &Arc<ChatterClient>,
     channel_icons: &std::collections::HashMap<String, Vec<u8>>,
 ) -> SectionConvSendData {
-    let mut data = SectionConvSendData {
-        conversation_id: conversation_id.to_string(),
-        section_id: section_id.to_string(),
-        conversation_type: conversation_type.as_str().to_string(),
-        display_name: String::new(),
-        avatar_decoded: None,
-        initials: String::new(),
-        last_message: String::new(),
-        timestamp: String::new(),
-        unread_count: 0,
-    };
-
-    if let Some(meta) = ui_ctx.get_conversation_metadata(conversation_id, conversation_type) {
-        data.display_name = meta.name.clone();
-        data.initials = get_initials(&meta.name);
-        data.unread_count = meta.unread_count as i32;
+    // Name / unread / pin already came back with the section — core resolved
+    // them in one query. This used to be a `get_conversation_metadata` per row.
+    let mut display_name = conv.display_name.clone();
+    if display_name.is_empty() {
+        // A channel-free DM has no unified-conversation row until its first
+        // message lands; fall back to the peer profile so the row is not blank.
+        if let Ok(peer_id) = conv.conversation_id.parse() {
+            display_name = ui_ctx.display_name(&peer_id);
+        }
     }
 
+    let mut data = SectionConvSendData {
+        conversation_id: conv.conversation_id.clone(),
+        conversation_type: conv.conversation_type.as_str().to_string(),
+        initials: get_initials(&display_name),
+        display_name,
+        avatar_decoded: None,
+        unread_count: conv.unread_count as i32,
+        is_pinned: conv.is_pinned,
+    };
+
     // Channels carry their icon as raw bytes on the Channel record, not a URL.
-    if matches!(conversation_type, ConversationType::Channel) {
+    if matches!(conv.conversation_type, ConversationType::Channel) {
         data.avatar_decoded = channel_icons
-            .get(conversation_id)
+            .get(&conv.conversation_id)
             .and_then(|bytes| image::load_from_memory(bytes).ok())
             .map(|img| {
                 let rgba = img.to_rgba8();

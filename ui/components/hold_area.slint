@@ -1,0 +1,90 @@
+// Press-and-hold, for surfaces whose only menu affordance was right-click.
+//
+// Android has no right button and no hover, so every sidebar row's context menu
+// — move to folder, remove from folder, pin, rename, delete — was unreachable on
+// touch. This is the same gesture the message bubbles use
+// (ui/chat/message_item.slint), lifted out rather than copied a fifth time.
+//
+// Why a timer instead of the platform long-press: there is no platform
+// long-press to ride. The Android backend in this tree only ever produces
+// `PointerEventButton::Right` from a real secondary mouse button, so the
+// right-click path is dead code on a phone.
+//
+// Replaces the row's own TouchArea rather than nesting inside it — two stacked
+// TouchAreas fight over the pointer grab. It inherits TouchArea, so `clicked`
+// still works; the caller guards that with `hold-fired` so a hold never doubles
+// as a click.
+//
+// Right-click raises the SAME `held` callback, anchored at the cursor instead of
+// under the row. One callback for both input models means a row cannot end up
+// with a working mouse menu and a missing touch one, which is the exact drift
+// this is fixing.
+
+import { Spacing } from "../theme/spacing.slint";
+
+export component HoldArea inherits TouchArea {
+    // Where the menu should be anchored, in window coordinates. Reported at
+    // press time because by the time the timer fires the finger may have
+    // shifted, and a menu that opens under the thumb that opened it is useless.
+    out property <length> anchor-x: 0px;
+    out property <length> anchor-y: 0px;
+    // True from the moment the hold fires until the next press. The caller
+    // checks this in its `clicked` handler to ignore the release-tap.
+    out property <bool> hold-fired: false;
+
+    // Off for pointer devices: there, right-click is the affordance and a hold
+    // would fire on every slow click.
+    in property <bool> enabled-for-touch: true;
+
+    // 500ms is Android's own long-press timeout (ViewConfiguration).
+    in property <duration> hold-delay: 500ms;
+
+    // Raised by a completed hold (touch) or a right-click (pointer).
+    callback held();
+
+    property <length> press-x: 0px;
+    property <length> press-y: 0px;
+
+    hold-timer := Timer {
+        interval: root.hold-delay;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.hold-fired = true;
+            root.held();
+        }
+    }
+
+    pointer-event(event) => {
+        if (event.kind == PointerEventKind.down) {
+            root.press-x = self.mouse-x;
+            root.press-y = self.mouse-y;
+            root.anchor-x = self.absolute-position.x;
+            root.anchor-y = self.absolute-position.y + self.height;
+            root.hold-fired = false;
+            if (root.enabled-for-touch) {
+                hold-timer.running = true;
+            }
+        }
+        // Release, or a grab stolen by an enclosing Flickable — Slint delivers
+        // that as Cancel, and it is what distinguishes a hold from a scroll.
+        if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+            hold-timer.running = false;
+        }
+        // Moving past the slop means the finger is scrolling, not holding.
+        if (event.kind == PointerEventKind.move && hold-timer.running) {
+            if (abs(self.mouse-x - root.press-x) > Spacing.sm
+                || abs(self.mouse-y - root.press-y) > Spacing.sm) {
+                hold-timer.running = false;
+            }
+        }
+        // Pointer devices keep their menu, anchored at the cursor.
+        if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
+            hold-timer.running = false;
+            root.anchor-x = self.absolute-position.x + self.mouse-x;
+            root.anchor-y = self.absolute-position.y + self.mouse-y;
+            root.hold-fired = true;
+            root.held();
+        }
+    }
+}

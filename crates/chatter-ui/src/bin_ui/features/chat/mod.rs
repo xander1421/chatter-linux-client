@@ -11,6 +11,7 @@ mod edit;
 mod helpers;
 mod pin;
 mod reactions;
+mod selection;
 mod send_message;
 mod typing;
 
@@ -38,5 +39,6 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     actions::wire_forward_message_action(window, ui_ctx);
     actions::wire_copy_message(window, ui_ctx);
     actions::wire_download_message(window, ui_ctx);
+    selection::wire_selection(window, ui_ctx);
     emoji_loader::wire_emoji_loader(window, ui_ctx);
 }

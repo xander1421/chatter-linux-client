@@ -73,6 +73,23 @@ impl ActiveConversation {
         }
     }
 
+    /// The id the SIDEBAR uses for this conversation — the same string the
+    /// context menus send to `move_to_section` / the pin service.
+    ///
+    /// Not the same as [`channel_id`](Self::channel_id): a server DM is
+    /// channel-free and is keyed by the peer's `UserId`, which is what the DM
+    /// row carries. Pin state keyed any other way would not match the row.
+    pub fn sidebar_key(&self) -> Option<String> {
+        match self {
+            Self::Channel(id) => Some(id.to_string()),
+            Self::ServerDm { peer_id } => Some(peer_id.to_string()),
+            Self::MailboxDm { channel_id, .. } => Some(channel_id.to_string()),
+            Self::AnonDm(id) => Some(id.to_string()),
+            Self::AnonGroup(id) => Some(id.to_string()),
+            Self::None => None,
+        }
+    }
+
     /// Check if any conversation is active.
     pub fn is_active(&self) -> bool {
         !matches!(self, Self::None)

@@ -204,6 +204,9 @@ impl MessageDisplayData {
     let clean_content = strip_markdown(trimmed_content);
 
     MessageItemData {
+        // Multi-select marking is applied by features::chat::selection after
+        // conversion; a freshly converted row is never pre-selected.
+        selected: false,
         message_id: self.message_id.clone().into(),
         sender_id: self.sender_id.clone().into(),
         sender_name: self.sender_name.clone().into(),

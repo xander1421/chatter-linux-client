@@ -5,6 +5,7 @@
 pub mod ai;
 pub mod call_signaling;
 pub mod conversation;
+pub mod conversation_pins;
 pub mod current_user;
 pub mod auth_service;
 pub mod link_device_service;

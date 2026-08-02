@@ -12,7 +12,7 @@ use super::utils::{avatar_bytes_to_image, channel_type_to_string};
 ///
 /// Decodes `channel.icon` (raw image bytes) into a `slint::Image` at the
 /// UI-thread boundary only — no image-decode or caching logic lives here.
-pub fn channel_to_slint(channel: &Channel, _ui_ctx: &ChatterClient) -> crate::ChannelListItemData {
+pub fn channel_to_slint(channel: &Channel, ui_ctx: &ChatterClient) -> crate::ChannelListItemData {
     let (avatar_source, has_avatar) = match channel.icon.as_deref() {
         Some(bytes) if !bytes.is_empty() => match avatar_bytes_to_image(bytes) {
             Some(img) => (img, true),
@@ -30,6 +30,10 @@ pub fn channel_to_slint(channel: &Channel, _ui_ctx: &ChatterClient) -> crate::Ch
         timestamp: SharedString::default(),
         avatar_source,
         has_avatar,
+        // Pin state is core's (settings-backed, local-only). One indexed
+        // lookup per row; the sidebar channel list is tens of rows, not
+        // thousands.
+        is_pinned: ui_ctx.is_conversation_pinned(&channel.id.to_string()),
         is_selected: false,
     }
 }
@@ -67,6 +71,7 @@ impl DMListItemExt for DMListItemSendData {
             unread_count: self.unread_count as i32,
             is_typing: self.is_typing,
             is_anon: self.is_anon,
+            is_pinned: self.is_pinned,
             is_selected: false,
         }
     }

@@ -21,15 +21,18 @@ export struct ChatHeaderData {
     presence-status: string,  // "online", "away", "dnd", "offline" — shown for DMs only
 }
 
-// Reusable icon button component — 44px minimum touch target for mobile
+// Reusable icon button component — 44px touch target, the accessibility floor.
+// It was 48px, which is the floor plus margin the header does not have: four of
+// these in a row is a fifth of a 411dp screen, and the extra width read as the
+// icons being loosely spaced rather than as a bigger target.
 component IconButton inherits Rectangle {
     in property <image> icon;
     in property <color> icon-color: Colors.text-secondary;
     in property <color> hover-color: Colors.text-primary;
     callback clicked();
 
-    width: Spacing.touch-target-min;
-    height: Spacing.touch-target-min;
+    width: 44px;
+    height: 44px;
     background: touch.has-hover ? Colors.surface-hover : transparent;
     border-radius: Spacing.radius-md;
     border-width: touch.has-hover ? 1px : 0px;
@@ -39,10 +42,13 @@ component IconButton inherits Rectangle {
     drop-shadow-offset-y: touch.has-hover ? 1px : 0px;
     drop-shadow-color: touch.has-hover ? Colors.neo-shadow : transparent;
 
+    // 18px glyph in a 44px box. The target is what has to be big; the glyph is
+    // what has to be legible, and at 20px it was neither more legible nor less
+    // shouty than the channel name beside it.
     Image {
         source: icon;
-        width: 20px;
-        height: 20px;
+        width: 18px;
+        height: 18px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         colorize: touch.has-hover ? hover-color : icon-color;
@@ -100,7 +106,7 @@ export component ChatHeader inherits Rectangle {
     property <bool> has-channel: channel-name != "";
 
     // Show member count for channels and private groups (not DMs)
-    property <bool> show-member-count: has-channel && (channel-type == "public" || channel-type == "private" || is-private-group) && member-count > 0;
+    property <bool> show-member-count: has-channel && !tight && (channel-type == "public" || channel-type == "private" || is-private-group) && member-count > 0;
 
     // Show settings for regular channels and private groups, not for anon DMs or saved messages
     property <bool> show-settings: has-channel && ((!is-anon-dm && !is-saved) || is-private-group) && !is-mesh;
@@ -121,6 +127,11 @@ export component ChatHeader inherits Rectangle {
     // peer count stays because it is the connectivity signal, and the switch stays
     // because it is a control.
     property <bool> mesh-tight: root.width < 520px;
+    // Narrow header. At 411dp minus the sidebar rail there is room for the
+    // conversation name OR for every secondary action, not both — and the name
+    // is what tells you where you are, so the actions yield. Both of the ones
+    // dropped here stay reachable from channel settings (the kebab).
+    property <bool> tight: root.width < 420px;
     property <bool> mesh-radio-down: !MeshGlobal.radio-running;
     property <string> mesh-standing:
         MeshGlobal.active-kind == "geohash"
@@ -140,13 +151,16 @@ export component ChatHeader inherits Rectangle {
       : MeshGlobal.peer-count + " nearby";
 
     // Show invite button for channels and private groups only (not DMs, anon DMs, or saved)
-    property <bool> show-invite: has-channel && !is-dm && !is-anon-dm && !is-saved && !is-mesh;
+    property <bool> show-invite: has-channel && !tight && !is-dm && !is-anon-dm && !is-saved && !is-mesh;
 
     // Show call buttons for everything except saved messages
     property <bool> show-calls: has-channel && !is-saved && !is-mesh;
 
-    // Layout (56px header) — Neo glassmorphism: translucent surface with edge definition
-    height: 56px;
+    // Layout (52px header) — Neo glassmorphism: translucent surface with edge
+    // definition. 52px is a 44px touch row plus 4px of air above and below; the
+    // old 56px was that plus a spare row of nothing, repeated at the top of every
+    // conversation.
+    height: 52px;
     background: Colors.surface.with-alpha(0.85);
     border-width: 1px;
     border-color: Colors.neo-highlight;
@@ -162,17 +176,21 @@ export component ChatHeader inherits Rectangle {
         padding-left: Spacing.sm;
         padding-right: Spacing.sm;
         spacing: Spacing.sm;
-        alignment: space-between;
+        // No `alignment` here, and none on the left section below. Under any
+        // alignment other than stretch, Slint sizes every child to its preferred
+        // width and turns the leftover into gaps between them — horizontal-stretch
+        // is never consulted (i-slint-core layout.rs, solve_box_layout). So the
+        // name could only ever shrink, never grow into the space beside it, and
+        // on a phone it elided to one character ("# j…") with a wide gap to its
+        // right. Stretching hands that space to the child that asked for it.
 
         // Left section: Back button + Icon + Name
         HorizontalLayout {
             spacing: Spacing.sm;
-            alignment: start;
 
             // Mobile back button (returns to chat list)
             if root.show-back-button: IconButton {
                 icon: Icons.chevron-left;
-                width: Spacing.touch-target-min;
                 clicked => { root.back-clicked(); }
             }
 
@@ -348,8 +366,11 @@ export component ChatHeader inherits Rectangle {
             }
         }
 
-        // Center section: Topic / Typing
-        Rectangle {
+        // Center section: Topic / Typing — only when there is something to put
+        // in it. An unconditional centre claimed width in the middle of the row
+        // and then drew nothing, which is the gap the name beside it was eliding
+        // to make room for.
+        if root.topic != "" || root.typing-indicator != "" || (JarvisGlobal.enabled && root.jarvis-thinking): Rectangle {
             horizontal-stretch: 1;
             // Topic text
             if root.topic != "" && root.typing-indicator == "" && !(JarvisGlobal.enabled && root.jarvis-thinking): Text {
@@ -395,14 +416,20 @@ export component ChatHeader inherits Rectangle {
             }
         }
 
-        // Right section: Action buttons
+        // Right section: Action buttons. stretch 0 so the row's spare width goes
+        // to the name rather than being split with a group of fixed-size icons;
+        // being the last child, it still ends flush with the right edge.
         HorizontalLayout {
-            spacing: 2px;
+            // Groups sit 4px apart, buttons inside a group flush against each
+            // other: with the divider gone on a phone, that gap is the only
+            // thing left saying "calls" and "everything else" are two things.
+            spacing: Spacing.xs;
             alignment: end;
+            horizontal-stretch: 0;
 
             // Call buttons group
             if root.show-calls: HorizontalLayout {
-                spacing: 2px;
+                spacing: 0px;
                 alignment: center;
                 IconButton {
                     icon: Icons.phone;
@@ -412,8 +439,10 @@ export component ChatHeader inherits Rectangle {
                     icon: Icons.video;
                     clicked => { root.video-call-clicked(); }
                 }
-                // Divider
-                Rectangle {
+                // Divider — wide screens only. At 411dp it draws a line between
+                // two things the eye already reads as separate, in the one place
+                // on the screen with the least room for a decoration.
+                if !root.tight: Rectangle {
                     width: 1px;
                     height: 20px;
                     background: Colors.text-muted.with-alpha(0.3);
@@ -458,7 +487,7 @@ export component ChatHeader inherits Rectangle {
 
             // Utility buttons group
             HorizontalLayout {
-                spacing: 2px;
+                spacing: 0px;
                 alignment: center;
                 if root.show-invite: IconButton {
                     icon: Icons.user-plus;

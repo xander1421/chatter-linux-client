@@ -214,6 +214,8 @@ pub struct DMListItemSendData {
     pub is_typing: bool,
     /// True for anonymous (ephemeral) DMs, false for regular server DMs.
     pub is_anon: bool,
+    /// Local-only pin flag. Set by `list_dm_sidebar`; pinned rows lead the list.
+    pub is_pinned: bool,
 }
 
 impl DMListItemSendData {

@@ -1,12 +1,47 @@
 // Message context menu component
 //
-// Shows actions for a message: reply, edit, delete, pin, forward, copy
-// Positions at the click location
+// The single surface a message hold (or a desktop right-click) opens:
+// a quick-reaction row on top, then the actions — reply, react, thread,
+// select, edit, pin, forward, copy, download, delete.
+//
+// One popup, not two. Telegram floats the reaction row and the menu
+// separately; here they share a container so there is exactly one thing to
+// keep on screen, which is what makes the near-the-bottom and near-the-top
+// cases tractable (see `anchor-*` below).
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+
+// One tap-to-react emoji in the quick row. 48px so it is a real touch target.
+component QuickReaction inherits Rectangle {
+    in property <string> emoji;
+    callback clicked();
+
+    width: Spacing.touch-target-min;
+    height: Spacing.touch-target-min;
+    border-radius: Spacing.touch-target-min / 2;
+    background: touch.has-hover ? Colors.surface-hover : transparent;
+
+    Text {
+        text: root.emoji;
+        // Same font the reaction picker and the reactions pill use — the app's
+        // bundled UI font has no emoji coverage, which is what turns bare
+        // dingbats into tofu boxes elsewhere in this tree.
+        font-family: Typography.font-family-emoji;
+        font-size: 24px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        width: 100%;
+        height: 100%;
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
 
 // Menu item with icon and label
 component MenuItem inherits Rectangle {
@@ -53,16 +88,30 @@ export component MessageContextMenu inherits Rectangle {
     in property <length> position-x: 0;
     in property <length> position-y: 0;
 
+    // Viewport insets, so the popup never renders under the status bar or the
+    // gesture-nav strip on Android.
+    in property <length> safe-area-top: 0px;
+    in property <length> safe-area-bottom: 0px;
+
     // Message context (Signal-style identification: sender_id + timestamp_ns)
     in property <string> sender-id: "";
     in property <string> timestamp-ns: "";
+    in property <string> message-id: "";        // Thread + selection are keyed by message id
     in property <bool> is-own-message: false;  // Can edit own messages
     in property <bool> can-delete-for-everyone: false;  // Derived from permissions
     in property <bool> is-pinned: false;
     in property <bool> has-attachments: false;  // Show download option when true
 
+    // The six one-tap reactions. Not configurable by design — this is the quick
+    // row; anything else is a tap away behind "More reactions".
+    property <[string]> quick-reactions: ["\u{1F44D}", "\u{2764}\u{FE0F}", "\u{1F602}", "\u{1F62E}", "\u{1F622}", "\u{1F64F}"];
+
     // Callbacks - use (sender_id, timestamp_ns) for Signal-style lookups
     callback close();
+    callback quick-react(string, string, string);   // (sender_id, timestamp_ns, emoji)
+    callback more-reactions-clicked(string, string);
+    callback thread-clicked(string);                // (message_id)
+    callback select-clicked(string);                // (message_id) — enters selection mode
     callback reply-clicked(string, string);
     callback edit-clicked(string, string);
     callback delete-clicked(string, string);           // Delete for me (local only)
@@ -72,9 +121,13 @@ export component MessageContextMenu inherits Rectangle {
     callback copy-clicked(string, string);
     callback download-clicked(string, string);         // Download attachments
 
-    // Only render when visible
+    // Only render when visible. The fade matters for the hold gesture: tier 2
+    // dismisses this menu at the same moment the message becomes selected, and
+    // an instant disappearance there reads as a glitch rather than as an
+    // escalation.
     visible: root.show;
     opacity: root.show ? 1 : 0;
+    animate opacity { duration: 120ms; easing: ease-out; }
 
     // Full screen backdrop
     width: 100%;
@@ -88,14 +141,29 @@ export component MessageContextMenu inherits Rectangle {
         clicked => { root.close(); }
     }
 
-    // Menu container - positioned at click location, with a small offset
-    // so the cursor lands on the menu content rather than the corner.
+    // Menu container - positioned at the anchor (press point / click point).
+    //
+    // Anchoring rules, in order:
+    //   * prefer just below the anchor, so the popup does not sit under the
+    //     finger that opened it;
+    //   * if that would overflow the bottom inset, flip to just above it;
+    //   * clamp into [safe-area-top, height - safe-area-bottom] regardless, so
+    //     a tall menu on a short screen is merely cropped at a sane edge rather
+    //     than rendered under the status bar or the gesture strip.
     menu-container := Rectangle {
-        // Position at click, but ensure menu stays on screen
-        x: min(root.position-x - Spacing.sm, parent.width - self.width - Spacing.md);
-        y: min(root.position-y + Spacing.sm, parent.height - self.height - Spacing.md);
-        width: 200px;
-        height: menu-layout.preferred-height + Spacing.sm * 2;
+        property <length> menu-h: menu-layout.preferred-height + Spacing.sm * 2;
+        property <length> top-limit: root.safe-area-top + Spacing.sm;
+        property <length> bottom-limit: parent.height - root.safe-area-bottom - Spacing.sm;
+        // Does the preferred (below-the-anchor) placement fit?
+        property <bool> flip-up: root.position-y + Spacing.sm + self.menu-h > self.bottom-limit;
+
+        x: max(Spacing.sm, min(root.position-x - Spacing.sm, parent.width - self.width - Spacing.md));
+        y: max(self.top-limit,
+               min(self.flip-up ? root.position-y - Spacing.sm - self.menu-h
+                                : root.position-y + Spacing.sm,
+                   self.bottom-limit - self.menu-h));
+        width: 304px;
+        height: self.menu-h;
         background: Colors.surface;
         border-radius: Spacing.radius-md;
         border-width: 1px;
@@ -111,11 +179,65 @@ export component MessageContextMenu inherits Rectangle {
             padding: Spacing.sm;
             spacing: 2px;
 
+            // Quick-reaction row. This is the whole point of opening on hold:
+            // reacting used to be reachable only from the hover action bar,
+            // which on a touch screen exists only while a finger is down — you
+            // had to guess where it would appear and hit it blind. The
+            // reactions pill below a bubble is `if has-reactions`, so it could
+            // not bootstrap the first reaction either.
+            HorizontalLayout {
+                spacing: 0px;
+                alignment: space-between;
+                padding-bottom: Spacing.xs;
+
+                for emoji in root.quick-reactions: QuickReaction {
+                    emoji: emoji;
+                    clicked => {
+                        root.quick-react(root.sender-id, root.timestamp-ns, emoji);
+                        root.close();
+                    }
+                }
+            }
+
+            Rectangle {
+                height: 1px;
+                background: Colors.surface-hover;
+            }
+
+            MenuItem {
+                icon: Icons.smile;
+                label: "More reactions";
+                clicked => {
+                    root.more-reactions-clicked(root.sender-id, root.timestamp-ns);
+                    root.close();
+                }
+            }
+
             MenuItem {
                 icon: Icons.reply;
                 label: "Reply";
                 clicked => {
                     root.reply-clicked(root.sender-id, root.timestamp-ns);
+                    root.close();
+                }
+            }
+
+            MenuItem {
+                icon: Icons.message-circle;
+                label: "Reply in Thread";
+                clicked => {
+                    root.thread-clicked(root.message-id);
+                    root.close();
+                }
+            }
+
+            // The discoverable route into multi-select, for anyone who never
+            // finds the longer hold.
+            MenuItem {
+                icon: Icons.check;
+                label: "Select";
+                clicked => {
+                    root.select-clicked(root.message-id);
                     root.close();
                 }
             }

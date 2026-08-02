@@ -632,6 +632,11 @@ impl ChatterClient {
     );
     crate::service_accessor!(sections, SectionService, section_service);
     crate::service_accessor!(
+        conversation_pins,
+        crate::services::conversation_pins::ConversationPins,
+        conversation_pins
+    );
+    crate::service_accessor!(
         devices,
         crate::services::device_service::DeviceService,
         device_service
@@ -1370,6 +1375,47 @@ impl ChatterClient {
         self.sections().reorder_sections(ids)
     }
 
+    /// Move a section one place up (`delta` -1) or down (`delta` +1).
+    pub fn move_section(
+        &self,
+        id: &crate::domain::ids::SectionId,
+        delta: i32,
+    ) -> Result<(), crate::services::section_service::SectionError> {
+        self.sections().move_section(id, delta)
+    }
+
+    /// Set how a section orders the conversations inside it.
+    pub fn set_section_sort_mode(
+        &self,
+        id: &crate::domain::ids::SectionId,
+        mode: crate::domain::section::SectionSortMode,
+    ) -> Result<(), crate::services::section_service::SectionError> {
+        self.sections().set_sort_mode(id, mode)
+    }
+
+    // ── Conversation pins (local-only) ───────────────────────────────────
+
+    /// Pin or unpin a conversation by its sidebar id.
+    pub fn set_conversation_pinned(&self, conversation_id: &str, pinned: bool) -> bool {
+        match self.conversation_pins().set_pinned(conversation_id, pinned) {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::error!(error = %e, conversation_id, pinned, "failed to persist conversation pin");
+                false
+            }
+        }
+    }
+
+    /// Whether a conversation is pinned.
+    pub fn is_conversation_pinned(&self, conversation_id: &str) -> bool {
+        self.conversation_pins().is_pinned(conversation_id)
+    }
+
+    /// Every pinned conversation id, in one query.
+    pub fn pinned_conversation_ids(&self) -> std::collections::HashSet<String> {
+        self.conversation_pins().pinned_ids()
+    }
+
     pub fn move_conversation_to_section(
         &self,
         conv_id: &str,
@@ -1427,7 +1473,9 @@ impl ChatterClient {
         }
     }
 
-    /// Channels to list in the sidebar: MRU order, only Public/Private, and
+    /// Channels to list in the sidebar: pinned first, then MRU; only
+    /// Public/Private; anything filed into a custom section is excluded (it
+    /// renders inside that folder instead — it used to render in BOTH); and
     /// empty while anon mode hides regular channels. Single source of the
     /// sidebar-inclusion rule.
     pub fn sidebar_channels(&self) -> Vec<crate::domain::channel::Channel> {
@@ -1435,11 +1483,21 @@ impl ChatterClient {
             return Vec::new();
         }
         use crate::domain::channel::ChannelType;
-        let channels: Vec<_> = self
+        // A channel that lives in a folder is not also a loose channel.
+        let sectioned = self
+            .sections()
+            .all_sectioned_conversation_ids()
+            .unwrap_or_default();
+        let mut channels: Vec<_> = self
             .get_channels_mru()
             .into_iter()
             .filter(|c| matches!(c.channel_type, ChannelType::Public | ChannelType::Private))
+            .filter(|c| !sectioned.contains(&c.id.to_string()))
             .collect();
+        // Pinned to the top, MRU preserved within each group.
+        self.conversation_pins()
+            .sort_pinned_first(&mut channels, |c| c.id.to_string());
+        let channels = channels;
 
         // The local AI channel is pinned to the top when local AI is on.
         #[cfg(feature = "jarvis")]

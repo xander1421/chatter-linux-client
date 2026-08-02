@@ -36,6 +36,7 @@ use crate::services::gateway::MessageGateway;
 use crate::services::pin_service::PinService;
 use crate::services::session_service::SessionService;
 use crate::services::signal_service::SignalService;
+use crate::services::conversation_pins::ConversationPins;
 use crate::services::section_service::SectionService;
 use crate::services::user::UserService;
 use crate::state::{
@@ -92,6 +93,7 @@ pub struct CoreServices {
     pub jarvis_engine: SharedJarvisEngine,
     pub notification_service: Arc<NotificationService>,
     pub section_service: Arc<SectionService>,
+    pub conversation_pins: Arc<ConversationPins>,
     pub device_service: Arc<DeviceService>,
     /// Unified conversation repository.
     pub conversation_repo: Arc<crate::storage::repositories::UnifiedConversationRepository>,
@@ -190,6 +192,7 @@ impl CoreServices {
                 Arc::new(svc)
             },
             section_service: services.section_service.clone(),
+            conversation_pins: services.conversation_pins.clone(),
             device_service: services.device_service.clone(),
             conversation_repo: services.conversation_repo.clone(),
 

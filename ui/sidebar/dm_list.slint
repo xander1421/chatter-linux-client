@@ -24,6 +24,7 @@ export struct DMListItemData {
     unread-count: int,
     is-typing: bool,
     is-anon: bool,           // True for anon (ephemeral) DMs, false for regular
+    is-pinned: bool,         // local-only pin; core sorts pinned rows first
     is-selected: bool,       // Rust-computed selection flag; drives highlight
 }
 
@@ -36,7 +37,7 @@ export component DMList inherits Rectangle {
     // Callbacks
     callback conversation-selected(string);
     callback add-friend-clicked();
-    callback dm-context-menu-requested(/* channel-id */ string, /* x */ length, /* y */ length);
+    callback dm-context-menu-requested(/* channel-id */ string, /* is-pinned */ bool, /* x */ length, /* y */ length);
     // Tooltip callbacks removed — DMListItem now uses self-contained TooltipArea
 
     // Layout
@@ -89,6 +90,7 @@ export component DMList inherits Rectangle {
                     avatar-source: item.avatar-source;
                     initials: item.initials;
                     presence-status: item.presence-status;
+                    is-pinned: item.is-pinned;
                     last-message: item.last-message;
                     timestamp: item.timestamp;
                     unread-count: item.unread-count;
@@ -100,7 +102,7 @@ export component DMList inherits Rectangle {
                         root.conversation-selected(item.channel-id);
                     }
                     context-menu-requested(x, y) => {
-                        root.dm-context-menu-requested(item.channel-id, x, y);
+                        root.dm-context-menu-requested(item.channel-id, item.is-pinned, x, y);
                     }
                 }
             }

@@ -100,15 +100,21 @@ export component CreateSectionModal inherits Rectangle {
             }
 
             // ── Inline emoji grid (shown when picker-open) ────────
-            if root.picker-open: Rectangle {
+            if root.picker-open: grid-box := Rectangle {
                 height: 200px;
                 background: Colors.background;
                 border-radius: Spacing.radius-md;
                 border-width: 1px;
                 border-color: Colors.text-muted.with-alpha(0.2);
 
+                // Columns are derived, not fixed at seven. Seven columns is a
+                // 324px row: fine inside the 400px card on a desktop, off the
+                // right edge of a 360dp phone, where ModalContainer caps the
+                // card at `viewport - 32px` and the last column was clipped.
+                property <int> grid-cols: max(4, Math.floor((self.width - Spacing.sm * 2) / 44px));
+
                 Flickable {
-                    viewport-height: Math.ceil(SectionEmojis.icons.length / 7) * 40px + Spacing.sm * 2;
+                    viewport-height: Math.ceil(SectionEmojis.icons.length / grid-box.grid-cols) * 40px + Spacing.sm * 2;
                     viewport-width: parent.width;
 
                     Rectangle {
@@ -116,11 +122,11 @@ export component CreateSectionModal inherits Rectangle {
                         height: parent.viewport-height;
 
                         for icon[index] in SectionEmojis.icons: Rectangle {
-                            property <int> grid-row: Math.floor(index / 7);
-                            property <int> grid-col: mod(index, 7);
+                            property <int> grid-row: Math.floor(index / grid-box.grid-cols);
+                            property <int> grid-col: mod(index, grid-box.grid-cols);
 
-                            x: Spacing.sm + grid-col * 44px;
-                            y: Spacing.sm + grid-row * 40px;
+                            x: Spacing.sm + self.grid-col * 44px;
+                            y: Spacing.sm + self.grid-row * 40px;
                             width: 40px;
                             height: 36px;
                             border-radius: Spacing.radius-sm;

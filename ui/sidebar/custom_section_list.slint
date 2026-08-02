@@ -5,6 +5,7 @@
 // components (channels, DMs, private groups) based on conversation_type.
 
 import { Colors } from "../theme/colors.slint";
+import { HoldArea } from "../components/hold_area.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
 import { Typography } from "../theme/typography.slint";
@@ -13,18 +14,9 @@ import { TooltipArea } from "../components/tooltip.slint";
 
 // ── Data structs ────────────────────────────────────────────────
 
-export struct CustomSectionData {
-    section-id: string,
-    name: string,
-    icon-emoji: string,
-    is-expanded: bool,
-    unread-count: int,
-}
-
 export struct SectionConversationData {
     conversation-id: string,
-    section-id: string,
-    conversation-type: string,   // "channel", "dm", "private_group"
+    conversation-type: string,   // ConversationType::as_str — "channel", "server_dm", "anon_dm", "anon_group", …
     display-name: string,
     avatar-source: image,
     has-avatar: bool,
@@ -32,7 +24,22 @@ export struct SectionConversationData {
     last-message: string,
     timestamp: string,
     unread-count: int,
+    is-pinned: bool,             // local-only pin; core sorts these first
     is-selected: bool,           // Rust-computed selection flag; drives highlight
+}
+
+export struct CustomSectionData {
+    section-id: string,
+    name: string,
+    icon-emoji: string,
+    is-expanded: bool,
+    unread-count: int,
+    sort-mode: string,           // "recent" | "unread" | "alphabetical"
+    // This section's OWN rows, pre-grouped in Rust. Previously every section
+    // looped the whole flat list and hid non-matches with `visible` +
+    // `height: 0px`, which instantiated sections × conversations elements
+    // (ten folders over two hundred conversations = two thousand rows).
+    conversations: [SectionConversationData],
 }
 
 // ── Single conversation item inside a section ───────────────────
@@ -45,17 +52,30 @@ component SectionConversationItem inherits Rectangle {
     in property <bool> has-avatar: false;
     in property <string> initials;
     in property <int> unread-count: 0;
+    in property <bool> is-pinned: false;
     in property <bool> selected: false;
     in property <bool> collapsed: false;
+    in property <bool> mobile-mode: false;
 
     callback clicked();
     callback context-menu-requested(/* x */ length, /* y */ length);
 
-    height: 36px;
+    // A finger needs the 48px minimum; a mouse does not, and 36px keeps the
+    // desktop sidebar dense.
+    height: root.mobile-mode ? Spacing.touch-target-min : 36px;
     border-radius: Spacing.radius-sm;
     background: root.selected ? Colors.primary.with-alpha(0.2)
               : touch.has-hover ? Colors.surface-hover
               : transparent;
+
+    // Two glyph families live in `conversation-type`: DMs arrive as
+    // "server_dm" / "mailbox_dm" / "anon_dm", groups as "anon_group".
+    property <bool> is-dm: root.conversation-type == "server_dm"
+                        || root.conversation-type == "mailbox_dm"
+                        || root.conversation-type == "anon_dm";
+    property <bool> is-group: root.conversation-type == "anon_group";
+    property <bool> is-channel: root.conversation-type == "channel"
+                             || root.conversation-type == "saved_messages";
 
     if !root.collapsed: HorizontalLayout {
         padding-left: Spacing.md;
@@ -68,14 +88,14 @@ component SectionConversationItem inherits Rectangle {
             width: 20px;
             height: parent.height;
 
-            if root.conversation-type == "channel" && root.has-avatar: Image {
+            if root.is-channel && root.has-avatar: Image {
                 source: root.avatar-source;
                 width: 18px;
                 height: 18px;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
             }
-            if root.conversation-type == "channel" && !root.has-avatar: Image {
+            if root.is-channel && !root.has-avatar: Image {
                 source: Icons.hash;
                 width: 14px;
                 height: 14px;
@@ -83,7 +103,7 @@ component SectionConversationItem inherits Rectangle {
                 y: (parent.height - self.height) / 2;
                 colorize: root.selected ? Colors.primary : Colors.text-secondary;
             }
-            if root.conversation-type == "dm": Avatar {
+            if root.is-dm: Avatar {
                 size: 20px;
                 source: root.avatar-source;
                 fallback-text: root.initials;
@@ -91,7 +111,7 @@ component SectionConversationItem inherits Rectangle {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
             }
-            if root.conversation-type == "private_group": Image {
+            if root.is-group: Image {
                 source: Icons.shield;
                 width: 14px;
                 height: 14px;
@@ -110,6 +130,19 @@ component SectionConversationItem inherits Rectangle {
             vertical-alignment: center;
             overflow: elide;
             horizontal-stretch: 1;
+        }
+
+        // Pin marker — why this row is above the others.
+        if root.is-pinned: VerticalLayout {
+            alignment: center;
+            Image {
+                source: Icons.pin;
+                width: 11px;
+                height: 11px;
+                colorize: Colors.text-muted;
+                accessible-role: text;
+                accessible-label: "Pinned";
+            }
         }
 
         // Unread badge
@@ -141,14 +174,14 @@ component SectionConversationItem inherits Rectangle {
         tooltip-enabled: true;
         placement: "right";
 
-        if root.conversation-type == "channel" && root.has-avatar: Image {
+        if root.is-channel && root.has-avatar: Image {
             source: root.avatar-source;
             width: 20px;
             height: 20px;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
         }
-        if root.conversation-type == "channel" && !root.has-avatar: Image {
+        if root.is-channel && !root.has-avatar: Image {
             source: Icons.hash;
             width: 16px;
             height: 16px;
@@ -156,7 +189,7 @@ component SectionConversationItem inherits Rectangle {
             y: (parent.height - self.height) / 2;
             colorize: root.selected ? Colors.primary : Colors.text-secondary;
         }
-        if root.conversation-type == "dm": Avatar {
+        if root.is-dm: Avatar {
             size: 22px;
             source: root.avatar-source;
             fallback-text: root.initials;
@@ -164,7 +197,7 @@ component SectionConversationItem inherits Rectangle {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
         }
-        if root.conversation-type == "private_group": Image {
+        if root.is-group: Image {
             source: Icons.shield;
             width: 16px;
             height: 16px;
@@ -174,16 +207,12 @@ component SectionConversationItem inherits Rectangle {
         }
     }
 
-    touch := TouchArea {
+    touch := HoldArea {
         mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-        pointer-event(event) => {
-            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
-                root.context-menu-requested(
-                    self.absolute-position.x + self.mouse-x,
-                    self.absolute-position.y + self.mouse-y);
-            }
+        clicked => {
+            if (!self.hold-fired) { root.clicked(); }
         }
+        held => { root.context-menu-requested(self.anchor-x, self.anchor-y); }
     }
 }
 
@@ -196,37 +225,41 @@ component CustomSectionHeader inherits Rectangle {
     in property <bool> is-expanded: true;
     in property <int> unread-count: 0;
     in property <bool> collapsed: false;
+    in property <bool> mobile-mode: false;
 
     callback toggle-expanded();
     callback rename-clicked();
     callback delete-clicked();
     callback context-menu-requested(/* x */ length, /* y */ length);
 
-    height: 32px;
+    height: root.mobile-mode ? Spacing.touch-target-min : 32px;
 
-    // Hover detector — always present (not inside conditional).
-    // Also captures right-click to open section context menu.
-    header-hover := TouchArea {
+    // The header's ONE pointer surface: tap toggles, hold (or right-click)
+    // opens the menu. There used to be a second TouchArea over the name inside
+    // the layout below, and being declared later it won the pointer grab — a
+    // press-and-hold on a folder header just collapsed the folder and the menu
+    // was unreachable on touch. Same "two stacked TouchAreas fight over the
+    // grab" trap HoldArea exists to avoid.
+    //
+    // Declared FIRST so the hover buttons below stay on top and keep their own
+    // clicks; the Texts and Images between are not interactive, so this still
+    // receives everything else.
+    header-hover := HoldArea {
         width: 100%;
         height: 100%;
-        mouse-cursor: default;
-        pointer-event(event) => {
-            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
-                root.context-menu-requested(
-                    self.absolute-position.x + self.mouse-x,
-                    self.absolute-position.y + self.mouse-y);
-            }
+        mouse-cursor: pointer;
+        clicked => {
+            if (!self.hold-fired) { root.toggle-expanded(); }
         }
+        held => { root.context-menu-requested(self.anchor-x, self.anchor-y); }
     }
 
     if !root.collapsed: HorizontalLayout {
         padding-left: 6px;
         padding-right: 4px;
 
-        TouchArea {
+        Rectangle {
             horizontal-stretch: 1;
-            mouse-cursor: pointer;
-            clicked => { root.toggle-expanded(); }
 
             HorizontalLayout {
                 padding-left: 2px;
@@ -239,8 +272,8 @@ component CustomSectionHeader inherits Rectangle {
                     horizontal-stretch: 0;
                     Image {
                         source: Icons.chevron-right;
-                        width: 10px;
-                        height: 10px;
+                        width: root.mobile-mode ? 14px : 10px;
+                        height: root.mobile-mode ? 14px : 10px;
                         colorize: Colors.text-muted;
                         transform-rotation: root.is-expanded ? 90deg : 0deg;
                         animate transform-rotation { duration: 150ms; easing: ease-out; }
@@ -251,7 +284,7 @@ component CustomSectionHeader inherits Rectangle {
                 Text {
                     text: root.icon-emoji;
                     font-family: Typography.font-family-emoji;
-                    font-size: Typography.xs;
+                    font-size: root.mobile-mode ? Typography.sm : Typography.xs;
                     vertical-alignment: center;
                 }
 
@@ -259,15 +292,15 @@ component CustomSectionHeader inherits Rectangle {
                 Text {
                     text: root.name;
                     color: Colors.text-muted;
-                    font-size: Typography.xs2;
+                    font-size: root.mobile-mode ? Typography.sm2 : Typography.xs2;
                     font-weight: 600;
                     letter-spacing: 0.5px;
                     vertical-alignment: center;
                     horizontal-stretch: 1;
                 }
 
-                // Aggregate unread badge (hidden when action buttons show)
-                if root.unread-count > 0 && !header-hover.has-hover: Rectangle {
+                // Aggregate unread badge (hidden when the desktop action buttons show)
+                if root.unread-count > 0 && (root.mobile-mode || !header-hover.has-hover): Rectangle {
                     width: root.unread-count > 9 ? 22px : 18px;
                     height: 18px;
                     border-radius: 9px;
@@ -286,8 +319,11 @@ component CustomSectionHeader inherits Rectangle {
             }
         }
 
-        // Hover-reveal action buttons
-        if header-hover.has-hover: HorizontalLayout {
+        // Hover-reveal action buttons — DESKTOP ONLY. There is no hover on a
+        // touch screen, and press-and-hold already opens a menu carrying
+        // Rename and Remove; a 24px button here would be an unhittable
+        // duplicate of a control the user already has.
+        if !root.mobile-mode && header-hover.has-hover: HorizontalLayout {
             spacing: 2px;
             alignment: end;
 
@@ -372,14 +408,14 @@ component CustomSectionHeader inherits Rectangle {
 
 export component CustomSectionList inherits Rectangle {
     in property <[CustomSectionData]> sections: [];
-    in property <[SectionConversationData]> section-conversations: [];
     in property <bool> collapsed: false;
+    in property <bool> mobile-mode: false;
 
     callback create-section-clicked();
     callback section-toggle-expanded(/* section-id */ string);
     callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ string);
-    callback section-conversation-context-menu-requested(/* conversation-id */ string, /* conversation-type */ string, /* section-id */ string, /* x */ length, /* y */ length);
-    callback section-header-context-menu-requested(/* section-id */ string, /* x */ length, /* y */ length);
+    callback section-conversation-context-menu-requested(/* conversation-id */ string, /* conversation-type */ string, /* section-id */ string, /* is-pinned */ bool, /* x */ length, /* y */ length);
+    callback section-header-context-menu-requested(/* section-id */ string, /* sort-mode */ string, /* x */ length, /* y */ length);
     callback delete-section-clicked(/* section-id */ string);
     callback rename-section-clicked(/* section-id */ string);
 
@@ -388,7 +424,7 @@ export component CustomSectionList inherits Rectangle {
 
         // "+ New Section" button — hidden in collapsed mode to avoid duplicate + icons
         if !root.collapsed: Rectangle {
-            height: 28px;
+            height: root.mobile-mode ? Spacing.touch-target-min : 28px;
             background: new-sec-touch.has-hover ? Colors.surface-hover : transparent;
             border-radius: Spacing.radius-sm;
             // Ghost-button affordance — a bare text row reads as a list item,
@@ -408,15 +444,15 @@ export component CustomSectionList inherits Rectangle {
                     horizontal-stretch: 0;
                     Image {
                         source: Icons.plus;
-                        width: 12px;
-                        height: 12px;
+                        width: root.mobile-mode ? 16px : 12px;
+                        height: root.mobile-mode ? 16px : 12px;
                         colorize: new-sec-touch.has-hover ? Colors.primary : Colors.text-muted;
                     }
                 }
                 Text {
                     text: "New Section";
                     color: new-sec-touch.has-hover ? Colors.text-secondary : Colors.text-muted;
-                    font-size: Typography.xs2;
+                    font-size: root.mobile-mode ? Typography.sm2 : Typography.xs2;
                     font-weight: 500;
                     vertical-alignment: center;
                 }
@@ -439,24 +475,24 @@ export component CustomSectionList inherits Rectangle {
                 is-expanded: section.is-expanded;
                 unread-count: section.unread-count;
                 collapsed: root.collapsed;
+                mobile-mode: root.mobile-mode;
 
                 toggle-expanded => { root.section-toggle-expanded(section.section-id); }
                 rename-clicked => { root.rename-section-clicked(section.section-id); }
                 delete-clicked => { root.delete-section-clicked(section.section-id); }
                 context-menu-requested(x, y) => {
-                    root.section-header-context-menu-requested(section.section-id, x, y);
+                    root.section-header-context-menu-requested(section.section-id, section.sort-mode, x, y);
                 }
             }
 
-            // Section conversations (only when expanded)
+            // Section conversations (only when expanded). The model is this
+            // section's own rows, already ordered by core.
             if section.is-expanded: VerticalLayout {
                 padding-left: Spacing.xs;
                 padding-right: Spacing.xs;
                 spacing: 2px;
 
-                for conv in root.section-conversations: SectionConversationItem {
-                    visible: conv.section-id == section.section-id;
-                    height: conv.section-id == section.section-id ? 36px : 0px;
+                for conv in section.conversations: SectionConversationItem {
                     conversation-id: conv.conversation-id;
                     conversation-type: conv.conversation-type;
                     display-name: conv.display-name;
@@ -464,21 +500,16 @@ export component CustomSectionList inherits Rectangle {
                     has-avatar: conv.has-avatar;
                     initials: conv.initials;
                     unread-count: conv.unread-count;
+                    is-pinned: conv.is-pinned;
                     selected: conv.is-selected;
                     collapsed: root.collapsed;
+                    mobile-mode: root.mobile-mode;
 
                     clicked => { root.section-conversation-selected(conv.conversation-id, conv.conversation-type); }
                     context-menu-requested(x, y) => {
-                        root.section-conversation-context-menu-requested(conv.conversation-id, conv.conversation-type, section.section-id, x, y);
+                        root.section-conversation-context-menu-requested(conv.conversation-id, conv.conversation-type, section.section-id, conv.is-pinned, x, y);
                     }
                 }
-            }
-
-            // Empty state (expanded + no conversations for this section)
-            if section.is-expanded && !root.collapsed: Rectangle {
-                // Slint doesn't support runtime filtering, so we show a subtle hint
-                // The Rust side should only populate conversations for visible sections
-                height: 0px; // Placeholder — Rust populates section-conversations per section
             }
         }
     }

@@ -20,6 +20,7 @@ import { ChatLayout, MessageItemData, MessageAttachmentData, PendingAttachmentDa
 import { ThreadPanel } from "chat/thread_panel.slint";
 import { ReactionPicker } from "chat/reaction_picker.slint";
 import { MessageContextMenu } from "chat/message_context_menu.slint";
+import { SelectionBar } from "chat/selection_bar.slint";
 import { EmojiPicker, EmojiData } from "components/emoji_picker.slint";
 import { GifPicker, GifData } from "components/gif_picker.slint";
 import { MentionAutocomplete, MentionSuggestion } from "components/mention_autocomplete.slint";
@@ -224,7 +225,6 @@ export component App inherits Rectangle {
     in property <[DMListItemData]> dm-conversations: [];
     in property <[PrivateGroupListItemData]> private-groups: [];
     in property <[CustomSectionData]> custom-sections: [];
-    in property <[SectionConversationData]> section-conversations: [];
     in property <int> total-unread-count: 0;
     in property <string> user-display-name: "User";
     in property <image> user-avatar-source;
@@ -234,6 +234,12 @@ export component App inherits Rectangle {
     in-out property <string> user-presence-mode: "auto";
     in property <string> user-custom-status: "";
     in-out property <bool> sidebar-collapsed: false;
+    // The ONE definition of "the panel is a rail right now". The Sidebar
+    // collapses on either signal, so anything else deciding based on collapse
+    // state has to read the same expression — checking `sidebar-collapsed`
+    // alone reports "expanded" on a phone that is showing a rail, which removed
+    // the entire chat column and left a blank screen.
+    property <bool> sidebar-is-rail: root.is-small-screen || root.sidebar-collapsed;
     in-out property <bool> sidebar-hidden: false;
 
     // ========== Chat properties ==========
@@ -365,10 +371,27 @@ export component App inherits Rectangle {
     in-out property <int> mention-selected-index: 0;
     callback mention-suggestion-selected(string, string);  // (id, display_text)
 
+    // ========== Message multi-select ==========
+    // Entered by the long hold on a bubble (tier 2) or by "Select" in the
+    // message menu. While active, a plain tap toggles selection instead of
+    // doing whatever a tap normally does, and Android Back exits the mode
+    // before it closes any modal — see the back-press handler in Rust.
+    //
+    // The set of selected ids lives in Rust (the per-row `selected` flag on
+    // MessageItemData is what the UI renders); Slint holds only the mode flag
+    // and the count, so there is one owner of the set.
+    in-out property <bool> selection-mode: false;
+    in property <int> selected-message-count: 0;
+    callback message-selection-toggled(string);   // (message_id)
+    callback selection-cleared();
+    callback selection-delete-clicked();
+
     // ========== Message context menu state ==========
     in-out property <bool> context-menu-visible: false;
     in-out property <string> context-menu-sender-id: "";
     in-out property <string> context-menu-timestamp-ns: "";
+    // Thread and selection are keyed by message id, not (sender, timestamp).
+    in-out property <string> context-menu-message-id: "";
     in-out property <length> context-menu-x: 0px;
     in-out property <length> context-menu-y: 0px;
     in property <bool> context-menu-is-own-message: false;
@@ -456,7 +479,7 @@ export component App inherits Rectangle {
     in-out property <string> create-section-name: "";
     in-out property <string> create-section-emoji: "📁";
     in-out property <string> create-section-id: "";  // set for rename
-    in property <bool> create-section-loading: false;
+    in-out property <bool> create-section-loading: false;
 
     // Create-channel modal: which tab to open on (0 = Create, 1 = Join)
     in-out property <int> create-channel-initial-tab: 0;
@@ -689,6 +712,9 @@ export component App inherits Rectangle {
     callback rename-section-clicked(/* section-id */ string);
     callback move-to-section(/* conversation-id */ string, /* conversation-type */ string, /* section-id */ string);
     callback remove-from-section(/* conversation-id */ string);
+    callback set-conversation-pinned(/* conversation-id */ string, /* pinned */ bool);
+    callback move-section(/* section-id */ string, /* delta */ int);
+    callback set-section-sort-mode(/* section-id */ string, /* mode */ string);
 
     // ========== Toast notification properties ==========
     in-out property <bool> toast-visible: false;
@@ -1117,20 +1143,27 @@ export component App inherits Rectangle {
                 // Survives dismissing the connection banner: the dot on the
                 // settings button is what keeps saying the server is down.
                 server-unreachable: root.server-unreachable;
-                // Mobile treated as narrow desktop: always-visible split view
-                // with collapse toggle. No full-screen swap on conversation open.
-                mobile-mode: false;
+                // `mobile-mode` means "touch input" — it sizes the panel's
+                // targets, it does NOT change the layout. The panel stays on
+                // screen on every platform, Discord-style: an icon rail by
+                // default, expanded to the full list by the toggle in its
+                // footer. A phone-style swap-the-whole-screen navigation was
+                // tried and rejected: it costs a tap for every glance at the
+                // conversation list.
+                mobile-mode: root.is-mobile-platform;
                 mobile-width: root.width;
                 channels: root.channels;
                 dm-conversations: root.dm-conversations;
                 private-groups: root.private-groups;
                 custom-sections: root.custom-sections;
-                section-conversations: root.section-conversations;
                 user-display-name: root.user-display-name;
                 user-avatar-source: root.user-avatar-source;
                 user-initials: root.user-initials;
                 user-presence-status: root.user-presence-status;
-                collapsed: root.is-small-screen || root.sidebar-collapsed;
+                // Narrow screens start on the rail and expand on demand. The
+                // user drives this — `sidebar-user-collapsed` keeps their choice
+                // from being undone by a resize.
+                collapsed: root.sidebar-is-rail;
                 hidden: root.sidebar-hidden;
                 pending-friend-requests: root.friends-received-requests.length;
                 pending-message-requests: root.pending-message-requests;
@@ -1232,6 +1265,15 @@ export component App inherits Rectangle {
                 move-to-section(conv-id, conv-type, section-id) => {
                     root.move-to-section(conv-id, conv-type, section-id);
                 }
+                set-conversation-pinned(conv-id, pinned) => {
+                    root.set-conversation-pinned(conv-id, pinned);
+                }
+                move-section(section-id, delta) => {
+                    root.move-section(section-id, delta);
+                }
+                set-section-sort-mode(section-id, mode) => {
+                    root.set-section-sort-mode(section-id, mode);
+                }
                 remove-from-section(conv-id) => {
                     root.remove-from-section(conv-id);
                 }
@@ -1244,9 +1286,15 @@ export component App inherits Rectangle {
                 }
             }
 
-            // Right side area (Chat + Panels)
-            // On mobile: hidden when sidebar is showing full-width (chat list view)
-            chat-panel-area := Rectangle {
+            // Right side area (Chat + Panels).
+            //
+            // Removed from the layout while the panel is expanded on touch,
+            // where the panel takes the whole screen. `if` rather than
+            // `visible: false`, for the reason documented at the ChatLayout
+            // below: a hidden element still occupies its layout slot, and a
+            // zero-width chat column beside a full-width panel is exactly the
+            // shape that pushes content past the clipped edge.
+            if !(root.is-mobile-platform && !root.sidebar-is-rail): chat-panel-area := Rectangle {
                 horizontal-stretch: 1;
                 vertical-stretch: 1;
                 visible: true;
@@ -1313,12 +1361,46 @@ export component App inherits Rectangle {
                     // still occupies its layout slot, so in fullscreen the hidden
                     // ChatLayout reserved black space below the call dock. `if`
                     // removes it from the layout tree entirely.
+                    // Selection mode takes over the channel's own header rather
+                    // than floating above everything: as a root-level overlay it
+                    // covered the sidebar and the header at once, so the count sat
+                    // on top of the nav it was not part of. Sitting here it lines
+                    // up with the header it replaces, which is also why it does not
+                    // apply safe-area-top — ChatHeader does not either, and an
+                    // inset on one of the two would misalign them.
+                    if root.selection-mode
+                        && !root.active-call-fullscreen
+                        && !(root.is-small-screen && root.thread-panel-visible): SelectionBar {
+                        show: true;
+                        count: root.selected-message-count;
+                        cleared => {
+                            root.selection-mode = false;
+                            root.selection-cleared();
+                        }
+                        delete-clicked => { root.selection-delete-clicked(); }
+                    }
+
                     if !root.active-call-fullscreen
                         && !(root.is-small-screen && root.thread-panel-visible): ChatLayout {
                     vertical-stretch: 1;
-                    hide-header: false;
+                    hide-header: root.selection-mode;
+                    // No back button: the conversation list is always on
+                    // screen beside this, so there is nothing to go back to —
+                    // and the header is tight enough already.
                     show-back-button: false;
                     back-clicked => { }
+                    selection-mode: root.selection-mode;
+                    // Press-and-hold on a bubble is a touch gesture only.
+                    mobile: root.is-mobile-platform;
+                    // Tier 2 of the hold escalates out of tier 1: close the menu
+                    // as selection engages, so the two are never on screen at
+                    // once. The menu fades (see MessageContextMenu) while the
+                    // row tint animates in, so it reads as an escalation the
+                    // user caused rather than a menu that glitched away.
+                    selection-toggled(id) => {
+                        root.context-menu-visible = false;
+                        root.message-selection-toggled(id);
+                    }
                     channel-id: root.channel-id;
                     channel-name: root.channel-name;
                     channel-type: root.channel-type;
@@ -2525,13 +2607,15 @@ export component App inherits Rectangle {
         }
     }
 
-    // Message context menu overlay
     MessageContextMenu {
         show: root.context-menu-visible;
         sender-id: root.context-menu-sender-id;
         timestamp-ns: root.context-menu-timestamp-ns;
+        message-id: root.context-menu-message-id;
         position-x: root.context-menu-x;
         position-y: root.context-menu-y;
+        safe-area-top: root.safe-area-top;
+        safe-area-bottom: root.safe-area-bottom;
         is-own-message: root.context-menu-is-own-message;
         can-delete-for-everyone: root.context-menu-can-delete-for-everyone;
         is-pinned: root.context-menu-is-pinned;
@@ -2539,6 +2623,29 @@ export component App inherits Rectangle {
 
         close => {
             root.context-menu-visible = false;
+        }
+        quick-react(sender-id, timestamp-ns, emoji) => {
+            root.context-menu-visible = false;
+            root.reaction-selected(sender-id, timestamp-ns, root.context-menu-message-id, emoji);
+        }
+        more-reactions-clicked(sender-id, timestamp-ns) => {
+            root.context-menu-visible = false;
+            root.reaction-picker-sender-id = sender-id;
+            root.reaction-picker-timestamp-ns = timestamp-ns;
+            root.reaction-picker-message-id = root.context-menu-message-id;
+            root.reaction-picker-anchor-x = root.context-menu-x;
+            root.reaction-picker-anchor-y = root.context-menu-y;
+            root.reaction-picker-visible = true;
+            root.react-clicked(sender-id, timestamp-ns, root.context-menu-x, root.context-menu-y);
+        }
+        thread-clicked(id) => {
+            root.context-menu-visible = false;
+            root.thread-clicked(id);
+        }
+        select-clicked(id) => {
+            root.context-menu-visible = false;
+            root.selection-mode = true;
+            root.message-selection-toggled(id);
         }
         reply-clicked(sender-id, timestamp-ns) => {
             root.context-menu-visible = false;

@@ -110,4 +110,7 @@ export struct MessageItemData {
     show-date-separator: bool,     // Show date separator bar before this message
     date-separator-text: string,   // "Today", "Yesterday", "March 25, 2026"
     is-continuation: bool,         // Same sender as previous, within time window — hide avatar/name
+    // Multi-select. The set of selected messages is owned by Rust; this is the
+    // per-row flag the bubble renders from.
+    selected: bool,
 }

@@ -4,6 +4,7 @@
 
 use crate::domain::ids::SectionId;
 use crate::domain::message::ConversationType;
+use crate::domain::section::SectionSortMode;
 use crate::error::StorageError;
 use crate::storage::Database;
 use chrono::{DateTime, Utc};
@@ -18,6 +19,7 @@ pub struct Section {
     pub icon_emoji: String,
     pub sort_order: i32,
     pub is_expanded: bool,
+    pub sort_mode: SectionSortMode,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -80,6 +82,7 @@ impl SectionRepository {
             icon_emoji: icon_emoji.to_string(),
             sort_order,
             is_expanded: true,
+            sort_mode: SectionSortMode::default(),
             created_at: now,
             updated_at: now,
         })
@@ -135,7 +138,7 @@ impl SectionRepository {
     pub fn list_sections(&self) -> Result<Vec<Section>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, name, icon_emoji, sort_order, is_expanded, created_at, updated_at
+            "SELECT id, name, icon_emoji, sort_order, is_expanded, sort_mode, created_at, updated_at
              FROM custom_sections
              ORDER BY sort_order ASC",
         )?;
@@ -160,6 +163,27 @@ impl SectionRepository {
         let rows = conn.execute(
             "UPDATE custom_sections SET is_expanded = ?1, updated_at = ?2 WHERE id = ?3",
             params![expanded as i32, now.to_rfc3339(), id.to_string()],
+        )?;
+
+        if rows == 0 {
+            return Err(StorageError::NotFound(format!("Section {} not found", id)));
+        }
+
+        Ok(())
+    }
+
+    /// Set how a section's conversations are ordered.
+    pub fn set_sort_mode(
+        &self,
+        id: &SectionId,
+        mode: SectionSortMode,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        let now = Utc::now();
+
+        let rows = conn.execute(
+            "UPDATE custom_sections SET sort_mode = ?1, updated_at = ?2 WHERE id = ?3",
+            params![mode.as_str(), now.to_rfc3339(), id.to_string()],
         )?;
 
         if rows == 0 {
@@ -298,8 +322,9 @@ fn row_to_section(row: &rusqlite::Row<'_>) -> Result<Section, StorageError> {
     let icon_emoji: String = row.get(2)?;
     let sort_order: i32 = row.get(3)?;
     let is_expanded: i32 = row.get(4)?;
-    let created_at_str: String = row.get(5)?;
-    let updated_at_str: String = row.get(6)?;
+    let sort_mode_str: String = row.get(5)?;
+    let created_at_str: String = row.get(6)?;
+    let updated_at_str: String = row.get(7)?;
 
     let id: SectionId = id_str
         .parse()
@@ -311,6 +336,7 @@ fn row_to_section(row: &rusqlite::Row<'_>) -> Result<Section, StorageError> {
         icon_emoji,
         sort_order,
         is_expanded: is_expanded != 0,
+        sort_mode: SectionSortMode::from_str_value(&sort_mode_str),
         created_at: parse_datetime(&created_at_str),
         updated_at: parse_datetime(&updated_at_str),
     })

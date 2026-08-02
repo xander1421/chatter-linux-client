@@ -36,6 +36,13 @@ export component MainWindow inherits Window {
 
     in property <bool> is-mobile-platform <=> app.is-mobile-platform;
 
+    // ========== Android back key ==========
+    // Fired once per hardware/gesture Back press, from `back-scope` at the
+    // bottom of this file. The DECISION (pop selection mode, else close the
+    // modal, else background the task) lives in Rust so it is testable:
+    // `bin_ui::features::back`. Slint only reports the press.
+    callback back-pressed();
+
     // ========== View routing ==========
     in-out property <string> current-view <=> app.current-view;
 
@@ -116,7 +123,6 @@ export component MainWindow inherits Window {
 
     // ========== Custom sections properties ==========
     in property <[CustomSectionData]> custom-sections <=> app.custom-sections;
-    in property <[SectionConversationData]> section-conversations <=> app.section-conversations;
 
     // ========== Chat properties ==========
     in property <string> channel-id <=> app.channel-id;
@@ -263,6 +269,16 @@ export component MainWindow inherits Window {
     callback forward-message-action <=> app.forward-message-action;
     callback copy-message <=> app.copy-message;
     callback download-message <=> app.download-message;
+
+    // Message context menu — thread and selection are keyed by message id.
+    in-out property <string> context-menu-message-id <=> app.context-menu-message-id;
+
+    // ========== Message multi-select ==========
+    in-out property <bool> selection-mode <=> app.selection-mode;
+    in property <int> selected-message-count <=> app.selected-message-count;
+    callback message-selection-toggled <=> app.message-selection-toggled;
+    callback selection-cleared <=> app.selection-cleared;
+    callback selection-delete-clicked <=> app.selection-delete-clicked;
 
     // ========== Pinned bar state ==========
     in property <bool> has-pinned-messages <=> app.has-pinned-messages;
@@ -597,6 +613,12 @@ export component MainWindow inherits Window {
     callback rename-section-clicked <=> app.rename-section-clicked;
     callback move-to-section <=> app.move-to-section;
     callback remove-from-section <=> app.remove-from-section;
+    callback set-conversation-pinned <=> app.set-conversation-pinned;
+    callback move-section <=> app.move-section;
+    callback set-section-sort-mode <=> app.set-section-sort-mode;
+    // Declared on App since the modal was written but never bridged, so the
+    // create-folder modal's spinner could never turn on.
+    in-out property <bool> create-section-loading <=> app.create-section-loading;
 
     // ========== Chat callbacks ==========
     callback chat-settings-clicked <=> app.chat-settings-clicked;
@@ -770,18 +792,60 @@ export component MainWindow inherits Window {
     in property <string> toast-message <=> app.toast-message;
     in property <string> toast-variant <=> app.toast-variant;
 
-    // App fills the entire window - explicit sizing ensures width flows to children.
+    // Initial keyboard focus goes to `back-scope`. Without this NOTHING has
+    // focus on startup, and `WindowInner::process_key_input` only delivers key
+    // events to the focus item and its ancestors — so a Back press before the
+    // user has tapped a text field would be dropped on the floor, which is the
+    // reported bug. Once the user focuses the composer, Back still arrives here
+    // because unhandled key events bubble UP the focus chain to this ancestor.
+    forward-focus: back-scope;
+
+    // Catches Android's hardware/gesture Back. It wraps `app` so it is an
+    // ANCESTOR of every focusable item — that is the only position from which
+    // it can see keys a focused TextInput chose not to consume.
     //
-    // Slint 1.15 splits two separate out-props:
-    //   * `safe-area-insets`  — system bars only (status bar / nav bar).
-    //   * `virtual-keyboard-size.height` — IME height when the keyboard is up.
-    // The Android backend feeds them from `WindowInsets.Type.systemBars()` and
-    // `WindowInsets.Type.ime()` respectively, so they must both be subtracted
-    // from the content area to lift the composer above the keyboard.
-    app := App {
+    // focus-on-click / focus-on-tab-navigation are both off on purpose: this
+    // scope must never take focus AWAY from the composer or a text field. It
+    // only ever receives focus once, from `forward-focus` above, and after that
+    // it works purely by event bubbling.
+    back-scope := FocusScope {
         width: root.width;
         height: root.height;
-        safe-area-top: root.safe-area-insets.top;
-        safe-area-bottom: root.safe-area-insets.bottom + root.virtual-keyboard-size.height;
+        focus-on-click: false;
+        focus-on-tab-navigation: false;
+
+        key-pressed(event) => {
+            if (event.text == Key.Back) {
+                root.back-pressed();
+                // Always consume. The android backend turns EventAccepted into
+                // InputStatus::Handled, which is what stops the framework's
+                // default Back (finish the Activity) from also running.
+                return accept;
+            }
+            return reject;
+        }
+
+        // Swallow the matching key-up too, WITHOUT re-firing back-pressed.
+        // Android's default Back acts on ACTION_UP, so consuming only the press
+        // would leave the release for the framework to act on — one physical
+        // press then both pops a layer here and runs the default handler.
+        key-released(event) => {
+            return event.text == Key.Back ? accept : reject;
+        }
+
+        // App fills the entire window - explicit sizing ensures width flows to children.
+        //
+        // Slint 1.15 splits two separate out-props:
+        //   * `safe-area-insets`  — system bars only (status bar / nav bar).
+        //   * `virtual-keyboard-size.height` — IME height when the keyboard is up.
+        // The Android backend feeds them from `WindowInsets.Type.systemBars()` and
+        // `WindowInsets.Type.ime()` respectively, so they must both be subtracted
+        // from the content area to lift the composer above the keyboard.
+        app := App {
+            width: root.width;
+            height: root.height;
+            safe-area-top: root.safe-area-insets.top;
+            safe-area-bottom: root.safe-area-insets.bottom + root.virtual-keyboard-size.height;
+        }
     }
 }

@@ -4,6 +4,7 @@
 // Neo states: flat default, highlight hover, inset active (selected).
 
 import { Colors } from "../theme/colors.slint";
+import { HoldArea } from "../components/hold_area.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
 import { Typography } from "../theme/typography.slint";
@@ -18,20 +19,31 @@ export component ChannelListItem inherits Rectangle {
     in property <bool> collapsed: false;
     in property <image> avatar-source;
     in property <bool> has-avatar: false;
+    in property <bool> is-pinned: false;
 
     // Callbacks
     callback clicked();
     callback context-menu-requested(/* x */ length, /* y */ length);
 
-    // Layout
-    height: 44px;
+    // The collapsed rail's slot: one shape and one size for every rail item
+    // (see `rail-slot-*` in sidebar.slint — kept in step by hand because the
+    // list components between here and there don't forward sizing).
+    property <length> slot-size: 44px;
+    property <length> slot-glyph: 20px;
+
+    // Layout. Collapsed rows are 48px so the 44px slot has breathing room
+    // above and below; expanded rows keep the 44px text row.
+    height: root.collapsed ? 48px : 44px;
     border-radius: Spacing.radius-sm;
 
-    // Neo 2.0 states: flat → highlight hover → inset selected
-    background: root.selected ? Colors.neo-inset-bg
+    // Neo 2.0 states: flat → highlight hover → inset selected.
+    // Collapsed, the state fill belongs to the slot below, not to a
+    // full-width plate across the rail.
+    background: root.collapsed ? transparent
+              : root.selected ? Colors.neo-inset-bg
               : touch.has-hover ? Colors.surface-hover
               : transparent;
-    border-width: root.selected || touch.has-hover ? 1px : 0px;
+    border-width: !root.collapsed && (root.selected || touch.has-hover) ? 1px : 0px;
     border-color: root.selected ? Colors.glow-primary : Colors.neo-highlight;
 
     // Expanded content layout
@@ -98,6 +110,20 @@ export component ChannelListItem inherits Rectangle {
             }
         }
 
+        // Pin marker — explains why this row sits above the rest.
+        if root.is-pinned: VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            Image {
+                source: Icons.pin;
+                width: 12px;
+                height: 12px;
+                colorize: Colors.text-muted;
+                accessible-role: text;
+                accessible-label: "Pinned";
+            }
+        }
+
         // Unread count badge
         if root.unread-count > 0: VerticalLayout {
             alignment: center;
@@ -135,7 +161,7 @@ export component ChannelListItem inherits Rectangle {
         }
     }
 
-    // Collapsed content layout - centered icon with badge overlay and self-contained tooltip
+    // Collapsed content layout — one rail slot, self-contained tooltip
     if root.collapsed: TooltipArea {
         width: 100%;
         height: 100%;
@@ -143,73 +169,91 @@ export component ChannelListItem inherits Rectangle {
         tooltip-enabled: root.collapsed;
         placement: "right";
 
-        if root.has-avatar: Rectangle {
-            width: 24px;
-            height: 24px;
-            x: (parent.width - self.width) / 2;
+        // Selected indicator — accent pill on the rail's left edge. Reads at
+        // a glance where a fill alone can be missed on a small screen.
+        if root.selected: Rectangle {
+            x: 0;
             y: (parent.height - self.height) / 2;
-            border-radius: 12px;
-            clip: true;
-            Image {
-                source: root.avatar-source;
-                width: 100%;
-                height: 100%;
-                image-fit: cover;
-            }
-        }
-
-        // Collapsed view: private → purple dot, others → type icon.
-        if !root.has-avatar && root.channel-type == "private": Rectangle {
-            width: 10px;
-            height: 10px;
-            border-radius: 5px;
-            background: Colors.primary;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-        }
-
-        if !root.has-avatar && root.channel-type != "private": Image {
-            source: root.channel-type == "public" ? Icons.hash : Icons.users;
-            width: 20px;
+            width: 3px;
             height: 20px;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            colorize: root.selected ? Colors.primary : Colors.text-secondary;
-        }
-
-        // Badge overlay (top-right of icon)
-        if root.unread-count > 0: Rectangle {
-            x: parent.width / 2 + 4px;
-            y: parent.height / 2 - 16px;
-            width: max(16px, collapsed-badge-text.preferred-width + 8px);
-            height: 16px;
             border-radius: Spacing.radius-full;
             background: Colors.primary;
+        }
 
-            collapsed-badge-text := Text {
-                text: root.unread-count > 99 ? "99+" : root.unread-count;
-                color: Colors.text-primary;
-                font-size: Typography.xxs;
-                font-weight: 600;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+        Rectangle {
+            width: root.slot-size;
+            height: root.slot-size;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: Spacing.radius-lg;
+            background: root.selected ? Colors.primary
+                      : touch.has-hover ? Colors.neo-highlight-strong
+                      : Colors.surface-hover;
+
+            if root.has-avatar: Rectangle {
                 width: 100%;
                 height: 100%;
+                border-radius: Spacing.radius-lg;
+                clip: true;
+                Image {
+                    source: root.avatar-source;
+                    width: 100%;
+                    height: 100%;
+                    image-fit: cover;
+                }
+            }
+
+            // Collapsed view: private → purple dot, others → type icon.
+            if !root.has-avatar && root.channel-type == "private": Rectangle {
+                width: 12px;
+                height: 12px;
+                border-radius: 6px;
+                background: root.selected ? Colors.text-primary : Colors.primary;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+
+            if !root.has-avatar && root.channel-type != "private": Image {
+                source: root.channel-type == "public" ? Icons.hash : Icons.users;
+                width: root.slot-glyph;
+                height: root.slot-glyph;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                colorize: root.selected ? Colors.text-primary : Colors.text-secondary;
+            }
+
+            // Badge overlay — top-right of the slot, ringed in the sidebar
+            // surface so it reads on a filled (selected) slot too.
+            if root.unread-count > 0: Rectangle {
+                x: parent.width - self.width + 4px;
+                y: -4px;
+                width: max(16px, collapsed-badge-text.preferred-width + 10px);
+                height: 16px;
+                border-radius: Spacing.radius-full;
+                border-width: 2px;
+                border-color: Colors.surface;
+                background: Colors.primary;
+
+                collapsed-badge-text := Text {
+                    text: root.unread-count > 99 ? "99+" : root.unread-count;
+                    color: Colors.text-primary;
+                    font-size: Typography.xxs;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: 100%;
+                    height: 100%;
+                }
             }
         }
     }
 
     // Touch area for click + right-click handling
-    touch := TouchArea {
+    touch := HoldArea {
         clicked => {
-            root.clicked();
+            // A hold already acted; swallow its release so it is not also a tap.
+            if (!self.hold-fired) { root.clicked(); }
         }
-        pointer-event(event) => {
-            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
-                root.context-menu-requested(
-                    self.absolute-position.x + self.mouse-x,
-                    self.absolute-position.y + self.mouse-y);
-            }
-        }
+        held => { root.context-menu-requested(self.anchor-x, self.anchor-y); }
     }
 }

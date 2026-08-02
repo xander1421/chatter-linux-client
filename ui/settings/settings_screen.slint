@@ -3,6 +3,7 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 import { Avatar } from "../components/avatar.slint";
@@ -166,8 +167,10 @@ export component SettingsScreen inherits Rectangle {
     VerticalLayout {
 
         // Compact mode: horizontal tab bar at top — Neo glass
+        // Tall enough for 48px touch targets (close button + tab chips) plus
+        // the 4px padding the tab strip carries.
         if compact-mode: Rectangle {
-            height: 48px;
+            height: Spacing.touch-target-min + Spacing.sm;
             background: Colors.surface.with-alpha(0.85);
             border-width: 1px;
             border-color: Colors.neo-highlight;
@@ -179,22 +182,30 @@ export component SettingsScreen inherits Rectangle {
                 padding-left: Spacing.sm;
                 padding-right: Spacing.sm;
 
-                // Close button
+                // Close button — the only way out of Settings in compact mode,
+                // so it gets a full 48x48 touch target and an SVG glyph (the
+                // Unicode "✕" is missing from the Android font).
                 Rectangle {
-                    width: 36px;
-                    height: 36px;
+                    width: Spacing.touch-target-min;
+                    height: Spacing.touch-target-min;
                     border-radius: Spacing.radius-sm;
                     background: compact-close-touch.has-hover ? Colors.surface-hover : transparent;
+                    accessible-role: button;
+                    accessible-label: "Close settings";
 
-                    Text {
-                        text: "\u{2715}";
-                        color: Colors.text-secondary;
-                        font-size: Typography.sm;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                    Image {
+                        source: Icons.x;
+                        width: 20px;
+                        height: 20px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        colorize: compact-close-touch.pressed ? Colors.text-muted :
+                                  (compact-close-touch.has-hover ? Colors.text-primary : Colors.text-secondary);
                     }
 
                     compact-close-touch := TouchArea {
+                        width: 100%;
+                        height: 100%;
                         mouse-cursor: pointer;
                         clicked => { root.close-settings(); }
                     }
@@ -217,7 +228,7 @@ export component SettingsScreen inherits Rectangle {
                             { id: "appearance", label: "Theme", enabled: true }
                         ]: Rectangle {
                             width: compact-tab-text.preferred-width + Spacing.md * 2;
-                            height: 32px;
+                            height: Spacing.touch-target-min;
                             border-radius: Spacing.radius-sm;
                             background: active-section == item.id ? Colors.primary :
                                        (compact-tab-touch.has-hover ? Colors.surface-hover : transparent);
@@ -352,7 +363,6 @@ export component SettingsScreen inherits Rectangle {
 
                             // Profile info row
                             Rectangle {
-                                height: 80px;
                                 background: Colors.surface;
                                 border-radius: Spacing.radius-lg;
                                 border-width: 1px;
@@ -362,39 +372,52 @@ export component SettingsScreen inherits Rectangle {
                                 drop-shadow-offset-y: Spacing.neo-offset-sm;
                                 drop-shadow-color: Colors.neo-shadow;
 
-                                HorizontalLayout {
+                                VerticalLayout {
                                     padding: Spacing.md;
                                     spacing: Spacing.md;
 
-                                    // Avatar
-                                    Avatar {
-                                        size: 64px;
-                                        source: root.avatar;
-                                        fallback-text: root.display-name;
-                                    }
+                                    HorizontalLayout {
+                                        spacing: Spacing.md;
 
-                                    // Name and username
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        alignment: center;
-                                        spacing: Spacing.xs;
-
-                                        Text {
-                                            text: root.display-name;
-                                            color: Colors.text-primary;
-                                            font-size: Typography.lg;
-                                            font-weight: Typography.medium;
+                                        // Avatar
+                                        Avatar {
+                                            size: 64px;
+                                            source: root.avatar;
+                                            fallback-text: root.display-name;
                                         }
 
-                                        Text {
-                                            text: "@" + root.username;
-                                            color: Colors.text-secondary;
-                                            font-size: Typography.sm;
+                                        // Name and username
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            alignment: center;
+                                            spacing: Spacing.xs;
+
+                                            Text {
+                                                text: root.display-name;
+                                                color: Colors.text-primary;
+                                                font-size: Typography.lg;
+                                                font-weight: Typography.medium;
+                                                overflow: elide;
+                                            }
+
+                                            Text {
+                                                text: "@" + root.username;
+                                                color: Colors.text-secondary;
+                                                font-size: Typography.sm;
+                                                overflow: elide;
+                                            }
+                                        }
+
+                                        // Edit button — beside the name on wide screens
+                                        if !root.compact-mode: Button {
+                                            text: "Edit Profile";
+                                            variant: "ghost";
+                                            clicked => { root.edit-profile-clicked(); }
                                         }
                                     }
 
-                                    // Edit button
-                                    Button {
+                                    // Compact: full-width button stacked below
+                                    if root.compact-mode: Button {
                                         text: "Edit Profile";
                                         variant: "ghost";
                                         clicked => { root.edit-profile-clicked(); }
@@ -449,11 +472,18 @@ export component SettingsScreen inherits Rectangle {
                                             }
                                         }
 
-                                        if !show-password-form: Button {
+                                        if !show-password-form && !root.compact-mode: Button {
                                             text: "Change Password";
                                             variant: "secondary";
                                             clicked => { show-password-form = true; }
                                         }
+                                    }
+
+                                    // Compact: full-width button stacked below
+                                    if !show-password-form && root.compact-mode: Button {
+                                        text: "Change Password";
+                                        variant: "secondary";
+                                        clicked => { show-password-form = true; }
                                     }
 
                                     // Inline password form
@@ -533,52 +563,63 @@ export component SettingsScreen inherits Rectangle {
                                 drop-shadow-offset-y: Spacing.neo-offset-sm;
                                 drop-shadow-color: Colors.neo-shadow;
 
-                                HorizontalLayout {
+                                VerticalLayout {
                                     padding: Spacing.md;
                                     spacing: Spacing.md;
 
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        spacing: Spacing.xs;
+                                    HorizontalLayout {
+                                        spacing: Spacing.md;
 
-                                        HorizontalLayout {
-                                            spacing: Spacing.sm;
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            spacing: Spacing.xs;
 
-                                            Text {
-                                                text: "Active Sessions";
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                                font-weight: Typography.medium;
-                                            }
-
-                                            // Count badge
-                                            Rectangle {
-                                                width: 24px;
-                                                height: 20px;
-                                                border-radius: Spacing.radius-sm;
-                                                background: Colors.primary;
+                                            HorizontalLayout {
+                                                spacing: Spacing.sm;
 
                                                 Text {
-                                                    text: root.session-count;
+                                                    text: "Active Sessions";
                                                     color: Colors.text-primary;
-                                                    font-size: Typography.xs;
-                                                    horizontal-alignment: center;
-                                                    vertical-alignment: center;
-                                                    width: 100%;
-                                                    height: 100%;
+                                                    font-size: Typography.sm;
+                                                    font-weight: Typography.medium;
                                                 }
+
+                                                // Count badge
+                                                Rectangle {
+                                                    width: 24px;
+                                                    height: 20px;
+                                                    border-radius: Spacing.radius-sm;
+                                                    background: Colors.primary;
+
+                                                    Text {
+                                                        text: root.session-count;
+                                                        color: Colors.text-primary;
+                                                        font-size: Typography.xs;
+                                                        horizontal-alignment: center;
+                                                        vertical-alignment: center;
+                                                        width: 100%;
+                                                        height: 100%;
+                                                    }
+                                                }
+                                            }
+
+                                            Text {
+                                                text: "Manage devices that are signed in to your account.";
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                                wrap: word-wrap;
                                             }
                                         }
 
-                                        Text {
-                                            text: "Manage devices that are signed in to your account.";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                            wrap: word-wrap;
+                                        if !root.compact-mode: Button {
+                                            text: "View All Sessions";
+                                            variant: "secondary";
+                                            clicked => { root.view-sessions-clicked(); }
                                         }
                                     }
 
-                                    Button {
+                                    // Compact: full-width button stacked below
+                                    if root.compact-mode: Button {
                                         text: "View All Sessions";
                                         variant: "secondary";
                                         clicked => { root.view-sessions-clicked(); }
@@ -623,11 +664,18 @@ export component SettingsScreen inherits Rectangle {
                                             }
                                         }
 
-                                        if !show-pin-form: Button {
+                                        if !show-pin-form && !root.compact-mode: Button {
                                             text: "Change PIN";
                                             variant: "secondary";
                                             clicked => { show-pin-form = true; }
                                         }
+                                    }
+
+                                    // Compact: full-width button stacked below
+                                    if !show-pin-form && root.compact-mode: Button {
+                                        text: "Change PIN";
+                                        variant: "secondary";
+                                        clicked => { show-pin-form = true; }
                                     }
 
                                     // Inline PIN form
@@ -751,11 +799,18 @@ export component SettingsScreen inherits Rectangle {
                                             }
                                         }
 
-                                        if !show-backup-retry: Button {
+                                        if !show-backup-retry && !root.compact-mode: Button {
                                             text: "Retry Backup";
                                             variant: "secondary";
                                             clicked => { show-backup-retry = true; }
                                         }
+                                    }
+
+                                    // Compact: full-width button stacked below
+                                    if !show-backup-retry && root.compact-mode: Button {
+                                        text: "Retry Backup";
+                                        variant: "secondary";
+                                        clicked => { show-backup-retry = true; }
                                     }
 
                                     // Inline retry form
@@ -946,11 +1001,18 @@ export component SettingsScreen inherits Rectangle {
                                             }
                                         }
 
-                                        Button {
+                                        if !root.compact-mode: Button {
                                             text: "Log Out";
                                             variant: "danger";
                                             clicked => { root.logout-clicked(); }
                                         }
+                                    }
+
+                                    // Compact: full-width button stacked below
+                                    if root.compact-mode: Button {
+                                        text: "Log Out";
+                                        variant: "danger";
+                                        clicked => { root.logout-clicked(); }
                                     }
 
                                     Rectangle {
@@ -983,13 +1045,23 @@ export component SettingsScreen inherits Rectangle {
 
                                         // First click reveals a confirmation step
                                         // (with password) — never deletes directly.
-                                        if !show-delete-confirm: Button {
+                                        if !show-delete-confirm && !root.compact-mode: Button {
                                             text: "Delete Account";
                                             variant: "danger";
                                             clicked => {
                                                 root.delete-account-clicked();
                                                 show-delete-confirm = true;
                                             }
+                                        }
+                                    }
+
+                                    // Compact: full-width button stacked below
+                                    if !show-delete-confirm && root.compact-mode: Button {
+                                        text: "Delete Account";
+                                        variant: "danger";
+                                        clicked => {
+                                            root.delete-account-clicked();
+                                            show-delete-confirm = true;
                                         }
                                     }
 
@@ -1340,11 +1412,18 @@ export component SettingsScreen inherits Rectangle {
                                             vertical-alignment: center;
                                         }
 
-                                        Button {
+                                        if !root.compact-mode: Button {
                                             text: "Copy";
                                             variant: "ghost";
                                             clicked => { root.copy-fingerprint-clicked(); }
                                         }
+                                    }
+
+                                    // Compact: full-width button stacked below
+                                    if root.compact-mode: Button {
+                                        text: "Copy";
+                                        variant: "ghost";
+                                        clicked => { root.copy-fingerprint-clicked(); }
                                     }
                                 }
                             }
@@ -1461,11 +1540,18 @@ export component SettingsScreen inherits Rectangle {
                                             }
                                         }
 
-                                        Button {
+                                        if !root.compact-mode: Button {
                                             text: "Refresh Keys";
                                             variant: "secondary";
                                             clicked => { root.refresh-keys-clicked(); }
                                         }
+                                    }
+
+                                    // Compact: full-width button stacked below
+                                    if root.compact-mode: Button {
+                                        text: "Refresh Keys";
+                                        variant: "secondary";
+                                        clicked => { root.refresh-keys-clicked(); }
                                     }
                                 }
                             }
