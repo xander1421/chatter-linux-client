@@ -935,6 +935,11 @@ impl EventHandlers {
             // Handled by the Signal service / inbox handlers that own the
             // ratchet + prekey stores. Nothing to mirror into UI state.
             DomainEvent::DmSessionHealed { .. }
+            // The change is already parked in `pending_identity_changes`, which
+            // is where the prompt reads it from; there is no state store to
+            // mutate. The event exists so an OPEN conversation can raise the
+            // prompt without waiting for a reload.
+            | DomainEvent::PeerIdentityChanged { .. }
             | DomainEvent::PeerDevicesChanged { .. } => {}
 
             // IncomingCall surfaces as a desktop toast via

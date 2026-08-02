@@ -291,6 +291,15 @@ pub fn handle_send_error(error: &super::outgoing::SendError, context: &str) -> S
         SendError::Message(crate::services::message::MessageError::EncryptionFailed(_)) => {
             "Encryption failed — try again".to_string()
         }
+        // NOT "try again". `ensure_session` refuses for as long as the change is
+        // parked, so every retry fails identically; the only thing that clears
+        // it is the user accepting the new safety number. The prompt to do that
+        // is already open in this conversation, so point at it.
+        SendError::Message(
+            crate::services::message::MessageError::RecipientIdentityChanged { .. },
+        ) => {
+            "Their safety number changed — accept it above to send".to_string()
+        }
         SendError::AnonDm(crate::services::anon_dm::AnonDmError::ConversationBlocked(_)) |
         SendError::AnonGroup(crate::services::anon_group::AnonGroupError::GroupBlocked(_)) => {
             "Conversation is blocked".to_string()

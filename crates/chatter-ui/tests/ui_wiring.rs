@@ -2252,3 +2252,263 @@ fn folder_header_has_one_pointer_surface_not_two() {
          on touch (verified on an S25 Ultra: the hold just collapsed the folder)"
     );
 }
+
+// ============================================================================
+// PEER IDENTITY CHANGE — the prompt and the accept.
+//
+// Detection of a changed peer identity key has worked for a while: the change
+// is parked in `pending_identity_changes` and every send path refuses while it
+// is there. It had ZERO production callers on the resolution side, so from the
+// user's seat nothing was fixed — the conversation was dead and the only route
+// out was clearing app data. These tests exist to keep it reachable.
+// ============================================================================
+
+/// Park an identity change for `peer` in the SAME database the offline client
+/// opened, through the real `KeyStore` write the receive paths use.
+///
+/// A second SQLCipher connection rather than the client's own: `KeyStore`
+/// access on `ChatterClient` is gated behind `chatter-core/testing`, and the UI
+/// suites run without it (`--features chatter-core/dev-trust-root`). Both
+/// handles hold the same file with the same passphrase, and this writes one row
+/// before the assertions read it back through the façade.
+///
+/// The key is a well-formed Curve25519 identity key — type byte `0x05` then 32
+/// bytes — because `accept_peer_identity_change` runs `IdentityKey::decode`
+/// BEFORE pinning, on purpose: a malformed key would turn every later message
+/// from the peer into a decode error, a worse wedge than the one being cleared.
+fn park_identity_change(data_dir: &std::path::Path, peer: &str, source: &str) -> Vec<u8> {
+    let db_path = chatter_core::system::Directories::with_base_dir(data_dir.to_path_buf())
+        .expect("Directories::with_base_dir")
+        .database_path();
+    let db = std::sync::Arc::new(
+        chatter_core::storage::Database::open(&db_path, "ui-wiring-harness-passphrase")
+            .expect("open the client's database a second time"),
+    );
+    let key_store = chatter_core::storage::KeyStore::new(db);
+
+    let mut new_identity_key = vec![0x05u8];
+    new_identity_key.extend_from_slice(&[0x42u8; 32]);
+
+    key_store
+        .record_pending_identity_change(peer, &new_identity_key, source, 1)
+        .expect("park the identity change");
+    new_identity_key
+}
+
+/// Build an offline client wired with the REAL chat callbacks, with a server DM
+/// open, so `identity-change-accept-clicked` has a peer to act on.
+fn wired_dm_open(
+    peer: chatter_core::domain::ids::UserId,
+) -> (
+    tempfile::TempDir,
+    std::sync::Arc<chatter_core::client::ChatterClient>,
+    MainWindow,
+) {
+    no_keyring();
+    let rt = test_rt();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    testing::init_no_event_loop();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+    let w = MainWindow::new().expect("MainWindow::new");
+    chatter_ui::bin_ui::features::chat::wire(&w, &client);
+    // The accept handler reads the peer from the ACTIVE conversation, never
+    // from the callback, so the key it pins always belongs to the conversation
+    // the prompt was drawn in.
+    client
+        .chat_state()
+        .set_active_conversation(chatter_core::state::ActiveConversation::ServerDm {
+            peer_id: peer,
+        });
+    (tmp, client, w)
+}
+
+/// THE test this whole change exists for: the Accept button reaches
+/// `SignalService::accept_peer_identity_change` and actually unwedges the
+/// conversation.
+///
+/// Asserted through the façade, not through a spy, so a handler that merely hid
+/// the bar would fail: after the click the parked change must be GONE, which
+/// only the core transaction (pin the new key, clear the stale verification,
+/// drop every session, delete the parked row) can do.
+#[test]
+fn identity_change_accept_reaches_core_and_clears_the_pending_change() {
+    let peer = chatter_core::domain::ids::UserId::new();
+    let (tmp, client, w) = wired_dm_open(peer);
+
+    // Nothing wrong yet: no prompt, and the façade agrees.
+    assert_eq!(
+        client.pending_identity_change(&peer).unwrap(),
+        None,
+        "precondition: a fresh client must have no parked identity change"
+    );
+
+    park_identity_change(tmp.path(), &peer.to_string(), "sender_certificate");
+
+    // Core now reports the wedge, and it is attributed (sealed sender).
+    assert_eq!(
+        client.pending_identity_change(&peer).unwrap(),
+        Some(true),
+        "the parked change must be visible through the façade the UI reads"
+    );
+
+    // The prompt the user actually sees, refreshed exactly as the DM open path
+    // and the PeerIdentityChanged event do it.
+    chatter_ui::bin_ui::features::chat::identity_change::refresh(&w, &client, &peer);
+    assert!(
+        w.get_identity_change_visible(),
+        "a parked identity change must raise the in-conversation prompt"
+    );
+    assert!(
+        w.get_identity_change_attributed(),
+        "a sealed-sender change is cryptographically attributed"
+    );
+    assert!(
+        !w.get_identity_change_title().is_empty()
+            && !w.get_identity_change_detail().is_empty(),
+        "the prompt must carry core's wording, not an empty bar"
+    );
+
+    // Fire the exact callback the Accept button invokes.
+    w.invoke_identity_change_accept_clicked();
+
+    // THE assertion: core ran the accept transaction. A UI-only stub cannot
+    // make this true.
+    assert_eq!(
+        client.pending_identity_change(&peer).unwrap(),
+        None,
+        "Accept did NOT reach core — the change is still parked, so the \
+         conversation is still wedged in both directions and the button is a lie"
+    );
+    assert!(
+        !w.get_identity_change_visible(),
+        "the prompt must come down once the change has been accepted"
+    );
+    assert!(w.get_toast_visible(), "accepting must confirm itself — a bar that \
+        merely disappears does not distinguish 'accepted' from 'did nothing'");
+}
+
+/// A server-claimed change must NOT be presented as though the peer had been
+/// cryptographically attributed. `IdentityChangeSource::is_authenticated`
+/// exists for exactly this, and collapsing the two would let a malicious server
+/// launder its own key change through the user's trust in the peer's name.
+#[test]
+fn a_server_claimed_identity_change_is_not_presented_as_attributed() {
+    let peer = chatter_core::domain::ids::UserId::new();
+    let (tmp, client, w) = wired_dm_open(peer);
+
+    park_identity_change(tmp.path(), &peer.to_string(), "server_claimed");
+
+    assert_eq!(
+        client.pending_identity_change(&peer).unwrap(),
+        Some(false),
+        "an identified-sender change is asserted by the server and proved by nobody"
+    );
+
+    chatter_ui::bin_ui::features::chat::identity_change::refresh(&w, &client, &peer);
+    assert!(w.get_identity_change_visible(), "it must still be surfaced");
+    assert!(
+        !w.get_identity_change_attributed(),
+        "the UI must not claim attribution the crypto never gave it"
+    );
+
+    // The peer's own display name resolves to their uuid on an offline client
+    // with no profile row, so this also proves the unattributed copy does not
+    // name them.
+    let title = w.get_identity_change_title().to_string();
+    assert!(
+        !title.contains(&peer.to_string()),
+        "an unattributed change must not name the peer: the only thing that \
+         named them was the server. Got: {title}"
+    );
+}
+
+/// L2 static: the affordance exists, is wired to the callback, and cannot be
+/// dismissed. A dismiss button here would leave the user with a DM that
+/// silently refuses to send and no route back.
+#[test]
+fn the_identity_change_bar_is_wired_and_not_dismissable() {
+    let bar = include_str!("../../../ui/chat/identity_change_bar.slint");
+    assert!(
+        bar.contains("root.accept-clicked()"),
+        "the Accept control must fire accept-clicked"
+    );
+    assert!(
+        bar.contains(r#"accessible-role: button"#)
+            && bar.contains(r#"accessible-label: "Accept new safety number""#),
+        "the control that pins a new identity key must be reachable by \
+         assistive tech and must say what it does"
+    );
+    // No dismiss AFFORDANCE. Matched against declarations rather than the raw
+    // text, because the file's own header comment explains why it has none.
+    assert!(
+        !bar.contains("callback dismiss") && !bar.contains("-dismiss"),
+        "the prompt is the only route back to a working conversation — a dismiss \
+         control would leave the user with a DM that silently refuses to send"
+    );
+    assert!(
+        bar.matches("TouchArea").count() == 1,
+        "the only pointer surface in the bar must be Accept — a second one is \
+         either a hidden dismiss or a mis-wire"
+    );
+    // Wording is core's, so the bar must not hardcode any of it beyond the
+    // button label.
+    assert!(
+        bar.contains("in property <string> title") && bar.contains("in property <string> detail"),
+        "title and detail must come in from chatter-core, not be written here"
+    );
+
+    let layout = include_str!("../../../ui/chat/chat_layout.slint");
+    assert!(
+        layout.contains(r#"if root.identity-change-visible && root.channel-type == "dm": IdentityChangeBar"#),
+        "the bar must render inside the conversation, gated on channel-type so a \
+         prompt cannot survive a switch into a channel, group or mesh room"
+    );
+    // The whole four-hop chain, because a break at any hop leaves a button that
+    // looks alive and reaches nothing:
+    // IdentityChangeBar -> ChatLayout -> App -> MainWindow -> Rust.
+    assert!(
+        layout.contains("root.identity-change-accept-clicked()"),
+        "ChatLayout must forward the bar's accept-clicked onwards"
+    );
+    let app = include_str!("../../../ui/app.slint");
+    assert!(
+        app.contains("identity-change-accept-clicked => { root.identity-change-accept-clicked(); }"),
+        "App must forward accept-clicked from ChatLayout"
+    );
+    let main = include_str!("../../../ui/main.slint");
+    assert!(
+        main.contains("callback identity-change-accept-clicked <=> app.identity-change-accept-clicked;"),
+        "MainWindow must alias the callback, or `on_identity_change_accept_clicked` \
+         is wired to something nothing can fire"
+    );
+}
+
+/// The send-side toast must stop telling the user to retry something that
+/// cannot succeed. `ensure_session` refuses for as long as the change is
+/// parked, so "Encryption failed — try again" is advice to loop forever.
+#[test]
+fn the_send_toast_points_at_the_identity_change_instead_of_saying_retry() {
+    use chatter_core::services::message::MessageError;
+
+    let peer = chatter_core::domain::ids::UserId::new();
+    let (_tmp, client, _w) = wired_dm_open(peer);
+
+    let err = chatter_core::services::gateway::SendError::Message(
+        MessageError::RecipientIdentityChanged { peer_id: peer.to_string() },
+    );
+    let msg = client.format_send_error(&err, "send");
+
+    assert!(
+        !msg.to_lowercase().contains("try again"),
+        "retrying cannot ever succeed here — only accepting the new key can. Got: {msg}"
+    );
+    assert!(
+        msg.to_lowercase().contains("safety number"),
+        "the toast must point at the identity change, which is the thing the \
+         user can actually act on. Got: {msg}"
+    );
+}

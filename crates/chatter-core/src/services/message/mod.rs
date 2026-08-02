@@ -82,6 +82,22 @@ pub enum MessageError {
     #[error("encryption failed: {0}")]
     EncryptionFailed(String),
 
+    /// The recipient's identity key changed and has not been accepted, so there
+    /// is no key we may encrypt to.
+    ///
+    /// **Kept out of [`Self::EncryptionFailed`] on purpose.** That variant's
+    /// user-facing text is "Encryption failed — try again", and retrying this
+    /// cannot ever succeed: `ensure_session` refuses for as long as the change
+    /// is parked, and only an explicit acceptance clears it. Stringifying it
+    /// into `EncryptionFailed` is precisely how the user ended up being told to
+    /// retry a dead conversation.
+    #[error("recipient identity changed and has not been accepted")]
+    RecipientIdentityChanged {
+        /// The peer whose key changed, so the UI can point at the right
+        /// conversation.
+        peer_id: String,
+    },
+
     /// DM conversation error.
     #[error("dm error: {0}")]
     DmError(String),
@@ -101,6 +117,24 @@ pub enum MessageError {
     /// Attachment upload/download failed.
     #[error("attachment error: {0}")]
     AttachmentError(String),
+}
+
+impl MessageError {
+    /// Classify a send-side [`ServiceError`] from the Signal layer.
+    ///
+    /// One place, because every send path that touches sessions can hit the
+    /// identity-change refusal and each of them used to flatten it into
+    /// `EncryptionFailed(format!("…: {e}"))` — which is a string, so the UI
+    /// could only offer "try again".
+    pub(crate) fn from_signal_send(err: crate::error::ServiceError, context: &str) -> Self {
+        if let crate::error::ServiceError::Crypto(
+            crate::error::CryptoError::UntrustedIdentity { ref peer_id, .. },
+        ) = err
+        {
+            return Self::RecipientIdentityChanged { peer_id: peer_id.clone() };
+        }
+        Self::EncryptionFailed(format!("{context}: {err}"))
+    }
 }
 
 impl From<CurrentUserError> for MessageError {

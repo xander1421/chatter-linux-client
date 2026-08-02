@@ -410,6 +410,13 @@ export component App inherits Rectangle {
     callback copy-message(string, string);
     callback download-message(string, string);       // Download attachments
 
+    // ========== Peer identity change (conversation wedged) ==========
+    in property <bool> identity-change-visible: false;
+    in property <string> identity-change-title: "";
+    in property <string> identity-change-detail: "";
+    in property <bool> identity-change-attributed: false;
+    callback identity-change-accept-clicked();
+
     // ========== Pinned bar state ==========
     in property <bool> has-pinned-messages: false;
     in property <string> pinned-message-preview: "";
@@ -1451,6 +1458,12 @@ export component App inherits Rectangle {
                     voice-call-clicked => { root.start-voice-call(); }
                     video-call-clicked => { root.start-video-call(); }
                     invite-clicked => { root.invite-member(); }
+                    // Peer identity change prompt
+                    identity-change-visible: root.identity-change-visible;
+                    identity-change-title: root.identity-change-title;
+                    identity-change-detail: root.identity-change-detail;
+                    identity-change-attributed: root.identity-change-attributed;
+                    identity-change-accept-clicked => { root.identity-change-accept-clicked(); }
                     // Pinned bar (Telegram-style)
                     has-pinned-messages: root.has-pinned-messages;
                     pinned-message-preview: root.pinned-message-preview;

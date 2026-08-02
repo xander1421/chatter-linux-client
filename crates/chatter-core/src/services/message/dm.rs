@@ -125,7 +125,7 @@ impl MessageService {
             .signal_service
             .encrypt_message_all_devices(auth_client, &peer_id_str, &plaintext)
             .await
-            .map_err(|e| MessageError::EncryptionFailed(format!("Multi-device encrypt: {}", e)))?;
+            .map_err(|e| MessageError::from_signal_send(e, "Multi-device encrypt"))?;
 
         tracing::info!(
             peer_id = %peer_id,
@@ -782,7 +782,7 @@ impl MessageService {
                     error = %e,
                     "Failed to establish new session after reset"
                 );
-                MessageError::EncryptionFailed(format!("Session establishment failed: {}", e))
+                MessageError::from_signal_send(e, "Session establishment failed")
             })?;
 
         tracing::info!(
@@ -827,7 +827,7 @@ impl MessageService {
                     error = %e,
                     "Failed to establish sessions for peer devices"
                 );
-                MessageError::EncryptionFailed(format!("Multi-device session establishment failed: {}", e))
+                MessageError::from_signal_send(e, "Multi-device session establishment failed")
             })?;
 
         tracing::info!(

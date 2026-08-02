@@ -10,6 +10,7 @@ import { ChatHeader, ChatHeaderData } from "chat_header.slint";
 import { MessageList, MessageItemData, MessageAttachmentData, ReactionEntry } from "message_list.slint";
 import { MessageComposer, PendingAttachmentData } from "message_composer.slint";
 import { PinnedBar } from "pinned_bar.slint";
+import { IdentityChangeBar } from "identity_change_bar.slint";
 import { EmojiPicker, EmojiData } from "../components/emoji_picker.slint";
 import { GifPicker, GifData } from "../components/gif_picker.slint";
 import { MeshGlobal } from "../mesh/mesh_global.slint";
@@ -95,6 +96,16 @@ export component ChatLayout inherits Rectangle {
     callback invite-clicked();
     callback voice-call-clicked();
     callback video-call-clicked();
+
+    // Peer identity change — the conversation is wedged until the user decides.
+    // Strings are formatted by chatter-core (`ChatterClient::identity_change_prompt`);
+    // `identity-change-visible` is set by the DM open path and by the
+    // PeerIdentityChanged domain event.
+    in property <bool> identity-change-visible: false;
+    in property <string> identity-change-title: "";
+    in property <string> identity-change-detail: "";
+    in property <bool> identity-change-attributed: false;
+    callback identity-change-accept-clicked();
 
     // Pinned bar callbacks
     callback pinned-prev-clicked();
@@ -191,6 +202,22 @@ export component ChatLayout inherits Rectangle {
             }
             video-call-clicked => {
                 root.video-call-clicked();
+            }
+        }
+
+        // Peer identity change. Above the message list so it is the first thing
+        // read, and directly above the marker for the message that could not be
+        // decrypted. Gated on channel-type as well as the flag: the flag is set
+        // per DM open, and this keeps a stale one from ever surviving a switch
+        // into a channel, group or mesh room.
+        if root.identity-change-visible && root.channel-type == "dm": IdentityChangeBar {
+            width: 100%;
+            vertical-stretch: 0;
+            title: root.identity-change-title;
+            detail: root.identity-change-detail;
+            attributed: root.identity-change-attributed;
+            accept-clicked => {
+                root.identity-change-accept-clicked();
             }
         }
 

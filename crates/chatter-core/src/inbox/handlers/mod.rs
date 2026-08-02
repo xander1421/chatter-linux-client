@@ -210,6 +210,21 @@ pub enum DomainEvent {
         archived: bool,
     },
 
+    /// A peer presented a DIFFERENT identity key than the one pinned for their
+    /// account (a reinstall — or a MITM), and the change has been parked for an
+    /// explicit user decision. The conversation is wedged in BOTH directions
+    /// until it is accepted, so this exists to let an open conversation raise
+    /// the prompt without waiting for a reload.
+    ///
+    /// `attributed` is
+    /// [`crate::error::IdentityChangeSource::is_authenticated`]: false means
+    /// `peer_user_id` is server-supplied envelope metadata that nothing proved,
+    /// and the UI must not name the peer as a fact.
+    PeerIdentityChanged {
+        peer_user_id: UserId,
+        attributed: bool,
+    },
+
     /// A peer who shares a channel with the local user added or revoked a
     /// device. Consumer must invalidate cached Signal sessions for
     /// `peer_user_id` and re-distribute sender keys on next group send.
@@ -661,6 +676,7 @@ impl DomainEvent {
             DomainEvent::SyncComplete { .. } => None,
             DomainEvent::PushWakeup { .. } => None,
             DomainEvent::DmSessionHealed { .. } => None,
+            DomainEvent::PeerIdentityChanged { .. } => None,
             DomainEvent::PeerDevicesChanged { .. } => None,
         }
     }

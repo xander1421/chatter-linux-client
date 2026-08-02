@@ -485,6 +485,22 @@ pub async fn handle_domain_event(
         DomainEvent::PushWakeup { .. } => {}
         DomainEvent::DmSessionHealed { .. } => {}
         DomainEvent::PeerDevicesChanged { .. } => {}
+        // A peer's identity key changed while we were running. If their
+        // conversation is the one on screen, raise the prompt now rather than
+        // at the next open — the user is likely mid-typing into a DM that has
+        // just stopped being able to send.
+        DomainEvent::PeerIdentityChanged { peer_user_id, .. } => {
+            let ui_ctx = ui_ctx.clone();
+            let _ = window.upgrade_in_event_loop(move |w| {
+                if ui_ctx.chat_state().active_conversation()
+                    == (chatter_core::state::ActiveConversation::ServerDm { peer_id: peer_user_id })
+                {
+                    crate::bin_ui::features::chat::identity_change::refresh(
+                        &w, &ui_ctx, &peer_user_id,
+                    );
+                }
+            });
+        }
         // Server-managed profile updated. Core already upserted user_repo.
         // Refresh display_name + status across sidebar / header / profile
         // modal in real time, then refresh friends-list (Friends tab).

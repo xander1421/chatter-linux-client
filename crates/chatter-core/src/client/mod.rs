@@ -221,6 +221,54 @@ pub struct RecoveryResult {
     pub remaining_codes: i32,
 }
 
+/// What to put in front of the user when a peer's identity key changed and the
+/// conversation is wedged pending their decision.
+///
+/// Built by [`ChatterClient::identity_change_prompt`]. The reason this is core
+/// data and not UI copy is `attributed`: it decides whether the peer may be
+/// named at all. Presenting a server-asserted identity change as though it had
+/// been cryptographically attributed is the exact failure
+/// [`crate::error::IdentityChangeSource`] exists to prevent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdentityChangePrompt {
+    /// True only when the peer id was proven cryptographically (a sender
+    /// certificate validated against the pinned trust root).
+    pub attributed: bool,
+    /// One-line headline. Names the peer only when `attributed`.
+    pub title: String,
+    /// What it means and what to do before accepting.
+    pub detail: String,
+}
+
+impl IdentityChangePrompt {
+    fn new(attributed: bool, peer_display_name: &str) -> Self {
+        // Signal's phrasing ("Your safety number with X has changed"), kept
+        // because it is the wording users have already been taught elsewhere.
+        if attributed {
+            return Self {
+                attributed,
+                title: format!("Your safety number with {peer_display_name} has changed"),
+                detail: "They most likely reinstalled the app or switched devices. It can \
+                         also mean someone is intercepting this conversation. Messages are \
+                         blocked in both directions until you accept the new safety number \
+                         — compare it with them over a call or in person first."
+                    .to_string(),
+            };
+        }
+        // Unattributed: the ONLY thing that named this peer was the server, so
+        // the headline must not state that it was them.
+        Self {
+            attributed,
+            title: "A safety number in this conversation has changed".to_string(),
+            detail: "The server says this came from your contact, but nothing proved that, \
+                     so it may not be them at all. Messages are blocked in both directions \
+                     until you accept the new safety number — confirm it with them over a \
+                     call or in person before you do."
+                .to_string(),
+        }
+    }
+}
+
 /// The main entry point for the chatter-core SDK.
 ///
 /// # Example
@@ -813,6 +861,81 @@ impl ChatterClient {
                 .map_err(|e| ClientError::Validation(e.to_string()))?;
         }
         Ok(())
+    }
+
+    /// Whether this peer has an identity change waiting on the user's decision,
+    /// and whether the peer was cryptographically attributed when it surfaced.
+    ///
+    /// `Some(attributed)` means the conversation is wedged in both directions.
+    /// `attributed == false` means the peer id came from server-supplied
+    /// envelope metadata and nothing proved it — the UI MUST NOT present that
+    /// as "X's safety number changed" (see
+    /// [`crate::error::IdentityChangeSource`]).
+    ///
+    /// The key itself deliberately does not leave core. The UI has no use for
+    /// it, and keeping it here is what lets `accept_peer_identity_change` below
+    /// take no key argument at all.
+    pub fn pending_identity_change(
+        &self,
+        peer_user_id: &crate::domain::ids::UserId,
+    ) -> Result<Option<bool>, ClientError> {
+        self.services
+            .signal_service
+            .pending_identity_change(&peer_user_id.to_string())
+            .map(|opt| opt.map(|(_key, source)| source.is_authenticated()))
+            .map_err(|e| ClientError::Validation(e.to_string()))
+    }
+
+    /// The prompt to put in front of the user for a parked identity change, or
+    /// `None` when the conversation is fine.
+    ///
+    /// The wording lives here, not in `chatter-ui`, because the choice it makes
+    /// is a security claim and not a style one: whether the peer may be NAMED.
+    /// The display name is resolved here too, and only READ when the change was
+    /// cryptographically attributed — an unattributed one stays anonymous,
+    /// because the only thing that tied that name to this key was the server.
+    pub fn identity_change_prompt(
+        &self,
+        peer_user_id: &crate::domain::ids::UserId,
+    ) -> Result<Option<IdentityChangePrompt>, ClientError> {
+        Ok(self.pending_identity_change(peer_user_id)?.map(|attributed| {
+            IdentityChangePrompt::new(attributed, &self.display_name(peer_user_id))
+        }))
+    }
+
+    /// Accept the peer's new identity key, unwedging the conversation in both
+    /// directions. Returns the number of stale sessions dropped.
+    ///
+    /// **A trust decision. Only ever call this from an explicit user action** —
+    /// a reinstall and an active MITM are indistinguishable from here.
+    ///
+    /// Takes no key: it reads the parked one, so the UI cannot accept a key the
+    /// user was never shown, and a server that swaps a fresh key in behind the
+    /// prompt still gets refused by
+    /// [`crate::services::SignalService::accept_peer_identity_change`]'s own
+    /// match check. Errors with `Validation` when nothing is pending, because
+    /// an accept with no prompt behind it is a bug, not a no-op.
+    pub fn accept_peer_identity_change(
+        &self,
+        peer_user_id: &crate::domain::ids::UserId,
+    ) -> Result<u32, ClientError> {
+        let (new_identity_key, _source) = self
+            .services
+            .signal_service
+            .pending_identity_change(&peer_user_id.to_string())
+            .map_err(|e| ClientError::Validation(e.to_string()))?
+            .ok_or_else(|| {
+                ClientError::Validation("no identity change is pending for this peer".into())
+            })?;
+
+        self.services
+            .signal_service
+            .accept_peer_identity_change(
+                peer_user_id,
+                &new_identity_key,
+                &self.services.channel_repo,
+            )
+            .map_err(|e| ClientError::Validation(e.to_string()))
     }
 
     // ── Events ──────────────────────────────────────────────────────────

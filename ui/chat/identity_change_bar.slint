@@ -1,0 +1,133 @@
+// The prompt shown when a peer's identity key changed and the conversation is
+// wedged until the user decides what to do about it.
+//
+// In the conversation, not a modal, because that is where the decision has
+// context: the marker for the message that could not be read sits a few
+// pixels below it, and Signal puts the same prompt in the same place. A modal
+// would also have to be raised from a background decrypt, i.e. on top of
+// whatever the user was actually doing.
+//
+// Every word here comes from `ChatterClient::identity_change_prompt` in
+// chatter-core. That is not tidiness: the choice of whether the peer may be
+// NAMED is a security claim (an unattributed change was asserted by the server
+// and proved by nobody), so it is made where the provenance lives. This bar
+// chooses layout, never wording.
+//
+// It is not dismissable. The one on screen is the only route back to a working
+// conversation, and a dismissed prompt would leave the user with a DM that
+// silently refuses to send.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+
+export component IdentityChangeBar inherits Rectangle {
+    // Both strings are formatted by chatter-core.
+    in property <string> title;
+    in property <string> detail;
+    // False when the peer id was server-supplied and nothing proved it. Only
+    // used to pick the accent: the *wording* already carries the caveat, and a
+    // colour is not allowed to be the thing that tells the user this may not be
+    // who it says it is.
+    in property <bool> attributed: false;
+
+    callback accept-clicked();
+
+    property <color> accent: root.attributed ? Colors.warning : Colors.error;
+
+    min-height: 24px;
+    background: root.accent.with-alpha(0.10);
+
+    // Bottom hairline, matching the other in-chat strips.
+    Rectangle {
+        y: parent.height - 1px;
+        width: 100%;
+        height: 1px;
+        background: root.accent.with-alpha(0.35);
+    }
+
+    HorizontalLayout {
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        padding-top: Spacing.sm;
+        padding-bottom: Spacing.sm;
+        spacing: Spacing.sm;
+
+        VerticalLayout {
+            alignment: start;
+            horizontal-stretch: 0;
+            Image {
+                source: Icons.shield;
+                width: 16px;
+                height: 16px;
+                colorize: root.accent;
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+
+            Text {
+                text: root.title;
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                font-weight: 600;
+                wrap: word-wrap;
+                accessible-role: text;
+                accessible-label: root.title;
+            }
+
+            // Never elided. The part that says "compare it with them first" is
+            // the part that makes accepting a decision rather than a button.
+            Text {
+                text: root.detail;
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+                accessible-role: text;
+                accessible-label: root.detail;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            Rectangle {
+                width: accept-label.preferred-width + Spacing.lg;
+                // The control that pins a new identity key should not be the
+                // hardest thing on the screen to hit.
+                height: Spacing.touch-target-min;
+                border-radius: Spacing.radius-sm;
+                background: accept-touch.has-hover
+                    ? root.accent.with-alpha(0.28)
+                    : root.accent.with-alpha(0.16);
+                border-width: 1px;
+                border-color: root.accent.with-alpha(0.5);
+
+                accept-label := Text {
+                    // Deliberately not "OK" or "Continue": the user is pinning
+                    // a new key, and the label should say so.
+                    text: "Accept new safety number";
+                    color: Colors.text-primary;
+                    font-size: Typography.xs;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: 100%;
+                    height: 100%;
+                }
+
+                accept-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    accessible-role: button;
+                    accessible-label: "Accept new safety number";
+                    clicked => {
+                        root.accept-clicked();
+                    }
+                }
+            }
+        }
+    }
+}

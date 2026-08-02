@@ -284,6 +284,13 @@ export component MainWindow inherits Window {
     callback selection-cleared <=> app.selection-cleared;
     callback selection-delete-clicked <=> app.selection-delete-clicked;
 
+    // ========== Peer identity change (conversation wedged) ==========
+    in property <bool> identity-change-visible <=> app.identity-change-visible;
+    in property <string> identity-change-title <=> app.identity-change-title;
+    in property <string> identity-change-detail <=> app.identity-change-detail;
+    in property <bool> identity-change-attributed <=> app.identity-change-attributed;
+    callback identity-change-accept-clicked <=> app.identity-change-accept-clicked;
+
     // ========== Pinned bar state ==========
     in property <bool> has-pinned-messages <=> app.has-pinned-messages;
     in property <string> pinned-message-preview <=> app.pinned-message-preview;

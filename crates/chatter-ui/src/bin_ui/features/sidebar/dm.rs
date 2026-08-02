@@ -107,6 +107,12 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             w.set_has_pinned_messages(false);
             w.set_pinned_message_preview("".into());
             w.set_pinned_total_count(0);
+
+            // Clear the identity-change prompt up front. It is re-evaluated
+            // below for a server DM; every other branch (anon DM, or a failed
+            // load) must not inherit the previous conversation's prompt, which
+            // would offer to pin a key belonging to somebody else.
+            crate::bin_ui::features::chat::identity_change::clear(&w);
         });
 
         tokio::spawn(async move {
@@ -291,6 +297,11 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     w.set_channel_has_avatar(false);
                     w.set_channel_avatar_source(slint::Image::default());
                 }
+                // Is this conversation wedged on an unaccepted identity key?
+                // Read on every open, not only on the live event, so a change
+                // parked while the app was closed is still surfaced.
+                crate::bin_ui::features::chat::identity_change::refresh(&w, &ui_ctx, &peer_id);
+
                 // Re-register GIFs for inline animation on every open. The
                 // animation state is UI-thread-local and the message model is
                 // rebuilt here, so without this a ServerDM gif renders its

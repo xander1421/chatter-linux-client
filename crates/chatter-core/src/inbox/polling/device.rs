@@ -15,7 +15,7 @@ use tokio::sync::broadcast;
 use crate::domain::ids::{AttachmentId, ChannelId, MessageId};
 use crate::domain::message::{ConversationType, Message};
 use crate::domain::UserId;
-use crate::error::ServiceError;
+use crate::error::{CryptoError, ServiceError};
 use crate::inbox::events::InboxEvent;
 use crate::inbox::state::InboxStats;
 use crate::mailbox::group::GroupCoordinator;
@@ -47,6 +47,47 @@ use crate::storage::{ChannelRepository, MessageRepository};
 /// next start.
 #[must_use]
 pub fn delivery_issue_message(peer_id: UserId, envelope_ts_ns: u64) -> Message {
+    system_dm_marker(
+        peer_id,
+        envelope_ts_ns,
+        crate::domain::message::SystemMessage::DeliveryIssue,
+    )
+}
+
+/// Build the conversation entry that marks the message which surfaced a peer
+/// identity change.
+///
+/// The SECOND marker, not a reuse of [`delivery_issue_message`], because the two
+/// failures are not the same failure. A delivery issue is a desynced session:
+/// the `DecryptionErrorMessage` we ship back heals it and a resend works, which
+/// is what that marker tells the user to ask for. An identity change is a
+/// changed pinned key: `classify_inner_failure`
+/// (`crypto/signal/sealed_sender.rs`) deliberately refuses to call it a desync,
+/// no report is sent, and a resend re-presents the same new key and fails
+/// identically forever. Telling the user to ask for a resend here would send
+/// them round a loop that cannot terminate.
+///
+/// `attributed` is [`crate::error::IdentityChangeSource::is_authenticated`] —
+/// it decides whether the entry may state who this was, not how it is styled.
+#[must_use]
+pub fn identity_changed_message(
+    peer_id: UserId,
+    envelope_ts_ns: u64,
+    attributed: bool,
+) -> Message {
+    system_dm_marker(
+        peer_id,
+        envelope_ts_ns,
+        crate::domain::message::SystemMessage::IdentityChanged { attributed },
+    )
+}
+
+/// Shared shape for the system entries the device inbox writes into a DM.
+fn system_dm_marker(
+    peer_id: UserId,
+    envelope_ts_ns: u64,
+    system: crate::domain::message::SystemMessage,
+) -> Message {
     let now = chrono::Utc::now();
     Message {
         id: MessageId::new(),
@@ -56,9 +97,7 @@ pub fn delivery_issue_message(peer_id: UserId, envelope_ts_ns: u64) -> Message {
         // "{sender_name} {description}".
         sender_id: Some(peer_id),
         device_id: None,
-        content: crate::domain::message::MessageContent::System(
-            crate::domain::message::SystemMessage::DeliveryIssue,
-        ),
+        content: crate::domain::message::MessageContent::System(system),
         encrypted_content: None,
         thread_id: None,
         reply_to: None,
@@ -1389,6 +1428,75 @@ async fn process_sealed_sender_message(
                     s.messages_failed += 1;
                 }
             }
+        }
+        // The peer's identity key changed. This envelope is already gone (the
+        // batch is acked whatever the outcome) and — unlike a desync — nothing
+        // will bring it back: `classify_inner_failure` refuses to treat this as
+        // a desync precisely because no session-layer action changes which key
+        // is pinned. Without an entry here the message that WEDGED the
+        // conversation is the one message with no trace at all, which is how
+        // this landed with detection working and the user seeing nothing.
+        //
+        // The change itself was already parked by `note_identity_change` on the
+        // decrypt path, so nothing is recorded here beyond what the user sees.
+        Err(ServiceError::Crypto(CryptoError::UntrustedIdentity {
+            ref peer_id,
+            device_id: peer_device_id,
+            ref attribution,
+            ..
+        })) => {
+            let attributed = attribution.is_authenticated();
+            tracing::warn!(
+                message_id = %msg.message_guid,
+                peer_id = %peer_id,
+                peer_device_id,
+                attributed,
+                "[INBOX] peer identity key changed — conversation wedged until accepted"
+            );
+            let _ = event_tx.send(InboxEvent::MessageFailed {
+                message_id: msg.message_guid.clone(),
+                error: "peer identity changed — awaiting the user's decision".to_string(),
+            });
+
+            if let Ok(peer) = peer_id.parse::<UserId>() {
+                if let Some(tx) = domain_tx {
+                    let _ = tx.send(DomainEvent::PeerIdentityChanged {
+                        peer_user_id: peer,
+                        attributed,
+                    });
+                }
+                let marker =
+                    identity_changed_message(peer, msg.server_timestamp, attributed);
+                match message_repo.insert_or_ignore(&marker) {
+                    // News: announce it so an open conversation shows the gap
+                    // without waiting for a reload.
+                    Ok(true) => {
+                        if let Some(tx) = domain_tx {
+                            let _ = tx.send(DomainEvent::MessageReceived { message: marker });
+                        }
+                    }
+                    // A replayed envelope after a failed `acknowledge`. Saying
+                    // it twice would spam the conversation.
+                    Ok(false) => {}
+                    Err(error) => {
+                        tracing::warn!(
+                            peer_id = %peer_id,
+                            %error,
+                            "[INBOX] could not record the identity-change marker — the \
+                             message that wedged this conversation will be invisible"
+                        );
+                    }
+                }
+            } else {
+                tracing::warn!(
+                    peer_id = %peer_id,
+                    "[INBOX] identity change for an unparseable peer id — no marker written"
+                );
+            }
+
+            let mut s = stats.write();
+            s.messages_received += 1;
+            s.messages_failed += 1;
         }
         Err(e) => {
             let e: ServiceError = e;

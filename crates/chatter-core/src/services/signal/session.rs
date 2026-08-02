@@ -144,6 +144,34 @@ impl SignalService {
         self.actor.has_session(address).await
     }
 
+    /// Refuse to open or reuse a session with a peer whose identity change is
+    /// still parked and unaccepted.
+    ///
+    /// Lives on its own because there are TWO send-side entry points and only
+    /// one of them used to check: `ensure_session` (single device) and
+    /// `ensure_sessions_and_uak_all_devices` (every device — the path a real DM
+    /// send actually takes, via `encrypt_message_all_devices`). Guarding only
+    /// the first left the hot path free to encrypt under the dead ratchet, so
+    /// the user was never told anything and the message left undeliverable.
+    ///
+    /// Per-account, not per-device: identity keys are pinned per account, so a
+    /// change parked against any device wedges all of them.
+    fn refuse_pending_identity_change(&self, recipient_id: &str) -> Result<(), ServiceError> {
+        let Some((key, source, device_id)) = self
+            .key_store
+            .get_pending_identity_change(recipient_id)
+            .map_err(ServiceError::Storage)?
+        else {
+            return Ok(());
+        };
+        Err(ServiceError::Crypto(CryptoError::UntrustedIdentity {
+            peer_id: recipient_id.to_string(),
+            device_id,
+            new_identity_key: Some(key),
+            attribution: crate::error::IdentityChangeSource::from_db_str(&source),
+        }))
+    }
+
     pub async fn ensure_session(
         &self,
         auth_client: &mut AuthClient,
@@ -169,18 +197,7 @@ impl SignalService {
         // inbound message or a fresh bundle has surfaced it. So this consults
         // what those paths parked, and refuses to reuse the stale session until
         // the user decides.
-        if let Some((key, source, device_id)) = self
-            .key_store
-            .get_pending_identity_change(recipient_id)
-            .map_err(ServiceError::Storage)?
-        {
-            return Err(ServiceError::Crypto(CryptoError::UntrustedIdentity {
-                peer_id: recipient_id.to_string(),
-                device_id,
-                new_identity_key: Some(key),
-                attribution: crate::error::IdentityChangeSource::from_db_str(&source),
-            }));
-        }
+        self.refuse_pending_identity_change(recipient_id)?;
 
         // Check if we already have a usable session with this peer
         // has_session now validates structural integrity (not just existence)
@@ -452,6 +469,13 @@ impl SignalService {
         recipient_id: &str,
     ) -> Result<(Vec<u32>, Option<[u8; 16]>), ServiceError> {
         use crate::proto::chat_v1::get_pre_key_bundle_response;
+
+        // Same refusal as `ensure_session`, and it matters MORE here: this is
+        // the path `encrypt_message_all_devices` takes, so it is the one a real
+        // DM send goes through. Note the loop below short-circuits on
+        // `has_session` per device exactly like the single-device path, so
+        // without this the stale post-reinstall session is reused silently.
+        self.refuse_pending_identity_change(recipient_id)?;
 
         /// The UAK is a fixed 16 bytes (`uakSize` in internal/middleware/auth.go).
         /// Anything else is a malformed bundle, not a usable key.

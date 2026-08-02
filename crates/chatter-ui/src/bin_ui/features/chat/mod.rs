@@ -9,6 +9,7 @@ mod context_menu;
 mod delete;
 mod edit;
 mod helpers;
+pub mod identity_change;
 mod pin;
 mod reactions;
 mod selection;
@@ -40,5 +41,6 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     actions::wire_copy_message(window, ui_ctx);
     actions::wire_download_message(window, ui_ctx);
     selection::wire_selection(window, ui_ctx);
+    identity_change::wire_accept(window, ui_ctx);
     emoji_loader::wire_emoji_loader(window, ui_ctx);
 }

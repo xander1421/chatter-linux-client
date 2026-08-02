@@ -519,6 +519,22 @@ pub enum SystemMessage {
     /// inserts a "Delivery issue" conversation update
     /// (`ThreadRecord_delivery_issue`).
     DeliveryIssue,
+    /// This peer's identity key changed (a reinstall — or a MITM), and the
+    /// message that surfaced it could not be decrypted. Like `DeliveryIssue`
+    /// the ciphertext is gone, but unlike `DeliveryIssue` the SESSION cannot
+    /// heal itself: no `DecryptionErrorMessage` is sent, resending fails
+    /// identically forever, and the conversation stays wedged in both
+    /// directions until a human accepts the new key.
+    ///
+    /// **Deliberately not folded into `DeliveryIssue`.** That variant's text
+    /// tells the user the session has been reset and to ask for a resend, which
+    /// is exactly the wrong advice here, and its resolution is automatic where
+    /// this one requires a trust decision.
+    ///
+    /// `attributed` mirrors [`crate::error::IdentityChangeSource::is_authenticated`]:
+    /// false means the peer id came from server-supplied envelope metadata and
+    /// nothing proved it, so the wording must not assert who this was.
+    IdentityChanged { attributed: bool },
 }
 
 impl SystemMessage {
@@ -538,6 +554,19 @@ impl SystemMessage {
             // "Alice sent a message that couldn't be delivered. ...".
             Self::DeliveryIssue => "sent a message that couldn't be delivered. The secure \
                  session has been reset — ask them to send it again."
+                .to_string(),
+            // Also rendered as "{sender_name} {description}". The unattributed
+            // wording must not state as fact that this was them: the only thing
+            // that named them was the server.
+            Self::IdentityChanged { attributed: true } => "changed their safety number, so \
+                 their message could not be read. Usually this means they reinstalled the \
+                 app, but it can also mean someone is intercepting this conversation. \
+                 Messages stay blocked until you accept the new safety number."
+                .to_string(),
+            Self::IdentityChanged { attributed: false } => "may have changed their safety \
+                 number, so the message could not be read. The server says it came from \
+                 them, but nothing proved that. Compare safety numbers over another channel \
+                 before you accept."
                 .to_string(),
         }
     }
