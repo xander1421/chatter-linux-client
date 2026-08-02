@@ -207,12 +207,74 @@ pub static TRUST_ROOT_PUBLIC_KEY: std::sync::LazyLock<PublicKey> = std::sync::La
 // corresponding public key (mirroring the GRA-249 fix for TRUST_ROOT). Until
 // then the server itself runs on the well-known dev key (CHATTER_KT_ALLOW_DEV_KEY),
 // so both build profiles pin the same key.
-pub const KT_TREE_HEAD_PUBLIC_KEY_BYTES: [u8; 32] = [
+/// The well-known DEVELOPMENT tree-head key. Its private half is derived from
+/// `devSigningSeedPhrase` in the server's `signingkey.go` — a seed phrase in
+/// source, so anyone with either repository can sign a tree head that this key
+/// verifies. It is only ever pinned under the `dev-trust-root` feature.
+const DEV_KT_TREE_HEAD_BYTES: [u8; 32] = [
     0x88, 0xad, 0x41, 0x28, 0x06, 0x05, 0x4a, 0x75,
     0x34, 0xe1, 0xb9, 0xde, 0xb4, 0x2e, 0xf2, 0x49,
     0xbd, 0x7c, 0x92, 0x70, 0x9f, 0x5b, 0xeb, 0xf1,
     0xd6, 0xbe, 0x7b, 0x0e, 0x40, 0x92, 0x6f, 0x72,
 ];
+
+/// The pinned key-transparency tree-head signing key.
+///
+/// Sourced exactly like `SHIPPED_TRUST_ROOT_BYTES`, and for the same reason: a
+/// key that can only be changed by editing source is a key nobody rotates. Set
+/// `CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX` (64 hex chars) at build time to pin a
+/// real one.
+///
+/// Note what this does NOT fix: nothing in production calls
+/// `verify_consistency_proof`, so an append-only violation still goes unnoticed
+/// however good this key is (OPEN-ITEMS §3, pinned in production_wiring.rs).
+/// Pinning a real key raises the bar from "anyone can forge a tree head" to
+/// "only the server operator can" — worth having, not sufficient on its own.
+#[cfg(feature = "dev-trust-root")]
+pub const KT_TREE_HEAD_PUBLIC_KEY_BYTES: [u8; 32] = DEV_KT_TREE_HEAD_BYTES;
+
+#[cfg(not(feature = "dev-trust-root"))]
+pub const KT_TREE_HEAD_PUBLIC_KEY_BYTES: [u8; 32] =
+    match option_env!("CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX") {
+        Some(hex) => decode_hex32(hex),
+        // chatter-core's own unit-test harness falls back to the dev key so that
+        // `cargo test` does not require every developer to export a production
+        // one. `cfg(test)` is set ONLY when rustc compiles this crate's test
+        // harness — never for the cdylib, a binary, or a downstream crate — so
+        // unlike `debug_assertions` it cannot leak into anything shippable.
+        None if cfg!(test) => DEV_KT_TREE_HEAD_BYTES,
+        // No configured key. Falling back to the development key here is exactly
+        // the defect this replaces, so the build stops instead.
+        None => panic!(
+            "no key-transparency tree-head key is baked into this build.\n\n\
+             Signed tree heads cannot be verified against anything trustworthy.\n\n\
+             Build with the production key:\n\n  \
+             CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX=<64 hex chars> cargo build --release\n\n\
+             It is the public half of the Ed25519 key the KT server signs tree heads\n\
+             with — see deploy/vault and the server's keytransparency signingkey.go.\n\n\
+             For local development only, build with --features dev-trust-root."
+        ),
+    };
+
+/// A non-dev build must not end up pinning the development tree-head key, even
+/// if someone exports its hex by mistake. Mirrors the trust-root assertion.
+#[cfg(all(not(feature = "dev-trust-root"), not(test)))]
+const _: () = {
+    let mut i = 0;
+    let mut same = true;
+    while i < 32 {
+        if KT_TREE_HEAD_PUBLIC_KEY_BYTES[i] != DEV_KT_TREE_HEAD_BYTES[i] {
+            same = false;
+        }
+        i += 1;
+    }
+    assert!(
+        !same,
+        "CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX is the publicly-known development \
+         tree-head key, whose private half derives from a seed phrase in source. \
+         Provision a real key or build with --features dev-trust-root."
+    );
+};
 
 // ─── KT query-privacy VRF public key (Phase 3b) ────────────────────────────
 //
