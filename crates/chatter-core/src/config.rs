@@ -237,12 +237,18 @@ pub const KT_TREE_HEAD_PUBLIC_KEY_BYTES: [u8; 32] = DEV_KT_TREE_HEAD_BYTES;
 pub const KT_TREE_HEAD_PUBLIC_KEY_BYTES: [u8; 32] =
     match option_env!("CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX") {
         Some(hex) => decode_hex32(hex),
-        // chatter-core's own unit-test harness falls back to the dev key so that
-        // `cargo test` does not require every developer to export a production
-        // one. `cfg(test)` is set ONLY when rustc compiles this crate's test
-        // harness — never for the cdylib, a binary, or a downstream crate — so
-        // unlike `debug_assertions` it cannot leak into anything shippable.
-        None if cfg!(test) => DEV_KT_TREE_HEAD_BYTES,
+        // Test harnesses fall back to the dev key so `cargo test` does not
+        // require every developer to export a production one.
+        //
+        // `cfg(test)` covers this crate's unit tests. It does NOT cover the
+        // integration tests in `tests/`, which link chatter-core as an ordinary
+        // dependency with `cfg(test)` unset — hence `feature = "testing"`, which
+        // exists only to widen accessors for exactly those tests and is
+        // documented in Cargo.toml as never to be enabled for an application
+        // build (chatter-ui does not enable it).
+        //
+        // Neither is `debug_assertions`, which the Android build path sets.
+        None if cfg!(test) || cfg!(feature = "testing") => DEV_KT_TREE_HEAD_BYTES,
         // No configured key. Falling back to the development key here is exactly
         // the defect this replaces, so the build stops instead.
         None => panic!(
@@ -258,7 +264,7 @@ pub const KT_TREE_HEAD_PUBLIC_KEY_BYTES: [u8; 32] =
 
 /// A non-dev build must not end up pinning the development tree-head key, even
 /// if someone exports its hex by mistake. Mirrors the trust-root assertion.
-#[cfg(all(not(feature = "dev-trust-root"), not(test)))]
+#[cfg(all(not(feature = "dev-trust-root"), not(test), not(feature = "testing")))]
 const _: () = {
     let mut i = 0;
     let mut same = true;
