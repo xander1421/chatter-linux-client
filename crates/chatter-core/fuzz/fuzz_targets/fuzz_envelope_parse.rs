@@ -3,7 +3,7 @@
 //!
 //! Property: `decrypt_envelope` must NEVER panic on arbitrary input.
 //! Returning `Err` is the expected outcome for random bytes; even if the
-//! length check passes and a `[u8; 32]` "sender public" is plucked off the
+//! length check passes and a `[u8; 32]` "ephemeral public" is plucked off the
 //! front, the XChaCha20-Poly1305 AEAD tag will fail verification and the
 //! function returns `CryptoError::DecryptionFailed`.
 //!
@@ -28,8 +28,8 @@ fuzz_target!(|data: &[u8]| {
     // astronomically unlikely (XChaCha20-Poly1305 has a 128-bit tag) and would
     // indicate either a bug in libsignal/aead or a forgery — fuzzer should
     // surface that as a finding via the assertion below.
-    match decrypt_envelope(data, &recipient_seed, None) {
-        Ok((_sender_pk, plaintext)) => {
+    match decrypt_envelope(data, &recipient_seed) {
+        Ok(plaintext) => {
             // Defensive: reaching here means AEAD accepted random bytes. That
             // would be a real cryptographic finding. Touch the bytes so the
             // optimizer can't elide the call, then assert false to flag it.

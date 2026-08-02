@@ -20,10 +20,8 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use libsignal_protocol::IdentityKeyPair;
 use tokio::sync::{broadcast, Mutex};
 use tokio::task::JoinHandle;
-use x25519_dalek::StaticSecret as X25519PrivateKey;
 
 use crate::crypto::envelope_crypto::encrypt_envelope;
 use crate::domain::UserId;
@@ -514,7 +512,6 @@ async fn handle_bootstrap_async(
         response,
         &signal_service,
         &mut auth_client,
-        &key_store,
         channel.clone(),
     )
     .await?;
@@ -727,7 +724,7 @@ async fn send_pending_messages_after_bootstrap(
 /// Send bootstrap response with proper two-layer encryption.
 ///
 /// Layer 1 (Content): Signal Protocol encryption to peer's identity
-/// Layer 2 (Transport): Envelope encryption using ECDH(our_identity, peer_mailbox)
+/// Layer 2 (Transport): Envelope encryption using ECDH(fresh_ephemeral, peer_mailbox)
 ///
 /// IMPORTANT: Uses the shared SignalService instance to ensure session counters
 /// stay in sync with pending message sending.
@@ -735,7 +732,6 @@ async fn send_bootstrap_response_with_envelope(
     response: BootstrapResponse,
     signal_service: &SignalService,
     auth_client: &mut AuthClient,
-    key_store: &Arc<KeyStore>,
     channel: tonic::transport::Channel,
 ) -> Result<(), String> {
     let peer_id = response.peer_id;
@@ -761,17 +757,11 @@ async fn send_bootstrap_response_with_envelope(
         "Encrypted bootstrap response content with Signal Protocol"
     );
 
-    // Layer 2: Wrap in envelope encrypted with ECDH(our_identity, peer_mailbox)
-    // Get our X25519 identity key from the key store
-    let our_identity_private = get_identity_x25519_private(key_store)
-        .map_err(|e| format!("Failed to get identity key: {}", e))?;
-
-    let envelope = encrypt_envelope(
-        &signal_ciphertext,
-        &our_identity_private,
-        &response.peer_mailbox_public_key,
-    )
-    .map_err(|e| format!("Failed to encrypt envelope: {}", e))?;
+    // Layer 2: Wrap in an envelope encrypted with ECDH(fresh_ephemeral, peer_mailbox).
+    // The envelope carries NO long-term key: its 32-byte prefix is a per-message
+    // ephemeral public key, so the unauthenticated deposit below does not name us.
+    let envelope = encrypt_envelope(&signal_ciphertext, &response.peer_mailbox_public_key)
+        .map_err(|e| format!("Failed to encrypt envelope: {}", e))?;
 
     tracing::debug!(
         peer = %peer_id,
@@ -798,28 +788,6 @@ async fn send_bootstrap_response_with_envelope(
     );
 
     Ok(())
-}
-
-/// Get our X25519 identity private key from the key store.
-fn get_identity_x25519_private(key_store: &Arc<KeyStore>) -> Result<X25519PrivateKey, String> {
-    // Get the identity key pair bytes from the store
-    let (_, key_pair_bytes) = key_store
-        .get_local_identity()
-        .map_err(|e| format!("Failed to get local identity: {}", e))?
-        .ok_or_else(|| "No local identity found".to_string())?;
-
-    // Parse into IdentityKeyPair
-    let identity_key_pair = IdentityKeyPair::try_from(key_pair_bytes.as_slice())
-        .map_err(|_| "Failed to parse identity key pair".to_string())?;
-
-    // The private key bytes from libsignal
-    let private_bytes = identity_key_pair.private_key().serialize();
-
-    // Convert to X25519 (the first 32 bytes of the serialized Curve25519 private key)
-    let mut key_bytes = [0u8; 32];
-    key_bytes.copy_from_slice(&private_bytes[..32]);
-
-    Ok(X25519PrivateKey::from(key_bytes))
 }
 
 #[cfg(test)]

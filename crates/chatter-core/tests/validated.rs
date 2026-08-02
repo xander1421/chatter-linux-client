@@ -23,8 +23,14 @@
 //! the client can read what the server cannot, and those accessors are
 //! `pub(crate)` without it.
 //!
+//! `dev-trust-root` is likewise not optional: this suite talks to the local
+//! docker-compose server, whose Vault signs sender certificates with the dev
+//! keypair. Integration tests link the lib without `cfg(test)`, so without the
+//! feature the trust root is unconfigured and the first `SignalService` panics.
+//!
 //! Run:
-//!   INTEGRATION_TESTS=1 cargo test -p chatter-core --features testing \
+//!   INTEGRATION_TESTS=1 cargo test -p chatter-core \
+//!     --features testing,dev-trust-root \
 //!     --test validated -- --nocapture --test-threads=1
 
 #[macro_use]
@@ -1573,7 +1579,7 @@ async fn v6_delivered_message_key_is_destroyed() {
     //       for a forward-secrecy break.
     let res_undelivered = client_b2.signal().decrypt_message(&bytes_undelivered).await;
     match &res_undelivered {
-        Ok((_addr, plaintext)) => {
+        Ok((_addr, plaintext, _)) => {
             let hay = String::from_utf8_lossy(plaintext);
             assert!(
                 hay.contains(&m_undelivered),
@@ -4156,7 +4162,7 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
     // Run FIRST, against the pristine healed session, before any overwrite.
     let live_post = client_b2.signal().decrypt_message(&bytes_post).await;
     match &live_post {
-        Ok((_addr, pt)) => {
+        Ok((_addr, pt, _)) => {
             let hay = String::from_utf8_lossy(pt);
             assert!(
                 hay.contains(&m_post),
@@ -4188,7 +4194,7 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
     );
     let stolen_pre = client_b2.signal().decrypt_message(&bytes_pre).await;
     match &stolen_pre {
-        Ok((_addr, pt)) => {
+        Ok((_addr, pt, _)) => {
             let hay = String::from_utf8_lossy(pt);
             assert!(
                 hay.contains(&m_pre),
@@ -6068,7 +6074,7 @@ async fn v23_message_ordering_reorder_and_gap() {
         let c = client_b2.clone();
         async move {
             match c.signal().decrypt_message(&bytes).await {
-                Ok((_addr, plaintext)) => {
+                Ok((_addr, plaintext, _)) => {
                     let hay = String::from_utf8_lossy(&plaintext);
                     assert!(
                         hay.contains(&want),

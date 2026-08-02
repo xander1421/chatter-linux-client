@@ -429,13 +429,18 @@ async fn test_list_sessions() {
 
 #[tokio::test]
 async fn test_hardcoded_trust_root() {
-    // Trust root is now hardcoded in config.rs following Signal's security model.
-    // This prevents MITM attacks during registration.
+    // Trust root is baked into the binary at compile time following Signal's
+    // security model. This prevents MITM attacks during registration.
+    //
+    // `None` means this build has no trust root configured — legitimate (the
+    // binary panics loudly on first use, see config.rs), so there is nothing to
+    // assert about the bytes.
     use chatter_core::config::TRUST_ROOT_PUBLIC_KEY_BYTES;
 
-    // Verify the hardcoded key is valid
-    assert_eq!(TRUST_ROOT_PUBLIC_KEY_BYTES.len(), 32, "Trust root must be 32 bytes");
-    assert_ne!(TRUST_ROOT_PUBLIC_KEY_BYTES, [0u8; 32], "Trust root must not be all zeros");
+    if let Some(bytes) = TRUST_ROOT_PUBLIC_KEY_BYTES {
+        assert_eq!(bytes.len(), 32, "Trust root must be 32 bytes");
+        assert_ne!(bytes, [0u8; 32], "Trust root must not be all zeros");
+    }
 }
 
 // ============================================================================

@@ -4,9 +4,10 @@
 # Pipeline: cargo-ndk builds libchatter_ui.so (arm64, debug) -> copied into
 # app/src/main/jniLibs -> Gradle assembles + signs the APK.
 #
-# DEBUG build on purpose: debug_assertions pins the DEV sealed-sender trust root
-# (config.rs) which matches the local dev Vault. A --release build pins the
-# production trust root and cannot validate dev-server sender certs.
+# DEBUG build on purpose: fast iteration, symbols, no LTO. The sealed-sender
+# trust root is NO LONGER tied to debug_assertions — it is selected by the
+# explicit `dev-trust-root` cargo feature below, which this script enables by
+# default because it targets the local dev Vault. See config.rs.
 #
 # Usage: ./build-android.sh [install]
 #   install -> also adb-install to the connected device and set the 50051 tunnel.
@@ -82,8 +83,26 @@ if [ "${MESH:-0}" = "1" ]; then
     MESH_FEATURE=",mesh"
     echo ">> mesh enabled (BLE radio + Kotlin bridge)"
 fi
+
+# Sealed-sender trust root. This script targets the local docker-compose stack,
+# whose Vault signs with the committed dev keypair, so it opts into the dev
+# trust root EXPLICITLY. That opt-in is the whole point: certificates signed by
+# that key are forgeable by anyone with a copy of this repository.
+#
+# For a real build, set CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX (64 hex chars, the
+# public half of the server's Vault signing key) and export DEV_TRUST_ROOT=0.
+TRUST_ROOT_FEATURE=""
+if [ "${DEV_TRUST_ROOT:-1}" = "1" ]; then
+    TRUST_ROOT_FEATURE=",dev-trust-root"
+    echo ">> !! DEV sealed-sender trust root — forgeable certs, local dev only"
+elif [ -z "${CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX:-}" ]; then
+    echo "FATAL: DEV_TRUST_ROOT=0 but CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX is unset."
+    echo "The APK would build and then panic at startup with no trust root."
+    exit 1
+fi
+
 ( cd "$PROJECT_ROOT" && cargo ndk -t arm64-v8a build -p chatter-ui \
-    --no-default-features --features "mobile${MESH_FEATURE}" --lib )
+    --no-default-features --features "mobile${MESH_FEATURE}${TRUST_ROOT_FEATURE}" --lib )
 
 # ── 2. Stage the .so into the Gradle module ─────────────────────────────────
 JNI_DIR="app/src/main/jniLibs/arm64-v8a"

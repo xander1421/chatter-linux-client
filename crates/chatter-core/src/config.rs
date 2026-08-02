@@ -4,115 +4,187 @@
 //!
 //! # Trust Root Key Security Model
 //!
-//! Following Signal's security model, the trust root public key is hardcoded in
-//! the binary. This prevents MITM attacks during registration by ensuring clients
-//! only trust sender certificates signed by a known server key.
+//! Following Signal's security model, the sealed-sender trust root public key
+//! is baked into the binary. A sender certificate that does not verify under it
+//! is worthless, so a malicious server cannot mint a certificate binding an
+//! arbitrary UUID to an identity key it controls.
 //!
-//! - **Debug builds** (`cargo build`): Use the development trust root derived from
-//!   a well-known seed. Safe for local development and testing.
-//! - **Release builds** (`cargo build --release`): Require a production trust root
-//!   to be configured. The binary will panic at startup if no production key is set.
+//! Selection is by an EXPLICIT build feature that DEFAULTS TO PRODUCTION. It is
+//! deliberately NOT keyed on `debug_assertions`: `android/build-android.sh` is
+//! the only Android build path in the tree and builds debug on purpose, and
+//! `[profile.release-dev]` forces `debug-assertions` back on — under the old
+//! scheme both silently shipped the insecure key.
 //!
-//! To configure a production trust root, replace the placeholder bytes in the
-//! `#[cfg(not(debug_assertions))]` section below with your production key.
+//! - **Default** (`cargo build`, `cargo build --release`, everything CI does):
+//!   the production trust root, taken at compile time from the
+//!   `CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX` environment variable (64 hex chars =
+//!   32 raw bytes, no `0x05` prefix). If that variable is unset the binary
+//!   builds but PANICS the moment anything needs the trust root — which is
+//!   during `SignalService` construction, i.e. at startup.
+//! - **`--features dev-trust-root`**: the development trust root matching the
+//!   local docker-compose Vault. Its private key is committed in plaintext at
+//!   `deploy/vault/init-and-unseal.sh`, so this build trusts certificates
+//!   anyone can forge. Local development only.
+//!
+//! Configuring production:
+//!
+//! ```sh
+//! CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX=<64 hex chars> cargo build --release
+//! ```
+//!
+//! The value is the public half of the Curve25519 keypair the server signs
+//! sealed-sender certificates with — `public_key` under
+//! `sealed-sender/signing-keys/current` in Vault, base64 there, hex here. A
+//! malformed value, or one equal to the dev key, fails the BUILD.
 
 use libsignal_protocol::PublicKey;
 
-// ─── Development trust root (debug builds only) ────────────────────────────
+// ─── Sealed sender trust root ──────────────────────────────────────────────
 
-/// Server trust root public key for sealed sender certificate verification.
+/// Public half of the development keypair provisioned by
+/// `deploy/vault/init-and-unseal.sh` when `VAULT_GENERATE_KEYS` is not `true`.
 ///
-/// SECURITY: This key is hardcoded following Signal's security model.
-/// Like Signal-Desktop's `TRUST_ROOT`, this prevents MITM attacks during
-/// registration by ensuring clients only trust certificates signed by this key.
+/// Base64: `yknZaqZBfXJLRTHfxsvcjikbUjHKrAiKMJLeUSC+aDM=`
 ///
-/// This is the Curve25519 public key (Montgomery u-coordinate) corresponding
-/// to the server's XEdDSA signing key stored in Vault.
-///
-/// Development key (matches docker-compose vault-init):
-/// - Seed: "chatter-dev-sealed-sender-trust-root-v1"
-/// - Base64: yknZaqZBfXJLRTHfxsvcjikbUjHKrAiKMJLeUSC+aDM=
-/// - Hex: ca49d96aa6417d724b4531dfc6cbdc8e291b5231caac088a3092de5120be6833
-#[cfg(debug_assertions)]
-pub const TRUST_ROOT_PUBLIC_KEY_BYTES: [u8; 32] = [
+/// The matching PRIVATE key is committed next to it in that script, so this key
+/// authenticates nobody. Kept here so the production path can refuse to equal
+/// it, and so `--features dev-trust-root` can select it on purpose.
+const DEV_TRUST_ROOT_BYTES: [u8; 32] = [
     0xca, 0x49, 0xd9, 0x6a, 0xa6, 0x41, 0x7d, 0x72,
     0x4b, 0x45, 0x31, 0xdf, 0xc6, 0xcb, 0xdc, 0x8e,
     0x29, 0x1b, 0x52, 0x31, 0xca, 0xac, 0x08, 0x8a,
     0x30, 0x92, 0xde, 0x51, 0x20, 0xbe, 0x68, 0x33,
 ];
 
-/// Trust root key in libsignal's 33-byte format (0x05 prefix + 32-byte key).
-/// The 0x05 byte indicates Curve25519 key type.
-#[cfg(debug_assertions)]
-const TRUST_ROOT_PUBLIC_KEY_SERIALIZED: [u8; 33] = [
-    0x05, // Curve25519 key type prefix
-    0xca, 0x49, 0xd9, 0x6a, 0xa6, 0x41, 0x7d, 0x72,
-    0x4b, 0x45, 0x31, 0xdf, 0xc6, 0xcb, 0xdc, 0x8e,
-    0x29, 0x1b, 0x52, 0x31, 0xca, 0xac, 0x08, 0x8a,
-    0x30, 0x92, 0xde, 0x51, 0x20, 0xbe, 0x68, 0x33,
-];
-
-/// Parsed trust root public key for use with libsignal (debug builds).
-#[cfg(debug_assertions)]
-pub static TRUST_ROOT_PUBLIC_KEY: std::sync::LazyLock<PublicKey> = std::sync::LazyLock::new(|| {
-    PublicKey::deserialize(&TRUST_ROOT_PUBLIC_KEY_SERIALIZED)
-        .expect("Invalid hardcoded trust root key - this is a build error")
-});
-
-// ─── Production trust root (release builds) ────────────────────────────────
-
-/// Production trust root public key bytes.
+/// The trust root a SHIPPABLE artifact of this build would pin — the cdylib,
+/// a binary, anything a downstream crate links. `None` means none is
+/// configured, which is a startup panic, not a silent downgrade.
 ///
-/// SECURITY: This is the production Curve25519 public key (Montgomery u-coordinate).
-/// The corresponding private key is stored in Vault at sealed-sender/signing-keys/current.
-/// Generated with crypto/rand — NOT derived from a seed.
+/// This is the value the security property is about, and the one
+/// `dev_trust_root_requires_explicit_feature` asserts on.
+#[cfg(feature = "dev-trust-root")]
+const SHIPPED_TRUST_ROOT_BYTES: Option<[u8; 32]> = Some(DEV_TRUST_ROOT_BYTES);
+
+/// The trust root a SHIPPABLE artifact of this build would pin. See above.
+#[cfg(not(feature = "dev-trust-root"))]
+const SHIPPED_TRUST_ROOT_BYTES: Option<[u8; 32]> =
+    match option_env!("CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX") {
+        Some(hex) => Some(decode_hex32(hex)),
+        None => None,
+    };
+
+/// The trust root this build actually uses.
 ///
-/// Base64: i6I51jfBzxRyPtEFSzJs2rh5VVKNd1oZ+kSinqRL0RM=
-/// GRA-249: Replaced dev key that was identical to debug build key.
-#[cfg(not(debug_assertions))]
-pub const TRUST_ROOT_PUBLIC_KEY_BYTES: [u8; 32] = [
-    0x8b, 0xa2, 0x39, 0xd6, 0x37, 0xc1, 0xcf, 0x14,
-    0x72, 0x3e, 0xd1, 0x05, 0x4b, 0x32, 0x6c, 0xda,
-    0xb8, 0x79, 0x55, 0x52, 0x8d, 0x77, 0x5a, 0x19,
-    0xfa, 0x44, 0xa2, 0x9e, 0xa4, 0x4b, 0xd1, 0x13,
-];
-
-#[cfg(not(debug_assertions))]
-const TRUST_ROOT_PUBLIC_KEY_SERIALIZED: [u8; 33] = [
-    0x05, // Curve25519 key type prefix
-    0x8b, 0xa2, 0x39, 0xd6, 0x37, 0xc1, 0xcf, 0x14,
-    0x72, 0x3e, 0xd1, 0x05, 0x4b, 0x32, 0x6c, 0xda,
-    0xb8, 0x79, 0x55, 0x52, 0x8d, 0x77, 0x5a, 0x19,
-    0xfa, 0x44, 0xa2, 0x9e, 0xa4, 0x4b, 0xd1, 0x13,
-];
-
-/// Compile-time assertion: release key must differ from the development key.
-/// Prevents accidentally shipping a release build with the dev trust root,
-/// which would allow sender certificate forgery (GRA-249).
-#[cfg(not(debug_assertions))]
-const _: () = {
-    const DEV_KEY: [u8; 32] = [
-        0xca, 0x49, 0xd9, 0x6a, 0xa6, 0x41, 0x7d, 0x72,
-        0x4b, 0x45, 0x31, 0xdf, 0xc6, 0xcb, 0xdc, 0x8e,
-        0x29, 0x1b, 0x52, 0x31, 0xca, 0xac, 0x08, 0x8a,
-        0x30, 0x92, 0xde, 0x51, 0x20, 0xbe, 0x68, 0x33,
-    ];
-    let mut i = 0;
-    let mut same = true;
-    while i < 32 {
-        if TRUST_ROOT_PUBLIC_KEY_BYTES[i] != DEV_KEY[i] {
-            same = false;
-        }
-        i += 1;
-    }
-    assert!(!same, "Production trust root must differ from development key");
+/// Identical to [`SHIPPED_TRUST_ROOT_BYTES`] except that chatter-core's own
+/// unit-test harness falls back to the dev key, so running `cargo test` does
+/// not require every developer to export a production key. `cfg(test)` is set
+/// ONLY when rustc compiles this crate's test harness — never for the cdylib,
+/// a binary, or a downstream crate — so unlike `debug_assertions` it cannot
+/// leak an insecure key into anything shippable.
+pub const TRUST_ROOT_PUBLIC_KEY_BYTES: Option<[u8; 32]> = match SHIPPED_TRUST_ROOT_BYTES {
+    Some(configured) => Some(configured),
+    None if cfg!(test) => Some(DEV_TRUST_ROOT_BYTES),
+    None => None,
 };
 
-/// Parsed trust root public key for use with libsignal (release builds).
-#[cfg(not(debug_assertions))]
+/// GRA-249, enforced at build time: a production build must not be handed the
+/// publicly-known development key.
+#[cfg(not(feature = "dev-trust-root"))]
+const _: () = {
+    match SHIPPED_TRUST_ROOT_BYTES {
+        Some(configured) => {
+            let mut i = 0;
+            let mut same = true;
+            while i < 32 {
+                if configured[i] != DEV_TRUST_ROOT_BYTES[i] {
+                    same = false;
+                }
+                i += 1;
+            }
+            assert!(
+                !same,
+                "CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX is the publicly-known development \
+                 trust root, whose private key is committed in deploy/vault/init-and-unseal.sh. \
+                 Use --features dev-trust-root if that is what you meant."
+            );
+        }
+        None => {}
+    }
+};
+
+/// Decode 64 hex characters into 32 bytes at compile time. A wrong length or a
+/// non-hex character is a build failure, not a runtime surprise.
+#[cfg(not(feature = "dev-trust-root"))]
+const fn decode_hex32(hex: &str) -> [u8; 32] {
+    let bytes = hex.as_bytes();
+    assert!(
+        bytes.len() == 64,
+        "CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX must be exactly 64 hex characters (32 bytes)"
+    );
+    let mut out = [0u8; 32];
+    let mut i = 0;
+    while i < 32 {
+        out[i] = hex_nibble(bytes[i * 2]) * 16 + hex_nibble(bytes[i * 2 + 1]);
+        i += 1;
+    }
+    out
+}
+
+#[cfg(not(feature = "dev-trust-root"))]
+const fn hex_nibble(c: u8) -> u8 {
+    match c {
+        b'0'..=b'9' => c - b'0',
+        b'a'..=b'f' => c - b'a' + 10,
+        b'A'..=b'F' => c - b'A' + 10,
+        _ => panic!("CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX contains a non-hex character"),
+    }
+}
+
+/// What the owner must do when the trust root was never provisioned. This is
+/// the whole failure mode: the binary links, then dies here.
+const MISSING_TRUST_ROOT: &str = "\n\
+    ==============================================================================\n\
+    FATAL: no sealed-sender trust root is baked into this build.\n\
+    \n\
+    Sender certificates cannot be verified, so every sealed-sender message would\n\
+    have to be either rejected or trusted blindly. Refusing to run.\n\
+    \n\
+    To fix, rebuild with the production trust root public key:\n\
+    \n\
+      CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX=<64 hex chars> cargo build --release\n\
+    \n\
+    That value is the public half of the Curve25519 keypair the SERVER signs\n\
+    sealed-sender certificates with: the `public_key` field of\n\
+    `sealed-sender/signing-keys/current` in Vault (base64 there, hex here).\n\
+    Provision it with VAULT_GENERATE_KEYS=true deploy/vault/init-and-unseal.sh,\n\
+    which generates a fresh random keypair, then read the public half back out.\n\
+    Client and server MUST be built/provisioned from the same keypair.\n\
+    \n\
+    For local development against the docker-compose Vault, build with\n\
+    `--features dev-trust-root` instead. That key's PRIVATE half is committed in\n\
+    this repository and anyone can forge certificates under it — never ship it.\n\
+    ==============================================================================\n";
+
+/// Parsed trust root public key for use with libsignal.
+///
+/// Panics on first use if the build has no trust root configured — see
+/// [`MISSING_TRUST_ROOT`]. First use is `SignalService::new`, so this surfaces
+/// at startup rather than mid-conversation.
 pub static TRUST_ROOT_PUBLIC_KEY: std::sync::LazyLock<PublicKey> = std::sync::LazyLock::new(|| {
-    PublicKey::deserialize(&TRUST_ROOT_PUBLIC_KEY_SERIALIZED)
-        .expect("Invalid production trust root key - check config.rs")
+    let bytes = match TRUST_ROOT_PUBLIC_KEY_BYTES {
+        Some(bytes) => bytes,
+        None => panic!("{}", MISSING_TRUST_ROOT),
+    };
+    // libsignal's 33-byte wire format: 0x05 (Curve25519) || key.
+    let mut serialized = [0u8; 33];
+    serialized[0] = 0x05;
+    let mut i = 0;
+    while i < 32 {
+        serialized[i + 1] = bytes[i];
+        i += 1;
+    }
+    PublicKey::deserialize(&serialized)
+        .expect("trust root is not a valid Curve25519 point - check the configured key")
 });
 
 // ─── Key Transparency tree-head signing key (pinned) ───────────────────────
@@ -185,32 +257,57 @@ mod tests {
     use super::*;
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 
+    /// The DEV trust root's private key is committed in plaintext at
+    /// `deploy/vault/init-and-unseal.sh`, so anyone can mint a sender
+    /// certificate under it. Selecting it must require an explicit opt-in
+    /// feature — a debug build must never silently become an insecure build.
+    /// (`android/build-android.sh` is the only Android build path and builds
+    /// debug on purpose; `[profile.release-dev]` used to force
+    /// `debug-assertions` back on for the same reason.)
     #[test]
-    fn test_trust_root_key_is_valid() {
-        // Verify the key can be deserialized (33-byte format with 0x05 prefix)
-        let key = PublicKey::deserialize(&TRUST_ROOT_PUBLIC_KEY_SERIALIZED);
-        assert!(key.is_ok(), "Trust root key must be a valid Curve25519 point");
+    #[cfg(not(feature = "dev-trust-root"))]
+    fn dev_trust_root_requires_explicit_feature() {
+        let dev_public = BASE64
+            .decode("yknZaqZBfXJLRTHfxsvcjikbUjHKrAiKMJLeUSC+aDM=")
+            .expect("known-good base64");
+        // SHIPPED_, not TRUST_ROOT_PUBLIC_KEY_BYTES: the latter carries the
+        // cfg(test) fallback, which by construction only exists inside this
+        // very harness. The property under test is what a cdylib/binary pins.
+        assert_ne!(
+            SHIPPED_TRUST_ROOT_BYTES.as_ref().map(|b| &b[..]),
+            Some(&dev_public[..]),
+            "build selected the publicly-known dev trust root without the \
+             `dev-trust-root` feature — sender certificates are forgeable"
+        );
     }
 
+    /// Opting in must actually get you the key the local dev Vault signs with,
+    /// otherwise `--features dev-trust-root` is useless and someone will reach
+    /// for `debug_assertions` again.
     #[test]
-    fn test_trust_root_matches_expected_base64() {
-        // Verify our hex bytes match the expected base64 from docker-compose
-        // Public key derived from seed: "chatter-dev-sealed-sender-trust-root-v1"
-        let expected_b64 = "yknZaqZBfXJLRTHfxsvcjikbUjHKrAiKMJLeUSC+aDM=";
-        let actual_b64 = BASE64.encode(TRUST_ROOT_PUBLIC_KEY_BYTES);
-        assert_eq!(actual_b64, expected_b64, "Trust root key must match server's key");
-    }
-
-    #[test]
-    fn test_lazy_static_works() {
-        // Access the lazy static to ensure it initializes without panic
+    #[cfg(feature = "dev-trust-root")]
+    fn dev_trust_root_feature_selects_the_dev_vault_key() {
+        let expected = "yknZaqZBfXJLRTHfxsvcjikbUjHKrAiKMJLeUSC+aDM=";
+        let actual = BASE64.encode(SHIPPED_TRUST_ROOT_BYTES.expect("feature pins a key"));
+        assert_eq!(actual, expected, "must match the docker-compose Vault key");
+        // And it must parse — this is the LazyLock's only non-panicking path.
         let _ = TRUST_ROOT_PUBLIC_KEY.serialize();
     }
 
+    /// Whatever the build configured, it must be a valid Curve25519 point in
+    /// libsignal's 33-byte format. Unconfigured builds have nothing to check.
     #[test]
-    fn test_serialized_format_is_correct() {
-        // Verify the 33-byte format has correct prefix
-        assert_eq!(TRUST_ROOT_PUBLIC_KEY_SERIALIZED[0], 0x05, "Key type prefix must be 0x05 (Curve25519)");
-        assert_eq!(&TRUST_ROOT_PUBLIC_KEY_SERIALIZED[1..], &TRUST_ROOT_PUBLIC_KEY_BYTES);
+    fn configured_trust_root_is_a_valid_curve_point() {
+        let Some(bytes) = TRUST_ROOT_PUBLIC_KEY_BYTES else {
+            return;
+        };
+        let mut serialized = [0u8; 33];
+        serialized[0] = 0x05;
+        serialized[1..].copy_from_slice(&bytes);
+        assert!(
+            PublicKey::deserialize(&serialized).is_ok(),
+            "Trust root key must be a valid Curve25519 point"
+        );
     }
+
 }

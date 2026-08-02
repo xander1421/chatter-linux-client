@@ -143,6 +143,9 @@ desktop-media-no-livekit = [
 ]
 local-ai = ["chatter-core/local-ai"]
 jarvis = ["chatter-core/jarvis"]
+# Build against the local dev Vault's sealed-sender trust root. Insecure by
+# construction (its private key is in this repo) — see chatter-core/config.rs.
+dev-trust-root = ["chatter-core/dev-trust-root"]
 # Route the network transport over Tor for anon mode. Forwards to chatter-core,
 # which owns the onion connector. See docs/ONION_DEPLOYMENT.md §8.3.
 onion = ["chatter-core/onion"]
