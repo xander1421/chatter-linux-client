@@ -8,7 +8,9 @@
 #       the headless testing backend, drives real interactions, and asserts the
 #       bound property/core state changed after the round-trip.
 #   LAYER 2 (wiring-static): scripts/ui-wiring-lint.py — flags dangling
-#       MainWindow callbacks, LOCAL-ONLY handlers, and STUB (dead) handlers.
+#       MainWindow callbacks, LOCAL-ONLY handlers, STUB (dead) handlers,
+#       imports that never render, callbacks nothing invokes, and right-click
+#       menus a finger cannot open.
 #
 # SLINT_EMIT_DEBUG_INFO=1 is REQUIRED: the ElementHandle query API is inert
 # without Slint debug info compiled into the generated code.
@@ -19,7 +21,7 @@
 # LazyLock panics the moment any test calls ChatterClient::build().
 #
 # Usage:  ./scripts/test-ui.sh            (from the linux-client submodule root)
-# Exit non-zero if either layer fails.
+# Exit non-zero if any layer fails.
 
 set -uo pipefail
 cd "$(dirname "$0")/.."   # linux-client/
@@ -54,14 +56,26 @@ LAYOUT_RC=${PIPESTATUS[0]}
 
 echo
 echo "=================================================================="
+echo " VALIDATED-UI  ·  LAYER 1 — render smoke (is anything ON SCREEN)"
+echo "=================================================================="
+# Third binary for the same once-per-process reason. This is the layer that
+# answers the question 43/43 green could not: does the main view actually
+# render its columns, or is the app a blank screen with live callbacks?
+SLINT_EMIT_DEBUG_INFO=1 cargo test -p chatter-ui --features $FEATURES --test ui_render 2>&1 \
+    | grep -v 'requires the presence of debug info'
+RENDER_RC=${PIPESTATUS[0]}
+
+echo
+echo "=================================================================="
 echo " RESULT"
 echo "=================================================================="
 echo "  static wiring lint : $([ $LINT_RC -eq 0 ] && echo PASS || echo 'FAIL (stub/dead wire)')"
 echo "  headless UI suite  : $([ $TEST_RC -eq 0 ] && echo PASS || echo FAIL)"
 echo "  layout suite       : $([ $LAYOUT_RC -eq 0 ] && echo PASS || echo FAIL)"
+echo "  render smoke       : $([ $RENDER_RC -eq 0 ] && echo PASS || echo FAIL)"
 
-# The lint currently reports the 3 KNOWN-intentional code-preview no-ops as
-# STUBs (documented in VALIDATED-UI.md, allowlisted in the lint). If you have
-# not allowlisted them, LINT_RC will be 1 by design — that is the positive
-# control proving the gate can see a dead wire.
-[ $TEST_RC -eq 0 ] && [ $LINT_RC -eq 0 ] && [ $LAYOUT_RC -eq 0 ]
+# Everything the lint reports as "known" is allowlisted with a written reason in
+# scripts/ui-wiring-lint.py — 3 code-preview no-ops, 1 never-rendered import,
+# 7 never-invoked callbacks. Those allowlists are the positive control: they are
+# real findings the gate CAN see, held green so a NEW one stands out.
+[ $TEST_RC -eq 0 ] && [ $LINT_RC -eq 0 ] && [ $LAYOUT_RC -eq 0 ] && [ $RENDER_RC -eq 0 ]
