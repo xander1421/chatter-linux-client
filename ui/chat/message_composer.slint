@@ -33,6 +33,19 @@ export component MessageComposer inherits Rectangle {
     in property <bool> disabled: false;
     in property <[PendingAttachmentData]> pending-attachments: [];
 
+    // What the last send is doing, or "" when nothing is in flight.
+    //
+    // Sending clears the composer immediately and the message does not appear
+    // until the round trip finishes — which for attachments is a 10s + 30s-per-
+    // file budget. Between those two moments the app showed nothing at all: an
+    // emptied composer, an unchanged conversation, and no indication anything
+    // was happening. People re-tapped send, or gave up and assumed it failed.
+    //
+    // A line, not a modal or a disabled composer: the send is already detached
+    // from the input by then, so there is no reason to stop the user writing the
+    // next message while this one is on its way.
+    in property <string> send-status: "";
+
     // Edit mode properties
     in-out property <bool> is-editing: false;
     in-out property <string> edit-message-id: "";
@@ -195,7 +208,7 @@ export component MessageComposer inherits Rectangle {
                     accessible-label: "Cancel edit";
 
                     Text {
-                        text: "\u{2715}";  // X mark
+                        text: "\u{00D7}";  // X mark
                         color: Colors.text-secondary;
                         font-size: Typography.sm;
                         horizontal-alignment: center;
@@ -284,7 +297,7 @@ export component MessageComposer inherits Rectangle {
                     accessible-label: "Cancel reply";
 
                     Text {
-                        text: "\u{2715}";  // X mark
+                        text: "\u{00D7}";  // X mark
                         color: Colors.text-secondary;
                         font-size: Typography.sm;
                         horizontal-alignment: center;
@@ -466,6 +479,27 @@ export component MessageComposer inherits Rectangle {
             }
         }
 
+        // In-flight send. Sits above the input so it reads as a property of the
+        // conversation, and disappears the moment the message lands or fails —
+        // failure additionally raises the error toast.
+        if root.send-status != "": Rectangle {
+            width: 100%;
+            height: 28px;
+            background: Colors.background;
+            HorizontalLayout {
+                padding-left: Spacing.md;
+                padding-right: Spacing.md;
+                spacing: Spacing.sm;
+                alignment: start;
+                Text {
+                    text: root.send-status;
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
         // Attachment tray (shown when there are pending attachments)
         if root.has-attachments: Rectangle {
             width: 100%;
@@ -593,7 +627,7 @@ export component MessageComposer inherits Rectangle {
                                 Text {
                                     width: 100%;
                                     height: 100%;
-                                    text: "\u{2715}";
+                                    text: "\u{00D7}";
                                     font-size: Typography.xs;
                                     color: Colors.error;
                                     horizontal-alignment: center;
