@@ -21,15 +21,18 @@ export struct ChatHeaderData {
     presence-status: string,  // "online", "away", "dnd", "offline" — shown for DMs only
 }
 
-// Reusable icon button component — 44px minimum touch target for mobile
+// Reusable icon button component — 44px touch target, the accessibility floor.
+// It was 48px, which is the floor plus margin the header does not have: four of
+// these in a row is a fifth of a 411dp screen, and the extra width read as the
+// icons being loosely spaced rather than as a bigger target.
 component IconButton inherits Rectangle {
     in property <image> icon;
     in property <color> icon-color: Colors.text-secondary;
     in property <color> hover-color: Colors.text-primary;
     callback clicked();
 
-    width: Spacing.touch-target-min;
-    height: Spacing.touch-target-min;
+    width: 44px;
+    height: 44px;
     background: touch.has-hover ? Colors.surface-hover : transparent;
     border-radius: Spacing.radius-md;
     border-width: touch.has-hover ? 1px : 0px;
@@ -39,10 +42,13 @@ component IconButton inherits Rectangle {
     drop-shadow-offset-y: touch.has-hover ? 1px : 0px;
     drop-shadow-color: touch.has-hover ? Colors.neo-shadow : transparent;
 
+    // 18px glyph in a 44px box. The target is what has to be big; the glyph is
+    // what has to be legible, and at 20px it was neither more legible nor less
+    // shouty than the channel name beside it.
     Image {
         source: icon;
-        width: 20px;
-        height: 20px;
+        width: 18px;
+        height: 18px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         colorize: touch.has-hover ? hover-color : icon-color;
@@ -150,8 +156,11 @@ export component ChatHeader inherits Rectangle {
     // Show call buttons for everything except saved messages
     property <bool> show-calls: has-channel && !is-saved && !is-mesh;
 
-    // Layout (56px header) — Neo glassmorphism: translucent surface with edge definition
-    height: 56px;
+    // Layout (52px header) — Neo glassmorphism: translucent surface with edge
+    // definition. 52px is a 44px touch row plus 4px of air above and below; the
+    // old 56px was that plus a spare row of nothing, repeated at the top of every
+    // conversation.
+    height: 52px;
     background: Colors.surface.with-alpha(0.85);
     border-width: 1px;
     border-color: Colors.neo-highlight;
@@ -182,7 +191,6 @@ export component ChatHeader inherits Rectangle {
             // Mobile back button (returns to chat list)
             if root.show-back-button: IconButton {
                 icon: Icons.chevron-left;
-                width: Spacing.touch-target-min;
                 clicked => { root.back-clicked(); }
             }
 
@@ -412,13 +420,16 @@ export component ChatHeader inherits Rectangle {
         // to the name rather than being split with a group of fixed-size icons;
         // being the last child, it still ends flush with the right edge.
         HorizontalLayout {
-            spacing: 2px;
+            // Groups sit 4px apart, buttons inside a group flush against each
+            // other: with the divider gone on a phone, that gap is the only
+            // thing left saying "calls" and "everything else" are two things.
+            spacing: Spacing.xs;
             alignment: end;
             horizontal-stretch: 0;
 
             // Call buttons group
             if root.show-calls: HorizontalLayout {
-                spacing: 2px;
+                spacing: 0px;
                 alignment: center;
                 IconButton {
                     icon: Icons.phone;
@@ -428,8 +439,10 @@ export component ChatHeader inherits Rectangle {
                     icon: Icons.video;
                     clicked => { root.video-call-clicked(); }
                 }
-                // Divider
-                Rectangle {
+                // Divider — wide screens only. At 411dp it draws a line between
+                // two things the eye already reads as separate, in the one place
+                // on the screen with the least room for a decoration.
+                if !root.tight: Rectangle {
                     width: 1px;
                     height: 20px;
                     background: Colors.text-muted.with-alpha(0.3);
@@ -474,7 +487,7 @@ export component ChatHeader inherits Rectangle {
 
             // Utility buttons group
             HorizontalLayout {
-                spacing: 2px;
+                spacing: 0px;
                 alignment: center;
                 if root.show-invite: IconButton {
                     icon: Icons.user-plus;

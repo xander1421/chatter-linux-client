@@ -127,8 +127,14 @@ export component MessageComposer inherits Rectangle {
     // Forward focus to input
     forward-focus: text-input;
 
+    // The air above and below the input row. 4px, not 8px: the row's floor is a
+    // 48px touch target, so the row is already tall enough to breathe on its own
+    // — 16px on top of it made the composer 65px for one line of text and left
+    // the screen looking bottom-heavy. The buttons are untouched.
+    property <length> row-padding: Spacing.xs;
+
     // Layout - dynamic height based on content (includes Bento Box when expanded)
-    height: content-height + attachment-tray-height + edit-bar-height + reply-bar-height + format-bar-height + Spacing.sm * 2 + 1px;
+    height: content-height + attachment-tray-height + edit-bar-height + reply-bar-height + format-bar-height + row-padding * 2 + 1px;
     animate height { duration: 150ms; easing: ease-out; }
     background: Colors.surface;
     border-width: 1px;
@@ -640,12 +646,15 @@ export component MessageComposer inherits Rectangle {
         // Main input area - using HorizontalLayout for proper width distribution
         HorizontalLayout {
             width: 100%;
-            height: root.content-height + Spacing.sm * 2;
+            height: root.content-height + root.row-padding * 2;
             padding-left: Spacing.md;
             padding-right: Spacing.md;
-            padding-top: Spacing.sm;
-            padding-bottom: Spacing.sm;
-            spacing: Spacing.sm;
+            padding-top: root.row-padding;
+            padding-bottom: root.row-padding;
+            // 4px between the field and the three 48px buttons. At 8px the gaps
+            // read as part of the buttons, which are already the widest thing in
+            // the row; the width goes to the field instead.
+            spacing: Spacing.xs;
             alignment: stretch;
 
             // Text input area — Neo inset (concave, pressed into surface).
@@ -833,10 +842,13 @@ export component MessageComposer inherits Rectangle {
 
                 // SVG, not a glyph: "\u{27A4}" has no coverage in the Android
                 // system font and rendered as a tofu box on device.
+                // 20px, matching the emoji and attach glyphs beside it — at 18px
+                // it was the smallest icon in the row while sitting in the only
+                // filled button, which read as a mismatch rather than a hierarchy.
                 Image {
                     source: Icons.send;
-                    width: 18px;
-                    height: 18px;
+                    width: 20px;
+                    height: 20px;
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
                     colorize: Colors.text-primary;

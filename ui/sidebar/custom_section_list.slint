@@ -5,6 +5,7 @@
 // components (channels, DMs, private groups) based on conversation_type.
 
 import { Colors } from "../theme/colors.slint";
+import { HoldArea } from "../components/hold_area.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
 import { Typography } from "../theme/typography.slint";
@@ -174,16 +175,12 @@ component SectionConversationItem inherits Rectangle {
         }
     }
 
-    touch := TouchArea {
+    touch := HoldArea {
         mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-        pointer-event(event) => {
-            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
-                root.context-menu-requested(
-                    self.absolute-position.x + self.mouse-x,
-                    self.absolute-position.y + self.mouse-y);
-            }
+        clicked => {
+            if (!self.hold-fired) { root.clicked(); }
         }
+        held => { root.context-menu-requested(self.anchor-x, self.anchor-y); }
     }
 }
 
@@ -206,17 +203,11 @@ component CustomSectionHeader inherits Rectangle {
 
     // Hover detector — always present (not inside conditional).
     // Also captures right-click to open section context menu.
-    header-hover := TouchArea {
+    header-hover := HoldArea {
         width: 100%;
         height: 100%;
         mouse-cursor: default;
-        pointer-event(event) => {
-            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
-                root.context-menu-requested(
-                    self.absolute-position.x + self.mouse-x,
-                    self.absolute-position.y + self.mouse-y);
-            }
-        }
+        held => { root.context-menu-requested(self.anchor-x, self.anchor-y); }
     }
 
     if !root.collapsed: HorizontalLayout {

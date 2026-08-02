@@ -235,6 +235,12 @@ export component App inherits Rectangle {
     in-out property <string> user-presence-mode: "auto";
     in property <string> user-custom-status: "";
     in-out property <bool> sidebar-collapsed: false;
+    // The ONE definition of "the panel is a rail right now". The Sidebar
+    // collapses on either signal, so anything else deciding based on collapse
+    // state has to read the same expression — checking `sidebar-collapsed`
+    // alone reports "expanded" on a phone that is showing a rail, which removed
+    // the entire chat column and left a blank screen.
+    property <bool> sidebar-is-rail: root.is-small-screen || root.sidebar-collapsed;
     in-out property <bool> sidebar-hidden: false;
 
     // ========== Chat properties ==========
@@ -1156,7 +1162,7 @@ export component App inherits Rectangle {
                 // Narrow screens start on the rail and expand on demand. The
                 // user drives this — `sidebar-user-collapsed` keeps their choice
                 // from being undone by a resize.
-                collapsed: root.is-small-screen || root.sidebar-collapsed;
+                collapsed: root.sidebar-is-rail;
                 hidden: root.sidebar-hidden;
                 pending-friend-requests: root.friends-received-requests.length;
                 pending-message-requests: root.pending-message-requests;
@@ -1270,9 +1276,15 @@ export component App inherits Rectangle {
                 }
             }
 
-            // Right side area (Chat + Panels). Always present — the sidebar is
-            // a panel beside it, never a view that replaces it.
-            chat-panel-area := Rectangle {
+            // Right side area (Chat + Panels).
+            //
+            // Removed from the layout while the panel is expanded on touch,
+            // where the panel takes the whole screen. `if` rather than
+            // `visible: false`, for the reason documented at the ChatLayout
+            // below: a hidden element still occupies its layout slot, and a
+            // zero-width chat column beside a full-width panel is exactly the
+            // shape that pushes content past the clipped edge.
+            if !(root.is-mobile-platform && !root.sidebar-is-rail): chat-panel-area := Rectangle {
                 horizontal-stretch: 1;
                 vertical-stretch: 1;
                 visible: true;

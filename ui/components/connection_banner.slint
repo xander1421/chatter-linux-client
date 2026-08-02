@@ -47,6 +47,20 @@ export component ConnectionBanner inherits Rectangle {
     property <bool> just-reconnected: false;
     property <bool> was-disconnected: false;
 
+    // Narrow screen. Same idiom as `ui/chat/chat_header.slint` (`tight` /
+    // `mesh-tight`): a width test, not a platform test.
+    //
+    // This banner is drawn on every screen for as long as the server is gone, so
+    // on a phone it is the one piece of chrome that must cost a single line. Two
+    // sentences at 411dp is nine percent of the display permanently spent on a
+    // fact that fits in three words, and it pushes the whole app down to say it.
+    // Above the breakpoint there is room for the full wording, so it keeps it.
+    property <bool> tight: root.width < 520px;
+    // One line of 12px text with breathing room. The close button below is 44px
+    // and overflows this by 2px at each edge on purpose: the touch minimum is
+    // not negotiable, and it is a transparent box, so nothing shows for it.
+    property <length> compact-height: 40px;
+
     // Tor connect in progress / failed while in shield mode — surface it in the
     // banner (state 1 = connecting, 3 = error; 2 = connected is silent).
     property <bool> tor-connecting: AnonMode.enabled && TorStatus.state == 1;
@@ -67,6 +81,11 @@ export component ConnectionBanner inherits Rectangle {
     // during "connecting" the honest position is that we do not know yet, and
     // pre-announcing a fallback would be the app talking itself down.
     //
+    // And never on a narrow screen, where it is the second of two paragraphs at
+    // the top of every screen. What the mesh is doing belongs where the mesh is
+    // — the mesh header and its context strip both say it — not stapled above
+    // the conversation list.
+    //
     // And not while the user is *in* a mesh conversation, where it is said twice.
     // There the header carries the peer count on its own line and the strip below
     // it explains what a send means when nobody is in range — so this sentence
@@ -75,7 +94,7 @@ export component ConnectionBanner inherits Rectangle {
     // What the banner still says there is the part the mesh surfaces cannot: that
     // the *server* is unreachable, which is why it is open at all.
     property <bool> show-mesh-line:
-        MeshGlobal.enabled && root.server-unreachable && MeshGlobal.active-id == "";
+        !root.tight && MeshGlobal.enabled && root.server-unreachable && MeshGlobal.active-id == "";
 
     // What is left when the server is gone. Ordered by what the user can act on.
     //
@@ -102,10 +121,14 @@ export component ConnectionBanner inherits Rectangle {
             : "Mesh is running over Bluetooth — " + MeshGlobal.peer-count + " nearby. Mesh conversations do not need the server.";
 
     visible: root.should-show;
-    // Content-driven, because the mesh sentence wraps and the half of it that
-    // would get cut is the half that says the mesh is *not* a substitute for
-    // the server.
-    height: root.should-show ? content.preferred-height : 0px;
+    // Wide: content-driven, because the mesh sentence wraps and the half of it
+    // that would get cut is the half that says the mesh is *not* a substitute
+    // for the server.
+    // Narrow: one fixed line. Nothing in the compact form wraps, so there is
+    // nothing for the content to drive.
+    height: !root.should-show ? 0px
+          : root.tight ? root.compact-height
+          : content.preferred-height;
     animate height { duration: 200ms; easing: ease-out; }
 
     // Banner color based on state
@@ -137,14 +160,20 @@ export component ConnectionBanner inherits Rectangle {
     }
 
     content := VerticalLayout {
-        padding-left: Spacing.lg;
-        padding-right: Spacing.lg;
-        padding-top: 8px;
-        padding-bottom: 8px;
+        padding-left: root.tight ? Spacing.sm : Spacing.lg;
+        padding-right: root.tight ? Spacing.sm : Spacing.lg;
+        // Narrow: -2px, i.e. (40 - 44) / 2. The row is the close button's 44px
+        // and cannot be less; the negative padding centres that 44px inside the
+        // 40px banner instead of letting it hang off the bottom edge. Nothing
+        // visible overflows — the button is a transparent box — and the target
+        // stays the full 44px. Ordinary padding on top of a 44px row is what
+        // turned one sentence into a slab in the first place.
+        padding-top: root.tight ? (root.compact-height - 44px) / 2 : 8px;
+        padding-bottom: root.tight ? (root.compact-height - 44px) / 2 : 8px;
         spacing: 2px;
 
         HorizontalLayout {
-            spacing: Spacing.sm;
+            spacing: root.tight ? Spacing.xs : Spacing.sm;
             alignment: center;
 
             // Status dot (pulsing for connecting states)
@@ -164,26 +193,41 @@ export component ConnectionBanner inherits Rectangle {
                 animate opacity { duration: 800ms; easing: ease-in-out; }
             }
 
-            // Status text
+            // Status text. Two wordings for the same fact: the long one explains
+            // the consequence, the short one states the fact and lets the rest of
+            // the screen exist. On a phone the consequence — that a message sent
+            // now is sent later — is already visible per-message as a pending
+            // tick, so the banner does not have to spend a second line on it.
             Text {
                 text: root.just-reconnected ? "Connected" :
-                      root.tor-error ? "Tor connection error — retrying…" :
+                      root.tor-error ? (root.tight ? "Tor error — retrying…" : "Tor connection error — retrying…") :
                       root.tor-connecting ? "Connecting over Tor…" :
                       connection-state == "connecting" ? "Connecting…" :
-                      connection-state == "reconnecting" ? "Reconnecting" + (reconnect-attempt > 0 ? " (attempt " + reconnect-attempt + ")…" : "…") :
-                      connection-state == "failed" ? "Server unreachable — check your network" :
-                      queue-count > 0 ? "Server unreachable — " + queue-count + " messages queued" :
-                      "Server unreachable — messages to it will be sent when it comes back";
+                      connection-state == "reconnecting" ? (root.tight
+                          ? "Reconnecting…"
+                          : "Reconnecting" + (reconnect-attempt > 0 ? " (attempt " + reconnect-attempt + ")…" : "…")) :
+                      connection-state == "failed" ? (root.tight ? "Server unreachable" : "Server unreachable — check your network") :
+                      queue-count > 0 ? (root.tight
+                          ? "No server — " + queue-count + " queued"
+                          : "Server unreachable — " + queue-count + " messages queued") :
+                      root.tight ? "No server — messages will send later"
+                                 : "Server unreachable — messages to it will be sent when it comes back";
                 color: root.banner-color;
                 font-size: Typography.xs;
                 font-weight: Typography.medium;
                 vertical-alignment: center;
-                wrap: word-wrap;
+                // Narrow: one line, guaranteed. Elide rather than wrap so an
+                // unexpectedly long state string cannot re-grow the banner.
+                wrap: root.tight ? TextWrap.no-wrap : TextWrap.word-wrap;
+                overflow: root.tight ? TextOverflow.elide : TextOverflow.clip;
+                min-width: 0px;
                 horizontal-stretch: 1;
             }
 
             // Close. 44px touch target — this sits at the top of the screen on a
-            // phone, where a 16px icon is a miss more often than a hit.
+            // phone, where a 16px icon is a miss more often than a hit. It stays
+            // 44px in the compact banner too, centred in a 40px row, so it is the
+            // banner that gives the 4px rather than the target.
             Rectangle {
                 width: 44px;
                 height: 44px;

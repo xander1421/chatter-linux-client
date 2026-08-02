@@ -24,6 +24,10 @@ export global Spacing {
     out property <length> avatar-lg: 56px;
     out property <length> sidebar-width: 240px;
     out property <length> sidebar-width-collapsed: 60px;
+    // Touch icon rail: a 44px slot with 12px gutters either side. The 60px
+    // desktop rail leaves a 44px slot only 8px of breathing room, which reads
+    // as cramped at phone density.
+    out property <length> sidebar-width-collapsed-touch: 68px;
     out property <length> sidebar-width-hidden: 0px;
     out property <length> thread-panel-width: 360px;
 

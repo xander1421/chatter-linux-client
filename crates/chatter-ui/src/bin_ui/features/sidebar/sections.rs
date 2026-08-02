@@ -224,8 +224,26 @@ fn wire_move_to_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak_clone = weak.clone();
 
         tokio::spawn(async move {
-            let Ok(sid) = section_id_str.parse::<SectionId>() else { return };
-            let Ok(conv_type) = ConversationType::from_str_value(&conv_type_str) else { return };
+            let Ok(sid) = section_id_str.parse::<SectionId>() else {
+                tracing::error!(section_id = %section_id_str, "move to folder: unparseable section id");
+                return;
+            };
+            // This bare `return` used to be silent, and the UI was sending "dm"
+            // and "private_group" — neither of which ConversationType accepts.
+            // Every attempt to file a DM or a private group into a folder did
+            // nothing at all: no log, no toast, the menu just closed.
+            let conv_type = match ConversationType::from_str_value(&conv_type_str) {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::error!(
+                        conversation_type = %conv_type_str,
+                        error = %e,
+                        "move to folder: the UI sent a conversation type core does not know — \
+                         the move was dropped. This is a wiring bug, not user error."
+                    );
+                    return;
+                }
+            };
 
             if let Ok(()) = ui_ctx.move_conversation_to_section(&conv_id_str, conv_type, &sid) {
                 refresh_sections_ui(&weak_clone, &ui_ctx);

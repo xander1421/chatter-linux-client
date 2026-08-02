@@ -32,7 +32,7 @@ export component RecoveryCodesModal inherits Rectangle {
     // Modal container — centered card with content-based sizing
     Rectangle {
         width: min(480px, parent.width - 32px);
-        height: max(200px, min(content-layout.preferred-height, min(600px, parent.height - 48px)));
+        height: max(200px, min(content-layout.preferred-height, min(760px, parent.height - 48px)));
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Colors.surface;
@@ -71,10 +71,17 @@ export component RecoveryCodesModal inherits Rectangle {
 
             Rectangle { height: Spacing.sm; }
 
-            // Recovery codes list (single column — scrollable when content exceeds space)
+            // Recovery codes list (single column).
+            //
+            // Asks for the WHOLE list, not a 120px window into it. These are
+            // write-them-down-now codes: a box three rows tall that hides the
+            // rest behind a scroll is how someone copies six of ten and loses
+            // the account. The Flickable below stays as the last-resort escape
+            // hatch for a genuinely short screen, but on a normal phone
+            // nothing scrolls and every code is on screen at once.
             Rectangle {
                 vertical-stretch: 1;
-                min-height: 120px;
+                min-height: codes-list.preferred-height;
                 background: Colors.background;
                 border-radius: Spacing.radius-md;
 

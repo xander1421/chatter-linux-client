@@ -96,6 +96,11 @@ export component Sidebar inherits Rectangle {
     // One size for every button in the collapsed rail's bottom cluster, so the
     // container height below stays in step with them.
     property <length> rail-icon-size: root.mobile-mode ? Spacing.touch-target-min : 32px;
+    // The visual plate inside a rail row. Smaller than the row so adjacent slots
+    // do not touch; the row stays the touch target, the slot is what you see.
+    property <length> rail-slot-size: root.mobile-mode ? 44px : 32px;
+    property <length> rail-slot-radius: 12px;
+    property <brush> rail-slot-bg: Colors.surface-hover;
     property <bool> rail-has-mesh: MeshGlobal.enabled && MeshGlobal.conversations.length > 0;
     // AI, Mesh (conditional), expand, Settings, anon shield, profile.
     property <int> rail-button-count: root.rail-has-mesh ? 6 : 5;
@@ -121,13 +126,16 @@ export component Sidebar inherits Rectangle {
     // expanded to the list, never a full-screen view that swaps the chat out.
     // `mobile-mode` here means "touch input", and sizes the targets below; it
     // does NOT change the layout.
-    // Expanded, the desktop width (240px) is 58% of a 411dp phone, which leaves
-    // the chat too narrow to read. On touch, cap it at 45% of the window so the
-    // conversation stays the larger pane — the panel is for navigating, not for
-    // living in. `mobile-width` is fed the window width by app.slint.
+    // Expanded on touch, the panel takes the WHOLE screen. 240px is 58% of a
+    // 411dp phone and 45% is not much better: at either width the panel is too
+    // cramped to browse folders in and the chat behind it is too narrow to read,
+    // so the split served neither. Expanded is now a full-screen list you go to,
+    // browse, and leave by collapsing back to the rail — the rail is what keeps
+    // navigation always-available, which is why the panel does not have to.
+    // `mobile-width` is fed the window width by app.slint.
     width: root.hidden ? Spacing.sidebar-width-hidden
-         : root.collapsed ? Spacing.sidebar-width-collapsed
-         : root.mobile-mode ? min(Spacing.sidebar-width, root.mobile-width * 0.45)
+         : root.collapsed ? (root.mobile-mode ? 68px : Spacing.sidebar-width-collapsed)
+         : root.mobile-mode ? root.mobile-width
          : Spacing.sidebar-width;
     visible: !root.hidden;
     // Neo 2.0: sidebar is a raised surface with right-edge highlight.
@@ -173,7 +181,7 @@ export component Sidebar inherits Rectangle {
                     if root.collapsed: TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
                         tooltip-text: "Search"; tooltip-enabled: true; placement: "right";
-                        HorizontalLayout { alignment: center; Image { source: Icons.search; width: 16px; height: 16px; colorize: Colors.text-secondary; } }
+                        HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg; Image { source: Icons.search; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; } } } }
                     }
                     search-touch := TouchArea { clicked => { root.search-clicked(); } }
                 }
@@ -193,7 +201,7 @@ export component Sidebar inherits Rectangle {
                     if root.collapsed: TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
                         tooltip-text: "Saved Messages"; tooltip-enabled: true; placement: "right";
-                        HorizontalLayout { alignment: center; Image { source: Icons.bookmark; width: 16px; height: 16px; colorize: Colors.text-secondary; } }
+                        HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg; Image { source: Icons.bookmark; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; } } } }
                     }
                     saved-touch := TouchArea { clicked => { root.saved-messages-clicked(); } }
                 }
@@ -216,7 +224,7 @@ export component Sidebar inherits Rectangle {
                     if root.collapsed: TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
                         tooltip-text: AnonMode.enabled ? "Add Contact" : "Friends"; tooltip-enabled: true; placement: "right";
-                        HorizontalLayout { alignment: center; Image { source: AnonMode.enabled ? Icons.user-plus : Icons.users; width: 16px; height: 16px; colorize: Colors.text-secondary; } }
+                        HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg; Image { source: AnonMode.enabled ? Icons.user-plus : Icons.users; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; } } } }
                     }
                     friends-touch := TouchArea { clicked => { root.friends-clicked(); } }
                 }
@@ -610,7 +618,10 @@ export component Sidebar inherits Rectangle {
                     add-friend-clicked => { root.friends-clicked(); }
                     dm-context-menu-requested(id, x, y) => {
                         root.ctx-menu-conv-id = id;
-                        root.ctx-menu-conv-type = "dm";
+                        // Core's vocabulary, not the UI's: ConversationType
+                        // (domain/message.rs) has never accepted "dm", so this
+                        // menu silently no-oped on every DM.
+                        root.ctx-menu-conv-type = AnonMode.enabled ? "anon_dm" : "server_dm";
                         root.ctx-menu-x = x;
                         root.ctx-menu-y = y;
                         root.ctx-menu-current-section-id = "";
@@ -695,11 +706,11 @@ export component Sidebar inherits Rectangle {
                     padding-bottom: 4px;
 
                     TooltipArea {
-                        height: 32px; width: 44px; x: (parent.width - self.width) / 2;
+                        height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                         tooltip-text: "New channel"; tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; Rectangle {
-                            width: 28px; height: 28px; border-radius: Spacing.radius-sm;
-                            background: c-new-touch.has-hover ? Colors.surface-hover : transparent;
+                            width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius;
+                            background: c-new-touch.has-hover ? Colors.surface-hover.brighter(0.6) : root.rail-slot-bg;
                             Image { source: Icons.plus; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                                 colorize: c-new-touch.has-hover ? Colors.text-primary : Colors.text-muted; }
                             c-new-touch := TouchArea { mouse-cursor: pointer; clicked => { root.create-channel-clicked(); } }
@@ -707,11 +718,11 @@ export component Sidebar inherits Rectangle {
                     }
 
                     TooltipArea {
-                        height: 32px; width: 44px; x: (parent.width - self.width) / 2;
+                        height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                         tooltip-text: "New section"; tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; Rectangle {
-                            width: 28px; height: 28px; border-radius: Spacing.radius-sm;
-                            background: c-sec-touch.has-hover ? Colors.surface-hover : transparent;
+                            width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius;
+                            background: c-sec-touch.has-hover ? Colors.surface-hover.brighter(0.6) : root.rail-slot-bg;
                             Image { source: Icons.folder; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                                 colorize: c-sec-touch.has-hover ? Colors.text-primary : Colors.text-muted; }
                             c-sec-touch := TouchArea { mouse-cursor: pointer; clicked => { root.create-section-clicked(); } }
@@ -744,7 +755,9 @@ export component Sidebar inherits Rectangle {
                     group-selected(id) => { root.private-group-selected(id); }
                     group-context-menu-requested(id, x, y) => {
                         root.ctx-menu-conv-id = id;
-                        root.ctx-menu-conv-type = "private_group";
+                        // A private group is an anon_group in core. "private_group" is not
+                        // a ConversationType and silently no-oped.
+                        root.ctx-menu-conv-type = "anon_group";
                         root.ctx-menu-x = x;
                         root.ctx-menu-y = y;
                         root.ctx-menu-current-section-id = "";
@@ -891,8 +904,8 @@ export component Sidebar inherits Rectangle {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: AnonMode.enabled ? "Anon Mode (active) - tap to disable" : "Anon Mode";
                     tooltip-enabled: true; placement: "right";
-                    HorizontalLayout { alignment: center; Rectangle { width: 32px; height: 32px; border-radius: 16px;
-                        background: AnonMode.enabled ? Colors.primary.with-alpha(0.2) : Colors.surface;
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius;
+                        background: AnonMode.enabled ? Colors.primary.with-alpha(0.2) : root.rail-slot-bg;
                         Image { source: Icons.shield; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                             colorize: AnonMode.enabled ? Colors.primary : Colors.text-secondary; }
                         // Tor status dot: green=connected, amber=connecting, red=error. Shield mode only.
@@ -916,7 +929,7 @@ export component Sidebar inherits Rectangle {
                 TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: "AI"; tooltip-enabled: true; placement: "right";
-                    HorizontalLayout { alignment: center; Rectangle { width: 32px; height: 32px; border-radius: 16px; background: Colors.surface;
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
                         Image { source: Icons.jarvis; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
                         // The local AI channel's fixed id is the nil UUID
                         // (chatter-core client/jarvis.rs jarvis_channel_id).
@@ -927,7 +940,7 @@ export component Sidebar inherits Rectangle {
                 if root.rail-has-mesh: TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: "Mesh"; tooltip-enabled: true; placement: "right";
-                    HorizontalLayout { alignment: center; Rectangle { width: 32px; height: 32px; border-radius: 16px; background: Colors.surface;
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
                         Image { source: Icons.radio; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                             colorize: !MeshGlobal.radio-running ? Colors.warning
                                 : MeshGlobal.peer-count > 0 ? Colors.glow-cyan
@@ -941,7 +954,7 @@ export component Sidebar inherits Rectangle {
                 TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: root.collapsed ? "Expand sidebar" : "Collapse sidebar"; tooltip-enabled: true; placement: "right";
-                    HorizontalLayout { alignment: center; Rectangle { width: 32px; height: 32px; border-radius: 16px; background: Colors.surface;
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
                         Image { source: root.collapsed ? Icons.chevron-right : Icons.chevron-left; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
                         TouchArea { clicked => { root.collapsed = !root.collapsed; root.toggle-collapsed(); } }
                     } }
@@ -949,7 +962,7 @@ export component Sidebar inherits Rectangle {
 
                 TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2; tooltip-text: "Settings"; tooltip-enabled: true; placement: "right";
-                    HorizontalLayout { alignment: center; Rectangle { width: 32px; height: 32px; border-radius: 16px; background: Colors.surface;
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
                         Image { source: Icons.settings; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
                         if root.server-unreachable: Rectangle {
                             x: parent.width - self.width - 1px; y: 1px;
