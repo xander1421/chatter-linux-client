@@ -44,12 +44,88 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 }
 
+/// Put the call view up *before* anything is awaited.
+///
+/// `start_call` can take the full 30s budget below — permission prompt, peer
+/// lookup, LiveKit join — and until this existed the entire wait was rendered as
+/// nothing at all. Tapping the call button in a conversation left the user on
+/// the conversation, with no pressed state, no view, and no error if it failed:
+/// indistinguishable from a button that does not work, which is what people
+/// reasonably concluded before tapping it again.
+///
+/// The view already knows how to draw this moment — `is-connecting` in
+/// `active_call_view.slint` keys off "one participant, no elapsed time", which is
+/// exactly the state seeded here, so it says "Calling…" with no new property.
+/// `render_calling_placeholder` overwrites all of it a moment later with the real
+/// call.
+fn show_dialling(weak: &slint::Weak<MainWindow>, call_type: CallType, ui_ctx: &Arc<ChatterClient>) {
+    let Some(w) = weak.upgrade() else { return };
+    let is_video = matches!(call_type, CallType::Video);
+    let display_name = ui_ctx.my_display_name().unwrap_or_else(|| "Anonymous".to_string());
+    let initials = get_initials(&display_name);
+
+    let local_participant = CallParticipantData {
+        user_id: "".into(),
+        display_name: display_name.into(),
+        initials: initials.into(),
+        avatar_source: w.get_user_avatar_source(),
+        is_muted: false,
+        is_video_enabled: is_video,
+        is_screen_sharing: false,
+        is_speaking: false,
+        is_audio_muted_locally: false,
+        is_video_paused_locally: false,
+    };
+
+    w.set_active_call_data(ActiveCallData {
+        call_id: "".into(),
+        channel_id: "".into(),
+        // Where the call is going. The conversation header already says this, and
+        // it is the only fact about the call we actually know yet.
+        title: w.get_channel_name(),
+        is_video_call: is_video,
+        is_anonymous_call: false,
+        is_encrypted: true,
+        // Nothing has been verified yet and nothing may claim otherwise. The
+        // hourglass is the same placeholder the real dialling state uses.
+        is_identity_verified: false,
+        identity_warning: "".into(),
+        participant_count: 1,
+        duration_seconds: 0,
+        participants: ModelRc::new(VecModel::from(vec![local_participant])),
+        verification_emoji_1: "\u{23F3}".into(),
+        verification_emoji_2: "".into(),
+        verification_emoji_3: "".into(),
+        verification_emoji_4: "".into(),
+    });
+    w.set_call_is_muted(false);
+    w.set_call_is_video_enabled(is_video);
+    w.set_call_is_screen_sharing(false);
+    w.set_active_call_visible(true);
+}
+
+/// Take the call view back down and say why.
+///
+/// Every failure path used to be `set_active_call_visible(false)` and a log line.
+/// With the view now raised at tap time that would be a flash and nothing else,
+/// which is worse than the silence it replaced — so failing closed has to come
+/// with the reason.
+fn fail_call(weak: &slint::Weak<MainWindow>, reason: &str) {
+    let Some(w) = weak.upgrade() else { return };
+    w.set_active_call_visible(false);
+    w.set_toast_message(reason.into());
+    w.set_toast_variant("error".into());
+    w.set_toast_visible(true);
+    w.global::<crate::Haptics>().invoke_error();
+}
+
 fn spawn_start(
     weak: slint::Weak<MainWindow>,
     conversation: ActiveConversation,
     call_type: CallType,
     ui_ctx: Arc<ChatterClient>,
 ) {
+    show_dialling(&weak, call_type, &ui_ctx);
     slint::spawn_local(async move {
         if tokio::time::timeout(
             std::time::Duration::from_secs(30),
@@ -59,9 +135,7 @@ fn spawn_start(
         .is_err()
         {
             tracing::error!("Call setup timed out");
-            if let Some(w) = weak.upgrade() {
-                w.set_active_call_visible(false);
-            }
+            fail_call(&weak, "The call could not be connected in time.");
         }
     })
     .unwrap();
@@ -89,6 +163,7 @@ async fn start_call_impl(
         Some(id) => id,
         None => {
             tracing::error!("No user ID available");
+            fail_call(&weak, "You are not signed in, so the call was not placed.");
             return;
         }
     };
@@ -111,16 +186,12 @@ async fn start_call_impl(
         Ok(Ok(s)) => s,
         Ok(Err(e)) => {
             tracing::error!(error = %e, "Failed to start call");
-            if let Some(w) = weak.upgrade() {
-                w.set_active_call_visible(false);
-            }
+            fail_call(&weak, "The call could not be started.");
             return;
         }
         Err(join_error) => {
             tracing::error!(%join_error, "Call start task did not finish");
-            if let Some(w) = weak.upgrade() {
-                w.set_active_call_visible(false);
-            }
+            fail_call(&weak, "The call could not be started.");
             return;
         }
     };
