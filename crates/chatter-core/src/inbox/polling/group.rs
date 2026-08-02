@@ -25,6 +25,10 @@ use crate::storage::MessageRepository;
 /// user is looking when the gap appears. `peer_id` is `Some` only when the
 /// failure authenticated a sender before dying (an identity change or a
 /// desync); a sealed-sender envelope that failed to open names nobody.
+///
+/// Bounded, because the group mailbox has no cursor at all — nothing else
+/// stops a permanently-failing envelope being re-decrypted on every poll.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn group_failure_decision(
     group_id: ChannelId,
     peer_id: Option<crate::domain::UserId>,
@@ -32,8 +36,10 @@ pub(crate) fn group_failure_decision(
     err: &crate::error::ServiceError,
     message_repo: &Arc<MessageRepository>,
     domain_tx: Option<&tokio::sync::broadcast::Sender<DomainEvent>>,
+    envelope_id: &str,
+    budget: &ack_policy::RetryBudget,
 ) -> AckDecision {
-    ack_policy::decide_after_failure(
+    ack_policy::decide_after_failure_bounded(
         err,
         MarkerTarget {
             conversation_id: group_id,
@@ -43,6 +49,9 @@ pub(crate) fn group_failure_decision(
         },
         message_repo,
         domain_tx,
+        envelope_id,
+        budget,
+        ack_policy::now_ns(),
     )
 }
 use crate::mailbox::group::{GroupCoordinator, GroupFanout};
@@ -72,6 +81,7 @@ pub async fn poll_group_mailboxes(
     attachment_repo: &Arc<AttachmentRepository>,
     message_repo: &Arc<MessageRepository>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
+    retry_budget: &ack_policy::RetryBudget,
 ) {
     match group_fanout.poll_all_group_mailboxes().await {
         Ok(poll_results) => {
@@ -123,10 +133,12 @@ pub async fn poll_group_mailboxes(
                         message_repo,
                         domain_tx,
                         msg.server_timestamp,
+                        retry_budget,
                     )
                     .await;
 
                     if decision.should_ack() {
+                        retry_budget.forget(&msg.message_id);
                         message_ids.push(msg.message_id.clone());
                     }
                 }
@@ -178,6 +190,7 @@ async fn process_sealed_sender_group_message(
     message_repo: &Arc<MessageRepository>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
     envelope_ts_ns: u64,
+    retry_budget: &ack_policy::RetryBudget,
 ) -> AckDecision {
     // Create SealedSenderMessage from raw envelope
     let sealed_sender_msg = SealedSenderMessage {
@@ -212,6 +225,8 @@ async fn process_sealed_sender_group_message(
                 &e,
                 message_repo,
                 domain_tx,
+                message_id,
+                retry_budget,
             );
         }
     };

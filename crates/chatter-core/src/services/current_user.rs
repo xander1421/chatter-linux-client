@@ -30,6 +30,26 @@ pub trait CurrentUserProvider {
     fn current_user_id(&self) -> Result<UserId, CurrentUserError>;
 }
 
+/// Carry the *cause* into `ServiceError` rather than flattening it to a string.
+///
+/// The inbox ack policy classifies a `ServiceError` into "retry this" or
+/// "delete this and tell the user", and `Validation` is on the delete side
+/// because validation means the bytes are bad. Neither variant here is about
+/// the bytes: a failed settings read is our disk, and not-being-logged-in-yet
+/// is local state a later poll resolves. Formatting either into
+/// `Validation(format!("…: {e}"))` — which is what the `SyncSent` path did —
+/// made a locked database look like a malformed message, so a linked device's
+/// sync copy was deleted from the server and replaced with a delivery-issue
+/// marker it did not deserve.
+impl From<CurrentUserError> for crate::error::ServiceError {
+    fn from(e: CurrentUserError) -> Self {
+        match e {
+            CurrentUserError::Storage(s) => Self::Storage(s),
+            CurrentUserError::NotLoggedIn => Self::NotLoggedIn,
+        }
+    }
+}
+
 impl CurrentUserProvider for SettingsRepository {
     fn current_user_id(&self) -> Result<UserId, CurrentUserError> {
         let user_id_str = self

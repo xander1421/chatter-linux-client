@@ -16,6 +16,33 @@ use super::error::InboxError;
 use super::events::InboxEvent;
 use super::state::{InboxState, InboxStats};
 
+/// Where the next `GetDeviceMessages` should resume from.
+///
+/// `after_id` is exclusive, so returning `q` means "give me everything with a
+/// queue id above `q`".
+///
+/// `batch_max` is the highest queue id in the batch just handled;
+/// `lowest_retained` is the lowest queue id the ack policy told us to keep
+/// (`AckDecision::Retain`), if any.
+///
+/// A retained message must stay *below* the cursor's exclusive bound, otherwise
+/// `Retain` is a no-op: the server keeps the envelope because we never acked it,
+/// and we never ask for it again because the cursor moved past it. The policy's
+/// entire transient half — "the SKDM may land on a later poll and then the same
+/// bytes decrypt" — depends on the later poll actually re-offering it.
+///
+/// Everything above a retained id is re-requested along with it. That is not a
+/// replay: acking DELETES server-side, so the ids that were acked are already
+/// gone and will not come back. The ones that do come back are exactly the ones
+/// whose `acknowledge` failed, and reprocessing those is idempotent.
+#[must_use]
+pub fn next_after_id(batch_max: i64, lowest_retained: Option<i64>) -> i64 {
+    match lowest_retained {
+        Some(retained) => batch_max.min(retained - 1),
+        None => batch_max,
+    }
+}
+
 /// Poller for fetching messages from the device inbox.
 ///
 /// Implements the polling loop for fetching authenticated device messages:
@@ -121,10 +148,10 @@ impl InboxPoller {
                 if count > 0 {
                     *self.last_activity.write() = Some(Instant::now());
 
-                    // Update pagination cursor
-                    if let Some(last_msg) = messages.last() {
-                        *self.last_queue_id.write() = last_msg.queue_id;
-                    }
+                    // The cursor is NOT advanced here. Only the caller knows
+                    // which of these the ack policy retained, and advancing
+                    // past a retained id makes `AckDecision::Retain` a no-op.
+                    // The caller calls `advance_after_id` once it has decided.
                 }
 
                 self.set_state(InboxState::Idle);
@@ -140,6 +167,16 @@ impl InboxPoller {
                 Err(e)
             }
         }
+    }
+
+    /// Move the pagination cursor after a batch's ack decisions are known.
+    ///
+    /// Split out of `run_once` because the cursor and the ack decision are the
+    /// same decision: `after_id` is exclusive, so a message below it is never
+    /// requested again, and a retained message below it is one the server still
+    /// holds and we will never ask for. See [`next_after_id`].
+    pub fn advance_after_id(&self, batch_max: i64, lowest_retained: Option<i64>) {
+        *self.last_queue_id.write() = next_after_id(batch_max, lowest_retained);
     }
 
     /// Perform a single poll request.
@@ -267,6 +304,41 @@ impl InboxPoller {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `AckDecision::Retain` means "leave it queued so it is delivered again",
+    /// and the whole transient half of the ack policy rests on that being true:
+    /// a `SessionNotFound` is retained because the SKDM "may land on a later
+    /// poll and then the same bytes decrypt".
+    ///
+    /// The cursor is what makes that a promise or a lie. It was advanced to the
+    /// last queue id in the batch before any decision was taken, so a retained
+    /// message sat below `after_id` and was never requested again for the rest
+    /// of the process lifetime. Not acked, so the server kept it; never asked
+    /// for, so we never saw it. Silently unreachable rather than redelivered.
+    #[test]
+    fn a_retained_message_is_asked_for_again_rather_than_skipped_past() {
+        // Batch of queue ids 1..=10; #4 came back Retain.
+        assert_eq!(
+            next_after_id(10, Some(4)),
+            3,
+            "the cursor must stop below the lowest retained id so the next poll \
+             re-offers it; advancing past it means a message we deliberately \
+             did not ack is also never delivered again"
+        );
+    }
+
+    /// The retained message must be re-offered, not re-offered *immediately in
+    /// a loop*: the run loop's own jittered sleep paces this, and the cursor
+    /// must not rewind below where it already was either.
+    #[test]
+    fn a_fully_handled_batch_still_advances_the_cursor() {
+        assert_eq!(
+            next_after_id(10, None),
+            10,
+            "with nothing retained there is nothing to re-offer, so the cursor \
+             advances normally and the queue drains"
+        );
+    }
 
     #[test]
     fn test_current_interval_no_activity() {

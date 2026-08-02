@@ -27,19 +27,27 @@ use crate::storage::{AttachmentRepository, ChannelRepository, MessageRepository,
 /// Decide what to do with a DM envelope whose decrypt failed.
 ///
 /// The single seam `poll_dm_mailboxes` calls for every failure, so the policy
-/// is one place rather than an emergent property of where the ack list is built.
+/// is one place rather than an emergent property of where the ack list is
+/// built. Bounded: without the budget a permanently-undecryptable envelope
+/// stays on the server to be re-fetched and re-decrypted on every poll for the
+/// life of the process.
 pub(crate) fn dm_failure_decision(
     peer_id: UserId,
     envelope_ts_ns: u64,
     err: &crate::error::ServiceError,
     message_repo: &Arc<MessageRepository>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
+    envelope_id: &str,
+    budget: &ack_policy::RetryBudget,
 ) -> AckDecision {
-    ack_policy::decide_after_failure(
+    ack_policy::decide_after_failure_bounded(
         err,
         ack_policy::dm_target(peer_id, envelope_ts_ns),
         message_repo,
         domain_tx,
+        envelope_id,
+        budget,
+        ack_policy::now_ns(),
     )
 }
 
@@ -69,6 +77,7 @@ pub async fn poll_dm_mailboxes(
     user_repo: &Arc<UserRepository>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
     deduplicator: &MessageDeduplicator,
+    retry_budget: &ack_policy::RetryBudget,
 ) {
     // Get current user ID for DM channel derivation
     let current_user_id: Option<UserId> = settings_repo
@@ -196,6 +205,8 @@ pub async fn poll_dm_mailboxes(
                                     &e,
                                     message_repo,
                                     domain_tx,
+                                    &msg.message_id,
+                                    retry_budget,
                                 )
                             }
                         }
@@ -266,7 +277,19 @@ pub async fn poll_dm_mailboxes(
                             // the device inbox, and then these same bytes
                             // decrypt. Acking here deleted every message that
                             // arrived before its own bootstrap landed.
-                            AckDecision::Retain
+                            //
+                            // Bounded, though: if the bootstrap never completes
+                            // this is a re-decrypt of the same bytes on every
+                            // poll for as long as the client runs.
+                            ack_policy::retain_within_budget(
+                                ack_policy::dm_target(peer_id, msg.server_timestamp),
+                                message_repo,
+                                domain_tx,
+                                &msg.message_id,
+                                retry_budget,
+                                ack_policy::now_ns(),
+                                "no shared secret established for this peer yet",
+                            )
                         }
                     };
 
@@ -276,6 +299,7 @@ pub async fn poll_dm_mailboxes(
                         // twice on the replay.
                         AckDecision::Ack => {
                             deduplicator.mark_processed(&msg.message_id);
+                            retry_budget.forget(&msg.message_id);
                             message_ids.push(msg.message_id.clone());
                         }
                         // Deliberately NOT marked processed — it must be
