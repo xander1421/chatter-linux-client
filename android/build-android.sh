@@ -114,6 +114,15 @@ else
         echo "Generate both:  ./scripts/provision-trust-root.sh   (server repo)"
         exit 1
     fi
+    # The VRF key is optional on purpose: it buys query privacy, not integrity,
+    # and both server and client fall back to the dev value rather than failing.
+    # Warn rather than refuse, so an operator who has not provisioned it knows
+    # what they are shipping.
+    if [ -z "${CHATTER_KT_VRF_PUBLIC_KEY_HEX:-}" ]; then
+        echo ">> NOTE: CHATTER_KT_VRF_PUBLIC_KEY_HEX unset — pinning the DEV VRF key."
+        echo "   KT query privacy is degraded (an auditor can link user -> leaf)."
+        echo "   Integrity is unaffected. ./scripts/provision-trust-root.sh emits it."
+    fi
     echo ">> production pinned keys from the environment"
 fi
 
