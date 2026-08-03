@@ -70,7 +70,7 @@ impl SignalService {
     /// it is newer, requires a consistency proof from the pinned head to it.
     ///
     /// Failures REJECT the session rather than warn. The server can rebuild
-    /// state at any epoch on demand (`loadStateAtEpoch`), so it has no honest
+    /// state at any epoch by replaying its log (`Service.replay`), so it has no honest
     /// reason to fail — and a server able to suppress this check by erroring
     /// could fork the log undetectably, which is the same reasoning that
     /// already makes a transport error on `GetProof` a reject rather than a
