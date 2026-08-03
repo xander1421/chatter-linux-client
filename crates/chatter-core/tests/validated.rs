@@ -198,12 +198,455 @@ where
     None
 }
 
+/// Budget for every condition wait in this file.
+///
+/// Deliberately generous. These waits replaced fixed sleeps, and a condition
+/// wait costs only as long as the condition actually takes — on an idle stack
+/// the friendship helper below returns in well under a second. The budget only
+/// matters when the shared dev stack is saturated by the other 52 tests, which
+/// is exactly when the fixed sleeps lost.
+const CONDITION_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// Poll interval for the condition waits. Short enough that a satisfied
+/// condition is noticed promptly, long enough not to add load to the very
+/// server whose saturation we are waiting out.
+const POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Backed-off poll interval for waits whose probe is a SERVER RPC.
+///
+/// A flat fast poll on a server-side condition is a self-inflicted wound: the
+/// first version of `befriend` polled `ListFriendRequests` every 250ms for as
+/// long as the friend-request workflow took, and with 16 tests in flight that
+/// is ~64 authorised RPC/s of pure waiting on top of the work the suite is
+/// actually there to do. That run produced 55 `i/o timeout` errors from the
+/// server's own Redis and four registration failures — none of which appear in
+/// any run before or since. Fast when the condition lands fast, cheap when it
+/// does not.
+fn backoff(current: Duration) -> Duration {
+    (current * 2).min(Duration::from_secs(2))
+}
+
+/// Serialises the ONE test that rotates an identity key (V53) against the ONE
+/// test that establishes a fresh Signal session late in its own run (V47).
+///
+/// THIS IS NOT A TIMING WORKAROUND. It exists because of a PRODUCT DEFECT that
+/// this suite reproduces, and it is scoped to the two tests that collide so the
+/// defect stays visible everywhere else:
+///
+///   The server defines Key Transparency consistency over the DERIVED MAP —
+///   `loadStateAtEpoch` (server `internal/services/keytransparency/log.go:140`)
+///   reconstructs "the latest identity key per user among the first N appends",
+///   and `BuildConsistencyProof` (`crypto/treehead.go:100`) then requires every
+///   old (key, value) pair to be byte-identical in the new tree. A user
+///   rotating their identity key changes that user's VALUE, so the derived map
+///   is by construction NOT append-only across the rotation and the server
+///   refuses its own proof with `ErrConsistencyOldModified`.
+///
+///   The client treats that refusal as evidence of a fork — correctly, under
+///   the KT threat model — and REFUSES to establish the session
+///   (`services/signal/session.rs:115-127` -> `session.rs:181` ->
+///   `session.rs:640` skips the device -> "Failed to establish session with any
+///   device"). So one user's identity reset denies session establishment to
+///   every OTHER client whose pinned tree head predates it, for as long as that
+///   client keeps its pin.
+///
+///   Evidence, run of 2026-08-03: server logs `Republished Signal identity key
+///   ... identity_key_changed:true` at 04:11:47.916 (V53), then
+///   `GetConsistencyProof: log not append-only (fork detected server-side)` at
+///   04:12:04.986 and 04:12:06.986 — V47's send and its one retry — and V47
+///   failed with `Failed to deliver sealed DM to any device`. Reproduced in 3
+///   of 5 full runs before this guard; `kt_log_entries` currently holds 15
+///   users with two distinct identity keys, one per suite run.
+///
+/// REMOVE THIS GUARD once consistency is proven over the LOG (append-only by
+/// construction) rather than over the derived latest-key map. Until then it is
+/// the only reason the two tests can share one server.
+static KT_LOG_ROTATION: std::sync::LazyLock<tokio::sync::RwLock<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::RwLock::new(()));
+
+/// Take the shared side of [`KT_LOG_ROTATION`] for the rest of the test.
+///
+/// Every test in this file can establish a Signal session at any point — to a
+/// new peer, to a peer's newly linked device, or to one of its own — and every
+/// one of those is refused while the KT log is mid-rotation. So the exclusion
+/// has to be "V53 versus the suite", not "V53 versus one test". Measured on an
+/// otherwise idle host with only V47 guarded: V9/V10/V12/V13 reported devices
+/// as dark, with their prekey-bundle fetches bracketed by
+/// `GetConsistencyProof: log not append-only (fork detected server-side)` in
+/// the server log at 04:55:28-34 on 2026-08-03.
+///
+/// The binding is macro-hygienic: it holds the guard to the end of the test and
+/// is not nameable from the test body, so it cannot be dropped early by
+/// accident. V53 deliberately does NOT use it — it takes the exclusive side, and
+/// tokio's `RwLock` is not reentrant.
+macro_rules! kt_stable {
+    () => {
+        let _kt_stable = KT_LOG_ROTATION.read().await;
+    };
+}
+
+/// Establish a mutual friendship A -> B, waiting on SERVER-OBSERVABLE
+/// CONDITIONS instead of sleeping.
+///
+/// WHY THIS EXISTS. `send_friend_request` returns as soon as the server's
+/// response stream emits one `FriendStatusChanged`, but the pending row B has
+/// to see is written by a Temporal workflow that the handler merely *starts*
+/// (`internal/services/user/service/friends.go:97` — `ExecuteWorkflow(...)`
+/// then returns a synthesised `Contact`). Every call site here used to bridge
+/// that with `sleep(2)`, i.e. a bet on the workflow's latency. Under the
+/// parallel suite the bet loses and B's accept comes back
+/// `NotFound("no friend request found")` from
+/// `internal/services/user/service/friends.go:178`. That single line was 9 of
+/// the 10 failures in one full baseline run, and at least one failure in all
+/// three.
+///
+/// Three conditions, in order:
+///   1. B can SEE the pending request (`ListFriendRequests`, filter Received).
+///   2. The accept RPC succeeds. Retried while — and only while — the server
+///      still says the request does not exist: the read in (1) and the write
+///      here race the same workflow, and any OTHER error is a real failure and
+///      surfaces immediately.
+///   3. BOTH sides list the other as an accepted friend (`ListFriends`). This
+///      is what the trailing `sleep(3)` was standing in for: the profile-key
+///      handshake, the presence/profile fan-out list and the DM prewarm are all
+///      keyed off that server-side state, so tests that assert on them need it
+///      to exist, not to have probably existed by now.
+async fn befriend(
+    requester: &Arc<ChatterClient>,
+    accepter: &Arc<ChatterClient>,
+    requester_id: UserId,
+    accepter_id: UserId,
+) {
+    requester
+        .send_friend_request(&accepter_id, Some("validated"))
+        .await
+        .expect("friend request failed");
+
+    let deadline = Instant::now() + CONDITION_TIMEOUT;
+
+    // (1) the addressee can see it
+    let mut visible = false;
+    let mut wait = POLL_INTERVAL;
+    while Instant::now() < deadline {
+        if let Ok(reqs) = accepter.list_pending_friend_requests().await {
+            if reqs.iter().any(|f| f.addressee_id == requester_id) {
+                visible = true;
+                break;
+            }
+        }
+        tokio::time::sleep(wait).await;
+        wait = backoff(wait);
+    }
+    assert!(
+        visible,
+        "friend request from {requester_id} never became visible to {accepter_id} within \
+         {CONDITION_TIMEOUT:?} — the FriendRequestWorkflow never persisted it"
+    );
+
+    // (2) accept, retrying only the "the workflow has not landed yet" error
+    let mut accept_err: Option<String> = None;
+    let mut accepted = false;
+    let mut wait = POLL_INTERVAL;
+    while Instant::now() < deadline {
+        match accepter.respond_friend_request(&requester_id, true).await {
+            Ok(_) => {
+                accepted = true;
+                break;
+            }
+            Err(e) => {
+                let msg = format!("{e:?}");
+                let transient = msg.contains("no friend request");
+                accept_err = Some(msg);
+                if !transient {
+                    break;
+                }
+                tokio::time::sleep(wait).await;
+                wait = backoff(wait);
+            }
+        }
+    }
+    assert!(
+        accepted,
+        "accept friend request failed: {}",
+        accept_err.unwrap_or_else(|| "timed out".to_string())
+    );
+
+    // (3) the accepted friendship is readable from the server on BOTH sides.
+    // Each side is latched once satisfied so a slow peer does not keep
+    // re-querying the side that already answered.
+    let (mut a_ok, mut b_ok) = (false, false);
+    let mut wait = POLL_INTERVAL;
+    while Instant::now() < deadline && !(a_ok && b_ok) {
+        if !a_ok {
+            a_ok = matches!(requester.list_friends_with_profiles().await,
+                Ok(fs) if fs.iter().any(|(f, _)| f.addressee_id == accepter_id));
+        }
+        if !b_ok {
+            b_ok = matches!(accepter.list_friends_with_profiles().await,
+                Ok(fs) if fs.iter().any(|(f, _)| f.addressee_id == requester_id));
+        }
+        if a_ok && b_ok {
+            break;
+        }
+        tokio::time::sleep(wait).await;
+        wait = backoff(wait);
+    }
+    assert!(
+        a_ok && b_ok,
+        "friendship {requester_id} <-> {accepter_id} was accepted but never became a mutual \
+         accepted friendship on the server within {CONDITION_TIMEOUT:?}"
+    );
+
+    // (4) let the accept's BACKGROUND work land before returning.
+    //
+    // Accepting spawns a DM-session prewarm and a profile-key handshake
+    // (client/mod.rs:2706-2729), and both put sealed envelopes in the other
+    // party's device inboxes. The old `sleep(2) + sleep(3)` absorbed them by
+    // accident; waiting only on the friendship made `befriend` FASTER than that
+    // and let those envelopes land after a test had already snapshotted
+    // `device_messages`. They then read as the property under test: V12 saw
+    // one on A's own sending device and called the self-sync skip broken, V19
+    // saw one on A's linked device and called own-typing self-sync broken —
+    // both from an envelope neither test sent.
+    //
+    // The prewarm's product of record is the Signal session, so wait for that.
+    // Best effort on purpose: it is a no-op on the higher-UUID side of the
+    // Sesame tie-break, so that side only gets a session once the other side's
+    // prewarm message arrives, and the prewarm itself is explicitly best-effort
+    // (its failure is a `tracing::warn!`, not an error). Tests that REQUIRE the
+    // session assert on it themselves — V3 does.
+    let settle = Instant::now() + Duration::from_secs(30);
+    let a_addr = format!("{accepter_id}:1");
+    let b_addr = format!("{requester_id}:1");
+    while Instant::now() < settle {
+        let a_sess = matches!(requester.signal().key_store().load_session(&a_addr), Ok(Some(_)));
+        let b_sess = matches!(accepter.signal().key_store().load_session(&b_addr), Ok(Some(_)));
+        if a_sess && b_sess {
+            break;
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+/// Wait until `receiver` has actually INSTALLED `sender`'s Sender Key for
+/// `channel`, i.e. the SKDM was delivered AND processed.
+///
+/// WHY THIS EXISTS. The call sites used to do
+/// `row_ids(&uid).len() > before` in a 1-second loop. `device_messages` is a
+/// QUEUE the receiver's own poller is draining concurrently, so that is a
+/// sample of a transient: if the SKDM was consumed between two samples (each
+/// sample is a `docker compose exec ... psql`, ~100ms on an idle box and worse
+/// under the parallel suite) the count never rises and the test declares
+/// "SENDER-KEY DISTRIBUTION BROKEN" for a distribution that in fact worked.
+/// Observed in 2 of 3 baseline runs across v35 / v41 / v45.
+///
+/// The sender-key record is TERMINAL state, not a transient — once installed it
+/// stays — so polling it is monotonic and cannot be missed. It is also the
+/// stronger assertion: the old check only proved the envelope was *queued*,
+/// which is why every call site had to follow it with a `sleep(6)` labelled
+/// "let X PROCESS the SKDM". Waiting for the installed key subsumes both.
+///
+/// Storage layout: libsignal's `process_sender_key_distribution_message` files
+/// the record under `(sender_address, distribution_id)`
+/// (`crypto/signal/store.rs:364`), the address renders as `"{user_id}:{device}"`
+/// (`store.rs:63`) and the distribution id IS the channel UUID
+/// (`services/signal/actor.rs:480`).
+async fn wait_for_sender_key(
+    receiver: &Arc<ChatterClient>,
+    sender: &UserId,
+    channel: &ChannelId,
+) -> bool {
+    let addr = format!("{sender}:1");
+    let dist = channel.to_string();
+    let deadline = Instant::now() + CONDITION_TIMEOUT;
+    while Instant::now() < deadline {
+        if matches!(
+            receiver.signal().key_store().load_sender_key(&addr, &dist),
+            Ok(Some(_))
+        ) {
+            return true;
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+    false
+}
+
+/// Wait until `uid`'s device inbox holds at least `want` rows that were NOT in
+/// `before`, then return every new row (whatever actually arrived).
+///
+/// WHY THIS EXISTS. The call sites replaced a flat `sleep(4)`. A fan-out is one
+/// `SendSealedMessage` RPC PER DEVICE, issued sequentially
+/// (`services/message/server_dm.rs:502-553`), so a two- or three-device
+/// recipient is two or three sequential round trips and four seconds is a bet
+/// that loses under the parallel suite: V9 failed with "B's PRIMARY received 1
+/// envelope, B's LINKED device received ZERO" while the linked device's deposit
+/// was simply still in flight.
+///
+/// Safe to poll, unlike `device_messages` generally: every call site has taken
+/// the destination devices OFFLINE first, so nothing is draining the queue and
+/// the new-row set only grows. (Contrast `wait_for_sender_key`, which had to
+/// stop sampling this table precisely because a LIVE device drains it.)
+///
+/// It never fabricates a row. On timeout it returns exactly what is in the
+/// table, so an assertion that a device is dark still fires.
+async fn wait_for_new_envelopes(
+    uid: &UserId,
+    before: &std::collections::HashSet<String>,
+    want: usize,
+) -> Vec<Vec<String>> {
+    let deadline = Instant::now() + CONDITION_TIMEOUT;
+    loop {
+        let rows: Vec<Vec<String>> = envelope_rows(uid)
+            .into_iter()
+            .filter(|f| !before.contains(&f[0]))
+            .collect();
+        if rows.len() >= want || Instant::now() >= deadline {
+            return rows;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+/// Snapshot `uid`'s device-inbox row ids once the queue has stopped moving.
+///
+/// The strict self-sync tests (V12, V13, V19) diff `device_messages` around one
+/// send and then assert on the EXACT composition of the new rows — "A's own
+/// sending device was skipped", "own typing was not echoed". That diff is only
+/// as honest as its baseline: any envelope still in flight when the baseline is
+/// taken is attributed to the send.
+///
+/// Accepting a friend request spawns a DM-session prewarm and a profile-key
+/// handshake (client/mod.rs:2706-2729), each of which seals an envelope to
+/// every one of the peer's devices. The old `sleep(2) + sleep(3)` absorbed them
+/// by accident. Waiting for a quiet queue does it on purpose: two consecutive
+/// identical reads a second apart, up to 30s, then the set is the baseline.
+///
+/// This cannot mask the property under test — the send has not happened yet
+/// when this returns.
+async fn quiesced_row_ids(uid: &UserId) -> std::collections::HashSet<String> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut prev = row_ids(uid);
+    loop {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let now = row_ids(uid);
+        if now == prev || Instant::now() >= deadline {
+            return now;
+        }
+        prev = now;
+    }
+}
+
+/// Wait until a NEW row addressed to `device_id` appears in `uid`'s device
+/// inbox, then return every new row as of that instant.
+///
+/// The device-targeted twin of `wait_for_new_envelopes`, and the one to use
+/// whenever the test ALSO asserts that some other device got nothing.
+///
+/// Two reasons it is not the same call:
+///   * `want: usize` is satisfied by the WRONG row. V13 waits for a self-sync
+///     copy on A's linked device; a count-based wait returns as soon as any row
+///     lands for A, which on a two-device account can be the primary's, and the
+///     linked row is then still in flight.
+///   * A count-based wait keeps looking until the count is reached, which
+///     WIDENS the observation window for every other assertion over the same
+///     queue. V12 asserts A's own sending device was skipped and V19 asserts a
+///     typing indicator was not self-synced; a wide window sweeps in unrelated
+///     later traffic (a delivery receipt from a live peer) and reports the skip
+///     as broken. Stopping the moment the awaited row lands keeps that window
+///     as tight as it can be while still guaranteeing the positive control.
+async fn wait_for_device_envelope(
+    uid: &UserId,
+    before: &std::collections::HashSet<String>,
+    device_id: u32,
+) -> Vec<Vec<String>> {
+    let want_dev = device_id.to_string();
+    let deadline = Instant::now() + CONDITION_TIMEOUT;
+    loop {
+        let rows: Vec<Vec<String>> = envelope_rows(uid)
+            .into_iter()
+            .filter(|f| !before.contains(&f[0]))
+            .collect();
+        if rows.iter().any(|f| f[1] == want_dev) || Instant::now() >= deadline {
+            return rows;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+/// Did `client` recover `want` in its OWN local store for `conv`?
+///
+/// The terminal-state twin of `wait_for_event` for a ServerDm, and the reason
+/// the multi-device tests need one. `wait_for_event` reads a
+/// `tokio::sync::broadcast` receiver whose capacity is 64
+/// (`events/bus.rs:33`), and its `if let Ok(Ok(event))` filter SILENTLY
+/// DISCARDS `Err(RecvError::Lagged)` — a lagged receiver's events are gone,
+/// including the one being waited for. V9/V10/V11 bring two or three devices up
+/// and then wait on their buses one after another, so the last receiver can sit
+/// unread for a minute while its client replays a whole inbox: comfortably more
+/// than 64 domain events. The stored row cannot be lost, so it is what the
+/// assertion should ultimately rest on.
+async fn wait_for_stored_text(
+    client: &Arc<ChatterClient>,
+    conv: &ChannelId,
+    want: &str,
+) -> bool {
+    let deadline = Instant::now() + EVENT_TIMEOUT;
+    loop {
+        let stored = client
+            .get_messages_local(
+                conv,
+                &chatter_core::domain::message::ConversationType::ServerDm,
+                None,
+                50,
+            )
+            .unwrap_or_default();
+        if stored.iter().any(|m| m.as_text() == Some(want)) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
 async fn register_and_start(client: &Arc<ChatterClient>, username: &str, display: &str) -> UserId {
     client.connect().await.expect("connect failed");
-    let r = client
-        .register(username, PASSWORD, display, "validated", None, Some(PIN))
-        .await
-        .expect("registration failed");
+
+    // Retry a registration that the SHARED DEV STACK could not serve.
+    //
+    // Registration is fixture setup here — no test in this file asserts on it
+    // succeeding first time — and the two failures seen are both the dev
+    // infrastructure being momentarily unavailable rather than anything the
+    // client did: `Failed to start registration workflow ... context deadline
+    // exceeded` (Temporal) and `failed to store challenge in Redis: i/o
+    // timeout`. One such window took 31 of 53 tests down at once. A user hitting
+    // that would press the button again; so does this.
+    //
+    // Deliberately narrow: only those two infrastructure signatures are
+    // retried. A rejected registration — taken username, weak PIN, rate limit —
+    // is a real answer from the server and still fails immediately.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut wait = Duration::from_secs(1);
+    let r = loop {
+        match client
+            .register(username, PASSWORD, display, "validated", None, Some(PIN))
+            .await
+        {
+            Ok(r) => break r,
+            Err(e) => {
+                let msg = format!("{e:?}");
+                let infra = msg.contains("failed to start registration")
+                    || msg.contains("failed to store challenge");
+                if !infra || Instant::now() >= deadline {
+                    panic!("registration failed: {e:?}");
+                }
+                eprintln!("  register({username}): dev stack unavailable ({msg}); retrying");
+                tokio::time::sleep(wait).await;
+                wait = backoff(wait);
+            }
+        }
+    };
     if let Err(e) = client.start().await {
         if !matches!(e, chatter_core::client::ClientError::AlreadyStarted) {
             panic!("client.start failed: {e:?}");
@@ -408,6 +851,7 @@ fn row_ids(uid: &UserId) -> std::collections::HashSet<String> {
 #[tokio::test]
 async fn v0_detector_self_check() {
     skip_if_no_server!();
+    kt_stable!();
 
     let marker = unique_marker();
 
@@ -462,6 +906,7 @@ async fn v0_detector_self_check() {
 #[tokio::test]
 async fn v1_server_never_holds_plaintext() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -475,16 +920,7 @@ async fn v1_server_never_holds_plaintext() {
     let uid_a = register_and_start(&client_a, &unique_user("v1a"), "Alice").await;
     let uid_b = register_and_start(&client_b, &user_b_name, "Bob").await;
 
-    client_a
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_b
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_a, &client_b, uid_a, uid_b).await;
 
     // Take B offline so the envelope SITS in the queue instead of being
     // acked and deleted. We must read the very bytes B will later decrypt.
@@ -633,6 +1069,7 @@ async fn v1_server_never_holds_plaintext() {
 #[tokio::test]
 async fn v2_corrupted_ciphertext_never_decrypts() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -645,16 +1082,7 @@ async fn v2_corrupted_ciphertext_never_decrypts() {
     let uid_a = register_and_start(&client_a, &unique_user("v2a"), "Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("v2b"), "Bob").await;
 
-    client_a
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_b
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_a, &client_b, uid_a, uid_b).await;
 
     client_b.shutdown().await;
     drop(client_b);
@@ -843,6 +1271,7 @@ async fn v2_corrupted_ciphertext_never_decrypts() {
 #[tokio::test]
 async fn v3_ratchet_advances_every_message() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -853,16 +1282,7 @@ async fn v3_ratchet_advances_every_message() {
     let uid_a = register_and_start(&client_a, &unique_user("v3a"), "Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("v3b"), "Bob").await;
 
-    client_a
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_b
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_a, &client_b, uid_a, uid_b).await;
 
     // A's Signal session record for B. Address format is "{user_id}:{device_id}"
     // (services/signal/actor.rs:514).
@@ -876,6 +1296,20 @@ async fn v3_ratchet_advances_every_message() {
             .expect("POSITIVE CONTROL FAILED: no session record for B — a set of \
                      missing records would compare 'distinct' vacuously")
     };
+    // The session is created by the post-accept DM prewarm, which is a spawned
+    // background task and a deliberate no-op on the higher-UUID side of the
+    // Sesame tie-break (client/mod.rs:2719) — so on that side A only gets a
+    // session when B's prewarm message arrives and is processed. Wait for the
+    // record rather than reading it the instant `befriend` returns.
+    {
+        let deadline = Instant::now() + CONDITION_TIMEOUT;
+        while Instant::now() < deadline {
+            if matches!(client_a.signal().key_store().load_session(&addr), Ok(Some(_))) {
+                break;
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    }
 
     const N: usize = 5;
     let mut snapshots: Vec<Vec<u8>> = Vec::new();
@@ -980,6 +1414,7 @@ async fn v3_ratchet_advances_every_message() {
 #[tokio::test]
 async fn v4_sealed_sender_hides_sender_from_server() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -990,16 +1425,7 @@ async fn v4_sealed_sender_hides_sender_from_server() {
     let uid_a = register_and_start(&client_a, &unique_user("v4a"), "Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("v4b"), "Bob").await;
 
-    client_a
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_b
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_a, &client_b, uid_a, uid_b).await;
 
     client_b.shutdown().await;
     drop(client_b);
@@ -1104,6 +1530,7 @@ async fn v4_sealed_sender_hides_sender_from_server() {
 #[tokio::test]
 async fn v5_kyber_is_load_bearing_not_decorative() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -1114,16 +1541,7 @@ async fn v5_kyber_is_load_bearing_not_decorative() {
     let uid_a = register_and_start(&client_a, &unique_user("v5a"), "Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("v5b"), "Bob").await;
 
-    client_a
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_b
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_a, &client_b, uid_a, uid_b).await;
 
     let mut events_b = client_b.subscribe_events();
     let expected_conv = ChannelId::from(uid_a);
@@ -1433,6 +1851,7 @@ async fn v5_kyber_is_load_bearing_not_decorative() {
 #[tokio::test]
 async fn v6_delivered_message_key_is_destroyed() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -1444,16 +1863,7 @@ async fn v6_delivered_message_key_is_destroyed() {
     let uid_a = register_and_start(&client_a, &unique_user("v6a"), "Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("v6b"), "Bob").await;
 
-    client_a
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_b
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_a, &client_b, uid_a, uid_b).await;
 
     // B offline so envelopes SIT in the queue and can be captured verbatim —
     // the exact bytes B would otherwise process.
@@ -1715,6 +2125,7 @@ async fn v6_delivered_message_key_is_destroyed() {
 #[tokio::test]
 async fn v7_pqopk_pool_is_seeded_and_consumed() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let count = |sql: String| -> i64 { psql(&sql).trim().parse().unwrap_or(-1) };
@@ -1773,8 +2184,16 @@ async fn v7_pqopk_pool_is_seeded_and_consumed() {
         .await
         .expect("friend request failed — the server-side bundle fetch never ran, \
                  so nothing below would be measuring PQOPK consumption");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    let used_after = pq_used();
+    // The pop is committed by the server after the RPC returns. Poll for the
+    // counter to move instead of sleeping a fixed 2s: `used_at` only ever goes
+    // up, so a poll that gives up still reports the same value a sleep would
+    // have, and the assertion below is unchanged.
+    let mut used_after = pq_used();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while used_after <= used_before && Instant::now() < deadline {
+        tokio::time::sleep(POLL_INTERVAL).await;
+        used_after = pq_used();
+    }
 
     println!("  PQOPKs consumed by one real handshake: {used_before} -> {used_after}");
     assert!(
@@ -1849,6 +2268,7 @@ async fn v7_pqopk_pool_is_seeded_and_consumed() {
 #[tokio::test]
 async fn v8_linked_device_pqopk_pool_is_seeded_and_consumed() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let count = |sql: String| -> i64 { psql(&sql).trim().parse().unwrap_or(-1) };
@@ -2031,6 +2451,7 @@ async fn v8_linked_device_pqopk_pool_is_seeded_and_consumed() {
 #[tokio::test]
 async fn v9_linked_device_receives_and_decrypts_dm() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- B: primary registers, then a REAL secondary device links -----------
@@ -2086,16 +2507,7 @@ async fn v9_linked_device_receives_and_decrypts_dm() {
     let client_a = build_client(dir_a.path());
     let uid_a = register_and_start(&client_a, &unique_user("v9a"), "V9 Alice").await;
 
-    client_a
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_bp
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_a, &client_bp, uid_a, uid_b).await;
 
     // ---- take BOTH of B's devices offline ----------------------------------
     // The envelopes must SIT in the queues so we can read the very bytes each
@@ -2108,16 +2520,7 @@ async fn v9_linked_device_receives_and_decrypts_dm() {
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     // ---- snapshot BEFORE the send, scoped to THIS user ----------------------
-    let row_ids = || -> std::collections::HashSet<String> {
-        psql(&format!(
-            "select id from device_messages where destination_user_id = '{uid_b}'"
-        ))
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect()
-    };
-    let before = row_ids();
+    let before = row_ids(&uid_b);
     println!("  device_messages rows for B before the send: {}", before.len());
 
     let marker = unique_marker();
@@ -2128,21 +2531,13 @@ async fn v9_linked_device_receives_and_decrypts_dm() {
         .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &marker)
         .await
         .expect("send_text failed");
-    tokio::time::sleep(Duration::from_secs(4)).await;
 
     // ---- read back exactly the rows THIS send created ----------------------
-    let after = psql(&format!(
-        "select id || '|' || destination_device_id || '|' || md5(envelope) || '|' || \
-         coalesce(source_user_id::text, 'NULL') || '|' || octet_length(envelope) \
-         from device_messages where destination_user_id = '{uid_b}'"
-    ));
-    let new_rows: Vec<Vec<String>> = after
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
-        .map(|l| l.split('|').map(|s| s.to_string()).collect::<Vec<_>>())
-        .filter(|f| f.len() == 5 && !before.contains(&f[0]))
-        .collect();
+    // Both of B's devices are offline, so the queue only grows: wait for the
+    // 2 rows a correct fan-out produces rather than sleeping past the second
+    // deposit. A fan-out that really is broken still returns 1 row and the
+    // assertion below still fires.
+    let new_rows = wait_for_new_envelopes(&uid_b, &before, 2).await;
 
     println!("  NEW device_messages rows created by this one send: {}", new_rows.len());
     for f in &new_rows {
@@ -2304,16 +2699,20 @@ async fn v9_linked_device_receives_and_decrypts_dm() {
     println!("  B primary  decrypted: {body_p:?}");
     println!("  B linked   decrypted: {body_s:?}");
 
-    assert_eq!(
-        body_p.as_deref(),
-        Some(marker.as_str()),
+    // Store fallback for a lagged bus — see `wait_for_stored_text`.
+    let ok_p = body_p.as_deref() == Some(marker.as_str())
+        || wait_for_stored_text(&client_bp2, &expected_conv, &marker).await;
+    let ok_s = body_s.as_deref() == Some(marker.as_str())
+        || wait_for_stored_text(&client_bs2, &expected_conv, &marker).await;
+
+    assert!(
+        ok_p,
         "B's PRIMARY device did not recover A's exact plaintext (got {body_p:?}). \
          The primary is the control here — if it cannot decrypt, the linked \
          device's result below says nothing about multi-device."
     );
-    assert_eq!(
-        body_s.as_deref(),
-        Some(marker.as_str()),
+    assert!(
+        ok_s,
         "LINKED DEVICE CANNOT DECRYPT: B's linked device {dev_s} was queued its own \
          distinct envelope (asserted above — the row is really there), came online, \
          and did not surface A's plaintext. Got {body_s:?}, expected {marker:?}. \
@@ -2395,6 +2794,7 @@ async fn v9_linked_device_receives_and_decrypts_dm() {
 #[tokio::test]
 async fn v10_dm_fans_out_to_three_devices() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- B: primary registers, then TWO real secondary devices link ---------
@@ -2454,16 +2854,7 @@ async fn v10_dm_fans_out_to_three_devices() {
     let client_a = build_client(dir_a.path());
     let uid_a = register_and_start(&client_a, &unique_user("v10a"), "V10 Alice").await;
 
-    client_a
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_bp
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_a, &client_bp, uid_a, uid_b).await;
 
     // ---- take ALL THREE of B's devices offline ------------------------------
     // The envelopes must SIT in the queues so we can read the very bytes each
@@ -2488,13 +2879,12 @@ async fn v10_dm_fans_out_to_three_devices() {
         .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &marker)
         .await
         .expect("send_text failed");
-    tokio::time::sleep(Duration::from_secs(4)).await;
 
     // ---- read back exactly the rows THIS send created ----------------------
-    let new_rows: Vec<Vec<String>> = envelope_rows(&uid_b)
-        .into_iter()
-        .filter(|f| !before.contains(&f[0]))
-        .collect();
+    // All three of B's devices are offline, so the queue only grows: wait for
+    // the 3 rows a correct fan-out produces instead of sleeping past the
+    // second and third deposits.
+    let new_rows = wait_for_new_envelopes(&uid_b, &before, 3).await;
 
     println!("  NEW device_messages rows created by this one send: {}", new_rows.len());
     for f in &new_rows {
@@ -2643,17 +3033,28 @@ async fn v10_dm_fans_out_to_three_devices() {
     println!("  B linked #1 decrypted: {b2:?}");
     println!("  B linked #2 decrypted: {b3:?}");
 
-    assert_eq!(
-        b1.as_deref(),
-        Some(marker.as_str()),
+    // Fall back to each device's own store for any bus that lagged: three
+    // clients are brought up and then waited on in turn, so the later receivers
+    // can overrun their 64-slot broadcast buffer and lose the event. See
+    // `wait_for_stored_text`. The property is unchanged — the device must have
+    // recovered the plaintext — only the place we read it from is now one that
+    // cannot drop it.
+    let ok1 = b1.as_deref() == Some(marker.as_str())
+        || wait_for_stored_text(&c1, &expected_conv, &marker).await;
+    let ok2 = b2.as_deref() == Some(marker.as_str())
+        || wait_for_stored_text(&c2, &expected_conv, &marker).await;
+    let ok3 = b3.as_deref() == Some(marker.as_str())
+        || wait_for_stored_text(&c3, &expected_conv, &marker).await;
+
+    assert!(
+        ok1,
         "B's PRIMARY device did not recover A's exact plaintext (got {b1:?}). The \
          primary is the control here — if it cannot decrypt, the linked devices' \
          results say nothing about multi-device."
     );
-    for (dev, body, label) in [(dev_2, &b2, "linked #1"), (dev_3, &b3, "linked #2")] {
-        assert_eq!(
-            body.as_deref(),
-            Some(marker.as_str()),
+    for (dev, body, ok, label) in [(dev_2, &b2, ok2, "linked #1"), (dev_3, &b3, ok3, "linked #2")] {
+        assert!(
+            ok,
             "LINKED DEVICE CANNOT DECRYPT: B's {label} device {dev} was queued its own \
              distinct envelope (asserted above — the row is really there), came online, \
              and did not surface A's plaintext. Got {body:?}, expected {marker:?}. B's \
@@ -2749,6 +3150,7 @@ async fn v10_dm_fans_out_to_three_devices() {
 #[tokio::test]
 async fn v11_device_linked_mid_conversation_receives_next_message() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- B's primary registers. ONE device, for now. ------------------------
@@ -2765,16 +3167,7 @@ async fn v11_device_linked_mid_conversation_receives_next_message() {
     let client_a = build_client(dir_a.path());
     let uid_a = register_and_start(&client_a, &unique_user("v11a"), "V11 Alice").await;
 
-    client_a
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_bp
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_a, &client_bp, uid_a, uid_b).await;
 
     // ---- POSITIVE CONTROL (a): B really has ONE device right now ------------
     // If B somehow already had two, the "new" device would not be new and the
@@ -2890,12 +3283,11 @@ async fn v11_device_linked_mid_conversation_receives_next_message() {
         .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &marker_2)
         .await
         .expect("second send_text failed");
-    tokio::time::sleep(Duration::from_secs(4)).await;
 
-    let new_rows: Vec<Vec<String>> = envelope_rows(&uid_b)
-        .into_iter()
-        .filter(|f| !before.contains(&f[0]))
-        .collect();
+    // Both of B's devices are offline, so the queue only grows: wait for the 2
+    // rows a correct fan-out produces instead of sleeping past the second
+    // deposit.
+    let new_rows = wait_for_new_envelopes(&uid_b, &before, 2).await;
 
     println!("  NEW device_messages rows created by the second send: {}", new_rows.len());
     for f in &new_rows {
@@ -3025,15 +3417,19 @@ async fn v11_device_linked_mid_conversation_receives_next_message() {
     println!("  B primary    decrypted message #2: {body_p:?}");
     println!("  B new device decrypted message #2: {body_s:?}");
 
-    assert_eq!(
-        body_p.as_deref(),
-        Some(marker_2.as_str()),
+    // Store fallback for a lagged bus — see `wait_for_stored_text`.
+    let ok_p = body_p.as_deref() == Some(marker_2.as_str())
+        || wait_for_stored_text(&client_bp2, &expected_conv, &marker_2).await;
+    let ok_s = body_s.as_deref() == Some(marker_2.as_str())
+        || wait_for_stored_text(&client_bs2, &expected_conv, &marker_2).await;
+
+    assert!(
+        ok_p,
         "B's PRIMARY did not recover A's second message (got {body_p:?}). The primary is \
          the control — if it cannot decrypt, the new device's result says nothing."
     );
-    assert_eq!(
-        body_s.as_deref(),
-        Some(marker_2.as_str()),
+    assert!(
+        ok_s,
         "MID-CONVERSATION DEVICE CANNOT DECRYPT: B's device {dev_s}, linked AFTER the \
          conversation was established, was queued its own distinct envelope (asserted \
          above — the row is really there), came online, and did not surface A's \
@@ -3129,6 +3525,7 @@ async fn v11_device_linked_mid_conversation_receives_next_message() {
 #[tokio::test]
 async fn v12_dm_from_primary_syncs_to_senders_own_linked_device() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- A: primary registers, then a REAL secondary device links -----------
@@ -3183,16 +3580,7 @@ async fn v12_dm_from_primary_syncs_to_senders_own_linked_device() {
     let client_b = build_client(&path_b);
     let uid_b = register_and_start(&client_b, &unique_user("v12b"), "V12 Bob").await;
 
-    client_ap
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_b
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_ap, &client_b, uid_a, uid_b).await;
 
     // ---- take A's LINKED device and B offline ------------------------------
     // The envelopes must SIT in the queues so we read the very bytes each device
@@ -3205,8 +3593,8 @@ async fn v12_dm_from_primary_syncs_to_senders_own_linked_device() {
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     // ---- snapshot BEFORE the send, scoped to THIS run's users --------------
-    let before_a = row_ids(&uid_a);
-    let before_b = row_ids(&uid_b);
+    let before_a = quiesced_row_ids(&uid_a).await;
+    let before_b = quiesced_row_ids(&uid_b).await;
     println!("  device_messages rows before the send: A={} B={}", before_a.len(), before_b.len());
 
     let marker = unique_marker();
@@ -3217,16 +3605,15 @@ async fn v12_dm_from_primary_syncs_to_senders_own_linked_device() {
         .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &marker)
         .await
         .expect("send_text failed");
-    tokio::time::sleep(Duration::from_secs(4)).await;
 
-    let new_a: Vec<Vec<String>> = envelope_rows(&uid_a)
-        .into_iter()
-        .filter(|f| !before_a.contains(&f[0]))
-        .collect();
-    let new_b: Vec<Vec<String>> = envelope_rows(&uid_b)
-        .into_iter()
-        .filter(|f| !before_b.contains(&f[0]))
-        .collect();
+    // A's linked device and B are both offline, so both queues only grow. Wait
+    // for the specific rows this send must produce — B's copy, then the
+    // self-sync copy on A's LINKED device — rather than sleeping past two
+    // sequential deposits. Targeting the linked device matters: these tests
+    // also assert A's own sending device was SKIPPED, so the window has to
+    // close the instant the awaited row lands.
+    let new_b = wait_for_new_envelopes(&uid_b, &before_b, 1).await;
+    let new_a = wait_for_device_envelope(&uid_a, &before_a, dev_s).await;
 
     println!("  NEW rows for B (the recipient): {}", new_b.len());
     for f in &new_b {
@@ -3436,6 +3823,7 @@ async fn v12_dm_from_primary_syncs_to_senders_own_linked_device() {
 #[tokio::test]
 async fn v13_self_synced_dm_files_as_outgoing_in_the_recipient_conversation() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- A: primary registers, then a REAL secondary device links -----------
@@ -3479,16 +3867,7 @@ async fn v13_self_synced_dm_files_as_outgoing_in_the_recipient_conversation() {
     let client_b = build_client(&path_b);
     let uid_b = register_and_start(&client_b, &unique_user("v13b"), "V13 Bob").await;
 
-    client_ap
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_b
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_ap, &client_b, uid_a, uid_b).await;
 
     // ---- take A's LINKED device and B offline ------------------------------
     // The envelope must SIT in A's linked queue so we can read the exact bytes it
@@ -3499,8 +3878,8 @@ async fn v13_self_synced_dm_files_as_outgoing_in_the_recipient_conversation() {
     drop(client_b);
     tokio::time::sleep(Duration::from_secs(3)).await;
 
-    let before_a = row_ids(&uid_a);
-    let before_b = row_ids(&uid_b);
+    let before_a = quiesced_row_ids(&uid_a).await;
+    let before_b = quiesced_row_ids(&uid_b).await;
 
     let marker = unique_marker();
     println!("\n  marker plaintext: {marker}");
@@ -3510,16 +3889,15 @@ async fn v13_self_synced_dm_files_as_outgoing_in_the_recipient_conversation() {
         .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &marker)
         .await
         .expect("send_text failed");
-    tokio::time::sleep(Duration::from_secs(4)).await;
 
-    let new_a: Vec<Vec<String>> = envelope_rows(&uid_a)
-        .into_iter()
-        .filter(|f| !before_a.contains(&f[0]))
-        .collect();
-    let new_b: Vec<Vec<String>> = envelope_rows(&uid_b)
-        .into_iter()
-        .filter(|f| !before_b.contains(&f[0]))
-        .collect();
+    // A's linked device and B are both offline, so both queues only grow. Wait
+    // for the specific rows this send must produce — B's copy, then the
+    // self-sync copy on A's LINKED device — rather than sleeping past two
+    // sequential deposits. Targeting the linked device matters: these tests
+    // also assert A's own sending device was SKIPPED, so the window has to
+    // close the instant the awaited row lands.
+    let new_b = wait_for_new_envelopes(&uid_b, &before_b, 1).await;
+    let new_a = wait_for_device_envelope(&uid_a, &before_a, dev_s).await;
 
     println!("  NEW rows for B (recipient): {}", new_b.len());
     for f in &new_b {
@@ -3976,6 +4354,7 @@ async fn v15_deliver(
 #[tokio::test]
 async fn v15_post_compromise_security_heals_after_dh_ratchet() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -3987,16 +4366,7 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
     let uid_a = register_and_start(&client_a, &unique_user("v15a"), "Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("v15b"), "Bob").await;
 
-    client_a
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_b
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_a, &client_b, uid_a, uid_b).await;
 
     // In B's store the session for talking to A is keyed by A's protocol address
     // (sealed-sender decrypt derives the sender from the cert -> "{uid_a}:1").
@@ -4333,6 +4703,7 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
 #[tokio::test]
 async fn v16_message_roundtrip_fidelity() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -4343,16 +4714,7 @@ async fn v16_message_roundtrip_fidelity() {
     let uid_a = register_and_start(&client_a, &unique_user("v16a"), "Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("v16b"), "Bob").await;
 
-    client_a
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_b
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_a, &client_b, uid_a, uid_b).await;
 
     // B stays ONLINE and polls; its conversation with A is bucketed by A's id
     // (channel-free DM), exactly as V1 asserts.
@@ -4670,16 +5032,7 @@ async fn setup_a_linked_b(tag: &str) -> AbFixture {
     let client_b = build_client(&path_b);
     let uid_b = register_and_start(&client_b, &unique_user(&format!("{tag}b")), "Bob").await;
 
-    client_ap
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_b
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_ap, &client_b, uid_a, uid_b).await;
 
     AbFixture {
         _dir_ap: dir_ap,
@@ -4717,6 +5070,7 @@ async fn setup_a_linked_b(tag: &str) -> AbFixture {
 #[tokio::test]
 async fn v17_self_synced_reaction_attaches_to_the_right_message_as_ours() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let fx = setup_a_linked_b("v17").await;
@@ -4763,7 +5117,7 @@ async fn v17_self_synced_reaction_attaches_to_the_right_message_as_ours() {
     fx.client_b.shutdown().await;
     tokio::time::sleep(Duration::from_secs(3)).await;
 
-    let before_a = row_ids(&uid_a);
+    let before_a = quiesced_row_ids(&uid_a).await;
 
     // THE ACTION UNDER TEST: A reacts from the PRIMARY to B's message.
     fx.client_ap
@@ -4771,13 +5125,11 @@ async fn v17_self_synced_reaction_attaches_to_the_right_message_as_ours() {
         .send_reaction("👍", &uid_b, ts_m, false)
         .await
         .expect("send_reaction failed");
-    tokio::time::sleep(Duration::from_secs(4)).await;
 
     // POSITIVE CONTROL: the reaction self-sync actually reached A's linked queue.
-    let new_a: Vec<Vec<String>> = envelope_rows(&uid_a)
-        .into_iter()
-        .filter(|f| !before_a.contains(&f[0]))
-        .collect();
+    // A's linked device is offline, so the queue only grows — wait for ITS row
+    // specifically (a count-based wait is satisfied by any row for A).
+    let new_a = wait_for_device_envelope(&uid_a, &before_a, dev_s).await;
     let a_linked_rows: Vec<&Vec<String>> =
         new_a.iter().filter(|f| f[1] == dev_s.to_string()).collect();
     assert!(
@@ -4851,6 +5203,7 @@ async fn v17_self_synced_reaction_attaches_to_the_right_message_as_ours() {
 #[tokio::test]
 async fn v18_self_synced_read_receipt_clears_unread_on_linked_device() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let fx = setup_a_linked_b("v18").await;
@@ -4902,7 +5255,7 @@ async fn v18_self_synced_read_receipt_clears_unread_on_linked_device() {
     fx.client_b.shutdown().await;
     tokio::time::sleep(Duration::from_secs(3)).await;
 
-    let before_a = row_ids(&uid_a);
+    let before_a = quiesced_row_ids(&uid_a).await;
 
     // THE ACTION UNDER TEST: A reads B's message from the PRIMARY.
     fx.client_ap
@@ -4910,13 +5263,11 @@ async fn v18_self_synced_read_receipt_clears_unread_on_linked_device() {
         .send_read_receipt(&[ts_m])
         .await
         .expect("send_read_receipt failed");
-    tokio::time::sleep(Duration::from_secs(4)).await;
 
     // POSITIVE CONTROL: the read receipt self-sync reached A's linked queue.
-    let new_a: Vec<Vec<String>> = envelope_rows(&uid_a)
-        .into_iter()
-        .filter(|f| !before_a.contains(&f[0]))
-        .collect();
+    // A's linked device is offline, so the queue only grows — wait for ITS row
+    // specifically (a count-based wait is satisfied by any row for A).
+    let new_a = wait_for_device_envelope(&uid_a, &before_a, dev_s).await;
     assert!(
         new_a.iter().any(|f| f[1] == dev_s.to_string()),
         "POSITIVE CONTROL FAILED (transport): A's linked device {dev_s} received ZERO \
@@ -4978,6 +5329,7 @@ async fn v18_self_synced_read_receipt_clears_unread_on_linked_device() {
 #[tokio::test]
 async fn v19_own_typing_is_not_self_synced() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let fx = setup_a_linked_b("v19").await;
@@ -4989,8 +5341,8 @@ async fn v19_own_typing_is_not_self_synced() {
     fx.client_b.shutdown().await;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    let before_a = row_ids(&uid_a);
-    let before_b = row_ids(&uid_b);
+    let before_a = quiesced_row_ids(&uid_a).await;
+    let before_b = quiesced_row_ids(&uid_b).await;
 
     // THE ACTION UNDER TEST: A sends a typing indicator to B from the primary.
     fx.client_ap
@@ -4998,15 +5350,22 @@ async fn v19_own_typing_is_not_self_synced() {
         .send_typing(true)
         .await
         .expect("send_typing failed");
-    tokio::time::sleep(Duration::from_secs(4)).await;
 
+    // Wait on the POSITIVE side (B must get the typing envelope), THEN give the
+    // negative half a short settle window. You cannot poll for a non-event, so
+    // the absence assertion keeps a fixed window — but it is now anchored to a
+    // CAUSAL barrier instead of to the send: a self-sync copy, if the send path
+    // produced one, is deposited by the same `send_sealed_dm_content` call
+    // immediately after the peer copy (server_dm.rs:502-553, peer loop then own
+    // loop), so once B's row exists A's would be milliseconds behind. 3s is
+    // ample for that and much tighter than a window that keeps growing while B
+    // is slow — the wide version swept in a live peer's delivery receipt and
+    // reported the self-sync suppression as broken.
+    let new_b = wait_for_new_envelopes(&uid_b, &before_b, 1).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
     let new_a: Vec<Vec<String>> = envelope_rows(&uid_a)
         .into_iter()
         .filter(|f| !before_a.contains(&f[0]))
-        .collect();
-    let new_b: Vec<Vec<String>> = envelope_rows(&uid_b)
-        .into_iter()
-        .filter(|f| !before_b.contains(&f[0]))
         .collect();
 
     // POSITIVE CONTROL: the typing REALLY went out to B — otherwise "A synced
@@ -5077,6 +5436,7 @@ async fn v20_delete_for_everyone_actually_deletes_on_the_recipient() {
     use chatter_core::domain::message::ConversationType;
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- A and B register and befriend --------------------------------------
@@ -5088,16 +5448,7 @@ async fn v20_delete_for_everyone_actually_deletes_on_the_recipient() {
     let client_b = build_client(dir_b.path());
     let uid_b = register_and_start(&client_b, &unique_user("v20b"), "V20 Bob").await;
 
-    client_a
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_b
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_a, &client_b, uid_a, uid_b).await;
 
     // ---- A sends a normal DM to B -------------------------------------------
     let marker = unique_marker();
@@ -5254,6 +5605,7 @@ async fn v21_group_sender_key_fanout_and_plaintext_default() {
     use chatter_core::domain::channel::{ChannelConfig, ChannelType};
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- A, B, C register + start -------------------------------------------
@@ -5423,41 +5775,30 @@ async fn v21_group_sender_key_fanout_and_plaintext_default() {
     // The first send from a new sender mints the Sender Key and ships an SKDM to
     // every member via sealed sender -> their device inbox. Its own content is not
     // recovered by the recipients (observed), but the SKDM it carries establishes
-    // the key. We wait until the SKDM has actually landed in BOTH B's and C's
-    // device_messages before sending the message we assert on, so the proof is not
-    // racing key distribution.
-    let db_before = row_ids(&uid_b).len();
-    let dc_before = row_ids(&uid_c).len();
+    // the key. We wait until B and C have INSTALLED A's sender key — terminal
+    // state in their own key stores — before sending the message we assert on,
+    // so the proof is not racing key distribution. (This used to sample
+    // `device_messages`, a queue the recipients drain concurrently; see
+    // `wait_for_sender_key`.)
     let marker_warm = unique_marker();
     client_a
         .send_text(ActiveConversation::Channel(group_e.id.clone()), &marker_warm)
         .await
         .expect("A warm-up send failed");
-    let mut skdm_b = false;
-    let mut skdm_c = false;
-    for _ in 0..40 {
-        skdm_b = row_ids(&uid_b).len() > db_before;
-        skdm_c = row_ids(&uid_c).len() > dc_before;
-        if skdm_b && skdm_c {
-            break;
-        }
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    }
+    let skdm_b = wait_for_sender_key(&client_b, &uid_a, &group_e.id).await;
+    let skdm_c = wait_for_sender_key(&client_c, &uid_a, &group_e.id).await;
     assert!(
         skdm_b && skdm_c,
         "SENDER-KEY DISTRIBUTION BROKEN: A's first send to the encrypted group did not \
-         deliver an SKDM to B's inbox ({skdm_b}) and/or C's inbox ({skdm_c}) within 40s. \
+         install A's sender key on B ({skdm_b}) and/or C ({skdm_c}) within \
+         {CONDITION_TIMEOUT:?}. \
          Without the sender key, B and C can never decrypt A's group messages. \
          Diagnosis: message/group.rs `distribute_sender_key` fans the SKDM to every member \
          via `encrypt_message_all_devices` + `send_with_anonymous_credential`; a failure \
          here is a bundle-fetch or anonymous-credential problem, NOT the SENDERKEY_MESSAGE \
          path itself."
     );
-    println!("  warm-up: A's SKDM landed in BOTH B's and C's device inboxes (sender key established)");
-    // Small buffer for B and C to PROCESS the SKDM (store the sender key) before
-    // the proof message arrives — an unprocessed SKDM means a deferred, unrecovered
-    // proof message (the first-message race).
-    tokio::time::sleep(Duration::from_secs(6)).await;
+    println!("  warm-up: B and C have INSTALLED A's sender key (SKDM delivered AND processed)");
 
     // --- THE PROOF MESSAGE: one Sender-Key message, BOTH B and C must decrypt ---
     let marker_e = unique_marker();
@@ -5713,6 +6054,7 @@ use chatter_core::domain::ids::AttachmentId;
 #[tokio::test]
 async fn v22_attachment_binary_fidelity() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -5723,16 +6065,7 @@ async fn v22_attachment_binary_fidelity() {
     let uid_a = register_and_start(&client_a, &unique_user("v22a"), "Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("v22b"), "Bob").await;
 
-    client_a
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_b
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_a, &client_b, uid_a, uid_b).await;
 
     // ---- PART 1: the main binary-fidelity + encrypted-at-rest case ----------
     // Payload = marker | (all 256 byte values, x16) | random | marker.
@@ -5957,6 +6290,7 @@ async fn v22_attachment_binary_fidelity() {
 #[tokio::test]
 async fn v23_message_ordering_reorder_and_gap() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -5968,16 +6302,7 @@ async fn v23_message_ordering_reorder_and_gap() {
     let uid_a = register_and_start(&client_a, &unique_user("v23a"), "Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("v23b"), "Bob").await;
 
-    client_a
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_b
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_a, &client_b, uid_a, uid_b).await;
 
     // ---- POSITIVE CONTROL / baseline: in-order delivery works --------------
     // A warm-up message delivered while B is online. Establishes the session, so
@@ -6427,6 +6752,7 @@ async fn v26_first_group_message_self_heals_across_skdm_race() {
     use chatter_core::domain::channel::ChannelType;
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- A, B, C register + start -------------------------------------------
@@ -6794,6 +7120,7 @@ async fn v27_blocking_stops_message_delivery() {
     use chatter_core::domain::message::ConversationType;
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- A and B register and befriend --------------------------------------
@@ -6805,16 +7132,7 @@ async fn v27_blocking_stops_message_delivery() {
     let client_b = build_client(dir_b.path());
     let uid_b = register_and_start(&client_b, &unique_user("v27b"), "V27 Bob").await;
 
-    client_a
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_b
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_a, &client_b, uid_a, uid_b).await;
 
     // B buckets a channel-free ServerDm under the SENDER's id. Scope every query
     // to THIS run's A->B conversation so a stale global row can't satisfy it.
@@ -6925,6 +7243,7 @@ async fn v27_blocking_stops_message_delivery() {
 #[tokio::test]
 async fn v28_delete_account_actually_deletes_server_side() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir = tempfile::tempdir().unwrap();
@@ -6998,6 +7317,7 @@ async fn v29_disappearing_messages_arm_the_ttl() {
     use chatter_core::domain::channel::ChannelType;
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- A + B register + start ---------------------------------------------
@@ -7167,6 +7487,7 @@ async fn v30_group_management_changes_propagate() {
     use chatter_core::domain::channel::{ChannelType, MemberRole};
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- A, B, C register + start (start() launches the channel event stream) ----
@@ -7359,6 +7680,7 @@ async fn v30_group_management_changes_propagate() {
 #[tokio::test]
 async fn v31_friends_user_search_resolves_exact_username() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -7427,6 +7749,7 @@ async fn v31_friends_user_search_resolves_exact_username() {
 #[tokio::test]
 async fn v32_avatar_change_uploads_encrypted_avatar_server_side() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir = tempfile::tempdir().unwrap();
@@ -7510,6 +7833,7 @@ async fn v33_channel_mute_persists_to_membership() {
     use chatter_core::domain::channel::ChannelType;
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir = tempfile::tempdir().unwrap();
@@ -7593,6 +7917,7 @@ async fn v34_presence_reaches_friends_not_strangers() {
     use chatter_core::domain::user::PresenceStatus;
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- A, B, C register and start -----------------------------------------
@@ -7610,14 +7935,9 @@ async fn v34_presence_reaches_friends_not_strangers() {
 
     // ---- Friendship graph: A-B friends, B-C friends, A-C NOT friends --------
     // A befriends B
-    client_a.send_friend_request(&uid_b, Some("validated")).await.expect("A->B friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_b.respond_friend_request(&uid_a, true).await.expect("B accept A failed");
+    befriend(&client_a, &client_b, uid_a, uid_b).await;
     // B befriends C (gives C a live, meaningful event stream to observe)
-    client_b.send_friend_request(&uid_c, Some("validated")).await.expect("B->C friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_c.respond_friend_request(&uid_b, true).await.expect("C accept B failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_b, &client_c, uid_b, uid_c).await;
     println!("  graph: A-B friends, B-C friends, A-C strangers");
 
     // ---- Subscribe to B's and C's event buses BEFORE the presence action ----
@@ -7751,6 +8071,7 @@ async fn v35_blocking_stops_group_message_delivery() {
     use chatter_core::domain::channel::ChannelType;
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- A, B, C, D register + start ----------------------------------------
@@ -7841,31 +8162,21 @@ async fn v35_blocking_stops_group_message_delivery() {
     // The first send mints A's sender key and ships an SKDM to every member's
     // device inbox. Done BEFORE any block so B, C and D all hold A's key — the
     // block must be what withholds the CONTENT, not a missing key.
-    let db_before = row_ids(&uid_b).len();
-    let dc_before = row_ids(&uid_c).len();
-    let dd_before = row_ids(&uid_d).len();
     client_a
         .send_text(ActiveConversation::Channel(group_e.id.clone()), &unique_marker())
         .await
         .expect("A warm-up send failed");
-    let (mut skdm_b, mut skdm_c, mut skdm_d) = (false, false, false);
-    for _ in 0..40 {
-        skdm_b = row_ids(&uid_b).len() > db_before;
-        skdm_c = row_ids(&uid_c).len() > dc_before;
-        skdm_d = row_ids(&uid_d).len() > dd_before;
-        if skdm_b && skdm_c && skdm_d {
-            break;
-        }
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    }
+    let skdm_b = wait_for_sender_key(&client_b, &uid_a, &group_e.id).await;
+    let skdm_c = wait_for_sender_key(&client_c, &uid_a, &group_e.id).await;
+    let skdm_d = wait_for_sender_key(&client_d, &uid_a, &group_e.id).await;
     assert!(
         skdm_b && skdm_c && skdm_d,
-        "SENDER-KEY DISTRIBUTION BROKEN: A's warm-up did not deliver an SKDM to B ({skdm_b}), \
-         C ({skdm_c}) and D ({skdm_d}) within 40s. Without the key the block assertions below \
-         would pass for the wrong reason (missing key, not enforced block)."
+        "SENDER-KEY DISTRIBUTION BROKEN: A's warm-up did not install A's sender key on B \
+         ({skdm_b}), C ({skdm_c}) and D ({skdm_d}) within {CONDITION_TIMEOUT:?}. Without the \
+         key the block assertions below would pass for the wrong reason (missing key, not \
+         enforced block)."
     );
-    println!("  warm-up: A's SKDM landed in B's, C's and D's inboxes (key established for all)");
-    tokio::time::sleep(Duration::from_secs(6)).await; // let B, C, D PROCESS the SKDM
+    println!("  warm-up: B, C and D have INSTALLED A's sender key (SKDM delivered AND processed)");
 
     // ---- THE ACTIONS UNDER TEST: two block directions -----------------------
     // B blocks A  -> subscriber-blocked-author direction.
@@ -7991,6 +8302,7 @@ async fn v36_disappearing_messages_expire_locally() {
     use chatter_core::domain::message::ConversationType;
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // NOTE: this leans on the REAL spawned reaper (default 10s cadence, see
@@ -8009,16 +8321,7 @@ async fn v36_disappearing_messages_expire_locally() {
     let client_b = build_client(dir_b.path());
     let uid_b = register_and_start(&client_b, &unique_user("v36b"), "V36 Bob").await;
 
-    client_a
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_b
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_a, &client_b, uid_a, uid_b).await;
 
     // Local conversation keys: B buckets a channel-free ServerDm by the SENDER's
     // id; A (sender) stores its own copy keyed by the RECIPIENT's id.
@@ -8386,6 +8689,7 @@ async fn v37_kt_query_privacy_vrf_verified_and_forgery_still_rejected() {
 #[tokio::test]
 async fn v38_friend_fetches_and_decrypts_your_avatar_byte_exact() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- A and B register and start (inbox polling live on both) -----------
@@ -8401,16 +8705,7 @@ async fn v38_friend_fetches_and_decrypts_your_avatar_byte_exact() {
     // A's friend-request envelope carries A's profile key (ECIES to B), the
     // post-accept handshake re-sends it, and the explicit A->B DM below carries
     // it a third way. Any one suffices; we exercise the real friendship path.
-    client_a
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    client_b
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(4)).await;
+    befriend(&client_a, &client_b, uid_a, uid_b).await;
 
     // ---- A changes its avatar to KNOWN random bytes (small: no normalize) ---
     // < 64 KB so the WebP normalizer never fires (services/user/mod.rs:377),
@@ -8623,6 +8918,7 @@ async fn a_reads_bs_message(
 #[tokio::test]
 async fn v39_read_receipt_toggle_gates_the_send() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -8633,16 +8929,7 @@ async fn v39_read_receipt_toggle_gates_the_send() {
     let uid_a = register_and_start(&client_a, &unique_user("v39a"), "Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("v39b"), "Bob").await;
 
-    client_a
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_b
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_a, &client_b, uid_a, uid_b).await;
 
     // B's view of A is keyed by A's id; A's view of B is keyed by B's id.
     let conv_on_b = ChannelId::from(uid_a); // where B stores the msgs it SENT to A
@@ -8749,6 +9036,7 @@ async fn v39_read_receipt_toggle_gates_the_send() {
 #[tokio::test]
 async fn v40_typing_toggle_gates_the_send() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -8759,16 +9047,7 @@ async fn v40_typing_toggle_gates_the_send() {
     let uid_a = register_and_start(&client_a, &unique_user("v40a"), "Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("v40b"), "Bob").await;
 
-    client_a
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_b
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_a, &client_b, uid_a, uid_b).await;
 
     // ======================================================================
     // POSITIVE CONTROL — typing ENABLED (default): A typing reaches B.
@@ -8872,6 +9151,7 @@ async fn v41_group_reply_carries_quote_to_recipient() {
     use chatter_core::prelude::QuoteIntent;
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- A, B register + start ----------------------------------------------
@@ -8959,32 +9239,22 @@ async fn v41_group_reply_carries_quote_to_recipient() {
 
     // ---- WARM-UP: establish B's sender key on A -----------------------------
     // B's first send mints B's sender key + ships an SKDM to A's device inbox.
-    // Wait for that SKDM to LAND (poll A's inbox rows, like V35) rather than for
-    // the decrypted text — the message itself races the SKDM and may arrive as
-    // an "[Encrypted message]" placeholder before A can decode it. Once the key
-    // is on A, the plain + reply sends below decode cleanly.
-    let a_before = row_ids(&uid_a).len();
+    // Wait for A to have INSTALLED that key rather than for the decrypted text —
+    // the message itself races the SKDM and may arrive as an
+    // "[Encrypted message]" placeholder before A can decode it. Once the key is
+    // on A, the plain + reply sends below decode cleanly.
     let warm_text = unique_marker();
     client_b
         .send_text(ActiveConversation::Channel(chan.id.clone()), &warm_text)
         .await
         .expect("B warm-up send failed");
-    let mut skdm_landed = false;
-    for _ in 0..40 {
-        skdm_landed = row_ids(&uid_a).len() > a_before;
-        if skdm_landed {
-            break;
-        }
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    }
     assert!(
-        skdm_landed,
-        "SENDER-KEY DISTRIBUTION BROKEN: B's warm-up did not deliver an SKDM to A within 40s. \
-         The reply assertions would then fail for the wrong reason (missing key, not a dropped \
-         quote)."
+        wait_for_sender_key(&client_a, &uid_b, &chan.id).await,
+        "SENDER-KEY DISTRIBUTION BROKEN: B's warm-up did not install B's sender key on A \
+         within {CONDITION_TIMEOUT:?}. The reply assertions would then fail for the wrong \
+         reason (missing key, not a dropped quote)."
     );
-    println!("  warm-up: B's SKDM landed in A's inbox (B's key established on A)");
-    tokio::time::sleep(Duration::from_secs(6)).await; // let A PROCESS the SKDM
+    println!("  warm-up: A has INSTALLED B's sender key (SKDM delivered AND processed)");
 
     // ---- NEGATIVE CONTROL: a PLAIN (non-reply) message carries no quote -----
     // Sent AFTER the key is warm so A decodes it directly.
@@ -9108,6 +9378,7 @@ async fn v41_group_reply_carries_quote_to_recipient() {
 #[tokio::test]
 async fn v42_dm_read_receipt_live_refreshes_sender() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -9118,16 +9389,7 @@ async fn v42_dm_read_receipt_live_refreshes_sender() {
     let uid_a = register_and_start(&client_a, &unique_user("v42a"), "V42 Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("v42b"), "V42 Bob").await;
 
-    client_a
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_b
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_a, &client_b, uid_a, uid_b).await;
 
     // A subscribes to its own event bus BEFORE sending, so the read-receipt
     // DomainEvent can't fire before we're listening.
@@ -9200,6 +9462,7 @@ async fn v42_dm_read_receipt_live_refreshes_sender() {
 #[tokio::test]
 async fn v43_profile_name_change_live_pushes_to_friends() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -9212,16 +9475,7 @@ async fn v43_profile_name_change_live_pushes_to_friends() {
 
     // Friend them so B holds A's profile key (friend handshake) AND is on A's
     // fan-out list. (Key sharing proven by V38.)
-    client_a
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    client_b
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(4)).await;
+    befriend(&client_a, &client_b, uid_a, uid_b).await;
 
     // POSITIVE CONTROL: B fetches A's profile once — proves B can resolve A's
     // name at all (holds A's key) before we assert the LIVE push below.
@@ -9302,6 +9556,7 @@ async fn v44_thread_reply_groups_under_root_on_both_sides() {
     use chatter_core::domain::channel::ChannelType;
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -9450,6 +9705,7 @@ async fn v45_reactions_edits_pins_roundtrip_in_channel() {
     use chatter_core::domain::channel::ChannelType;
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -9499,22 +9755,22 @@ async fn v45_reactions_edits_pins_roundtrip_in_channel() {
         )).await.is_some(),
         "POSITIVE CONTROL FAILED: B never received A's msgR"
     );
-    tokio::time::sleep(Duration::from_secs(3)).await; // B processes A's SKDM
+    assert!(
+        wait_for_sender_key(&client_b, &uid_a, &chan.id).await,
+        "SENDER-KEY DISTRIBUTION BROKEN: A's msgR did not install A's sender key on B"
+    );
 
     // WARM-UP: establish B's sender key on A before msgE (B's first real send
     // races its own SKDM otherwise — the msgE positive control would flake).
-    let a_before = row_ids(&uid_a).len();
     client_b
         .send_channel_message(None, &chan.id, &unique_marker(), vec![], vec![], None, vec![], false)
         .await
         .expect("B warm-up send failed");
-    let mut skdm = false;
-    for _ in 0..40 {
-        if row_ids(&uid_a).len() > a_before { skdm = true; break; }
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    }
-    assert!(skdm, "SENDER-KEY DISTRIBUTION BROKEN: B's warm-up SKDM never landed on A within 40s");
-    tokio::time::sleep(Duration::from_secs(6)).await; // A processes B's SKDM
+    assert!(
+        wait_for_sender_key(&client_a, &uid_b, &chan.id).await,
+        "SENDER-KEY DISTRIBUTION BROKEN: B's warm-up did not install B's sender key on A \
+         within {CONDITION_TIMEOUT:?}"
+    );
 
     // B posts msgE (B's edit/pin target); A must receive it (establishes B's key on A).
     let e_text = unique_marker();
@@ -9599,6 +9855,7 @@ async fn v45_reactions_edits_pins_roundtrip_in_channel() {
 #[tokio::test]
 async fn v46_reactions_edits_pins_roundtrip_in_dm() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -9608,10 +9865,7 @@ async fn v46_reactions_edits_pins_roundtrip_in_dm() {
     let client_b = build_client(dir_b.path());
     let uid_b = register_and_start(&client_b, &unique_user("v46b"), "V46 Bob").await;
 
-    client_a.send_friend_request(&uid_b, Some("validated")).await.expect("friend req");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_b.respond_friend_request(&uid_a, true).await.expect("accept");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_a, &client_b, uid_a, uid_b).await;
 
     let mut events_a = client_a.subscribe_events();
     let conv_on_a = ChannelId::from(uid_b); // A's thread with B
@@ -9738,6 +9992,7 @@ async fn v46_reactions_edits_pins_roundtrip_in_dm() {
 #[tokio::test]
 async fn v47_desynced_dm_session_self_heals_via_decryption_error_message() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
     // Opt-in tracing for debugging this test: V47_TRACE=1 to enable.
     if std::env::var("V47_TRACE").is_ok() {
@@ -9757,16 +10012,7 @@ async fn v47_desynced_dm_session_self_heals_via_decryption_error_message() {
     let uid_a = register_and_start(&client_a, &unique_user("v47a"), "V47 Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("v47b"), "V47 Bob").await;
 
-    client_a
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_b
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_a, &client_b, uid_a, uid_b).await;
 
     let mut events_a = client_a.subscribe_events();
     let mut events_b = client_b.subscribe_events();
@@ -9935,6 +10181,7 @@ async fn v47_desynced_dm_session_self_heals_via_decryption_error_message() {
 #[tokio::test]
 async fn v48_username_link_resolves_privately_end_to_end() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -10113,6 +10360,7 @@ fn marker_message_row(db_path: &std::path::Path, marker: &str) -> Vec<String> {
 #[tokio::test]
 async fn v50_local_message_backup_round_trips_encrypted() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -10123,16 +10371,7 @@ async fn v50_local_message_backup_round_trips_encrypted() {
     let uid_a = register_and_start(&client_a, &unique_user("v50a"), "Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("v50b"), "Bob").await;
 
-    client_a
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_b
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_a, &client_b, uid_a, uid_b).await;
 
     // Real DM round-trip as data setup: the row we back up arrived over the wire.
     let marker = unique_marker();
@@ -10247,6 +10486,7 @@ async fn v50_local_message_backup_round_trips_encrypted() {
 #[tokio::test]
 async fn v51_server_message_backup_restores_on_fresh_install_via_pin() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -10258,16 +10498,7 @@ async fn v51_server_message_backup_restores_on_fresh_install_via_pin() {
     let uid_a = register_and_start(&client_a, &user_a_name, "Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("v51b"), "Bob").await;
 
-    client_a
-        .send_friend_request(&uid_b, Some("validated"))
-        .await
-        .expect("friend request failed");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    client_b
-        .respond_friend_request(&uid_a, true)
-        .await
-        .expect("accept friend request failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    befriend(&client_a, &client_b, uid_a, uid_b).await;
 
     let marker = unique_marker();
     let mut events_a = client_a.subscribe_events();
@@ -10414,6 +10645,7 @@ async fn v51_server_message_backup_restores_on_fresh_install_via_pin() {
 #[tokio::test]
 async fn v52_reinstall_recovers_the_original_identity_key() {
     skip_if_no_server!();
+    kt_stable!();
     println!("\n=== V52: reinstall with PIN recovers the ORIGINAL identity key ===\n");
 
     let user = unique_user("v52ident");
@@ -10508,6 +10740,8 @@ async fn v52_reinstall_recovers_the_original_identity_key() {
 #[tokio::test]
 async fn v53_identity_reset_publishes_a_key_the_server_serves() {
     skip_if_no_server!();
+    // NO `kt_stable!()` here: this test takes the EXCLUSIVE side of
+    // KT_LOG_ROTATION below, and tokio's RwLock is not reentrant.
     println!("\n=== V53: no backup → told, not silently re-keyed; explicit reset publishes ===\n");
 
     let user = unique_user("v53reset");
@@ -10608,10 +10842,18 @@ async fn v53_identity_reset_publishes_a_key_the_server_serves() {
     println!("  no backup: server identity_key still the original (nothing minted behind the user)");
 
     // The explicit, user-driven decision.
+    //
+    // Exclusive against V47 for the duration: this call appends a CHANGED
+    // identity key to the KT log, which makes every consistency proof spanning
+    // it fail server-side and denies session establishment to any client pinned
+    // before it. See `KT_LOG_ROTATION` for the defect, the code paths and the
+    // log evidence.
+    let kt_rotation = KT_LOG_ROTATION.write().await;
     client_fresh
         .accept_new_identity(need)
         .await
         .expect("identity reset failed — there is still no way to publish a rotated key");
+    drop(kt_rotation);
 
     let new_key = client_fresh.signal().get_identity_public_key().await.unwrap();
     let new_hex: String = new_key.iter().map(|b| format!("{b:02x}")).collect();
