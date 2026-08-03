@@ -226,65 +226,6 @@ fn backoff(current: Duration) -> Duration {
     (current * 2).min(Duration::from_secs(2))
 }
 
-/// Serialises the ONE test that rotates an identity key (V53) against the ONE
-/// test that establishes a fresh Signal session late in its own run (V47).
-///
-/// THIS IS NOT A TIMING WORKAROUND. It exists because of a PRODUCT DEFECT that
-/// this suite reproduces, and it is scoped to the two tests that collide so the
-/// defect stays visible everywhere else:
-///
-///   The server defines Key Transparency consistency over the DERIVED MAP —
-///   `loadStateAtEpoch` (server `internal/services/keytransparency/log.go:140`)
-///   reconstructs "the latest identity key per user among the first N appends",
-///   and `BuildConsistencyProof` (`crypto/treehead.go:100`) then requires every
-///   old (key, value) pair to be byte-identical in the new tree. A user
-///   rotating their identity key changes that user's VALUE, so the derived map
-///   is by construction NOT append-only across the rotation and the server
-///   refuses its own proof with `ErrConsistencyOldModified`.
-///
-///   The client treats that refusal as evidence of a fork — correctly, under
-///   the KT threat model — and REFUSES to establish the session
-///   (`services/signal/session.rs:115-127` -> `session.rs:181` ->
-///   `session.rs:640` skips the device -> "Failed to establish session with any
-///   device"). So one user's identity reset denies session establishment to
-///   every OTHER client whose pinned tree head predates it, for as long as that
-///   client keeps its pin.
-///
-///   Evidence, run of 2026-08-03: server logs `Republished Signal identity key
-///   ... identity_key_changed:true` at 04:11:47.916 (V53), then
-///   `GetConsistencyProof: log not append-only (fork detected server-side)` at
-///   04:12:04.986 and 04:12:06.986 — V47's send and its one retry — and V47
-///   failed with `Failed to deliver sealed DM to any device`. Reproduced in 3
-///   of 5 full runs before this guard; `kt_log_entries` currently holds 15
-///   users with two distinct identity keys, one per suite run.
-///
-/// REMOVE THIS GUARD once consistency is proven over the LOG (append-only by
-/// construction) rather than over the derived latest-key map. Until then it is
-/// the only reason the two tests can share one server.
-static KT_LOG_ROTATION: std::sync::LazyLock<tokio::sync::RwLock<()>> =
-    std::sync::LazyLock::new(|| tokio::sync::RwLock::new(()));
-
-/// Take the shared side of [`KT_LOG_ROTATION`] for the rest of the test.
-///
-/// Every test in this file can establish a Signal session at any point — to a
-/// new peer, to a peer's newly linked device, or to one of its own — and every
-/// one of those is refused while the KT log is mid-rotation. So the exclusion
-/// has to be "V53 versus the suite", not "V53 versus one test". Measured on an
-/// otherwise idle host with only V47 guarded: V9/V10/V12/V13 reported devices
-/// as dark, with their prekey-bundle fetches bracketed by
-/// `GetConsistencyProof: log not append-only (fork detected server-side)` in
-/// the server log at 04:55:28-34 on 2026-08-03.
-///
-/// The binding is macro-hygienic: it holds the guard to the end of the test and
-/// is not nameable from the test body, so it cannot be dropped early by
-/// accident. V53 deliberately does NOT use it — it takes the exclusive side, and
-/// tokio's `RwLock` is not reentrant.
-macro_rules! kt_stable {
-    () => {
-        let _kt_stable = KT_LOG_ROTATION.read().await;
-    };
-}
-
 /// Establish a mutual friendship A -> B, waiting on SERVER-OBSERVABLE
 /// CONDITIONS instead of sleeping.
 ///
@@ -851,7 +792,6 @@ fn row_ids(uid: &UserId) -> std::collections::HashSet<String> {
 #[tokio::test]
 async fn v0_detector_self_check() {
     skip_if_no_server!();
-    kt_stable!();
 
     let marker = unique_marker();
 
@@ -906,7 +846,6 @@ async fn v0_detector_self_check() {
 #[tokio::test]
 async fn v1_server_never_holds_plaintext() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -1069,7 +1008,6 @@ async fn v1_server_never_holds_plaintext() {
 #[tokio::test]
 async fn v2_corrupted_ciphertext_never_decrypts() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -1271,7 +1209,6 @@ async fn v2_corrupted_ciphertext_never_decrypts() {
 #[tokio::test]
 async fn v3_ratchet_advances_every_message() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -1414,7 +1351,6 @@ async fn v3_ratchet_advances_every_message() {
 #[tokio::test]
 async fn v4_sealed_sender_hides_sender_from_server() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -1530,7 +1466,6 @@ async fn v4_sealed_sender_hides_sender_from_server() {
 #[tokio::test]
 async fn v5_kyber_is_load_bearing_not_decorative() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -1851,7 +1786,6 @@ async fn v5_kyber_is_load_bearing_not_decorative() {
 #[tokio::test]
 async fn v6_delivered_message_key_is_destroyed() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -2125,7 +2059,6 @@ async fn v6_delivered_message_key_is_destroyed() {
 #[tokio::test]
 async fn v7_pqopk_pool_is_seeded_and_consumed() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let count = |sql: String| -> i64 { psql(&sql).trim().parse().unwrap_or(-1) };
@@ -2268,7 +2201,6 @@ async fn v7_pqopk_pool_is_seeded_and_consumed() {
 #[tokio::test]
 async fn v8_linked_device_pqopk_pool_is_seeded_and_consumed() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let count = |sql: String| -> i64 { psql(&sql).trim().parse().unwrap_or(-1) };
@@ -2451,7 +2383,6 @@ async fn v8_linked_device_pqopk_pool_is_seeded_and_consumed() {
 #[tokio::test]
 async fn v9_linked_device_receives_and_decrypts_dm() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     // ---- B: primary registers, then a REAL secondary device links -----------
@@ -2794,7 +2725,6 @@ async fn v9_linked_device_receives_and_decrypts_dm() {
 #[tokio::test]
 async fn v10_dm_fans_out_to_three_devices() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     // ---- B: primary registers, then TWO real secondary devices link ---------
@@ -3150,7 +3080,6 @@ async fn v10_dm_fans_out_to_three_devices() {
 #[tokio::test]
 async fn v11_device_linked_mid_conversation_receives_next_message() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     // ---- B's primary registers. ONE device, for now. ------------------------
@@ -3525,7 +3454,6 @@ async fn v11_device_linked_mid_conversation_receives_next_message() {
 #[tokio::test]
 async fn v12_dm_from_primary_syncs_to_senders_own_linked_device() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     // ---- A: primary registers, then a REAL secondary device links -----------
@@ -3823,7 +3751,6 @@ async fn v12_dm_from_primary_syncs_to_senders_own_linked_device() {
 #[tokio::test]
 async fn v13_self_synced_dm_files_as_outgoing_in_the_recipient_conversation() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     // ---- A: primary registers, then a REAL secondary device links -----------
@@ -4354,7 +4281,6 @@ async fn v15_deliver(
 #[tokio::test]
 async fn v15_post_compromise_security_heals_after_dh_ratchet() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -4703,7 +4629,6 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
 #[tokio::test]
 async fn v16_message_roundtrip_fidelity() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -5070,7 +4995,6 @@ async fn setup_a_linked_b(tag: &str) -> AbFixture {
 #[tokio::test]
 async fn v17_self_synced_reaction_attaches_to_the_right_message_as_ours() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let fx = setup_a_linked_b("v17").await;
@@ -5203,7 +5127,6 @@ async fn v17_self_synced_reaction_attaches_to_the_right_message_as_ours() {
 #[tokio::test]
 async fn v18_self_synced_read_receipt_clears_unread_on_linked_device() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let fx = setup_a_linked_b("v18").await;
@@ -5329,7 +5252,6 @@ async fn v18_self_synced_read_receipt_clears_unread_on_linked_device() {
 #[tokio::test]
 async fn v19_own_typing_is_not_self_synced() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let fx = setup_a_linked_b("v19").await;
@@ -5436,7 +5358,6 @@ async fn v20_delete_for_everyone_actually_deletes_on_the_recipient() {
     use chatter_core::domain::message::ConversationType;
 
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     // ---- A and B register and befriend --------------------------------------
@@ -5605,7 +5526,6 @@ async fn v21_group_sender_key_fanout_and_plaintext_default() {
     use chatter_core::domain::channel::{ChannelConfig, ChannelType};
 
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     // ---- A, B, C register + start -------------------------------------------
@@ -6054,7 +5974,6 @@ use chatter_core::domain::ids::AttachmentId;
 #[tokio::test]
 async fn v22_attachment_binary_fidelity() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -6290,7 +6209,6 @@ async fn v22_attachment_binary_fidelity() {
 #[tokio::test]
 async fn v23_message_ordering_reorder_and_gap() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -6752,7 +6670,6 @@ async fn v26_first_group_message_self_heals_across_skdm_race() {
     use chatter_core::domain::channel::ChannelType;
 
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     // ---- A, B, C register + start -------------------------------------------
@@ -6974,13 +6891,18 @@ async fn v26_first_group_message_self_heals_across_skdm_race() {
 // POSITIVE CONTROL: an honest consistency proof between two real epochs verifies
 // Ok. If this half failed, the rejects below would prove nothing.
 //
-// THE ATTACKS (both must be REJECTED):
-//   (A) FORK / REWRITE: tamper one old leaf's committed value (as a server that
-//       swapped a user's key would). The old leaf no longer reconstructs the
-//       signed old root AND no longer includes into the new root -> REJECT.
-//   (B) UNDER-REPORT: drop an old leaf from the proof (a server hiding a leaf it
-//       rewrote). The remaining leaves no longer reconstruct the signed old root
-//       -> REJECT (this is the soundness check beyond Go's VerifyConsistency).
+// The proof is an RFC 6962 consistency proof over the append-only LOG tree, so
+// the client reconstructs BOTH roots from the path and compares each to its
+// signed head.
+//
+// THE ATTACKS (all must be REJECTED):
+//   (A) TAMPERED PATH: flip a byte in a path node. Neither root reconstructs
+//       -> REJECT.
+//   (B) UNDER-REPORT: drop a path node -> REJECT.
+//   (C) REWRITTEN HISTORY: claim an old root the signed old head does not carry.
+//       This is the shape a server that changed a committed value, dropped an
+//       entry, or reordered the log produces — it reconstructs a DIFFERENT old
+//       root from its altered data -> REJECT.
 //
 // MUTATION (run it, observe RED, revert; source-hash the file in the submodule):
 // in `crypto/keytransparency.rs::verify_consistency_proof`, make the function
@@ -7034,55 +6956,71 @@ async fn v25_consistency_proof_rejects_a_forked_log() {
         .await
         .expect("anon GetConsistencyProof transport ok (public method reachable without auth)");
 
-    let old_leaf_count = honest.proof.as_ref().map(|p| p.old_leaf_proofs.len()).unwrap_or(0);
+    let path_len = honest.proof.as_ref().map(|p| p.path.len()).unwrap_or(0);
     println!(
         "  fetched consistency proof over the anonymous channel: old_epoch={old_epoch} \
-         new_epoch={new_epoch} old_leaves={old_leaf_count}"
+         new_epoch={new_epoch} path_nodes={path_len}"
     );
-    assert!(old_leaf_count >= 1, "old tree must have at least one leaf to test consistency");
+    assert!(path_len >= 1, "a consistency proof between two distinct epochs needs a path");
 
     // ---- POSITIVE CONTROL: the honest proof verifies (log is append-only). ----
     verify_kt_consistency_proof(&honest)
         .expect("POSITIVE CONTROL FAILED: honest consistency proof between two real epochs must verify");
     println!("  positive control: honest consistency proof VERIFIED (log is append-only across epochs)");
 
-    // ---- ATTACK (A): FORK — rewrite one old leaf's committed value. ----------
+    // ---- ATTACK (A): tamper a path node. -------------------------------------
     {
         let mut forged = honest.clone();
         let p = forged.proof.as_mut().unwrap();
-        // Flip a byte in the FIRST old leaf's value: simulates the server having
-        // swapped a user's committed identity key between the two epochs.
-        p.old_leaf_proofs[0].value[0] ^= 0xFF;
+        p.path[0][0] ^= 0xFF;
 
         let verdict = verify_kt_consistency_proof(&forged);
         assert!(
             verdict.is_err(),
-            "CONSISTENCY MONITORING FAILED (fork accepted): a rewritten old-leaf value was \
-             accepted — a malicious server could rewrite the transparency log undetected."
+            "CONSISTENCY MONITORING FAILED (tampered path accepted): the path no longer \
+             reconstructs the signed roots and must be rejected."
         );
-        println!("  attack (A) fork/rewrite REJECTED: {}", verdict.unwrap_err());
+        println!("  attack (A) tampered path REJECTED: {}", verdict.unwrap_err());
     }
 
-    // ---- ATTACK (B): UNDER-REPORT — drop an old leaf from the proof. ----------
+    // ---- ATTACK (B): UNDER-REPORT — drop a path node. ------------------------
     {
         let mut forged = honest.clone();
         let p = forged.proof.as_mut().unwrap();
-        let dropped = p.old_leaf_proofs.remove(0);
-        let _ = dropped;
+        p.path.remove(0);
 
         let verdict = verify_kt_consistency_proof(&forged);
         assert!(
             verdict.is_err(),
-            "CONSISTENCY MONITORING FAILED (under-report accepted): dropping an old leaf was \
-             accepted — a server could hide a leaf it rewrote. The old root must not reconstruct."
+            "CONSISTENCY MONITORING FAILED (under-report accepted): a short path must not \
+             reconstruct the signed roots."
         );
         println!("  attack (B) under-report REJECTED: {}", verdict.unwrap_err());
     }
 
+    // ---- ATTACK (C): REWRITTEN HISTORY — an old root we never signed. --------
+    // A server that rewrote a committed entry reconstructs a different old root
+    // from its own altered data. Here that is simulated directly: the proof
+    // claims an old root its signed old head does not carry.
+    {
+        let mut forged = honest.clone();
+        let p = forged.proof.as_mut().unwrap();
+        p.old_root[0] ^= 0xFF;
+
+        let verdict = verify_kt_consistency_proof(&forged);
+        assert!(
+            verdict.is_err(),
+            "CONSISTENCY MONITORING FAILED (rewritten history accepted): an old root that the \
+             signed old head does not carry must be rejected — this is how a rewritten log is \
+             caught."
+        );
+        println!("  attack (C) rewritten history REJECTED: {}", verdict.unwrap_err());
+    }
+
     println!(
         "  V25 PASS — consistency proof VERIFIED the append-only log across epochs \
-         (old={old_epoch} new={new_epoch}, {old_leaf_count} old leaves) and REJECTED both a \
-         rewritten leaf (fork) and a dropped leaf (under-report). Log-fork hole closed."
+         (old={old_epoch} new={new_epoch}, {path_len} path nodes) and REJECTED a tampered \
+         path, a dropped path node, and an unsigned old root. Log-fork hole closed."
     );
 }
 
@@ -7120,7 +7058,6 @@ async fn v27_blocking_stops_message_delivery() {
     use chatter_core::domain::message::ConversationType;
 
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     // ---- A and B register and befriend --------------------------------------
@@ -7243,7 +7180,6 @@ async fn v27_blocking_stops_message_delivery() {
 #[tokio::test]
 async fn v28_delete_account_actually_deletes_server_side() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let dir = tempfile::tempdir().unwrap();
@@ -7317,7 +7253,6 @@ async fn v29_disappearing_messages_arm_the_ttl() {
     use chatter_core::domain::channel::ChannelType;
 
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     // ---- A + B register + start ---------------------------------------------
@@ -7487,7 +7422,6 @@ async fn v30_group_management_changes_propagate() {
     use chatter_core::domain::channel::{ChannelType, MemberRole};
 
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     // ---- A, B, C register + start (start() launches the channel event stream) ----
@@ -7680,7 +7614,6 @@ async fn v30_group_management_changes_propagate() {
 #[tokio::test]
 async fn v31_friends_user_search_resolves_exact_username() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -7749,7 +7682,6 @@ async fn v31_friends_user_search_resolves_exact_username() {
 #[tokio::test]
 async fn v32_avatar_change_uploads_encrypted_avatar_server_side() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let dir = tempfile::tempdir().unwrap();
@@ -7833,7 +7765,6 @@ async fn v33_channel_mute_persists_to_membership() {
     use chatter_core::domain::channel::ChannelType;
 
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let dir = tempfile::tempdir().unwrap();
@@ -7917,7 +7848,6 @@ async fn v34_presence_reaches_friends_not_strangers() {
     use chatter_core::domain::user::PresenceStatus;
 
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     // ---- A, B, C register and start -----------------------------------------
@@ -8071,7 +8001,6 @@ async fn v35_blocking_stops_group_message_delivery() {
     use chatter_core::domain::channel::ChannelType;
 
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     // ---- A, B, C, D register + start ----------------------------------------
@@ -8302,7 +8231,6 @@ async fn v36_disappearing_messages_expire_locally() {
     use chatter_core::domain::message::ConversationType;
 
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     // NOTE: this leans on the REAL spawned reaper (default 10s cadence, see
@@ -8689,7 +8617,6 @@ async fn v37_kt_query_privacy_vrf_verified_and_forgery_still_rejected() {
 #[tokio::test]
 async fn v38_friend_fetches_and_decrypts_your_avatar_byte_exact() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     // ---- A and B register and start (inbox polling live on both) -----------
@@ -8918,7 +8845,6 @@ async fn a_reads_bs_message(
 #[tokio::test]
 async fn v39_read_receipt_toggle_gates_the_send() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -9036,7 +8962,6 @@ async fn v39_read_receipt_toggle_gates_the_send() {
 #[tokio::test]
 async fn v40_typing_toggle_gates_the_send() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -9151,7 +9076,6 @@ async fn v41_group_reply_carries_quote_to_recipient() {
     use chatter_core::prelude::QuoteIntent;
 
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     // ---- A, B register + start ----------------------------------------------
@@ -9378,7 +9302,6 @@ async fn v41_group_reply_carries_quote_to_recipient() {
 #[tokio::test]
 async fn v42_dm_read_receipt_live_refreshes_sender() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -9462,7 +9385,6 @@ async fn v42_dm_read_receipt_live_refreshes_sender() {
 #[tokio::test]
 async fn v43_profile_name_change_live_pushes_to_friends() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -9556,7 +9478,6 @@ async fn v44_thread_reply_groups_under_root_on_both_sides() {
     use chatter_core::domain::channel::ChannelType;
 
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -9705,7 +9626,6 @@ async fn v45_reactions_edits_pins_roundtrip_in_channel() {
     use chatter_core::domain::channel::ChannelType;
 
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -9855,7 +9775,6 @@ async fn v45_reactions_edits_pins_roundtrip_in_channel() {
 #[tokio::test]
 async fn v46_reactions_edits_pins_roundtrip_in_dm() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -9992,7 +9911,6 @@ async fn v46_reactions_edits_pins_roundtrip_in_dm() {
 #[tokio::test]
 async fn v47_desynced_dm_session_self_heals_via_decryption_error_message() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
     // Opt-in tracing for debugging this test: V47_TRACE=1 to enable.
     if std::env::var("V47_TRACE").is_ok() {
@@ -10181,7 +10099,6 @@ async fn v47_desynced_dm_session_self_heals_via_decryption_error_message() {
 #[tokio::test]
 async fn v48_username_link_resolves_privately_end_to_end() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -10360,7 +10277,6 @@ fn marker_message_row(db_path: &std::path::Path, marker: &str) -> Vec<String> {
 #[tokio::test]
 async fn v50_local_message_backup_round_trips_encrypted() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -10486,7 +10402,6 @@ async fn v50_local_message_backup_round_trips_encrypted() {
 #[tokio::test]
 async fn v51_server_message_backup_restores_on_fresh_install_via_pin() {
     skip_if_no_server!();
-    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -10645,7 +10560,6 @@ async fn v51_server_message_backup_restores_on_fresh_install_via_pin() {
 #[tokio::test]
 async fn v52_reinstall_recovers_the_original_identity_key() {
     skip_if_no_server!();
-    kt_stable!();
     println!("\n=== V52: reinstall with PIN recovers the ORIGINAL identity key ===\n");
 
     let user = unique_user("v52ident");
@@ -10740,8 +10654,6 @@ async fn v52_reinstall_recovers_the_original_identity_key() {
 #[tokio::test]
 async fn v53_identity_reset_publishes_a_key_the_server_serves() {
     skip_if_no_server!();
-    // NO `kt_stable!()` here: this test takes the EXCLUSIVE side of
-    // KT_LOG_ROTATION below, and tokio's RwLock is not reentrant.
     println!("\n=== V53: no backup → told, not silently re-keyed; explicit reset publishes ===\n");
 
     let user = unique_user("v53reset");
@@ -10843,17 +10755,17 @@ async fn v53_identity_reset_publishes_a_key_the_server_serves() {
 
     // The explicit, user-driven decision.
     //
-    // Exclusive against V47 for the duration: this call appends a CHANGED
-    // identity key to the KT log, which makes every consistency proof spanning
-    // it fail server-side and denies session establishment to any client pinned
-    // before it. See `KT_LOG_ROTATION` for the defect, the code paths and the
-    // log evidence.
-    let kt_rotation = KT_LOG_ROTATION.write().await;
+    // This appends a CHANGED identity key to the KT log. It used to need
+    // exclusion against the rest of the suite: consistency was proven over the
+    // derived latest-key map, so a rotation read as a rewrite of history, the
+    // server refused its own proof, and every client pinned before it stopped
+    // establishing sessions. Consistency is now proven over the append-only LOG
+    // (`crypto/logtree.go`), where a rotation is just another append, so the
+    // rotation runs concurrently with everything else.
     client_fresh
         .accept_new_identity(need)
         .await
         .expect("identity reset failed — there is still no way to publish a rotated key");
-    drop(kt_rotation);
 
     let new_key = client_fresh.signal().get_identity_public_key().await.unwrap();
     let new_hex: String = new_key.iter().map(|b| format!("{b:02x}")).collect();

@@ -1,6 +1,6 @@
 //! Key Transparency (KT) client-side verification — Phase 2.
 //!
-//! The server maintains an append-only sparse-Merkle log of user identity keys
+//! The server maintains an append-only log of user identity keys
 //! (see `internal/services/keytransparency` on the server). `GetProof(user_id)`
 //! returns the identity key the server has committed for a user together with a
 //! Merkle inclusion proof and an Ed25519-signed tree head.
@@ -15,9 +15,20 @@
 //!      keys stay unlinkable to usernames for a third-party auditor (Phase 3b),
 //!   2. the proof's committed value equals the identity key from the bundle —
 //!      binds the log to the *key we are about to trust*,
-//!   3. the Merkle inclusion proof recomputes to the tree head's `root_hash`,
-//!   4. the tree head signature verifies under the pinned Ed25519 public key
+//!   3. the Merkle inclusion proof recomputes to the served `prefix_root` — the
+//!      root of the sparse tree holding each user's CURRENT key,
+//!   4. that `prefix_root` is sealed inside the newest leaf of the append-only
+//!      LOG tree, proven by an RFC 6962 audit path against the tree head's
+//!      `root_hash` (which is the LOG root),
+//!   5. the tree head signature verifies under the pinned Ed25519 public key
 //!      (`config::KT_TREE_HEAD_PUBLIC_KEY_BYTES`).
+//!
+//! Step 4 is what makes the current-key map auditable over time. The server
+//! keeps two structures, as Signal's key transparency does: an append-only LOG
+//! tree over the sequence of updates (consistency proofs live there — an
+//! identity-key rotation is just another append) and a PREFIX tree of current
+//! values (inclusion proofs live there). Sealing the prefix root into the log
+//! leaf ties them together.
 //!
 //! Every byte format below is a direct port of the Go `crypto` package
 //! (`internal/services/keytransparency/crypto/{merkle,treehead}.go`) — the leaf
@@ -25,8 +36,6 @@
 //! separator (`"ChatterKT-v1"`), and the little-endian epoch/tree-size encoding.
 //! A mismatch in any of these makes the verifier reject a genuine proof, so
 //! interop is proven live against a real server in the V14 validated test.
-
-use std::sync::LazyLock;
 
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use sha2::{Digest, Sha256};
@@ -44,7 +53,13 @@ const LEAF_PREFIX: u8 = 0x00;
 /// Interior-node hash prefix. Mirrors `crypto.interiorPrefix` (merkle.go).
 const INTERIOR_PREFIX: u8 = 0x01;
 /// Tree-head signature domain separator. Mirrors `crypto.treeHeadDomainSeparator`.
-const TREE_HEAD_DOMAIN: &[u8] = b"ChatterKT-v1";
+/// v2: the signed root is the LOG tree's root, not the current-key map's.
+const TREE_HEAD_DOMAIN: &[u8] = b"ChatterKT-v2";
+
+/// Log-tree leaf prefix. Mirrors `crypto.logLeafPrefix` (logtree.go).
+const LOG_LEAF_PREFIX: u8 = 0x02;
+/// Log-tree interior prefix. Mirrors `crypto.logInteriorPrefix` (logtree.go).
+const LOG_INTERIOR_PREFIX: u8 = 0x03;
 
 /// Why a KT proof was rejected. Any variant means: do NOT trust the peer key.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,17 +86,20 @@ pub enum KtError {
     /// A consistency proof's old/new root does not match the signed tree head it
     /// claims to be for.
     ConsistencyRootMismatch,
-    /// The provided old leaves do not reconstruct to the signed old root — the
-    /// server under-reported or altered the old leaf set (an attempt to hide a
-    /// rewritten/omitted leaf). REJECT: the log may have been forked.
-    ConsistencyOldRootUnreconstructable,
-    /// An old leaf is NOT present unchanged in the new tree — the log was
-    /// rewritten (not append-only). THIS is the fork being rejected.
-    ConsistencyLeafNotPreserved,
+    /// The RFC 6962 consistency path does not reconstruct both signed roots —
+    /// the log of `old_epoch` entries is NOT a prefix of the log of `new_epoch`
+    /// entries. History was rewritten, reordered or truncated. THIS is the fork
+    /// being rejected.
+    ConsistencyLogNotAppendOnly,
+    /// The identity key's inclusion proof verifies against a current-key-map
+    /// root that is NOT the one the log committed at this epoch, so the map the
+    /// server served is unattested. REJECT.
+    PrefixRootNotInLog,
     /// The consistency proof could not be obtained at all.
     ///
     /// Treated as a REJECT, not a shrug. The server can rebuild state at any
-    /// epoch on demand (`loadStateAtEpoch`, keytransparency/service.go), so it
+    /// epoch by replaying its log (`Service.replay`, keytransparency/service.go),
+    /// so it
     /// has no honest reason to fail — and a server that could suppress this
     /// check by erroring could fork the log undetectably, which is the same
     /// reasoning that already makes a transport error on `GetProof` a reject
@@ -116,18 +134,20 @@ impl std::fmt::Display for KtError {
             KtError::ConsistencyRootMismatch => {
                 write!(f, "KT consistency proof root does not match its signed tree head")
             }
-            KtError::ConsistencyOldRootUnreconstructable => write!(
+            KtError::ConsistencyLogNotAppendOnly => write!(
                 f,
-                "KT consistency proof old leaves do not reconstruct the signed old root (log may be forked)"
+                "KT consistency proof: the log at the old epoch is not a prefix of the log at the \
+                 new epoch (history rewritten, reordered or truncated)"
+            ),
+            KtError::PrefixRootNotInLog => write!(
+                f,
+                "KT proof: the current-key tree root is not the one the append-only log committed \
+                 at this epoch"
             ),
             KtError::ConsistencyUnavailable => write!(
                 f,
                 "KT consistency proof could not be obtained — refusing to advance the pinned \
                  tree head (a server that can suppress this check can fork the log undetected)"
-            ),
-            KtError::ConsistencyLeafNotPreserved => write!(
-                f,
-                "KT consistency proof: an old leaf is not preserved in the new tree (log rewritten/forked)"
             ),
         }
     }
@@ -221,6 +241,124 @@ fn verify_tree_head(
     vk.verify(&digest, &Signature::from_bytes(&sig_bytes)).is_ok()
 }
 
+/// One log-tree interior hash `SHA-256(0x03 || left || right)`.
+/// Port of `crypto.logInterior` (logtree.go).
+fn log_interior(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update([LOG_INTERIOR_PREFIX]);
+    h.update(left);
+    h.update(right);
+    h.finalize().into()
+}
+
+/// The log leaf for one update: `SHA-256(0x02 || prefix_root || update_hash)`.
+/// Port of `crypto.LogLeafHash` (logtree.go).
+///
+/// This is the binding between the two trees. The append-only log commits to the
+/// current-key map's root at every epoch, so the succession of maps is itself
+/// covered by the log's consistency proof — a server cannot later claim a
+/// different current-key map for an epoch it already committed.
+fn log_leaf_hash(prefix_root: &[u8; 32], update_hash: &[u8; 32]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update([LOG_LEAF_PREFIX]);
+    h.update(prefix_root);
+    h.update(update_hash);
+    h.finalize().into()
+}
+
+/// Verify an RFC 6962 audit path: that `leaf` sits at `index` in a log of `size`
+/// leaves whose Merkle Tree Hash is `root`. Port of `crypto.VerifyLogInclusion`
+/// (logtree.go), which follows RFC 6962-bis §2.1.3.2 verbatim.
+fn verify_log_inclusion(
+    leaf: &[u8; 32],
+    index: u64,
+    size: u64,
+    path: &[[u8; 32]],
+    root: &[u8; 32],
+) -> bool {
+    if index >= size {
+        return false;
+    }
+    let (mut fnv, mut sn) = (index, size - 1);
+    let mut r = *leaf;
+    for p in path {
+        if sn == 0 {
+            return false;
+        }
+        if fnv & 1 == 1 || fnv == sn {
+            r = log_interior(p, &r);
+            while fnv & 1 == 0 && fnv != 0 {
+                fnv >>= 1;
+                sn >>= 1;
+            }
+        } else {
+            r = log_interior(&r, p);
+        }
+        fnv >>= 1;
+        sn >>= 1;
+    }
+    sn == 0 && r == *root
+}
+
+/// Verify an RFC 6962 consistency proof: that a log of `old_size` leaves with
+/// Merkle Tree Hash `old_root` was EXTENDED — not rewritten — into a log of
+/// `new_size` leaves with hash `new_root`. Port of `crypto.VerifyLogConsistency`
+/// (logtree.go), which follows RFC 6962-bis §2.1.4.2 verbatim.
+///
+/// BOTH roots are reconstructed from the path, which is what makes every way of
+/// breaking history detectable: change a committed value, drop an entry, or
+/// reorder entries and the reconstructed old root stops matching the one the
+/// caller supplied.
+fn verify_log_consistency(
+    old_size: u64,
+    new_size: u64,
+    old_root: &[u8; 32],
+    new_root: &[u8; 32],
+    path: &[[u8; 32]],
+) -> bool {
+    if old_size == 0 || old_size >= new_size {
+        return false;
+    }
+
+    // When the old size is a power of two the old root IS a node of the new
+    // tree, so the server omits it from the path.
+    let mut p: Vec<[u8; 32]> = Vec::with_capacity(path.len() + 1);
+    if old_size & (old_size - 1) == 0 {
+        p.push(*old_root);
+    }
+    p.extend_from_slice(path);
+    if p.is_empty() {
+        return false;
+    }
+
+    let (mut fnv, mut sn) = (old_size - 1, new_size - 1);
+    while fnv & 1 == 1 {
+        fnv >>= 1;
+        sn >>= 1;
+    }
+    let (mut fr, mut sr) = (p[0], p[0]);
+
+    for c in &p[1..] {
+        if sn == 0 {
+            return false;
+        }
+        if fnv & 1 == 1 || fnv == sn {
+            fr = log_interior(c, &fr);
+            sr = log_interior(c, &sr);
+            while fnv & 1 == 0 && fnv != 0 {
+                fnv >>= 1;
+                sn >>= 1;
+            }
+        } else {
+            sr = log_interior(&sr, c);
+        }
+        fnv >>= 1;
+        sn >>= 1;
+    }
+
+    sn == 0 && fr == *old_root && sr == *new_root
+}
+
 /// Full client-side verification of a `GetProof` response.
 ///
 /// On `Ok(())` the caller may trust `bundle_identity_key` as `user_id`'s key: it
@@ -270,92 +408,61 @@ pub fn verify_proof(
         return Err(KtError::IdentityKeyMismatch);
     }
 
-    // (3) The inclusion proof must recompute to the tree-head root.
-    let root: &[u8; 32] = sth
+    // (3) The inclusion proof must recompute to the CURRENT-KEY map's root.
+    let prefix_root: &[u8; 32] = response
+        .prefix_root
+        .as_slice()
+        .try_into()
+        .map_err(|_| KtError::Malformed("prefix_root is not 32 bytes"))?;
+    let recomputed = recompute_root(proof_key, &proof.value, &proof.sibling_hashes, &proof.bits)
+        .ok_or(KtError::InclusionInvalid)?;
+    if &recomputed != prefix_root {
+        return Err(KtError::InclusionInvalid);
+    }
+
+    // (4) That map must be the one the APPEND-ONLY LOG committed at this epoch.
+    // Without this the prefix root is just a number the server sent us, and a
+    // server could serve any current-key map it liked for an epoch it had
+    // already committed to.
+    let log_root: &[u8; 32] = sth
         .root_hash
         .as_slice()
         .try_into()
         .map_err(|_| KtError::Malformed("signed_tree_head.root_hash is not 32 bytes"))?;
-    let recomputed = recompute_root(proof_key, &proof.value, &proof.sibling_hashes, &proof.bits)
-        .ok_or(KtError::InclusionInvalid)?;
-    if &recomputed != root {
-        return Err(KtError::InclusionInvalid);
+    let update_hash: &[u8; 32] = response
+        .log_update_hash
+        .as_slice()
+        .try_into()
+        .map_err(|_| KtError::Malformed("log_update_hash is not 32 bytes"))?;
+    let log_path = hashes32(
+        &response.log_inclusion_path,
+        "log_inclusion_path entry is not 32 bytes",
+    )?;
+    if sth.tree_size == 0 {
+        return Err(KtError::Malformed("signed tree head claims an empty log"));
+    }
+    // The newest log leaf is the one sealing the map we just verified against,
+    // so its index is the last one.
+    if !verify_log_inclusion(
+        &log_leaf_hash(prefix_root, update_hash),
+        sth.tree_size - 1,
+        sth.tree_size,
+        &log_path,
+        log_root,
+    ) {
+        return Err(KtError::PrefixRootNotInLog);
     }
 
-    // (4) The tree head must be signed by the pinned KT key.
-    if !verify_tree_head(sth.epoch, root, sth.tree_size, &sth.signature) {
+    // (5) The tree head must be signed by the pinned KT key.
+    if !verify_tree_head(sth.epoch, log_root, sth.tree_size, &sth.signature) {
         return Err(KtError::TreeHeadSignatureInvalid);
     }
 
     Ok(())
 }
 
-/// Default hashes for empty subtrees at each depth, port of `crypto.defaultHashes`
-/// (merkle.go): `dh[0]` = 32 zero bytes, `dh[d] = SHA-256(0x01 || dh[d-1] || dh[d-1])`.
-/// Index runs 0..=256 (TreeDepth = 256).
-static DEFAULT_HASHES: LazyLock<[[u8; 32]; 257]> = LazyLock::new(|| {
-    let mut dh = [[0u8; 32]; 257];
-    for d in 1..=256 {
-        dh[d] = interior_hash(&dh[d - 1], &dh[d - 1]);
-    }
-    dh
-});
-
-/// Bit `pos` of `key`, port of `crypto.getBit`: `pos=255` is the MSB of byte 0.
-fn get_bit(key: &[u8; 32], pos: usize) -> u8 {
-    let byte_idx = (256 - 1 - pos) / 8;
-    let bit_idx = 7 - ((256 - 1 - pos) % 8);
-    (key[byte_idx] >> bit_idx) & 1
-}
-
-/// Recompute a sparse-Merkle subtree root from the leaves that fall inside it,
-/// splitting on bit `depth`. Byte-exact port of the Go tree's root computation
-/// (merkle.go insert/split + nodeHash/defaultHashes):
-///   - empty subtree  -> DEFAULT_HASHES[depth + 1]
-///   - single leaf    -> its leaf hash (a lone leaf collapses, never padded down)
-///   - otherwise      -> H(0x01 || left_root || right_root), partitioning leaves
-///     by their bit at `depth`.
-///
-/// `leaves` are (tree_key, leaf_hash) pairs. Used to independently reconstruct
-/// the OLD root from a consistency proof's old leaves, so the server cannot
-/// omit/alter an old leaf without the reconstructed root diverging from the
-/// signed old root.
-fn sparse_subtree_root(leaves: &[([u8; 32], [u8; 32])], depth: usize) -> [u8; 32] {
-    match leaves.len() {
-        0 => DEFAULT_HASHES[depth + 1],
-        1 => leaves[0].1,
-        _ => {
-            let (mut left, mut right): (Vec<_>, Vec<_>) = (Vec::new(), Vec::new());
-            for &lf in leaves {
-                if get_bit(&lf.0, depth) == 0 {
-                    left.push(lf);
-                } else {
-                    right.push(lf);
-                }
-            }
-            // depth == 0 with >1 leaf would mean two identical keys; the Go tree
-            // cannot represent that (keys are unique), so recursion always makes
-            // progress before underflowing.
-            let lh = sparse_subtree_root(&left, depth.wrapping_sub(1));
-            let rh = sparse_subtree_root(&right, depth.wrapping_sub(1));
-            interior_hash(&lh, &rh)
-        }
-    }
-}
-
-/// Reconstruct the whole-tree root from a complete set of (key, value) leaves.
-/// Port of `SparseMerkleTree.Root()` for the leaves collected via `Leaves()`.
-fn sparse_root(kv_leaves: &[(&[u8; 32], &[u8])]) -> [u8; 32] {
-    if kv_leaves.is_empty() {
-        return DEFAULT_HASHES[256];
-    }
-    let leaves: Vec<([u8; 32], [u8; 32])> =
-        kv_leaves.iter().map(|(k, v)| (**k, leaf_hash(k, v))).collect();
-    sparse_subtree_root(&leaves, 255)
-}
-
 /// Verify a `SignedTreeHead` proto message under the pinned key. Returns the
-/// 32-byte root on success.
+/// 32-byte LOG root on success.
 fn verify_sth(sth: &SignedTreeHead) -> Result<[u8; 32], KtError> {
     let root: [u8; 32] = sth
         .root_hash
@@ -368,20 +475,31 @@ fn verify_sth(sth: &SignedTreeHead) -> Result<[u8; 32], KtError> {
     Ok(root)
 }
 
+/// Collect a repeated proto `bytes` field into 32-byte hashes.
+fn hashes32(raw: &[Vec<u8>], what: &'static str) -> Result<Vec<[u8; 32]>, KtError> {
+    raw.iter()
+        .map(|h| h.as_slice().try_into().map_err(|_| KtError::Malformed(what)))
+        .collect()
+}
+
 /// Verify a consistency proof between two epochs. On `Ok(())` the client has
-/// cryptographic evidence that the KT log is APPEND-ONLY between `old_epoch` and
-/// `new_epoch`: every leaf committed in the old tree still exists, unchanged, in
-/// the new tree, under two tree heads both signed by the pinned key. Any `Err`
-/// means the log may have been FORKED/rewritten and the client must alarm.
+/// cryptographic evidence that the KT LOG is APPEND-ONLY between `old_epoch` and
+/// `new_epoch`: the log of `old_epoch` entries is a PREFIX of the log of
+/// `new_epoch` entries, under two tree heads both signed by the pinned key.
 ///
 /// Checks (all must hold):
 ///   1. both tree-head signatures verify under the pinned key,
 ///   2. epochs are ordered and match the signed heads (old < new),
 ///   3. `proof.old_root` / `proof.new_root` equal the signed roots,
-///   4. the old leaves reconstruct EXACTLY to the signed old root (completeness —
-///      the server cannot omit or alter an old leaf),
-///   5. every old leaf has a valid inclusion proof against the new root
-///      (persistence — port of `crypto.VerifyConsistency`).
+///   4. the RFC 6962 consistency path reconstructs BOTH roots.
+///
+/// What this does NOT do, deliberately: decide whether `old_root` is a head this
+/// device ever trusted. A server can always produce an internally valid proof
+/// between two epochs of a log it just rewrote — reconstructing the old root
+/// from its own altered data. Catching that is
+/// [`crate::services::signal::kt_anchor::accept_advance`]'s job: it compares
+/// `old_root` against the PINNED head. Both halves are required; neither alone
+/// detects a fork.
 pub fn verify_consistency_proof(response: &GetConsistencyProofResponse) -> Result<(), KtError> {
     let proof = response
         .proof
@@ -423,39 +541,18 @@ pub fn verify_consistency_proof(response: &GetConsistencyProofResponse) -> Resul
         return Err(KtError::ConsistencyRootMismatch);
     }
 
-    // (4) COMPLETENESS: reconstruct the old root from the provided old leaves.
-    // Every old_leaf_proof carries the old (key, value); rebuilding the sparse
-    // tree from them must yield exactly the signed old root, so the server cannot
-    // silently drop or rewrite an old leaf and still pass (5).
-    let kv: Vec<(&[u8; 32], &[u8])> = {
-        let mut v = Vec::with_capacity(proof.old_leaf_proofs.len());
-        for lp in &proof.old_leaf_proofs {
-            let key: &[u8; 32] = lp
-                .key
-                .as_slice()
-                .try_into()
-                .map_err(|_| KtError::Malformed("consistency old leaf key is not 32 bytes"))?;
-            v.push((key, lp.value.as_slice()));
-        }
-        v
-    };
-    if sparse_root(&kv) != old_root {
-        return Err(KtError::ConsistencyOldRootUnreconstructable);
-    }
-
-    // (5) PERSISTENCE: each old leaf must be included in the new tree with the
-    // same value (port of crypto.VerifyConsistency).
-    for lp in &proof.old_leaf_proofs {
-        let key: &[u8; 32] = lp
-            .key
-            .as_slice()
-            .try_into()
-            .map_err(|_| KtError::Malformed("consistency old leaf key is not 32 bytes"))?;
-        let recomputed = recompute_root(key, &lp.value, &lp.sibling_hashes, &lp.bits)
-            .ok_or(KtError::ConsistencyLeafNotPreserved)?;
-        if recomputed != new_root {
-            return Err(KtError::ConsistencyLeafNotPreserved);
-        }
+    // (4) APPEND-ONLY: the path must reconstruct both roots. A value changed
+    // retroactively, an entry dropped, or entries reordered all change the
+    // reconstructed old root.
+    let path = hashes32(&proof.path, "consistency path entry is not 32 bytes")?;
+    if !verify_log_consistency(
+        old_sth.tree_size,
+        new_sth.tree_size,
+        &old_root,
+        &new_root,
+        &path,
+    ) {
+        return Err(KtError::ConsistencyLogNotAppendOnly);
     }
 
     Ok(())
@@ -509,6 +606,263 @@ mod tests {
     fn recompute_root_rejects_length_mismatch() {
         let key = [0u8; 32];
         assert!(recompute_root(&key, b"v", &[vec![0u8; 32]], &[]).is_none());
+    }
+
+    // ── Cross-language interop with the Go log tree ──────────────────────────
+    //
+    // Every vector below was produced by the Go implementation
+    // (internal/services/keytransparency/crypto/logtree.go) over a 16-leaf log
+    // whose leaf i is LogLeafHash([i; 32], [i + 128; 32]). If the two sides ever
+    // disagree on a domain-separation byte, a hash order, or the RFC 6962 index
+    // arithmetic, these fail — which is the failure mode that would otherwise
+    // show up as "every client rejects every honest proof".
+
+    fn vec_leaf(i: u8) -> [u8; 32] {
+        log_leaf_hash(&[i; 32], &[i.wrapping_add(128); 32])
+    }
+
+    fn unhex(h: &str) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        for (i, b) in out.iter_mut().enumerate() {
+            *b = u8::from_str_radix(&h[i * 2..i * 2 + 2], 16).expect("hex");
+        }
+        out
+    }
+
+    fn unhex_list(hs: &[&str]) -> Vec<[u8; 32]> {
+        hs.iter().map(|h| unhex(h)).collect()
+    }
+
+    /// Go's roots for log sizes 0..=16.
+    const GO_ROOTS: [&str; 17] = [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "ff294c2759f7cd422e8a5b839e4b7300a1da3c417c5aeade37ade51dd02f62ee",
+        "2344eaa8fe15e8aed52902eaa5dd1ac6869c228d3c5fd801efe7dd565fd5e6bd",
+        "7f218f4c6a5bf1f4ec901ca3ade55da66b0051df18985b270ebd6cd6d38de8db",
+        "d1284b3d2aa9b337437e6317a939826cbb5bab2be986304a8374711fa038db12",
+        "2584a54291ccad8f3a7381165b277198685d001b5481675fa5ae90031b118e95",
+        "eb69cea77a87ec5d1289107f5019850b7534aba5f0b02da8db84b25c13d4656e",
+        "478aa4cf7e5b00677fd96d475efa2babc7182bd90b7df4fac609aa0766bcaa04",
+        "69871fc3acd1180a538e9594cd749a6e308f37a4f0247bad393f28975f987d33",
+        "4f8320fe77b70a70e2fb87f616b11f0d1f29e9763d9b6ce7060b1e82608cf1ef",
+        "caa0c5b37ab7e5e309253d394309afc95377caf44f9cdae95849ad8e407a05af",
+        "b474caa14cd75b2bbabc91ddf6c686c6f81998fd694eec9a68918ea8a504d2b0",
+        "199476e04cdf99717c300e0130aeebbe9cf84c1b1748d393bbcb3be8b53b512a",
+        "1c9c803f09cb9c15c54d845c8821228625c480624c3c801dfe17b58c8512018b",
+        "bc8282501c4dd224c3de740fb00580b3e42557e372ff391c570488cc7ea0c4d3",
+        "4c321500a068be2c2edb486d2fbbaaf083382f0346a8732c98dfd9da3454afd9",
+        "e8b3fcfd6ecc821592773e6054d3a662b3a16172df964122891becb8ef498f51",
+    ];
+
+    /// RFC 6962 defines the empty tree's hash as SHA-256 of the empty string;
+    /// Go agrees, and so must we.
+    #[test]
+    fn empty_log_root_matches_rfc6962() {
+        assert_eq!(unhex(GO_ROOTS[0]), <[u8; 32]>::from(Sha256::digest([])));
+    }
+
+    #[test]
+    fn log_inclusion_verifies_against_go_vectors() {
+        // (leaf index, log size, audit path)
+        let cases: &[(u64, u64, &[&str])] = &[
+            (0, 1, &[]),
+            (
+                2,
+                5,
+                &[
+                    "9da80170723ae9e44c40a54a60cc112881227e421f252e545074aff9547b92a9",
+                    "2344eaa8fe15e8aed52902eaa5dd1ac6869c228d3c5fd801efe7dd565fd5e6bd",
+                    "1ac483f08581ebbb526cbb11891ac61417aee138eacbb15a40b6dc0cbe5a69c8",
+                ],
+            ),
+            (
+                6,
+                7,
+                &[
+                    "e0fdbaaa5767a6798d08c44142b1e08a64ff21f44050aeadd6dc0b60dafe59d2",
+                    "d1284b3d2aa9b337437e6317a939826cbb5bab2be986304a8374711fa038db12",
+                ],
+            ),
+            (
+                0,
+                16,
+                &[
+                    "4576f3ef1d5ae23a4ad5b6c28f52e87c9b77d42c14c0b64cc0c22f646c383a13",
+                    "361233c5ad54405c1725ccdbf427050c1f2af1a25d92e08ca18f3f6ef318caf8",
+                    "95423c2ef941d804a6ffed1bed47bd339c2350651173703e0ea667013f2cfac4",
+                    "fc52510871fd8cc7ba5aaf99e47b991b7f47073f4ee935f3458dbdc856c0ad6d",
+                ],
+            ),
+            (
+                15,
+                16,
+                &[
+                    "d1654966fd7f1f25c26401986d36206b34e4a92c86555557ce645efbbdfe5035",
+                    "5ab30febf0bc24e653fb5420c8fe1f81e799edfef66a57ee1ce0b4152847f14a",
+                    "2988fc3ac205d5c7c88e3ff9a0b6e25cc9dbb1068ba531cb6825c61d8e280191",
+                    "69871fc3acd1180a538e9594cd749a6e308f37a4f0247bad393f28975f987d33",
+                ],
+            ),
+            (
+                9,
+                13,
+                &[
+                    "2a212c95aa87cbfc4700725f6027a5d90b411f4a3229745f8d2cf0f1ba7c4eb7",
+                    "3992ed97d045e067babbeca03bdfaf42c62f2b6abc19a63c62d46f5999ec1f5c",
+                    "bb215edff47683785ac67f086d872b4d7c4e795da62917fd5128b3ac0c190da8",
+                    "69871fc3acd1180a538e9594cd749a6e308f37a4f0247bad393f28975f987d33",
+                ],
+            ),
+        ];
+
+        for &(index, size, path) in cases {
+            let root = unhex(GO_ROOTS[size as usize]);
+            let path = unhex_list(path);
+            let leaf = vec_leaf(index as u8);
+            assert!(
+                verify_log_inclusion(&leaf, index, size, &path, &root),
+                "Go's audit path for leaf {index} of {size} must verify here"
+            );
+            // A forged leaf at the same position must not.
+            assert!(
+                !verify_log_inclusion(&vec_leaf(200), index, size, &path, &root),
+                "a forged leaf verified at {index} of {size}"
+            );
+        }
+    }
+
+    #[test]
+    fn log_consistency_verifies_against_go_vectors() {
+        // (old size, new size, path)
+        let cases: &[(u64, u64, &[&str])] = &[
+            (
+                1,
+                2,
+                &["4576f3ef1d5ae23a4ad5b6c28f52e87c9b77d42c14c0b64cc0c22f646c383a13"],
+            ),
+            (
+                3,
+                7,
+                &[
+                    "13f89c99b70ec2e84a507f143c6bb766fe21e1531013f46cf5797a583c5ece73",
+                    "9da80170723ae9e44c40a54a60cc112881227e421f252e545074aff9547b92a9",
+                    "2344eaa8fe15e8aed52902eaa5dd1ac6869c228d3c5fd801efe7dd565fd5e6bd",
+                    "826066dcfdadeb7fc16e022158923c72f10274dc72392b71653cb57a0335f01b",
+                ],
+            ),
+            (
+                4,
+                8,
+                &["95423c2ef941d804a6ffed1bed47bd339c2350651173703e0ea667013f2cfac4"],
+            ),
+            (
+                6,
+                13,
+                &[
+                    "e0fdbaaa5767a6798d08c44142b1e08a64ff21f44050aeadd6dc0b60dafe59d2",
+                    "1cca1b58c9a0c16478344cac5f523e63497b6ed266d72d47d6a4a0d0e7f61923",
+                    "d1284b3d2aa9b337437e6317a939826cbb5bab2be986304a8374711fa038db12",
+                    "f27cde603e98dcae8240a20464111ed5e53fe5bd595e6f0fddb5b660458b8e99",
+                ],
+            ),
+            (
+                8,
+                16,
+                &["fc52510871fd8cc7ba5aaf99e47b991b7f47073f4ee935f3458dbdc856c0ad6d"],
+            ),
+            (
+                5,
+                16,
+                &[
+                    "1ac483f08581ebbb526cbb11891ac61417aee138eacbb15a40b6dc0cbe5a69c8",
+                    "425d188a138c27f842ae2b4f7ae92bbd58d5ed0e373fed26d0fd4fb679479535",
+                    "1cca1b58c9a0c16478344cac5f523e63497b6ed266d72d47d6a4a0d0e7f61923",
+                    "d1284b3d2aa9b337437e6317a939826cbb5bab2be986304a8374711fa038db12",
+                    "fc52510871fd8cc7ba5aaf99e47b991b7f47073f4ee935f3458dbdc856c0ad6d",
+                ],
+            ),
+        ];
+
+        for &(old, new, path) in cases {
+            let old_root = unhex(GO_ROOTS[old as usize]);
+            let new_root = unhex(GO_ROOTS[new as usize]);
+            let path = unhex_list(path);
+            assert!(
+                verify_log_consistency(old, new, &old_root, &new_root, &path),
+                "Go's consistency proof {old}->{new} must verify here"
+            );
+        }
+    }
+
+    /// THE DEFECT, at the level the client can see it. A rotation grows the log
+    /// by one entry and rewrites nothing, so consistency across it holds. This
+    /// is the case the old map-based proof rejected, wedging every pinned
+    /// client out of every new session.
+    #[test]
+    fn a_rotation_is_just_another_append_and_stays_consistent() {
+        // Sizes 5 -> 16 spans eleven further appends, any of which may be a
+        // rotation: the log tree cannot tell, and does not need to.
+        let path = unhex_list(&[
+            "1ac483f08581ebbb526cbb11891ac61417aee138eacbb15a40b6dc0cbe5a69c8",
+            "425d188a138c27f842ae2b4f7ae92bbd58d5ed0e373fed26d0fd4fb679479535",
+            "1cca1b58c9a0c16478344cac5f523e63497b6ed266d72d47d6a4a0d0e7f61923",
+            "d1284b3d2aa9b337437e6317a939826cbb5bab2be986304a8374711fa038db12",
+            "fc52510871fd8cc7ba5aaf99e47b991b7f47073f4ee935f3458dbdc856c0ad6d",
+        ]);
+        assert!(verify_log_consistency(
+            5,
+            16,
+            &unhex(GO_ROOTS[5]),
+            &unhex(GO_ROOTS[16]),
+            &path
+        ));
+    }
+
+    /// ...and the negative control that keeps it honest: the same proof must
+    /// NOT verify against a root the client never pinned, nor to a different
+    /// new root. This is how a rewritten history is caught.
+    #[test]
+    fn a_consistency_proof_to_an_unpinned_root_is_rejected() {
+        let path = unhex_list(&[
+            "1ac483f08581ebbb526cbb11891ac61417aee138eacbb15a40b6dc0cbe5a69c8",
+            "425d188a138c27f842ae2b4f7ae92bbd58d5ed0e373fed26d0fd4fb679479535",
+            "1cca1b58c9a0c16478344cac5f523e63497b6ed266d72d47d6a4a0d0e7f61923",
+            "d1284b3d2aa9b337437e6317a939826cbb5bab2be986304a8374711fa038db12",
+            "fc52510871fd8cc7ba5aaf99e47b991b7f47073f4ee935f3458dbdc856c0ad6d",
+        ]);
+        // Old root the device never saw (a rewritten history reconstructs to a
+        // different old root, which is exactly this shape).
+        assert!(!verify_log_consistency(
+            5,
+            16,
+            &unhex(GO_ROOTS[6]),
+            &unhex(GO_ROOTS[16]),
+            &path
+        ));
+        // New root that is not the head being offered.
+        assert!(!verify_log_consistency(
+            5,
+            16,
+            &unhex(GO_ROOTS[5]),
+            &unhex(GO_ROOTS[15]),
+            &path
+        ));
+        // Truncation / reordering shows up as a size that does not fit the path.
+        assert!(!verify_log_consistency(
+            5,
+            15,
+            &unhex(GO_ROOTS[5]),
+            &unhex(GO_ROOTS[15]),
+            &path
+        ));
+    }
+
+    #[test]
+    fn log_consistency_rejects_degenerate_ranges() {
+        let r = unhex(GO_ROOTS[4]);
+        assert!(!verify_log_consistency(0, 4, &r, &r, &[]));
+        assert!(!verify_log_consistency(4, 4, &r, &r, &[]));
+        assert!(!verify_log_consistency(5, 4, &r, &r, &[]));
     }
 
     #[test]
