@@ -33,6 +33,8 @@ pub struct UserSyncResult {
     pub profiles_updated: usize,
     pub friendships_inserted: usize,
     pub friendships_removed: usize,
+    /// Blocked users reconciled from the server this cycle.
+    pub blocked_synced: usize,
 }
 
 impl UserSync {
@@ -272,6 +274,94 @@ impl UserSync {
         );
 
         Ok(result)
+    }
+
+    /// Reconcile the server's block list into the local `friendships` table.
+    ///
+    /// Without this a block only ever exists on the device that made it:
+    /// `UserService::block_user` writes the row locally and tells the server,
+    /// and nothing on any *other* device ever asks. Since client-side block
+    /// enforcement reads that table
+    /// (`services::gateway::decryption::sender_is_blocked`), a user who blocks
+    /// someone on their phone would keep receiving that person's DMs on their
+    /// laptop forever.
+    ///
+    /// Two-way, like the friends pass: rows the server no longer reports as
+    /// blocked are cleared, so an unblock on another device also lands. Only
+    /// `Blocked` rows are touched — a `Pending` or `Accepted` friendship is not
+    /// this RPC's business.
+    pub async fn sync_blocked_users(&self) -> Result<usize, SyncError> {
+        use std::collections::HashSet;
+
+        let current_user = self
+            .settings_repo
+            .current_user_id()
+            .map_err(|e| SyncError::Storage(format!("current user: {}", e)))?;
+
+        let mut server_blocked: HashSet<UserId> = HashSet::new();
+        let mut offset: i32 = 0;
+
+        loop {
+            let mut client = self.grpc_pool.user_client();
+            let response = client
+                .list_blocked_users(PAGE_SIZE, offset)
+                .await
+                .map_err(|e| SyncError::Network(format!("list blocked users: {}", e)))?;
+
+            let page_len = response.blocked_users.len();
+
+            for proto_user in &response.blocked_users {
+                match proto_user.id.parse::<UserId>() {
+                    Ok(user_id) => {
+                        server_blocked.insert(user_id);
+                    }
+                    Err(e) => {
+                        // Skip the row rather than abort the pass. Failing the
+                        // whole sync on one bad id would leave every OTHER
+                        // block unenforced, which is the worse direction.
+                        tracing::warn!(error = %e, "Invalid blocked user ID during sync");
+                    }
+                }
+            }
+
+            if (page_len as i32) < PAGE_SIZE {
+                break;
+            }
+            offset += PAGE_SIZE;
+        }
+
+        for user_id in &server_blocked {
+            // FK on users(id) — the blocked user may never have been seen on
+            // this device, which is precisely the case that needs the row.
+            let _ = self.user_repo.ensure_user_exists(user_id);
+            let friendship = Friendship {
+                requester_id: current_user,
+                addressee_id: *user_id,
+                status: FriendshipStatus::Blocked,
+                created_at: Utc::now(),
+            };
+            if self.user_repo.update_friendship(&friendship).is_err() {
+                let _ = self.user_repo.insert_friendship(&friendship);
+            }
+        }
+
+        // Clear local blocks the server no longer reports (an unblock made on
+        // another device).
+        if let Ok(local) = self.user_repo.list_friends(&current_user) {
+            for friendship in local {
+                if friendship.status == FriendshipStatus::Blocked
+                    && friendship.requester_id == current_user
+                    && !server_blocked.contains(&friendship.addressee_id)
+                {
+                    let _ = self
+                        .user_repo
+                        .delete_friendship(&friendship.requester_id, &friendship.addressee_id);
+                }
+            }
+        }
+
+        tracing::info!(blocked = server_blocked.len(), "Blocked-user sync complete");
+        Ok(server_blocked.len())
     }
 
     /// Get the last sync timestamp.

@@ -289,6 +289,30 @@ pub(crate) fn ecies_init_decision(
     }
 }
 
+/// Decide what to do with an envelope the gateway refused because its
+/// authenticated sender is blocked.
+///
+/// Split out from the match arms so both device-inbox paths — sealed sender and
+/// identified sender — answer identically, and so a test can pin the two
+/// properties that matter without standing up a gateway: the envelope IS
+/// drained, and NOTHING is written into the conversation.
+///
+/// Note what this function does not take: no `event_tx`, no `stats`, no
+/// `message_repo` to write to. There is no way for it to surface the message,
+/// which is the point.
+pub(crate) fn blocked_sender_decision(
+    sender_id: UserId,
+    envelope_id: &str,
+    budget: &crate::inbox::ack_policy::RetryBudget,
+) -> crate::inbox::ack_policy::AckDecision {
+    tracing::info!(
+        sender_id = %sender_id,
+        envelope_id,
+        "[INBOX] message from a blocked sender — dropped after decryption"
+    );
+    crate::inbox::ack_policy::drop_and_ack("blocked sender", envelope_id, budget)
+}
+
 /// Shared shape for the system entries the device inbox writes into a DM.
 ///
 /// Delegates to the one builder in [`crate::inbox::ack_policy`] so the four
@@ -1147,6 +1171,13 @@ async fn process_identified_sender_message(
                 );
             }
         }
+        // Blocked. Drain the envelope and say nothing: no InboxEvent (an
+        // event is how the message reaches the UI), no stats bump that would
+        // put it in a badge count, no marker. `messages_processed` is not
+        // incremented either — nothing was processed.
+        Ok(SealedSenderResult::DroppedBlockedSender { sender_id }) => {
+            return blocked_sender_decision(sender_id, &msg.message_guid, retry_budget);
+        }
         // 1:1 self-heal results only arise on the SEALED path
         // (process_incoming_message): the sender identity there is
         // authenticated by the sealed-sender certificate. The identified
@@ -1362,6 +1393,14 @@ async fn process_sealed_sender_message(
         .process_incoming_message(sealed_sender_msg.clone())
         .await
     {
+        // Blocked. This is the arm that matters most: on the sealed path the
+        // sender certificate is the ONLY thing that ever names the sender —
+        // `DeviceMessage.SourceUserID` is empty here — so the server could not
+        // have filtered this envelope even in principle. Drain it, emit
+        // nothing, store nothing.
+        Ok(SealedSenderResult::DroppedBlockedSender { sender_id }) => {
+            return blocked_sender_decision(sender_id, &msg.message_guid, retry_budget);
+        }
         Ok(SealedSenderResult::KeyExchange {
             sender_id,
             conversation_id,

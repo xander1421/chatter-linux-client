@@ -109,6 +109,19 @@ impl SyncEngine {
             }
         }
 
+        // Step 4: Sync the block list. Separate from friends because it is a
+        // separate RPC, and run unconditionally because a failed friends pass
+        // must not stop blocks from landing — the inbound block filter reads
+        // the rows this writes, so skipping it means a blocked sender's
+        // messages are delivered on this device.
+        match self.user_sync.sync_blocked_users().await {
+            Ok(count) => result.users.blocked_synced = count,
+            Err(e) => {
+                tracing::warn!(error = %e, "Blocked-user sync failed — blocks made on \
+                                           another device are not enforced here yet");
+            }
+        }
+
         result.duration_ms = start.elapsed().as_millis() as u64;
 
         // Emit sync complete event

@@ -8,6 +8,7 @@ use crate::error::StorageError;
 use crate::storage::Database;
 use chrono::{DateTime, Utc};
 use rusqlite::params;
+use rusqlite::OptionalExtension;
 use std::sync::Arc;
 
 /// User data repository.
@@ -387,6 +388,32 @@ impl UserRepository {
         }
     }
 
+    /// Has `user_id` blocked `peer_id`?
+    ///
+    /// The durable answer, read from `friendships`. This is the ONLY source
+    /// worth asking: `state::user_state::UserState::blocked_users` is an
+    /// in-memory `HashSet` that nothing populates in production, so consulting
+    /// it answers "no" for every server-side block — a set that fails OPEN.
+    ///
+    /// Direction matters and is deliberately not symmetric. `list_friends`
+    /// matches either column because a friendship is mutual; a block is not.
+    /// The row `block_user` writes is `(user_id = us, friend_id = them)`, so
+    /// only that orientation means "we blocked them". The mirror row means
+    /// *they* blocked *us*, which is their enforcement to do, not ours —
+    /// treating it as ours would silently discard mail from someone the user
+    /// never blocked.
+    pub fn is_blocked(&self, user_id: &UserId, peer_id: &UserId) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        let status: Option<i32> = conn
+            .query_row(
+                "SELECT status FROM friendships WHERE user_id = ?1 AND friend_id = ?2",
+                params![user_id.to_string(), peer_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(status.map(friendship_status_from_i32) == Some(FriendshipStatus::Blocked))
+    }
+
     /// Update a friendship status.
     pub fn update_friendship(&self, friendship: &Friendship) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
@@ -613,5 +640,118 @@ fn friendship_status_from_i32(value: i32) -> FriendshipStatus {
         1 => FriendshipStatus::Accepted,
         2 => FriendshipStatus::Blocked,
         _ => FriendshipStatus::Pending,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::Database;
+
+    fn setup() -> (tempfile::TempDir, UserRepository) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("users.db"), "testpass").unwrap());
+        db.run_migrations().unwrap();
+        (dir, UserRepository::new(db))
+    }
+
+    fn friendship(from: UserId, to: UserId, status: FriendshipStatus) -> Friendship {
+        Friendship {
+            requester_id: from,
+            addressee_id: to,
+            status,
+            created_at: Utc::now(),
+        }
+    }
+
+    /// The durable read that client-side block enforcement stands on.
+    ///
+    /// `UserService::block_user` writes exactly this row. If the read cannot
+    /// see it, every incoming message from a blocked sender is delivered —
+    /// which is the state the in-memory `blocked_users` set leaves the client
+    /// in, and why `is_profile_user_blocked` reports false for server blocks.
+    #[test]
+    fn a_block_written_to_friendships_is_visible_to_is_blocked() {
+        let (_d, repo) = setup();
+        let me = UserId::new();
+        let them = UserId::new();
+        repo.ensure_user_exists(&me).unwrap();
+        repo.ensure_user_exists(&them).unwrap();
+
+        repo.insert_friendship(&friendship(me, them, FriendshipStatus::Blocked))
+            .unwrap();
+
+        assert!(
+            repo.is_blocked(&me, &them).unwrap(),
+            "block_user persisted FriendshipStatus::Blocked and the read says no — \
+             enforcement built on this answer delivers every blocked sender's mail"
+        );
+    }
+
+    /// Fail-open in the other direction is just as bad: dropping mail from
+    /// someone who was never blocked is unrecoverable data loss.
+    #[test]
+    fn a_stranger_and_a_friend_are_not_blocked() {
+        let (_d, repo) = setup();
+        let me = UserId::new();
+        let stranger = UserId::new();
+        let friend = UserId::new();
+        let pending = UserId::new();
+        for u in [&me, &stranger, &friend, &pending] {
+            repo.ensure_user_exists(u).unwrap();
+        }
+
+        repo.insert_friendship(&friendship(me, friend, FriendshipStatus::Accepted))
+            .unwrap();
+        repo.insert_friendship(&friendship(me, pending, FriendshipStatus::Pending))
+            .unwrap();
+
+        assert!(!repo.is_blocked(&me, &stranger).unwrap(), "no row is not a block");
+        assert!(!repo.is_blocked(&me, &friend).unwrap(), "Accepted is not Blocked");
+        assert!(!repo.is_blocked(&me, &pending).unwrap(), "Pending is not Blocked");
+    }
+
+    /// A block is one-directional. `list_friends` matches either column
+    /// because friendship is mutual; reusing that shape here would make "they
+    /// blocked me" silently delete their messages from my inbox.
+    #[test]
+    fn their_block_on_me_does_not_make_them_blocked_by_me() {
+        let (_d, repo) = setup();
+        let me = UserId::new();
+        let them = UserId::new();
+        repo.ensure_user_exists(&me).unwrap();
+        repo.ensure_user_exists(&them).unwrap();
+
+        // Row stored in the mirror orientation: THEY blocked ME.
+        repo.insert_friendship(&friendship(them, me, FriendshipStatus::Blocked))
+            .unwrap();
+
+        assert!(
+            !repo.is_blocked(&me, &them).unwrap(),
+            "a block recorded in the peer's direction is their enforcement, not \
+             ours — reading it as ours drops mail the user never blocked"
+        );
+    }
+
+    /// `block_user` UPDATEs an existing row when one is there, so the common
+    /// path is Accepted -> Blocked rather than a fresh insert.
+    #[test]
+    fn upgrading_an_accepted_friendship_to_blocked_is_visible() {
+        let (_d, repo) = setup();
+        let me = UserId::new();
+        let them = UserId::new();
+        repo.ensure_user_exists(&me).unwrap();
+        repo.ensure_user_exists(&them).unwrap();
+
+        repo.insert_friendship(&friendship(me, them, FriendshipStatus::Accepted))
+            .unwrap();
+        assert!(!repo.is_blocked(&me, &them).unwrap());
+
+        repo.update_friendship(&friendship(me, them, FriendshipStatus::Blocked))
+            .unwrap();
+        assert!(
+            repo.is_blocked(&me, &them).unwrap(),
+            "blocking an existing friend takes the UPDATE branch in block_user"
+        );
     }
 }

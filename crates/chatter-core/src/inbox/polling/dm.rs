@@ -166,6 +166,17 @@ pub async fn poll_dm_mailboxes(
                             .process_dm_message(&msg.encrypted_envelope, secret)
                             .await
                         {
+                            // Blocked sender: the gateway authenticated them
+                            // and refused before parsing, so there is nothing
+                            // to dispatch. Ack anyway — an unacked envelope is
+                            // re-fetched and re-decrypted on every poll.
+                            Ok((_, DmContent::DroppedBlockedSender)) => {
+                                crate::inbox::ack_policy::drop_and_ack(
+                                    "blocked sender",
+                                    &msg.message_id,
+                                    retry_budget,
+                                )
+                            }
                             Ok((sender_id, dm_content)) => {
                                 dispatch_dm_content(
                                     dm_content,
@@ -1056,6 +1067,13 @@ fn dispatch_dm_content(
                 inner_content,
             });
         }
+        // Unreachable in practice — the poll loop routes this to
+        // `ack_policy::drop_and_ack` before it ever calls dispatch, because the
+        // ack decision is the only thing left to make. The arm exists because
+        // this match is exhaustive on purpose, and because "dispatch a blocked
+        // sender's message" must have exactly one possible meaning if a future
+        // caller does reach here: do nothing.
+        DmContent::DroppedBlockedSender => {}
     }
 }
 
@@ -1202,6 +1220,20 @@ async fn try_parse_bootstrap_response(
                     tracing::debug!(
                         peer_id = %peer_id,
                         "Received DataMessage in DM bootstrap path (unexpected)"
+                    );
+                    None
+                }
+                // A blocked peer answering our bootstrap. `None` means "no
+                // shared secret was established", so no conversation keys are
+                // saved and no DmBootstrapCompleted is emitted — the block
+                // holds even against the handshake, not just against messages.
+                // Spelled out rather than left to the wildcard because the
+                // silent outcome and the "unexpected" outcomes below happen to
+                // share a return value for entirely different reasons.
+                crate::services::gateway::SealedSenderResult::DroppedBlockedSender { .. } => {
+                    tracing::info!(
+                        peer_id = %peer_id,
+                        "DM bootstrap response from a blocked sender — dropped"
                     );
                     None
                 }

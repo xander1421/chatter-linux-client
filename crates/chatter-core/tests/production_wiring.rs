@@ -202,6 +202,50 @@ const TABLE: &[Entry] = &[
               follow-up behaviour happens in production even though evaluate_announce \
               is live.",
     },
+    // ---- Blocking: enforced only on the receiving client ------------------
+    Entry {
+        symbol: "sender_is_blocked",
+        defined_in: "chatter-core/src/services/gateway/block_filter.rs",
+        expect: Expect::Wired,
+        why: "The entire client-side block filter for DMs. Blocking CANNOT be enforced \
+              on the server for a sealed send: DeviceMessage.SourceUserID is empty, the \
+              prekey-fetch gate is skipped once a session exists, and that RPC serves \
+              anonymous callers anyway. So this call — from all three inbound paths in \
+              decryption.rs — is the only thing between a blocked sender and the user's \
+              inbox. Lose it and blocking silently becomes decorative for every \
+              conversation that already has a session, which is the OPEN-ITEMS 7a bug.",
+    },
+    Entry {
+        symbol: "is_blocked",
+        defined_in: "chatter-core/src/storage/repositories/user_repo.rs",
+        expect: Expect::Wired,
+        why: "The durable read the filter stands on. If its caller goes away the filter \
+              has to fall back to something, and the something in this codebase is \
+              `state/user_state.rs:27 blocked_users` — an in-memory set nothing \
+              populates in production, which answers `not blocked` for every \
+              server-side block. That set failing open is why `is_profile_user_blocked` \
+              already reports false for real blocks.",
+    },
+    Entry {
+        symbol: "blocked_sender_decision",
+        defined_in: "chatter-core/src/inbox/polling/device.rs",
+        expect: Expect::Wired,
+        why: "Both device-inbox arms route the drop through here so it acks. An \
+              unacked envelope is re-fetched and re-decrypted on every poll forever, so \
+              losing this caller turns a block into a permanent inbox slot for the \
+              blocked sender.",
+    },
+    Entry {
+        symbol: "sync_blocked_users",
+        defined_in: "chatter-core/src/sync/user_sync.rs",
+        expect: Expect::Wired,
+        why: "Called by SyncEngine::sync_all. Without it a block only exists on the \
+              device that made it: block_user writes the local row and tells the \
+              server, and no other device ever asks. The filter reads that table, so \
+              losing this caller means blocking on the phone does nothing on the \
+              laptop. This replaced UserService::list_blocked_users, which did the same \
+              work and had zero production callers.",
+    },
 ];
 
 // ============================================================================

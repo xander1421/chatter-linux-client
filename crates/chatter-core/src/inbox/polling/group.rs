@@ -445,6 +445,20 @@ async fn process_sealed_sender_group_message(
             // the group mailbox. Drop if it lands here — match must stay
             // exhaustive.
         }
+        // A blocked member posted into a group mailbox we poll. Same answer as
+        // everywhere else: nothing was stored, nothing is emitted, and the
+        // envelope is drained by the `AckDecision::Ack` below — leaving it
+        // queued would re-deliver it on every poll for as long as the block
+        // stands. Blocking a person does not remove them from a shared group,
+        // so this arm is reachable in ordinary use, unlike the two above.
+        SealedSenderResult::DroppedBlockedSender { sender_id } => {
+            tracing::info!(
+                group_id = %group_id,
+                message_id = %message_id,
+                sender_id = %sender_id,
+                "Group mailbox message from a blocked sender — dropped after decryption"
+            );
+        }
     }
 
     // Every arm above is a handled outcome.
