@@ -264,6 +264,27 @@ fn backoff(current: Duration) -> Duration {
 static KT_LOG_ROTATION: std::sync::LazyLock<tokio::sync::RwLock<()>> =
     std::sync::LazyLock::new(|| tokio::sync::RwLock::new(()));
 
+/// Take the shared side of [`KT_LOG_ROTATION`] for the rest of the test.
+///
+/// Every test in this file can establish a Signal session at any point — to a
+/// new peer, to a peer's newly linked device, or to one of its own — and every
+/// one of those is refused while the KT log is mid-rotation. So the exclusion
+/// has to be "V53 versus the suite", not "V53 versus one test". Measured on an
+/// otherwise idle host with only V47 guarded: V9/V10/V12/V13 reported devices
+/// as dark, with their prekey-bundle fetches bracketed by
+/// `GetConsistencyProof: log not append-only (fork detected server-side)` in
+/// the server log at 04:55:28-34 on 2026-08-03.
+///
+/// The binding is macro-hygienic: it holds the guard to the end of the test and
+/// is not nameable from the test body, so it cannot be dropped early by
+/// accident. V53 deliberately does NOT use it — it takes the exclusive side, and
+/// tokio's `RwLock` is not reentrant.
+macro_rules! kt_stable {
+    () => {
+        let _kt_stable = KT_LOG_ROTATION.read().await;
+    };
+}
+
 /// Establish a mutual friendship A -> B, waiting on SERVER-OBSERVABLE
 /// CONDITIONS instead of sleeping.
 ///
@@ -375,6 +396,36 @@ async fn befriend(
         "friendship {requester_id} <-> {accepter_id} was accepted but never became a mutual \
          accepted friendship on the server within {CONDITION_TIMEOUT:?}"
     );
+
+    // (4) let the accept's BACKGROUND work land before returning.
+    //
+    // Accepting spawns a DM-session prewarm and a profile-key handshake
+    // (client/mod.rs:2706-2729), and both put sealed envelopes in the other
+    // party's device inboxes. The old `sleep(2) + sleep(3)` absorbed them by
+    // accident; waiting only on the friendship made `befriend` FASTER than that
+    // and let those envelopes land after a test had already snapshotted
+    // `device_messages`. They then read as the property under test: V12 saw
+    // one on A's own sending device and called the self-sync skip broken, V19
+    // saw one on A's linked device and called own-typing self-sync broken —
+    // both from an envelope neither test sent.
+    //
+    // The prewarm's product of record is the Signal session, so wait for that.
+    // Best effort on purpose: it is a no-op on the higher-UUID side of the
+    // Sesame tie-break, so that side only gets a session once the other side's
+    // prewarm message arrives, and the prewarm itself is explicitly best-effort
+    // (its failure is a `tracing::warn!`, not an error). Tests that REQUIRE the
+    // session assert on it themselves — V3 does.
+    let settle = Instant::now() + Duration::from_secs(30);
+    let a_addr = format!("{accepter_id}:1");
+    let b_addr = format!("{requester_id}:1");
+    while Instant::now() < settle {
+        let a_sess = matches!(requester.signal().key_store().load_session(&a_addr), Ok(Some(_)));
+        let b_sess = matches!(accepter.signal().key_store().load_session(&b_addr), Ok(Some(_)));
+        if a_sess && b_sess {
+            break;
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
 }
 
 /// Wait until `receiver` has actually INSTALLED `sender`'s Sender Key for
@@ -456,6 +507,35 @@ async fn wait_for_new_envelopes(
     }
 }
 
+/// Snapshot `uid`'s device-inbox row ids once the queue has stopped moving.
+///
+/// The strict self-sync tests (V12, V13, V19) diff `device_messages` around one
+/// send and then assert on the EXACT composition of the new rows — "A's own
+/// sending device was skipped", "own typing was not echoed". That diff is only
+/// as honest as its baseline: any envelope still in flight when the baseline is
+/// taken is attributed to the send.
+///
+/// Accepting a friend request spawns a DM-session prewarm and a profile-key
+/// handshake (client/mod.rs:2706-2729), each of which seals an envelope to
+/// every one of the peer's devices. The old `sleep(2) + sleep(3)` absorbed them
+/// by accident. Waiting for a quiet queue does it on purpose: two consecutive
+/// identical reads a second apart, up to 30s, then the set is the baseline.
+///
+/// This cannot mask the property under test — the send has not happened yet
+/// when this returns.
+async fn quiesced_row_ids(uid: &UserId) -> std::collections::HashSet<String> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut prev = row_ids(uid);
+    loop {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let now = row_ids(uid);
+        if now == prev || Instant::now() >= deadline {
+            return now;
+        }
+        prev = now;
+    }
+}
+
 /// Wait until a NEW row addressed to `device_id` appears in `uid`'s device
 /// inbox, then return every new row as of that instant.
 ///
@@ -532,10 +612,41 @@ async fn wait_for_stored_text(
 
 async fn register_and_start(client: &Arc<ChatterClient>, username: &str, display: &str) -> UserId {
     client.connect().await.expect("connect failed");
-    let r = client
-        .register(username, PASSWORD, display, "validated", None, Some(PIN))
-        .await
-        .expect("registration failed");
+
+    // Retry a registration that the SHARED DEV STACK could not serve.
+    //
+    // Registration is fixture setup here — no test in this file asserts on it
+    // succeeding first time — and the two failures seen are both the dev
+    // infrastructure being momentarily unavailable rather than anything the
+    // client did: `Failed to start registration workflow ... context deadline
+    // exceeded` (Temporal) and `failed to store challenge in Redis: i/o
+    // timeout`. One such window took 31 of 53 tests down at once. A user hitting
+    // that would press the button again; so does this.
+    //
+    // Deliberately narrow: only those two infrastructure signatures are
+    // retried. A rejected registration — taken username, weak PIN, rate limit —
+    // is a real answer from the server and still fails immediately.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut wait = Duration::from_secs(1);
+    let r = loop {
+        match client
+            .register(username, PASSWORD, display, "validated", None, Some(PIN))
+            .await
+        {
+            Ok(r) => break r,
+            Err(e) => {
+                let msg = format!("{e:?}");
+                let infra = msg.contains("failed to start registration")
+                    || msg.contains("failed to store challenge");
+                if !infra || Instant::now() >= deadline {
+                    panic!("registration failed: {e:?}");
+                }
+                eprintln!("  register({username}): dev stack unavailable ({msg}); retrying");
+                tokio::time::sleep(wait).await;
+                wait = backoff(wait);
+            }
+        }
+    };
     if let Err(e) = client.start().await {
         if !matches!(e, chatter_core::client::ClientError::AlreadyStarted) {
             panic!("client.start failed: {e:?}");
@@ -740,6 +851,7 @@ fn row_ids(uid: &UserId) -> std::collections::HashSet<String> {
 #[tokio::test]
 async fn v0_detector_self_check() {
     skip_if_no_server!();
+    kt_stable!();
 
     let marker = unique_marker();
 
@@ -794,6 +906,7 @@ async fn v0_detector_self_check() {
 #[tokio::test]
 async fn v1_server_never_holds_plaintext() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -956,6 +1069,7 @@ async fn v1_server_never_holds_plaintext() {
 #[tokio::test]
 async fn v2_corrupted_ciphertext_never_decrypts() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -1157,6 +1271,7 @@ async fn v2_corrupted_ciphertext_never_decrypts() {
 #[tokio::test]
 async fn v3_ratchet_advances_every_message() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -1299,6 +1414,7 @@ async fn v3_ratchet_advances_every_message() {
 #[tokio::test]
 async fn v4_sealed_sender_hides_sender_from_server() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -1414,6 +1530,7 @@ async fn v4_sealed_sender_hides_sender_from_server() {
 #[tokio::test]
 async fn v5_kyber_is_load_bearing_not_decorative() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -1734,6 +1851,7 @@ async fn v5_kyber_is_load_bearing_not_decorative() {
 #[tokio::test]
 async fn v6_delivered_message_key_is_destroyed() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -2007,6 +2125,7 @@ async fn v6_delivered_message_key_is_destroyed() {
 #[tokio::test]
 async fn v7_pqopk_pool_is_seeded_and_consumed() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let count = |sql: String| -> i64 { psql(&sql).trim().parse().unwrap_or(-1) };
@@ -2149,6 +2268,7 @@ async fn v7_pqopk_pool_is_seeded_and_consumed() {
 #[tokio::test]
 async fn v8_linked_device_pqopk_pool_is_seeded_and_consumed() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let count = |sql: String| -> i64 { psql(&sql).trim().parse().unwrap_or(-1) };
@@ -2331,6 +2451,7 @@ async fn v8_linked_device_pqopk_pool_is_seeded_and_consumed() {
 #[tokio::test]
 async fn v9_linked_device_receives_and_decrypts_dm() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- B: primary registers, then a REAL secondary device links -----------
@@ -2673,6 +2794,7 @@ async fn v9_linked_device_receives_and_decrypts_dm() {
 #[tokio::test]
 async fn v10_dm_fans_out_to_three_devices() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- B: primary registers, then TWO real secondary devices link ---------
@@ -3028,6 +3150,7 @@ async fn v10_dm_fans_out_to_three_devices() {
 #[tokio::test]
 async fn v11_device_linked_mid_conversation_receives_next_message() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- B's primary registers. ONE device, for now. ------------------------
@@ -3402,6 +3525,7 @@ async fn v11_device_linked_mid_conversation_receives_next_message() {
 #[tokio::test]
 async fn v12_dm_from_primary_syncs_to_senders_own_linked_device() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- A: primary registers, then a REAL secondary device links -----------
@@ -3469,8 +3593,8 @@ async fn v12_dm_from_primary_syncs_to_senders_own_linked_device() {
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     // ---- snapshot BEFORE the send, scoped to THIS run's users --------------
-    let before_a = row_ids(&uid_a);
-    let before_b = row_ids(&uid_b);
+    let before_a = quiesced_row_ids(&uid_a).await;
+    let before_b = quiesced_row_ids(&uid_b).await;
     println!("  device_messages rows before the send: A={} B={}", before_a.len(), before_b.len());
 
     let marker = unique_marker();
@@ -3699,6 +3823,7 @@ async fn v12_dm_from_primary_syncs_to_senders_own_linked_device() {
 #[tokio::test]
 async fn v13_self_synced_dm_files_as_outgoing_in_the_recipient_conversation() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- A: primary registers, then a REAL secondary device links -----------
@@ -3753,8 +3878,8 @@ async fn v13_self_synced_dm_files_as_outgoing_in_the_recipient_conversation() {
     drop(client_b);
     tokio::time::sleep(Duration::from_secs(3)).await;
 
-    let before_a = row_ids(&uid_a);
-    let before_b = row_ids(&uid_b);
+    let before_a = quiesced_row_ids(&uid_a).await;
+    let before_b = quiesced_row_ids(&uid_b).await;
 
     let marker = unique_marker();
     println!("\n  marker plaintext: {marker}");
@@ -4229,6 +4354,7 @@ async fn v15_deliver(
 #[tokio::test]
 async fn v15_post_compromise_security_heals_after_dh_ratchet() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -4577,6 +4703,7 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
 #[tokio::test]
 async fn v16_message_roundtrip_fidelity() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -4943,6 +5070,7 @@ async fn setup_a_linked_b(tag: &str) -> AbFixture {
 #[tokio::test]
 async fn v17_self_synced_reaction_attaches_to_the_right_message_as_ours() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let fx = setup_a_linked_b("v17").await;
@@ -4989,7 +5117,7 @@ async fn v17_self_synced_reaction_attaches_to_the_right_message_as_ours() {
     fx.client_b.shutdown().await;
     tokio::time::sleep(Duration::from_secs(3)).await;
 
-    let before_a = row_ids(&uid_a);
+    let before_a = quiesced_row_ids(&uid_a).await;
 
     // THE ACTION UNDER TEST: A reacts from the PRIMARY to B's message.
     fx.client_ap
@@ -5075,6 +5203,7 @@ async fn v17_self_synced_reaction_attaches_to_the_right_message_as_ours() {
 #[tokio::test]
 async fn v18_self_synced_read_receipt_clears_unread_on_linked_device() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let fx = setup_a_linked_b("v18").await;
@@ -5126,7 +5255,7 @@ async fn v18_self_synced_read_receipt_clears_unread_on_linked_device() {
     fx.client_b.shutdown().await;
     tokio::time::sleep(Duration::from_secs(3)).await;
 
-    let before_a = row_ids(&uid_a);
+    let before_a = quiesced_row_ids(&uid_a).await;
 
     // THE ACTION UNDER TEST: A reads B's message from the PRIMARY.
     fx.client_ap
@@ -5200,6 +5329,7 @@ async fn v18_self_synced_read_receipt_clears_unread_on_linked_device() {
 #[tokio::test]
 async fn v19_own_typing_is_not_self_synced() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let fx = setup_a_linked_b("v19").await;
@@ -5211,8 +5341,8 @@ async fn v19_own_typing_is_not_self_synced() {
     fx.client_b.shutdown().await;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    let before_a = row_ids(&uid_a);
-    let before_b = row_ids(&uid_b);
+    let before_a = quiesced_row_ids(&uid_a).await;
+    let before_b = quiesced_row_ids(&uid_b).await;
 
     // THE ACTION UNDER TEST: A sends a typing indicator to B from the primary.
     fx.client_ap
@@ -5306,6 +5436,7 @@ async fn v20_delete_for_everyone_actually_deletes_on_the_recipient() {
     use chatter_core::domain::message::ConversationType;
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- A and B register and befriend --------------------------------------
@@ -5474,6 +5605,7 @@ async fn v21_group_sender_key_fanout_and_plaintext_default() {
     use chatter_core::domain::channel::{ChannelConfig, ChannelType};
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- A, B, C register + start -------------------------------------------
@@ -5922,6 +6054,7 @@ use chatter_core::domain::ids::AttachmentId;
 #[tokio::test]
 async fn v22_attachment_binary_fidelity() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -6157,6 +6290,7 @@ async fn v22_attachment_binary_fidelity() {
 #[tokio::test]
 async fn v23_message_ordering_reorder_and_gap() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -6618,6 +6752,7 @@ async fn v26_first_group_message_self_heals_across_skdm_race() {
     use chatter_core::domain::channel::ChannelType;
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- A, B, C register + start -------------------------------------------
@@ -6985,6 +7120,7 @@ async fn v27_blocking_stops_message_delivery() {
     use chatter_core::domain::message::ConversationType;
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- A and B register and befriend --------------------------------------
@@ -7107,6 +7243,7 @@ async fn v27_blocking_stops_message_delivery() {
 #[tokio::test]
 async fn v28_delete_account_actually_deletes_server_side() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir = tempfile::tempdir().unwrap();
@@ -7180,6 +7317,7 @@ async fn v29_disappearing_messages_arm_the_ttl() {
     use chatter_core::domain::channel::ChannelType;
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- A + B register + start ---------------------------------------------
@@ -7349,6 +7487,7 @@ async fn v30_group_management_changes_propagate() {
     use chatter_core::domain::channel::{ChannelType, MemberRole};
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- A, B, C register + start (start() launches the channel event stream) ----
@@ -7541,6 +7680,7 @@ async fn v30_group_management_changes_propagate() {
 #[tokio::test]
 async fn v31_friends_user_search_resolves_exact_username() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -7609,6 +7749,7 @@ async fn v31_friends_user_search_resolves_exact_username() {
 #[tokio::test]
 async fn v32_avatar_change_uploads_encrypted_avatar_server_side() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir = tempfile::tempdir().unwrap();
@@ -7692,6 +7833,7 @@ async fn v33_channel_mute_persists_to_membership() {
     use chatter_core::domain::channel::ChannelType;
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir = tempfile::tempdir().unwrap();
@@ -7775,6 +7917,7 @@ async fn v34_presence_reaches_friends_not_strangers() {
     use chatter_core::domain::user::PresenceStatus;
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- A, B, C register and start -----------------------------------------
@@ -7928,6 +8071,7 @@ async fn v35_blocking_stops_group_message_delivery() {
     use chatter_core::domain::channel::ChannelType;
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- A, B, C, D register + start ----------------------------------------
@@ -8158,6 +8302,7 @@ async fn v36_disappearing_messages_expire_locally() {
     use chatter_core::domain::message::ConversationType;
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // NOTE: this leans on the REAL spawned reaper (default 10s cadence, see
@@ -8544,6 +8689,7 @@ async fn v37_kt_query_privacy_vrf_verified_and_forgery_still_rejected() {
 #[tokio::test]
 async fn v38_friend_fetches_and_decrypts_your_avatar_byte_exact() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- A and B register and start (inbox polling live on both) -----------
@@ -8772,6 +8918,7 @@ async fn a_reads_bs_message(
 #[tokio::test]
 async fn v39_read_receipt_toggle_gates_the_send() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -8889,6 +9036,7 @@ async fn v39_read_receipt_toggle_gates_the_send() {
 #[tokio::test]
 async fn v40_typing_toggle_gates_the_send() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -9003,6 +9151,7 @@ async fn v41_group_reply_carries_quote_to_recipient() {
     use chatter_core::prelude::QuoteIntent;
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     // ---- A, B register + start ----------------------------------------------
@@ -9229,6 +9378,7 @@ async fn v41_group_reply_carries_quote_to_recipient() {
 #[tokio::test]
 async fn v42_dm_read_receipt_live_refreshes_sender() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -9312,6 +9462,7 @@ async fn v42_dm_read_receipt_live_refreshes_sender() {
 #[tokio::test]
 async fn v43_profile_name_change_live_pushes_to_friends() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -9405,6 +9556,7 @@ async fn v44_thread_reply_groups_under_root_on_both_sides() {
     use chatter_core::domain::channel::ChannelType;
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -9553,6 +9705,7 @@ async fn v45_reactions_edits_pins_roundtrip_in_channel() {
     use chatter_core::domain::channel::ChannelType;
 
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -9702,6 +9855,7 @@ async fn v45_reactions_edits_pins_roundtrip_in_channel() {
 #[tokio::test]
 async fn v46_reactions_edits_pins_roundtrip_in_dm() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -9838,6 +9992,7 @@ async fn v46_reactions_edits_pins_roundtrip_in_dm() {
 #[tokio::test]
 async fn v47_desynced_dm_session_self_heals_via_decryption_error_message() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
     // Opt-in tracing for debugging this test: V47_TRACE=1 to enable.
     if std::env::var("V47_TRACE").is_ok() {
@@ -9856,14 +10011,6 @@ async fn v47_desynced_dm_session_self_heals_via_decryption_error_message() {
 
     let uid_a = register_and_start(&client_a, &unique_user("v47a"), "V47 Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("v47b"), "V47 Bob").await;
-
-    // Held from before A pins a KT tree head until after m3 re-establishes the
-    // session. This test is the only one that establishes a FRESH Signal
-    // session late in its own run, which is exactly the window a concurrent
-    // identity-key rotation (V53) poisons. See `KT_LOG_ROTATION`: this is a
-    // product defect, not a timing fudge, and the guard is deliberately scoped
-    // to these two tests so the defect still bites anywhere it recurs.
-    let kt_rotation = KT_LOG_ROTATION.read().await;
 
     befriend(&client_a, &client_b, uid_a, uid_b).await;
 
@@ -9989,7 +10136,6 @@ async fn v47_desynced_dm_session_self_heals_via_decryption_error_message() {
         stored.iter().any(|m| m.as_text() == Some(m3.as_str())),
         "ROUND TRIP FAILED: m3 event fired but B never stored the message text"
     );
-    drop(kt_rotation);
 
     println!(
         "\n  V47 PASS — a wedged 1:1 Signal session SELF-HEALS: B (desynced) reported the \
@@ -10035,6 +10181,7 @@ async fn v47_desynced_dm_session_self_heals_via_decryption_error_message() {
 #[tokio::test]
 async fn v48_username_link_resolves_privately_end_to_end() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -10213,6 +10360,7 @@ fn marker_message_row(db_path: &std::path::Path, marker: &str) -> Vec<String> {
 #[tokio::test]
 async fn v50_local_message_backup_round_trips_encrypted() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -10338,6 +10486,7 @@ async fn v50_local_message_backup_round_trips_encrypted() {
 #[tokio::test]
 async fn v51_server_message_backup_restores_on_fresh_install_via_pin() {
     skip_if_no_server!();
+    kt_stable!();
     no_keyring_prompts();
 
     let dir_a = tempfile::tempdir().unwrap();
@@ -10496,6 +10645,7 @@ async fn v51_server_message_backup_restores_on_fresh_install_via_pin() {
 #[tokio::test]
 async fn v52_reinstall_recovers_the_original_identity_key() {
     skip_if_no_server!();
+    kt_stable!();
     println!("\n=== V52: reinstall with PIN recovers the ORIGINAL identity key ===\n");
 
     let user = unique_user("v52ident");
@@ -10590,6 +10740,8 @@ async fn v52_reinstall_recovers_the_original_identity_key() {
 #[tokio::test]
 async fn v53_identity_reset_publishes_a_key_the_server_serves() {
     skip_if_no_server!();
+    // NO `kt_stable!()` here: this test takes the EXCLUSIVE side of
+    // KT_LOG_ROTATION below, and tokio's RwLock is not reentrant.
     println!("\n=== V53: no backup → told, not silently re-keyed; explicit reset publishes ===\n");
 
     let user = unique_user("v53reset");
