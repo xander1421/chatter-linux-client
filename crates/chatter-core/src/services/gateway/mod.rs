@@ -3,6 +3,7 @@
 //! Central message routing and validation pipeline.
 //! Decrypts sealed sender messages, parses DataMessage proto, and stores to repository.
 
+pub mod block_filter;
 pub mod builders;
 mod decryption;
 pub mod inbound;

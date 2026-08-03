@@ -983,38 +983,10 @@ impl UserService {
         Ok(())
     }
 
-    /// List blocked users.
-    pub async fn list_blocked_users(&self, limit: u32, offset: u32) -> Result<Vec<UserId>, UserError> {
-        let current_user = self.settings_repo.current_user_id()?;
-
-        let mut user_client = self.user_client();
-        let response = user_client
-            .list_blocked_users(limit as i32, offset as i32)
-            .await?;
-
-        let mut blocked_ids = Vec::with_capacity(response.blocked_users.len());
-        for proto_user in &response.blocked_users {
-            let user_id: UserId = proto_user
-                .id
-                .parse()
-                .map_err(|_| UserError::InvalidInput("invalid blocked user ID".to_string()))?;
-
-            let friendship = Friendship {
-                requester_id: current_user,
-                addressee_id: user_id,
-                status: FriendshipStatus::Blocked,
-                created_at: Utc::now(),
-            };
-
-            if self.user_repo.update_friendship(&friendship).is_err() {
-                let _ = self.user_repo.insert_friendship(&friendship);
-            }
-
-            blocked_ids.push(user_id);
-        }
-
-        Ok(blocked_ids)
-    }
+    // Pulling the server's block list into the local `friendships` table is
+    // `UserSync::sync_blocked_users` (`sync/user_sync.rs`), which the sync
+    // engine runs every cycle. A duplicate of it lived here with no caller at
+    // all, so a block made on another device never reached this one.
 
     // ========================================================================
     // Local Query Methods

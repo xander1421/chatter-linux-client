@@ -41,6 +41,7 @@ pub(crate) fn unratcheted_plaintext_rejected(sender: &str) -> ServiceError {
     ))
 }
 
+use super::block_filter::sender_is_blocked;
 use super::{CallHangupReason, DecryptResult, DmContent, MessageGateway, SealedSenderResult};
 use super::inbound::content_type_name;
 
@@ -271,6 +272,20 @@ impl MessageGateway {
         let sender_id: UserId = sender_address.name().parse().map_err(|e| {
             ServiceError::Validation(format!("Invalid sender ID in Signal address: {}", e))
         })?;
+
+        // The sender is authenticated as of the line above and nothing has been
+        // parsed yet, so this is the only place the block can be enforced
+        // without either trusting an unauthenticated claim or letting the
+        // message act first. One check here covers DataMessage, ControlContent
+        // (reactions/typing/receipts/edits/pins), KeyExchange, SenderKeyRequest,
+        // SKDM and mailbox announcements.
+        if sender_is_blocked(&self.user_repo, &self.settings_repo, &sender_id)? {
+            tracing::info!(
+                sender_id = %sender_id,
+                "GATEWAY: dropping sealed sender message from a blocked sender"
+            );
+            return Ok(SealedSenderResult::DroppedBlockedSender { sender_id });
+        }
 
         tracing::info!(
             sender_id = %sender_id,
@@ -648,6 +663,18 @@ impl MessageGateway {
         sender_id: &UserId,
         plaintext: &[u8],
     ) -> Result<SealedSenderResult, ServiceError> {
+        // Same refusal as the sealed path, before anything is parsed. The
+        // sender here is not asserted by the server: `plaintext` came out of
+        // the Double Ratchet session filed under this address, so only someone
+        // holding that session could have produced it.
+        if sender_is_blocked(&self.user_repo, &self.settings_repo, sender_id)? {
+            tracing::info!(
+                sender_id = %sender_id,
+                "GATEWAY: dropping identified-sender message from a blocked sender"
+            );
+            return Ok(SealedSenderResult::DroppedBlockedSender { sender_id: *sender_id });
+        }
+
         // First try to parse as Content proto (preferred, contains KeyExchange)
         if let Ok(content_proto) = Content::decode(plaintext) {
             // Check for KeyExchange
@@ -729,6 +756,19 @@ impl MessageGateway {
         let sender_id: UserId = sender_address.name().parse().map_err(|e| {
             ServiceError::Validation(format!("Invalid sender ID in Signal address: {}", e))
         })?;
+
+        // Block check before any parse, as on the other two paths. The mailbox
+        // this envelope arrived in belongs to one peer, but the sealed sender
+        // certificate names who actually sent it — so the authenticated
+        // `sender_id` is what gets checked, not the mailbox owner.
+        if sender_is_blocked(&self.user_repo, &self.settings_repo, &sender_id)? {
+            plaintext.zeroize();
+            tracing::info!(
+                sender_id = %sender_id,
+                "DM_DECRYPT: dropping mailbox message from a blocked sender"
+            );
+            return Ok((sender_id, DmContent::DroppedBlockedSender));
+        }
 
         // Try to parse as Content proto first (preferred)
         if let Ok(content_proto) = Content::decode(plaintext.as_slice()) {
@@ -1201,3 +1241,4 @@ impl MessageGateway {
         }
     }
 }
+

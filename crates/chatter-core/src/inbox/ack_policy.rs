@@ -590,6 +590,35 @@ pub fn decide_after_malformed(
     )
 }
 
+/// The table's last row — "duplicate / self-echo / blocked": ack, no marker.
+///
+/// Nothing failed here. The envelope decrypted, the sender was authenticated,
+/// and the client then decided not to act on it. That is a different animal
+/// from every other outcome in this module, and it needs saying in one place
+/// because the two obvious ways of writing it inline are both bugs:
+///
+/// - **Not acking** leaves the envelope on the server, so the next poll fetches
+///   it, decrypts it, drops it, and leaves it again — forever, for as long as
+///   the block stands. A blocked sender would get a permanent foothold in the
+///   recipient's inbox for free.
+/// - **Writing a marker** would put a "message could not be delivered" entry in
+///   the conversation, which is exactly the notification the user blocked this
+///   person to stop receiving. Nothing was lost, so nothing is reported.
+///
+/// The budget entry goes too: the envelope is about to be destroyed, so its
+/// retain counter can never be consulted again and keeping it leaks.
+#[must_use]
+pub fn drop_and_ack(reason: &str, envelope_id: &str, budget: &RetryBudget) -> AckDecision {
+    tracing::info!(
+        envelope_id,
+        reason,
+        "[INBOX] envelope deliberately dropped — draining it, with no marker \
+         (nothing was lost)"
+    );
+    budget.forget(envelope_id);
+    AckDecision::Ack
+}
+
 /// Convenience: the marker target for a 1:1 server DM with `peer`.
 #[must_use]
 pub fn dm_target(peer: UserId, envelope_ts_ns: u64) -> MarkerTarget {

@@ -271,6 +271,14 @@ pub enum DmContent {
         conversation_id: Vec<u8>,
         inner_content: Box<crate::proto::content_v1::Content>,
     },
+    /// Not content at all: the authenticated sender is blocked, so the
+    /// envelope was never parsed. The DM-mailbox twin of
+    /// [`SealedSenderResult::DroppedBlockedSender`] — same decision, same
+    /// point in the pipeline, a different return shape because
+    /// `process_dm_message` hands back content rather than an outcome.
+    ///
+    /// Dispatching this must do nothing at all; the caller still acks.
+    DroppedBlockedSender,
 }
 
 // =============================================================================
@@ -411,5 +419,28 @@ pub enum SealedSenderResult {
         peer_id: UserId,
         peer_device_id: u32,
         archived: bool,
+    },
+    /// The sender is blocked. The envelope decrypted and the sender was
+    /// authenticated — by the sealed sender certificate, or by holding the
+    /// Double Ratchet session for the address it claimed — and the gateway
+    /// then refused to act on it. Nothing was parsed, nothing was stored,
+    /// nothing is reported to the user.
+    ///
+    /// This is the whole of client-side block enforcement for DMs, and it has
+    /// to live here rather than on the server. Blocking a sealed send server-
+    /// side would require binding a sender identity to it, which is precisely
+    /// the guarantee sealed sender exists to remove: `DeviceMessage`'s
+    /// `SourceUserID` is empty on that path, the prekey RPC that used to gate
+    /// it is skipped entirely once a session exists, and it answers anonymous
+    /// callers anyway. Signal-Server holds no block list for the same reason;
+    /// Signal-Desktop drops in `MessageReceiver` *after* sealed-sender
+    /// decryption, which is this point.
+    ///
+    /// The caller MUST still acknowledge the envelope — see
+    /// [`crate::inbox::ack_policy::drop_and_ack`]. Leaving it queued means
+    /// re-fetching and re-decrypting it on every poll for as long as the block
+    /// stands.
+    DroppedBlockedSender {
+        sender_id: UserId,
     },
 }

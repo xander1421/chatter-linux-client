@@ -800,3 +800,67 @@ fn a_replayed_envelope_does_not_stack_markers() {
          per replay would spam the conversation"
     );
 }
+
+// ===========================================================================
+// LOOP 1c — the blocked sender
+//
+// Blocking is enforced on the RECEIVING client, after sealed-sender
+// decryption, because it cannot be enforced anywhere else: `DeviceMessage`
+// carries no `source_user_id` on the sealed path, the prekey-fetch gate is
+// skipped entirely once a session exists, and that RPC answers anonymous
+// callers anyway. So the drop lands here, and it has to be a drop with two
+// halves that are easy to get wrong in opposite directions — ack (or the
+// envelope replays forever) and record nothing (or the block leaks a
+// notification to the user who asked not to hear from this person).
+// ===========================================================================
+
+#[test]
+fn a_blocked_senders_message_is_drained_from_the_server() {
+    use crate::inbox::ack_policy::RetryBudget;
+
+    let budget = RetryBudget::new();
+    // The envelope has been delivered once already and is being retained —
+    // exactly the state a repeat sender puts us in.
+    budget.record_attempt("envelope-blocked-1", crate::inbox::ack_policy::now_ns());
+
+    let decision = super::device::blocked_sender_decision(
+        UserId::new(),
+        "envelope-blocked-1",
+        &budget,
+    );
+
+    assert_eq!(
+        decision,
+        AckDecision::Ack,
+        "not acking leaves the envelope on the server, so every poll re-fetches \
+         and re-decrypts it for as long as the block stands — a blocked sender \
+         would hold a permanent slot in the recipient's inbox"
+    );
+    assert_eq!(
+        budget.tracked(),
+        0,
+        "the envelope is about to be destroyed, so its retain counter can never \
+         be consulted again — keeping it leaks one entry per blocked message"
+    );
+}
+
+#[test]
+fn a_blocked_senders_message_leaves_nothing_behind_in_the_conversation() {
+    use crate::inbox::ack_policy::RetryBudget;
+
+    let (_d, repo) = repo();
+    let sender = UserId::new();
+
+    let decision =
+        super::device::blocked_sender_decision(sender, "envelope-blocked-2", &RetryBudget::new());
+
+    assert_eq!(decision, AckDecision::Ack);
+    assert!(
+        repo.list_for_conversation(&sender.into(), &ConversationType::ServerDm, None, 50)
+            .expect("list conversation")
+            .is_empty(),
+        "a blocked sender's message must not be stored and must not leave a \
+         delivery-issue marker — nothing was lost, and a marker is itself a \
+         notification from the person the user blocked"
+    );
+}
