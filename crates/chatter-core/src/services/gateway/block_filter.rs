@@ -36,7 +36,8 @@ use crate::storage::repositories::UserRepository;
 /// message has already had an effect.
 ///
 /// Reads the durable `friendships` table, which `UserService::block_user`
-/// writes and `UserSync::sync_blocked_users` refreshes at login. It
+/// writes and `UserSync::sync_blocked_users` refreshes every sync cycle (the
+/// sync engine starts with the client and re-runs periodically). It
 /// deliberately does NOT consult `state::user_state::UserState::blocked_users`
 /// — that is an in-memory `HashSet` nothing populates in production, so it
 /// answers "not blocked" for every server-side block, and a fail-open set is

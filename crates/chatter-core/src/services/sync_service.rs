@@ -55,7 +55,16 @@ impl SyncService {
     ///
     /// Returns a JoinHandle for the background task.
     /// The task runs until `stop()` is called.
-    pub fn start(&self) -> tokio::task::JoinHandle<()> {
+    ///
+    /// Called from `ChatterClient::start`, which every authenticated entry
+    /// path funnels through (login, register, link-device, restored session).
+    /// This is the ONLY production driver of `SyncEngine` — if this loses its
+    /// caller, every sync pass dies with it, including
+    /// `UserSync::sync_blocked_users`, which the inbound block filter depends
+    /// on for blocks made on other devices. `tests/production_wiring.rs` pins
+    /// it. (The distinctive name over plain `start` is what makes that pin
+    /// possible — the wiring check is textual.)
+    pub fn start_background_sync(&self) -> tokio::task::JoinHandle<()> {
         let engine = Arc::clone(&self.engine);
         let shutdown_rx = self.shutdown_tx.subscribe();
         tokio::spawn(async move {
