@@ -54,7 +54,15 @@ const SERVER_URL: &str = "http://localhost:50051";
 fn server_url() -> String {
     std::env::var("CHATTER_SERVER_URL").unwrap_or_else(|_| SERVER_URL.to_string())
 }
-const REPO: &str = "/home/alex/Documents/chatter";
+/// The server repo checkout, where `.env` and the docker-compose stack live.
+/// The shell helpers below run `docker compose exec psql/redis-cli` from this
+/// directory. Overridable via `CHATTER_REPO_DIR` because a hardcoded path only
+/// exists on one machine — everywhere else every DB-inspecting proof dies at
+/// spawn, which looks like 37 protocol failures and is actually one bad path.
+fn repo_dir() -> String {
+    std::env::var("CHATTER_REPO_DIR")
+        .unwrap_or_else(|_| "/home/alex/Documents/chatter".to_string())
+}
 const EVENT_TIMEOUT: Duration = Duration::from_secs(30);
 // Must clear crypto::svr::MIN_PIN_ENTROPY_BITS (30.0).
 const PIN: &str = "Va1idPin!x9";
@@ -70,7 +78,7 @@ fn sh(cmd: &str) -> String {
     let out = std::process::Command::new("sh")
         .arg("-c")
         .arg(cmd)
-        .current_dir(REPO)
+        .current_dir(repo_dir())
         .output()
         .expect("shell command failed to spawn");
     let mut s = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -129,7 +137,8 @@ fn env_value(key: &str) -> String {
         .to_string();
     assert!(
         !v.is_empty(),
-        "{key} is not set in {REPO}/.env — run ./scripts/dev-secrets.sh"
+        "{key} is not set in {}/.env — run ./scripts/dev-secrets.sh",
+        repo_dir()
     );
     v
 }
