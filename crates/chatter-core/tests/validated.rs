@@ -163,6 +163,16 @@ fn no_keyring_prompts() {
 }
 
 fn build_client(dir: &std::path::Path) -> Arc<ChatterClient> {
+    // Client-side visibility on demand: `RUST_LOG=chatter_core=debug` surfaces
+    // stream connects, inbox event emission and the post-accept handshake
+    // sends, which are otherwise invisible when a cross-client proof fails.
+    // No-op unless RUST_LOG is set; `try_init` tolerates repeat calls and the
+    // per-test init below.
+    if std::env::var("RUST_LOG").is_ok() {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .try_init();
+    }
     ChatterClient::builder()
         .server_url(&server_url())
         .data_dir(dir.to_str().unwrap())
