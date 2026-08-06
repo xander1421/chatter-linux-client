@@ -2293,6 +2293,14 @@ impl ChatterClient {
             });
         }
 
+        // ── Multi-device sync engine ─────────────────────────────────
+        // Periodic pull of channels, messages, friends and the block list.
+        // The block-list pass is load-bearing for security: the inbound block
+        // filter (`services/gateway/block_filter.rs`) reads the `friendships`
+        // rows this writes, so without this loop a block made on another
+        // device is never enforced here.
+        let h_sync = self.services.sync_service.start_background_sync();
+
         // ── PreKey replenishment (runs initial check immediately) ────
         let h_prekey = self.services.spawn_prekey_replenishment();
 
@@ -2342,7 +2350,7 @@ impl ChatterClient {
 
         // ── Store handles for shutdown ───────────────────────────────
         let mut tasks = self.tasks.lock();
-        tasks.extend([h_events, h_inbox, h_skdm_retry, h_channel_stream, h_channel_bootstrap, h_dm_bootstrap, h_ai, h_prekey, h_key_rolling, h_ephemeral_reaper]);
+        tasks.extend([h_events, h_inbox, h_skdm_retry, h_channel_stream, h_channel_bootstrap, h_dm_bootstrap, h_ai, h_sync, h_prekey, h_key_rolling, h_ephemeral_reaper]);
         #[cfg(feature = "jarvis")]
         {
             tasks.push(jarvis.maintenance);
@@ -3304,6 +3312,10 @@ impl ChatterClient {
                 tracing::warn!("Error stopping inbox provider: {}", e);
             }
         }
+
+        // Ask the sync engine to exit at its next select point; the abort
+        // below is the backstop if it's mid-cycle.
+        self.services.sync_service.stop();
 
         // Abort background tasks
         let handles: Vec<_> = {

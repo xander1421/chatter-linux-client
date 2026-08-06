@@ -97,6 +97,12 @@ pub struct CoreServices {
     pub device_service: Arc<DeviceService>,
     /// Unified conversation repository.
     pub conversation_repo: Arc<crate::storage::repositories::UnifiedConversationRepository>,
+    /// Multi-device sync engine wrapper (channels, messages, friends, block
+    /// list). Started by `ChatterClient::start` — nothing else drives
+    /// `SyncEngine`, so this field going unused means cross-device sync is
+    /// dead, which is exactly how the block list silently stopped propagating
+    /// between devices once before.
+    pub sync_service: Arc<crate::services::sync_service::SyncService>,
 
     // State stores
     pub auth_state: AuthState,
@@ -195,6 +201,18 @@ impl CoreServices {
             conversation_pins: services.conversation_pins.clone(),
             device_service: services.device_service.clone(),
             conversation_repo: services.conversation_repo.clone(),
+            sync_service: Arc::new(crate::services::sync_service::SyncService::new(
+                infra.grpc_pool.clone(),
+                infra.channel_repo.clone(),
+                Arc::new(
+                    crate::storage::repositories::unified_message_repo::UnifiedMessageRepository::new(
+                        infra.database.clone(),
+                    ),
+                ),
+                infra.user_repo.clone(),
+                infra.settings_repo.clone(),
+                infra.event_bus.clone(),
+            )),
 
             // State stores
             auth_state: AuthState::new(),

@@ -246,6 +246,19 @@ const TABLE: &[Entry] = &[
               laptop. This replaced UserService::list_blocked_users, which did the same \
               work and had zero production callers.",
     },
+    Entry {
+        symbol: "start_background_sync",
+        defined_in: "chatter-core/src/services/sync_service.rs",
+        expect: Expect::Wired,
+        why: "The ONLY production driver of SyncEngine, called from \
+              ChatterClient::start. The entry above pins sync_blocked_users's caller \
+              (SyncEngine::sync_all) but that check is one hop deep: from 2026-08-03 \
+              to 2026-08-06 the whole chain above it was dead — SyncService existed \
+              and nothing constructed or started it — so sync_blocked_users was \
+              'wired' into an engine that never ran, and cross-device blocks silently \
+              did not propagate. This entry pins the top of the chain; between the \
+              two, both edges that matter have a tripwire.",
+    },
 ];
 
 // ============================================================================
