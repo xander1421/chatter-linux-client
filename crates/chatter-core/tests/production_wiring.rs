@@ -253,6 +253,21 @@ const TABLE: &[Entry] = &[
               work and had zero production callers.",
     },
     Entry {
+        symbol: "needs_signed_prekey_rotation",
+        defined_in: "chatter-core/src/crypto/signal/prekey.rs",
+        expect: Expect::Wired,
+        why: "The gate on the replenisher's 48h signed-prekey rotation \
+              (core_services.rs spawn_prekey_replenishment) — the ONLY thing that \
+              keeps a live device's signed prekey fresh. The server deliberately \
+              serves stale signed prekeys rather than refuse them (refusal is a \
+              presence oracle — OPEN-ITEMS §11, f14f877f), so if this check leaves \
+              the replenisher, rotation stops on every live device and nothing \
+              server-side ever notices: sessions established against the old SPK \
+              quietly lose the forward-secrecy contribution rotation exists for. \
+              The rotate_signed_prekey symbol itself is unpinnable textually (an \
+              actor method shares the name), so the gate is the pin.",
+    },
+    Entry {
         symbol: "start_background_sync",
         defined_in: "chatter-core/src/services/sync_service.rs",
         expect: Expect::Wired,
