@@ -160,14 +160,18 @@ impl ChannelService {
     ) -> Result<usize, ChannelError> {
         let channel_id_str = channel_id.to_string();
 
-        // Fetch members from server (paginate if needed)
-        let response = channel_client
-            .get_channel_members(&channel_id_str, 100, 0)
+        // Full membership, paginated. This sync is what SKDM distribution
+        // reads, so a single-page fetch here meant members past the server's
+        // page size never appeared locally and never received sender keys —
+        // the "(paginate if needed)" comment that used to sit here described
+        // an intention, not the code (OPEN-ITEMS §16).
+        let proto_members = channel_client
+            .get_all_channel_members(&channel_id_str)
             .await?;
 
-        let total_from_server = response.members.len();
+        let total_from_server = proto_members.len();
         let mut synced_count = 0;
-        for proto_member in &response.members {
+        for proto_member in &proto_members {
             // Convert proto to domain membership
             match proto_to_domain_membership(channel_id, proto_member) {
                 Ok(membership) => {
@@ -488,6 +492,41 @@ impl ChannelService {
                 None => self.channel_repo.insert_membership(&membership)?,
             }
 
+            memberships.push(membership);
+        }
+
+        Ok(memberships)
+    }
+
+    /// Get EVERY channel member, paginating past the server page size.
+    ///
+    /// The single-page `get_channel_members(_, 100, 0)` pattern silently
+    /// truncated at 100 in every caller whose answer had to be "everyone" —
+    /// group-call key distribution and rotation left members past the first
+    /// page unable to decrypt the call, and SKDM membership sync never learned
+    /// they existed (OPEN-ITEMS §16). Use the paged method above only for UI
+    /// that genuinely wants one page.
+    pub async fn get_all_channel_members(
+        &self,
+        channel_id: &ChannelId,
+    ) -> Result<Vec<Membership>, ChannelError> {
+        let _ = self.settings_repo.current_user_id()?;
+
+        let mut channel_client = self.channel_client();
+        let proto_members = channel_client
+            .get_all_channel_members(&channel_id.to_string())
+            .await?;
+
+        let mut memberships = Vec::with_capacity(proto_members.len());
+        for proto_member in &proto_members {
+            let membership = proto_to_domain_membership(channel_id, proto_member)?;
+            match self
+                .channel_repo
+                .get_membership(channel_id, &membership.user_id)?
+            {
+                Some(_) => self.channel_repo.update_membership(&membership)?,
+                None => self.channel_repo.insert_membership(&membership)?,
+            }
             memberships.push(membership);
         }
 

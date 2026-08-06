@@ -158,21 +158,14 @@ impl ChannelSync {
         use std::collections::HashSet;
 
         let mut client = self.grpc_pool.channel_client();
-        let mut all_members = Vec::new();
-        let mut offset: i32 = 0;
-
-        loop {
-            let response = client
-                .get_channel_members(&channel_id.to_string(), PAGE_SIZE, offset)
-                .await
-                .map_err(|e| SyncError::Network(e.to_string()))?;
-            let page_len = response.members.len();
-            all_members.extend(response.members);
-            if (page_len as i32) < PAGE_SIZE {
-                break;
-            }
-            offset += PAGE_SIZE;
-        }
+        // The one paginated fetch, shared with every other "everyone" caller.
+        // This function used to carry its own page loop — correct, but a local
+        // exception that let the truncating single-page pattern survive
+        // everywhere else (OPEN-ITEMS §16).
+        let all_members = client
+            .get_all_channel_members(&channel_id.to_string())
+            .await
+            .map_err(|e| SyncError::Network(e.to_string()))?;
 
         let server_ids: HashSet<UserId> = all_members
             .iter()

@@ -698,11 +698,14 @@ impl MessageService {
     /// empty cache). The server list is the source of truth for recipients.
     async fn refresh_channel_members(&self, channel_id: &ChannelId) -> Vec<crate::domain::UserId> {
         let mut channel_client = self.grpc_pool.channel_client();
-        let response = match channel_client
-            .get_channel_members(&channel_id.to_string(), 100, 0)
+        // Full membership, paginated: this list is the fan-out recipient set,
+        // so a single-page fetch meant members past the server's page size
+        // received no channel content at all (OPEN-ITEMS §16).
+        let members = match channel_client
+            .get_all_channel_members(&channel_id.to_string())
             .await
         {
-            Ok(r) => r,
+            Ok(m) => m,
             Err(e) => {
                 tracing::debug!(
                     channel_id = %channel_id,
@@ -713,8 +716,8 @@ impl MessageService {
             }
         };
 
-        let mut ids = Vec::with_capacity(response.members.len());
-        for pb_member in &response.members {
+        let mut ids = Vec::with_capacity(members.len());
+        for pb_member in &members {
             let user_id = match pb_member.user_id.parse::<crate::domain::UserId>() {
                 Ok(id) => id,
                 Err(_) => continue,

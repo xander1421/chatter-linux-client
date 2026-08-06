@@ -712,8 +712,11 @@ impl ChatterClient {
         use std::collections::HashSet;
         use crate::domain::ids::UserId;
 
+        // Full membership, paginated — an already-joined member past the
+        // server's page size would otherwise show up as invitable.
         let members: HashSet<UserId> = self
-            .get_channel_members(channel_id, 100, 0)
+            .channels()
+            .get_all_channel_members(channel_id)
             .await
             .unwrap_or_default()
             .into_iter()
