@@ -556,7 +556,11 @@ impl KeyStore {
 
     /// Delete a session record.
     ///
-    /// Used when archiving sessions due to identity key change.
+    /// This is NOT how sessions are invalidated — identity changes and peer
+    /// device-roster changes ARCHIVE via `SessionRecord::archive_current_state`
+    /// so in-transit messages under the old ratchet still decrypt. The one
+    /// production use is the convergence rollback in `services/signal/actor.rs`:
+    /// removing a candidate session that did not exist before the attempt.
     pub fn delete_session(&self, address: &str) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
         let rows_affected = conn.execute(
@@ -566,18 +570,13 @@ impl KeyStore {
         Ok(rows_affected > 0)
     }
 
-    /// Delete all sessions for a user (all devices).
-    ///
-    /// Address format is "user_id:device_id", so we match on "user_id:%".
-    pub fn delete_sessions_for_user(&self, user_id: &str) -> Result<u32, StorageError> {
-        let conn = self.db.connection()?;
-        let pattern = format!("{}:%", user_id);
-        let rows_affected = conn.execute(
-            "DELETE FROM sessions WHERE address LIKE ?1",
-            params![pattern],
-        )?;
-        Ok(rows_affected as u32)
-    }
+    // `delete_sessions_for_user` is deliberately GONE. It was the §12 defect:
+    // a peer device-roster change ran `DELETE FROM sessions WHERE address LIKE
+    // 'user:%'`, destroying the archived ratchet states that let in-transit
+    // messages decrypt. Both invalidation paths (identity change, roster
+    // change) now archive through `list_sessions_for_user` +
+    // `SessionRecord::archive_current_state`. If bulk deletion seems needed
+    // again, it almost certainly wants to be an archive.
 
     /// List all sessions for a user (all devices) as `(address, record)` pairs.
     ///
