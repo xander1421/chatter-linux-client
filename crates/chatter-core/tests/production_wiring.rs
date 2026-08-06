@@ -151,11 +151,17 @@ const TABLE: &[Entry] = &[
               messages.",
     },
     Entry {
-        symbol: "delete_sessions_for_user",
+        symbol: "list_sessions_for_user",
         defined_in: "chatter-core/src/storage/key_store.rs",
         expect: Expect::Wired,
-        why: "InvalidatePeerSessions — the only way a peer's stale sessions are dropped \
-              so the next send re-fetches their bundle.",
+        why: "The enumerator BOTH session-invalidation paths archive through: identity \
+              change (crypto/signal/store.rs) and peer device-roster change \
+              (InvalidatePeerSessions in services/signal/actor.rs). Its predecessor \
+              here was delete_sessions_for_user — a bulk DELETE that destroyed the \
+              archived ratchet states in-transit messages decrypt under, the §12 \
+              defect. Losing this caller means invalidation stops happening at all: \
+              the next send never re-fetches the peer's bundle, and a peer's revoked \
+              device keeps a live session.",
     },
     // ---- Mesh: peer authentication --------------------------------------
     Entry {

@@ -685,21 +685,44 @@ impl SignalActorHandle {
                         }
 
                         SignalCommand::InvalidatePeerSessions { peer_user_id, response } => {
-                            // Blow away every session whose address LIKE "peer_user_id:%".
-                            // Next send to this peer will trigger ensure_session,
-                            // which fetches the peer's (now updated) prekey
-                            // bundle and re-establishes sessions for every
-                            // current device. For groups, caller is
-                            // responsible for also marking affected channels
-                            // for sender-key rotation.
-                            let res = store.key_store()
-                                .delete_sessions_for_user(&peer_user_id)
-                                .map_err(ServiceError::Storage);
+                            // ARCHIVE (not delete) every session whose address is
+                            // "peer_user_id:%". The next send to this peer triggers
+                            // ensure_session, which fetches the peer's (now updated)
+                            // prekey bundle and establishes a fresh session per
+                            // current device — while the archived states inside each
+                            // SessionRecord keep decrypting messages already in
+                            // transit under the old ratchet. This used to be a plain
+                            // DELETE, which silently lost those in-flight messages on
+                            // every peer device-roster change (OPEN-ITEMS §12); the
+                            // identity-change path (crypto/signal/store.rs) has
+                            // archived this way all along, and libsignal keeps the
+                            // previous states inside the record, so no schema change
+                            // is involved. For groups, the caller is responsible for
+                            // also marking affected channels for sender-key rotation.
+                            let res = (|| -> Result<u32, ServiceError> {
+                                let mut archived: u32 = 0;
+                                for (addr, record_bytes) in store.key_store()
+                                    .list_sessions_for_user(&peer_user_id)
+                                    .map_err(ServiceError::Storage)?
+                                {
+                                    let mut record = SessionRecord::deserialize(&record_bytes)
+                                        .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?;
+                                    record.archive_current_state()
+                                        .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?;
+                                    let serialized = record.serialize()
+                                        .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?;
+                                    store.key_store()
+                                        .store_session(&addr, &serialized)
+                                        .map_err(ServiceError::Storage)?;
+                                    archived += 1;
+                                }
+                                Ok(archived)
+                            })();
                             if let Ok(n) = &res {
                                 tracing::info!(
                                     peer_user_id = %peer_user_id,
-                                    deleted = *n,
-                                    "Invalidated peer Signal sessions"
+                                    archived = *n,
+                                    "Invalidated peer Signal sessions (archived, not deleted)"
                                 );
                             }
                             let _ = response.send(res);

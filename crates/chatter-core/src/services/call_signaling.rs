@@ -253,17 +253,10 @@ impl CallSignalingService {
         room_identities: &[String],
     ) -> Result<usize, CallSignalingError> {
         let current_user = self.channel_service.current_user_id()?;
-        let members = self.channel_service.get_channel_members(channel_id, 100, 0).await?;
-        // A full page means the membership list was truncated, so a member past
-        // the first 100 who IS in the room would be silently skipped and left
-        // unable to decrypt. Rare, but silent — say so.
-        if members.len() >= 100 {
-            tracing::warn!(
-                call_id, epoch, members = members.len(),
-                "Channel membership page is full during key rotation — a participant beyond the \
-                 first 100 members would not receive the rotated key"
-            );
-        }
+        // Full membership, paginated: a member past the server's page size who
+        // IS in the room used to be silently skipped here and left unable to
+        // decrypt after rotation (OPEN-ITEMS §16).
+        let members = self.channel_service.get_all_channel_members(channel_id).await?;
         let recipients = rotation_recipients(&members, room_identities, &current_user);
         let channel_id_str = channel_id.to_string();
 
@@ -305,7 +298,9 @@ impl CallSignalingService {
         epoch: u32,
     ) -> Result<usize, CallSignalingError> {
         let current_user = self.channel_service.current_user_id()?;
-        let members = self.channel_service.get_channel_members(channel_id, 100, 0).await?;
+        // Full membership, paginated — a member past the server's page size
+        // otherwise never receives the call key at all (OPEN-ITEMS §16).
+        let members = self.channel_service.get_all_channel_members(channel_id).await?;
         let channel_id_str = channel_id.to_string();
 
         let mut sent_count = 0;

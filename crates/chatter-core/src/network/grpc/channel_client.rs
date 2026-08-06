@@ -475,6 +475,35 @@ impl ChannelClient {
             .map_err(|s| NetworkError::from_status(&s))
     }
 
+    /// Get EVERY channel member, paginating until the server is exhausted.
+    ///
+    /// Use this wherever the answer has to be "everyone" — SKDM recipient
+    /// sync, group-call key distribution and rotation, channel content
+    /// fan-out. A single `get_channel_members(_, 100, 0)` call silently
+    /// truncates at the page size, and in those callers a member past the
+    /// first page becomes a member who cannot decrypt (OPEN-ITEMS §16). The
+    /// paged variant above is for UI that genuinely wants one page.
+    pub async fn get_all_channel_members(
+        &mut self,
+        channel_id: &str,
+    ) -> Result<Vec<crate::proto::chat_v1::channel::ChannelMember>, NetworkError> {
+        const PAGE_SIZE: i32 = 100;
+        let mut members = Vec::new();
+        let mut offset: i32 = 0;
+        loop {
+            let response = self
+                .get_channel_members(channel_id, PAGE_SIZE, offset)
+                .await?;
+            let page_len = response.members.len();
+            members.extend(response.members);
+            if !fetch_next_members_page(page_len, PAGE_SIZE, members.len(), response.total) {
+                break;
+            }
+            offset += PAGE_SIZE;
+        }
+        Ok(members)
+    }
+
     /// Update a member's role (streaming response).
     ///
     /// Returns stream of ChannelEvent with role update progress.
@@ -594,6 +623,24 @@ impl ChannelClient {
 
 }
 
+/// Termination rule for [`ChannelClient::get_all_channel_members`], separated
+/// so the arithmetic is testable without a server.
+///
+/// Stop on a short page (the server ran out), or once `total` — when the
+/// server reports a positive one — has been fetched. The second condition is
+/// what bounds the loop against a server that always fills pages regardless of
+/// offset: without it, such a bug would loop forever; with it, the worst case
+/// is one full sweep of the reported membership.
+fn fetch_next_members_page(page_len: usize, page_size: i32, fetched: usize, total: i32) -> bool {
+    if (page_len as i32) < page_size {
+        return false;
+    }
+    if total > 0 && fetched >= total as usize {
+        return false;
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -609,6 +656,42 @@ mod tests {
         fn _verify_types(channel: Channel, interceptor: AuthInterceptor) {
             let _client = ChannelClient::new(channel, interceptor);
         }
+    }
+
+    /// The exact miss OPEN-ITEMS §16 records: 100 members come back in one
+    /// full page, and the old single-call pattern stopped there. A full first
+    /// page with more reported must fetch again.
+    #[test]
+    fn a_full_first_page_with_more_members_keeps_paginating() {
+        assert!(fetch_next_members_page(100, 100, 100, 250));
+    }
+
+    #[test]
+    fn a_short_page_ends_the_sweep() {
+        assert!(!fetch_next_members_page(37, 100, 137, 250));
+        // Empty page too — a channel whose size is an exact multiple of the
+        // page size ends on one of these rather than looping.
+        assert!(!fetch_next_members_page(0, 100, 200, 200));
+    }
+
+    /// A membership that is an exact multiple of the page size, with a server
+    /// that reports `total`: the sweep must stop at `total` without issuing
+    /// the extra empty-page request being merely one wasted call — the case
+    /// this guards is a server that ignores `offset` and returns a full page
+    /// forever, where `total` is the only thing standing between one sweep
+    /// and an infinite loop.
+    #[test]
+    fn reported_total_bounds_a_server_that_always_fills_pages() {
+        assert!(!fetch_next_members_page(100, 100, 100, 100));
+        assert!(!fetch_next_members_page(100, 100, 200, 150));
+    }
+
+    /// total == 0 or negative means "not reported" — only the short-page rule
+    /// applies then, and a full page must keep going.
+    #[test]
+    fn an_unreported_total_falls_back_to_short_page_termination() {
+        assert!(fetch_next_members_page(100, 100, 100, 0));
+        assert!(fetch_next_members_page(100, 100, 300, -1));
     }
 
     #[test]
