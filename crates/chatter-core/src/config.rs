@@ -212,6 +212,77 @@ pub static TRUST_ROOT_PUBLIC_KEY: std::sync::LazyLock<PublicKey> = std::sync::La
         .expect("trust root is not a valid Curve25519 point - check the configured key")
 });
 
+// ─── TLS root CA (private-PKI transport pin, §8) ───────────────────────────
+//
+// Signal's transport model, ported: the client trusts ONLY this CA for its own
+// hostname-TLS endpoints — the direct gRPC channel and the anonymous HTTP path
+// over Tor — and NEVER the operating-system / webpki root store. A rogue or
+// mis-issued *public* CA certificate therefore cannot MITM the transport, the
+// way it can with system-root trust. Onion endpoints are self-authenticating by
+// their `.onion` address (the address IS the key) and carry no TLS certificate,
+// so they need nothing here.
+//
+// Unlike the sealed-sender trust root and the KT tree head (32-byte curve keys),
+// the anchor is a full X.509 CA certificate: we pin the CA, not a leaf SPKI —
+// exactly as Signal does — so the server can rotate its TLS leaf freely as long
+// as the new leaf still chains to this CA. No client rebuild per rotation, and
+// no SPKI-leaf pin that would break on one. Same provisioning story as the two
+// pinned keys: a dev build embeds a committed placeholder; a non-dev build must
+// supply the real CA at build time or fail to compile.
+
+/// Development placeholder CA (committed, INSECURE, and keyless — its private
+/// key was never saved, so it can sign nothing). The dev server speaks plaintext
+/// `http://`, so this never authenticates a real handshake; it exists only so
+/// dev/test builds compile with a non-empty trust store. `--features
+/// dev-trust-root` selects it on purpose.
+const DEV_TLS_ROOT_CA_PEM: &str = include_str!("../assets/dev_tls_root_ca.pem");
+
+/// The TLS CA a SHIPPABLE artifact of this build would pin. `None` means none is
+/// configured — a build failure below, not a silent fall-through to system
+/// roots.
+#[cfg(feature = "dev-trust-root")]
+const SHIPPED_TLS_ROOT_CA_PEM: Option<&str> = Some(DEV_TLS_ROOT_CA_PEM);
+
+/// The TLS CA a SHIPPABLE artifact of this build would pin. See above.
+#[cfg(not(feature = "dev-trust-root"))]
+const SHIPPED_TLS_ROOT_CA_PEM: Option<&str> = option_env!("CHATTER_TLS_ROOT_CA_PEM");
+
+/// The TLS trust anchor this build actually uses. `cfg(test)` / `feature =
+/// "testing"` fall back to the dev placeholder so `cargo test` needs no
+/// provisioning — identical posture to the sealed-sender trust root above, and
+/// safe for the same reason (`cfg(test)` is set only for this crate's own test
+/// harness, never for a shippable artifact).
+pub const TLS_ROOT_CA_PEM: Option<&str> = match SHIPPED_TLS_ROOT_CA_PEM {
+    // An empty `CHATTER_TLS_ROOT_CA_PEM` reaches `option_env!` as `Some("")`,
+    // which would satisfy an `is_some()` guard while baking in NO trust anchor —
+    // every hostname-TLS connection would then fail at runtime. Treat empty as
+    // unconfigured so the build-time guard below rejects it (or test/testing
+    // falls back to the dev CA), never the user's first handshake.
+    Some(pem) if !pem.is_empty() => Some(pem),
+    _ if cfg!(test) || cfg!(feature = "testing") => Some(DEV_TLS_ROOT_CA_PEM),
+    _ => None,
+};
+
+/// Fail the BUILD when no TLS CA is provisioned for a shippable artifact.
+/// Because the client trusts ONLY the pinned CA (never system roots), an
+/// unprovisioned build would reject every hostname-TLS connection at runtime —
+/// so, like the sealed-sender trust root, this must fail on the machine that
+/// builds it, not the user's.
+#[cfg(all(not(feature = "dev-trust-root"), not(test), not(feature = "testing")))]
+const _: () = {
+    assert!(
+        TLS_ROOT_CA_PEM.is_some(),
+        "no TLS root CA is baked into this build.\n\n\
+         The client trusts ONLY the pinned chatter CA for its gRPC and anonymous \
+         HTTP endpoints (never the system roots), so without one every TLS \
+         connection would fail at runtime.\n\n\
+         Build with your server's CA certificate:\n\n  \
+         CHATTER_TLS_ROOT_CA_PEM=\"$(cat chatter-root-ca.pem)\" cargo build --release\n\n\
+         The server's TLS leaf MUST chain to this CA. For local development \
+         against the plaintext dev server, build with --features dev-trust-root."
+    );
+};
+
 // ─── Key Transparency tree-head signing key (pinned) ───────────────────────
 //
 // The KT server signs every SignedTreeHead with an Ed25519 key; the client
@@ -426,4 +497,34 @@ mod tests {
         );
     }
 
+    /// The pinned TLS CA (§8) must be present in a test/dev build and be a
+    /// structurally valid PEM certificate. Because the client trusts ONLY this
+    /// CA (never system roots) on the gRPC and anon-HTTP paths, a missing,
+    /// empty, or renamed asset would leave it trusting nothing and failing every
+    /// handshake — catch that on this machine, not on a user's first connection.
+    #[test]
+    fn tls_root_ca_is_a_wellformed_pem_certificate() {
+        let pem = TLS_ROOT_CA_PEM.expect("test/dev builds pin the committed dev CA");
+        assert!(
+            pem.contains("-----BEGIN CERTIFICATE-----"),
+            "TLS_ROOT_CA_PEM is not a PEM certificate"
+        );
+        // Decode the DER body and confirm it opens with an ASN.1 SEQUENCE tag,
+        // i.e. it is a real X.509 certificate rather than an empty/corrupt
+        // placeholder. Cheap structural check, no X.509 parser dependency.
+        let body: String = pem
+            .lines()
+            .skip_while(|l| !l.contains("BEGIN CERTIFICATE"))
+            .skip(1)
+            .take_while(|l| !l.contains("END CERTIFICATE"))
+            .collect();
+        let der = BASE64
+            .decode(body.trim())
+            .expect("CA PEM body must be valid base64");
+        assert!(der.len() > 64, "DER certificate implausibly small");
+        assert_eq!(
+            der[0], 0x30,
+            "DER certificate must begin with an ASN.1 SEQUENCE tag"
+        );
+    }
 }
