@@ -117,11 +117,22 @@ mod tor {
 
         let mut roots = RootCertStore::empty();
         if let Some(ca_pem) = crate::config::TLS_ROOT_CA_PEM {
+            // A malformed provisioned PEM must not panic a live request: on parse
+            // failure we log and leave the trust store empty, so the handshake
+            // fails closed with a clean "no trust anchor" TLS error instead. The
+            // dev/test CA is validated by `config::tls_root_ca_is_a_wellformed_pem_certificate`,
+            // and X.509 cannot be parsed in the const build-time guard.
             for cert in CertificateDer::pem_slice_iter(ca_pem.as_bytes()) {
-                let cert = cert.expect("pinned chatter TLS CA PEM must parse");
-                roots
-                    .add(cert)
-                    .expect("pinned chatter TLS CA must be a valid trust anchor");
+                match cert {
+                    Ok(cert) => {
+                        if let Err(e) = roots.add(cert) {
+                            tracing::error!(error = %e, "pinned chatter TLS CA is not a valid trust anchor");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "pinned chatter TLS CA PEM failed to parse");
+                    }
+                }
             }
         }
         ClientConfig::builder_with_provider(Arc::new(

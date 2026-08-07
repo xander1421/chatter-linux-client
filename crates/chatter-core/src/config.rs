@@ -253,9 +253,14 @@ const SHIPPED_TLS_ROOT_CA_PEM: Option<&str> = option_env!("CHATTER_TLS_ROOT_CA_P
 /// safe for the same reason (`cfg(test)` is set only for this crate's own test
 /// harness, never for a shippable artifact).
 pub const TLS_ROOT_CA_PEM: Option<&str> = match SHIPPED_TLS_ROOT_CA_PEM {
-    Some(pem) => Some(pem),
-    None if cfg!(test) || cfg!(feature = "testing") => Some(DEV_TLS_ROOT_CA_PEM),
-    None => None,
+    // An empty `CHATTER_TLS_ROOT_CA_PEM` reaches `option_env!` as `Some("")`,
+    // which would satisfy an `is_some()` guard while baking in NO trust anchor —
+    // every hostname-TLS connection would then fail at runtime. Treat empty as
+    // unconfigured so the build-time guard below rejects it (or test/testing
+    // falls back to the dev CA), never the user's first handshake.
+    Some(pem) if !pem.is_empty() => Some(pem),
+    _ if cfg!(test) || cfg!(feature = "testing") => Some(DEV_TLS_ROOT_CA_PEM),
+    _ => None,
 };
 
 /// Fail the BUILD when no TLS CA is provisioned for a shippable artifact.
