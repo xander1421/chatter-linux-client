@@ -328,7 +328,7 @@ impl LinkDeviceService {
     pub fn verify_pin(&self, pin: &str) -> Result<bool, LinkDeviceError> {
         use subtle::ConstantTimeEq;
 
-        crate::crypto::svr::validate_pin(pin)
+        crate::crypto::svr::validate_pin_shape(pin)
             .map_err(|e| LinkDeviceError::Invalid(e.to_string()))?;
 
         let user_id_str = self
@@ -371,7 +371,7 @@ impl LinkDeviceService {
         // are 8+ printable ASCII), so we can't tell them apart by shape -
         // we attempt PIN, and fall through to password if PIN validation
         // rejects the input or the fingerprint doesn't match.
-        if crate::crypto::svr::validate_pin(secret).is_ok() {
+        if crate::crypto::svr::validate_pin_shape(secret).is_ok() {
             if let Ok(true) = self.verify_pin(secret) {
                 return Ok(true);
             }

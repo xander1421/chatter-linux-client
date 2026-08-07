@@ -236,7 +236,10 @@ impl MessageBackupService {
     /// it (`SetMessageBackup`), PUT the blob to the presigned URL. One backup
     /// per user — this replaces any previous one.
     pub async fn upload_to_server(&self, pin: &str) -> Result<BackupStats, MessageBackupError> {
-        crate::crypto::svr::validate_pin(pin)
+        // Shape-only: this uses the EXISTING account PIN. Strength rules only
+        // apply where a PIN is chosen; a blocklist entry added after this PIN
+        // was set must not block the user's own backup (see validate_pin_shape).
+        crate::crypto::svr::validate_pin_shape(pin)
             .map_err(|e| MessageBackupError::Generic(format!("invalid PIN: {e}")))?;
         let username = self.salt_username()?;
         let (mut kek, backup_id) = self.derive_server_keys(pin, &username).await?;

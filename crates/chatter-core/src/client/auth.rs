@@ -438,11 +438,14 @@ impl ChatterClient {
         username: &str,
     ) -> Result<(), ClientError> {
         use crate::crypto::svr::{
-            derive_registration_lock, derive_svr_secret, validate_pin, SvrKeypair,
+            derive_registration_lock, derive_svr_secret, validate_pin, validate_pin_shape, SvrKeypair,
         };
         use zeroize::Zeroize;
 
-        validate_pin(old_pin).map_err(|e| ClientError::Validation(format!("old PIN: {e}")))?;
+        // Old PIN is the EXISTING one being verified — shape-only, or a user
+        // whose current PIN is now blocklisted could never change it (§10).
+        // The NEW PIN is being chosen, so it gets full strength validation.
+        validate_pin_shape(old_pin).map_err(|e| ClientError::Validation(format!("old PIN: {e}")))?;
         validate_pin(new_pin).map_err(|e| ClientError::Validation(format!("new PIN: {e}")))?;
         if old_pin == new_pin {
             return Err(ClientError::Validation(

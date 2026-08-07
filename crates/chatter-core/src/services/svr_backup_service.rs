@@ -206,7 +206,7 @@ impl SvrBackupService {
         use crate::storage::repositories::settings_repo::keys;
         use zeroize::Zeroize;
 
-        crate::crypto::svr::validate_pin(pin)
+        crate::crypto::svr::validate_pin_shape(pin)
             .map_err(|e| SvrBackupError::Generic(e.to_string()))?;
 
         let stored = self
