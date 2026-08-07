@@ -22,7 +22,8 @@ use zeroize::Zeroize;
 
 use crate::crypto::message_backup::{
     decrypt_backup_file, derive_message_backup_id, derive_passphrase_kek, derive_server_kek,
-    encrypt_backup_file, parse_backup_file, ARGON2_SALT_LEN, KEY_MODE_PASSPHRASE, KEY_MODE_SVR,
+    encrypt_backup_file, parse_backup_file, ARGON2_SALT_LEN, KEY_MODE_LINK, KEY_MODE_PASSPHRASE,
+    KEY_MODE_SVR,
 };
 use crate::error::{CryptoError, NetworkError, StorageError};
 use crate::network::grpc::client_pool::GrpcClientPool;
@@ -348,5 +349,174 @@ impl MessageBackupService {
         client.delete_message_backup(backup_id.to_vec()).await?;
         tracing::info!("server message backup deleted");
         Ok(())
+    }
+
+    // ── Link'n'Sync mode (§30) ──────────────────────────────────────
+    //
+    // A device-to-device history transfer at link time. Same container and the
+    // same `dump_frames`/`import_frames` payload as every other mode — only the
+    // KEK derivation (ephemeral key from the provision envelope, see
+    // `derive_link_sync_kek`) and the transport (the provisioning service's
+    // presigned URLs, driven by the caller) differ. The KEK is supplied by the
+    // caller because it is derived from envelope material the caller holds
+    // (ephemeral key + ACI + primary registration id), not from local settings.
+
+    /// Build the encrypted Link'n'Sync transfer archive from the local store.
+    /// Returns the ciphertext and its stats; the caller declares `bytes` to
+    /// `SetTransferArchive` and then uploads via `upload_link_archive`.
+    pub fn build_link_archive(
+        &self,
+        kek: &[u8; 32],
+    ) -> Result<(Vec<u8>, BackupStats), MessageBackupError> {
+        let (container, rows) = self.build_container(kek, KEY_MODE_LINK, &[])?;
+        let bytes = container.len();
+        Ok((container, BackupStats { rows, bytes }))
+    }
+
+    /// PUT an already-built transfer archive to the primary-supplied presigned
+    /// URL. The bytes are opaque to the server — only the new device holds the
+    /// KEK.
+    pub async fn upload_link_archive(
+        &self,
+        container: &[u8],
+        upload_url: &str,
+    ) -> Result<(), MessageBackupError> {
+        let response = reqwest::Client::new()
+            .put(upload_url)
+            .header("Content-Type", "application/octet-stream")
+            .body(container.to_vec())
+            .send()
+            .await
+            .map_err(|e| {
+                MessageBackupError::Generic(format!("transfer archive upload failed: {e}"))
+            })?;
+        if !response.status().is_success() {
+            return Err(MessageBackupError::Generic(format!(
+                "transfer archive upload failed with status {}",
+                response.status()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Download the transfer archive from the primary-supplied presigned URL,
+    /// verify (KEY_MODE_LINK + header-as-AAD MAC), decrypt, and import its
+    /// frames (idempotent). A wrong KEK fails at the file-key unwrap, so nothing
+    /// is imported.
+    pub async fn download_and_import_link_archive(
+        &self,
+        download_url: &str,
+        kek: &[u8; 32],
+    ) -> Result<ImportSummary, MessageBackupError> {
+        let response = reqwest::Client::new()
+            .get(download_url)
+            .send()
+            .await
+            .map_err(|e| {
+                MessageBackupError::Generic(format!("transfer archive download failed: {e}"))
+            })?;
+        if !response.status().is_success() {
+            return Err(MessageBackupError::Generic(format!(
+                "transfer archive download failed with status {}",
+                response.status()
+            )));
+        }
+        let blob = response.bytes().await.map_err(|e| {
+            MessageBackupError::Generic(format!("transfer archive read failed: {e}"))
+        })?;
+
+        let summary = self.decrypt_and_import(&blob, kek, KEY_MODE_LINK)?;
+        tracing::info!(
+            rows_seen = summary.rows_seen,
+            rows_inserted = summary.rows_inserted,
+            "link transfer archive imported"
+        );
+        Ok(summary)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crypto::message_backup::{
+        decrypt_backup_file, derive_link_sync_kek, parse_backup_file, KEY_MODE_LINK,
+    };
+    use crate::domain::ids::UserId;
+    use crate::domain::user::User;
+    use crate::network::grpc::client_pool::GrpcClientPool;
+    use crate::storage::backup_data::import_frames;
+    use crate::storage::repositories::user_repo::UserRepository;
+    use crate::storage::Database;
+    use tempfile::NamedTempFile;
+
+    fn svc_with_db() -> (MessageBackupService, Arc<Database>, NamedTempFile) {
+        let file = NamedTempFile::new().unwrap();
+        let db = Arc::new(Database::open(file.path(), "test_passphrase").unwrap());
+        db.run_migrations().unwrap();
+        let settings = Arc::new(SettingsRepository::new(db.clone()));
+        let grpc = Arc::new(GrpcClientPool::new("http://127.0.0.1:0").unwrap());
+        (
+            MessageBackupService::new(db.clone(), settings, grpc),
+            db,
+            file,
+        )
+    }
+
+    fn user(id: &str, name: &str) -> User {
+        User {
+            id: id.parse::<UserId>().unwrap(),
+            username: name.to_string(),
+            svr_public_key: Vec::new(),
+            last_active: chrono::Utc::now(),
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    // The property PR3/PR4 exist for: a device's local rows, exported under the
+    // ephemeral-key KEK in KEY_MODE_LINK, transfer byte-exact into a fresh
+    // device — and a wrong ephemeral key decrypts nothing. This exercises the
+    // real dump_frames -> encrypt -> decrypt -> import_frames path with a live
+    // SQLite store, which the crypto-layer container test cannot.
+    #[test]
+    fn link_archive_round_trips_between_devices() {
+        let (src, src_db, _f1) = svc_with_db();
+        let aci = "11111111-1111-1111-1111-111111111111";
+        src.settings.set_string(keys::CURRENT_USER_ID, aci).unwrap();
+        let contact = "22222222-2222-2222-2222-222222222222";
+        UserRepository::new(src_db.clone())
+            .insert(&user(contact, "bob"))
+            .unwrap();
+
+        // Primary builds the archive keyed to the single-use ephemeral key.
+        let kek = derive_link_sync_kek(&[7u8; 32], aci, 42);
+        let (container, stats) = src.build_link_archive(&kek).unwrap();
+        assert!(stats.bytes > 0);
+        assert_eq!(
+            parse_backup_file(&container).unwrap().header.key_mode,
+            KEY_MODE_LINK
+        );
+
+        // New device: fresh store, derive the same KEK, decrypt + import.
+        let (_dst, dst_db, _f2) = svc_with_db();
+        let payload =
+            decrypt_backup_file(&parse_backup_file(&container).unwrap(), &kek).unwrap();
+        {
+            let mut conn = dst_db.connection().unwrap();
+            import_frames(&mut conn, &payload).unwrap();
+        }
+        assert!(
+            UserRepository::new(dst_db.clone())
+                .get(&contact.parse::<UserId>().unwrap())
+                .unwrap()
+                .is_some(),
+            "contact row transferred to the newly linked device"
+        );
+
+        // A wrong ephemeral key (attacker holding the CDN blob but not the
+        // envelope) fails at the file-key unwrap — nothing to import.
+        let wrong = derive_link_sync_kek(&[9u8; 32], aci, 42);
+        assert!(
+            decrypt_backup_file(&parse_backup_file(&container).unwrap(), &wrong).is_err()
+        );
     }
 }

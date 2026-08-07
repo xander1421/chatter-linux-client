@@ -23,12 +23,13 @@ use libsignal_protocol::{IdentityKey, IdentityKeyPair, PrivateKey};
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 use url::Url;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::crypto::auth_crypto::{derive_login_auth_hash, hash_password};
 use crate::crypto::provisioning::{
     decrypt_envelope, encrypt_envelope, ProvisioningKeypair,
 };
+use crate::crypto::message_backup::derive_link_sync_kek;
 use crate::crypto::signal::identity::IdentityKeyManager;
 use crate::crypto::signal::prekey::PreKeyManager;
 use crate::crypto::DeviceCredentials;
@@ -37,13 +38,17 @@ use crate::error::{CryptoError, NetworkError, StorageError};
 use crate::domain::notification::NotificationPriority;
 use crate::events::EventBus;
 use crate::inbox::handlers::DomainEvent;
+use crate::services::message_backup_service::{BackupStats, MessageBackupService};
 use crate::services::notification_service::NotificationService;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::network::grpc::provisioning_client::{ProvisioningClient, ProvisioningPollResult};
+use crate::network::grpc::provisioning_client::{
+    ProvisioningClient, ProvisioningPollResult, TransferArchivePoll,
+};
 use crate::proto::provisioning_v1::{ProvisionEnvelope, ProvisionMessage, ProvisioningSession};
+use crate::storage::backup_data::ImportSummary;
 use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
 use crate::storage::repositories::user_repo::UserRepository;
-use crate::storage::KeyStore;
+use crate::storage::{Database, KeyStore};
 
 /// URL scheme prefix for QR payloads.
 pub const LINK_URL_SCHEME: &str = "chatter";
@@ -220,6 +225,10 @@ pub struct LinkDeviceService {
     settings_repo: Arc<SettingsRepository>,
     user_repo: Arc<UserRepository>,
     key_store: Arc<KeyStore>,
+    /// Backs the Link'n'Sync transfer archive (§30): the primary exports message
+    /// history from it, the new device imports into it. Held so the linking flow
+    /// can build a `MessageBackupService` without a wider client handle.
+    database: Arc<Database>,
     event_bus: EventBus,
     notifications: Arc<NotificationService>,
     /// UUID of an in-flight new-device session, owned here so the cancel
@@ -233,6 +242,7 @@ impl LinkDeviceService {
         settings_repo: Arc<SettingsRepository>,
         user_repo: Arc<UserRepository>,
         key_store: Arc<KeyStore>,
+        database: Arc<Database>,
         event_bus: EventBus,
         notifications: Arc<NotificationService>,
     ) -> Self {
@@ -241,6 +251,7 @@ impl LinkDeviceService {
             settings_repo,
             user_repo,
             key_store,
+            database,
             event_bus,
             notifications,
             active_uuid: Mutex::new(None),
@@ -909,11 +920,117 @@ impl LinkDeviceService {
             }
         }
 
+        // Link'n'Sync import (§30): if the primary exported a transfer archive,
+        // fetch it, decrypt with the ephemeral-key-derived KEK, and import the
+        // message history + social graph. Best-effort, exactly like the PQOPK
+        // seed above: the device is already linked, so a poll/decrypt failure
+        // leaves it linked-without-history, never stranded. Absent key = the
+        // primary offered no history, which is a legal link.
+        if let Some(eph) = provision.ephemeral_backup_key.as_deref() {
+            if eph.len() == 32 {
+                let mut key = [0u8; 32];
+                key.copy_from_slice(eph);
+                self.import_transfer_archive(
+                    &session.uuid,
+                    &key,
+                    &provision.aci,
+                    provision.primary_device_registration_id,
+                )
+                .await;
+                key.zeroize();
+            } else {
+                tracing::warn!(
+                    "provision ephemeral_backup_key is not 32 bytes; linking without history"
+                );
+            }
+        }
+
         Ok(CompletedLink {
             user_id,
             device_id,
             display_name,
         })
+    }
+
+    /// Fetch + import the Link'n'Sync transfer archive on the new device (§30).
+    /// Never returns an error: the device is already linked, so any failure is
+    /// downgraded to "linked without history".
+    async fn import_transfer_archive(
+        &self,
+        uuid: &str,
+        ephemeral_backup_key: &[u8; 32],
+        aci: &str,
+        primary_registration_id: u32,
+    ) {
+        let backup = MessageBackupService::new(
+            self.database.clone(),
+            self.settings_repo.clone(),
+            self.grpc_pool.clone(),
+        );
+        let mut kek = derive_link_sync_kek(ephemeral_backup_key, aci, primary_registration_id);
+
+        let result: Result<Option<ImportSummary>, LinkDeviceError> = async {
+            match self.poll_transfer_archive(uuid).await? {
+                Some(download_url) => {
+                    let summary = backup
+                        .download_and_import_link_archive(&download_url, &kek)
+                        .await
+                        .map_err(|e| {
+                            LinkDeviceError::Invalid(format!("import transfer archive: {e}"))
+                        })?;
+                    Ok(Some(summary))
+                }
+                // Primary failed/declined to export, or the wait timed out —
+                // link without history.
+                None => Ok(None),
+            }
+        }
+        .await;
+        kek.zeroize();
+
+        match result {
+            Ok(Some(summary)) => tracing::info!(
+                rows_inserted = summary.rows_inserted,
+                "link transfer archive imported"
+            ),
+            Ok(None) => tracing::info!("no transfer archive for this link; linked without history"),
+            Err(e) => tracing::warn!(
+                error = %e,
+                "link transfer archive import failed; linked without history"
+            ),
+        }
+    }
+
+    /// Poll `GetTransferArchive` until Ready (returns the download URL), Failed
+    /// (returns None — link without history), or a bounded deadline elapses
+    /// (also None). Mirrors `poll_until_envelope`'s cadence.
+    async fn poll_transfer_archive(
+        &self,
+        uuid: &str,
+    ) -> Result<Option<String>, LinkDeviceError> {
+        // A primary export of up to 1 GiB plus the upload can take a while;
+        // 3 minutes is generous without hanging a linked device indefinitely.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(180);
+        let mut client = self.provisioning_client()?;
+        loop {
+            match client.get_transfer_archive(uuid).await? {
+                TransferArchivePoll::Ready { download_url, .. } => {
+                    return Ok(Some(download_url));
+                }
+                TransferArchivePoll::Failed { message } => {
+                    tracing::info!(%message, "transfer archive unavailable for this link");
+                    return Ok(None);
+                }
+                TransferArchivePoll::Pending { retry_after_ms } => {
+                    if tokio::time::Instant::now() >= deadline {
+                        tracing::warn!("transfer archive poll timed out; linking without history");
+                        return Ok(None);
+                    }
+                    let delay = retry_after_ms.clamp(1_000, 10_000);
+                    tokio::time::sleep(Duration::from_millis(delay as u64)).await;
+                }
+            }
+        }
     }
 
     // ====================================================================
@@ -1018,6 +1135,20 @@ impl LinkDeviceService {
         // we treat it as a freshness marker and put a random value here.
         let provisioning_code = random_provisioning_code();
 
+        // Mint the single-use Link'n'Sync archive key (§30). It rides ONLY
+        // inside the E2E envelope; the server never sees it. The new device
+        // derives the same KEK from it and decrypts the transfer archive we
+        // export below. Keep the ACI for that same derivation before the
+        // struct build moves `user_id_str`.
+        let aci = user_id_str.clone();
+        let mut ephemeral_backup_key = Zeroizing::new([0u8; 32]);
+        {
+            use rand::TryRngCore;
+            rand::rngs::OsRng
+                .try_fill_bytes(ephemeral_backup_key.as_mut())
+                .expect("OS CSPRNG must not fail");
+        }
+
         let message = ProvisionMessage {
             aci_identity_key_private: priv_bytes,
             pni_identity_key_private: vec![],
@@ -1036,6 +1167,7 @@ impl LinkDeviceService {
                 env!("CARGO_PKG_VERSION"),
             ),
             primary_device_registration_id: registration_id,
+            ephemeral_backup_key: Some(ephemeral_backup_key.to_vec()),
         };
 
         let envelope: ProvisionEnvelope = encrypt_envelope(&req.peer_pub, &message)?;
@@ -1047,7 +1179,74 @@ impl LinkDeviceService {
         client
             .provision_device(&req.uuid, envelope, &message.provisioning_code)
             .await?;
+
+        // Keys are on their way. Now export this account's message history +
+        // social graph as an encrypted archive keyed to the ephemeral key the
+        // new device just received, and hand the server a blob pointer via
+        // SetTransferArchive. Best-effort: a failure here signals the new
+        // device to link WITHOUT history rather than hang — linking already
+        // succeeded above.
+        self.export_transfer_archive(&req.uuid, &ephemeral_backup_key, &aci, registration_id)
+            .await;
         Ok(())
+    }
+
+    /// Export + upload the Link'n'Sync transfer archive for a linking session
+    /// (§30). Never returns an error: linking has already succeeded by the time
+    /// this runs, so any failure is downgraded to an `export_failed` signal that
+    /// tells the polling new device to proceed without history.
+    async fn export_transfer_archive(
+        &self,
+        uuid: &str,
+        ephemeral_backup_key: &[u8; 32],
+        aci: &str,
+        primary_registration_id: u32,
+    ) {
+        let backup = MessageBackupService::new(
+            self.database.clone(),
+            self.settings_repo.clone(),
+            self.grpc_pool.clone(),
+        );
+        let mut kek = derive_link_sync_kek(ephemeral_backup_key, aci, primary_registration_id);
+
+        let result: Result<BackupStats, LinkDeviceError> = async {
+            let (container, stats) = backup
+                .build_link_archive(&kek)
+                .map_err(|e| LinkDeviceError::Invalid(format!("build transfer archive: {e}")))?;
+            let mut client = self.provisioning_client()?;
+            let upload_url = client
+                .set_transfer_archive(uuid, container.len() as u64, false)
+                .await?;
+            backup
+                .upload_link_archive(&container, &upload_url)
+                .await
+                .map_err(|e| LinkDeviceError::Invalid(format!("upload transfer archive: {e}")))?;
+            Ok(stats)
+        }
+        .await;
+        kek.zeroize();
+
+        match result {
+            Ok(stats) => {
+                tracing::info!(
+                    rows = stats.rows,
+                    bytes = stats.bytes,
+                    "link transfer archive exported"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "link transfer archive export failed; new device will link without history"
+                );
+                if let Ok(mut client) = self.provisioning_client() {
+                    // Signal the new device to stop polling. Best-effort: if
+                    // even this fails, the new device's own poll deadline ends
+                    // the wait.
+                    let _ = client.set_transfer_archive(uuid, 0, true).await;
+                }
+            }
+        }
     }
 
     pub async fn cancel(&self, uuid: &str) -> Result<(), LinkDeviceError> {
@@ -1471,6 +1670,7 @@ mod tests {
             settings_repo,
             user_repo,
             key_store,
+            db,
             event_bus,
             notifications,
         ));

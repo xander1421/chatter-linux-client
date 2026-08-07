@@ -260,5 +260,65 @@ pub mod device_provisioning_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        pub async fn set_transfer_archive(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SetTransferArchiveRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::SetTransferArchiveResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.provisioning.DeviceProvisioningService/SetTransferArchive",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "chat.v1.provisioning.DeviceProvisioningService",
+                        "SetTransferArchive",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn get_transfer_archive(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetTransferArchiveRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetTransferArchiveResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.provisioning.DeviceProvisioningService/GetTransferArchive",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "chat.v1.provisioning.DeviceProvisioningService",
+                        "GetTransferArchive",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
     }
 }

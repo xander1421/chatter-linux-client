@@ -36,6 +36,7 @@ impl ChatterClient {
                 settings,
                 user_repo,
                 key_store,
+                self.services.database.clone(),
                 self.services.event_bus.clone(),
                 self.notifications().clone(),
             ))

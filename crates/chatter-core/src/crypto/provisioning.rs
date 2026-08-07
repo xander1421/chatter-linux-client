@@ -284,6 +284,7 @@ mod tests {
             link_previews: false,
             provisioning_user_agent: "linux-client/0.1".into(),
             primary_device_registration_id: 1234,
+            ephemeral_backup_key: None,
         }
     }
 
