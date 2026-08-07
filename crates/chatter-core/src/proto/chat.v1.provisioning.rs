@@ -179,6 +179,15 @@ pub struct ProvisionMessage {
     /// Primary device's registration ID (for session establishment)
     #[prost(uint32, tag="13")]
     pub primary_device_registration_id: u32,
+    /// Single-use Link'n'Sync archive key: 32 bytes that decrypt the transfer
+    /// archive holding this account's message history + social graph (§30).
+    /// Present iff the primary exported an archive for this link; absent means a
+    /// link with no history transfer, which stays legal. Travels ONLY inside the
+    /// E2E ProvisionEnvelope — the server never sees it, so binding the archive
+    /// to this key is what keeps the server (which stores only ciphertext + a
+    /// blob pointer) unable to read a byte of the transfer.
+    #[prost(bytes="vec", optional, tag="14")]
+    pub ephemeral_backup_key: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
 // ================== Complete Device Linking ==================
 
@@ -316,6 +325,82 @@ pub mod provisioning_session {
             }
         }
     }
+}
+// ================== Transfer Archive (Link'n'Sync, §30) ==================
+
+/// Primary announces the uploaded (or failed) transfer archive for a session.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SetTransferArchiveRequest {
+    /// Session whose new device the archive is for. Both parties already share
+    /// this uuid (new device minted it in StartProvisioning, primary read it from
+    /// the QR), and Chatter's primary never learns the new device's assigned id
+    /// at approve time — so the uuid, not a device id, is the archive's address.
+    #[prost(string, tag="1")]
+    pub provisioning_uuid: ::prost::alloc::string::String,
+    /// Size in bytes of the encrypted archive the primary is about to PUT. Capped
+    /// at 1 GiB, matching the message-backup ceiling (svr.proto). Ignored when
+    /// export_failed is set; required positive otherwise (see the message-level
+    /// CEL rule above).
+    #[prost(uint64, tag="2")]
+    pub size: u64,
+    /// Set instead of a size when the primary cancelled or its export failed, so
+    /// the new device stops polling and reports the failure rather than hanging.
+    #[prost(bool, tag="3")]
+    pub export_failed: bool,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SetTransferArchiveResponse {
+    /// Presigned PUT URL for the primary to upload the ciphertext to. Empty when
+    /// export_failed was set.
+    #[prost(string, tag="1")]
+    pub upload_url: ::prost::alloc::string::String,
+}
+/// New device long-polls for the archive location.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetTransferArchiveRequest {
+    #[prost(string, tag="1")]
+    pub provisioning_uuid: ::prost::alloc::string::String,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetTransferArchiveResponse {
+    #[prost(oneof="get_transfer_archive_response::Result", tags="1, 2, 3")]
+    pub result: ::core::option::Option<get_transfer_archive_response::Result>,
+}
+/// Nested message and enum types in `GetTransferArchiveResponse`.
+pub mod get_transfer_archive_response {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Result {
+        /// Archive uploaded — download it, verify, import.
+        #[prost(message, tag="1")]
+        Ready(super::TransferArchiveReady),
+        /// Primary has not finished exporting yet — keep polling.
+        #[prost(message, tag="2")]
+        Pending(super::ProvisioningPending),
+        /// Primary cancelled or the export failed — stop polling.
+        #[prost(message, tag="3")]
+        Error(super::TransferArchiveError),
+    }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TransferArchiveReady {
+    /// Presigned GET URL for the encrypted archive blob.
+    #[prost(string, tag="1")]
+    pub download_url: ::prost::alloc::string::String,
+    /// Size in bytes, so the new device can show progress / pre-allocate.
+    #[prost(uint64, tag="2")]
+    pub size: u64,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TransferArchiveError {
+    #[prost(string, tag="1")]
+    pub message: ::prost::alloc::string::String,
 }
 /// Encoded file descriptor set for the `chat.v1.provisioning` package
 pub const FILE_DESCRIPTOR_SET: &[u8] = &[

@@ -10,10 +10,11 @@ use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::provisioning_v1::{
     device_provisioning_service_client::DeviceProvisioningServiceClient,
-    get_provisioning_message_response, CancelProvisioningRequest, CompleteDeviceLinkingRequest,
-    CompleteDeviceLinkingResponse, GetProvisioningMessageRequest, GetProvisioningMessageResponse,
-    ListProvisioningSessionsRequest, ListProvisioningSessionsResponse, ProvisionDeviceRequest,
-    ProvisionEnvelope, StartProvisioningRequest, StartProvisioningResponse,
+    get_provisioning_message_response, get_transfer_archive_response, CancelProvisioningRequest,
+    CompleteDeviceLinkingRequest, CompleteDeviceLinkingResponse, GetProvisioningMessageRequest,
+    GetProvisioningMessageResponse, GetTransferArchiveRequest, ListProvisioningSessionsRequest,
+    ListProvisioningSessionsResponse, ProvisionDeviceRequest, ProvisionEnvelope,
+    SetTransferArchiveRequest, StartProvisioningRequest, StartProvisioningResponse,
 };
 use crate::proto::{signal_pre_key_bundle::PreKeyRecord, SignalPreKeyBundle};
 
@@ -28,6 +29,18 @@ pub enum ProvisioningPollResult {
     Expired { message: String },
     /// Session was cancelled by primary
     Cancelled { message: String },
+}
+
+/// Result of polling for the Link'n'Sync transfer archive (§30).
+#[derive(Debug, Clone)]
+pub enum TransferArchivePoll {
+    /// Ciphertext is uploaded — download it from `download_url`, decrypt, import.
+    Ready { download_url: String, size: u64 },
+    /// Primary has not finished exporting yet — keep polling.
+    Pending { retry_after_ms: u32 },
+    /// Primary cancelled, its export failed, or the session ended — stop
+    /// polling. The device links without history rather than hanging.
+    Failed { message: String },
 }
 
 /// Device provisioning client wrapper.
@@ -231,6 +244,76 @@ impl ProvisioningClient {
             .await
             .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Announce the Link'n'Sync transfer archive for a session (primary calls,
+    /// authenticated). On success returns a presigned PUT URL to upload the
+    /// ciphertext to; the server stores only the blob pointer + declared size,
+    /// never the archive key. §30.
+    ///
+    /// # Arguments
+    /// * `provisioning_uuid` - Session UUID (the archive's address)
+    /// * `size` - Byte length of the encrypted archive about to be uploaded
+    /// * `export_failed` - When true, no size/URL: signals the new device to
+    ///   stop polling and link without history rather than hang.
+    pub async fn set_transfer_archive(
+        &mut self,
+        provisioning_uuid: &str,
+        size: u64,
+        export_failed: bool,
+    ) -> Result<String, NetworkError> {
+        let request = SetTransferArchiveRequest {
+            provisioning_uuid: provisioning_uuid.to_string(),
+            size,
+            export_failed,
+        };
+
+        self.inner
+            .set_transfer_archive(request)
+            .await
+            .map(|r| r.into_inner().upload_url)
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Poll for the transfer archive location (new device calls, unauthenticated
+    /// — authorized only by holding the session UUID, like
+    /// `poll_provisioning_message`). §30.
+    pub async fn get_transfer_archive(
+        &mut self,
+        provisioning_uuid: &str,
+    ) -> Result<TransferArchivePoll, NetworkError> {
+        let request = GetTransferArchiveRequest {
+            provisioning_uuid: provisioning_uuid.to_string(),
+        };
+
+        let response = self
+            .inner
+            .get_transfer_archive(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))?;
+
+        match response.result {
+            Some(get_transfer_archive_response::Result::Ready(ready)) => {
+                Ok(TransferArchivePoll::Ready {
+                    download_url: ready.download_url,
+                    size: ready.size,
+                })
+            }
+            Some(get_transfer_archive_response::Result::Pending(p)) => {
+                Ok(TransferArchivePoll::Pending {
+                    retry_after_ms: p.retry_after_ms,
+                })
+            }
+            Some(get_transfer_archive_response::Result::Error(e)) => {
+                Ok(TransferArchivePoll::Failed { message: e.message })
+            }
+            // A server that answered without a oneof arm is treated as
+            // still-pending; the caller's overall deadline bounds the loop.
+            None => Ok(TransferArchivePoll::Pending {
+                retry_after_ms: 2000,
+            }),
+        }
     }
 }
 

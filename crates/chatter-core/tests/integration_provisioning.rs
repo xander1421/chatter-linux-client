@@ -519,6 +519,7 @@ fn test_provision_envelope_roundtrip_with_real_proto() {
         link_previews: true,
         provisioning_user_agent: "chatter-test/0.0".into(),
         primary_device_registration_id: 1234,
+        ephemeral_backup_key: None,
     };
 
     // Primary encrypts to new device's pub.
@@ -598,6 +599,7 @@ async fn test_full_link_flow_with_real_envelope_crypto() {
         link_previews: true,
         provisioning_user_agent: "primary-test/0.0".into(),
         primary_device_registration_id: 42,
+        ephemeral_backup_key: None,
     };
     let envelope = encrypt_provision_envelope(&new_device_kp.public_bytes(), &provision_msg)
         .expect("encrypt envelope");
