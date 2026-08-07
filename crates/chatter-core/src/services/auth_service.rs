@@ -337,7 +337,14 @@ impl AuthService {
         // secret — and run off the async worker. See `derive_svr_secret_async`.
         let mut svr_secret: [u8; 32];
         let svr_public_key = if let Some(p) = pin {
-            crate::crypto::svr::validate_pin(p).map_err(|e| {
+            // Shape-only: this is the EXISTING account PIN being used to log in
+            // and drive the post-login SVR restore, not a PIN being chosen.
+            // Full strength validation here would lock a user out of their own
+            // account for a PIN that was valid when set — the exact
+            // ratchet-forward violation the validate_pin/validate_pin_shape
+            // split exists to prevent (§10). A weak legacy PIN's cost is
+            // already paid; refusing the login only denies the owner.
+            crate::crypto::svr::validate_pin_shape(p).map_err(|e| {
                 AuthError::RegistrationFailed(format!("invalid PIN: {e}"))
             })?;
             let secret = crate::crypto::svr::derive_svr_secret_async(p, username).await?;

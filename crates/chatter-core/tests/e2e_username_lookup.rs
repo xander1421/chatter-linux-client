@@ -16,7 +16,7 @@ use std::sync::Arc;
 use chatter_core::client::ChatterClient;
 
 const SERVER_URL: &str = "http://localhost:50051";
-const PIN: &str = "abcd1234"; // must clear validate_pin's entropy floor
+const PIN: &str = "Kf8mq2xpZ"; // non-blocklisted, clears validate_pin
 const PASSWORD: &str = "TestPass123!";
 
 fn build_client(dir: &tempfile::TempDir) -> Arc<ChatterClient> {

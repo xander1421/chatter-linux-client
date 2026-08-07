@@ -47,7 +47,7 @@ const EVENT_TIMEOUT: Duration = Duration::from_secs(30);
 // behaviour under test is identical: a known-correct PIN registered with
 // the user, plus a set of mismatching/empty/short PINs that must squash
 // to `false` through `verify_pin_for_anon_mode`.
-const PIN: &str = "12345678";
+const PIN: &str = "Kf8mq2xpZ"; // non-blocklisted, clears validate_pin
 const PASSWORD: &str = "TestPass123!";
 
 // ============================================================================

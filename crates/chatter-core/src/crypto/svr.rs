@@ -444,6 +444,28 @@ mod tests {
         }
     }
 
+    /// The ratchet-forward invariant, load-bearing for account recovery: a PIN
+    /// that is now blocklisted or structurally weak must still pass the
+    /// SHAPE-only check, because that is what the login, SVR-restore, backup
+    /// and change-old-PIN paths run. If strict validation ever leaks onto one
+    /// of those paths, a user whose PIN predates a blocklist entry is locked
+    /// out of their own account and their own backup — the regression cubic
+    /// caught on the login path (§10).
+    #[test]
+    fn a_now_weak_pin_still_passes_shape_only_so_its_owner_can_still_log_in() {
+        for pin in ["password", "abcd1234", "12345678", "aaaaaaaa", "abcdefgh"] {
+            assert!(
+                validate_pin(pin).is_err(),
+                "{pin:?} must be refused when a PIN is being CHOSEN"
+            );
+            assert!(
+                validate_pin_shape(pin).is_ok(),
+                "{pin:?} must pass shape-only — its owner set it when it was valid and \
+                 must still be able to log in and restore",
+            );
+        }
+    }
+
     /// Padding short usernames must be deterministic: the same username always
     /// derives the same secret regardless of how many NUL bytes were appended.
     /// This guards the salt-padding rationale documented on `derive_svr_secret`.
