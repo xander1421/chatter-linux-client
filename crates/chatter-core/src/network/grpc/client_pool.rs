@@ -166,6 +166,21 @@ impl GrpcClientPool {
             .initial_stream_window_size(2 * 1024 * 1024)
             .initial_connection_window_size(8 * 1024 * 1024);
 
+        // §8 fail-closed: a provisioned (non-dev) build must not fall back to a
+        // cleartext direct connection. Without this the CA pin below is simply
+        // skipped for an `http://<host>` URL and the client talks plaintext with
+        // no warning. Onion is exempt — it is `http://<hash>.onion` authenticated
+        // by its address, over Tor, on a separate connector. Dev builds keep
+        // plaintext `http://localhost` for the local stack.
+        #[cfg(not(feature = "dev-trust-root"))]
+        if !server_url.starts_with("https://") && !server_url.contains(".onion") {
+            return Err(NetworkError::ConnectionFailed(
+                "refusing a cleartext direct server URL in a provisioned build; \
+                 use https:// (chatter-CA-pinned) or a .onion address"
+                    .to_string(),
+            ));
+        }
+
         // TLS for HTTPS endpoints — Signal-style private-PKI pin (§8): trust ONLY
         // the provisioned chatter CA, never the system/native roots, so a rogue
         // or mis-issued public CA cannot MITM this channel. `ClientTlsConfig::new()`

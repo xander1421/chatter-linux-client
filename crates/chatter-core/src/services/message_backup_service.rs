@@ -421,9 +421,28 @@ impl MessageBackupService {
                 response.status()
             )));
         }
+        // Bound the download: the server caps a transfer archive at 1 GiB
+        // (SetTransferArchive proto rule). A compromised/rogue presigned URL
+        // could otherwise return an unbounded body and OOM the new device.
+        // Reject on a declared over-cap length up front, and defensively verify
+        // the received length too (Content-Length may be absent or lie).
+        const MAX_LINK_ARCHIVE_BYTES: u64 = 1024 * 1024 * 1024;
+        if let Some(len) = response.content_length() {
+            if len > MAX_LINK_ARCHIVE_BYTES {
+                return Err(MessageBackupError::Generic(format!(
+                    "transfer archive too large: {len} bytes exceeds the 1 GiB cap"
+                )));
+            }
+        }
         let blob = response.bytes().await.map_err(|e| {
             MessageBackupError::Generic(format!("transfer archive read failed: {e}"))
         })?;
+        if blob.len() as u64 > MAX_LINK_ARCHIVE_BYTES {
+            return Err(MessageBackupError::Generic(format!(
+                "transfer archive too large: {} bytes exceeds the 1 GiB cap",
+                blob.len()
+            )));
+        }
 
         let summary = self.decrypt_and_import(&blob, kek, KEY_MODE_LINK)?;
         tracing::info!(

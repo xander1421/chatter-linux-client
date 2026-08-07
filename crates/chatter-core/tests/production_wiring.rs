@@ -172,8 +172,8 @@ const TABLE: &[Entry] = &[
               that the sender ID equals SHA256(announced noise key)[..8]. This function \
               HAD zero production callers — mesh peers were unauthenticated on the live \
               path while announce.rs's unit tests passed. It is wired now \
-              (services/mesh/ble.rs); this entry stops it regressing. Note that \
-              CLAUDE.md still describes it as dead.",
+              (services/mesh/ble.rs); this entry stops it regressing. CLAUDE.md's \
+              'CORRECTED' note agrees it is wired.",
     },
     Entry {
         symbol: "verify_packet",
