@@ -63,6 +63,11 @@ pub const FORMAT_VERSION: u32 = 1;
 pub const KEY_MODE_PASSPHRASE: u32 = 1;
 /// KEK derived from the SVR secret (server-stored backup).
 pub const KEY_MODE_SVR: u32 = 2;
+/// KEK derived from a single-use Link'n'Sync ephemeral key (§30). The archive
+/// is a device-to-device transfer that transits the CDN as ciphertext; the key
+/// rode inside the E2E provision envelope, so — like SVR mode — there is no
+/// Argon2 salt (the ephemeral key is already 32 bytes of fresh entropy).
+pub const KEY_MODE_LINK: u32 = 3;
 
 /// Argon2 salt length for passphrase mode.
 pub const ARGON2_SALT_LEN: usize = 16;
@@ -78,7 +83,7 @@ const WRAPPED_FILE_KEY_LEN: usize = NONCE_LEN + 32 + TAG_LEN;
 pub struct BackupFileHeader {
     #[prost(uint32, tag = "1")]
     pub format_version: u32,
-    /// One of [`KEY_MODE_PASSPHRASE`] / [`KEY_MODE_SVR`].
+    /// One of [`KEY_MODE_PASSPHRASE`] / [`KEY_MODE_SVR`] / [`KEY_MODE_LINK`].
     #[prost(uint32, tag = "2")]
     pub key_mode: u32,
     /// Random Argon2 salt (passphrase mode only; empty in SVR mode).
@@ -130,6 +135,41 @@ pub fn derive_server_kek(svr_secret: &[u8; 32]) -> [u8; 32] {
     kek
 }
 
+/// Derive the Link'n'Sync archive KEK from the single-use ephemeral key that
+/// travelled inside the E2E provision envelope (§30).
+///
+/// `HKDF-SHA256(ikm = ephemeral_key, salt = aci, info = "Chatter Link Sync KEK
+/// v1|" || primary_registration_id)`.
+///
+/// Three bindings, in order of what they buy:
+/// - **ephemeral key** — the actual secret. Single-use and 32 bytes of fresh
+///   entropy per link, so a KEK can never be reused across sessions.
+/// - **ACI salt** — binds the archive to the account. A blob stolen from the
+///   CDN is undecryptable and cannot be replayed against another account, even
+///   by someone who somehow learned an ephemeral key.
+/// - **primary registration id in the info** — costless domain separation
+///   (both sides already hold it: the primary knows its own, the new device
+///   reads `primary_device_registration_id` from the same provision envelope
+///   the ephemeral key came in). Binds the KEK to the specific primary that
+///   created the link. Defense in depth, not load-bearing on its own.
+///
+/// Distinct info string from `derive_server_kek` keeps this domain-separated
+/// from every other KEK.
+pub fn derive_link_sync_kek(
+    ephemeral_key: &[u8; 32],
+    aci: &str,
+    primary_registration_id: u32,
+) -> [u8; 32] {
+    let hk = Hkdf::<Sha256>::new(Some(aci.as_bytes()), ephemeral_key);
+    let mut info = Vec::with_capacity(26 + 4);
+    info.extend_from_slice(b"Chatter Link Sync KEK v1|");
+    info.extend_from_slice(&primary_registration_id.to_be_bytes());
+    let mut kek = [0u8; 32];
+    hk.expand(&info, &mut kek)
+        .expect("32 bytes is a valid HKDF-SHA256 output length");
+    kek
+}
+
 /// Derive the server-side index for the message backup:
 /// HMAC-SHA256(svr_secret, "MessageBackupId"). Mirrors
 /// `svr_backup::derive_backup_id` ("BackupId") with a distinct context so the
@@ -165,6 +205,9 @@ pub fn encrypt_backup_file(
     match key_mode {
         KEY_MODE_PASSPHRASE if argon2_salt.len() == ARGON2_SALT_LEN => {}
         KEY_MODE_SVR if argon2_salt.is_empty() => {}
+        // Link'n'Sync mode carries no Argon2 salt — the ephemeral key is the
+        // entropy source (§30), same shape as SVR mode.
+        KEY_MODE_LINK if argon2_salt.is_empty() => {}
         _ => {
             return Err(CryptoError::Validation(
                 "invalid backup key mode / salt combination".into(),
@@ -333,6 +376,69 @@ mod tests {
         );
         // And the KEK must not equal the raw secret (domain separation).
         assert_ne!(derive_server_kek(&secret()), secret());
+    }
+
+    /// Link'n'Sync KEK (§30): deterministic per (ephemeral, aci, reg_id) and
+    /// distinct when ANY of the three bindings changes. Pinned against an
+    /// independently-computed HKDF vector so a silent change to the salt/info
+    /// construction — which would make every in-flight transfer archive
+    /// undecryptable — fails loudly. MUTATION: dropping the ACI salt or the
+    /// reg-id from the derivation makes the corresponding assertion fail.
+    #[test]
+    fn link_sync_kek_binds_ephemeral_aci_and_regid() {
+        let eph = secret();
+        let aci = "11111111-1111-1111-1111-111111111111";
+        let k = derive_link_sync_kek(&eph, aci, 7);
+
+        // Deterministic.
+        assert_eq!(k, derive_link_sync_kek(&eph, aci, 7));
+        // Pinned: HKDF-SHA256(ikm=0..31, salt=aci bytes,
+        // info="Chatter Link Sync KEK v1|" || 0x00000007), 32 bytes.
+        assert_eq!(
+            hex::encode(k),
+            "dee2e015eeba8ef7f1f71c8599edfd13a64b08cd8709d7b0e685a1c4fe5fec7a",
+        );
+
+        // Each binding is load-bearing.
+        assert_ne!(k, derive_link_sync_kek(&[9u8; 32], aci, 7), "ephemeral key binds");
+        assert_ne!(
+            k,
+            derive_link_sync_kek(&eph, "22222222-2222-2222-2222-222222222222", 7),
+            "ACI salt binds — a blob cannot be replayed across accounts"
+        );
+        assert_ne!(k, derive_link_sync_kek(&eph, aci, 8), "primary reg-id binds");
+        // Domain separation from the SVR KEK built on the same 32 bytes.
+        assert_ne!(k, derive_server_kek(&eph));
+    }
+
+    /// Full container round-trip in link mode: encrypt a frame payload under a
+    /// link-sync KEK, parse, decrypt byte-exact. The wrong KEK (a mutated
+    /// ephemeral key) fails to unwrap, and a header-tamper fails the AAD bind —
+    /// the "MAC-verify before a single frame is imported" property §30 requires.
+    #[test]
+    fn link_mode_container_round_trips_and_rejects_wrong_key() {
+        let aci = "abcdefab-cdef-abcd-efab-cdefabcdefab";
+        let kek = derive_link_sync_kek(&secret(), aci, 1);
+        let payload = b"length-delimited archive frames".to_vec();
+
+        let file = encrypt_backup_file(&payload, &kek, KEY_MODE_LINK, &[]).unwrap();
+        let parsed = parse_backup_file(&file).unwrap();
+        assert_eq!(parsed.header.key_mode, KEY_MODE_LINK);
+        assert_eq!(decrypt_backup_file(&parsed, &kek).unwrap(), payload);
+
+        // Wrong ephemeral key (attacker who has the blob but not the envelope).
+        let wrong = derive_link_sync_kek(&[0xFFu8; 32], aci, 1);
+        assert!(decrypt_backup_file(&parsed, &wrong).is_err());
+
+        // A link-mode file must carry no Argon2 salt.
+        assert!(encrypt_backup_file(&payload, &kek, KEY_MODE_LINK, &[0u8; ARGON2_SALT_LEN]).is_err());
+
+        // Header tamper (flip a byte in the header) breaks the AAD bind.
+        let mut tampered = file.clone();
+        tampered[MAGIC.len() + 4] ^= 0x01;
+        assert!(parse_backup_file(&tampered)
+            .and_then(|p| decrypt_backup_file(&p, &kek))
+            .is_err());
     }
 
     /// Passphrase KEK: deterministic for same (passphrase, salt), distinct
