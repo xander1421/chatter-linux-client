@@ -106,12 +106,24 @@ mod tor {
     }
 
     /// Build a rustls client config that verifies the server certificate against
-    /// the webpki root store. SNI is supplied at connect time. Uses the `ring`
-    /// crypto provider explicitly so we never depend on a process-global default
-    /// being installed.
+    /// the pinned chatter CA — Signal-style private-PKI pin (§8), the SAME
+    /// anchor the direct gRPC path uses. This path tunnels ordinary hostname TLS
+    /// through a Tor circuit, so it does the identical CA-only trust: only the
+    /// provisioned chatter CA, never the webpki/system roots. SNI is supplied at
+    /// connect time. Uses the `ring` crypto provider explicitly so we never
+    /// depend on a process-global default being installed.
     fn tls_config() -> ClientConfig {
+        use tokio_rustls::rustls::pki_types::{pem::PemObject, CertificateDer};
+
         let mut roots = RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        if let Some(ca_pem) = crate::config::TLS_ROOT_CA_PEM {
+            for cert in CertificateDer::pem_slice_iter(ca_pem.as_bytes()) {
+                let cert = cert.expect("pinned chatter TLS CA PEM must parse");
+                roots
+                    .add(cert)
+                    .expect("pinned chatter TLS CA must be a valid trust anchor");
+            }
+        }
         ClientConfig::builder_with_provider(Arc::new(
             tokio_rustls::rustls::crypto::ring::default_provider(),
         ))

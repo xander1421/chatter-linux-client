@@ -166,10 +166,22 @@ impl GrpcClientPool {
             .initial_stream_window_size(2 * 1024 * 1024)
             .initial_connection_window_size(8 * 1024 * 1024);
 
-        // Configure TLS for HTTPS endpoints (required on Android where system CAs
-        // aren't automatically loaded by rustls)
+        // TLS for HTTPS endpoints — Signal-style private-PKI pin (§8): trust ONLY
+        // the provisioned chatter CA, never the system/native roots, so a rogue
+        // or mis-issued public CA cannot MITM this channel. `ClientTlsConfig::new()`
+        // starts with an EMPTY trust store in tonic 0.12; we add just our CA and
+        // never call `with_native_roots()`. Onion endpoints are `http://` over Tor,
+        // pinned by their `.onion` address, and never reach this branch.
         if server_url.starts_with("https://") {
-            let tls_config = tonic::transport::ClientTlsConfig::new();
+            let ca_pem = crate::config::TLS_ROOT_CA_PEM.ok_or_else(|| {
+                NetworkError::ConnectionFailed(
+                    "no TLS root CA provisioned; refusing to open an unpinned TLS connection \
+                     (build with CHATTER_TLS_ROOT_CA_PEM, or --features dev-trust-root)"
+                        .to_string(),
+                )
+            })?;
+            let tls_config = tonic::transport::ClientTlsConfig::new()
+                .ca_certificate(tonic::transport::Certificate::from_pem(ca_pem));
             endpoint = endpoint.tls_config(tls_config)
                 .map_err(|e| NetworkError::ConnectionFailed(format!("TLS config error: {}", e)))?;
         }
