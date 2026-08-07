@@ -86,13 +86,109 @@ fn estimate_pin_entropy_bits(pin: &str) -> f64 {
     pin.chars().count() as f64 * (charset as f64).log2()
 }
 
+/// The most common passwords of [`MIN_PIN_LENGTH`]+ characters, from the
+/// public breach-corpus top lists (rockyou / NCSC / SecLists top-10k,
+/// filtered to >= 8 chars). Matched case-insensitively.
+///
+/// This exists because the entropy estimate above is a CHARSET model:
+/// "password" scores 8 x log2(26) = 37.6 "bits" and sails over the 30-bit
+/// floor, while sitting in the first hundred guesses of every cracking
+/// wordlist. A curated list of the head of that distribution costs nothing
+/// and removes exactly the guesses an offline attacker tries first
+/// (OPEN-ITEMS §10). It deliberately stays small — the tail adds little,
+/// because past the head the structural checks and the entropy floor carry
+/// the weight.
+const BLOCKED_PINS: &[&str] = &[
+    "password", "password1", "password12", "password123", "passw0rd", "p@ssw0rd",
+    "12345678", "123456789", "1234567890", "123123123", "987654321", "11111111",
+    "00000000", "1q2w3e4r", "1q2w3e4r5t", "1qaz2wsx", "qazwsx123", "aa123456",
+    "abc12345", "abcd1234", "qwertyui", "qwertyuiop", "asdfghjk", "asdfghjkl",
+    "zxcvbnm123", "iloveyou", "iloveyou1", "sunshine", "princess", "football",
+    "baseball", "superman", "trustno1", "welcome1", "michelle", "jennifer",
+    "computer", "whatever", "chocolate", "butterfly", "liverpool", "starwars",
+    "pokemon1", "michael1", "jordan23", "harley123", "shadow123", "monkey123",
+    "dragon123", "master123", "samantha", "anthony1", "danielle", "jessica1",
+    "charlie1", "internet", "creative", "adventure", "elephant", "November",
+    "December", "September", "alexander", "victoria", "kimberly", "veronica",
+    "corvette", "mercedes", "midnight", "snickers", "mountain", "dinosaur",
+    "hardcore", "lovelove", "loveyou2", "babygirl", "babygirl1", "angelina",
+    "valentina", "isabella", "gabriella", "benjamin", "nicholas", "matthew1",
+];
+
+/// Blocklist membership, case-insensitive.
+fn is_blocklisted_pin(pin: &str) -> bool {
+    let lowered = pin.to_ascii_lowercase();
+    BLOCKED_PINS.iter().any(|b| b.eq_ignore_ascii_case(&lowered))
+}
+
+/// Structural weakness: patterns whose keyspace is tiny regardless of what
+/// the charset model says. Each catches a whole family no finite blocklist
+/// can enumerate:
+///
+/// - all one character:            "aaaaaaaa", "!!!!!!!!"  (charset model: 37.6 bits)
+/// - a single +/-1 run:            "abcdefgh", "87654321"
+/// - a short block repeated:       "12341234", "abcabcab", "xyxyxyxy"
+///
+/// The period check accepts any period `p <= len/2` with `s[i] == s[i-p]`,
+/// which also catches non-integer tilings like "abcabcab" (period 3 over 8).
+fn is_structurally_weak_pin(pin: &str) -> bool {
+    let b = pin.as_bytes();
+    // All one character.
+    if b.iter().all(|&c| c == b[0]) {
+        return true;
+    }
+    // Single monotone run with step +1 or -1 ("12345678", "hgfedcba").
+    for step in [1i16, -1i16] {
+        if b.windows(2).all(|w| w[1] as i16 - w[0] as i16 == step) {
+            return true;
+        }
+    }
+    // Repeated short block.
+    for period in 1..=b.len() / 2 {
+        if (period..b.len()).all(|i| b[i] == b[i - period]) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Validate a PIN's shape and strength.
 ///
-/// `MIN_PIN_LENGTH..=MAX_PIN_LENGTH` ASCII printable bytes, and at least
-/// [`MIN_PIN_ENTROPY_BITS`] of estimated entropy. The entropy floor rejects
-/// low-keyspace PINs (e.g. an 8-digit numeric PIN) that a software-only SVR
-/// cannot otherwise defend against.
+/// `MIN_PIN_LENGTH..=MAX_PIN_LENGTH` ASCII printable bytes, at least
+/// [`MIN_PIN_ENTROPY_BITS`] of estimated entropy, not in the common-password
+/// blocklist, and not structurally degenerate (one repeated character, a
+/// keyboard-walk run, a short repeated block). The entropy floor rejects
+/// low-keyspace PINs (e.g. an 8-digit numeric PIN); the blocklist and the
+/// structural checks reject the high-scoring-but-first-guessed PINs the
+/// charset model cannot see — "password" scores 37.6 estimated bits and is
+/// the first line of every cracking wordlist (OPEN-ITEMS §10).
 pub fn validate_pin(pin: &str) -> Result<(), CryptoError> {
+    validate_pin_shape(pin)?;
+    if estimate_pin_entropy_bits(pin) < MIN_PIN_ENTROPY_BITS {
+        return Err(CryptoError::Validation(
+            "PIN is too weak — use more characters or mix digits, letters, and symbols".into(),
+        ));
+    }
+    if is_blocklisted_pin(pin) || is_structurally_weak_pin(pin) {
+        return Err(CryptoError::Validation(
+            "PIN is too common or too predictable — choose something less guessable".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Shape-only validation: length bounds and printable ASCII, WITHOUT the
+/// entropy floor, blocklist or structural checks.
+///
+/// This is the check for paths that USE an already-set PIN — verifying it,
+/// restoring a backup with it, re-uploading with it. Those paths must accept
+/// every PIN that was valid when it was SET: the strength rules only ratchet
+/// forward (the §10 blocklist grew once and will again), and a rule added
+/// after a user chose their PIN must never stand between them and their own
+/// backup. Strength enforcement belongs exclusively to the creation paths
+/// (registration, change-pin, new backup passphrase), which use
+/// [`validate_pin`].
+pub fn validate_pin_shape(pin: &str) -> Result<(), CryptoError> {
     if pin.len() < MIN_PIN_LENGTH {
         return Err(CryptoError::Validation(format!(
             "PIN must be at least {MIN_PIN_LENGTH} characters",
@@ -106,11 +202,6 @@ pub fn validate_pin(pin: &str) -> Result<(), CryptoError> {
     if !pin.chars().all(|c| c.is_ascii_graphic()) {
         return Err(CryptoError::Validation(
             "PIN must contain only printable ASCII characters".into(),
-        ));
-    }
-    if estimate_pin_entropy_bits(pin) < MIN_PIN_ENTROPY_BITS {
-        return Err(CryptoError::Validation(
-            "PIN is too weak — use more characters or mix digits, letters, and symbols".into(),
         ));
     }
     Ok(())
@@ -318,6 +409,41 @@ impl SvrKeypair {
 mod tests {
     use super::*;
 
+    /// The §10 defect, pinned: PINs that pass the charset entropy model while
+    /// sitting at the head of every cracking wordlist. Every one of these
+    /// scored >= 30 estimated bits under the old rules and was ACCEPTED.
+    #[test]
+    fn common_and_predictable_pins_are_rejected_despite_high_charset_entropy() {
+        for pin in [
+            "password",  // 37.6 "bits", first line of rockyou (§10's own example)
+            "Password1", // blocklist is case-insensitive
+            "iloveyou",  // common-list
+            "aaaaaaaa",  // one repeated char — 37.6 "bits" under the charset model
+            "abcdefgh",  // +1 run
+            "hgfedcba",  // -1 run
+            "12341234",  // repeated block, integer tiling
+            "abcabcab",  // repeated block, NON-integer tiling (period 3 over 8)
+            "xyxyxyxyxy", // period 2
+        ] {
+            assert!(
+                validate_pin(pin).is_err(),
+                "{pin:?} must be rejected — it is among an offline attacker's first guesses"
+            );
+        }
+    }
+
+    /// Reasonable PINs keep passing — including the VALIDATED harness PIN, so
+    /// this check can never lock the integration suite out.
+    #[test]
+    fn reasonable_pins_still_pass() {
+        for pin in ["Va1idPin!x9", "tr0mb0ne-cloud", "Bl4ckb1rd$", "novemberrain77"] {
+            assert!(
+                validate_pin(pin).is_ok(),
+                "{pin:?} should pass but was rejected"
+            );
+        }
+    }
+
     /// Padding short usernames must be deterministic: the same username always
     /// derives the same secret regardless of how many NUL bytes were appended.
     /// This guards the salt-padding rationale documented on `derive_svr_secret`.
@@ -423,7 +549,10 @@ mod tests {
 
     #[test]
     fn validate_pin_accepts_minimum_length() {
-        assert!(validate_pin("abcdefgh").is_ok(), "8 lowercase (~37.6 bits) accepted");
+        // NOT "abcdefgh" — that is a keyboard-walk run the structural check
+        // now rejects (§10); an 8-char PIN must be fine when it isn't a
+        // pattern.
+        assert!(validate_pin("kf8mq2xp").is_ok(), "8 mixed lowercase+digits accepted");
         assert!(validate_pin("AaBbCc12").is_ok(), "mixed alphanumeric accepted");
         assert!(validate_pin("Pa$$w0rd!").is_ok(), "symbols accepted");
     }
@@ -433,8 +562,12 @@ mod tests {
         // 8-digit numeric (~26.6 bits) is below the entropy floor — the case a
         // software-only SVR can't defend against.
         assert!(validate_pin("12345678").is_err(), "8-digit numeric rejected");
-        // A longer numeric PIN clears the floor (10 digits ~= 33 bits).
-        assert!(validate_pin("1234567890").is_ok(), "10-digit numeric accepted");
+        // A longer numeric PIN clears the entropy floor (10 digits ~= 33
+        // bits), but "1234567890" specifically is a +1 run AND on the
+        // blocklist — the §10 case of a high-scoring first-guess. A
+        // non-pattern 10-digit PIN passes.
+        assert!(validate_pin("1234567890").is_err(), "the canonical 10-digit run rejected");
+        assert!(validate_pin("8629174035").is_ok(), "non-pattern 10-digit numeric accepted");
     }
 
     #[test]
