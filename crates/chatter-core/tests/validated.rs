@@ -696,8 +696,14 @@ async fn link_secondary_device(
         .await
         .expect("primary failed to approve the link — provision envelope never uploaded");
 
+    // The gap between approval and Linked legitimately contains the whole
+    // Link'n'Sync archive round trip (§30: export -> presigned PUT -> poll ->
+    // GET -> import) plus the PQOPK seed, which retries with backoff when the
+    // per-IP RefreshPreKeys limit throttles a parallel run (§34). EVENT_TIMEOUT
+    // is sized for a single event hop, not for that pipeline.
+    const LINKED_TIMEOUT: Duration = Duration::from_secs(120);
     let linked = loop {
-        match tokio::time::timeout(EVENT_TIMEOUT, rx.recv())
+        match tokio::time::timeout(LINKED_TIMEOUT, rx.recv())
             .await
             .expect("timed out waiting for Linked")
         {
