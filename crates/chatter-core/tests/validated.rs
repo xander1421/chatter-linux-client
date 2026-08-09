@@ -10823,3 +10823,116 @@ async fn v53_identity_reset_publishes_a_key_the_server_serves() {
     println!("\nV53 PASS — no backup is reported, never silently re-keyed; an explicit reset publishes a rotated identity key atomically and KT records it\n");
     client_fresh.shutdown().await;
 }
+
+// ============================================================================
+// V54: Link'n'Sync actually transfers history — a device linked AFTER a
+// conversation happened holds that conversation, from the ARCHIVE, not the wire
+// ============================================================================
+//
+// The §30 server half (SetTransferArchive / GetTransferArchive, presigned
+// RustFS blobs) and the client's export/import have each been proven in
+// isolation; this is the end-to-end: A talks to B, THEN links a new device.
+// The new device was not registered when the message was sent, so no queue on
+// the server ever held a copy for it — the ONLY way the conversation can
+// appear in its local store is the encrypted transfer archive riding the link
+// (primary: build_link_archive → SetTransferArchive → presigned PUT; new
+// device: GetTransferArchive poll → presigned GET → decrypt with the KEK
+// derived from the in-envelope ephemeral_backup_key → import).
+//
+// Kill the export, the import, either RPC, or the blob store and the link
+// still "succeeds" (§30's failure mode is deliberately linked-without-history)
+// — but the marker assertion below goes RED. That silence-tolerance is exactly
+// why the proof must look at the imported store and not at link success.
+#[tokio::test]
+async fn v54_link_transfers_history_to_new_device() {
+    skip_if_no_server!();
+    no_keyring_prompts();
+
+    // ---- A registers; B registers; they befriend ---------------------------
+    let dir_ap = tempfile::tempdir().unwrap();
+    let client_ap = build_client(dir_ap.path());
+    let uid_a = register_and_start(&client_ap, &unique_user("v54a"), "V54 Alice").await;
+
+    let dir_b = tempfile::tempdir().unwrap();
+    let client_b = build_client(dir_b.path());
+    let uid_b = register_and_start(&client_b, &unique_user("v54b"), "V54 Bob").await;
+
+    befriend(&client_ap, &client_b, uid_a, uid_b).await;
+
+    // ---- the conversation that must survive the link -----------------------
+    let expected_conv = ChannelId::from(uid_a);
+    let mut ev_b = client_b.subscribe_events();
+    let marker = unique_marker();
+    println!("\n  history marker: {marker}");
+
+    client_ap
+        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &marker)
+        .await
+        .expect("send_text failed");
+    let got = wait_for_event(&mut ev_b, EVENT_TIMEOUT, |e| {
+        matches!(e, DomainEvent::MessageReceived { message } if message.conversation_id == expected_conv)
+    })
+    .await;
+    assert!(
+        matches!(&got, Some(DomainEvent::MessageReceived { message })
+            if message.as_text() == Some(marker.as_str())),
+        "POSITIVE CONTROL FAILED: B never decrypted A's marker — the conversation \
+         under test does not exist, so its absence on the linked device would mean \
+         nothing."
+    );
+
+    // ---- POSITIVE CONTROL: the marker is in A's LOCAL store ----------------
+    // The archive is built from exactly this store; an export of a store that
+    // never held the marker would make the final assertion fail for a reason
+    // that is not the transfer.
+    let on_a = client_ap
+        .get_messages(&ActiveConversation::ServerDm { peer_id: uid_b }, 50)
+        .expect("query A's local store failed");
+    assert!(
+        on_a.iter().any(|m| m.as_text() == Some(marker.as_str())),
+        "POSITIVE CONTROL FAILED: the marker is not in A's local store — there is \
+         no history to export."
+    );
+    println!("  positive control: marker present in A's local store (the export source)");
+
+    // B is done: the message is delivered and stored on A. Take B down so
+    // nothing else in this test can move bytes for it.
+    client_b.shutdown().await;
+    drop(client_b);
+
+    // ---- A links a NEW device. This is the whole flow under test -----------
+    // Inside link_secondary_device: A's approve exports the archive and PUTs
+    // it to the blob store; the new device polls, GETs, decrypts and imports —
+    // all before LinkProgress::Linked fires.
+    let dir_s = tempfile::tempdir().unwrap();
+    let client_s = build_client(dir_s.path());
+    let dev_s = link_secondary_device(&client_ap, &client_s, uid_a).await;
+    println!("  A linked a new device: device_id={dev_s}");
+    start_linked(&client_s, "A linked").await;
+
+    // ---- THE PROPERTY: the conversation is ON the new device ---------------
+    // No server queue ever held this message for device {dev_s} (it did not
+    // exist at send time), so presence here is the archive round trip.
+    let on_s = client_s
+        .get_messages(&ActiveConversation::ServerDm { peer_id: uid_b }, 50)
+        .expect("query the linked device's local store failed");
+    let transferred = on_s.iter().any(|m| m.as_text() == Some(marker.as_str()));
+    assert!(
+        transferred,
+        "LINK'N'SYNC DID NOT TRANSFER HISTORY: A's new device linked fine but its \
+         local store has {} messages for the B conversation and none is the marker. \
+         The link degraded to 'linked without history' — the silent §30 failure \
+         mode. Check, in order: the primary's export (build_link_archive / \
+         SetTransferArchive / presigned PUT), the server's GetTransferArchive \
+         poll answers, the blob GET, and the KEK-decrypt+import on the new device.",
+        on_s.len()
+    );
+
+    println!(
+        "\nV54 PASS — a device linked AFTER the conversation holds the conversation: \
+         the encrypted transfer archive was exported by the primary, served by the \
+         server's presigned blob flow, and imported by the new device\n"
+    );
+    client_s.shutdown().await;
+    client_ap.shutdown().await;
+}
