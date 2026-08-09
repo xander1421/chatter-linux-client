@@ -898,8 +898,7 @@ impl LinkDeviceService {
         if !initial_kyber_one_time.is_empty() {
             let pq_count = initial_kyber_one_time.len();
             let mut auth_client = self.grpc_pool.auth_client();
-            match auth_client
-                .refresh_pre_keys_with_kyber_otpk(Vec::new(), initial_kyber_one_time)
+            match crate::services::pqopk_seed::seed_pqopk_pool(&mut auth_client, initial_kyber_one_time)
                 .await
             {
                 Ok(()) => {

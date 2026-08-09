@@ -9,6 +9,7 @@ pub mod conversation_pins;
 pub mod current_user;
 pub mod auth_service;
 pub mod link_device_service;
+pub(crate) mod pqopk_seed;
 pub mod session_service;
 pub mod account_service;
 pub mod device_service;

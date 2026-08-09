@@ -925,10 +925,10 @@ impl AuthService {
         // (spec-permitted). Failing registration outright would be a worse
         // outcome than the degradation it avoids. The background replenisher
         // (app/core_services.rs) refills both pools together on its next pass.
+        // A rate-limited seed retries briefly first (§34, pqopk_seed.rs).
         if !initial_kyber_prekeys.is_empty() {
             let pq_count = initial_kyber_prekeys.len();
-            match auth_client
-                .refresh_pre_keys_with_kyber_otpk(Vec::new(), initial_kyber_prekeys)
+            match crate::services::pqopk_seed::seed_pqopk_pool(&mut *auth_client, initial_kyber_prekeys)
                 .await
             {
                 Ok(()) => {
