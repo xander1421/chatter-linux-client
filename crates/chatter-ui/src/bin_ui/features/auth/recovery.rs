@@ -33,11 +33,26 @@ pub fn wire_recovery(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             match ui_ctx.use_recovery_code(&username, &recovery_code, &new_password, &new_pin).await {
                 Ok(result) => {
+                    // Surface key_backup_invalidated (§7): recovery rotates the
+                    // PIN, and the SVR key + message backups were encrypted under
+                    // and indexed by a secret derived from the OLD PIN, so the
+                    // server drops them — they are gone, not merely stale. The
+                    // user must be told, or they believe a backup still protects
+                    // them when none does. It is destroyed on every recovery, so
+                    // the notice fires whenever the flag is set.
+                    let backup_notice = if result.key_backup_invalidated {
+                        " Your previous PIN-based backup was invalidated by this recovery — set up a new backup from Settings after signing in."
+                    } else {
+                        ""
+                    };
                     let msg = format!(
-                        "Account recovered successfully! {} recovery codes remaining. Please sign in with your new credentials.",
-                        result.remaining_codes
+                        "Account recovered successfully! {} recovery codes remaining.{} Please sign in with your new credentials.",
+                        result.remaining_codes, backup_notice
                     );
-                    tracing::info!("Account recovery succeeded, {} codes remaining", result.remaining_codes);
+                    tracing::info!(
+                        "Account recovery succeeded, {} codes remaining, key_backup_invalidated={}",
+                        result.remaining_codes, result.key_backup_invalidated
+                    );
 
                     let weak_for_success = weak.clone();
                     let _ = slint::invoke_from_event_loop(move || {
