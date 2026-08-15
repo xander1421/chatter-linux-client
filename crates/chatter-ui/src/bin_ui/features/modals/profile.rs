@@ -777,7 +777,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx_avatar = ui_ctx.clone();
     window.on_edit_profile_change_avatar(move || {
-        #[cfg(not(target_os = "android"))]
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         {
             let weak = weak_window.clone();
             let ui_ctx = ui_ctx_avatar.clone();
@@ -823,8 +823,8 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             });
         }
-        #[cfg(target_os = "android")]
-        tracing::warn!("File picker not supported on Android");
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        tracing::warn!("File picker not supported on mobile");
     });
 
     // View safety number — generates and displays the 60-digit fingerprint

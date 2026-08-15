@@ -10,10 +10,10 @@ use slint::{ComponentHandle, SharedString};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::attachment::{AttachmentStatus, ContentLocation, FileMetadata};
 use chatter_core::domain::ids::AttachmentId;
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use chatter_core::media::{FilePicker, FilePickerConfig};
 use chatter_core::media::ImageProcessor;
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use chatter_core::system::ExternalOpener;
 
 use crate::bin_ui::audio_state;
@@ -718,7 +718,7 @@ fn display_pdf_from_buffer(
 ///
 /// NOTE: This may be called from a background thread, so we use block_on
 /// for the async file picker.
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn save_file_from_buffer(
     secure_buffer: chatter_core::prelude::SecureBuffer,
     filename: &str,
@@ -765,12 +765,12 @@ fn save_file_from_buffer(
     }
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "ios"))]
 fn save_file_from_buffer(
     _secure_buffer: chatter_core::prelude::SecureBuffer,
     _filename: &str,
 ) {
-    tracing::warn!("Save file not supported on Android");
+    tracing::warn!("Save file not supported on mobile");
 }
 
 /// Handle attachment that needs to be downloaded first.

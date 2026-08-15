@@ -262,9 +262,20 @@ pub async fn app_init() -> AppState {
 
     let window = MainWindow::new().expect("Failed to create window");
 
-    // Android: flag as mobile platform so the UI uses mobile layout (full-screen
-    // sidebar, bottom nav, etc.) when the screen is narrow.
-    #[cfg(target_os = "android")]
+    // The register form's Server URL field is required to submit, and until now
+    // it was only ever filled in dev mode. On a phone there is no shell to set
+    // CHATTER_SERVER_URL in, so an empty field meant a dead Create Account
+    // button. Seed it with the endpoint the client is already connected to.
+    window.set_register_server_url(ui_ctx.endpoint().into());
+    // Same for Sign In, which had no binding at all: the field started empty and
+    // the only way to fill it was the LAN preset, which was a hardcoded
+    // 192.168.0.7 that resolved to nothing on any other network.
+    window.set_login_server_url(ui_ctx.endpoint().into());
+    window.set_configured_server_url(ui_ctx.endpoint().into());
+
+    // Flag as mobile platform so the UI uses mobile layout (full-screen sidebar,
+    // bottom nav, etc.) when the screen is narrow.
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     window.set_is_mobile_platform(true);
 
     // Let the notification "Accept" activity-intent drive the in-app accept flow.

@@ -1,5 +1,9 @@
 target
 target-android
+target-ios
+ios/build
+macos/build
+xcuserdata/
 
 # Local secrets - never commit
 .env

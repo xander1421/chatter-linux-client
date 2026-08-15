@@ -315,7 +315,7 @@ impl VideoCapture {
 
         #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
-            // Unused on desktop platforms without a camera backend (e.g. macOS);
+            // Unused on platforms without a camera backend (e.g. macOS, iOS);
             // only the android branch below consumes it.
             #[cfg(not(target_os = "android"))]
             let _ = &device_path;

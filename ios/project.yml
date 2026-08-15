@@ -1,0 +1,122 @@
+name: Chatter
+options:
+  bundleIdPrefix: com.chatter
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+targets:
+  Chatter:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Chatter
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        # Declared up front so the smoke build and the eventual call UI use the
+        # same bundle — iOS kills the app on first use if these are missing.
+        NSCameraUsageDescription: Chatter uses the camera for video calls.
+        NSMicrophoneUsageDescription: Chatter uses the microphone for calls.
+        NSPhotoLibraryUsageDescription: Chatter attaches photos to messages.
+        # iOS 14+ gates any connection to a LAN peer behind this prompt; the
+        # gRPC channel is a raw socket, so without it connect() just times out.
+        NSLocalNetworkUsageDescription: Chatter connects to your Chatter server on the local network.
+        # Narrowest ATS exception that covers a plaintext server on an RFC1918
+        # address or a .local name. NOT NSAllowsArbitraryLoads.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        # Which server the app talks to. Sources/main.m re-exports this as
+        # CHATTER_SERVER_URL before Rust boots, because env vars don't reach an
+        # app bundle. Substituted from the build setting below, so:
+        #   CHATTER_SERVER_URL=http://10.0.0.5:50051 ./ship.sh ios
+        # retargets the app without recompiling Rust.
+        CHATTERServerURL: $(CHATTER_SERVER_URL)
+    settings:
+      base:
+        # Matches the Android package (chatter-ui Cargo.toml metadata.android).
+        # Provisioned via a free Personal Team, so the profile expires 7 days
+        # after it is minted — re-run `ship.sh ios` to refresh it.
+        # Never borrow one of the unrelated on-disk profiles
+        # (com.vnikolenko.resonance, com.resonannnnce.app) to sideload Chatter:
+        # that ships this app under another app's identity.
+        PRODUCT_BUNDLE_IDENTIFIER: com.chatter.client
+        # Default server for LAN dev builds. Overridden per-build by ship.sh
+        # when CHATTER_SERVER_URL is set in the environment. An empty value is
+        # fine — main.m then skips setenv and chatter-core falls back to its
+        # own default (localhost, i.e. nothing on a phone).
+        # ponytail: one dev machine's IP, good enough until there is a staging
+        # host; then this becomes a per-configuration setting.
+        CHATTER_SERVER_URL: http://192.168.0.10:50051
+        CODE_SIGN_STYLE: Automatic
+        # Team ID = the OU of the signing cert, not the (…) suffix in its CN.
+        DEVELOPMENT_TEAM: 75A5A8N59P
+        ENABLE_BITCODE: NO
+        # Xcode 16+ splits debug builds into a stub + Chatter.debug.dylib, which
+        # complicates devicectl install. One fat executable is simpler here.
+        ENABLE_DEBUG_DYLIB: NO
+        # cargo writes the staticlib here; see Sources/build-rust.sh
+        LIBRARY_SEARCH_PATHS:
+          - $(inherited)
+          - $(SRCROOT)/build/lib
+        OTHER_LDFLAGS:
+          - $(inherited)
+          - -lchatter_ios
+          - -lc++
+          # Frameworks the Rust side references but can't auto-link from a
+          # staticlib: Security+CoreFoundation for keyring/apple-native and
+          # ring, the audio four for cpal/rodio (chatter-core still pulls them
+          # in on iOS — they compile, they just need AudioToolbox at link time).
+          - -framework
+          - Security
+          - -framework
+          - CoreFoundation
+          - -framework
+          - AudioToolbox
+          - -framework
+          - AVFoundation
+          - -framework
+          - CoreAudio
+          - -framework
+          - CoreMedia
+    # Default build runs chatter-core's on-device smoke harness. For the real
+    # Slint UI (links clean, not yet run on a device):
+    #   CHATTER_IOS_FEATURES=ui xcodebuild … \
+    #     GCC_PREPROCESSOR_DEFINITIONS='$(inherited) CHATTER_RUST_UI=1'
+    preBuildScripts:
+      - name: Build Rust staticlib
+        script: '"$SRCROOT/build-rust.sh"'
+        basedOnDependencyAnalysis: false
+        outputFiles:
+          - $(SRCROOT)/build/lib/libchatter_ios.a
+    scheme:
+      testTargets:
+        - ChatterUITests
+
+  # Remote control for the device: screenshots and taps. iOS has no adb —
+  # devicectl has no screenshot/tap subcommand, and libimobiledevice's
+  # screenshotr service is unreachable on iOS 17+ (RemoteXPC tunnel).
+  # XCUITest is the only route that needs neither sudo nor extra deps.
+  ChatterUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: Chatter
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.chatter.client.uitests
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 75A5A8N59P
+        TEST_TARGET_NAME: Chatter
+        # The app target ships a hand-written Info.plist; the test bundle has
+        # nothing to declare, so let Xcode synthesize one. Without this,
+        # codesign fails outright: "target does not have an Info.plist file".
+        GENERATE_INFOPLIST_FILE: YES

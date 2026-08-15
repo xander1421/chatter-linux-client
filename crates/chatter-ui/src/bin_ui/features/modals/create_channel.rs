@@ -23,7 +23,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_pick = weak_window.clone();
     window.on_create_channel_pick_icon(move || {
         tracing::info!("[CHANNEL_ICON] pick-channel-icon callback fired");
-        #[cfg(not(target_os = "android"))]
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         {
             let weak = weak_pick.clone();
             tokio::spawn(async move {
@@ -63,8 +63,8 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             });
         }
-        #[cfg(target_os = "android")]
-        tracing::warn!("File picker not supported on Android");
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        tracing::warn!("File picker not supported on mobile");
     });
 
     window.on_create_channel(

@@ -57,13 +57,13 @@ impl VideoRecorder {
     ///
     /// Returns an error if the application cannot be launched.
     pub fn record_with_app(app: &str) -> Result<(), MediaError> {
-        #[cfg(not(target_os = "android"))]
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         {
             open::that_in_background(app);
         }
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", target_os = "ios"))]
         {
-            tracing::warn!("video recording via system camera apps is not supported on Android");
+            tracing::warn!("video recording via system camera apps is not supported on mobile: {app}");
         }
         Ok(())
     }

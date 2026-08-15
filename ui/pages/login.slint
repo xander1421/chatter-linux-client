@@ -12,6 +12,11 @@ export component LoginPage inherits Rectangle {
     in-out property <string> password: "";
     in-out property <string> pin: "";
     in-out property <string> server-url: "";
+    // The endpoint this build is actually configured for (CHATTER_SERVER_URL,
+    // or the compiled-in default). Seeded from Rust — never hardcode an IP
+    // here; the previous literal was one dev's LAN address and was dead for
+    // everyone else.
+    in property <string> configured-server-url: "";
     in property <bool> loading: false;
     in property <string> error: "";
     // Live server reachability and the mesh escape hatch — see
@@ -135,7 +140,7 @@ export component LoginPage inherits Rectangle {
                             background: Colors.surface-hover;
                             border-radius: Spacing.radius-sm;
                             Text { text: "LAN"; font-size: Typography.xs; color: Colors.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
-                            TouchArea { clicked => { root.server-url = "http://192.168.0.7:50051"; } }
+                            TouchArea { clicked => { root.server-url = root.configured-server-url; } }
                         }
 
                     }

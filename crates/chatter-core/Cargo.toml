@@ -202,9 +202,9 @@ argon2 = "0.5.3"
 tempfile = "3"
 
 # ============================================================================
-# Desktop-only system deps (not available on Android)
+# Desktop-only system deps (not available on Android or iOS)
 # ============================================================================
-[target.'cfg(not(target_os = "android"))'.dependencies]
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 notify-rust = "4"
 arboard = { version = "3", features = ["wayland-data-control"] }
 # gtk3 backend (in-process GtkFileChooserDialog) instead of the xdg-portal
@@ -290,7 +290,7 @@ onion = [
     "dep:hyper", "dep:http-body-util", "dep:tokio-rustls", "dep:webpki-roots",
     "dep:tokio-tungstenite",
 ]
-desktop-system = ["keyring/sync-secret-service", "keyring/windows-native"]
+desktop-system = ["keyring/sync-secret-service", "keyring/windows-native", "keyring/apple-native"]
 # Shared media stack (LiveKit + WebRTC) — works on every target the `livekit`
 # crate supports. Mobile bridges opt in via `--features media`; desktop pulls
 # it in transitively through `desktop-media`.
@@ -305,6 +305,9 @@ desktop-gstreamer = [
 ]
 # Compat alias — previous callers (desktop-cli, chatter-ui) keep working.
 desktop-media = ["media", "desktop-gstreamer"]
+# iOS: no desktop system deps; keyring must use the Keychain, otherwise
+# keyring silently falls back to an in-memory mock (keyring lib.rs:286).
+ios = ["keyring/apple-native"]
 local-ai = ["dep:mistralrs"]
 jarvis = []
 # The bitchat mesh. Off by default: the radio stack has never exchanged a byte

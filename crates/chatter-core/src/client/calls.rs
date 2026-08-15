@@ -570,7 +570,7 @@ impl ChatterClient {
         }
     }
 
-    #[cfg(all(feature = "media", not(target_os = "android"), not(target_os = "ios")))]
+    #[cfg(all(feature = "media", not(any(target_os = "android", target_os = "ios"))))]
     pub async fn call_publish_screen_share(
         &self,
         source: crate::calls::ScreenSource,
@@ -581,7 +581,7 @@ impl ChatterClient {
         }
     }
 
-    #[cfg(all(feature = "media", not(target_os = "android"), not(target_os = "ios")))]
+    #[cfg(all(feature = "media", not(any(target_os = "android", target_os = "ios"))))]
     pub fn call_stop_screen_share(&self) {
         if let Some(worker) = self.call_service().get() {
             worker.stop_screen_share();

@@ -149,9 +149,9 @@ impl CoreServices {
         notification_sink: Option<Arc<dyn NotificationSink>>,
     ) -> Self {
         let notification_sink: Arc<dyn NotificationSink> = notification_sink.unwrap_or_else(|| {
-            #[cfg(not(target_os = "android"))]
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             { Arc::new(crate::system::notifications::DesktopNotifications::new()) }
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", target_os = "ios"))]
             { Arc::new(crate::system::notification_sink::NoopNotificationSink) }
         });
         Self {

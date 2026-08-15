@@ -8,14 +8,14 @@ pub mod notification_sink;
 pub mod platform;
 
 // Desktop-only modules (not available on Android)
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod autostart;
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod clipboard;
 pub mod keyring;
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod notifications;
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod open;
 
 // Linux-only modules
@@ -27,16 +27,16 @@ pub mod tray;
 pub mod tray_windows;
 
 pub use antidebug::{check_debugger, init_protection as init_antidebug, periodic_check as antidebug_check, DebuggerStatus};
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use autostart::AutostartManager;
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use clipboard::{Clipboard, ImageData};
 pub use directories::Directories;
 pub use keyring::Keyring;
 pub use notification_sink::{NoopNotificationSink, NotificationSink};
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use notifications::DesktopNotifications;
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use open::ExternalOpener;
 
 #[cfg(target_os = "linux")]

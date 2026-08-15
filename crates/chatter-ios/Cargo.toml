@@ -1,0 +1,25 @@
+[package]
+name = "chatter-ios"
+version = "0.1.0"
+edition = "2024"
+description = "iOS staticlib entry point — links the Rust side into the Xcode app target"
+publish = false
+
+[lib]
+name = "chatter_ios"
+crate-type = ["staticlib"]
+path = "src/lib.rs"
+
+[dependencies]
+chatter-core = { path = "../chatter-core", default-features = false, features = ["ios"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# ponytail: chatter-ui is optional so the shell still builds+installs while the
+# Slint UI's iOS port is in progress. Drop the flag once `ui` builds clean.
+chatter-ui = { path = "../chatter-ui", default-features = false, features = ["ios"], optional = true }
+
+[features]
+default = []
+ui = ["dep:chatter-ui"]

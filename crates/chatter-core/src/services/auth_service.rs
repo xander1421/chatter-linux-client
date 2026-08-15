@@ -211,25 +211,41 @@ impl AuthService {
 
     /// Restore a password-based (Basic auth) session.
     fn restore_password_session(&self) -> bool {
-        let user_id_str = match self.settings_repo.get_string(keys::CURRENT_USER_ID) {
-            Ok(Some(id)) => id,
-            _ => return false,
-        };
+        // Every miss below is logged. A silent `return false` here presents as
+        // "registration worked but the app is logged out on next launch", with
+        // nothing in the log to say which of the four keys was absent.
+        macro_rules! need {
+            ($key:expr, $get:expr) => {
+                match $get {
+                    Ok(Some(v)) => v,
+                    Ok(None) => {
+                        tracing::warn!("No saved session: {} is not set", $key);
+                        return false;
+                    }
+                    Err(e) => {
+                        tracing::warn!("No saved session: reading {} failed: {e}", $key);
+                        return false;
+                    }
+                }
+            };
+        }
 
-        let device_id: u32 = match self.settings_repo.get(keys::CURRENT_DEVICE_ID) {
-            Ok(Some(id)) => id,
-            _ => return false,
-        };
-
-        let profile_key_bytes = match self.settings_repo.get_bytes(keys::PROFILE_KEY) {
-            Ok(Some(bytes)) => bytes,
-            _ => return false,
-        };
-
-        let auth_token_bytes = match self.settings_repo.get_bytes(keys::DEVICE_AUTH_TOKEN) {
-            Ok(Some(bytes)) => bytes,
-            _ => return false,
-        };
+        let user_id_str = need!(
+            keys::CURRENT_USER_ID,
+            self.settings_repo.get_string(keys::CURRENT_USER_ID)
+        );
+        let device_id: u32 = need!(
+            keys::CURRENT_DEVICE_ID,
+            self.settings_repo.get(keys::CURRENT_DEVICE_ID)
+        );
+        let profile_key_bytes = need!(
+            keys::PROFILE_KEY,
+            self.settings_repo.get_bytes(keys::PROFILE_KEY)
+        );
+        let auth_token_bytes = need!(
+            keys::DEVICE_AUTH_TOKEN,
+            self.settings_repo.get_bytes(keys::DEVICE_AUTH_TOKEN)
+        );
 
         if profile_key_bytes.len() != 32 || auth_token_bytes.len() != 32 {
             tracing::warn!("Saved auth credentials have invalid length");

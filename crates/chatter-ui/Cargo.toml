@@ -157,6 +157,11 @@ onion = ["chatter-core/onion"]
 # dep:livekit so android_main can call livekit::webrtc::android::initialize_android
 # (webrtc needs the JavaVM wired before Room::connect, or it segfaults on join).
 mobile = ["dep:i-slint-backend-android-activity", "dep:android-activity", "i-slint-backend-selector/backend-android-activity", "slint/std", "chatter-core/media", "call-ui", "dep:livekit"]
+# iOS: leanest possible set. winit backend (i-slint-backend-winit 1.17 declares
+# objc2-ui-kit/objc2-quartz-core/block2 for iOS) and the same skia renderer
+# desktop uses — it cross-compiles and links for aarch64-apple-ios and renders
+# correctly on device. No livekit, no gstreamer, no arboard, no pdfium.
+ios = ["dep:i-slint-backend-winit", "dep:winit", "slint/backend-winit", "slint/renderer-skia", "slint/std", "chatter-core/ios"]
 
 # =============================================================================
 # Android Metadata (for cargo-apk)
