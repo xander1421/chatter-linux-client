@@ -2,6 +2,7 @@
 members = [
     "crates/chatter-core",
     "crates/chatter-ui",
+    "crates/chatter-ios",
 ]
 # The fuzz crate must NOT be a workspace member — otherwise libfuzzer-sys
 # (which requires `-Z sanitizer=address` and a nightly toolchain) gets pulled

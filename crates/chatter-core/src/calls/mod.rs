@@ -9,7 +9,7 @@ mod video_capture;
 mod video_playback;
 #[cfg(target_os = "android")]
 pub mod android_camera;
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod screen_capture;
 pub mod shared_frames;
 
@@ -18,6 +18,6 @@ pub use audio_capture::{AudioCapture, AudioDevice, AudioOutputDevice as AudioInp
 pub use audio_playback::{AudioPlayback, AudioOutputDevice};
 pub use video_capture::{VideoCapture, VideoDevice, VideoCaptureConfig};
 pub use video_playback::{VideoPlayback, VideoStreamInfo, screen_share_frame_id};
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use screen_capture::{ScreenCapture, ScreenSource, ScreenSourceType, ScreenCaptureConfig};
 pub use shared_frames::{SharedVideoFrames, VideoFrameData};

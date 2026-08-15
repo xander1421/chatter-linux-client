@@ -182,7 +182,11 @@ fn wire_copy_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
         if let Some(w) = weak_window.upgrade() {
             let code = w.get_friends_my_code().to_string();
             if !code.is_empty() {
-                // Use wl-copy for Wayland (more reliable than arboard on Wayland)
+                // Use wl-copy for Wayland (more reliable than arboard on Wayland).
+                // Desktop-only: subprocess clipboard tools don't exist on mobile
+                // and `arboard` isn't a dependency there.
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                {
                 let code_clone = code.clone();
                 std::thread::spawn(move || {
                     // Try wl-copy first (Wayland), fall back to xclip (X11),
@@ -222,6 +226,9 @@ fn wire_copy_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
                         }
                     }
                 });
+                }
+                #[cfg(any(target_os = "android", target_os = "ios"))]
+                tracing::warn!("Clipboard not supported on mobile");
 
                 w.set_friends_code_status("Copied to clipboard!".into());
             } else {

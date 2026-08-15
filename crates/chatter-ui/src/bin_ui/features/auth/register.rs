@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use slint::{ComponentHandle, Image};
 
 use chatter_core::client::ChatterClient;
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use chatter_core::media::{FileFilter, FilePicker, FilePickerConfig};
 
 fn selected_avatar() -> &'static Mutex<Option<Vec<u8>>> {
@@ -68,7 +68,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.on_register_select_avatar({
         let weak = weak_window.clone();
         move || {
-            #[cfg(not(target_os = "android"))]
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
                 let weak = weak.clone();
                 crate::rt_handle().spawn(async move {
@@ -120,8 +120,8 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                 });
             }
-            #[cfg(target_os = "android")]
-            tracing::warn!("File picker not supported on Android");
+            #[cfg(any(target_os = "android", target_os = "ios"))]
+            tracing::warn!("File picker not supported on mobile");
         }
     });
 

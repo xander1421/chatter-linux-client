@@ -3,9 +3,9 @@
 //! Handles PDF file viewing with in-app rendering via pdfium-render (desktop)
 //! or export-to-external-viewer fallback.
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use chatter_core::media::{FilePicker, FilePickerConfig};
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use chatter_core::system::ExternalOpener;
 
 use slint::ComponentHandle;
@@ -25,7 +25,7 @@ pub fn wire_pdf_preview_callbacks(window: &MainWindow) {
 
     // Open PDF in external viewer - uses Save As for secure export
     window.on_open_pdf_external(|| {
-        #[cfg(not(target_os = "android"))]
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         if let Some(content) = preview_state::get_pdf_preview_content() {
             // Show Save As dialog then open with system handler
             let filename = content.filename.clone();
@@ -55,8 +55,8 @@ pub fn wire_pdf_preview_callbacks(window: &MainWindow) {
         } else {
             tracing::warn!("No PDF content available for external open");
         }
-        #[cfg(target_os = "android")]
-        tracing::warn!("Open external not supported on Android");
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        tracing::warn!("Open external not supported on mobile");
     });
 
     // Page navigation

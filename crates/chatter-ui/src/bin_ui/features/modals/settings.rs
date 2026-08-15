@@ -94,7 +94,7 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                 }
             };
 
-            #[cfg(not(target_os = "android"))]
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
                 use chatter_core::system::Clipboard;
                 match Clipboard::new() {
@@ -110,8 +110,8 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                     }
                 }
             }
-            #[cfg(target_os = "android")]
-            tracing::warn!("Clipboard not supported on Android");
+            #[cfg(any(target_os = "android", target_os = "ios"))]
+            tracing::warn!("Clipboard not supported on mobile");
         });
     });
 
@@ -271,7 +271,7 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                         all_codes.push_str(&codes_model.row_data(i).unwrap_or_default());
                     }
 
-                    #[cfg(not(target_os = "android"))]
+                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     {
                         use chatter_core::system::Clipboard;
                         match Clipboard::new() {
@@ -300,8 +300,8 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                             }
                         }
                     }
-                    #[cfg(target_os = "android")]
-                    tracing::warn!("Clipboard not supported on Android");
+                    #[cfg(any(target_os = "android", target_os = "ios"))]
+                    tracing::warn!("Clipboard not supported on mobile");
                 }
             });
         }

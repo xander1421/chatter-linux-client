@@ -125,6 +125,8 @@ export component App inherits Rectangle {
     in-out property <string> register-confirm-password: "";
     in-out property <string> register-pin: "";
     in-out property <string> register-server-url: "";
+    in-out property <string> login-server-url: "";
+    in-out property <string> configured-server-url: "";
     in property <bool> register-loading: false;
     in property <string> register-error: "";
     in property <image> register-avatar-source;
@@ -896,6 +898,8 @@ export component App inherits Rectangle {
 
         // Login page
         if current-view == "login": LoginPage {
+            server-url <=> root.login-server-url;
+            configured-server-url: root.configured-server-url;
             username <=> root.login-username;
             password <=> root.login-password;
             pin <=> root.login-pin;

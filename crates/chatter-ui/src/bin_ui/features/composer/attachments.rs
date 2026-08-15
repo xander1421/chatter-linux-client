@@ -110,7 +110,7 @@ pub(crate) fn wire_attachment_clicked(window: &MainWindow, chat_state: ChatState
             return;
         }
 
-        #[cfg(not(target_os = "android"))]
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         {
             tokio::spawn(async move {
                 use chatter_core::media::file_picker::{FileFilter, FilePicker, FilePickerConfig};
@@ -164,13 +164,21 @@ pub(crate) fn wire_attachment_clicked(window: &MainWindow, chat_state: ChatState
                 }
             });
         }
+        // iOS has no picker yet: chatter-core's file_picker is desktop-only
+        // (rfd) and there's no UIDocumentPickerViewController bridge. Warn
+        // rather than no-op silently.
+        #[cfg(target_os = "ios")]
+        {
+            let _ = (&chat_state, &weak);
+            tracing::warn!("File picker not yet implemented on iOS");
+        }
     });
 }
 
 /// Wire the paste-image callback: on Ctrl/Cmd+V, attach an image from the
 /// clipboard (if any) as a pending attachment. Text paste is handled by the
 /// TextInput itself; this only fires the image path.
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) fn wire_paste_image(window: &MainWindow, chat_state: ChatState) {
     let weak_window = window.as_weak();
 
@@ -209,7 +217,7 @@ pub(crate) fn wire_paste_image(window: &MainWindow, chat_state: ChatState) {
 /// Read an image off the clipboard and write it to a temp PNG, returning its
 /// path so it can flow through the normal attachment pipeline. Errors (incl.
 /// "no image on clipboard") are returned as strings for the caller to log.
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn read_clipboard_image() -> Result<PathBuf, String> {
     let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     let img = clipboard.get_image().map_err(|e| e.to_string())?;

@@ -12,7 +12,7 @@ use parking_lot::RwLock;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex as TokioMutex};
 
 use crate::calls::{LiveKitRoomEvent, RoomManager, RoomState, SharedVideoFrames, VideoCaptureConfig};
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::calls::ScreenSource;
 use crate::crypto::call_key_provider::CallKeyState;
 use crate::domain::call::{Call, CallState, CallType, Participant};
@@ -332,13 +332,13 @@ enum CallCommand {
     /// Locally pause/resume a specific remote participant's video.
     SetPeerVideoPaused { participant_id: String, paused: bool },
     /// Publish screen share (desktop only).
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     PublishScreenShare {
         source: ScreenSource,
         response: oneshot::Sender<Result<(), CallError>>,
     },
     /// Stop screen share (desktop only).
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     StopScreenShare,
     /// Check if screen sharing.
     IsScreenSharing {
@@ -943,7 +943,7 @@ impl CallWorkerHandle {
     }
 
     /// Publish screen share (desktop only).
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub async fn publish_screen_share(&self, source: ScreenSource) -> Result<(), CallError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
@@ -956,7 +956,7 @@ impl CallWorkerHandle {
     }
 
     /// Stop screen share (desktop only).
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub fn stop_screen_share(&self) {
         let _ = self.cmd_tx.try_send(CallCommand::StopScreenShare);
     }
@@ -1334,13 +1334,13 @@ fn run_call_worker(
                     room_manager.set_peer_video_paused(&participant_id, paused);
                 }
 
-                #[cfg(not(target_os = "android"))]
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 CallCommand::PublishScreenShare { source, response } => {
                     let result = room_manager.publish_screen_share(source, None).await;
                     let _ = response.send(result);
                 }
 
-                #[cfg(not(target_os = "android"))]
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 CallCommand::StopScreenShare => {
                     room_manager.stop_screen_share().await;
                 }

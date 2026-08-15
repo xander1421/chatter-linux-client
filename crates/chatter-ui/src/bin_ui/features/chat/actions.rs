@@ -205,7 +205,7 @@ pub fn wire_copy_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
 
             // Copy text to clipboard using arboard
-            #[cfg(not(target_os = "android"))]
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             match arboard::Clipboard::new() {
                 Ok(mut clipboard) => {
                     if let Err(e) = clipboard.set_text(&text) {
@@ -222,8 +222,8 @@ pub fn wire_copy_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     tracing::error!(error = %e, "Failed to access clipboard");
                 }
             }
-            #[cfg(target_os = "android")]
-            tracing::warn!("Clipboard not yet supported on Android");
+            #[cfg(any(target_os = "android", target_os = "ios"))]
+            tracing::warn!("Clipboard not yet supported on mobile");
         });
     });
 }

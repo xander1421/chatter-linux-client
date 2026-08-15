@@ -19,10 +19,6 @@ mod mediacodec;
 #[cfg(target_os = "android")]
 pub use self::mediacodec::MediaCodecDecoder as PlatformDecoder;
 
-#[cfg(target_os = "ios")]
-mod videotoolbox;
-#[cfg(target_os = "ios")]
-pub use self::videotoolbox::VideoToolboxDecoder as PlatformDecoder;
 
 /// Information about an opened video.
 #[derive(Debug, Clone)]

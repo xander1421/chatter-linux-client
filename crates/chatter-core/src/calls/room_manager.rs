@@ -5,10 +5,13 @@
 
 use livekit::prelude::*;
 use livekit::e2ee::{E2eeOptions, EncryptionType, key_provider::{KeyProvider, KeyProviderOptions}};
-use livekit::options::{TrackPublishOptions, VideoCodec, VideoEncoding};
+use livekit::options::TrackPublishOptions;
+// Screen-share only (desktop): the publish path is cfg-gated off on mobile.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use livekit::options::{VideoCodec, VideoEncoding};
 use livekit::webrtc::audio_source::RtcAudioSource;
 use livekit::webrtc::video_source::RtcVideoSource;
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use livekit::webrtc::video_source::{native::NativeVideoSource, VideoResolution};
 use tokio::sync::mpsc;
 use std::sync::Arc;
@@ -19,7 +22,7 @@ use super::audio_capture::{AudioCapture, AudioDevice};
 use super::audio_playback::AudioPlayback;
 use super::video_capture::{VideoCapture, VideoDevice, VideoCaptureConfig};
 use super::video_playback::VideoPlayback;
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use super::screen_capture::{ScreenCapture, ScreenSource, ScreenCaptureConfig};
 use super::shared_frames::SharedVideoFrames;
 
@@ -114,14 +117,14 @@ pub struct RoomManager {
     /// Video playback manager for remote participants.
     video_playback: Arc<RwLock<VideoPlayback>>,
     /// Screen capture manager.
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     screen_capture: Arc<RwLock<ScreenCapture>>,
     /// SID of the currently-published screen-share track. Cleared on stop
     /// so we can call `local_participant.unpublish_track(sid)` and free
     /// the slot — otherwise restart creates a second track while the
     /// first stays published with no frames, and remote viewers stay
     /// subscribed to the dead one.
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     screen_share_track_sid: Arc<RwLock<Option<TrackSid>>>,
     /// E2EE key state (provider + epoch).
     e2ee: Arc<RwLock<E2eeState>>,
@@ -164,9 +167,9 @@ impl RoomManager {
             camera_published: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             camera_track_sid: Arc::new(RwLock::new(None)),
             video_playback: Arc::new(RwLock::new(video_playback)),
-            #[cfg(not(target_os = "android"))]
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             screen_capture: Arc::new(RwLock::new(ScreenCapture::new())),
-            #[cfg(not(target_os = "android"))]
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             screen_share_track_sid: Arc::new(RwLock::new(None)),
             e2ee: Arc::new(RwLock::new(E2eeState { provider: None, epoch: 0 })),
             event_task: Arc::new(RwLock::new(None)),
@@ -189,7 +192,7 @@ impl RoomManager {
     }
 
     /// List available screen sources for sharing.
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub fn list_screen_sources() -> Result<Vec<ScreenSource>, CallError> {
         ScreenCapture::list_sources()
     }
@@ -290,7 +293,7 @@ impl RoomManager {
     /// # Arguments
     /// * `source` - Screen source to capture
     /// * `config` - Optional capture configuration
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub async fn publish_screen_share(
         &self,
         source: ScreenSource,
@@ -466,7 +469,7 @@ impl RoomManager {
     /// frozen stream; restarting screen share creates a second track on
     /// top of the dead one and the receiver tile picks whichever
     /// subscription it had first.
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub async fn stop_screen_share(&self) {
         {
             let mut capture = self.screen_capture.write();
@@ -506,9 +509,9 @@ impl RoomManager {
 
     /// Check if screen sharing is active.
     pub fn is_screen_sharing(&self) -> bool {
-        #[cfg(not(target_os = "android"))]
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         { self.screen_capture.read().is_running() }
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", target_os = "ios"))]
         { false }
     }
 
@@ -778,7 +781,7 @@ impl RoomManager {
                 .store(false, std::sync::atomic::Ordering::SeqCst);
             self.camera_track_sid.write().take();
         }
-        #[cfg(not(target_os = "android"))]
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         {
             let screen = self.screen_capture.read();
             screen.signal_stop();

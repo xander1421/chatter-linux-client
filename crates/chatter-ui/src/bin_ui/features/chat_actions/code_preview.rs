@@ -5,9 +5,9 @@
 
 use slint::ComponentHandle;
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use chatter_core::media::{FilePicker, FilePickerConfig};
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use chatter_core::system::ExternalOpener;
 
 use crate::bin_ui::preview_state;
@@ -27,7 +27,7 @@ pub fn wire_code_preview_callbacks(window: &MainWindow) {
         if let Some(w) = weak_window.upgrade() {
             let content = w.get_code_preview_plain_text().to_string();
             let line_count = w.get_code_preview_line_count();
-            #[cfg(not(target_os = "android"))]
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             std::thread::spawn(move || {
                 if let Ok(mut clipboard) = arboard::Clipboard::new() {
                     if let Err(e) = clipboard.set_text(&content) {
@@ -47,7 +47,7 @@ pub fn wire_code_preview_callbacks(window: &MainWindow) {
         if let Some(w) = weak_window.upgrade() {
             let content = w.get_code_preview_plain_text().to_string();
             if !content.is_empty() {
-                #[cfg(not(target_os = "android"))]
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 std::thread::spawn(move || {
                     if let Ok(mut clipboard) = arboard::Clipboard::new() {
                         if let Err(e) = clipboard.set_text(&content) {
@@ -66,7 +66,7 @@ pub fn wire_code_preview_callbacks(window: &MainWindow) {
 
     // Open code in external editor - uses Save As for secure export
     window.on_open_code_external(|| {
-        #[cfg(not(target_os = "android"))]
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         if let Some(content) = preview_state::get_code_preview_content() {
             let filename = content.filename.clone();
             let data = content.data.clone();
@@ -95,7 +95,7 @@ pub fn wire_code_preview_callbacks(window: &MainWindow) {
         } else {
             tracing::warn!("No code content available for external open");
         }
-        #[cfg(target_os = "android")]
-        tracing::warn!("Open external not supported on Android");
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        tracing::warn!("Open external not supported on mobile");
     });
 }

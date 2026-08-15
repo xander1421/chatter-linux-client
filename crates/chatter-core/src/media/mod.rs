@@ -11,7 +11,7 @@ pub mod audio_recorder;
 pub mod code_preview;
 pub mod decoder;
 pub mod embed;
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod file_picker;
 pub mod gif;
 pub mod image_processor;
@@ -30,7 +30,7 @@ pub mod waveform;
 pub use audio_player::{AudioPlayer, PlaybackState};
 pub use audio_recorder::{AudioRecorder, RecordingState};
 pub use code_preview::{HighlightedLine, HighlightedSpan};
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use file_picker::{FileFilter, FilePicker, FilePickerConfig};
 pub use gif::{GifCache, GifClient, GifPicker, GifResult};
 pub use image_processor::{ImageProcessor, DEFAULT_THUMBNAIL_SIZE};
