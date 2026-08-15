@@ -4,15 +4,14 @@
 #   macos/bundle.sh [debug|release] [signing-identity-hash]
 #
 # Copies every Homebrew dylib the binary pulls in (transitively) into
-# Contents/Frameworks and rewrites the install names to @rpath.
+# Contents/Frameworks and rewrites the install names to @rpath. Also copies
+# every GStreamer plugin (/opt/homebrew/lib/gstreamer-1.0) into
+# Contents/Resources/gstreamer-1.0-plugins and rewrites THEIR dependency references to
+# @rpath the same way — see the "why" comment above the plugin loop below.
 #
-# ponytail: GStreamer *plugins* (/opt/homebrew/lib/gstreamer-1.0, 275 files /
-# 162M, each with its own Homebrew dep tree) are NOT bundled. libgstreamer has
-# Homebrew's absolute plugin dir baked in, so media works on a machine that has
-# brew gstreamer installed and nowhere else. Upgrade path when this ships to
-# other machines: bundle the plugin subset actually used, and make the app
-# re-exec itself through a shell stub that exports GST_PLUGIN_SYSTEM_PATH (an
-# Info.plist LSEnvironment entry can't reference the bundle's own path).
+# GST_PLUGIN_SYSTEM_PATH must point at Contents/Resources/gstreamer-1.0-plugins when
+# launching (bundle-relative, so an Info.plist LSEnvironment entry can't
+# express it — set it in the shell that execs Contents/MacOS/chatter-ui).
 set -euo pipefail
 
 PROFILE="${1:-debug}"
@@ -69,6 +68,60 @@ for dep in $(deps "$APP/Contents/MacOS/chatter-ui"); do
 	install_name_tool -change "$dep" "@rpath/$(basename "$dep")" "$APP/Contents/MacOS/chatter-ui"
 done
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/chatter-ui" 2>/dev/null || true
+
+# --- GStreamer plugins: same treatment, or two copies of GLib collide ----
+#
+# Plugins are dlopen'd at runtime (GST_PLUGIN_SYSTEM_PATH), not linked at
+# build time, so the transitive walk above never sees them. Left pointing
+# at their original Homebrew absolute paths, each plugin loads ITS OWN
+# libglib/libgobject instead of resolving to the @rpath copy already
+# loaded from Contents/Frameworks — two live copies of the same library in
+# one process corrupts GObject's type table (G_IS_PARAM_SPEC assertions,
+# "type id '0' is invalid") and segfaults on whichever plugin the scanner
+# happens to touch next (seen with both libgstwebp and libgstinterleave —
+# not plugin-specific, any of them can trip it). Rewriting every plugin's
+# deps to @rpath, same as the app's own Frameworks copies, makes them
+# resolve to the SAME already-loaded instance instead of a second one.
+PLUGDIR="$APP/Contents/Resources/gstreamer-1.0-plugins"
+mkdir -p "$PLUGDIR"
+SRC_PLUGDIR="/opt/homebrew/lib/gstreamer-1.0"
+if [ -d "$SRC_PLUGDIR" ]; then
+	cp "$SRC_PLUGDIR"/*.dylib "$PLUGDIR/" 2>/dev/null || true
+
+	# Any dep a plugin needs that isn't already in Frameworks (i.e. not
+	# reachable from the app binary's own transitive walk) gets pulled in
+	# here too, same copy+rewrite pattern as the main loop above.
+	queue=""
+	for f in "$PLUGDIR"/*.dylib; do
+		queue="$queue $(deps "$f")"
+	done
+	while [ -n "$queue" ]; do
+		next=""
+		for lib in $queue; do
+			base="$(basename "$lib")"
+			[ -f "$FW/$base" ] && continue
+			[ -f "$lib" ] || continue
+			cp "$lib" "$FW/$base"
+			chmod +w "$FW/$base"
+			install_name_tool -id "@rpath/$base" "$FW/$base"
+			for dep in $(deps "$FW/$base"); do
+				install_name_tool -change "$dep" "@rpath/$(basename "$dep")" "$FW/$base"
+			done
+			next="$next $(deps "$FW/$base")"
+		done
+		queue="$next"
+	done
+
+	for f in "$PLUGDIR"/*.dylib; do
+		chmod +w "$f"
+		for dep in $(deps "$f"); do
+			install_name_tool -change "$dep" "@rpath/$(basename "$dep")" "$f" 2>/dev/null || true
+		done
+		install_name_tool -add_rpath "@executable_path/../Frameworks" "$f" 2>/dev/null || true
+	done
+else
+	echo "warn: no GStreamer plugin dir at $SRC_PLUGDIR — camera/media will be limited to whatever's statically linked" >&2
+fi
 
 # --- sign ---------------------------------------------------------------
 if [ -n "$IDENTITY" ]; then

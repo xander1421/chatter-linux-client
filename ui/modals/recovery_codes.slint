@@ -81,7 +81,15 @@ export component RecoveryCodesModal inherits Rectangle {
             // nothing scrolls and every code is on screen at once.
             Rectangle {
                 vertical-stretch: 1;
-                min-height: codes-list.preferred-height;
+                // Wants to grow to codes-list.preferred-height (every code
+                // visible at once, the normal case) but must be able to
+                // shrink below that — pinning min-height to the full list
+                // height made this Flickable's "last-resort scroll" comment
+                // a lie: the modal could never actually get shorter than
+                // all-codes-at-once, so on a short window the Continue
+                // button below just got clipped off-screen, unreachable.
+                // ~3 rows (32px item + xs spacing) is the real floor.
+                min-height: 120px;
                 background: Colors.background;
                 border-radius: Spacing.radius-md;
 

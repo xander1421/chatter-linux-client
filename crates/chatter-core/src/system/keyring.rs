@@ -163,6 +163,15 @@ impl Keyring {
                 Ok(entry) => match entry.get_password() {
                     Ok(p) => return Ok(p),
                     Err(keyring::Error::NoEntry) => return Err(SystemError::KeyringNoEntry),
+                    // NoStorageAccess means the OS actually showed the
+                    // interactive unlock prompt and the user denied/canceled
+                    // it (or auth failed) — retrying re-triggers a brand new
+                    // prompt instead of backing off, so a single "no" turns
+                    // into up to `max_retries` more popups. Only retry the
+                    // transient case this loop exists for: the backend
+                    // itself being unavailable (e.g. Secret Service not up
+                    // yet at login on Linux).
+                    Err(e @ keyring::Error::NoStorageAccess(_)) => return Err(map_keyring_error(e)),
                     Err(_) => continue,
                 },
                 Err(e) => return Err(e),
@@ -247,8 +256,15 @@ impl Keyring {
                 std::thread::sleep(std::time::Duration::from_secs(retry_delay_secs));
             }
             if let Ok(entry) = self.entry() {
-                if entry.set_password(passphrase).is_ok() {
-                    return Ok(());
+                match entry.set_password(passphrase) {
+                    Ok(()) => return Ok(()),
+                    // Same reasoning as get_passphrase_with_retry: a denied/
+                    // canceled interactive prompt must not retry, or one
+                    // "no" becomes several more popups.
+                    Err(e @ keyring::Error::NoStorageAccess(_)) => {
+                        return Err(map_keyring_error(e));
+                    }
+                    Err(_) => {}
                 }
             }
         }

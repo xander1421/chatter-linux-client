@@ -120,6 +120,11 @@ impl VideoCapture {
             Self::list_devices_windows()
         }
 
+        #[cfg(target_os = "macos")]
+        {
+            Self::list_devices_macos()
+        }
+
         #[cfg(target_os = "android")]
         {
             // CameraX selects by lens facing rather than device node; surface
@@ -141,7 +146,7 @@ impl VideoCapture {
             ])
         }
 
-        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "android")))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos", target_os = "android")))]
         {
             tracing::warn!("Video device enumeration not supported on this platform");
             Ok(Vec::new())
@@ -188,6 +193,67 @@ impl VideoCapture {
 
         if monitor.start().is_err() {
             tracing::warn!("Failed to start GStreamer device monitor");
+            return Ok(devices);
+        }
+
+        for (i, device) in monitor.devices().iter().enumerate() {
+            let name = device.display_name().to_string();
+            let device_class = device.device_class().to_string();
+
+            if device_class.contains("Video") || device_class.contains("Source") {
+                devices.push(VideoDevice {
+                    name,
+                    path: format!("device-index={}", i),
+                    is_default: i == 0,
+                    resolutions: vec![(640, 480), (1280, 720), (1920, 1080)],
+                });
+            }
+        }
+
+        monitor.stop();
+
+        if devices.is_empty() {
+            tracing::warn!("No video devices found");
+        }
+
+        Ok(devices)
+    }
+
+    /// macOS: Enumerate cameras using GStreamer device monitor (avfvideosrc,
+    /// AVFoundation-backed). Same generic gst::DeviceMonitor API as Windows —
+    /// only the source element GStreamer resolves per-platform differs.
+    #[cfg(target_os = "macos")]
+    fn list_devices_macos() -> Result<Vec<VideoDevice>, CallError> {
+        use gstreamer as gst;
+        use gstreamer::prelude::*;
+
+        let mut devices = Vec::new();
+
+        let monitor = gst::DeviceMonitor::new();
+        monitor.add_filter(Some("Video/Source"), None);
+
+        // avfvideosrc's device *enumeration* only reports devices once camera
+        // access is already authorized — unlike Windows/Linux, it never
+        // triggers the system permission prompt itself (only actually
+        // starting an AVCaptureSession-backed capture does that). On a
+        // never-asked app, monitor.start() fails outright here, before the
+        // pipeline in capture_loop_macos ever gets a chance to run and
+        // trigger that prompt. Fall back to the standard default camera
+        // index instead of erroring out, so callers (default_device / start)
+        // still get a path to try — that attempt is what shows the OS
+        // permission dialog on first use.
+        if monitor.start().is_err() {
+            tracing::warn!(
+                "GStreamer device monitor unavailable (likely camera access not yet \
+                 authorized) — falling back to the default camera; starting capture \
+                 will trigger the OS permission prompt"
+            );
+            devices.push(VideoDevice {
+                name: "Default Camera".to_string(),
+                path: "device-index=0".to_string(),
+                is_default: true,
+                resolutions: vec![(640, 480), (1280, 720), (1920, 1080)],
+            });
             return Ok(devices);
         }
 
@@ -310,12 +376,17 @@ impl VideoCapture {
             Self::capture_loop_windows(device_path, video_source, running, width, height, fps, local_preview);
         }
 
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(target_os = "macos")]
+        {
+            Self::capture_loop_macos(device_path, video_source, running, width, height, fps, local_preview);
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
         let _ = local_preview; // android/fallback: self-preview tee not wired
 
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
         {
-            // Unused on platforms without a camera backend (e.g. macOS, iOS);
+            // Unused on platforms without a camera backend (e.g. iOS);
             // only the android branch below consumes it.
             #[cfg(not(target_os = "android"))]
             let _ = &device_path;
@@ -667,6 +738,159 @@ impl VideoCapture {
                 }
                 None => {
                     // No frame available, check pipeline state
+                    if pipeline.current_state() == gst::State::Null {
+                        tracing::error!("Video capture pipeline stopped unexpectedly");
+                        break;
+                    }
+                }
+            }
+
+            let elapsed = start.elapsed();
+            if elapsed < frame_duration {
+                std::thread::sleep(frame_duration - elapsed);
+            }
+        }
+
+        let _ = pipeline.set_state(gst::State::Null);
+    }
+
+    /// macOS capture loop. Same GStreamer appsink pipeline as Windows —
+    /// only the source element differs: avfvideosrc is GStreamer's
+    /// AVFoundation-backed camera source (gst-plugins-bad), and takes the
+    /// same `device-index` property Windows' mfvideosrc/ksvideosrc do, so
+    /// the "device-index=N" path format from list_devices_macos parses
+    /// identically.
+    #[cfg(target_os = "macos")]
+    fn capture_loop_macos(
+        device_path: String,
+        video_source: NativeVideoSource,
+        running: Arc<AtomicBool>,
+        width: u32,
+        height: u32,
+        fps: u32,
+        local_preview: Option<LocalPreview>,
+    ) {
+        use std::time::{Duration, Instant};
+        use gstreamer as gst;
+        use gstreamer::prelude::*;
+        use gstreamer_app as gst_app;
+        use gstreamer_video as gst_video;
+
+        // VideoCaptureConfig::default()'s 60fps is a Linux/USB-MJPG-bandwidth
+        // tradeoff (see its doc comment) — irrelevant to AVFoundation, and
+        // actively wrong here: built-in Mac cameras report a
+        // framerate=[15/1, 30/1] range (confirmed via gst-device-monitor-1.0
+        // for "MacBook Pro Camera"). Requesting 60 asks capsfilter to
+        // negotiate a framerate the device never advertises, which fails
+        // silently — the pipeline reaches PLAYING, appsink just never gets a
+        // sample, and both the local preview and the remote peer see a
+        // black tile instead of an explicit error.
+        let fps = fps.min(30);
+        let frame_duration = Duration::from_secs_f64(1.0 / fps as f64);
+
+        let src = match gst::ElementFactory::make("avfvideosrc").build() {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!("Failed to create macOS video source (avfvideosrc): {}", e);
+                Self::fallback_capture_loop(video_source, running, width, height, fps);
+                return;
+            }
+        };
+
+        if let Some(idx_str) = device_path.strip_prefix("device-index=") {
+            if let Ok(idx) = idx_str.parse::<i32>() {
+                src.set_property("device-index", idx);
+            }
+        }
+
+        let pipeline = gst::Pipeline::new();
+
+        let capsfilter = gst::ElementFactory::make("capsfilter")
+            .build()
+            .expect("capsfilter");
+        let caps = gst_video::VideoCapsBuilder::new()
+            .width(width as i32)
+            .height(height as i32)
+            .framerate(gst::Fraction::new(fps as i32, 1))
+            .build();
+        capsfilter.set_property("caps", &caps);
+
+        let videoconvert = gst::ElementFactory::make("videoconvert")
+            .build()
+            .expect("videoconvert");
+
+        let appsink = gst_app::AppSink::builder()
+            .caps(
+                &gst_video::VideoCapsBuilder::new()
+                    .format(gst_video::VideoFormat::I420)
+                    .build(),
+            )
+            .enable_last_sample(false)
+            .max_buffers(1)
+            .drop(true)
+            .sync(false)
+            .build();
+
+        pipeline
+            .add_many([&src, &capsfilter, &videoconvert, appsink.upcast_ref()])
+            .expect("add elements");
+        gst::Element::link_many([&src, &capsfilter, &videoconvert, appsink.upcast_ref()])
+            .expect("link elements");
+
+        if pipeline.set_state(gst::State::Playing).is_err() {
+            tracing::error!("Failed to start macOS video capture pipeline");
+            Self::fallback_capture_loop(video_source, running, width, height, fps);
+            return;
+        }
+
+        tracing::info!("macOS video capture pipeline started");
+
+        let mut frame_count = 0u64;
+
+        while running.load(Ordering::SeqCst) {
+            let start = Instant::now();
+
+            match appsink.try_pull_sample(gst::ClockTime::from_mseconds(100)) {
+                Some(sample) => {
+                    if let (Some(buffer), Some(caps)) = (sample.buffer(), sample.caps()) {
+                        if let Ok(info) = gst_video::VideoInfo::from_caps(caps) {
+                            let actual_w = info.width();
+                            let actual_h = info.height();
+
+                            if let Ok(map) = buffer.map_readable() {
+                                let data = map.as_slice();
+                                let y_size = (actual_w * actual_h) as usize;
+                                let uv_size = y_size / 4;
+
+                                if data.len() >= y_size + 2 * uv_size {
+                                    let mut i420_buffer = I420Buffer::new(actual_w, actual_h);
+                                    {
+                                        let (y_plane, u_plane, v_plane) = i420_buffer.data_mut();
+                                        y_plane.copy_from_slice(&data[..y_size]);
+                                        u_plane.copy_from_slice(&data[y_size..y_size + uv_size]);
+                                        v_plane.copy_from_slice(&data[y_size + uv_size..y_size + 2 * uv_size]);
+                                    }
+
+                                    let frame = VideoFrame {
+                                        rotation: VideoRotation::VideoRotation0,
+                                        timestamp_us: (frame_count * 1_000_000 / fps as u64) as i64,
+                                        buffer: i420_buffer,
+                                        frame_metadata: None,
+                                    };
+
+                                    video_source.capture_frame(&frame);
+                                    if let Some(ref preview) = local_preview {
+                                        if frame_count % 2 == 0 {
+                                            preview.tee_i420(&frame.buffer, actual_w, actual_h);
+                                        }
+                                    }
+                                    frame_count += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                None => {
                     if pipeline.current_state() == gst::State::Null {
                         tracing::error!("Video capture pipeline stopped unexpectedly");
                         break;

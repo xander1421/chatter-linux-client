@@ -71,6 +71,11 @@ export component App inherits Rectangle {
     // wiring on the Rust side; the Slint layout itself is platform-agnostic
     // (mobile renders the same split view as a narrow desktop window).
     in property <bool> is-mobile-platform: false;
+    // macOS only, set by Rust once the native titlebar is made transparent/
+    // unified (platform::macos::apply_unified_titlebar) — the standard
+    // traffic-light row height, so content clears it instead of rendering
+    // underneath. 0 on every other platform.
+    in property <length> macos-titlebar-inset: 0px;
     // Keyboard is considered open when bottom inset exceeds the nav bar threshold
     property <bool> keyboard-open: safe-area-bottom > 80px;
 
@@ -1001,8 +1006,8 @@ export component App inherits Rectangle {
     // one rectangle, all insets.
     Rectangle {
         width: root.width;
-        height: root.height - root.safe-area-top - root.safe-area-bottom;
-        y: root.safe-area-top;
+        height: root.height - root.safe-area-top - root.macos-titlebar-inset - root.safe-area-bottom;
+        y: root.safe-area-top + root.macos-titlebar-inset;
 
         // Loading page
         if current-view == "loading": LoadingPage {

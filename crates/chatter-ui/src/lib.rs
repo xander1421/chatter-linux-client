@@ -553,6 +553,35 @@ pub async fn app_init() -> AppState {
 /// Phase 2: Sync event loop (runs OUTSIDE block_on — rt.enter() keeps reactor accessible).
 /// Slint owns the thread. Tokio worker threads handle async I/O.
 fn app_run(state: AppState) {
+    // macOS: the native NSWindow only exists once the platform window has
+    // actually been created, which needs at least one event-loop iteration
+    // after the window is shown (see platform::macos's docs) — in practice a
+    // single Duration::ZERO tick isn't always enough (observed: still no
+    // NSWindow on the very first tick), so retry a bounded number of times
+    // at a short interval instead of gambling on one fixed delay.
+    #[cfg(target_os = "macos")]
+    let _unified_titlebar_timer = {
+        let weak = state.window.as_weak();
+        let attempts_left = std::cell::Cell::new(20u32); // ~1s at 50ms, generous margin
+        let timer = std::rc::Rc::new(slint::Timer::default());
+        let timer_handle = timer.clone();
+        timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(50), move || {
+            let Some(w) = weak.upgrade() else { return };
+            if crate::platform::macos::apply_unified_titlebar(w.window()) {
+                w.set_macos_titlebar_inset(crate::platform::macos::TITLEBAR_INSET);
+                timer_handle.stop();
+            } else {
+                let left = attempts_left.get().saturating_sub(1);
+                attempts_left.set(left);
+                if left == 0 {
+                    tracing::warn!("macOS titlebar: gave up after repeated attempts, window handle never became available");
+                    timer_handle.stop();
+                }
+            }
+        });
+        timer
+    };
+
     // Run Slint event loop (blocks until window closes)
     state.window.run().expect("Failed to run application");
 

@@ -180,6 +180,26 @@ impl SignalService {
                         // Pin the head across time as well.
                         self.check_tree_head_consistency(auth_client, recipient_id, &proof).await
                     }
+                    // `Malformed` means the proof doesn't even have the shape
+                    // this verifier expects (e.g. missing prefix_root) — that's
+                    // a protocol-version mismatch (client speaks KT v2,
+                    // two-tree/log-sealed; this server still speaks v1,
+                    // single-tree), not evidence of a forged key. Every OTHER
+                    // variant is a real cryptographic verification failure
+                    // against a structurally-valid v2 proof and must keep
+                    // hard-rejecting even here.
+                    #[cfg(feature = "dev-trust-root")]
+                    Err(KtError::Malformed(reason)) => {
+                        tracing::warn!(
+                            recipient = %recipient_id,
+                            reason,
+                            "KT DOWNGRADE (dev-trust-root, protocol version mismatch): server's \
+                             KT proof doesn't match the v2 shape this client verifies (server is \
+                             still on v1) — trusting the bundle identity key WITHOUT a KT proof. \
+                             NEVER hit outside a dev-trust-root build."
+                        );
+                        Ok(())
+                    }
                     Err(e) => {
                         tracing::error!(
                             recipient = %recipient_id,
@@ -837,6 +857,22 @@ impl SignalService {
                             recipient = %recipient_id,
                             epoch,
                             "KT(anon): peer identity key verified against the signed transparency log"
+                        );
+                        Ok(())
+                    }
+                    // See verify_peer_key_transparency's identical arm: Malformed
+                    // means protocol-version mismatch (server still on KT v1),
+                    // not a forged key. Only that variant downgrades, and only
+                    // under dev-trust-root.
+                    #[cfg(feature = "dev-trust-root")]
+                    Err(KtError::Malformed(reason)) => {
+                        tracing::warn!(
+                            recipient = %recipient_id,
+                            reason,
+                            "KT(anon) DOWNGRADE (dev-trust-root, protocol version mismatch): \
+                             server's KT proof doesn't match the v2 shape this client verifies \
+                             (server is still on v1) — trusting the bundle identity key WITHOUT \
+                             a KT proof. NEVER hit outside a dev-trust-root build."
                         );
                         Ok(())
                     }

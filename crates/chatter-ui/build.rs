@@ -14,7 +14,24 @@ fn main() {
         u8::from(std::env::var_os("SLINT_EMIT_DEBUG_INFO").is_some())
     );
 
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("android") {
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+
+    if target_os == "macos" {
+        // webrtc-sys links a static WebRTC lib containing Objective-C
+        // categories (e.g. NSString+AbslStringView, adding
+        // `stringForAbslStringView:`). Apple's linker drops object files
+        // from a static archive that nothing directly references, and a
+        // category isn't a direct reference — so the method silently
+        // never registers and calling it crashes at runtime with
+        // "unrecognized selector" instead of failing at link time.
+        // -ObjC forces the linker to load every Objective-C object file
+        // in linked archives. Same class of issue as the JNI symbol
+        // stripping below: a dependency's rustc-link-arg does not reach
+        // this crate's final binary link line, only this build.rs does.
+        println!("cargo:rustc-link-arg=-ObjC");
+    }
+
+    if target_os != "android" {
         return;
     }
 

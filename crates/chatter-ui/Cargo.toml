@@ -34,7 +34,7 @@ chatter-core = { path = "../chatter-core", default-features = false }
 # ============================================================================
 # UI Framework - Slint
 # ============================================================================
-slint = { version = "1.15.1", default-features = false, features = ["compat-1-2", "accessibility"] }
+slint = { version = "1.15.1", default-features = false, features = ["compat-1-2", "accessibility", "raw-window-handle-06"] }
 i-slint-backend-winit = { version = "1.15.1", optional = true }
 winit = { version = "0.30", optional = true }
 
@@ -70,6 +70,20 @@ arboard = { version = "3", features = ["wayland-data-control"], optional = true 
 [target.'cfg(target_os = "linux")'.dependencies]
 gstreamer-gl-egl = { version = "0.23", optional = true }
 glutin_egl_sys = { version = "0.7", optional = true }
+
+# ============================================================================
+# Platform-specific: macOS (unified/transparent titlebar)
+# ============================================================================
+[target.'cfg(target_os = "macos")'.dependencies]
+# winit's WindowExtMacOS doesn't expose titlebar transparency or full-size-content-view
+# (checked: no such methods on that trait) — only raw NSWindow access gets us the
+# native unified-toolbar look every macOS chat app uses. objc2-app-kit is already
+# in the dependency graph transitively (winit's macOS backend is built on it), so
+# this doesn't add a new crate family, just a direct edge to one already present.
+objc2 = { version = "0.6", optional = true }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSWindow", "NSResponder", "NSView"], optional = true }
+objc2-foundation = { version = "0.3", optional = true }
+raw-window-handle = { version = "0.6", optional = true }
 
 # ============================================================================
 # Platform-specific: Android
@@ -113,9 +127,10 @@ default = ["desktop", "jarvis"]
 # Nostr DMs, which are Tor-only on purpose.
 mesh = ["chatter-core/mesh"]
 desktop = [
-    "dep:i-slint-backend-winit", "dep:winit", "dep:arboard", "slint/backend-winit", 
-    "slint/renderer-skia", "chatter-core/desktop-system", "chatter-core/desktop-media", 
-    "dep:pdfium-render", "desktop-media"
+    "dep:i-slint-backend-winit", "dep:winit", "dep:arboard", "slint/backend-winit",
+    "slint/renderer-skia", "chatter-core/desktop-system", "chatter-core/desktop-media",
+    "dep:pdfium-render", "desktop-media",
+    "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation", "dep:raw-window-handle"
 ]
 # windows-cross: No LiveKit (webrtc-sys requires MSVC, can't cross-compile with MinGW).
 # GStreamer still links (unconditional dep in chatter-ui). For full features, build
