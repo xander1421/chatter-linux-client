@@ -29,8 +29,11 @@ use crate::system::{Directories, Keyring};
 
 use super::ContextError;
 
-/// Default server URL if CHATTER_SERVER_URL is not set.
-pub(crate) const DEFAULT_SERVER_URL: &str = "http://localhost:50051";
+/// Default server URL if CHATTER_SERVER_URL is not set. Must be `https://`:
+/// the server has no plaintext fallback (TLS is mandatory in every
+/// environment), and Android app processes never inherit shell env vars, so
+/// this default is always what an Android build actually connects with.
+pub(crate) const DEFAULT_SERVER_URL: &str = "https://localhost:50051";
 
 /// Environment variable for server URL.
 pub(crate) const SERVER_URL_ENV: &str = "CHATTER_SERVER_URL";
