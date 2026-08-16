@@ -123,7 +123,24 @@ else
 	echo "warn: no GStreamer plugin dir at $SRC_PLUGDIR — camera/media will be limited to whatever's statically linked" >&2
 fi
 
-# --- sign ---------------------------------------------------------------
+# --- sign -----------------------------------------------------------------
+#
+# `codesign --deep` walks known embedded-code locations (Contents/Frameworks,
+# Contents/PlugIns, nested .app bundles) but NOT loose files under
+# Contents/Resources — which is exactly where the GStreamer plugins above
+# live (PlugIns is reserved for nested bundles, see the comment at PLUGDIR).
+# install_name_tool already invalidated every plugin's original signature by
+# rewriting its load commands; left unsigned, dlopen'ing any of them at
+# runtime gets SIGKILL'd by the kernel (EXC_BAD_ACCESS / Code Signature
+# Invalid) the moment GStreamer's plugin scanner touches one. Sign every
+# loose dylib individually before the deep bundle-level pass covers the rest.
+SIGN_ARGS=(--force --sign -)
+[ -n "$IDENTITY" ] && SIGN_ARGS=(--force --options runtime --sign "$IDENTITY")
+for f in "$FW"/*.dylib "$PLUGDIR"/*.dylib; do
+	[ -f "$f" ] || continue
+	codesign "${SIGN_ARGS[@]}" "$f"
+done
+
 if [ -n "$IDENTITY" ]; then
 	codesign --deep --force --options runtime \
 		--entitlements "$ROOT/macos/chatter.entitlements" \
