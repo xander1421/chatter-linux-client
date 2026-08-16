@@ -5,7 +5,7 @@
 
 use tokio_stream::{Stream, StreamExt};
 use tonic::service::interceptor::InterceptedService;
-use tonic::transport::Channel;
+use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
@@ -40,12 +40,12 @@ use crate::proto::chat_v1::{
 /// let response = integration.create_integration("my-integration", IntegrationType::Claude as i32, None).await?;
 /// ```
 pub struct IntegrationClient {
-    inner: IntegrationServiceClient<InterceptedService<Channel, AuthInterceptor>>,
+    inner: IntegrationServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
 }
 
 impl IntegrationClient {
     /// Create a new IntegrationClient from pool components.
-    pub fn new(channel: Channel, interceptor: AuthInterceptor) -> Self {
+    pub fn new(channel: GrpcTransport, interceptor: AuthInterceptor) -> Self {
         Self {
             inner: IntegrationServiceClient::with_interceptor(channel, interceptor),
         }
@@ -471,7 +471,7 @@ mod tests {
     #[test]
     fn test_integration_client_construction_types() {
         // This test verifies the type signatures compile correctly.
-        fn _verify_types(channel: Channel, interceptor: AuthInterceptor) {
+        fn _verify_types(channel: GrpcTransport, interceptor: AuthInterceptor) {
             let _client = IntegrationClient::new(channel, interceptor);
         }
     }

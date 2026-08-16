@@ -550,7 +550,7 @@ async fn send_pending_messages_after_bootstrap(
     database: Arc<Database>,
     signal_service: &SignalService,
     auth_client: &mut AuthClient,
-    channel: tonic::transport::Channel,
+    channel: crate::network::grpc::transport::GrpcTransport,
 ) {
     use prost::Message as ProstMessage;
     use crate::crypto::signal::sesame::{SesameManager, SqliteSesameStore};
@@ -732,7 +732,7 @@ async fn send_bootstrap_response_with_envelope(
     response: BootstrapResponse,
     signal_service: &SignalService,
     auth_client: &mut AuthClient,
-    channel: tonic::transport::Channel,
+    channel: crate::network::grpc::transport::GrpcTransport,
 ) -> Result<(), String> {
     let peer_id = response.peer_id;
 

@@ -5,7 +5,7 @@
 //! is on managed tokens rather than their own API key.
 
 use tonic::service::interceptor::InterceptedService;
-use tonic::transport::Channel;
+use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
@@ -17,12 +17,12 @@ use crate::proto::chat_v1::{
 /// AI broker client wrapper.
 #[derive(Clone)]
 pub struct AiClient {
-    inner: AiServiceClient<InterceptedService<Channel, AuthInterceptor>>,
+    inner: AiServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
 }
 
 impl AiClient {
     /// Create a new AiClient from pool components.
-    pub fn new(channel: Channel, interceptor: AuthInterceptor) -> Self {
+    pub fn new(channel: GrpcTransport, interceptor: AuthInterceptor) -> Self {
         Self {
             inner: AiServiceClient::with_interceptor(channel, interceptor),
         }

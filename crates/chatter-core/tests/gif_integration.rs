@@ -30,7 +30,7 @@ async fn test_gif_client_anonymous_search() {
 
     interceptor.set_anonymous(token.clone());
     
-    let mut client = GifClient::new(channel, interceptor.clone());
+    let mut client = GifClient::new(channel.into(), interceptor.clone());
     
     // Call trending - if backend is running and whitelist worked, this should succeed
     // Even with a fake token, if it hits the whitelist, it might return results

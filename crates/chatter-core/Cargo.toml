@@ -45,9 +45,10 @@ async-trait = "0.1"
 # ============================================================================
 # gRPC (Generated code dependencies)
 # ============================================================================
-tonic = { version = "0.12", features = ["tls", "tls-roots"] }
-prost = "0.13"
-prost-types = "0.13"
+tonic = { version = "0.14", features = ["tls-ring"] }
+tonic-prost = "0.14"
+prost = "0.14"
+prost-types = "0.14"
 tower = "0.5"
 
 # ============================================================================
@@ -202,6 +203,21 @@ argon2 = "0.5.3"
 tempfile = "3"
 
 # ============================================================================
+# HTTP/3 (QUIC) gRPC transport (optional — gated behind `quic` feature)
+# ============================================================================
+# h3-quinn (tonic-h3's quinn backend) depends on quinn with
+# default-features = false and only the "futures-io" feature, deliberately
+# leaving the crypto backend to the consuming crate. quinn/rustls are ALSO
+# declared here (not just referenced through tonic-h3's re-export) so Cargo's
+# feature unification turns on quinn's rustls-ring backend and Endpoint::client
+# for the whole dependency graph, including inside h3-quinn itself — the
+# version ranges match what quinn/h3-quinn already pin, so this resolves to
+# the SAME crate instances, never a second mismatched copy.
+tonic-h3 = { version = "0.0.6", default-features = false, features = ["quinn"], optional = true }
+quinn = { version = "0.11", default-features = false, features = ["rustls-ring", "runtime-tokio"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"], optional = true }
+
+# ============================================================================
 # Desktop-only system deps (not available on Android or iOS)
 # ============================================================================
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
@@ -291,6 +307,9 @@ onion = [
     "dep:tokio-tungstenite",
 ]
 desktop-system = ["keyring/sync-secret-service", "keyring/windows-native", "keyring/apple-native"]
+# HTTP/3 (QUIC) gRPC transport. Off by default — pulls quinn/h3 via tonic-h3.
+# Without it, GrpcClientPool is TCP/HTTP2-only (today's behavior, unchanged).
+quic = ["dep:tonic-h3", "dep:quinn", "dep:rustls"]
 # Shared media stack (LiveKit + WebRTC) — works on every target the `livekit`
 # crate supports. Mobile bridges opt in via `--features media`; desktop pulls
 # it in transitively through `desktop-media`.

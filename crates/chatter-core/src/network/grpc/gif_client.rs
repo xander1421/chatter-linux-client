@@ -3,7 +3,7 @@
 //! Client for GIF service operations including search and trending.
 
 use tonic::service::interceptor::InterceptedService;
-use tonic::transport::Channel;
+use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
@@ -17,12 +17,12 @@ use crate::proto::chat_v1::{
 ///
 /// Wraps the generated GifServiceClient with ergonomic APIs and error mapping.
 pub struct GifClient {
-    inner: GifServiceClient<InterceptedService<Channel, AuthInterceptor>>,
+    inner: GifServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
 }
 
 impl GifClient {
     /// Create a new GifClient from pool components.
-    pub fn new(channel: Channel, interceptor: AuthInterceptor) -> Self {
+    pub fn new(channel: GrpcTransport, interceptor: AuthInterceptor) -> Self {
         Self {
             inner: GifServiceClient::with_interceptor(channel, interceptor),
         }

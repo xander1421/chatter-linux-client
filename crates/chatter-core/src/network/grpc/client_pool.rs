@@ -7,12 +7,32 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::RwLock;
-use tonic::transport::{Channel, Endpoint};
+use tonic::transport::Endpoint;
 
 use crate::error::NetworkError;
 
 use super::interceptors::AuthInterceptor;
 use super::retry::{retry_unary, RetryConfig};
+use super::transport::GrpcTransport;
+
+/// Ceiling on the QUIC reachability probe in [`GrpcClientPool::dial`]. QUIC/UDP
+/// is blocked on some networks (hotel wifi, corporate firewalls); a hung
+/// handshake must fall back to TCP quickly rather than eat into the caller's
+/// own deadline (e.g. the 75s `UNARY_DEADLINE`).
+#[cfg(feature = "quic")]
+const QUIC_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Cached result of the QUIC reachability probe, process-lifetime (no
+/// persistence — re-probing on every process start is cheap and self-heals if
+/// a network's QUIC/UDP filtering changes; a TTL-based re-probe within one
+/// run is unneeded until flaky-UDP users show up in the wild).
+#[cfg(feature = "quic")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuicProbeState {
+    Untried,
+    Working,
+    Failed,
+}
 
 /// Connect timeout for an endpoint URL.
 ///
@@ -64,7 +84,7 @@ pub enum TransportMode {
 }
 
 pub struct GrpcClientPool {
-    channel: Arc<RwLock<Option<Channel>>>,
+    channel: Arc<RwLock<Option<GrpcTransport>>>,
     endpoint: Arc<RwLock<Endpoint>>,
     auth: AuthInterceptor,
     timeout: Option<Duration>,
@@ -78,7 +98,12 @@ pub struct GrpcClientPool {
     /// Separate channel for the anonymous mailbox/message/auth clients, so their
     /// traffic rides its OWN connection — an isolated Tor circuit under onion — and
     /// the server can't correlate anon ops with authenticated RPCs by connection.
-    anon_channel: Arc<RwLock<Option<Channel>>>,
+    anon_channel: Arc<RwLock<Option<GrpcTransport>>>,
+    /// Cached QUIC reachability, probed once and reused. Only ever consulted
+    /// for `TransportMode::Direct` over `https://` — onion carries TCP, and
+    /// QUIC needs TLS 1.3 to negotiate ALPN.
+    #[cfg(feature = "quic")]
+    quic_probe: Arc<RwLock<QuicProbeState>>,
     /// Lazily-bootstrapped, pool-wide Tor client for the onion transport.
     /// Bootstrap is deferred to the first onion dial and cached thereafter.
     #[cfg(feature = "onion")]
@@ -146,6 +171,8 @@ impl GrpcClientPool {
             onion_addr: Arc::new(RwLock::new(None)),
             transport_mode: Arc::new(RwLock::new(TransportMode::Direct)),
             anon_channel: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "quic")]
+            quic_probe: Arc::new(RwLock::new(QuicProbeState::Untried)),
             #[cfg(feature = "onion")]
             onion_tor: Arc::new(tokio::sync::OnceCell::new()),
             #[cfg(feature = "onion")]
@@ -294,16 +321,7 @@ impl GrpcClientPool {
     pub async fn connect(&self) -> Result<(), NetworkError> {
         let endpoint = self.endpoint.read().clone();
 
-        // Onion transport tunnels the channel through Tor via the Arti connector;
-        // Direct transport uses tonic's built-in TCP/TLS dialer.
-        #[cfg(feature = "onion")]
-        let connect_result = if *self.transport_mode.read() == TransportMode::Onion {
-            endpoint.connect_with_connector(self.onion_connector()).await
-        } else {
-            endpoint.connect().await
-        };
-        #[cfg(not(feature = "onion"))]
-        let connect_result = endpoint.connect().await;
+        let connect_result = self.dial(&endpoint).await;
 
         let channel = connect_result.map_err(|e| {
             crate::network::connection::set_server_status(
@@ -317,6 +335,71 @@ impl GrpcClientPool {
         );
         *self.channel.write() = Some(channel);
         Ok(())
+    }
+
+    /// Dial the server, preferring QUIC when reachable.
+    ///
+    /// Only `TransportMode::Direct` over `https://` ever attempts QUIC — onion
+    /// carries TCP (Tor has no UDP relay support) and plain `http://` has no
+    /// TLS 1.3 to negotiate ALPN over. Reachability is probed once per pool
+    /// (cached in `quic_probe`): a hit reuses the QUIC transport on every
+    /// subsequent dial, a miss (or a timeout — some networks silently drop
+    /// UDP) falls back to the existing TCP/HTTP2 path for the rest of the
+    /// pool's life, matching today's behavior exactly when QUIC is off or
+    /// unreachable.
+    async fn dial(&self, endpoint: &Endpoint) -> Result<GrpcTransport, tonic::transport::Error> {
+        #[cfg(feature = "quic")]
+        {
+            let try_quic = *self.transport_mode.read() == TransportMode::Direct
+                && *self.quic_probe.read() != QuicProbeState::Failed;
+            if try_quic {
+                let server_url = self.direct_url.read().clone();
+                if server_url.starts_with("https://") {
+                    if let Ok(uri) = server_url.parse::<http::Uri>() {
+                        let probe = tokio::time::timeout(
+                            QUIC_PROBE_TIMEOUT,
+                            super::transport::probe_quic(&uri),
+                        )
+                        .await;
+                        match probe {
+                            Ok(Ok(())) => {
+                                *self.quic_probe.write() = QuicProbeState::Working;
+                                match super::transport::build_quic(uri) {
+                                    Ok(transport) => {
+                                        tracing::info!("transport: QUIC (probe succeeded)");
+                                        return Ok(transport);
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(error = %e, "QUIC probe succeeded but channel build failed — falling back to TCP");
+                                    }
+                                }
+                            }
+                            Ok(Err(e)) => {
+                                tracing::info!(error = %e, "QUIC unreachable — falling back to TCP");
+                                *self.quic_probe.write() = QuicProbeState::Failed;
+                            }
+                            Err(_) => {
+                                tracing::info!("QUIC probe timed out — falling back to TCP");
+                                *self.quic_probe.write() = QuicProbeState::Failed;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Onion transport tunnels the channel through Tor via the Arti connector;
+        // Direct transport uses tonic's built-in TCP/TLS dialer.
+        #[cfg(feature = "onion")]
+        let channel = if *self.transport_mode.read() == TransportMode::Onion {
+            endpoint.connect_with_connector(self.onion_connector()).await?
+        } else {
+            endpoint.connect().await?
+        };
+        #[cfg(not(feature = "onion"))]
+        let channel = endpoint.connect().await?;
+
+        Ok(channel.into())
     }
 
     /// Dial the server and throw the connection away: a reachability probe.
@@ -341,15 +424,7 @@ impl GrpcClientPool {
         use crate::network::connection::{set_server_status, ServerStatus};
 
         let endpoint = self.endpoint.read().clone();
-
-        #[cfg(feature = "onion")]
-        let result = if *self.transport_mode.read() == TransportMode::Onion {
-            endpoint.connect_with_connector(self.onion_connector()).await
-        } else {
-            endpoint.connect().await
-        };
-        #[cfg(not(feature = "onion"))]
-        let result = endpoint.connect().await;
+        let result = self.dial(&endpoint).await;
 
         match result {
             Ok(_channel) => {
@@ -388,7 +463,7 @@ impl GrpcClientPool {
     /// account's authenticated RPCs by connection/circuit. On the direct
     /// transport isolation is moot (both connections share the client IP), so it
     /// falls back to the shared channel.
-    pub fn anon_channel(&self) -> Channel {
+    pub fn anon_channel(&self) -> GrpcTransport {
         #[cfg(feature = "onion")]
         {
             if *self.transport_mode.read() == TransportMode::Onion {
@@ -400,7 +475,9 @@ impl GrpcClientPool {
                     return ch;
                 }
                 let endpoint = self.endpoint.read().clone();
-                let ch = endpoint.connect_with_connector_lazy(self.anon_onion_connector());
+                let ch: GrpcTransport = endpoint
+                    .connect_with_connector_lazy(self.anon_onion_connector())
+                    .into();
                 *guard = Some(ch.clone());
                 return ch;
             }
@@ -427,7 +504,7 @@ impl GrpcClientPool {
     /// a **lazy channel** is created automatically. The lazy channel defers the
     /// real TCP handshake to the first gRPC call, so callers get a proper
     /// transport error instead of a panic when the server is unreachable.
-    pub fn channel(&self) -> Channel {
+    pub fn channel(&self) -> GrpcTransport {
         // Fast path: already connected.
         if let Some(ch) = self.channel.read().clone() {
             return ch;
@@ -440,21 +517,47 @@ impl GrpcClientPool {
             return ch;
         }
         let endpoint = self.endpoint.read().clone();
+
+        // A prior dial() already proved QUIC reachable — build a lazy QUIC
+        // channel (no I/O until the first RPC, same cost profile as
+        // connect_lazy()) instead of re-probing synchronously, which this
+        // path must never do: callers rely on channel() never blocking.
+        #[cfg(feature = "quic")]
+        {
+            let quic_ready = *self.transport_mode.read() == TransportMode::Direct
+                && *self.quic_probe.read() == QuicProbeState::Working;
+            if quic_ready {
+                let server_url = self.direct_url.read().clone();
+                if let Ok(uri) = server_url.parse::<http::Uri>() {
+                    match super::transport::build_quic(uri) {
+                        Ok(channel) => {
+                            tracing::warn!("GrpcClientPool: no active connection — created lazy QUIC channel (RPCs will attempt on-demand connect)");
+                            *guard = Some(channel.clone());
+                            return channel;
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "lazy QUIC channel build failed — falling back to TCP");
+                        }
+                    }
+                }
+            }
+        }
+
         #[cfg(feature = "onion")]
-        let channel = if *self.transport_mode.read() == TransportMode::Onion {
-            endpoint.connect_with_connector_lazy(self.onion_connector())
+        let channel: GrpcTransport = if *self.transport_mode.read() == TransportMode::Onion {
+            endpoint.connect_with_connector_lazy(self.onion_connector()).into()
         } else {
-            endpoint.connect_lazy()
+            endpoint.connect_lazy().into()
         };
         #[cfg(not(feature = "onion"))]
-        let channel = endpoint.connect_lazy();
+        let channel: GrpcTransport = endpoint.connect_lazy().into();
         tracing::warn!("GrpcClientPool: no active connection — created lazy channel (RPCs will attempt on-demand connect)");
         *guard = Some(channel.clone());
         channel
     }
 
     /// Try to get the channel, returning None if not connected.
-    pub fn try_channel(&self) -> Option<Channel> {
+    pub fn try_channel(&self) -> Option<GrpcTransport> {
         self.channel.read().clone()
     }
 
@@ -836,5 +939,37 @@ mod tests {
         } else {
             panic!("Expected ConnectionFailed error");
         }
+    }
+
+    /// Bind a UDP socket that never completes a QUIC handshake — simulates a
+    /// network that silently drops/filters QUIC (hotel wifi, some corporate
+    /// firewalls) — and confirm `dial()` falls back to TCP rather than
+    /// hanging past `QUIC_PROBE_TIMEOUT`, and that the failure is cached so
+    /// later dials don't pay the probe cost again.
+    #[cfg(feature = "quic")]
+    #[tokio::test]
+    async fn test_dial_falls_back_to_tcp_when_quic_unreachable() {
+        let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = udp.local_addr().unwrap().port();
+        let server_url = format!("https://127.0.0.1:{port}");
+
+        let pool = GrpcClientPool::new(&server_url).unwrap();
+        assert_eq!(*pool.quic_probe.read(), QuicProbeState::Untried);
+
+        let endpoint = pool.endpoint.read().clone();
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(Duration::from_secs(10), pool.dial(&endpoint)).await;
+
+        // dial() itself must never hang past its own QUIC_PROBE_TIMEOUT (3s)
+        // plus a normal TCP connect attempt — the outer 10s is just a test
+        // deadline, not the thing under test.
+        assert!(started.elapsed() < Duration::from_secs(10), "dial() did not return promptly");
+        let result = result.expect("dial() must not hang");
+
+        // TCP fallback also fails here (nothing listens on that port for TCP
+        // either) — the point of this test is the QUIC decision, not a
+        // successful connection.
+        assert!(result.is_err());
+        assert_eq!(*pool.quic_probe.read(), QuicProbeState::Failed);
     }
 }

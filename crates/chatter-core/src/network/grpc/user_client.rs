@@ -5,7 +5,7 @@
 
 use tokio_stream::{Stream, StreamExt};
 use tonic::service::interceptor::InterceptedService;
-use tonic::transport::Channel;
+use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
@@ -38,12 +38,12 @@ use crate::proto::chat_v1::{
 /// let profile = user.get_user_profile("user-123").await?;
 /// ```
 pub struct UserClient {
-    inner: UserServiceClient<InterceptedService<Channel, AuthInterceptor>>,
+    inner: UserServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
 }
 
 impl UserClient {
     /// Create a new UserClient from pool components.
-    pub fn new(channel: Channel, interceptor: AuthInterceptor) -> Self {
+    pub fn new(channel: GrpcTransport, interceptor: AuthInterceptor) -> Self {
         Self {
             inner: UserServiceClient::with_interceptor(channel, interceptor),
         }
@@ -505,7 +505,7 @@ mod tests {
         // This test verifies the type signatures compile correctly.
         // We can't actually create a client without a real channel,
         // but we verify the wrapper pattern is correct.
-        fn _verify_types(channel: Channel, interceptor: AuthInterceptor) {
+        fn _verify_types(channel: GrpcTransport, interceptor: AuthInterceptor) {
             let _client = UserClient::new(channel, interceptor);
         }
     }

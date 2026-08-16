@@ -11,7 +11,7 @@
 
 use tokio_stream::{Stream, StreamExt};
 use tonic::service::interceptor::InterceptedService;
-use tonic::transport::Channel;
+use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
@@ -50,11 +50,11 @@ use crate::proto::chat_v1::{
 /// let response = auth.login("alice", b"password", "linux-desktop").await?;
 /// ```
 pub struct AuthClient {
-    inner: AuthServiceClient<InterceptedService<Channel, AuthInterceptor>>,
+    inner: AuthServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
     /// Key Transparency client, built on the same channel + auth interceptor.
     /// Used to fetch a peer's signed inclusion proof before trusting the
     /// identity key in their prekey bundle (Phase 2 KT verification).
-    kt: KeyTransparencyServiceClient<InterceptedService<Channel, AuthInterceptor>>,
+    kt: KeyTransparencyServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
 }
 
 impl AuthClient {
@@ -64,7 +64,7 @@ impl AuthClient {
     ///
     /// * `channel` - Cloned channel from GrpcClientPool
     /// * `interceptor` - Cloned auth interceptor for credential injection
-    pub fn new(channel: Channel, interceptor: AuthInterceptor) -> Self {
+    pub fn new(channel: GrpcTransport, interceptor: AuthInterceptor) -> Self {
         Self {
             inner: AuthServiceClient::with_interceptor(channel.clone(), interceptor.clone()),
             kt: KeyTransparencyServiceClient::with_interceptor(channel, interceptor),
@@ -847,7 +847,7 @@ mod tests {
         // This test verifies the type signatures compile correctly.
         // We can't actually create a client without a real channel,
         // but we verify the wrapper pattern is correct.
-        fn _verify_types(channel: Channel, interceptor: AuthInterceptor) {
+        fn _verify_types(channel: GrpcTransport, interceptor: AuthInterceptor) {
             let _client = AuthClient::new(channel, interceptor);
         }
     }

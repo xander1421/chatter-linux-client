@@ -4,7 +4,7 @@
 //! URLs. Bytes go directly to RustFS; the server only brokers URLs.
 
 use tonic::service::interceptor::InterceptedService;
-use tonic::transport::Channel;
+use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
@@ -20,12 +20,12 @@ use crate::proto::chat_v1::{
 ///
 /// Wraps the generated FileServiceClient with ergonomic APIs and error mapping.
 pub struct FileClient {
-    inner: FileServiceClient<InterceptedService<Channel, AuthInterceptor>>,
+    inner: FileServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
 }
 
 impl FileClient {
     /// Create a new FileClient from pool components.
-    pub fn new(channel: Channel, interceptor: AuthInterceptor) -> Self {
+    pub fn new(channel: GrpcTransport, interceptor: AuthInterceptor) -> Self {
         Self {
             inner: FileServiceClient::with_interceptor(channel, interceptor),
         }
@@ -155,7 +155,7 @@ mod tests {
         // This test verifies the type signatures compile correctly.
         // We can't actually create a client without a real channel,
         // but we verify the wrapper pattern is correct.
-        fn _verify_types(channel: Channel, interceptor: AuthInterceptor) {
+        fn _verify_types(channel: GrpcTransport, interceptor: AuthInterceptor) {
             let _client = FileClient::new(channel, interceptor);
         }
     }

@@ -1064,6 +1064,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "axum-h3"
+version = "0.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b4c25010faba73bf807d5012fd154ff185031e1a7e98fed1ea2438bc99c0500"
+dependencies = [
+ "axum",
+ "futures",
+ "h3",
+ "h3-util",
+ "hyper",
+ "hyper-util",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "base16ct"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1916,6 +1933,7 @@ dependencies = [
  "prost 0.14.3",
  "prost-types 0.14.3",
  "qrcode",
+ "quinn",
  "rand 0.9.4",
  "rand_core 0.6.4",
  "rayon",
@@ -1925,6 +1943,7 @@ dependencies = [
  "rodio",
  "rsa 0.7.2",
  "rusqlite",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",
@@ -1939,6 +1958,7 @@ dependencies = [
  "tokio-tungstenite 0.28.0",
  "tokio-util",
  "tonic",
+ "tonic-h3",
  "tonic-prost",
  "tor-rtcompat",
  "tower",
@@ -5598,6 +5618,51 @@ dependencies = [
  "slab",
  "tokio",
  "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "h3"
+version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10872b55cfb02a821b69dc7cf8dc6a71d6af25eb9a79662bec4a9d016056b3be"
+dependencies = [
+ "bytes",
+ "fastrand",
+ "futures-util",
+ "http",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
+name = "h3-quinn"
+version = "0.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b2e732c8d91a74731663ac8479ab505042fbf547b9a207213ab7fbcbfc4f8b4"
+dependencies = [
+ "bytes",
+ "futures",
+ "h3",
+ "quinn",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "h3-util"
+version = "0.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df853a026dd43ad24c6e008109597492bf1a646c5b305ce112ec9bbf3f1355da"
+dependencies = [
+ "bytes",
+ "futures",
+ "h3",
+ "h3-quinn",
+ "hyper",
+ "hyper-util",
+ "tokio",
+ "tower",
  "tracing",
 ]
 
@@ -10389,6 +10454,7 @@ checksum = "b9e20a958963c291dc322d98411f541009df2ced7b5a4f2bd52337638cfccf20"
 dependencies = [
  "bytes",
  "cfg_aliases",
+ "futures-io",
  "pin-project-lite",
  "quinn-proto",
  "quinn-udp",
@@ -13580,6 +13646,21 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "tonic-h3"
+version = "0.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5aa927bc2a686f6bd2ab4991ad52b6ef5108de864f849629bda212193fdef23a"
+dependencies = [
+ "axum-h3",
+ "futures",
+ "h3-util",
+ "http",
+ "hyper",
+ "tonic",
+ "tower",
 ]
 
 [[package]]

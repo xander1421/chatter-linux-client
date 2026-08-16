@@ -8,7 +8,7 @@
 //! These clients do NOT use AuthInterceptor. They send requests with only
 //! the blind signature token as credential, ensuring true sender anonymity.
 
-use tonic::transport::Channel;
+use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::proto::chat_v1::{
@@ -27,7 +27,7 @@ use crate::proto::chat_v1::{
 /// this does not include any authentication headers.
 pub struct AnonymousMessageClient {
     /// Raw client without auth interceptor
-    inner: MessageServiceClient<Channel>,
+    inner: MessageServiceClient<GrpcTransport>,
 }
 
 impl AnonymousMessageClient {
@@ -35,8 +35,8 @@ impl AnonymousMessageClient {
     ///
     /// # Important
     ///
-    /// Pass a raw `Channel`, NOT one wrapped with `AuthInterceptor`.
-    pub fn new(channel: Channel) -> Self {
+    /// Pass a raw `GrpcTransport`, NOT one wrapped with `AuthInterceptor`.
+    pub fn new(channel: GrpcTransport) -> Self {
         Self {
             inner: MessageServiceClient::new(channel),
         }
@@ -229,12 +229,12 @@ impl AnonymousMessageClient {
 ///
 /// Uses blind signature tokens instead of auth headers.
 pub struct AnonymousAuthClient {
-    inner: AuthServiceClient<Channel>,
+    inner: AuthServiceClient<GrpcTransport>,
 }
 
 impl AnonymousAuthClient {
     /// Create a new anonymous auth client from a raw channel.
-    pub fn new(channel: Channel) -> Self {
+    pub fn new(channel: GrpcTransport) -> Self {
         Self {
             inner: AuthServiceClient::new(channel),
         }
@@ -318,12 +318,12 @@ impl AnonymousAuthClient {
 /// peer is queried. Hiding that (VRF-indexed lookup) is the remaining
 /// query-privacy work.
 pub struct AnonymousKtClient {
-    inner: KeyTransparencyServiceClient<Channel>,
+    inner: KeyTransparencyServiceClient<GrpcTransport>,
 }
 
 impl AnonymousKtClient {
     /// Create a new anonymous KT client from a raw channel (NO auth interceptor).
-    pub fn new(channel: Channel) -> Self {
+    pub fn new(channel: GrpcTransport) -> Self {
         Self {
             inner: KeyTransparencyServiceClient::new(channel),
         }

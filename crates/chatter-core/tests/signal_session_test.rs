@@ -344,7 +344,7 @@ async fn ensure_session_refuses_a_stale_session_when_an_identity_change_is_parke
         .unwrap();
 
     let channel = tonic::transport::Channel::from_static("http://127.0.0.1:1").connect_lazy();
-    let mut auth_client = AuthClient::new(channel, AuthInterceptor::new());
+    let mut auth_client = AuthClient::new(channel.into(), AuthInterceptor::new());
 
     match service.ensure_session(&mut auth_client, peer_id, 1).await {
         Err(ServiceError::Crypto(CryptoError::UntrustedIdentity {

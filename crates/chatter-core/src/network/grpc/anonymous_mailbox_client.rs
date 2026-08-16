@@ -22,7 +22,7 @@
 //! | get_mailbox_challenge | AnonymousMailboxClient | None |
 //! | get_blind_signature_public_key | Either | None |
 
-use tonic::transport::Channel;
+use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::proto::mailbox_v1::{
@@ -40,7 +40,7 @@ use crate::proto::mailbox_v1::{
 /// Authentication is done via blind signatures or challenge-response, NOT auth tokens.
 pub struct AnonymousMailboxClient {
     /// Raw client without auth interceptor
-    inner: EphemeralMailboxServiceClient<Channel>,
+    inner: EphemeralMailboxServiceClient<GrpcTransport>,
 }
 
 impl AnonymousMailboxClient {
@@ -48,8 +48,8 @@ impl AnonymousMailboxClient {
     ///
     /// # Important
     ///
-    /// Pass a raw `Channel`, NOT one wrapped with `AuthInterceptor`.
-    pub fn new(channel: Channel) -> Self {
+    /// Pass a raw `GrpcTransport`, NOT one wrapped with `AuthInterceptor`.
+    pub fn new(channel: GrpcTransport) -> Self {
         Self {
             inner: EphemeralMailboxServiceClient::new(channel),
         }

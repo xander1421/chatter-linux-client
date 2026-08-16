@@ -4,7 +4,7 @@
 //! Enables ephemeral mailbox management for privacy-preserving messaging (NDSS '21 system).
 
 use tonic::service::interceptor::InterceptedService;
-use tonic::transport::Channel;
+use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
@@ -32,12 +32,12 @@ use crate::proto::mailbox_v1::{
 /// let tokens = mailbox.get_mailbox_tokens(5, vec![]).await?;
 /// ```
 pub struct MailboxClient {
-    inner: EphemeralMailboxServiceClient<InterceptedService<Channel, AuthInterceptor>>,
+    inner: EphemeralMailboxServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
 }
 
 impl MailboxClient {
     /// Create a new MailboxClient from pool components.
-    pub fn new(channel: Channel, interceptor: AuthInterceptor) -> Self {
+    pub fn new(channel: GrpcTransport, interceptor: AuthInterceptor) -> Self {
         Self {
             inner: EphemeralMailboxServiceClient::with_interceptor(channel, interceptor),
         }
@@ -251,7 +251,7 @@ mod tests {
         // This test verifies the type signatures compile correctly.
         // We can't actually create a client without a real channel,
         // but we verify the wrapper pattern is correct.
-        fn _verify_types(channel: Channel, interceptor: AuthInterceptor) {
+        fn _verify_types(channel: GrpcTransport, interceptor: AuthInterceptor) {
             let _client = MailboxClient::new(channel, interceptor);
         }
     }

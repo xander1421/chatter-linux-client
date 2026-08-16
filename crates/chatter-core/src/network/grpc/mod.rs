@@ -21,6 +21,7 @@ pub mod notification_client;
 pub mod onion_transport;
 pub mod provisioning_client;
 pub mod svr_client;
+pub mod transport;
 pub mod user_client;
 
 pub use anonymous_client::{AnonymousAuthClient, AnonymousKtClient, AnonymousMessageClient};
@@ -39,4 +40,5 @@ pub use notification_client::NotificationClient;
 pub use provisioning_client::{ProvisioningClient, ProvisioningPollResult};
 pub use retry::{retry_unary, RetryConfig};
 pub use svr_client::{FetchBackupResult, SvrClient};
+pub use transport::GrpcTransport;
 pub use user_client::UserClient;

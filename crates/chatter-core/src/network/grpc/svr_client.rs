@@ -3,7 +3,7 @@
 //! Client for SVR backup service operations including store, fetch, and delete.
 
 use tonic::service::interceptor::InterceptedService;
-use tonic::transport::Channel;
+use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
@@ -43,7 +43,7 @@ pub struct FetchBackupResult {
 /// Wraps the generated SvrServiceClient with ergonomic APIs and error mapping.
 /// Used for encrypted key backup lifecycle: store, fetch, delete.
 pub struct SvrClient {
-    inner: SvrServiceClient<InterceptedService<Channel, AuthInterceptor>>,
+    inner: SvrServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
 }
 
 impl SvrClient {
@@ -53,7 +53,7 @@ impl SvrClient {
     ///
     /// * `channel` - Cloned channel from GrpcClientPool
     /// * `interceptor` - Cloned auth interceptor for credential injection
-    pub fn new(channel: Channel, interceptor: AuthInterceptor) -> Self {
+    pub fn new(channel: GrpcTransport, interceptor: AuthInterceptor) -> Self {
         Self {
             inner: SvrServiceClient::with_interceptor(channel, interceptor),
         }

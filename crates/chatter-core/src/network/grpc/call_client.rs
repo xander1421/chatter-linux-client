@@ -5,7 +5,7 @@
 
 use tokio_stream::{Stream, StreamExt};
 use tonic::service::interceptor::InterceptedService;
-use tonic::transport::Channel;
+use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
@@ -30,12 +30,12 @@ use crate::proto::chat_v1::{
 /// let response = client.create_call("channel-123", "Team Meeting", CallType::Video, None).await?;
 /// ```
 pub struct CallClient {
-    inner: CallServiceClient<InterceptedService<Channel, AuthInterceptor>>,
+    inner: CallServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
 }
 
 impl CallClient {
     /// Create a new CallClient from pool components.
-    pub fn new(channel: Channel, interceptor: AuthInterceptor) -> Self {
+    pub fn new(channel: GrpcTransport, interceptor: AuthInterceptor) -> Self {
         Self {
             inner: CallServiceClient::with_interceptor(channel, interceptor),
         }
@@ -264,7 +264,7 @@ mod tests {
     #[test]
     fn test_call_client_construction_types() {
         // Verify type signatures compile correctly.
-        fn _verify_types(channel: Channel, interceptor: AuthInterceptor) {
+        fn _verify_types(channel: GrpcTransport, interceptor: AuthInterceptor) {
             let _client = CallClient::new(channel, interceptor);
         }
     }

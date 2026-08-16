@@ -4,7 +4,7 @@
 //! Supports both new device (linking) and primary device (approving) flows.
 
 use tonic::service::interceptor::InterceptedService;
-use tonic::transport::Channel;
+use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
@@ -60,12 +60,12 @@ pub enum TransferArchivePoll {
 /// 2. `provision_device()` - Send ECDH-encrypted keys
 /// 3. Optionally `cancel_provisioning()` to abort
 pub struct ProvisioningClient {
-    inner: DeviceProvisioningServiceClient<InterceptedService<Channel, AuthInterceptor>>,
+    inner: DeviceProvisioningServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
 }
 
 impl ProvisioningClient {
     /// Create a new ProvisioningClient from pool components.
-    pub fn new(channel: Channel, interceptor: AuthInterceptor) -> Self {
+    pub fn new(channel: GrpcTransport, interceptor: AuthInterceptor) -> Self {
         Self {
             inner: DeviceProvisioningServiceClient::with_interceptor(channel, interceptor),
         }
