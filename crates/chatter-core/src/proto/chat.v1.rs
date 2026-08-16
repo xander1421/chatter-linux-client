@@ -4,15 +4,13 @@
 ///
 /// Only user and assistant turns travel here; a system prompt is its own field
 /// on CompleteRequest.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ChatTurn {
     #[prost(string, tag="1")]
     pub role: ::prost::alloc::string::String,
     #[prost(string, tag="2")]
     pub content: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CompleteRequest {
     #[prost(string, tag="1")]
@@ -25,8 +23,7 @@ pub struct CompleteRequest {
     #[prost(string, tag="4")]
     pub system: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CompleteResponse {
     #[prost(string, tag="1")]
     pub content: ::prost::alloc::string::String,
@@ -39,29 +36,24 @@ pub struct CompleteResponse {
     #[prost(int64, tag="4")]
     pub balance_after: i64,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetQuotaRequest {
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetQuotaResponse {
     #[prost(int64, tag="1")]
     pub balance: i64,
     #[prost(int64, tag="2")]
     pub spent_total: i64,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListServedModelsRequest {
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ServedModel {
     #[prost(string, tag="1")]
     pub id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListServedModelsResponse {
     #[prost(message, repeated, tag="1")]
@@ -69,8 +61,7 @@ pub struct ListServedModelsResponse {
 }
 // ================== Core Entities ==================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct User {
     /// UUIDv4
     #[prost(string, tag="1")]
@@ -84,8 +75,7 @@ pub struct User {
     #[prost(fixed64, tag="4")]
     pub last_active: u64,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UserProfile {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
@@ -116,7 +106,6 @@ pub struct UserProfile {
     pub encrypted_avatar: ::prost::alloc::vec::Vec<u8>,
 }
 /// Error handling
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Error {
     #[prost(enumeration="error::Code", tag="1")]
@@ -162,19 +151,19 @@ pub mod error {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Code::Unknown => "UNKNOWN",
-                Code::Unauthorized => "UNAUTHORIZED",
-                Code::NotFound => "NOT_FOUND",
-                Code::PermissionDenied => "PERMISSION_DENIED",
-                Code::InvalidArgument => "INVALID_ARGUMENT",
-                Code::RateLimited => "RATE_LIMITED",
-                Code::ChannelFull => "CHANNEL_FULL",
-                Code::UserBanned => "USER_BANNED",
-                Code::TemporarilyUnavailable => "TEMPORARILY_UNAVAILABLE",
-                Code::DeadlineExceeded => "DEADLINE_EXCEEDED",
-                Code::Aborted => "ABORTED",
-                Code::InternalError => "INTERNAL_ERROR",
-                Code::UsernameAlreadyTaken => "USERNAME_ALREADY_TAKEN",
+                Self::Unknown => "UNKNOWN",
+                Self::Unauthorized => "UNAUTHORIZED",
+                Self::NotFound => "NOT_FOUND",
+                Self::PermissionDenied => "PERMISSION_DENIED",
+                Self::InvalidArgument => "INVALID_ARGUMENT",
+                Self::RateLimited => "RATE_LIMITED",
+                Self::ChannelFull => "CHANNEL_FULL",
+                Self::UserBanned => "USER_BANNED",
+                Self::TemporarilyUnavailable => "TEMPORARILY_UNAVAILABLE",
+                Self::DeadlineExceeded => "DEADLINE_EXCEEDED",
+                Self::Aborted => "ABORTED",
+                Self::InternalError => "INTERNAL_ERROR",
+                Self::UsernameAlreadyTaken => "USERNAME_ALREADY_TAKEN",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -202,8 +191,7 @@ pub mod error {
 /// serialized GroupEncrypted proto; associated_data tags the sender-key format
 /// ("sender_key" or "sender:{uid}:channel:{cid}"). It carries no AES-AEAD
 /// fields — Signal Protocol messages use SignalEncrypted/SealedSender, not this.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EncryptedData {
     #[prost(enumeration="CryptoVersion", tag="1")]
     pub version: i32,
@@ -216,8 +204,7 @@ pub struct EncryptedData {
 
 /// Signal Protocol prekey bundle for X3DH key agreement (matches Signal's format)
 /// Also includes UAK for sealed sender authorization (sender needs recipient's UAK)
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SignalPreKeyBundle {
     #[prost(bytes="vec", tag="1")]
     pub identity_key: ::prost::alloc::vec::Vec<u8>,
@@ -243,8 +230,7 @@ pub struct SignalPreKeyBundle {
 /// Nested message and enum types in `SignalPreKeyBundle`.
 pub mod signal_pre_key_bundle {
     /// Based on Signal's LibSignal-Client.proto PreKeyRecordStructure
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PreKeyRecord {
         #[prost(uint32, tag="1")]
         pub id: u32,
@@ -252,8 +238,7 @@ pub mod signal_pre_key_bundle {
         pub public_key: ::prost::alloc::vec::Vec<u8>,
     }
     /// Based on Signal's LibSignal-Client.proto SignedPreKeyRecordStructure
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct SignedPreKeyRecord {
         #[prost(uint32, tag="1")]
         pub id: u32,
@@ -266,8 +251,7 @@ pub mod signal_pre_key_bundle {
         pub timestamp: u64,
     }
     /// Based on Signal's LibSignal-Client.proto KyberPreKeyRecordStructure (Post-Quantum Cryptography)
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct KyberPreKeyRecord {
         #[prost(uint32, tag="1")]
         pub id: u32,
@@ -281,8 +265,7 @@ pub mod signal_pre_key_bundle {
     }
 }
 /// Signal Protocol encrypted message (matches Signal's envelope format)
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SignalMessage {
     #[prost(enumeration="signal_message::Type", tag="1")]
     pub r#type: i32,
@@ -313,10 +296,10 @@ pub mod signal_message {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Type::Unspecified => "TYPE_UNSPECIFIED",
-                Type::PrekeyMessage => "PREKEY_MESSAGE",
-                Type::WhisperMessage => "WHISPER_MESSAGE",
-                Type::SenderkeyMessage => "SENDERKEY_MESSAGE",
+                Self::Unspecified => "TYPE_UNSPECIFIED",
+                Self::PrekeyMessage => "PREKEY_MESSAGE",
+                Self::WhisperMessage => "WHISPER_MESSAGE",
+                Self::SenderkeyMessage => "SENDERKEY_MESSAGE",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -333,8 +316,7 @@ pub mod signal_message {
 }
 /// Sealed Sender certificate for metadata privacy
 /// Hides sender identity from server during message transmission
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SenderCertificate {
     /// Serialized certificate blob (issued and signed by server)
     #[prost(bytes="vec", tag="1")]
@@ -354,8 +336,7 @@ pub struct SenderCertificate {
 }
 /// Sealed Sender message envelope
 /// Encrypts sender identity - only recipient can decrypt and reveal sender
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SealedSenderMessage {
     /// Sealed envelope (opaque encrypted blob that hides sender identity)
     /// Contains both sender info and encrypted Signal Protocol message
@@ -389,11 +370,11 @@ impl UserPresence {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            UserPresence::PresenceUnspecified => "PRESENCE_UNSPECIFIED",
-            UserPresence::Offline => "OFFLINE",
-            UserPresence::Online => "ONLINE",
-            UserPresence::Away => "AWAY",
-            UserPresence::DoNotDisturb => "DO_NOT_DISTURB",
+            Self::PresenceUnspecified => "PRESENCE_UNSPECIFIED",
+            Self::Offline => "OFFLINE",
+            Self::Online => "ONLINE",
+            Self::Away => "AWAY",
+            Self::DoNotDisturb => "DO_NOT_DISTURB",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -424,11 +405,11 @@ impl ChannelRole {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            ChannelRole::RoleUnspecified => "ROLE_UNSPECIFIED",
-            ChannelRole::Member => "MEMBER",
-            ChannelRole::Moderator => "MODERATOR",
-            ChannelRole::Admin => "ADMIN",
-            ChannelRole::Owner => "OWNER",
+            Self::RoleUnspecified => "ROLE_UNSPECIFIED",
+            Self::Member => "MEMBER",
+            Self::Moderator => "MODERATOR",
+            Self::Admin => "ADMIN",
+            Self::Owner => "OWNER",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -465,12 +446,12 @@ impl ChannelType {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            ChannelType::Unspecified => "CHANNEL_TYPE_UNSPECIFIED",
-            ChannelType::ChannelPublic => "CHANNEL_PUBLIC",
-            ChannelType::ChannelPrivate => "CHANNEL_PRIVATE",
-            ChannelType::SavedMessages => "SAVED_MESSAGES",
-            ChannelType::ChannelAnonymousDm => "CHANNEL_ANONYMOUS_DM",
-            ChannelType::ChannelAnonymousGroup => "CHANNEL_ANONYMOUS_GROUP",
+            Self::Unspecified => "CHANNEL_TYPE_UNSPECIFIED",
+            Self::ChannelPublic => "CHANNEL_PUBLIC",
+            Self::ChannelPrivate => "CHANNEL_PRIVATE",
+            Self::SavedMessages => "SAVED_MESSAGES",
+            Self::ChannelAnonymousDm => "CHANNEL_ANONYMOUS_DM",
+            Self::ChannelAnonymousGroup => "CHANNEL_ANONYMOUS_GROUP",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -509,12 +490,12 @@ impl FriendStatus {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            FriendStatus::Unspecified => "FRIEND_STATUS_UNSPECIFIED",
-            FriendStatus::None => "NONE",
-            FriendStatus::Pending => "PENDING",
-            FriendStatus::Accepted => "ACCEPTED",
-            FriendStatus::Declined => "DECLINED",
-            FriendStatus::Blocked => "BLOCKED",
+            Self::Unspecified => "FRIEND_STATUS_UNSPECIFIED",
+            Self::None => "NONE",
+            Self::Pending => "PENDING",
+            Self::Accepted => "ACCEPTED",
+            Self::Declined => "DECLINED",
+            Self::Blocked => "BLOCKED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -547,9 +528,9 @@ impl CryptoVersion {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            CryptoVersion::Unspecified => "CRYPTO_VERSION_UNSPECIFIED",
-            CryptoVersion::SimpleE2e => "CRYPTO_VERSION_SIMPLE_E2E",
-            CryptoVersion::SignalProtocol => "CRYPTO_VERSION_SIGNAL_PROTOCOL",
+            Self::Unspecified => "CRYPTO_VERSION_UNSPECIFIED",
+            Self::SimpleE2e => "CRYPTO_VERSION_SIMPLE_E2E",
+            Self::SignalProtocol => "CRYPTO_VERSION_SIGNAL_PROTOCOL",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -566,8 +547,7 @@ impl CryptoVersion {
 
 /// Session represents a user's authenticated device session (Signal-style device auth)
 /// Note: JWT fields (token, token_id, refresh_token) have been removed
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Session {
     /// Unix timestamp in nanoseconds (must be within 30 days)
     #[prost(fixed64, tag="4")]
@@ -589,8 +569,7 @@ pub struct Session {
     #[prost(bytes="vec", tag="8")]
     pub unidentified_access_key: ::prost::alloc::vec::Vec<u8>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LoginRequest {
     /// Privacy: the client sends a password-keyed login-lookup hash here
     /// (hex of a 32-byte digest = 64 chars), NOT a plaintext username.
@@ -623,7 +602,6 @@ pub struct LoginRequest {
     #[prost(uint32, tag="8")]
     pub device_id: u32,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RegisterRequest {
     /// Privacy: the client sends a password-keyed login-lookup hash here
@@ -690,8 +668,7 @@ pub struct RegisterRequest {
 
 /// RequestRegistrationChallengeRequest initiates the registration challenge flow.
 /// The server generates a random nonce that the client must sign with their identity key.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RequestRegistrationChallengeRequest {
     /// Privacy: the client sends a password-keyed login-lookup hash here
     /// (hex of a 32-byte digest = 64 chars), NOT a plaintext username.
@@ -705,8 +682,7 @@ pub struct RequestRegistrationChallengeRequest {
 /// RequestRegistrationChallengeResponse contains the server's challenge nonce.
 /// The client must sign this with their identity private key and include
 /// the signature in the RegisterRequest.challenge_response field.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RequestRegistrationChallengeResponse {
     /// Random 32-byte nonce that client must sign with identity private key
     #[prost(bytes="vec", tag="1")]
@@ -720,22 +696,19 @@ pub struct RequestRegistrationChallengeResponse {
     pub expires_at: u64,
 }
 /// RefreshRequest is deprecated - Signal auth uses long-lived device sessions
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RefreshRequest {
     /// Client device information
     #[prost(string, tag="3")]
     pub device_info: ::prost::alloc::string::String,
 }
 /// LogoutRequest - uses device_id for Signal-style auth
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LogoutRequest {
     #[prost(uint32, tag="2")]
     pub device_id: u32,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteAccountRequest {
     /// Raw password for confirmation (will be verified against stored hash)
     #[prost(bytes="vec", tag="1")]
@@ -744,14 +717,12 @@ pub struct DeleteAccountRequest {
     pub request_id: ::prost::alloc::string::String,
 }
 /// RevokeSessionRequest - uses device_id for Signal-style auth
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RevokeSessionRequest {
     #[prost(uint32, tag="2")]
     pub device_id: u32,
 }
 /// Event messages for auth service
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AuthEvent {
     /// Unix timestamp in nanoseconds
@@ -794,15 +765,15 @@ pub mod auth_event {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                RegistrationStatus::Unspecified => "REGISTRATION_STATUS_UNSPECIFIED",
-                RegistrationStatus::RegistrationStarted => "REGISTRATION_STARTED",
-                RegistrationStatus::AccountCreating => "ACCOUNT_CREATING",
-                RegistrationStatus::AccountCreated => "ACCOUNT_CREATED",
-                RegistrationStatus::AuthzRelationsInitialized => "AUTHZ_RELATIONS_INITIALIZED",
-                RegistrationStatus::UserProfileCreated => "USER_PROFILE_CREATED",
-                RegistrationStatus::LoggingIn => "LOGGING_IN",
-                RegistrationStatus::RegistrationCompleted => "REGISTRATION_COMPLETED",
-                RegistrationStatus::RegistrationFailed => "REGISTRATION_FAILED",
+                Self::Unspecified => "REGISTRATION_STATUS_UNSPECIFIED",
+                Self::RegistrationStarted => "REGISTRATION_STARTED",
+                Self::AccountCreating => "ACCOUNT_CREATING",
+                Self::AccountCreated => "ACCOUNT_CREATED",
+                Self::AuthzRelationsInitialized => "AUTHZ_RELATIONS_INITIALIZED",
+                Self::UserProfileCreated => "USER_PROFILE_CREATED",
+                Self::LoggingIn => "LOGGING_IN",
+                Self::RegistrationCompleted => "REGISTRATION_COMPLETED",
+                Self::RegistrationFailed => "REGISTRATION_FAILED",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -821,8 +792,7 @@ pub mod auth_event {
             }
         }
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Payload {
         /// Sent when status is ACCOUNT_CREATED
         #[prost(message, tag="3")]
@@ -836,7 +806,6 @@ pub mod auth_event {
     }
 }
 /// Placeholder for Account Deletion Event Stream
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AccountDeletionEvent {
     #[prost(enumeration="account_deletion_event::Status", tag="1")]
@@ -867,12 +836,12 @@ pub mod account_deletion_event {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Status::Unspecified => "STATUS_UNSPECIFIED",
-                Status::Started => "STARTED",
-                Status::DataRemovalInProgress => "DATA_REMOVAL_IN_PROGRESS",
-                Status::SpicedbCleanupInProgress => "SPICEDB_CLEANUP_IN_PROGRESS",
-                Status::Completed => "COMPLETED",
-                Status::Failed => "FAILED",
+                Self::Unspecified => "STATUS_UNSPECIFIED",
+                Self::Started => "STARTED",
+                Self::DataRemovalInProgress => "DATA_REMOVAL_IN_PROGRESS",
+                Self::SpicedbCleanupInProgress => "SPICEDB_CLEANUP_IN_PROGRESS",
+                Self::Completed => "COMPLETED",
+                Self::Failed => "FAILED",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -889,8 +858,7 @@ pub mod account_deletion_event {
         }
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AuthResponse {
     #[prost(message, optional, tag="1")]
     pub session: ::core::option::Option<Session>,
@@ -908,8 +876,7 @@ pub struct AuthResponse {
 /// Client already has device_auth_token and UAK (it generated them)
 /// NOTE: Server trust root is NOT included here - it must be hardcoded in client binary
 /// per Signal's security model (prevents MITM during registration)
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RegistrationResult {
     /// Server-assigned user UUID
     #[prost(string, tag="1")]
@@ -925,16 +892,14 @@ pub struct RegistrationResult {
     pub recovery_codes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 /// RefreshTokenRequest is deprecated - Signal auth uses long-lived device sessions
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RefreshTokenRequest {
     #[prost(string, tag="2")]
     pub device_info: ::prost::alloc::string::String,
     #[prost(string, tag="3")]
     pub request_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ChangePasswordRequest {
     #[prost(bytes="vec", tag="1")]
     pub current_password_hash: ::prost::alloc::vec::Vec<u8>,
@@ -944,11 +909,9 @@ pub struct ChangePasswordRequest {
     pub request_id: ::prost::alloc::string::String,
 }
 /// No fields needed, returns sessions for the authenticated user
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetActiveSessionsRequest {
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetActiveSessionsResponse {
     #[prost(message, repeated, tag="1")]
@@ -956,8 +919,7 @@ pub struct GetActiveSessionsResponse {
 }
 /// Nested message and enum types in `GetActiveSessionsResponse`.
 pub mod get_active_sessions_response {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct SessionInfo {
         /// Signal device ID
         #[prost(uint32, tag="7")]
@@ -977,8 +939,7 @@ pub mod get_active_sessions_response {
     }
 }
 /// InvalidateSessionRequest - uses device_id for Signal-style auth
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InvalidateSessionRequest {
     /// Signal device ID to invalidate
     #[prost(uint32, tag="3")]
@@ -986,8 +947,7 @@ pub struct InvalidateSessionRequest {
     #[prost(string, tag="2")]
     pub request_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InvalidateAllSessionsRequest {
     /// Optional: exclude current session?
     /// bool exclude_current = 1;
@@ -996,8 +956,7 @@ pub struct InvalidateAllSessionsRequest {
 }
 // ================== Account Recovery ==================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UseRecoveryCodeRequest {
     /// Privacy: the client sends a password-keyed login-lookup hash here
     /// (hex of a 32-byte digest = 64 chars), NOT a plaintext username.
@@ -1014,30 +973,26 @@ pub struct UseRecoveryCodeRequest {
     #[prost(string, tag="6")]
     pub request_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UseRecoveryCodeResponse {
     /// Number of unused recovery codes remaining
     #[prost(int32, tag="1")]
     pub remaining_codes: i32,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RegenerateRecoveryCodesRequest {
     /// Requires password confirmation for security
     #[prost(bytes="vec", tag="1")]
     pub password_hash: ::prost::alloc::vec::Vec<u8>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RegenerateRecoveryCodesResponse {
     #[prost(string, repeated, tag="1")]
     pub recovery_codes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 // ================== Device Management ==================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Device {
     #[prost(uint32, tag="1")]
     pub device_id: u32,
@@ -1060,11 +1015,9 @@ pub struct Device {
     pub is_current: bool,
 }
 /// No fields needed - returns devices for authenticated user
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListDevicesRequest {
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListDevicesResponse {
     #[prost(message, repeated, tag="1")]
@@ -1073,14 +1026,12 @@ pub struct ListDevicesResponse {
 // ================== Identity ==================
 
 /// GetMyIdentityRequest requires no fields - identity comes from auth context.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetMyIdentityRequest {
 }
 /// GetMyIdentityResponse returns the authenticated caller's Chatter identity
 /// (the server-assigned user_id) for the current device-auth session.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetMyIdentityResponse {
     /// Chatter user UUID
     #[prost(string, tag="1")]
@@ -1107,31 +1058,26 @@ pub struct GetMyIdentityResponse {
 //      required (unrestricted_unidentified_access).
 
 /// GetSealedSenderPolicyRequest requires no fields - identity comes from auth context.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetSealedSenderPolicyRequest {
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetSealedSenderPolicyResponse {
     #[prost(bool, tag="1")]
     pub allow_from_anyone: bool,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SetSealedSenderPolicyRequest {
     #[prost(bool, tag="1")]
     pub allow_from_anyone: bool,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SetSealedSenderPolicyResponse {
     /// Echoes the persisted value after the update.
     #[prost(bool, tag="1")]
     pub allow_from_anyone: bool,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RenameDeviceRequest {
     #[prost(uint32, tag="1")]
     pub device_id: u32,
@@ -1140,8 +1086,7 @@ pub struct RenameDeviceRequest {
     #[prost(string, tag="3")]
     pub request_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RevokeDeviceRequest {
     #[prost(uint32, tag="1")]
     pub device_id: u32,
@@ -1150,8 +1095,7 @@ pub struct RevokeDeviceRequest {
 }
 // ================== Signal Protocol Messages ==================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UploadPreKeyBundleRequest {
     #[prost(message, optional, tag="1")]
     pub bundle: ::core::option::Option<SignalPreKeyBundle>,
@@ -1177,7 +1121,6 @@ pub struct UploadPreKeyBundleRequest {
 /// device does not hold. Serving a mix of old identity key and new prekeys is
 /// precisely the state that makes an account permanently unreachable, so it
 /// must not be reachable even transiently.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RepublishIdentityKeyRequest {
     #[prost(message, optional, tag="1")]
@@ -1189,8 +1132,7 @@ pub struct RepublishIdentityKeyRequest {
     #[prost(string, tag="4")]
     pub request_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RepublishIdentityKeyResponse {
     /// True when the published identity key differs from the one this account
     /// previously had — i.e. every peer will see a safety-number change.
@@ -1200,8 +1142,7 @@ pub struct RepublishIdentityKeyResponse {
     #[prost(uint32, tag="2")]
     pub devices_reset: u32,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetPreKeyBundleRequest {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
@@ -1211,7 +1152,6 @@ pub struct GetPreKeyBundleRequest {
     #[prost(string, tag="3")]
     pub request_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetPreKeyBundleResponse {
     #[prost(oneof="get_pre_key_bundle_response::Result", tags="1, 2")]
@@ -1219,8 +1159,7 @@ pub struct GetPreKeyBundleResponse {
 }
 /// Nested message and enum types in `GetPreKeyBundleResponse`.
 pub mod get_pre_key_bundle_response {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Result {
         /// Single device result
         #[prost(message, tag="1")]
@@ -1230,7 +1169,6 @@ pub mod get_pre_key_bundle_response {
         Devices(super::PreKeyBundleDeviceList),
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PreKeyBundleDeviceList {
     #[prost(message, repeated, tag="1")]
@@ -1239,7 +1177,6 @@ pub struct PreKeyBundleDeviceList {
     #[prost(bytes="vec", tag="2")]
     pub identity_key: ::prost::alloc::vec::Vec<u8>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RefreshPreKeysRequest {
     #[prost(message, repeated, tag="1")]
@@ -1258,15 +1195,13 @@ pub struct RefreshPreKeysRequest {
     #[prost(message, repeated, tag="5")]
     pub new_kyber_one_time_prekeys: ::prost::alloc::vec::Vec<signal_pre_key_bundle::KyberPreKeyRecord>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetPreKeyStatsRequest {
     /// Optional device ID filter, defaults to 1
     #[prost(uint32, tag="1")]
     pub device_id: u32,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetPreKeyStatsResponse {
     /// Number of unused one-time prekeys
     #[prost(int32, tag="1")]
@@ -1285,15 +1220,13 @@ pub struct GetPreKeyStatsResponse {
 /// client supply it allowed an authenticated device_1 user to request a
 /// certificate naming itself as device_7, which the recipient would then
 /// route into device_7's session slot.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RequestSenderCertificateRequest {
     /// How long should certificate be valid (max 30 days, default 7 days)
     #[prost(message, optional, tag="2")]
     pub validity_period: ::core::option::Option<::prost_types::Duration>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RequestSenderCertificateResponse {
     #[prost(message, optional, tag="1")]
     pub certificate: ::core::option::Option<SenderCertificate>,
@@ -1303,8 +1236,7 @@ pub struct RequestSenderCertificateResponse {
 }
 // ---- Internal Auth Service (for Sagas / System Communication) ----
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CompensateRegistrationRequest {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
@@ -1315,8 +1247,7 @@ pub struct CompensateRegistrationRequest {
     #[prost(string, tag="4")]
     pub compensation_request_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InternalCreateSessionRequest {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
@@ -1325,16 +1256,14 @@ pub struct InternalCreateSessionRequest {
     #[prost(string, tag="3")]
     pub request_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InternalCreateSessionResponse {
     #[prost(message, optional, tag="1")]
     pub session: ::core::option::Option<Session>,
 }
 // ================== Request/Response Messages ==================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CreateCallRequest {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -1348,7 +1277,6 @@ pub struct CreateCallRequest {
     #[prost(string, tag="5")]
     pub client_request_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateCallResponse {
     #[prost(string, tag="1")]
@@ -1366,15 +1294,13 @@ pub struct CreateCallResponse {
     #[prost(message, optional, tag="6")]
     pub call_info: ::core::option::Option<CallInfo>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct JoinCallRequest {
     #[prost(string, tag="1")]
     pub call_id: ::prost::alloc::string::String,
     #[prost(string, tag="2")]
     pub client_request_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct JoinCallResponse {
     /// LiveKit room access token (not user auth JWT)
@@ -1388,28 +1314,24 @@ pub struct JoinCallResponse {
     #[prost(message, optional, tag="4")]
     pub call_info: ::core::option::Option<CallInfo>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EndCallRequest {
     #[prost(string, tag="1")]
     pub call_id: ::prost::alloc::string::String,
     #[prost(string, tag="2")]
     pub reason: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LeaveCallRequest {
     #[prost(string, tag="1")]
     pub call_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetCallInfoRequest {
     #[prost(string, tag="1")]
     pub call_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListChannelCallsRequest {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -1423,13 +1345,11 @@ pub struct ListChannelCallsRequest {
     #[prost(int32, tag="4")]
     pub offset: i32,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetActiveCallInChannelRequest {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetActiveCallInChannelResponse {
     #[prost(message, optional, tag="1")]
@@ -1437,7 +1357,6 @@ pub struct GetActiveCallInChannelResponse {
     #[prost(bool, tag="2")]
     pub has_active_call: bool,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListChannelCallsResponse {
     #[prost(message, repeated, tag="1")]
@@ -1447,8 +1366,7 @@ pub struct ListChannelCallsResponse {
     #[prost(bool, tag="3")]
     pub has_more: bool,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StreamCallEventsRequest {
     /// Stream events for specific calls
     #[prost(string, repeated, tag="1")]
@@ -1458,8 +1376,7 @@ pub struct StreamCallEventsRequest {
     pub channel_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 /// LiveKit reservation messages
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ReserveConferenceRequest {
     /// Room name
     #[prost(string, tag="1")]
@@ -1471,8 +1388,7 @@ pub struct ReserveConferenceRequest {
     #[prost(string, tag="3")]
     pub mail_owner: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ReserveConferenceResponse {
     /// Conference ID
     #[prost(string, tag="1")]
@@ -1481,8 +1397,7 @@ pub struct ReserveConferenceResponse {
     #[prost(int32, tag="2")]
     pub duration: i32,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CallSettings {
     #[prost(bool, tag="1")]
     pub start_with_audio_muted: bool,
@@ -1499,7 +1414,6 @@ pub struct CallSettings {
     #[prost(string, tag="7")]
     pub password: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CallInfo {
     #[prost(string, tag="1")]
@@ -1532,8 +1446,7 @@ pub struct CallInfo {
     #[prost(int32, tag="13")]
     pub current_participant_count: i32,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CallParticipant {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
@@ -1557,7 +1470,6 @@ pub struct CallParticipant {
 }
 // ================== Event Streaming ==================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CallEvent {
     #[prost(string, tag="1")]
@@ -1576,8 +1488,7 @@ pub struct CallEvent {
 }
 /// Nested message and enum types in `CallEvent`.
 pub mod call_event {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Data {
         #[prost(message, tag="6")]
         CallCreated(super::CallCreatedEvent),
@@ -1592,7 +1503,6 @@ pub mod call_event {
     }
 }
 /// Event data messages
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CallCreatedEvent {
     #[prost(message, optional, tag="1")]
@@ -1600,8 +1510,7 @@ pub struct CallCreatedEvent {
     #[prost(string, tag="2")]
     pub created_by_display_name: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CallEndedEvent {
     #[prost(string, tag="1")]
     pub call_id: ::prost::alloc::string::String,
@@ -1614,14 +1523,12 @@ pub struct CallEndedEvent {
     #[prost(string, tag="5")]
     pub reason: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ParticipantJoinedEvent {
     #[prost(message, optional, tag="1")]
     pub participant: ::core::option::Option<CallParticipant>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ParticipantLeftEvent {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
@@ -1630,8 +1537,7 @@ pub struct ParticipantLeftEvent {
     #[prost(message, optional, tag="3")]
     pub duration_in_call: ::core::option::Option<::prost_types::Duration>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ParticipantUpdatedEvent {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
@@ -1657,10 +1563,10 @@ impl CallType {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            CallType::Unspecified => "CALL_TYPE_UNSPECIFIED",
-            CallType::Voice => "CALL_TYPE_VOICE",
-            CallType::Video => "CALL_TYPE_VIDEO",
-            CallType::ScreenShare => "CALL_TYPE_SCREEN_SHARE",
+            Self::Unspecified => "CALL_TYPE_UNSPECIFIED",
+            Self::Voice => "CALL_TYPE_VOICE",
+            Self::Video => "CALL_TYPE_VIDEO",
+            Self::ScreenShare => "CALL_TYPE_SCREEN_SHARE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1688,9 +1594,9 @@ impl CallStatus {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            CallStatus::Unspecified => "CALL_STATUS_UNSPECIFIED",
-            CallStatus::Active => "CALL_STATUS_ACTIVE",
-            CallStatus::Ended => "CALL_STATUS_ENDED",
+            Self::Unspecified => "CALL_STATUS_UNSPECIFIED",
+            Self::Active => "CALL_STATUS_ACTIVE",
+            Self::Ended => "CALL_STATUS_ENDED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1721,12 +1627,12 @@ impl CallEventType {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            CallEventType::Unspecified => "CALL_EVENT_TYPE_UNSPECIFIED",
-            CallEventType::Created => "CALL_EVENT_TYPE_CREATED",
-            CallEventType::Ended => "CALL_EVENT_TYPE_ENDED",
-            CallEventType::ParticipantJoined => "CALL_EVENT_TYPE_PARTICIPANT_JOINED",
-            CallEventType::ParticipantLeft => "CALL_EVENT_TYPE_PARTICIPANT_LEFT",
-            CallEventType::ParticipantUpdated => "CALL_EVENT_TYPE_PARTICIPANT_UPDATED",
+            Self::Unspecified => "CALL_EVENT_TYPE_UNSPECIFIED",
+            Self::Created => "CALL_EVENT_TYPE_CREATED",
+            Self::Ended => "CALL_EVENT_TYPE_ENDED",
+            Self::ParticipantJoined => "CALL_EVENT_TYPE_PARTICIPANT_JOINED",
+            Self::ParticipantLeft => "CALL_EVENT_TYPE_PARTICIPANT_LEFT",
+            Self::ParticipantUpdated => "CALL_EVENT_TYPE_PARTICIPANT_UPDATED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1744,7 +1650,6 @@ impl CallEventType {
 }
 // ================== Channel Entities ==================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Channel {
     /// UUIDv4
@@ -1782,8 +1687,7 @@ pub struct Channel {
 }
 /// Nested message and enum types in `Channel`.
 pub mod channel {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Config {
         #[prost(enumeration="config::Persistence", tag="1")]
         pub persistence: i32,
@@ -1817,9 +1721,9 @@ pub mod channel {
             /// (if the ProtoBuf definition does not change) and safe for programmatic use.
             pub fn as_str_name(&self) -> &'static str {
                 match self {
-                    Persistence::Unspecified => "PERSISTENCE_UNSPECIFIED",
-                    Persistence::Ephemeral => "EPHEMERAL",
-                    Persistence::Persistent => "PERSISTENT",
+                    Self::Unspecified => "PERSISTENCE_UNSPECIFIED",
+                    Self::Ephemeral => "EPHEMERAL",
+                    Self::Persistent => "PERSISTENT",
                 }
             }
             /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1833,8 +1737,7 @@ pub mod channel {
             }
         }
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ChannelMember {
         #[prost(string, tag="1")]
         pub user_id: ::prost::alloc::string::String,
@@ -1875,10 +1778,10 @@ pub mod channel {
             /// (if the ProtoBuf definition does not change) and safe for programmatic use.
             pub fn as_str_name(&self) -> &'static str {
                 match self {
-                    InvitationStatus::Unspecified => "INVITATION_STATUS_UNSPECIFIED",
-                    InvitationStatus::Active => "ACTIVE",
-                    InvitationStatus::Pending => "PENDING",
-                    InvitationStatus::Declined => "DECLINED",
+                    Self::Unspecified => "INVITATION_STATUS_UNSPECIFIED",
+                    Self::Active => "ACTIVE",
+                    Self::Pending => "PENDING",
+                    Self::Declined => "DECLINED",
                 }
             }
             /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1897,8 +1800,7 @@ pub mod channel {
 // ================== Channel Operations ==================
 
 /// For creating a new channel
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CreateChannelRequest {
     #[prost(string, tag="1")]
     pub name: ::prost::alloc::string::String,
@@ -1922,7 +1824,6 @@ pub struct CreateChannelRequest {
     pub icon: ::prost::alloc::vec::Vec<u8>,
 }
 /// For updating a channel
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UpdateChannelRequest {
     #[prost(string, tag="1")]
@@ -1937,8 +1838,7 @@ pub struct UpdateChannelRequest {
     pub request_id: ::prost::alloc::string::String,
 }
 /// For join requests
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ChannelJoinRequest {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -1949,8 +1849,7 @@ pub struct ChannelJoinRequest {
     #[prost(string, tag="4")]
     pub request_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ChannelInvite {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -1965,8 +1864,7 @@ pub struct ChannelInvite {
     #[prost(string, tag="5")]
     pub message: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ChannelModeration {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -2001,12 +1899,12 @@ pub mod channel_moderation {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Action::Unspecified => "ACTION_UNSPECIFIED",
-                Action::Kick => "KICK",
-                Action::Ban => "BAN",
-                Action::Mute => "MUTE",
-                Action::Unban => "UNBAN",
-                Action::Unmute => "UNMUTE",
+                Self::Unspecified => "ACTION_UNSPECIFIED",
+                Self::Kick => "KICK",
+                Self::Ban => "BAN",
+                Self::Mute => "MUTE",
+                Self::Unban => "UNBAN",
+                Self::Unmute => "UNMUTE",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2024,8 +1922,7 @@ pub mod channel_moderation {
     }
 }
 /// New message for channel invitation response
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ChannelInviteResponse {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -2039,8 +1936,7 @@ pub struct ChannelInviteResponse {
     #[prost(string, tag="5")]
     pub request_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ChannelSearchRequest {
     #[prost(string, tag="1")]
     pub query: ::prost::alloc::string::String,
@@ -2054,7 +1950,6 @@ pub struct ChannelSearchRequest {
     #[prost(enumeration="ChannelType", repeated, packed="false", tag="5")]
     pub type_filter: ::prost::alloc::vec::Vec<i32>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ChannelSearchResponse {
     #[prost(message, repeated, tag="1")]
@@ -2062,21 +1957,18 @@ pub struct ChannelSearchResponse {
     #[prost(int32, tag="2")]
     pub total: i32,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListChannelsResponse {
     #[prost(message, repeated, tag="1")]
     pub channels: ::prost::alloc::vec::Vec<Channel>,
 }
 /// Event messages for channel service
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ChannelEventRequest {
     /// Optional - if not provided, subscribe to all channels user has access to
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ChannelEvent {
     /// Unix timestamp in nanoseconds
@@ -2092,8 +1984,7 @@ pub struct ChannelEvent {
 }
 /// Nested message and enum types in `ChannelEvent`.
 pub mod channel_event {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Event {
         #[prost(message, tag="4")]
         ChannelCreated(super::Channel),
@@ -2126,15 +2017,13 @@ pub mod channel_event {
 // ================== Channel RPC Requests ==================
 
 /// New definition for GetChannelRequest
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetChannelRequest {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
 }
 /// New definition for ListChannelsRequest
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListChannelsRequest {
     /// Filtering options can be added here, e.g., by type, membership
     #[prost(int32, tag="1")]
@@ -2148,8 +2037,7 @@ pub struct ListChannelsRequest {
     pub archived: ::core::option::Option<bool>,
 }
 /// Request to delete a channel
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteChannelRequest {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -2157,8 +2045,7 @@ pub struct DeleteChannelRequest {
     pub request_id: ::prost::alloc::string::String,
 }
 /// Request to leave a channel
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LeaveChannelRequest {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -2166,8 +2053,7 @@ pub struct LeaveChannelRequest {
     pub request_id: ::prost::alloc::string::String,
 }
 /// New definition for InviteUserRequest (replaces InviteRequest)
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InviteUserRequest {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -2180,8 +2066,7 @@ pub struct InviteUserRequest {
     pub request_id: ::prost::alloc::string::String,
 }
 /// New definition for KickUserRequest
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct KickUserRequest {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -2194,8 +2079,7 @@ pub struct KickUserRequest {
     pub request_id: ::prost::alloc::string::String,
 }
 /// New definition for BanUserRequest
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BanUserRequest {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -2211,8 +2095,7 @@ pub struct BanUserRequest {
     pub request_id: ::prost::alloc::string::String,
 }
 /// New definition for UnbanUserRequest
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UnbanUserRequest {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -2222,8 +2105,7 @@ pub struct UnbanUserRequest {
     pub request_id: ::prost::alloc::string::String,
 }
 /// New definition for GetChannelMembersRequest
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetChannelMembersRequest {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -2235,7 +2117,6 @@ pub struct GetChannelMembersRequest {
     pub offset: i32,
 }
 /// New definition for GetChannelMembersResponse
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetChannelMembersResponse {
     #[prost(message, repeated, tag="1")]
@@ -2244,8 +2125,7 @@ pub struct GetChannelMembersResponse {
     pub total: i32,
 }
 /// Request to respond to a channel invitation
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InviteResponse {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -2260,8 +2140,7 @@ pub struct InviteResponse {
     pub request_id: ::prost::alloc::string::String,
 }
 /// Request to update a member's role (admin/moderator action)
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UpdateMemberRoleRequest {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -2275,8 +2154,7 @@ pub struct UpdateMemberRoleRequest {
 // ================== Archived Channel Operations ==================
 
 /// Request to archive a channel for a user
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ArchiveChannelRequest {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -2284,8 +2162,7 @@ pub struct ArchiveChannelRequest {
     pub request_id: ::prost::alloc::string::String,
 }
 /// Request to unarchive a channel for a user
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UnarchiveChannelRequest {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -2293,7 +2170,6 @@ pub struct UnarchiveChannelRequest {
     pub request_id: ::prost::alloc::string::String,
 }
 /// Response for archive channel operation
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ArchiveChannelResponse {
     /// The updated channel with archived=true
@@ -2304,7 +2180,6 @@ pub struct ArchiveChannelResponse {
     pub channels: ::prost::alloc::vec::Vec<Channel>,
 }
 /// Response for unarchive channel operation
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UnarchiveChannelResponse {
     /// The updated channel with archived=false
@@ -2315,8 +2190,7 @@ pub struct UnarchiveChannelResponse {
     pub channels: ::prost::alloc::vec::Vec<Channel>,
 }
 /// Request to list archived channels for a user
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListArchivedChannelsRequest {
     #[prost(int32, tag="1")]
     pub limit: i32,
@@ -2324,8 +2198,7 @@ pub struct ListArchivedChannelsRequest {
     pub offset: i32,
 }
 /// Response containing archived channels
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListArchivedChannelsResponse {
     /// List of channel IDs that are archived for the user
     #[prost(string, repeated, tag="1")]
@@ -2337,8 +2210,7 @@ pub struct ListArchivedChannelsResponse {
 
 // --- New messages for streaming status updates ---
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OperationStarted {
     /// Optional: ID for client-side correlation if needed
     #[prost(string, tag="1")]
@@ -2350,7 +2222,6 @@ pub struct OperationStarted {
     pub user_id: ::prost::alloc::string::String,
 }
 /// --- Local Error Definition (Workaround for import issue) ---
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ChannelError {
     #[prost(enumeration="channel_error::Code", tag="1")]
@@ -2381,14 +2252,14 @@ pub mod channel_error {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Code::Unknown => "UNKNOWN",
-                Code::Unauthorized => "UNAUTHORIZED",
-                Code::NotFound => "NOT_FOUND",
-                Code::PermissionDenied => "PERMISSION_DENIED",
-                Code::InvalidArgument => "INVALID_ARGUMENT",
-                Code::RateLimited => "RATE_LIMITED",
-                Code::ChannelFull => "CHANNEL_FULL",
-                Code::UserBanned => "USER_BANNED",
+                Self::Unknown => "UNKNOWN",
+                Self::Unauthorized => "UNAUTHORIZED",
+                Self::NotFound => "NOT_FOUND",
+                Self::PermissionDenied => "PERMISSION_DENIED",
+                Self::InvalidArgument => "INVALID_ARGUMENT",
+                Self::RateLimited => "RATE_LIMITED",
+                Self::ChannelFull => "CHANNEL_FULL",
+                Self::UserBanned => "USER_BANNED",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2407,7 +2278,6 @@ pub mod channel_error {
         }
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OperationFailed {
     /// Optional: ID for client-side correlation
@@ -2425,8 +2295,7 @@ pub struct OperationFailed {
 }
 /// A pending channel invitation for the current user, enriched with the
 /// channel name so a client can render the invite without a second lookup.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PendingChannelInvite {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -2446,11 +2315,9 @@ pub struct PendingChannelInvite {
 }
 /// Lists the authenticated user's pending channel invitations.
 /// The user is taken from the auth context, so the request carries no fields.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListPendingInvitesRequest {
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListPendingInvitesResponse {
     #[prost(message, repeated, tag="1")]
@@ -2483,14 +2350,14 @@ impl ChannelCreationStatus {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            ChannelCreationStatus::Unspecified => "CHANNEL_CREATION_STATUS_UNSPECIFIED",
-            ChannelCreationStatus::ChannelCreationStarted => "CHANNEL_CREATION_STARTED",
-            ChannelCreationStatus::ChannelRecordCreating => "CHANNEL_RECORD_CREATING",
-            ChannelCreationStatus::ChannelRecordCreated => "CHANNEL_RECORD_CREATED",
-            ChannelCreationStatus::AuthzRelationsInitializing => "AUTHZ_RELATIONS_INITIALIZING",
-            ChannelCreationStatus::AuthzRelationsInitialized => "AUTHZ_RELATIONS_INITIALIZED",
-            ChannelCreationStatus::ChannelCreationCompleted => "CHANNEL_CREATION_COMPLETED",
-            ChannelCreationStatus::ChannelCreationFailed => "CHANNEL_CREATION_FAILED",
+            Self::Unspecified => "CHANNEL_CREATION_STATUS_UNSPECIFIED",
+            Self::ChannelCreationStarted => "CHANNEL_CREATION_STARTED",
+            Self::ChannelRecordCreating => "CHANNEL_RECORD_CREATING",
+            Self::ChannelRecordCreated => "CHANNEL_RECORD_CREATED",
+            Self::AuthzRelationsInitializing => "AUTHZ_RELATIONS_INITIALIZING",
+            Self::AuthzRelationsInitialized => "AUTHZ_RELATIONS_INITIALIZED",
+            Self::ChannelCreationCompleted => "CHANNEL_CREATION_COMPLETED",
+            Self::ChannelCreationFailed => "CHANNEL_CREATION_FAILED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2510,8 +2377,7 @@ impl ChannelCreationStatus {
 }
 // ================== File Transfer ==================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FileMetadata {
     /// UUIDv4
     #[prost(string, tag="1")]
@@ -2532,14 +2398,12 @@ pub struct FileMetadata {
 // Signal-style anonymous file uploads/downloads via presigned URLs.
 // Server never sees file content or links attachments to users.
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetAttachmentUploadUrlRequest {
     #[prost(uint64, tag="1")]
     pub encrypted_size: u64,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetAttachmentUploadUrlResponse {
     /// Random 22-char base64url identifier
     #[prost(string, tag="1")]
@@ -2551,26 +2415,22 @@ pub struct GetAttachmentUploadUrlResponse {
     #[prost(int64, tag="3")]
     pub expires_at: i64,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ConfirmAttachmentUploadRequest {
     #[prost(string, tag="1")]
     pub cdn_key: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ConfirmAttachmentUploadResponse {
     #[prost(bool, tag="1")]
     pub confirmed: bool,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetAttachmentDownloadUrlRequest {
     #[prost(string, tag="1")]
     pub cdn_key: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetAttachmentDownloadUrlResponse {
     /// Presigned GET URL from RustFS
     #[prost(string, tag="1")]
@@ -2581,8 +2441,7 @@ pub struct GetAttachmentDownloadUrlResponse {
 }
 /// AttachmentPointer is embedded INSIDE encrypted message content.
 /// Server NEVER sees this - it's only in the encrypted envelope.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AttachmentPointer {
     /// Random identifier
     #[prost(string, tag="1")]
@@ -2603,14 +2462,12 @@ pub struct AttachmentPointer {
     #[prost(string, tag="6")]
     pub file_name: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CreateAttachmentMultipartUploadRequest {
     #[prost(uint64, tag="1")]
     pub encrypted_size: u64,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CreateAttachmentMultipartUploadResponse {
     /// Random 22-char base64url identifier
     #[prost(string, tag="1")]
@@ -2628,8 +2485,7 @@ pub struct CreateAttachmentMultipartUploadResponse {
     #[prost(int64, tag="5")]
     pub expires_at: i64,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CompletedPart {
     /// 1-based part number
     #[prost(uint32, tag="1")]
@@ -2638,7 +2494,6 @@ pub struct CompletedPart {
     #[prost(string, tag="2")]
     pub etag: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CompleteAttachmentMultipartUploadRequest {
     #[prost(string, tag="1")]
@@ -2648,14 +2503,12 @@ pub struct CompleteAttachmentMultipartUploadRequest {
     #[prost(message, repeated, tag="3")]
     pub parts: ::prost::alloc::vec::Vec<CompletedPart>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CompleteAttachmentMultipartUploadResponse {
     #[prost(bool, tag="1")]
     pub confirmed: bool,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AbortAttachmentMultipartUploadRequest {
     #[prost(string, tag="1")]
     pub cdn_key: ::prost::alloc::string::String,
@@ -2663,8 +2516,7 @@ pub struct AbortAttachmentMultipartUploadRequest {
     pub upload_id: ::prost::alloc::string::String,
 }
 /// SearchGifsRequest is the request for searching GIFs
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SearchGifsRequest {
     /// The search query
     #[prost(string, tag="1")]
@@ -2680,7 +2532,6 @@ pub struct SearchGifsRequest {
     pub content_filter: ::prost::alloc::string::String,
 }
 /// SearchGifsResponse contains the search results
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SearchGifsResponse {
     /// List of GIF results
@@ -2691,8 +2542,7 @@ pub struct SearchGifsResponse {
     pub next: ::prost::alloc::string::String,
 }
 /// GetTrendingGifsRequest is the request for trending GIFs
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetTrendingGifsRequest {
     /// Maximum number of results to return (default: 30, max: 50)
     #[prost(int32, tag="1")]
@@ -2705,7 +2555,6 @@ pub struct GetTrendingGifsRequest {
     pub content_filter: ::prost::alloc::string::String,
 }
 /// GetTrendingGifsResponse contains the trending GIFs
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetTrendingGifsResponse {
     /// List of GIF results
@@ -2716,8 +2565,7 @@ pub struct GetTrendingGifsResponse {
     pub next: ::prost::alloc::string::String,
 }
 /// GifResult represents a single GIF
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GifResult {
     /// Unique identifier for the GIF
     #[prost(string, tag="1")]
@@ -2756,7 +2604,6 @@ pub struct GifResult {
 // ================== Integration Entities ==================
 
 /// IntegrationConfig represents strongly-typed configuration for integrations
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct IntegrationConfig {
     /// Common fields for all integrations
@@ -2812,7 +2659,6 @@ pub struct IntegrationConfig {
     pub extra_config: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
 }
 /// Integration represents an external service integration
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Integration {
     #[prost(string, tag="1")]
@@ -2858,7 +2704,6 @@ pub struct Integration {
     pub config_history: ::prost::alloc::vec::Vec<ConfigVersion>,
 }
 /// ConfigVersion represents a historical version of integration configuration
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ConfigVersion {
     #[prost(int32, tag="1")]
@@ -2874,7 +2719,6 @@ pub struct ConfigVersion {
     pub change_reason: ::prost::alloc::string::String,
 }
 /// WebhookConfig defines webhook-specific configuration
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WebhookConfig {
     #[prost(string, tag="1")]
@@ -2893,7 +2737,6 @@ pub struct WebhookConfig {
     pub retry_count: u32,
 }
 /// WebhookEvent defines events that trigger webhooks
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WebhookEvent {
     #[prost(enumeration="EventType", tag="1")]
@@ -2903,7 +2746,6 @@ pub struct WebhookEvent {
     pub filters: ::core::option::Option<::prost_types::Struct>,
 }
 /// IntegrationEvent represents an event from an integration
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct IntegrationEvent {
     #[prost(string, tag="1")]
@@ -2919,7 +2761,6 @@ pub struct IntegrationEvent {
     pub timestamp: u64,
 }
 /// ModelLimits represents the token and parameter limits for an AI model
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct ModelLimits {
     #[prost(int32, tag="1")]
@@ -2942,7 +2783,6 @@ pub struct ModelLimits {
 // ================== Request/Response Messages ==================
 
 /// CreateIntegration
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateIntegrationRequest {
     #[prost(string, tag="1")]
@@ -2956,28 +2796,24 @@ pub struct CreateIntegrationRequest {
     #[prost(string, repeated, tag="5")]
     pub channel_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateIntegrationResponse {
     #[prost(message, optional, tag="1")]
     pub integration: ::core::option::Option<Integration>,
 }
 /// GetIntegration
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetIntegrationRequest {
     #[prost(string, tag="1")]
     pub integration_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetIntegrationResponse {
     #[prost(message, optional, tag="1")]
     pub integration: ::core::option::Option<Integration>,
 }
 /// ListIntegrations
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListIntegrationsRequest {
     /// Optional filters
     #[prost(enumeration="IntegrationType", repeated, tag="1")]
@@ -2992,7 +2828,6 @@ pub struct ListIntegrationsRequest {
     #[prost(string, tag="11")]
     pub page_token: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListIntegrationsResponse {
     #[prost(message, repeated, tag="1")]
@@ -3003,7 +2838,6 @@ pub struct ListIntegrationsResponse {
     pub total_count: u32,
 }
 /// UpdateIntegration
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UpdateIntegrationRequest {
     #[prost(string, tag="1")]
@@ -3013,41 +2847,35 @@ pub struct UpdateIntegrationRequest {
     #[prost(message, optional, tag="3")]
     pub update_mask: ::core::option::Option<::prost_types::FieldMask>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UpdateIntegrationResponse {
     #[prost(message, optional, tag="1")]
     pub integration: ::core::option::Option<Integration>,
 }
 /// DeleteIntegration
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteIntegrationRequest {
     #[prost(string, tag="1")]
     pub integration_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteIntegrationResponse {
     #[prost(message, optional, tag="1")]
     pub empty: ::core::option::Option<()>,
 }
 /// EnableIntegration
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EnableIntegrationRequest {
     #[prost(string, tag="1")]
     pub integration_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EnableIntegrationResponse {
     #[prost(message, optional, tag="1")]
     pub integration: ::core::option::Option<Integration>,
 }
 /// DisableIntegration
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DisableIntegrationRequest {
     #[prost(string, tag="1")]
     pub integration_id: ::prost::alloc::string::String,
@@ -3055,14 +2883,12 @@ pub struct DisableIntegrationRequest {
     #[prost(string, tag="2")]
     pub reason: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DisableIntegrationResponse {
     #[prost(message, optional, tag="1")]
     pub integration: ::core::option::Option<Integration>,
 }
 /// TestIntegration
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TestIntegrationRequest {
     #[prost(string, tag="1")]
@@ -3071,7 +2897,6 @@ pub struct TestIntegrationRequest {
     #[prost(message, optional, tag="2")]
     pub test_payload: ::core::option::Option<::prost_types::Struct>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TestIntegrationResponse {
     #[prost(bool, tag="1")]
@@ -3082,7 +2907,6 @@ pub struct TestIntegrationResponse {
     pub response_data: ::core::option::Option<::prost_types::Struct>,
 }
 /// RegisterWebhook
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RegisterWebhookRequest {
     #[prost(string, tag="1")]
@@ -3090,8 +2914,7 @@ pub struct RegisterWebhookRequest {
     #[prost(message, optional, tag="2")]
     pub config: ::core::option::Option<WebhookConfig>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RegisterWebhookResponse {
     #[prost(string, tag="1")]
     pub webhook_id: ::prost::alloc::string::String,
@@ -3100,22 +2923,19 @@ pub struct RegisterWebhookResponse {
     pub webhook_secret: ::prost::alloc::string::String,
 }
 /// UnregisterWebhook
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UnregisterWebhookRequest {
     #[prost(string, tag="1")]
     pub integration_id: ::prost::alloc::string::String,
     #[prost(string, tag="2")]
     pub webhook_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UnregisterWebhookResponse {
     #[prost(message, optional, tag="1")]
     pub empty: ::core::option::Option<()>,
 }
 /// HandleWebhookCallback
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HandleWebhookCallbackRequest {
     #[prost(string, tag="1")]
@@ -3125,8 +2945,7 @@ pub struct HandleWebhookCallbackRequest {
     #[prost(bytes="vec", tag="3")]
     pub body: ::prost::alloc::vec::Vec<u8>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct HandleWebhookCallbackResponse {
     #[prost(bool, tag="1")]
     pub success: bool,
@@ -3134,8 +2953,7 @@ pub struct HandleWebhookCallbackResponse {
     pub message: ::prost::alloc::string::String,
 }
 /// StreamIntegrationEvents
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StreamIntegrationEventsRequest {
     #[prost(string, repeated, tag="1")]
     pub integration_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
@@ -3145,15 +2963,13 @@ pub struct StreamIntegrationEventsRequest {
     #[prost(fixed64, tag="3")]
     pub since: u64,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StreamIntegrationEventsResponse {
     #[prost(message, optional, tag="1")]
     pub event: ::core::option::Option<IntegrationEvent>,
 }
 /// AddIntegrationToChannel
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AddIntegrationToChannelRequest {
     #[prost(string, tag="1")]
     pub integration_id: ::prost::alloc::string::String,
@@ -3161,13 +2977,11 @@ pub struct AddIntegrationToChannelRequest {
     pub channel_id: ::prost::alloc::string::String,
 }
 /// Empty response on success
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AddIntegrationToChannelResponse {
 }
 /// RemoveIntegrationFromChannel
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RemoveIntegrationFromChannelRequest {
     #[prost(string, tag="1")]
     pub integration_id: ::prost::alloc::string::String,
@@ -3175,33 +2989,28 @@ pub struct RemoveIntegrationFromChannelRequest {
     pub channel_id: ::prost::alloc::string::String,
 }
 /// Empty response on success
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RemoveIntegrationFromChannelResponse {
 }
 /// GetChannelIntegrations
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetChannelIntegrationsRequest {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetChannelIntegrationsResponse {
     #[prost(message, repeated, tag="1")]
     pub integrations: ::prost::alloc::vec::Vec<Integration>,
 }
 /// GetModelLimits
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetModelLimitsRequest {
     #[prost(enumeration="IntegrationType", tag="1")]
     pub integration_type: i32,
     #[prost(string, tag="2")]
     pub model: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct GetModelLimitsResponse {
     #[prost(message, optional, tag="1")]
@@ -3210,8 +3019,7 @@ pub struct GetModelLimitsResponse {
     pub found: bool,
 }
 /// ListAvailableModels - fetches models dynamically from AI provider API
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListAvailableModelsRequest {
     #[prost(enumeration="IntegrationType", tag="1")]
     pub integration_type: i32,
@@ -3222,8 +3030,7 @@ pub struct ListAvailableModelsRequest {
     #[prost(string, tag="3")]
     pub integration_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AvailableModel {
     #[prost(string, tag="1")]
     pub id: ::prost::alloc::string::String,
@@ -3235,7 +3042,6 @@ pub struct AvailableModel {
     #[prost(fixed64, tag="4")]
     pub created_at: u64,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListAvailableModelsResponse {
     #[prost(message, repeated, tag="1")]
@@ -3283,19 +3089,19 @@ impl IntegrationType {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            IntegrationType::Unspecified => "INTEGRATION_TYPE_UNSPECIFIED",
-            IntegrationType::Webhook => "INTEGRATION_TYPE_WEBHOOK",
-            IntegrationType::Slack => "INTEGRATION_TYPE_SLACK",
-            IntegrationType::Discord => "INTEGRATION_TYPE_DISCORD",
-            IntegrationType::Github => "INTEGRATION_TYPE_GITHUB",
-            IntegrationType::Jira => "INTEGRATION_TYPE_JIRA",
-            IntegrationType::Claude => "INTEGRATION_TYPE_CLAUDE",
-            IntegrationType::Openai => "INTEGRATION_TYPE_OPENAI",
-            IntegrationType::GoogleAi => "INTEGRATION_TYPE_GOOGLE_AI",
-            IntegrationType::AzureOpenai => "INTEGRATION_TYPE_AZURE_OPENAI",
-            IntegrationType::Cohere => "INTEGRATION_TYPE_COHERE",
-            IntegrationType::Huggingface => "INTEGRATION_TYPE_HUGGINGFACE",
-            IntegrationType::Custom => "INTEGRATION_TYPE_CUSTOM",
+            Self::Unspecified => "INTEGRATION_TYPE_UNSPECIFIED",
+            Self::Webhook => "INTEGRATION_TYPE_WEBHOOK",
+            Self::Slack => "INTEGRATION_TYPE_SLACK",
+            Self::Discord => "INTEGRATION_TYPE_DISCORD",
+            Self::Github => "INTEGRATION_TYPE_GITHUB",
+            Self::Jira => "INTEGRATION_TYPE_JIRA",
+            Self::Claude => "INTEGRATION_TYPE_CLAUDE",
+            Self::Openai => "INTEGRATION_TYPE_OPENAI",
+            Self::GoogleAi => "INTEGRATION_TYPE_GOOGLE_AI",
+            Self::AzureOpenai => "INTEGRATION_TYPE_AZURE_OPENAI",
+            Self::Cohere => "INTEGRATION_TYPE_COHERE",
+            Self::Huggingface => "INTEGRATION_TYPE_HUGGINGFACE",
+            Self::Custom => "INTEGRATION_TYPE_CUSTOM",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -3341,12 +3147,12 @@ impl IntegrationStatus {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            IntegrationStatus::Unspecified => "INTEGRATION_STATUS_UNSPECIFIED",
-            IntegrationStatus::Pending => "INTEGRATION_STATUS_PENDING",
-            IntegrationStatus::Active => "INTEGRATION_STATUS_ACTIVE",
-            IntegrationStatus::Paused => "INTEGRATION_STATUS_PAUSED",
-            IntegrationStatus::Error => "INTEGRATION_STATUS_ERROR",
-            IntegrationStatus::Disabled => "INTEGRATION_STATUS_DISABLED",
+            Self::Unspecified => "INTEGRATION_STATUS_UNSPECIFIED",
+            Self::Pending => "INTEGRATION_STATUS_PENDING",
+            Self::Active => "INTEGRATION_STATUS_ACTIVE",
+            Self::Paused => "INTEGRATION_STATUS_PAUSED",
+            Self::Error => "INTEGRATION_STATUS_ERROR",
+            Self::Disabled => "INTEGRATION_STATUS_DISABLED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -3407,27 +3213,27 @@ impl EventType {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            EventType::Unspecified => "EVENT_TYPE_UNSPECIFIED",
-            EventType::MessageCreated => "EVENT_TYPE_MESSAGE_CREATED",
-            EventType::MessageUpdated => "EVENT_TYPE_MESSAGE_UPDATED",
-            EventType::MessageDeleted => "EVENT_TYPE_MESSAGE_DELETED",
-            EventType::ReactionAdded => "EVENT_TYPE_REACTION_ADDED",
-            EventType::ReactionRemoved => "EVENT_TYPE_REACTION_REMOVED",
-            EventType::ChannelCreated => "EVENT_TYPE_CHANNEL_CREATED",
-            EventType::ChannelUpdated => "EVENT_TYPE_CHANNEL_UPDATED",
-            EventType::ChannelDeleted => "EVENT_TYPE_CHANNEL_DELETED",
-            EventType::MemberJoined => "EVENT_TYPE_MEMBER_JOINED",
-            EventType::MemberLeft => "EVENT_TYPE_MEMBER_LEFT",
-            EventType::UserMentioned => "EVENT_TYPE_USER_MENTIONED",
-            EventType::FileUploaded => "EVENT_TYPE_FILE_UPLOADED",
-            EventType::AiRequest => "EVENT_TYPE_AI_REQUEST",
-            EventType::AiResponse => "EVENT_TYPE_AI_RESPONSE",
-            EventType::AiError => "EVENT_TYPE_AI_ERROR",
-            EventType::AiFunctionCall => "EVENT_TYPE_AI_FUNCTION_CALL",
-            EventType::AiFunctionResult => "EVENT_TYPE_AI_FUNCTION_RESULT",
-            EventType::AiStreamingStart => "EVENT_TYPE_AI_STREAMING_START",
-            EventType::AiStreamingChunk => "EVENT_TYPE_AI_STREAMING_CHUNK",
-            EventType::AiStreamingEnd => "EVENT_TYPE_AI_STREAMING_END",
+            Self::Unspecified => "EVENT_TYPE_UNSPECIFIED",
+            Self::MessageCreated => "EVENT_TYPE_MESSAGE_CREATED",
+            Self::MessageUpdated => "EVENT_TYPE_MESSAGE_UPDATED",
+            Self::MessageDeleted => "EVENT_TYPE_MESSAGE_DELETED",
+            Self::ReactionAdded => "EVENT_TYPE_REACTION_ADDED",
+            Self::ReactionRemoved => "EVENT_TYPE_REACTION_REMOVED",
+            Self::ChannelCreated => "EVENT_TYPE_CHANNEL_CREATED",
+            Self::ChannelUpdated => "EVENT_TYPE_CHANNEL_UPDATED",
+            Self::ChannelDeleted => "EVENT_TYPE_CHANNEL_DELETED",
+            Self::MemberJoined => "EVENT_TYPE_MEMBER_JOINED",
+            Self::MemberLeft => "EVENT_TYPE_MEMBER_LEFT",
+            Self::UserMentioned => "EVENT_TYPE_USER_MENTIONED",
+            Self::FileUploaded => "EVENT_TYPE_FILE_UPLOADED",
+            Self::AiRequest => "EVENT_TYPE_AI_REQUEST",
+            Self::AiResponse => "EVENT_TYPE_AI_RESPONSE",
+            Self::AiError => "EVENT_TYPE_AI_ERROR",
+            Self::AiFunctionCall => "EVENT_TYPE_AI_FUNCTION_CALL",
+            Self::AiFunctionResult => "EVENT_TYPE_AI_FUNCTION_RESULT",
+            Self::AiStreamingStart => "EVENT_TYPE_AI_STREAMING_START",
+            Self::AiStreamingChunk => "EVENT_TYPE_AI_STREAMING_CHUNK",
+            Self::AiStreamingEnd => "EVENT_TYPE_AI_STREAMING_END",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -3485,8 +3291,7 @@ impl EventType {
 /// hash H(0x00 || key || value) and walks sibling_hashes up to the root using
 /// the per-level direction bits, then checks the result equals the tree head
 /// root_hash.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InclusionProof {
     /// 32-byte sparse-Merkle tree key for this user. Phase 3b: this is the VRF
     /// index VRF_sk(user_id) (see GetProofResponse.vrf_proof), not a plain hash of
@@ -3508,8 +3313,7 @@ pub struct InclusionProof {
 /// SHA-256("ChatterKT-v2" || epoch_le64 || root_hash || tree_size_le64), made
 /// with the server's KT tree-head signing key. The corresponding public key is
 /// pinned by the client, mirroring the sealed-sender trust root.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SignedTreeHead {
     /// Number of appends the log has taken. Equals tree_size.
     #[prost(uint64, tag="1")]
@@ -3525,14 +3329,12 @@ pub struct SignedTreeHead {
     #[prost(bytes="vec", tag="4")]
     pub signature: ::prost::alloc::vec::Vec<u8>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetProofRequest {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetProofResponse {
     /// The identity key the server has committed for this user (33-byte Signal
     /// format). Equal to InclusionProof.value; returned separately for clarity.
@@ -3593,8 +3395,7 @@ pub struct GetProofResponse {
 /// The client reconstructs BOTH roots from `path` and checks old_root against the
 /// tree head it PINNED at old_epoch (not against whatever the server claims). A
 /// server that rewrote history produces a different old root and is rejected.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ConsistencyProof {
     #[prost(uint64, tag="1")]
     pub old_epoch: u64,
@@ -3608,8 +3409,7 @@ pub struct ConsistencyProof {
     #[prost(bytes="vec", repeated, tag="5")]
     pub path: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetConsistencyProofRequest {
     /// Both epochs are tree-head epochs the client has previously seen (the
     /// monotonic append counter carried in SignedTreeHead.epoch). old < new.
@@ -3618,8 +3418,7 @@ pub struct GetConsistencyProofRequest {
     #[prost(uint64, tag="2")]
     pub new_epoch: u64,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetConsistencyProofResponse {
     #[prost(message, optional, tag="1")]
     pub proof: ::core::option::Option<ConsistencyProof>,
@@ -3633,7 +3432,6 @@ pub struct GetConsistencyProofResponse {
 }
 // ================== Message Entities ==================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Message {
     /// ULID or similar
@@ -3705,16 +3503,14 @@ pub struct Message {
 }
 /// Nested message and enum types in `Message`.
 pub mod message {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Content {
         #[prost(oneof="content::Type", tags="1, 2, 3, 4, 5, 6, 7, 8, 9")]
         pub r#type: ::core::option::Option<content::Type>,
     }
     /// Nested message and enum types in `Content`.
     pub mod content {
-        #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+        #[derive(Clone, PartialEq, ::prost::Oneof)]
         pub enum Type {
             /// Plain text (when encryption not required)
             #[prost(string, tag="1")]
@@ -3746,8 +3542,7 @@ pub mod message {
         }
     }
     /// Call content type for call notifications in chat
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct CallContent {
         #[prost(string, tag="1")]
         pub call_id: ::prost::alloc::string::String,
@@ -3769,8 +3564,7 @@ pub mod message {
         pub participant_count: i32,
     }
     /// Mixed content type for text + files in a single message
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct MixedContent {
         /// Optional text content
         #[prost(string, tag="1")]
@@ -3780,8 +3574,7 @@ pub mod message {
         pub files: ::prost::alloc::vec::Vec<super::FileMetadata>,
     }
     /// AI Bot content type for AI-generated messages
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct AiBotContent {
         #[prost(string, tag="1")]
         pub text: ::prost::alloc::string::String,
@@ -3815,9 +3608,9 @@ pub mod message {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                CallContentType::Unspecified => "CALL_CONTENT_TYPE_UNSPECIFIED",
-                CallContentType::Started => "CALL_CONTENT_TYPE_STARTED",
-                CallContentType::Ended => "CALL_CONTENT_TYPE_ENDED",
+                Self::Unspecified => "CALL_CONTENT_TYPE_UNSPECIFIED",
+                Self::Started => "CALL_CONTENT_TYPE_STARTED",
+                Self::Ended => "CALL_CONTENT_TYPE_ENDED",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -3833,7 +3626,6 @@ pub mod message {
 }
 // ================== Message Operations ==================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MessageUpdate {
     #[prost(string, tag="1")]
@@ -3848,8 +3640,7 @@ pub struct MessageUpdate {
 }
 /// Nested message and enum types in `MessageUpdate`.
 pub mod message_update {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Update {
         /// Updated content with proper type
         #[prost(message, tag="3")]
@@ -3861,8 +3652,7 @@ pub mod message_update {
     }
 }
 /// ReactionCount aggregates reactions by emoji for efficient display
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ReactionCount {
     #[prost(string, tag="1")]
     pub emoji: ::prost::alloc::string::String,
@@ -3871,8 +3661,7 @@ pub struct ReactionCount {
 }
 /// ReactionUpdate is used for adding/removing reactions.
 /// Target message identified by (target_author_aci, target_sent_timestamp) per Signal convention.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ReactionUpdate {
     /// Signal-style target message identification (replaces message_id UUID)
     ///
@@ -3894,8 +3683,7 @@ pub struct ReactionUpdate {
 }
 // ================== Search & Pagination ==================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MessageSearchRequest {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -3914,7 +3702,6 @@ pub struct MessageSearchRequest {
     #[prost(fixed64, tag="6")]
     pub to: u64,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MessageSearchResponse {
     #[prost(message, repeated, tag="1")]
@@ -3924,7 +3711,6 @@ pub struct MessageSearchResponse {
 }
 // ================== Streaming ==================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListPinnedMessagesResponse {
     #[prost(message, repeated, tag="1")]
@@ -3933,7 +3719,6 @@ pub struct ListPinnedMessagesResponse {
 // ================== Message RPC Requests / Responses ==================
 
 /// New definition for SendMessageRequest
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SendMessageRequest {
     #[prost(string, tag="1")]
@@ -3971,8 +3756,7 @@ pub struct SendMessageRequest {
     pub mentioned_file_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 /// NEW: Crypto options for message encryption
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CryptoOptions {
     /// Preferred crypto version (from common.proto)
     #[prost(enumeration="CryptoVersion", tag="1")]
@@ -3985,8 +3769,7 @@ pub struct CryptoOptions {
     pub target_device_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 /// NEW: Crypto status information
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CryptoStatus {
     /// Message is encrypted
     #[prost(bool, tag="1")]
@@ -4016,7 +3799,6 @@ pub struct CryptoStatus {
     pub session_established: bool,
 }
 /// New definition for EditMessageRequest
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EditMessageRequest {
     #[prost(string, tag="1")]
@@ -4030,8 +3812,7 @@ pub struct EditMessageRequest {
     pub request_id: ::prost::alloc::string::String,
 }
 /// New definition for DeleteMessageRequest
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteMessageRequest {
     #[prost(string, tag="1")]
     pub message_id: ::prost::alloc::string::String,
@@ -4042,8 +3823,7 @@ pub struct DeleteMessageRequest {
     pub request_id: ::prost::alloc::string::String,
 }
 /// New definition for GetMessagesRequest with proper cursor pagination
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetMessagesRequest {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -4067,8 +3847,7 @@ pub struct GetMessagesRequest {
 /// Nested message and enum types in `GetMessagesRequest`.
 pub mod get_messages_request {
     /// Reference point (optional - if not using page_token)
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum ReferencePoint {
         /// Get messages around (before and after) this ID
         #[prost(string, tag="6")]
@@ -4079,7 +3858,6 @@ pub mod get_messages_request {
     }
 }
 /// New definition for GetMessagesResponse with cursor pagination
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetMessagesResponse {
     #[prost(message, repeated, tag="1")]
@@ -4097,8 +3875,7 @@ pub struct GetMessagesResponse {
     pub total_count: ::core::option::Option<i32>,
 }
 /// New definition for StreamMessagesRequest
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StreamMessagesRequest {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -4108,8 +3885,7 @@ pub struct StreamMessagesRequest {
 }
 /// ReactionRequest uses Signal-style (target_author_aci, target_sent_timestamp) routing.
 /// New message for event streaming
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StreamMessageEventsRequest {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -4118,8 +3894,7 @@ pub struct StreamMessageEventsRequest {
     pub resume_from_event_id: ::prost::alloc::string::String,
 }
 /// New: Global streaming for all user's channels
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StreamGlobalEventsRequest {
     /// Optional: specific channels to stream. Empty = all user's channels
     #[prost(string, repeated, tag="1")]
@@ -4128,7 +3903,6 @@ pub struct StreamGlobalEventsRequest {
     #[prost(string, tag="2")]
     pub resume_from_event_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MessageEvent {
     /// Unique ID for the event itself (for resuming)
@@ -4144,8 +3918,7 @@ pub struct MessageEvent {
 }
 /// Nested message and enum types in `MessageEvent`.
 pub mod message_event {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Event {
         #[prost(message, tag="4")]
         MessageSent(super::Message),
@@ -4164,8 +3937,7 @@ pub mod message_event {
 
 /// SendSealedMessageRequest - for anonymous message delivery via UAK authorization
 /// This endpoint requires Unidentified-Access-Key header instead of auth
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SendSealedMessageRequest {
     /// Destination user ID (recipient)
     #[prost(string, tag="1")]
@@ -4184,8 +3956,7 @@ pub struct SendSealedMessageRequest {
     pub envelope_type: i32,
 }
 /// SendSealedMessageResponse
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SendSealedMessageResponse {
     /// Whether the message was successfully queued
     #[prost(bool, tag="1")]
@@ -4209,7 +3980,6 @@ pub struct SendSealedMessageResponse {
 /// headers from the blob and queues an individual envelope to each recipient's
 /// device inbox.  The combined UAK (XOR of all recipients' UAKs) is validated
 /// in middleware.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SendMultiRecipientSealedMessageRequest {
     /// The multi-recipient sealed sender blob (libsignal v2 format).
@@ -4234,8 +4004,7 @@ pub struct SendMultiRecipientSealedMessageRequest {
     pub server_key_id: u32,
 }
 /// Routing metadata for one recipient in a multi-recipient send.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MultiRecipientDestination {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
@@ -4244,7 +4013,6 @@ pub struct MultiRecipientDestination {
     pub device_ids: ::prost::alloc::vec::Vec<u32>,
 }
 /// SendMultiRecipientSealedMessageResponse
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SendMultiRecipientSealedMessageResponse {
     #[prost(bool, tag="1")]
@@ -4257,8 +4025,7 @@ pub struct SendMultiRecipientSealedMessageResponse {
     #[prost(message, repeated, tag="4")]
     pub recipient_status: ::prost::alloc::vec::Vec<MultiRecipientDeliveryStatus>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MultiRecipientDeliveryStatus {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
@@ -4269,8 +4036,7 @@ pub struct MultiRecipientDeliveryStatus {
 
 /// DeviceMessage represents a queued message for a specific device
 /// This is the envelope that gets stored in the device's inbox queue
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeviceMessage {
     /// Server-assigned queue ID (for pagination)
     #[prost(int64, tag="1")]
@@ -4299,8 +4065,7 @@ pub struct DeviceMessage {
     pub destination_device_id: u32,
 }
 /// GetDeviceMessagesRequest - Fetch queued messages for the authenticated device
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetDeviceMessagesRequest {
     /// Pagination: fetch messages with queue_id > after_id (0 for start)
     #[prost(int64, tag="1")]
@@ -4310,7 +4075,6 @@ pub struct GetDeviceMessagesRequest {
     pub limit: i32,
 }
 /// GetDeviceMessagesResponse
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetDeviceMessagesResponse {
     /// List of queued messages
@@ -4321,24 +4085,21 @@ pub struct GetDeviceMessagesResponse {
     pub has_more: bool,
 }
 /// AcknowledgeMessagesRequest - Acknowledge receipt of messages (deletes from queue)
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AcknowledgeMessagesRequest {
     /// List of message GUIDs to acknowledge
     #[prost(string, repeated, tag="1")]
     pub message_guids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 /// AcknowledgeMessagesResponse
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AcknowledgeMessagesResponse {
     /// Number of messages successfully acknowledged
     #[prost(int32, tag="1")]
     pub acknowledged_count: i32,
 }
 /// ---- Internal Message Service (for Temporal/System operations)
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InternalDeleteMessageRequest {
     #[prost(string, tag="1")]
     pub message_id: ::prost::alloc::string::String,
@@ -4351,8 +4112,7 @@ pub struct InternalDeleteMessageRequest {
     #[prost(string, tag="4")]
     pub request_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InternalDeleteMessageResponse {
     #[prost(bool, tag="1")]
     pub success: bool,
@@ -4377,9 +4137,9 @@ impl MessageSortDirection {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            MessageSortDirection::SortUnspecified => "SORT_UNSPECIFIED",
-            MessageSortDirection::SortNewestFirst => "SORT_NEWEST_FIRST",
-            MessageSortDirection::SortOldestFirst => "SORT_OLDEST_FIRST",
+            Self::SortUnspecified => "SORT_UNSPECIFIED",
+            Self::SortNewestFirst => "SORT_NEWEST_FIRST",
+            Self::SortOldestFirst => "SORT_OLDEST_FIRST",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -4393,8 +4153,7 @@ impl MessageSortDirection {
     }
 }
 /// Notification represents a user notification
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Notification {
     #[prost(string, tag="1")]
     pub id: ::prost::alloc::string::String,
@@ -4437,7 +4196,6 @@ pub struct Notification {
     pub action_url: ::prost::alloc::string::String,
 }
 /// NotificationPreferences defines user notification preferences
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct NotificationPreferences {
     #[prost(string, tag="1")]
@@ -4473,8 +4231,7 @@ pub struct NotificationPreferences {
 // ================== Request/Response Messages ==================
 
 /// CreateNotificationRequest creates a new notification
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CreateNotificationRequest {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
@@ -4500,28 +4257,24 @@ pub struct CreateNotificationRequest {
     #[prost(string, tag="11")]
     pub action_url: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CreateNotificationResponse {
     #[prost(message, optional, tag="1")]
     pub notification: ::core::option::Option<Notification>,
 }
 /// GetNotificationRequest retrieves a specific notification
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetNotificationRequest {
     #[prost(string, tag="1")]
     pub id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetNotificationResponse {
     #[prost(message, optional, tag="1")]
     pub notification: ::core::option::Option<Notification>,
 }
 /// ListNotificationsRequest lists notifications for a user
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListNotificationsRequest {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
@@ -4534,7 +4287,6 @@ pub struct ListNotificationsRequest {
     #[prost(int32, tag="5")]
     pub offset: i32,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListNotificationsResponse {
     #[prost(message, repeated, tag="1")]
@@ -4545,21 +4297,18 @@ pub struct ListNotificationsResponse {
     pub unread_count: i32,
 }
 /// MarkAsReadRequest marks notification(s) as read
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MarkAsReadRequest {
     #[prost(string, repeated, tag="1")]
     pub notification_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MarkAsReadResponse {
     #[prost(int32, tag="1")]
     pub updated_count: i32,
 }
 /// MarkAllAsReadRequest marks all notifications as read for a user
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MarkAllAsReadRequest {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
@@ -4567,28 +4316,24 @@ pub struct MarkAllAsReadRequest {
     #[prost(enumeration="NotificationType", repeated, tag="2")]
     pub types: ::prost::alloc::vec::Vec<i32>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MarkAllAsReadResponse {
     #[prost(int32, tag="1")]
     pub updated_count: i32,
 }
 /// DeleteNotificationRequest deletes a notification
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteNotificationRequest {
     #[prost(string, tag="1")]
     pub id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteNotificationResponse {
     #[prost(message, optional, tag="1")]
     pub empty: ::core::option::Option<()>,
 }
 /// GetUnreadCountRequest gets unread notification count
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetUnreadCountRequest {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
@@ -4596,7 +4341,6 @@ pub struct GetUnreadCountRequest {
     #[prost(enumeration="NotificationType", repeated, tag="2")]
     pub types: ::prost::alloc::vec::Vec<i32>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetUnreadCountResponse {
     #[prost(int32, tag="1")]
@@ -4607,19 +4351,16 @@ pub struct GetUnreadCountResponse {
 }
 // Preferences Management
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetPreferencesRequest {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetPreferencesResponse {
     #[prost(message, optional, tag="1")]
     pub preferences: ::core::option::Option<NotificationPreferences>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UpdatePreferencesRequest {
     #[prost(string, tag="1")]
@@ -4627,7 +4368,6 @@ pub struct UpdatePreferencesRequest {
     #[prost(message, optional, tag="2")]
     pub preferences: ::core::option::Option<NotificationPreferences>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UpdatePreferencesResponse {
     #[prost(message, optional, tag="1")]
@@ -4635,8 +4375,7 @@ pub struct UpdatePreferencesResponse {
 }
 // Streaming
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StreamNotificationsRequest {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
@@ -4644,21 +4383,18 @@ pub struct StreamNotificationsRequest {
     #[prost(enumeration="NotificationType", repeated, tag="2")]
     pub types: ::prost::alloc::vec::Vec<i32>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StreamNotificationsResponse {
     #[prost(message, optional, tag="1")]
     pub notification: ::core::option::Option<Notification>,
 }
 // Batch Operations
 
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateBatchNotificationsRequest {
     #[prost(message, repeated, tag="1")]
     pub notifications: ::prost::alloc::vec::Vec<CreateNotificationRequest>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateBatchNotificationsResponse {
     #[prost(message, repeated, tag="1")]
@@ -4713,20 +4449,20 @@ impl NotificationType {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            NotificationType::Unspecified => "NOTIFICATION_TYPE_UNSPECIFIED",
-            NotificationType::Message => "MESSAGE",
-            NotificationType::Mention => "MENTION",
-            NotificationType::Reply => "REPLY",
-            NotificationType::Reaction => "REACTION",
-            NotificationType::ChannelInvite => "CHANNEL_INVITE",
-            NotificationType::FriendRequest => "FRIEND_REQUEST",
-            NotificationType::FriendAccepted => "FRIEND_ACCEPTED",
-            NotificationType::System => "SYSTEM",
-            NotificationType::Integration => "INTEGRATION",
-            NotificationType::CallIncoming => "CALL_INCOMING",
-            NotificationType::CallMissed => "CALL_MISSED",
-            NotificationType::DeviceLinked => "DEVICE_LINKED",
-            NotificationType::PeerDevicesChanged => "PEER_DEVICES_CHANGED",
+            Self::Unspecified => "NOTIFICATION_TYPE_UNSPECIFIED",
+            Self::Message => "MESSAGE",
+            Self::Mention => "MENTION",
+            Self::Reply => "REPLY",
+            Self::Reaction => "REACTION",
+            Self::ChannelInvite => "CHANNEL_INVITE",
+            Self::FriendRequest => "FRIEND_REQUEST",
+            Self::FriendAccepted => "FRIEND_ACCEPTED",
+            Self::System => "SYSTEM",
+            Self::Integration => "INTEGRATION",
+            Self::CallIncoming => "CALL_INCOMING",
+            Self::CallMissed => "CALL_MISSED",
+            Self::DeviceLinked => "DEVICE_LINKED",
+            Self::PeerDevicesChanged => "PEER_DEVICES_CHANGED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -4767,11 +4503,11 @@ impl NotificationPriority {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            NotificationPriority::Unspecified => "NOTIFICATION_PRIORITY_UNSPECIFIED",
-            NotificationPriority::Low => "LOW",
-            NotificationPriority::Normal => "NORMAL",
-            NotificationPriority::High => "HIGH",
-            NotificationPriority::Urgent => "URGENT",
+            Self::Unspecified => "NOTIFICATION_PRIORITY_UNSPECIFIED",
+            Self::Low => "LOW",
+            Self::Normal => "NORMAL",
+            Self::High => "HIGH",
+            Self::Urgent => "URGENT",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -4791,8 +4527,7 @@ impl NotificationPriority {
 /// StoreBackupRequest upserts an encrypted SVR backup.
 /// The client encrypts the backup locally with a key derived from PIN + svr_secret.
 /// Neither PIN nor svr_secret appear in any request — only opaque ciphertext and HMAC identifiers.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StoreBackupRequest {
     /// AES-256-GCM ciphertext: 12-byte nonce + encrypted payload + 16-byte tag
     /// Minimum 48 bytes = 12 (nonce) + 16 (tag) + 20 (minimum payload)
@@ -4805,8 +4540,7 @@ pub struct StoreBackupRequest {
     #[prost(uint32, tag="3")]
     pub version: u32,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StoreBackupResponse {
     /// Confirmed version stored by server
     #[prost(uint32, tag="1")]
@@ -4814,15 +4548,13 @@ pub struct StoreBackupResponse {
 }
 /// FetchBackupRequest retrieves an encrypted backup by its HMAC-derived identifier.
 /// Rate-limited server-side to prevent PIN brute-force attacks.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FetchBackupRequest {
     /// HMAC-SHA256(svr_secret, "BackupId") — same identifier used in StoreBackup
     #[prost(bytes="vec", tag="1")]
     pub backup_id_hash: ::prost::alloc::vec::Vec<u8>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FetchBackupResponse {
     /// The stored AES-256-GCM ciphertext
     #[prost(bytes="vec", tag="1")]
@@ -4848,19 +4580,16 @@ pub struct FetchBackupResponse {
 ///
 /// The caller is already authenticated as the account owner, so the single bit
 /// returned tells them nothing they are not entitled to know.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct HasKeyBackupRequest {
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct HasKeyBackupResponse {
     #[prost(bool, tag="1")]
     pub exists: bool,
 }
 /// DeleteBackupRequest removes an encrypted backup.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteBackupRequest {
     /// HMAC-SHA256(svr_secret, "BackupId") — identifies which backup to delete
     #[prost(bytes="vec", tag="1")]
@@ -4876,8 +4605,7 @@ pub struct DeleteBackupRequest {
 ///
 /// The old_backup_id_hash proves the user knows their current PIN (they can derive
 /// the old hash). The server verifies it matches before accepting the change.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ChangePinBackupRequest {
     /// New encrypted backup (re-encrypted with new PIN-derived key)
     #[prost(bytes="vec", tag="1")]
@@ -4898,8 +4626,7 @@ pub struct ChangePinBackupRequest {
     #[prost(bytes="vec", tag="6")]
     pub new_svr_public_key: ::prost::alloc::vec::Vec<u8>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ChangePinBackupResponse {
     #[prost(uint32, tag="1")]
     pub version: u32,
@@ -4915,8 +4642,7 @@ pub struct ChangePinBackupResponse {
 // One backup per user; Set replaces (rotation). Upload/download go direct to
 // object storage via presigned URLs (same model as attachments).
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SetMessageBackupRequest {
     /// HMAC-SHA256(svr_secret, "MessageBackupId")
     #[prost(bytes="vec", tag="1")]
@@ -4925,23 +4651,20 @@ pub struct SetMessageBackupRequest {
     #[prost(uint64, tag="2")]
     pub size: u64,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SetMessageBackupResponse {
     /// Presigned PUT URL — the client uploads the encrypted blob here directly.
     #[prost(string, tag="1")]
     pub upload_url: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetMessageBackupRequest {
     /// HMAC-SHA256(svr_secret, "MessageBackupId") — derived from the PIN on a
     /// fresh install; the server only compares it against the stored index.
     #[prost(bytes="vec", tag="1")]
     pub backup_id_hash: ::prost::alloc::vec::Vec<u8>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetMessageBackupResponse {
     /// Presigned GET URL for the encrypted blob.
     #[prost(string, tag="1")]
@@ -4950,16 +4673,14 @@ pub struct GetMessageBackupResponse {
     #[prost(uint64, tag="2")]
     pub size: u64,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteMessageBackupRequest {
     #[prost(bytes="vec", tag="1")]
     pub backup_id_hash: ::prost::alloc::vec::Vec<u8>,
 }
 // ================== Friend/Contact System ==================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Contact {
     /// Contact's user ID
     #[prost(string, tag="1")]
@@ -4989,8 +4710,7 @@ pub struct Contact {
     pub encrypted_message: ::prost::alloc::vec::Vec<u8>,
 }
 /// New message for friend request
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FriendRequest {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
@@ -5002,8 +4722,7 @@ pub struct FriendRequest {
     pub request_id: ::prost::alloc::string::String,
 }
 /// New message for friend requests response
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FriendResponse {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
@@ -5015,8 +4734,7 @@ pub struct FriendResponse {
     pub request_id: ::prost::alloc::string::String,
 }
 /// New message for friend status
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FriendStatusResponse {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
@@ -5028,8 +4746,7 @@ pub struct FriendStatusResponse {
     pub updated_at: u64,
 }
 /// New message for friend request filter
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FriendRequestsFilter {
     #[prost(enumeration="friend_requests_filter::Filter", tag="1")]
     pub filter: i32,
@@ -5058,11 +4775,11 @@ pub mod friend_requests_filter {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Filter::All => "ALL",
-                Filter::Pending => "PENDING",
-                Filter::Accepted => "ACCEPTED",
-                Filter::Sent => "SENT",
-                Filter::Received => "RECEIVED",
+                Self::All => "ALL",
+                Self::Pending => "PENDING",
+                Self::Accepted => "ACCEPTED",
+                Self::Sent => "SENT",
+                Self::Received => "RECEIVED",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -5078,8 +4795,7 @@ pub mod friend_requests_filter {
         }
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PresenceUpdate {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
@@ -5094,21 +4810,18 @@ pub struct PresenceUpdate {
 /// exact-match on `user_profiles.username_lookup_hash` and returns the ACI
 /// (user_id). No substring search, no fuzzy match — the only valid use is
 /// "I typed this username, who's the account behind it?".
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LookupUsernameRequest {
     #[prost(bytes="vec", tag="1")]
     pub username_hash: ::prost::alloc::vec::Vec<u8>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LookupUsernameResponse {
     /// empty when no match
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetUserProfileRequest {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
@@ -5124,8 +4837,7 @@ pub struct GetUserProfileRequest {
 // server. Resolution: fetch blob by link id, decrypt locally, then discover
 // the account via the existing LookupUsername hash path.
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SetUsernameLinkRequest {
     /// libsignal username-link blob: 16-byte IV || AES-256-CBC ciphertext ||
     /// 32-byte HMAC-SHA256. The plaintext pads to 4 AES blocks, so the blob is
@@ -5134,8 +4846,7 @@ pub struct SetUsernameLinkRequest {
     #[prost(bytes="vec", tag="1")]
     pub encrypted_username: ::prost::alloc::vec::Vec<u8>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SetUsernameLinkResponse {
     /// Server-generated opaque handle for the stored blob. One active link per
     /// user: setting a new link replaces the old one (rotation) and the previous
@@ -5143,14 +4854,12 @@ pub struct SetUsernameLinkResponse {
     #[prost(string, tag="1")]
     pub link_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetUsernameLinkRequest {
     #[prost(string, tag="1")]
     pub link_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetUsernameLinkResponse {
     /// The stored ciphertext blob. Useless without the URL-fragment entropy,
     /// which the server never sees.
@@ -5159,19 +4868,16 @@ pub struct GetUsernameLinkResponse {
 }
 /// Deletes the caller's single active link — inherently idempotent, so no
 /// request_id.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteUsernameLinkRequest {
 }
 /// Event messages for user service
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UserEventRequest {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UserEvent {
     /// Unix timestamp in nanoseconds
     #[prost(fixed64, tag="1")]
@@ -5181,8 +4887,7 @@ pub struct UserEvent {
 }
 /// Nested message and enum types in `UserEvent`.
 pub mod user_event {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Event {
         #[prost(message, tag="2")]
         ProfileUpdated(super::UserProfile),
@@ -5195,8 +4900,7 @@ pub mod user_event {
 // ================== User RPC Requests / Responses ==================
 
 /// New definition for UpdateUserProfileRequest
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UpdateUserProfileRequest {
     /// The updated profile data
     #[prost(message, optional, tag="1")]
@@ -5208,8 +4912,7 @@ pub struct UpdateUserProfileRequest {
     pub request_id: ::prost::alloc::string::String,
 }
 /// New definition for UpdatePresenceRequest
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UpdatePresenceRequest {
     #[prost(enumeration="UserPresence", tag="1")]
     pub presence: i32,
@@ -5217,8 +4920,7 @@ pub struct UpdatePresenceRequest {
     pub request_id: ::prost::alloc::string::String,
 }
 /// New definition for RemoveFriendRequest
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RemoveFriendRequest {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
@@ -5226,8 +4928,7 @@ pub struct RemoveFriendRequest {
     pub request_id: ::prost::alloc::string::String,
 }
 /// New definition for ListFriendsRequest
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListFriendsRequest {
     /// Optional filters (e.g., online status, favorites)
     /// UserPresence presence_filter = 1;
@@ -5238,7 +4939,6 @@ pub struct ListFriendsRequest {
     pub offset: i32,
 }
 /// New definition for ListFriendsResponse
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListFriendsResponse {
     /// Return full profiles for friends
@@ -5248,8 +4948,7 @@ pub struct ListFriendsResponse {
     pub total: i32,
 }
 /// New definition for BlockUserRequest
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BlockUserRequest {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
@@ -5257,8 +4956,7 @@ pub struct BlockUserRequest {
     pub request_id: ::prost::alloc::string::String,
 }
 /// New definition for UnblockUserRequest
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UnblockUserRequest {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
@@ -5266,8 +4964,7 @@ pub struct UnblockUserRequest {
     pub request_id: ::prost::alloc::string::String,
 }
 /// New definition for ListBlockedUsersRequest
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListBlockedUsersRequest {
     #[prost(int32, tag="1")]
     pub limit: i32,
@@ -5275,7 +4972,6 @@ pub struct ListBlockedUsersRequest {
     pub offset: i32,
 }
 /// New definition for ListBlockedUsersResponse
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListBlockedUsersResponse {
     /// Return basic User info for blocked users
@@ -5285,14 +4981,12 @@ pub struct ListBlockedUsersResponse {
     pub total: i32,
 }
 /// New definition for ListFriendRequestsRequest 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListFriendRequestsRequest {
     #[prost(message, optional, tag="1")]
     pub filter: ::core::option::Option<FriendRequestsFilter>,
 }
 /// New definition for ListFriendRequestsResponse
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListFriendRequestsResponse {
     #[prost(message, repeated, tag="1")]
@@ -5303,8 +4997,7 @@ pub struct ListFriendRequestsResponse {
 // ================== Channel Navigation History ==================
 
 /// Represents a channel in the navigation history
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ChannelNavigation {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -5320,8 +5013,7 @@ pub struct ChannelNavigation {
     pub pin_position: i32,
 }
 /// Track when a user visits a channel
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TrackChannelVisitRequest {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -5329,8 +5021,7 @@ pub struct TrackChannelVisitRequest {
     pub request_id: ::prost::alloc::string::String,
 }
 /// Pin a channel to the top
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PinChannelRequest {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -5341,7 +5032,6 @@ pub struct PinChannelRequest {
     pub request_id: ::prost::alloc::string::String,
 }
 /// Response for pin channel operation
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PinChannelResponse {
     /// Updated list of pinned channels
@@ -5352,8 +5042,7 @@ pub struct PinChannelResponse {
     pub total_pinned: i32,
 }
 /// Unpin a channel
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UnpinChannelRequest {
     #[prost(string, tag="1")]
     pub channel_id: ::prost::alloc::string::String,
@@ -5361,7 +5050,6 @@ pub struct UnpinChannelRequest {
     pub request_id: ::prost::alloc::string::String,
 }
 /// Response for unpin channel operation
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UnpinChannelResponse {
     /// Updated list of pinned channels
@@ -5372,8 +5060,7 @@ pub struct UnpinChannelResponse {
     pub total_pinned: i32,
 }
 /// Reorder pinned channels
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ReorderPinnedChannelsRequest {
     /// Channel IDs in desired order
     #[prost(string, repeated, tag="1")]
@@ -5382,8 +5069,7 @@ pub struct ReorderPinnedChannelsRequest {
     pub request_id: ::prost::alloc::string::String,
 }
 /// Get user's navigation history
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetNavigationHistoryRequest {
     /// Max channels to return (default: 50)
     #[prost(int32, tag="1")]
@@ -5395,7 +5081,6 @@ pub struct GetNavigationHistoryRequest {
     #[prost(bool, tag="3")]
     pub only_pinned: bool,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetNavigationHistoryResponse {
     /// Ordered by pin_position
@@ -5410,8 +5095,7 @@ pub struct GetNavigationHistoryResponse {
     pub total_recent: i32,
 }
 /// Clear navigation history
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ClearNavigationHistoryRequest {
     /// Keep pinned channels (default: true)
     #[prost(bool, tag="1")]
@@ -5422,8 +5106,7 @@ pub struct ClearNavigationHistoryRequest {
 // ---- Internal User Service (for Sagas / System Communication) ----
 
 /// Request for internal profile creation
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InternalCreateUserProfileRequest {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,
@@ -5442,8 +5125,7 @@ pub struct InternalCreateUserProfileRequest {
     pub username_lookup_hash: ::prost::alloc::vec::Vec<u8>,
 }
 /// Request for internal profile deletion (compensation)
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InternalDeleteUserProfileRequest {
     #[prost(string, tag="1")]
     pub user_id: ::prost::alloc::string::String,

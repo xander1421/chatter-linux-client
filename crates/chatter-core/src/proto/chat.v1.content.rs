@@ -15,7 +15,6 @@
 ///    - Efficient encoding (protobuf vs JSON overhead)
 ///    - Schema evolution (add new types without breaking old clients)
 ///
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Content {
     /// Sender's ephemeral mailbox public key (32 bytes Ed25519)
@@ -46,8 +45,7 @@ pub struct Content {
 }
 /// Nested message and enum types in `Content`.
 pub mod content {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Content {
         /// Chat messages (text, quotes, AI mentions)
         #[prost(message, tag="1")]
@@ -153,7 +151,6 @@ pub mod content {
 // =============================================================================
 // Field numbers match Signal's DataMessage for potential interop
 
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DataMessage {
     /// Message text body
@@ -208,8 +205,7 @@ pub struct DataMessage {
 }
 /// Delete: Request to delete a previously sent message
 /// Signal-compatible: targets message by timestamp (field #17 in DataMessage)
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Delete {
     /// Target message timestamp (nanoseconds since epoch)
     /// The message to delete is identified by (authorId, targetSentTimestamp) tuple
@@ -218,7 +214,6 @@ pub struct Delete {
 }
 /// Quote: Reference to a quoted/replied-to message
 /// Signal-compatible field numbers for potential interop
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Quote {
     /// ID of quoted message (timestamp in nanoseconds)
@@ -258,8 +253,8 @@ pub mod quote {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Type::Normal => "NORMAL",
-                Type::GiftBadge => "GIFT_BADGE",
+                Self::Normal => "NORMAL",
+                Self::GiftBadge => "GIFT_BADGE",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -273,8 +268,7 @@ pub mod quote {
     }
 }
 /// QuotedAttachment: Preview of an attachment in a quoted message
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct QuotedAttachment {
     /// MIME type of the attachment
     #[prost(string, tag="1")]
@@ -290,8 +284,7 @@ pub struct QuotedAttachment {
 // TypingMessage: Typing indicator
 // =============================================================================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TypingMessage {
     /// Typing action
     #[prost(enumeration="typing_message::Action", tag="1")]
@@ -319,9 +312,9 @@ pub mod typing_message {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Action::Unspecified => "ACTION_UNSPECIFIED",
-                Action::Started => "STARTED",
-                Action::Stopped => "STOPPED",
+                Self::Unspecified => "ACTION_UNSPECIFIED",
+                Self::Started => "STARTED",
+                Self::Stopped => "STOPPED",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -339,8 +332,7 @@ pub mod typing_message {
 // ReceiptMessage: Read/delivery receipts
 // =============================================================================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ReceiptMessage {
     /// Receipt type
     #[prost(enumeration="receipt_message::Type", tag="1")]
@@ -373,10 +365,10 @@ pub mod receipt_message {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Type::Unspecified => "TYPE_UNSPECIFIED",
-                Type::Delivery => "DELIVERY",
-                Type::Read => "READ",
-                Type::Viewed => "VIEWED",
+                Self::Unspecified => "TYPE_UNSPECIFIED",
+                Self::Delivery => "DELIVERY",
+                Self::Read => "READ",
+                Self::Viewed => "VIEWED",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -395,8 +387,7 @@ pub mod receipt_message {
 // Reaction: Emoji reaction to a message
 // =============================================================================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Reaction {
     /// The emoji (e.g., "👍", "❤️", "😂")
     #[prost(string, tag="1")]
@@ -418,8 +409,7 @@ pub struct Reaction {
 // PinMessage: Pin/unpin a message
 // =============================================================================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PinMessage {
     /// Target message author's ACI (UUID)
     #[prost(string, tag="1")]
@@ -441,7 +431,6 @@ pub struct PinMessage {
 // EditMessage: Edit a previously sent message
 // =============================================================================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EditMessage {
     /// Target message timestamp (the message being edited)
@@ -455,8 +444,7 @@ pub struct EditMessage {
 // KeyExchange: Ephemeral mailbox key exchange
 // =============================================================================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct KeyExchange {
     /// Sender's ephemeral mailbox public key (32 bytes Ed25519)
     #[prost(bytes="vec", tag="1")]
@@ -472,8 +460,7 @@ pub struct KeyExchange {
 // AttachmentMessage: Standalone file attachment
 // =============================================================================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AttachmentMessage {
     /// The attachment pointer
     #[prost(message, optional, tag="1")]
@@ -516,8 +503,7 @@ pub struct AttachmentMessage {
 //    6. Client embeds this pointer in E2E encrypted message
 //    7. Recipient downloads from cdn_key, verifies digest, decrypts with key
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AttachmentPointer {
     /// CDN key/path for downloading the encrypted blob
     #[prost(string, tag="1")]
@@ -592,8 +578,7 @@ pub struct AttachmentPointer {
 // DeleteForMeSync: Sync local deletion to other devices
 // =============================================================================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteForMeSync {
     /// Conversation/channel ID where the message exists
     #[prost(string, tag="1")]
@@ -616,8 +601,7 @@ pub struct DeleteForMeSync {
 // the user's own devices via Signal Protocol device sessions. No special
 // encryption key — Signal Protocol provides forward secrecy.
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SavedMessageSync {
     /// Message text content
     #[prost(string, tag="1")]
@@ -648,7 +632,6 @@ pub struct SavedMessageSync {
 /// SyncSent closes the gap exactly as Signal's Sent.destination does: it carries
 /// the real recipient explicitly, so our other devices bucket the message into
 /// the correct conversation as OUTGOING.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SyncSent {
     /// The real recipient of the original message (NOT us). Our other devices
@@ -669,8 +652,7 @@ pub struct SyncSent {
 // =============================================================================
 
 /// SenderKeyDistribution: Distribute sender key to group members
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SenderKeyDistribution {
     /// Channel ID this key is for
     #[prost(string, tag="1")]
@@ -683,8 +665,7 @@ pub struct SenderKeyDistribution {
     pub timestamp: u64,
 }
 /// GroupEncrypted: Message encrypted with sender key
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GroupEncrypted {
     /// Channel ID
     #[prost(string, tag="1")]
@@ -697,8 +678,7 @@ pub struct GroupEncrypted {
     pub timestamp: u64,
 }
 /// SenderKeyRequest: Request sender key from a group member
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SenderKeyRequest {
     /// Channel ID
     #[prost(string, tag="1")]
@@ -714,8 +694,7 @@ pub struct SenderKeyRequest {
 /// L4 mailbox rotation announce (DM). Sent encrypted under the existing
 /// conversation shared secret into the peer's CURRENT mailbox, telling them to
 /// send future messages to new_mailbox_pk. Does not touch the ratchet.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DmMailboxRotation {
     /// The new mailbox public key the peer should send to (32 bytes Ed25519).
     #[prost(bytes="vec", tag="1")]
@@ -727,8 +706,7 @@ pub struct DmMailboxRotation {
     #[prost(fixed64, tag="3")]
     pub timestamp: u64,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GroupMailboxAddress {
     /// Channel ID
     #[prost(string, tag="1")]
@@ -745,8 +723,7 @@ pub struct GroupMailboxAddress {
 // =============================================================================
 
 /// CallKeyExchange: Exchange call encryption keys
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CallKeyExchange {
     /// Call ID
     #[prost(string, tag="1")]
@@ -768,8 +745,7 @@ pub struct CallKeyExchange {
     pub channel_id: ::prost::alloc::string::String,
 }
 /// CallHangup: Notify peer that call has ended
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CallHangup {
     /// Call ID
     #[prost(string, tag="1")]
@@ -805,12 +781,12 @@ pub mod call_hangup {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Reason::Unspecified => "REASON_UNSPECIFIED",
-                Reason::Normal => "NORMAL",
-                Reason::Declined => "DECLINED",
-                Reason::Busy => "BUSY",
-                Reason::Timeout => "TIMEOUT",
-                Reason::NetworkError => "NETWORK_ERROR",
+                Self::Unspecified => "REASON_UNSPECIFIED",
+                Self::Normal => "NORMAL",
+                Self::Declined => "DECLINED",
+                Self::Busy => "BUSY",
+                Self::Timeout => "TIMEOUT",
+                Self::NetworkError => "NETWORK_ERROR",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -831,8 +807,7 @@ pub mod call_hangup {
 // Group Call Key Distribution
 // =============================================================================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GroupCallKey {
     #[prost(string, tag="1")]
     pub call_id: ::prost::alloc::string::String,
@@ -849,8 +824,7 @@ pub struct GroupCallKey {
 // Anonymous Group Messages (NDSS '21)
 // =============================================================================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AnonGroupInvite {
     #[prost(bytes="vec", tag="1")]
     pub group_id: ::prost::alloc::vec::Vec<u8>,
@@ -867,8 +841,7 @@ pub struct AnonGroupInvite {
     #[prost(bytes="vec", optional, tag="7")]
     pub encrypted_avatar: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AnonGroupJoinAck {
     #[prost(bytes="vec", tag="1")]
     pub group_id: ::prost::alloc::vec::Vec<u8>,
@@ -883,8 +856,7 @@ pub struct AnonGroupJoinAck {
     #[prost(bytes="vec", optional, tag="6")]
     pub encrypted_avatar: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AnonGroupMemberInfo {
     #[prost(bytes="vec", tag="1")]
     pub user_id: ::prost::alloc::vec::Vec<u8>,
@@ -899,7 +871,6 @@ pub struct AnonGroupMemberInfo {
     #[prost(bytes="vec", optional, tag="6")]
     pub encrypted_avatar: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AnonGroupMemberList {
     #[prost(bytes="vec", tag="1")]
@@ -909,16 +880,14 @@ pub struct AnonGroupMemberList {
     #[prost(fixed64, tag="3")]
     pub timestamp: u64,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AnonGroupLeave {
     #[prost(bytes="vec", tag="1")]
     pub group_id: ::prost::alloc::vec::Vec<u8>,
     #[prost(fixed64, tag="2")]
     pub timestamp: u64,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AnonGroupKick {
     #[prost(bytes="vec", tag="1")]
     pub group_id: ::prost::alloc::vec::Vec<u8>,
@@ -929,8 +898,7 @@ pub struct AnonGroupKick {
     #[prost(bytes="vec", tag="4")]
     pub admin_signature: ::prost::alloc::vec::Vec<u8>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AnonGroupRoleChange {
     #[prost(bytes="vec", tag="1")]
     pub user_id: ::prost::alloc::vec::Vec<u8>,
@@ -939,8 +907,7 @@ pub struct AnonGroupRoleChange {
     #[prost(fixed64, tag="3")]
     pub timestamp: u64,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AnonGroupUpdate {
     #[prost(bytes="vec", tag="1")]
     pub group_id: ::prost::alloc::vec::Vec<u8>,
@@ -951,8 +918,7 @@ pub struct AnonGroupUpdate {
 }
 /// Nested message and enum types in `AnonGroupUpdate`.
 pub mod anon_group_update {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Update {
         #[prost(string, tag="3")]
         NewName(::prost::alloc::string::String),
@@ -960,7 +926,6 @@ pub mod anon_group_update {
         RoleChange(super::AnonGroupRoleChange),
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AnonGroupMessage {
     #[prost(bytes="vec", tag="1")]
@@ -968,8 +933,7 @@ pub struct AnonGroupMessage {
     #[prost(message, optional, boxed, tag="2")]
     pub inner_content: ::core::option::Option<::prost::alloc::boxed::Box<Content>>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AnonGroupProfileShare {
     #[prost(bytes="vec", tag="1")]
     pub group_id: ::prost::alloc::vec::Vec<u8>,
@@ -986,8 +950,7 @@ pub struct AnonGroupProfileShare {
 // Anonymous DM Messages
 // =============================================================================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AnonDmRequest {
     #[prost(bytes="vec", tag="1")]
     pub conversation_id: ::prost::alloc::vec::Vec<u8>,
@@ -1004,8 +967,7 @@ pub struct AnonDmRequest {
     #[prost(bytes="vec", optional, tag="7")]
     pub encrypted_avatar: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AnonDmAccept {
     #[prost(bytes="vec", tag="1")]
     pub conversation_id: ::prost::alloc::vec::Vec<u8>,
@@ -1022,7 +984,6 @@ pub struct AnonDmAccept {
     #[prost(bytes="vec", optional, tag="7")]
     pub encrypted_avatar: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AnonDmMessage {
     #[prost(bytes="vec", tag="1")]
@@ -1030,8 +991,7 @@ pub struct AnonDmMessage {
     #[prost(message, optional, boxed, tag="2")]
     pub inner_content: ::core::option::Option<::prost::alloc::boxed::Box<Content>>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AnonDmPresence {
     #[prost(bytes="vec", tag="1")]
     pub conversation_id: ::prost::alloc::vec::Vec<u8>,
@@ -1059,12 +1019,12 @@ pub mod anon_dm_presence {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Status::Unspecified => "STATUS_UNSPECIFIED",
-                Status::Online => "ONLINE",
-                Status::Offline => "OFFLINE",
-                Status::Typing => "TYPING",
-                Status::Away => "AWAY",
-                Status::DoNotDisturb => "DO_NOT_DISTURB",
+                Self::Unspecified => "STATUS_UNSPECIFIED",
+                Self::Online => "ONLINE",
+                Self::Offline => "OFFLINE",
+                Self::Typing => "TYPING",
+                Self::Away => "AWAY",
+                Self::DoNotDisturb => "DO_NOT_DISTURB",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1081,8 +1041,7 @@ pub mod anon_dm_presence {
         }
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AnonDmProfileUpdate {
     #[prost(bytes="vec", tag="1")]
     pub conversation_id: ::prost::alloc::vec::Vec<u8>,
@@ -1106,8 +1065,7 @@ pub struct AnonDmProfileUpdate {
 // Anonymous Call Signaling
 // =============================================================================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AnonCallToken {
     #[prost(bytes="vec", tag="1")]
     pub public_key: ::prost::alloc::vec::Vec<u8>,
@@ -1116,8 +1074,7 @@ pub struct AnonCallToken {
     #[prost(bytes="vec", tag="3")]
     pub message_randomizer: ::prost::alloc::vec::Vec<u8>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AnonCallOffer {
     #[prost(bytes="vec", tag="1")]
     pub call_room_id: ::prost::alloc::vec::Vec<u8>,
@@ -1149,8 +1106,8 @@ pub mod anon_call_offer {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                CallType::Voice => "CALL_TYPE_VOICE",
-                CallType::Video => "CALL_TYPE_VIDEO",
+                Self::Voice => "CALL_TYPE_VOICE",
+                Self::Video => "CALL_TYPE_VIDEO",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1163,8 +1120,7 @@ pub mod anon_call_offer {
         }
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AnonCallAnswer {
     #[prost(bytes="vec", tag="1")]
     pub call_room_id: ::prost::alloc::vec::Vec<u8>,
@@ -1196,10 +1152,10 @@ pub mod anon_call_answer {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                DeclineReason::Unspecified => "DECLINE_REASON_UNSPECIFIED",
-                DeclineReason::Busy => "BUSY",
-                DeclineReason::Rejected => "REJECTED",
-                DeclineReason::Timeout => "TIMEOUT",
+                Self::Unspecified => "DECLINE_REASON_UNSPECIFIED",
+                Self::Busy => "BUSY",
+                Self::Rejected => "REJECTED",
+                Self::Timeout => "TIMEOUT",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1214,8 +1170,7 @@ pub mod anon_call_answer {
         }
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AnonCallHangup {
     #[prost(bytes="vec", tag="1")]
     pub call_room_id: ::prost::alloc::vec::Vec<u8>,
@@ -1243,12 +1198,12 @@ pub mod anon_call_hangup {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Reason::Unspecified => "REASON_UNSPECIFIED",
-                Reason::Normal => "NORMAL",
-                Reason::Declined => "DECLINED",
-                Reason::Busy => "BUSY",
-                Reason::Timeout => "TIMEOUT",
-                Reason::NetworkError => "NETWORK_ERROR",
+                Self::Unspecified => "REASON_UNSPECIFIED",
+                Self::Normal => "NORMAL",
+                Self::Declined => "DECLINED",
+                Self::Busy => "BUSY",
+                Self::Timeout => "TIMEOUT",
+                Self::NetworkError => "NETWORK_ERROR",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.

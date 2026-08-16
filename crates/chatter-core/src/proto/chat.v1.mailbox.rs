@@ -4,8 +4,7 @@
 // Token Management (Authenticated)
 // ============================================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetMailboxTokensRequest {
     /// Number of tokens requested (max 10 per request)
     #[prost(int32, tag="1")]
@@ -15,8 +14,7 @@ pub struct GetMailboxTokensRequest {
     #[prost(bytes="vec", repeated, tag="2")]
     pub blinded_keys: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetMailboxTokensResponse {
     /// Blind signatures on the blinded keys
     /// Client unblinds these to get valid signatures on their actual keys
@@ -33,8 +31,7 @@ pub struct GetMailboxTokensResponse {
 // Mailbox Creation (Anonymous)
 // ============================================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CreateEphemeralMailboxRequest {
     /// The ephemeral public key (unblinded, Ed25519)
     #[prost(bytes="vec", tag="1")]
@@ -53,8 +50,7 @@ pub struct CreateEphemeralMailboxRequest {
     #[prost(bytes="vec", tag="4")]
     pub message_randomizer: ::prost::alloc::vec::Vec<u8>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CreateEphemeralMailboxResponse {
     #[prost(bool, tag="1")]
     pub success: bool,
@@ -71,15 +67,13 @@ pub struct CreateEphemeralMailboxResponse {
 // Mailbox Polling (Anonymous)
 // ============================================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetMailboxChallengeRequest {
     /// Public key of the mailbox to authenticate
     #[prost(bytes="vec", tag="1")]
     pub public_key: ::prost::alloc::vec::Vec<u8>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetMailboxChallengeResponse {
     /// Random 32-byte challenge to sign
     #[prost(bytes="vec", tag="1")]
@@ -88,8 +82,7 @@ pub struct GetMailboxChallengeResponse {
     #[prost(fixed64, tag="2")]
     pub expires_at: u64,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PollEphemeralMailboxRequest {
     /// Public key of the mailbox
     #[prost(bytes="vec", tag="1")]
@@ -107,7 +100,6 @@ pub struct PollEphemeralMailboxRequest {
     #[prost(int32, tag="5")]
     pub limit: i32,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PollEphemeralMailboxResponse {
     #[prost(message, repeated, tag="1")]
@@ -116,8 +108,7 @@ pub struct PollEphemeralMailboxResponse {
     #[prost(bool, tag="2")]
     pub has_more: bool,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EphemeralMessage {
     #[prost(string, tag="1")]
     pub id: ::prost::alloc::string::String,
@@ -141,8 +132,7 @@ pub struct EphemeralMessage {
 // Sending to Mailbox (Anonymous)
 // ============================================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SendToEphemeralMailboxRequest {
     /// Destination mailbox public key
     #[prost(bytes="vec", tag="1")]
@@ -154,8 +144,7 @@ pub struct SendToEphemeralMailboxRequest {
     #[prost(enumeration="EnvelopeType", tag="3")]
     pub envelope_type: i32,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SendToEphemeralMailboxResponse {
     #[prost(bool, tag="1")]
     pub success: bool,
@@ -169,8 +158,7 @@ pub struct SendToEphemeralMailboxResponse {
 // Message Acknowledgment (Anonymous)
 // ============================================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AcknowledgeMessagesRequest {
     /// Public key of the mailbox
     #[prost(bytes="vec", tag="1")]
@@ -185,8 +173,7 @@ pub struct AcknowledgeMessagesRequest {
     #[prost(string, repeated, tag="4")]
     pub message_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AcknowledgeMessagesResponse {
     #[prost(bool, tag="1")]
     pub success: bool,
@@ -197,12 +184,10 @@ pub struct AcknowledgeMessagesResponse {
 // Public Key Retrieval
 // ============================================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetBlindSignaturePublicKeyRequest {
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetBlindSignaturePublicKeyResponse {
     /// RSA-2048 public key in DER format for blind signatures
     #[prost(bytes="vec", tag="1")]
@@ -218,8 +203,7 @@ pub struct GetBlindSignaturePublicKeyResponse {
 // Anonymous Call Room (Anonymous)
 // ============================================
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct JoinAnonCallRoomRequest {
     #[prost(string, tag="1")]
     pub room_name: ::prost::alloc::string::String,
@@ -234,8 +218,7 @@ pub struct JoinAnonCallRoomRequest {
     #[prost(int32, tag="6")]
     pub call_type: i32,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct JoinAnonCallRoomResponse {
     #[prost(bool, tag="1")]
     pub success: bool,
@@ -265,12 +248,12 @@ impl EnvelopeType {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            EnvelopeType::Unspecified => "ENVELOPE_TYPE_UNSPECIFIED",
-            EnvelopeType::SealedSender => "ENVELOPE_TYPE_SEALED_SENDER",
-            EnvelopeType::PrekeyMessage => "ENVELOPE_TYPE_PREKEY_MESSAGE",
-            EnvelopeType::Message => "ENVELOPE_TYPE_MESSAGE",
-            EnvelopeType::EciesInit => "ENVELOPE_TYPE_ECIES_INIT",
-            EnvelopeType::SenderKey => "ENVELOPE_TYPE_SENDER_KEY",
+            Self::Unspecified => "ENVELOPE_TYPE_UNSPECIFIED",
+            Self::SealedSender => "ENVELOPE_TYPE_SEALED_SENDER",
+            Self::PrekeyMessage => "ENVELOPE_TYPE_PREKEY_MESSAGE",
+            Self::Message => "ENVELOPE_TYPE_MESSAGE",
+            Self::EciesInit => "ENVELOPE_TYPE_ECIES_INIT",
+            Self::SenderKey => "ENVELOPE_TYPE_SENDER_KEY",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
