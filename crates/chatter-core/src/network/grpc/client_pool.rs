@@ -234,13 +234,24 @@ impl GrpcClientPool {
     /// Returns `NetworkError::ConnectionFailed` if the URL is invalid.
     pub fn set_url(&self, server_url: &str) -> Result<(), NetworkError> {
         let new_endpoint = Self::create_endpoint(server_url, self.timeout)?;
-        
+
         // Disconnect first
         self.disconnect();
-        
+
         // Update endpoint
         *self.endpoint.write() = new_endpoint;
         *self.direct_url.write() = server_url.to_string();
+        // quic_probe caches a verdict about the OLD server_url specifically
+        // (reachable-over-QUIC or not) -- carrying it over to a genuinely
+        // different destination is wrong in both directions: a stale
+        // Working would skip probing a server that's never actually been
+        // tried, and a stale Failed would give up on QUIC for a server that
+        // might well support it. A new URL is a fair, cheap reason to
+        // re-probe from scratch.
+        #[cfg(feature = "quic")]
+        {
+            *self.quic_probe.write() = QuicProbeState::Untried;
+        }
 
         tracing::info!("gRPC pool URL updated to: {}", server_url);
         Ok(())
@@ -1091,5 +1102,24 @@ mod tests {
         *pool.quic_probe.write() = QuicProbeState::Failed;
         pool.note_transport_error();
         assert_eq!(*pool.quic_probe.read(), QuicProbeState::Failed);
+    }
+
+    /// Regression test: quic_probe caches a verdict about a specific
+    /// server_url. set_url() must reset it, or a stale verdict from the
+    /// old server (in either direction) silently carries over to a
+    /// genuinely different one.
+    #[cfg(feature = "quic")]
+    #[test]
+    fn test_set_url_resets_quic_probe() {
+        let pool = GrpcClientPool::new("https://old-server:50051").unwrap();
+        *pool.quic_probe.write() = QuicProbeState::Failed;
+
+        pool.set_url("https://new-server:50051").unwrap();
+
+        assert_eq!(
+            *pool.quic_probe.read(),
+            QuicProbeState::Untried,
+            "a new server_url must get a fresh QUIC probe, not inherit the old one's verdict"
+        );
     }
 }
