@@ -164,6 +164,9 @@ dev-trust-root = ["chatter-core/dev-trust-root"]
 # Route the network transport over Tor for anon mode. Forwards to chatter-core,
 # which owns the onion connector. See docs/ONION_DEPLOYMENT.md §8.3.
 onion = ["chatter-core/onion"]
+# HTTP/3 (QUIC) gRPC transport, probed and preferred over TCP/HTTP2 when the
+# server supports it. Forwards to chatter-core, which owns GrpcTransport.
+quic = ["chatter-core/quic"]
 # NOTE: deliberately NOT pulling `slint/backend-android-activity-06` — that
 # umbrella feature hard-enables `i-slint-backend-android-activity/native-activity`,
 # which is mutually exclusive with `game-activity`. We select the backend +

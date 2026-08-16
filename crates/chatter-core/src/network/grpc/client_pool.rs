@@ -350,37 +350,56 @@ impl GrpcClientPool {
     async fn dial(&self, endpoint: &Endpoint) -> Result<GrpcTransport, tonic::transport::Error> {
         #[cfg(feature = "quic")]
         {
-            let try_quic = *self.transport_mode.read() == TransportMode::Direct
-                && *self.quic_probe.read() != QuicProbeState::Failed;
-            if try_quic {
+            let direct = *self.transport_mode.read() == TransportMode::Direct;
+            let probe_state = *self.quic_probe.read();
+            if direct && probe_state != QuicProbeState::Failed {
                 let server_url = self.direct_url.read().clone();
                 if server_url.starts_with("https://") {
                     if let Ok(uri) = server_url.parse::<http::Uri>() {
-                        let probe = tokio::time::timeout(
-                            QUIC_PROBE_TIMEOUT,
-                            super::transport::probe_quic(&uri),
-                        )
-                        .await;
-                        match probe {
-                            Ok(Ok(())) => {
-                                *self.quic_probe.write() = QuicProbeState::Working;
-                                match super::transport::build_quic(uri) {
-                                    Ok(transport) => {
-                                        tracing::info!("transport: QUIC (probe succeeded)");
-                                        return Ok(transport);
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!(error = %e, "QUIC probe succeeded but channel build failed — falling back to TCP");
-                                    }
+                        // Already proven reachable — skip straight to building a
+                        // channel, no network I/O. Re-probing here on every
+                        // dial() (every connect()/reconnect-after-error) was a
+                        // real bug: each call did a fresh QUIC handshake attempt
+                        // even when one had already succeeded, which under any
+                        // reconnect churn (a background stream erroring and
+                        // retrying, several callers dialing around the same
+                        // time) turned into a sustained flood of real UDP/TLS
+                        // handshakes — exactly the kind of CPU/kevent storm a
+                        // hung-looking UI turned out to be.
+                        if probe_state == QuicProbeState::Working {
+                            match super::transport::build_quic(uri) {
+                                Ok(transport) => return Ok(transport),
+                                Err(e) => {
+                                    tracing::warn!(error = %e, "cached-working QUIC channel build failed — falling back to TCP");
                                 }
                             }
-                            Ok(Err(e)) => {
-                                tracing::info!(error = %e, "QUIC unreachable — falling back to TCP");
-                                *self.quic_probe.write() = QuicProbeState::Failed;
-                            }
-                            Err(_) => {
-                                tracing::info!("QUIC probe timed out — falling back to TCP");
-                                *self.quic_probe.write() = QuicProbeState::Failed;
+                        } else {
+                            let probe = tokio::time::timeout(
+                                QUIC_PROBE_TIMEOUT,
+                                super::transport::probe_quic(&uri),
+                            )
+                            .await;
+                            match probe {
+                                Ok(Ok(())) => {
+                                    *self.quic_probe.write() = QuicProbeState::Working;
+                                    match super::transport::build_quic(uri) {
+                                        Ok(transport) => {
+                                            tracing::info!("transport: QUIC (probe succeeded)");
+                                            return Ok(transport);
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(error = %e, "QUIC probe succeeded but channel build failed — falling back to TCP");
+                                        }
+                                    }
+                                }
+                                Ok(Err(e)) => {
+                                    tracing::info!(error = %e, "QUIC unreachable — falling back to TCP");
+                                    *self.quic_probe.write() = QuicProbeState::Failed;
+                                }
+                                Err(_) => {
+                                    tracing::info!("QUIC probe timed out — falling back to TCP");
+                                    *self.quic_probe.write() = QuicProbeState::Failed;
+                                }
                             }
                         }
                     }
@@ -971,5 +990,41 @@ mod tests {
         // successful connection.
         assert!(result.is_err());
         assert_eq!(*pool.quic_probe.read(), QuicProbeState::Failed);
+    }
+
+    /// Regression test for a real bug: `dial()` re-probed QUIC over the
+    /// network on every call, even when `quic_probe` was already cached as
+    /// `Working` — so any reconnect (a background stream erroring and
+    /// retrying, several callers dialing around the same time) redid a full
+    /// QUIC handshake attempt instead of reusing the known-good result. A
+    /// cached `Working` state must skip straight to building a channel with
+    /// no I/O — proven here by pointing at an address that would time out if
+    /// actually probed, and asserting `dial()` still returns almost
+    /// instantly.
+    #[cfg(feature = "quic")]
+    #[tokio::test]
+    async fn test_dial_skips_network_probe_when_already_working() {
+        // A non-routable address (RFC 5737 TEST-NET-1): a real probe against
+        // it would hang until QUIC_PROBE_TIMEOUT (3s), not fail fast.
+        let pool = GrpcClientPool::new("https://192.0.2.1:50051").unwrap();
+        *pool.quic_probe.write() = QuicProbeState::Working;
+
+        let endpoint = pool.endpoint.read().clone();
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(Duration::from_secs(1), pool.dial(&endpoint)).await;
+
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "dial() took {elapsed:?} — should skip straight to build_quic() (no I/O) \
+             when quic_probe is already Working, not re-probe the network"
+        );
+        // build_quic() is infallible I/O-wise (binds a local socket, does no
+        // network round-trip), so this succeeds even though nothing is
+        // listening at the far end — the real handshake is deferred to the
+        // first RPC, same as connect_lazy().
+        assert!(result.is_ok(), "dial() must not hang");
+        assert!(result.unwrap().is_ok());
+        assert_eq!(*pool.quic_probe.read(), QuicProbeState::Working);
     }
 }

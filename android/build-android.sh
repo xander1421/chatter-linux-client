@@ -126,8 +126,29 @@ else
     echo ">> production pinned keys from the environment"
 fi
 
+# The TLS root CA is a THIRD pin, separate from DEV_TRUST_ROOT above (which
+# only covers the sealed-sender/KT keys) -- the server has no plaintext mode,
+# so every build needs one now, dev-trust-root included. Local dev: point it
+# at create-certs.sh's cert. Real build: your server's actual CA.
+if [ -z "${CHATTER_TLS_ROOT_CA_PEM:-}" ]; then
+    echo "FATAL: CHATTER_TLS_ROOT_CA_PEM is unset."
+    echo
+    echo "The client trusts ONLY this pinned CA for TLS (never system roots), and"
+    echo "the server has no plaintext fallback, so this is a compile-time pin now"
+    echo "regardless of DEV_TRUST_ROOT."
+    echo
+    echo "Local dev:  CHATTER_TLS_ROOT_CA_PEM=\"\$(cat ../../certs/server.crt)\" $0"
+    echo "  (run ./create-certs.sh in the server repo first if that file doesn't exist)"
+    exit 1
+fi
+
+# QUIC/HTTP3 transport -- probed and preferred over TCP/HTTP2, falls back
+# automatically when unreachable. Unconditional now, same as TLS: it's the
+# transport, not an opt-in layered on top of one.
+QUIC_FEATURE=",quic"
+
 ( cd "$PROJECT_ROOT" && cargo ndk -t arm64-v8a build -p chatter-ui \
-    --no-default-features --features "mobile${MESH_FEATURE}${TRUST_ROOT_FEATURE}" --lib )
+    --no-default-features --features "mobile${MESH_FEATURE}${TRUST_ROOT_FEATURE}${QUIC_FEATURE}" --lib )
 
 # ── 2. Stage the .so into the Gradle module ─────────────────────────────────
 JNI_DIR="app/src/main/jniLibs/arm64-v8a"
