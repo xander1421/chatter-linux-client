@@ -799,12 +799,14 @@ impl MessageGateway {
             );
             // Zeroize plaintext before returning
             plaintext.zeroize();
+            let thread_id = (!data_message.thread_id.is_empty()).then_some(data_message.thread_id);
             return Ok((sender_id, DmContent::Text {
                 body: data_message.body,
                 timestamp: data_message.timestamp,
                 attachments: data_message.attachments,
                 profile_key,
                 quote: data_message.quote,
+                thread_id,
             }));
         }
 
@@ -831,6 +833,7 @@ impl MessageGateway {
             attachments: vec![],
             profile_key: None,
             quote: None,
+            thread_id: None,
         }))
     }
 
@@ -860,12 +863,14 @@ impl MessageGateway {
                     "parse_content: DataMessage extracted"
                 );
                 // Otherwise it's a text message (possibly with attachments)
+                let thread_id = (!msg.thread_id.is_empty()).then_some(msg.thread_id);
                 Ok(DmContent::Text {
                     body: msg.body,
                     timestamp: msg.timestamp,
                     attachments: msg.attachments,
                     profile_key,
                     quote: msg.quote,
+                    thread_id,
                 })
             }
             Some(content::Content::Typing(msg)) => {
@@ -1242,3 +1247,61 @@ impl MessageGateway {
     }
 }
 
+
+#[cfg(test)]
+mod thread_id_tests {
+    //! Regression test for a real bug: `DmContent::Text` (and, downstream,
+    //! `dispatch_dm_content` in `inbox/polling/dm.rs`) silently dropped
+    //! `DataMessage.thread_id` on the MailboxDm (private-friend DM) receive
+    //! path. The ServerDm/channel receive path (`gateway/mod.rs`) already
+    //! carried this through -- see its `thread_id: data_message.thread_id
+    //! .parse().ok()` and comment. MailboxDm never got the same fix, so a
+    //! thread reply received over that transport was filed into the main
+    //! conversation instead of the open thread panel.
+    use super::*;
+
+    #[test]
+    fn parse_content_carries_thread_id_through() {
+        let content = Content {
+            content: Some(content::Content::DataMessage(DataMessage {
+                body: "a reply".to_string(),
+                thread_id: "11111111-1111-1111-1111-111111111111".to_string(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        let parsed = MessageGateway::parse_content(content).expect("parse_content failed");
+        match parsed {
+            DmContent::Text { thread_id, .. } => {
+                assert_eq!(
+                    thread_id,
+                    Some("11111111-1111-1111-1111-111111111111".to_string()),
+                    "thread_id must survive parse_content, or a MailboxDm reply \
+                     is indistinguishable from a top-level message"
+                );
+            }
+            other => panic!("expected DmContent::Text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_content_thread_id_is_none_when_not_a_reply() {
+        let content = Content {
+            content: Some(content::Content::DataMessage(DataMessage {
+                body: "not a reply".to_string(),
+                thread_id: String::new(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        let parsed = MessageGateway::parse_content(content).expect("parse_content failed");
+        match parsed {
+            DmContent::Text { thread_id, .. } => {
+                assert_eq!(thread_id, None, "empty wire thread_id must map to None, not Some(\"\")");
+            }
+            other => panic!("expected DmContent::Text, got {other:?}"),
+        }
+    }
+}

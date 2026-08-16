@@ -381,7 +381,7 @@ fn dispatch_dm_content(
     );
 
     match dm_content {
-        DmContent::Text { body, timestamp, attachments, profile_key, quote } => {
+        DmContent::Text { body, timestamp, attachments, profile_key, quote, thread_id } => {
             // Store sender's profile key if present (for decrypting their display_name)
             if let Some(ref key) = profile_key {
                 if key.len() == 32 {
@@ -474,6 +474,12 @@ fn dispatch_dm_content(
                 );
                 let mut message = Message::new_text(dm_channel_id, ConversationType::MailboxDm, Some(*sender_id), body.clone(), sent_at);
                 message.id = msg_id;
+                // Thread root rides on the wire (DataMessage.thread_id).
+                // Mirrors the ServerDm inbound path in gateway/mod.rs — see
+                // that comment for why this matters: without it, a thread
+                // reply gets filed into the main channel instead of the
+                // open thread panel.
+                message.thread_id = thread_id.as_deref().and_then(|s| s.parse().ok());
 
                 // Add attachment IDs to message (attachments are stored separately in attachment_repo)
                 message.attachments = attachments

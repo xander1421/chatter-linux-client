@@ -117,6 +117,11 @@ pub enum DmContent {
         /// Reply quote, so the receiver's stored message keeps its reply
         /// bubble (author + preview + thumbnail). `None` for non-replies.
         quote: Option<Quote>,
+        /// Thread root this message replies into (DataMessage.thread_id on
+        /// the wire), so a MailboxDm reply lands in the thread panel instead
+        /// of the main channel — mirrors the ServerDm inbound path in
+        /// `gateway/mod.rs`, which already carries this through.
+        thread_id: Option<String>,
     },
     /// Typing indicator
     Typing {
