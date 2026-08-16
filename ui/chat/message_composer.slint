@@ -127,9 +127,15 @@ export component MessageComposer inherits Rectangle {
         );
     }
 
-    // Formatting toolbar only while composing (focused or draft present) —
-    // persistent chrome for a rare action wastes a row otherwise.
-    property <bool> show-formatting: text-input.has-focus || root.text != "";
+    // Formatting toolbar only while there's a draft — persistent chrome for a
+    // rare action wastes a row otherwise. Deliberately NOT gated on has-focus:
+    // that grows format-bar-height (and so the composer's height, via the
+    // `height:` expression below) the instant focus lands, mid-tap, before
+    // the finger lifts. The animated resize shifts text-input out from under
+    // the touch-up, which reads as a blur — the just-shown soft keyboard
+    // immediately hides itself again (GameActivity/InsetsController logs:
+    // setSoftKeyboardActive true then false within ~3ms of the same tap).
+    property <bool> show-formatting: root.text != "";
 
     // Formatting bar height — 44px so the B/I/S/code buttons inside can be
     // 44px touch targets rather than the 28px boxes measured on a phone.
