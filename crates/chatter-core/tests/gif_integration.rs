@@ -9,7 +9,7 @@ async fn test_gif_client_anonymous_search() {
     // This test assumes a running backend at localhost:50051
     // or tests the logic of token injection.
     
-    let channel = match tonic::transport::Channel::from_static("http://localhost:50051")
+    let channel = match tonic::transport::Channel::from_static("https://localhost:50051")
         .connect()
         .await {
             Ok(c) => c,

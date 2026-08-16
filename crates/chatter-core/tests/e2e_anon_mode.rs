@@ -19,8 +19,10 @@
 //! `INTEGRATION_TESTS=1` + a server on `localhost:50051`; `skip_if_no_server!()`
 //! macro; isolated tempdir per client.
 //!
-//! Run with:
-//!   `INTEGRATION_TESTS=1 cargo test -p chatter-core --features testing \
+//! Run with (the server has no plaintext mode -- point CHATTER_TLS_ROOT_CA_PEM
+//! at its cert, e.g. `certs/server.crt` from `./create-certs.sh`):
+//!   `CHATTER_TLS_ROOT_CA_PEM="$(cat certs/server.crt)" INTEGRATION_TESTS=1 \
+//!        cargo test -p chatter-core --features testing \
 //!        --test e2e_anon_mode -- --nocapture --test-threads=1`
 
 #[macro_use]
@@ -35,7 +37,7 @@ use chatter_core::domain::message::ConversationType;
 use chatter_core::events::DomainEvent;
 use chatter_core::state::ActiveConversation;
 
-const SERVER_URL: &str = "http://localhost:50051";
+const SERVER_URL: &str = "https://localhost:50051";
 const EVENT_TIMEOUT: Duration = Duration::from_secs(30);
 // NOTE: The task spec mentions a PIN of `"123456"` (matching the constant
 // in `e2e_server_dm_flow.rs`). However, `crate::crypto::svr::MIN_PIN_LENGTH`

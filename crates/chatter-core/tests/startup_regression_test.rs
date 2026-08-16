@@ -210,7 +210,7 @@ fn test_07_grpc_pool_creation() {
 
     // This should NOT connect, just create the pool
     let (result, duration) = with_timeout("GrpcClientPool::new", || {
-        GrpcClientPool::new("http://localhost:50051")
+        GrpcClientPool::new("https://localhost:50051")
     }).expect("GrpcClientPool::new should not hang");
 
     match &result {

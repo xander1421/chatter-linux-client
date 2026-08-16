@@ -25,7 +25,7 @@ use chatter_core::events::DomainEvent;
 use chatter_core::state::ActiveConversation;
 use chatter_core::state::chat_state::PendingAttachment;
 
-const SERVER_URL: &str = "http://localhost:50051";
+const SERVER_URL: &str = "https://localhost:50051";
 const EVENT_TIMEOUT: Duration = Duration::from_secs(30);
 // Must clear crypto::svr::MIN_PIN_ENTROPY_BITS (30.0). An 8-digit numeric PIN
 // is ~26.6 bits and is rejected by design; mix classes to clear the floor.
@@ -587,7 +587,9 @@ async fn t7_file_transfer() {
 // ============================================================================
 
 /// Run all tests sequentially and report summary.
-/// Invoke manually: `INTEGRATION_TESTS=1 cargo test --test e2e_two_user_suite full_e2e_suite -- --nocapture`
+/// Invoke manually (the server has no plaintext mode -- point CHATTER_TLS_ROOT_CA_PEM
+/// at its cert, e.g. `certs/server.crt` from `./create-certs.sh`):
+/// `CHATTER_TLS_ROOT_CA_PEM="$(cat certs/server.crt)" INTEGRATION_TESTS=1 cargo test --test e2e_two_user_suite full_e2e_suite -- --nocapture`
 #[tokio::test]
 async fn full_e2e_suite() {
     skip_if_no_server!();

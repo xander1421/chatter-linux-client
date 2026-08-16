@@ -502,17 +502,19 @@ pub async fn app_init() -> AppState {
             // Android dev defaults to localhost via `adb reverse` tunnels
             // (50051 gRPC, 9000 RustFS, 7880/7881 LiveKit). For tunnel-free LAN
             // testing (needed for WebRTC UDP media), build with
-            // CHATTER_ANDROID_SERVER=http://<host-lan-ip>:50051 and point the
-            // server's LIVEKIT_URL + S3 endpoint at the same LAN IP.
+            // CHATTER_ANDROID_SERVER=https://<host-lan-ip>:50051 and point the
+            // server's LIVEKIT_URL + S3 endpoint at the same LAN IP. TLS is
+            // required — the server has no plaintext mode.
             option_env!("CHATTER_ANDROID_SERVER")
-                .unwrap_or("http://localhost:50051")
+                .unwrap_or("https://localhost:50051")
                 .to_string()
         } else {
             // Desktop dev: override the gRPC server at runtime with CHATTER_SERVER_URL
-            // (e.g. http://192.168.122.1:50051 to reach the host from a VM guest),
-            // otherwise default to localhost.
+            // (e.g. https://192.168.122.1:50051 to reach the host from a VM guest),
+            // otherwise default to localhost. TLS is required in every
+            // environment now — there is no plaintext server mode.
             std::env::var("CHATTER_SERVER_URL")
-                .unwrap_or_else(|_| "http://localhost:50051".to_string())
+                .unwrap_or_else(|_| "https://localhost:50051".to_string())
         };
 
         window.set_register_username(username.clone().into());

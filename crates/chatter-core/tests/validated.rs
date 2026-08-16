@@ -28,8 +28,10 @@
 //! keypair. Integration tests link the lib without `cfg(test)`, so without the
 //! feature the trust root is unconfigured and the first `SignalService` panics.
 //!
-//! Run:
-//!   INTEGRATION_TESTS=1 cargo test -p chatter-core \
+//! Run (the server has no plaintext mode -- point CHATTER_TLS_ROOT_CA_PEM at
+//! its cert, e.g. `certs/server.crt` from `./create-certs.sh`):
+//!   CHATTER_TLS_ROOT_CA_PEM="$(cat certs/server.crt)" INTEGRATION_TESTS=1 \
+//!     cargo test -p chatter-core \
 //!     --features testing,dev-trust-root \
 //!     --test validated -- --nocapture --test-threads=1
 
@@ -44,7 +46,7 @@ use chatter_core::domain::ids::{ChannelId, UserId};
 use chatter_core::events::DomainEvent;
 use chatter_core::state::ActiveConversation;
 
-const SERVER_URL: &str = "http://localhost:50051";
+const SERVER_URL: &str = "https://localhost:50051";
 
 /// The server under test.
 ///

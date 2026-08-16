@@ -230,32 +230,22 @@ pub static TRUST_ROOT_PUBLIC_KEY: std::sync::LazyLock<PublicKey> = std::sync::La
 // pinned keys: a dev build embeds a committed placeholder; a non-dev build must
 // supply the real CA at build time or fail to compile.
 
-/// Development placeholder CA (committed, INSECURE, and keyless — its private
-/// key was never saved, so it can sign nothing). Selected when
-/// `--features dev-trust-root` is on and `CHATTER_TLS_ROOT_CA_PEM` is unset —
-/// the plaintext-`http://` dev loop needs no trust store at all, so this only
-/// exists to give such builds a non-empty one and compile.
+/// Test-only placeholder CA (committed, INSECURE, and keyless — its private
+/// key was never saved, so it can sign nothing). Used ONLY by `cargo test` /
+/// `--features testing`, which never open a real TLS connection and just need
+/// a non-empty trust store to satisfy the type. There is no plaintext server
+/// mode to fall back to anymore — every real build, dev-trust-root included,
+/// needs a CA whose private key actually exists.
 const DEV_TLS_ROOT_CA_PEM: &str = include_str!("../assets/dev_tls_root_ca.pem");
 
-/// The TLS CA a SHIPPABLE artifact of this build would pin. `None` means none is
-/// configured — a build failure below, not a silent fall-through to system
-/// roots.
-///
-/// `dev-trust-root` still honors `CHATTER_TLS_ROOT_CA_PEM` when set: local dev
-/// against a real TLS-terminated server (e.g. HTTP/3, which needs actual TLS
-/// 1.3 — plaintext has no ALPN to negotiate over) needs a CA whose private key
-/// exists, which the keyless placeholder above categorically cannot be. This
-/// does not weaken `dev-trust-root`'s posture — sealed-sender and KT still pin
-/// their own separate, always-insecure dev keys — it only lets the TLS leg
-/// point at whatever CA the developer generated locally (e.g. `create-certs.sh`).
-#[cfg(feature = "dev-trust-root")]
-const SHIPPED_TLS_ROOT_CA_PEM: Option<&str> = match option_env!("CHATTER_TLS_ROOT_CA_PEM") {
-    Some(pem) if !pem.is_empty() => Some(pem),
-    _ => Some(DEV_TLS_ROOT_CA_PEM),
-};
-
-/// The TLS CA a SHIPPABLE artifact of this build would pin. See above.
-#[cfg(not(feature = "dev-trust-root"))]
+/// The TLS CA a SHIPPABLE artifact of this build would pin. `None` means none
+/// is configured — a build failure below, not a silent fall-through to system
+/// roots. Same for every build, `dev-trust-root` included: TLS is required in
+/// every environment now, so there is no dev/prod split here the way the
+/// sealed-sender trust root and KT tree head still have one (those two stay
+/// insecure-by-default under `dev-trust-root`; this one cannot, because the
+/// keyless placeholder CA can't authenticate anything and the server it would
+/// need to front — a plaintext dev loop — no longer exists).
 const SHIPPED_TLS_ROOT_CA_PEM: Option<&str> = option_env!("CHATTER_TLS_ROOT_CA_PEM");
 
 /// The TLS trust anchor this build actually uses. `cfg(test)` / `feature =
@@ -274,23 +264,26 @@ pub const TLS_ROOT_CA_PEM: Option<&str> = match SHIPPED_TLS_ROOT_CA_PEM {
     _ => None,
 };
 
-/// Fail the BUILD when no TLS CA is provisioned for a shippable artifact.
-/// Because the client trusts ONLY the pinned CA (never system roots), an
-/// unprovisioned build would reject every hostname-TLS connection at runtime —
-/// so, like the sealed-sender trust root, this must fail on the machine that
-/// builds it, not the user's.
-#[cfg(all(not(feature = "dev-trust-root"), not(test), not(feature = "testing")))]
+/// Fail the BUILD when no TLS CA is provisioned for a shippable artifact —
+/// `dev-trust-root` included; TLS is mandatory in every environment, not just
+/// production. Because the client trusts ONLY the pinned CA (never system
+/// roots), an unprovisioned build would reject every hostname-TLS connection
+/// at runtime — so, like the sealed-sender trust root, this must fail on the
+/// machine that builds it, not the user's.
+#[cfg(all(not(test), not(feature = "testing")))]
 const _: () = {
     assert!(
         TLS_ROOT_CA_PEM.is_some(),
         "no TLS root CA is baked into this build.\n\n\
          The client trusts ONLY the pinned chatter CA for its gRPC and anonymous \
          HTTP endpoints (never the system roots), so without one every TLS \
-         connection would fail at runtime.\n\n\
-         Build with your server's CA certificate:\n\n  \
-         CHATTER_TLS_ROOT_CA_PEM=\"$(cat chatter-root-ca.pem)\" cargo build --release\n\n\
-         The server's TLS leaf MUST chain to this CA. For local development \
-         against the plaintext dev server, build with --features dev-trust-root."
+         connection would fail at runtime. This applies to --features \
+         dev-trust-root too -- there is no plaintext server mode to fall back \
+         to; TLS is required in every environment.\n\n\
+         For local development: run ./create-certs.sh, then build with\n\n  \
+         CHATTER_TLS_ROOT_CA_PEM=\"$(cat ../certs/server.crt)\" cargo build --features dev-trust-root\n\n\
+         For a shippable build, use your server's real CA certificate instead \
+         of the local dev one, and drop --features dev-trust-root."
     );
 };
 

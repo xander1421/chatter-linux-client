@@ -8,7 +8,7 @@
 
 use chatter_core::network::grpc::{AuthClient, GrpcClientPool};
 
-const SERVER_ADDRESS: &str = "http://localhost:50051";
+const SERVER_ADDRESS: &str = "https://localhost:50051";
 
 /// Test the complete registration flow with challenge verification
 #[tokio::test]

@@ -30,7 +30,7 @@ async fn test_appcontext_three_tier_initialization() {
     let start = Instant::now();
     let data_dir = test_data_dir("appcontext_init");
 
-    let ctx = chatter_core::app::AppContext::with_config(Some("http://localhost:50051".to_string()), Some(data_dir));
+    let ctx = chatter_core::app::AppContext::with_config(Some("https://localhost:50051".to_string()), Some(data_dir));
 
     let elapsed = start.elapsed();
     assert!(elapsed < Duration::from_secs(30), "AppContext init took too long: {:?}", elapsed);
@@ -44,7 +44,7 @@ async fn test_appcontext_three_tier_initialization() {
 
             // Build a client to verify all tiers wired correctly
             let client = chatter_core::client::ChatterClient::builder()
-                .server_url("http://localhost:50051")
+                .server_url("https://localhost:50051")
                 .data_dir(test_data_dir("appcontext_init_client"))
                 .build();
 
@@ -88,7 +88,7 @@ async fn test_appcontext_three_tier_initialization() {
 #[tokio::test]
 async fn test_chatter_client_builder() {
     let result = chatter_core::client::ChatterClient::builder()
-        .server_url("http://localhost:50051")
+        .server_url("https://localhost:50051")
         .data_dir(test_data_dir("client_builder"))
         .build();
 
@@ -123,7 +123,7 @@ async fn test_chatter_client_builder() {
 #[tokio::test]
 async fn test_oncelock_services_uninitialized_before_login() {
     let result = chatter_core::client::ChatterClient::builder()
-        .server_url("http://localhost:50051")
+        .server_url("https://localhost:50051")
         .data_dir(test_data_dir("oncelock_uninit"))
         .build();
 
@@ -164,7 +164,7 @@ async fn test_oncelock_services_uninitialized_before_login() {
 #[tokio::test]
 async fn test_event_bus_created_on_init() {
     let result = chatter_core::client::ChatterClient::builder()
-        .server_url("http://localhost:50051")
+        .server_url("https://localhost:50051")
         .data_dir(test_data_dir("event_bus"))
         .build();
 
@@ -193,7 +193,7 @@ async fn test_event_bus_created_on_init() {
 #[tokio::test]
 async fn test_fresh_init_not_logged_in() {
     let result = chatter_core::client::ChatterClient::builder()
-        .server_url("http://localhost:50051")
+        .server_url("https://localhost:50051")
         .data_dir(test_data_dir("fresh_init"))
         .build();
 
