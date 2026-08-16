@@ -55,6 +55,18 @@ fn main() {
     let ndk = std::env::var("ANDROID_NDK_HOME").unwrap_or_default();
     let gst_root = std::env::var("GSTREAMER_ROOT_ANDROID").unwrap_or_default();
 
+    // NDK build scripts always run on the HOST doing the cross-compile, not
+    // the android target — the prebuilt LLVM toolchain directory name is
+    // host-specific (linux-x86_64, darwin-x86_64, windows-x86_64), and was
+    // hardcoded to linux-x86_64 (this project's Android builds had only ever
+    // been done from Linux). Building from macOS linked against a
+    // nonexistent linux-x86_64 path and failed at link time.
+    let ndk_host = match std::env::consts::OS {
+        "macos" => "darwin-x86_64",
+        "windows" => "windows-x86_64",
+        _ => "linux-x86_64",
+    };
+
     // cargo-apk defaults to API level 23 which lacks libaaudio.
     // Add NDK sysroot library path for min SDK 26 (AAudio introduced here).
     if !ndk.is_empty() {
@@ -66,8 +78,8 @@ fn main() {
             _ => "aarch64-linux-android",
         };
         println!(
-            "cargo:rustc-link-search=native={}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/{}/26",
-            ndk, abi
+            "cargo:rustc-link-search=native={}/toolchains/llvm/prebuilt/{}/sysroot/usr/lib/{}/26",
+            ndk, ndk_host, abi
         );
     }
 
@@ -96,8 +108,8 @@ fn main() {
     // libffi needs __clear_cache from compiler-rt builtins
     if !ndk.is_empty() {
         println!(
-            "cargo:rustc-link-arg={}/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/19/lib/linux/libclang_rt.builtins-{}-android.a",
-            ndk, target_arch
+            "cargo:rustc-link-arg={}/toolchains/llvm/prebuilt/{}/lib/clang/19/lib/linux/libclang_rt.builtins-{}-android.a",
+            ndk, ndk_host, target_arch
         );
     }
 }

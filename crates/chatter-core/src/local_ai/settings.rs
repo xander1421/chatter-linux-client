@@ -37,7 +37,7 @@ pub struct LocalAISettings {
 impl Default for LocalAISettings {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             active_provider: ProviderKind::Ollama,
             ollama_url: "http://localhost:11434".to_string(),
             chat_model: "qwen3:4b".to_string(),

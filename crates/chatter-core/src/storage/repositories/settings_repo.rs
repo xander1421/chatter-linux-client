@@ -315,9 +315,11 @@ impl SettingsRepository {
     // Local AI Settings
     // ========================================================================
 
-    /// Check if local AI is enabled.
+    /// Check if local AI is enabled. Off by default — it downloads and runs
+    /// a multi-GB model on-device; users opt in explicitly rather than
+    /// discovering the download/CPU cost after the fact.
     pub fn get_local_ai_enabled(&self) -> Result<bool, StorageError> {
-        Ok(self.get_bool(keys::LOCAL_AI_ENABLED)?.unwrap_or(true))
+        Ok(self.get_bool(keys::LOCAL_AI_ENABLED)?.unwrap_or(false))
     }
 
     /// Set whether local AI is enabled.

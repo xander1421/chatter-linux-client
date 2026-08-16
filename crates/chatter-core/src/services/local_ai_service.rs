@@ -193,6 +193,7 @@ impl HttpLocalAIService {
         channel_id: &str,
         content: &str,
     ) -> Result<bool, HttpLocalAIError> {
+        self.check_enabled()?;
         self.semantic_search
             .index_message(message_id, channel_id, content)
             .await
@@ -206,6 +207,7 @@ impl HttpLocalAIService {
         &self,
         messages: &[(String, String, String)],
     ) -> Result<u32, HttpLocalAIError> {
+        self.check_enabled()?;
         self.semantic_search
             .index_messages_batch(messages)
             .await
@@ -426,12 +428,10 @@ impl HttpLocalAIService {
         if let Ok(Some(model)) = repo.get_string("local_ai.embedding_model") {
             settings.embedding_model = model;
         }
-        if let Ok(false) = repo.get_local_ai_enabled() {
-            // Only disable if explicitly set to false
-            if repo.get_string("local_ai.enabled").ok().flatten().is_some() {
-                settings.enabled = false;
-            }
-        }
+        // get_local_ai_enabled() is the single source of truth for the
+        // enabled default (off) — no "only override if explicit" carve-out,
+        // that pattern silently ignored an off default on a fresh install.
+        settings.enabled = repo.get_local_ai_enabled().unwrap_or(false);
 
         settings
     }

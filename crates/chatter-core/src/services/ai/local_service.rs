@@ -42,20 +42,20 @@ impl LocalAIService {
         return false;
 
         #[cfg(feature = "local-ai")]
-        self.settings_repo.get_local_ai_enabled().unwrap_or(true)
+        // Fail closed: a settings-read error must not silently turn on a
+        // multi-GB on-device model download the user never opted into.
+        self.settings_repo.get_local_ai_enabled().unwrap_or(false)
     }
 
     /// Load the user's preferred model from settings, or default model.
     ///
-    /// Local AI is enabled by default. Uses DEFAULT_MODEL_ID if no model configured.
+    /// Local AI is off by default (opt-in) — get_local_ai_enabled() is the
+    /// single source of truth for that default. Uses DEFAULT_MODEL_ID if no
+    /// model configured.
     pub async fn load_preferred_model(&self) -> Result<Option<ModelInfo>, LocalAIError> {
-        // Check if user explicitly disabled local AI
-        if let Ok(false) = self.settings_repo.get_local_ai_enabled() {
-            // Only skip if explicitly set to false
-            if self.settings_repo.get_string("local_ai.enabled").ok().flatten().is_some() {
-                tracing::debug!("Local AI explicitly disabled by user");
-                return Ok(None);
-            }
+        if !self.is_available() {
+            tracing::debug!("Local AI not enabled, skipping model load");
+            return Ok(None);
         }
 
         // Get configured model or use default
