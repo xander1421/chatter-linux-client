@@ -231,17 +231,28 @@ pub static TRUST_ROOT_PUBLIC_KEY: std::sync::LazyLock<PublicKey> = std::sync::La
 // supply the real CA at build time or fail to compile.
 
 /// Development placeholder CA (committed, INSECURE, and keyless — its private
-/// key was never saved, so it can sign nothing). The dev server speaks plaintext
-/// `http://`, so this never authenticates a real handshake; it exists only so
-/// dev/test builds compile with a non-empty trust store. `--features
-/// dev-trust-root` selects it on purpose.
+/// key was never saved, so it can sign nothing). Selected when
+/// `--features dev-trust-root` is on and `CHATTER_TLS_ROOT_CA_PEM` is unset —
+/// the plaintext-`http://` dev loop needs no trust store at all, so this only
+/// exists to give such builds a non-empty one and compile.
 const DEV_TLS_ROOT_CA_PEM: &str = include_str!("../assets/dev_tls_root_ca.pem");
 
 /// The TLS CA a SHIPPABLE artifact of this build would pin. `None` means none is
 /// configured — a build failure below, not a silent fall-through to system
 /// roots.
+///
+/// `dev-trust-root` still honors `CHATTER_TLS_ROOT_CA_PEM` when set: local dev
+/// against a real TLS-terminated server (e.g. HTTP/3, which needs actual TLS
+/// 1.3 — plaintext has no ALPN to negotiate over) needs a CA whose private key
+/// exists, which the keyless placeholder above categorically cannot be. This
+/// does not weaken `dev-trust-root`'s posture — sealed-sender and KT still pin
+/// their own separate, always-insecure dev keys — it only lets the TLS leg
+/// point at whatever CA the developer generated locally (e.g. `create-certs.sh`).
 #[cfg(feature = "dev-trust-root")]
-const SHIPPED_TLS_ROOT_CA_PEM: Option<&str> = Some(DEV_TLS_ROOT_CA_PEM);
+const SHIPPED_TLS_ROOT_CA_PEM: Option<&str> = match option_env!("CHATTER_TLS_ROOT_CA_PEM") {
+    Some(pem) if !pem.is_empty() => Some(pem),
+    _ => Some(DEV_TLS_ROOT_CA_PEM),
+};
 
 /// The TLS CA a SHIPPABLE artifact of this build would pin. See above.
 #[cfg(not(feature = "dev-trust-root"))]
