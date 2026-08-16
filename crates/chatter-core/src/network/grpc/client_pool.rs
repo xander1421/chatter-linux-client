@@ -512,6 +512,32 @@ impl GrpcClientPool {
         *self.anon_channel.write() = None;
     }
 
+    /// Demote a cached `Working` QUIC verdict to `Failed` after a real RPC
+    /// over it has actually failed.
+    ///
+    /// `dial()` never re-probes once QUIC is cached `Working` — see the
+    /// comment there — which means nothing ever demoted it either: probe
+    /// succeeds on a network where UDP works, phone roams to one that
+    /// blocks it, every subsequent RPC fails, and `dial()` keeps handing
+    /// out a QUIC channel forever (`build_quic()` is pure local
+    /// construction, no I/O, so it never itself errors). A transport
+    /// failure on the channel actually in use is proof enough to stop
+    /// trying QUIC for the rest of this pool's life — deliberately
+    /// `Failed`, not `Untried`: `Untried` would re-probe on every
+    /// reconnect and reintroduce the handshake-storm shape 96a77c45
+    /// already fixed once. Only demotes from `Working`; leaves `Untried`
+    /// (never got a chance yet) and `Failed` (already terminal) alone.
+    #[cfg(feature = "quic")]
+    fn note_transport_error(&self) {
+        let mut probe = self.quic_probe.write();
+        if *probe == QuicProbeState::Working {
+            tracing::info!("QUIC channel failed in use — falling back to TCP for the rest of this session");
+            *probe = QuicProbeState::Failed;
+        }
+    }
+    #[cfg(not(feature = "quic"))]
+    fn note_transport_error(&self) {}
+
     /// Check if currently connected.
     pub fn is_connected(&self) -> bool {
         self.channel.read().is_some()
@@ -658,6 +684,7 @@ impl GrpcClientPool {
                 );
                 set_server_status(ServerStatus::Unreachable);
                 pool.disconnect();
+                pool.note_transport_error();
             }),
             || f(pool),
         );
@@ -679,6 +706,7 @@ impl GrpcClientPool {
                 );
                 set_server_status(ServerStatus::Unreachable);
                 pool.disconnect();
+                pool.note_transport_error();
                 Err(NetworkError::Timeout)
             }
         };
@@ -1026,5 +1054,42 @@ mod tests {
         assert!(result.is_ok(), "dial() must not hang");
         assert!(result.unwrap().is_ok());
         assert_eq!(*pool.quic_probe.read(), QuicProbeState::Working);
+    }
+
+    /// Regression test for a real bug: nothing ever demoted a cached
+    /// `Working` QUIC verdict, so once QUIC proved reachable it stayed
+    /// "working" forever even after the network actually stopped
+    /// supporting it (e.g. roaming onto a UDP-blocking network) — every
+    /// subsequent dial() would keep handing out a QUIC channel that fails
+    /// on first real use, since build_quic() does no I/O and can't itself
+    /// detect the network changed.
+    #[cfg(feature = "quic")]
+    #[test]
+    fn test_note_transport_error_demotes_working_to_failed() {
+        let pool = GrpcClientPool::new("https://localhost:50051").unwrap();
+        *pool.quic_probe.write() = QuicProbeState::Working;
+
+        pool.note_transport_error();
+        assert_eq!(
+            *pool.quic_probe.read(),
+            QuicProbeState::Failed,
+            "a real transport failure must demote a cached Working verdict"
+        );
+    }
+
+    /// note_transport_error() must be a no-op for Untried (hasn't had its
+    /// probe chance yet — demoting it would skip straight to TCP without
+    /// ever trying QUIC) and for Failed (already terminal).
+    #[cfg(feature = "quic")]
+    #[test]
+    fn test_note_transport_error_leaves_untried_and_failed_alone() {
+        let pool = GrpcClientPool::new("https://localhost:50051").unwrap();
+        assert_eq!(*pool.quic_probe.read(), QuicProbeState::Untried);
+        pool.note_transport_error();
+        assert_eq!(*pool.quic_probe.read(), QuicProbeState::Untried);
+
+        *pool.quic_probe.write() = QuicProbeState::Failed;
+        pool.note_transport_error();
+        assert_eq!(*pool.quic_probe.read(), QuicProbeState::Failed);
     }
 }

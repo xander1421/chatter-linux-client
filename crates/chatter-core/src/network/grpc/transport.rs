@@ -22,6 +22,7 @@ mod quic_enabled {
     use std::pin::Pin;
     use std::sync::Arc;
     use std::task::{Context, Poll};
+    use std::time::Duration;
 
     use http::{Request, Response};
     use rustls::pki_types::{pem::PemObject, CertificateDer};
@@ -110,7 +111,23 @@ mod quic_enabled {
 
         let quic_crypto = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
             .map_err(|e| BoxError::from(e.to_string()))?;
-        Ok(quinn::ClientConfig::new(Arc::new(quic_crypto)))
+        let mut config = quinn::ClientConfig::new(Arc::new(quic_crypto));
+
+        // Without this, quinn's default TransportConfig sends no keepalive
+        // at all, and the server's QUIC listener (quic-go, http3.Server)
+        // uses its default MaxIdleTimeout of 30s with KeepAlivePeriod
+        // disabled — an idle long-lived stream (the message/notification
+        // inbox streams sit quiet between events) gets dropped by the
+        // server every ~30s. The TCP/HTTP2 path already keeps its
+        // connections alive the same way (http2_keep_alive_interval(30s) in
+        // client_pool.rs); this is the QUIC-side equivalent. 10s, safely
+        // under the server's 30s idle timeout so a PING always lands before
+        // the peer would otherwise close it.
+        let mut transport = quinn::TransportConfig::default();
+        transport.keep_alive_interval(Some(Duration::from_secs(10)));
+        config.transport_config(Arc::new(transport));
+
+        Ok(config)
     }
 
     /// Resolve `uri`'s host:port to a socket address. IP-literal authorities
