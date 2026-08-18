@@ -325,11 +325,13 @@ const DEV_KT_TREE_HEAD_BYTES: [u8; 32] = [
 /// `CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX` (64 hex chars) at build time to pin a
 /// real one.
 ///
-/// Note what this does NOT fix: nothing in production calls
-/// `verify_consistency_proof`, so an append-only violation still goes unnoticed
-/// however good this key is (OPEN-ITEMS §3, pinned in production_wiring.rs).
-/// Pinning a real key raises the bar from "anyone can forge a tree head" to
-/// "only the server operator can" — worth having, not sufficient on its own.
+/// This pin is one half of KT integrity; the other — consistency verification —
+/// is now also wired (as of 2026-08-03): `crypto/keytransparency.rs::
+/// verify_consistency_proof` is driven by `services/signal/kt_anchor.rs` on every
+/// KT-verified send, so an append-only violation (fork/rollback) is rejected, not
+/// invisible (OPEN-ITEMS §3/§3b; pinned Wired in `production_wiring.rs`). Pinning
+/// a real key here raises tree-head forgery from "anyone with the repo" to "only
+/// the server operator", and the consistency check catches the operator too.
 #[cfg(feature = "dev-trust-root")]
 pub const KT_TREE_HEAD_PUBLIC_KEY_BYTES: [u8; 32] = DEV_KT_TREE_HEAD_BYTES;
 

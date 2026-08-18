@@ -9,8 +9,9 @@
 //! # What Tor does and does not give us
 //! The Tor tunnel hides the client IP from the CDN host; it does **not**
 //! authenticate that host. That is still TLS's job — so for `https://` we run a
-//! real rustls client handshake with SNI and full certificate verification
-//! against the webpki root store. Cert verification is never disabled.
+//! real rustls client handshake with SNI and certificate verification against
+//! the pinned chatter CA (§8), never the webpki/system root store. Cert
+//! verification is never disabled.
 //!
 //! # Structure
 //! The [`ANON_HTTP_ACTIVE`] flag and URL parsing are always compiled so the leaf
