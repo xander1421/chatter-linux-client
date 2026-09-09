@@ -527,6 +527,95 @@ pub async fn handle_domain_event(
                 crate::bin_ui::features::auth::initial_data::refresh_dm_list(&w, ui_ctx);
             }
         }
+        // =========================================================================
+        // Channel Lifecycle (INFRA-29)
+        // =========================================================================
+        // Core has already written the authoritative local state for each of
+        // these; the UI's job is to stop showing what is no longer true.
+
+        DomainEvent::ChannelDeleted { channel_id } => {
+            // If the deleted channel is the one on screen, leave it before the
+            // sidebar rebuild removes the row underneath the view.
+            if ui_ctx.chat_state().get().active_channel_id == Some(channel_id) {
+                ui_ctx
+                    .chat_state()
+                    .set_active_conversation(chatter_core::state::ActiveConversation::None);
+                let weak = window.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_toast_message("This channel was deleted.".into());
+                        w.set_toast_variant("error".into());
+                        w.set_toast_visible(true);
+                    }
+                });
+            }
+            crate::bin_ui::features::auth::load_initial_data(window.clone(), ui_ctx).await;
+        }
+
+        DomainEvent::ChannelCreated { .. } | DomainEvent::ChannelArchivedChanged { .. } => {
+            crate::bin_ui::features::auth::load_initial_data(window.clone(), ui_ctx).await;
+        }
+
+        DomainEvent::ChannelModerationAction { channel_id, action, reason, is_self, .. } => {
+            if is_self {
+                let removed = matches!(action.as_str(), "KICK" | "BAN");
+                if removed && ui_ctx.chat_state().get().active_channel_id == Some(channel_id) {
+                    ui_ctx
+                        .chat_state()
+                        .set_active_conversation(chatter_core::state::ActiveConversation::None);
+                }
+                let text = match (action.as_str(), reason.as_deref()) {
+                    ("BAN", Some(r)) => format!("You were banned from this channel: {r}"),
+                    ("BAN", None) => "You were banned from this channel.".to_string(),
+                    ("KICK", Some(r)) => format!("You were removed from this channel: {r}"),
+                    ("KICK", None) => "You were removed from this channel.".to_string(),
+                    ("MUTE", _) => "You were muted in this channel.".to_string(),
+                    ("UNMUTE", _) => "You were unmuted in this channel.".to_string(),
+                    ("UNBAN", _) => "Your ban was lifted.".to_string(),
+                    _ => "A moderation action was applied to your account.".to_string(),
+                };
+                let weak = window.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_toast_message(text.into());
+                        w.set_toast_variant("error".into());
+                        w.set_toast_visible(true);
+                    }
+                });
+                if removed {
+                    crate::bin_ui::features::auth::load_initial_data(window.clone(), ui_ctx).await;
+                }
+            } else {
+                // Someone else was moderated: the roster changed.
+                messaging::update_active_channel_member_count(window, ui_ctx, channel_id);
+            }
+        }
+
+        DomainEvent::ChannelInviteReceived { .. } | DomainEvent::ChannelInviteResponded { .. } => {
+            crate::bin_ui::features::auth::load_initial_data(window.clone(), ui_ctx).await;
+        }
+
+        // The saga said no. Core already re-read the channel from the server,
+        // so a refresh drops whatever optimistic row this client was showing;
+        // the toast is what stops the user waiting for an operation that is
+        // never going to land.
+        DomainEvent::ChannelOperationFailed { code, message, .. } => {
+            let text = if message.is_empty() {
+                format!("Channel operation failed ({code}).")
+            } else {
+                format!("Channel operation failed: {message}")
+            };
+            let weak = window.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.set_toast_message(text.into());
+                    w.set_toast_variant("error".into());
+                    w.set_toast_visible(true);
+                }
+            });
+            crate::bin_ui::features::auth::load_initial_data(window.clone(), ui_ctx).await;
+        }
+
         // Incoming calls are surfaced via a dedicated IncomingCallData
         // channel + IncomingCallModal — handled outside this inbox
         // domain-event path.

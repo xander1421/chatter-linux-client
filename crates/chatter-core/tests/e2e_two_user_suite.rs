@@ -454,7 +454,7 @@ async fn t6_group_chat() {
 
     // B was added as initial member (not via join_channel), so explicitly
     // subscribe to the group's message stream.
-    client_b.subscribe_channel_messages(&group.id);
+    client_b.resubscribe_channel_messages();
 
     // Subscribe to events BEFORE sending
     let mut events_b = client_b.subscribe_events();
@@ -772,7 +772,7 @@ async fn t6_inner() {
     let grp = client_a.create_channel(&grp_name, ChannelType::Private, None, Some("test"), None, None, vec![uid_b]).await.unwrap();
     // Wait for SKDM propagation — needs longer in suite mode when server is under load
     tokio::time::sleep(Duration::from_secs(5)).await;
-    client_b.subscribe_channel_messages(&grp.id);
+    client_b.resubscribe_channel_messages();
     // Subscribe to events AFTER SKDM wait to avoid stale events from previous tests
     let mut events_b = client_b.subscribe_events();
     // Brief drain period for any pending events

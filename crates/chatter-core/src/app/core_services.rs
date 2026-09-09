@@ -103,6 +103,12 @@ pub struct CoreServices {
     /// dead, which is exactly how the block list silently stopped propagating
     /// between devices once before.
     pub sync_service: Arc<crate::services::sync_service::SyncService>,
+    /// Live channel-message stream (server-managed channels). Started by
+    /// `ChatterClient::start`; it is the ONLY thing that delivers channel
+    /// messages live, and it re-subscribes on every connect from the server's
+    /// own membership list, which is what makes a restart recover (INFRA-1).
+    /// `tests/production_wiring.rs` pins its start call.
+    pub channel_stream_service: Arc<crate::services::channel_stream::ChannelStreamService>,
 
     // State stores
     pub auth_state: AuthState,
@@ -154,6 +160,28 @@ impl CoreServices {
             #[cfg(any(target_os = "android", target_os = "ios"))]
             { Arc::new(crate::system::notification_sink::NoopNotificationSink) }
         });
+        // Shared decrypt -> persist path for server-managed channel messages.
+        // Both the live stream and the durable catch-up fetch go through it,
+        // so a message reads the same whichever way it arrived.
+        let channel_inbound = Arc::new(crate::services::message::channel_inbound::ChannelInbound::new(
+            services.message_service.clone(),
+            services.attachment_service.clone(),
+        ));
+
+        let sync_service = Arc::new(crate::services::sync_service::SyncService::new(
+            infra.grpc_pool.clone(),
+            infra.channel_repo.clone(),
+            Arc::new(
+                crate::storage::repositories::unified_message_repo::UnifiedMessageRepository::new(
+                    infra.database.clone(),
+                ),
+            ),
+            infra.user_repo.clone(),
+            infra.settings_repo.clone(),
+            infra.event_bus.clone(),
+            channel_inbound.clone(),
+        ));
+
         Self {
             // Runtime handle for async spawning from UI callbacks
             runtime_handle: tokio::runtime::Handle::current(),
@@ -201,18 +229,17 @@ impl CoreServices {
             conversation_pins: services.conversation_pins.clone(),
             device_service: services.device_service.clone(),
             conversation_repo: services.conversation_repo.clone(),
-            sync_service: Arc::new(crate::services::sync_service::SyncService::new(
-                infra.grpc_pool.clone(),
-                infra.channel_repo.clone(),
-                Arc::new(
-                    crate::storage::repositories::unified_message_repo::UnifiedMessageRepository::new(
-                        infra.database.clone(),
-                    ),
+            sync_service: sync_service.clone(),
+            channel_stream_service: Arc::new(
+                crate::services::channel_stream::ChannelStreamService::new(
+                    infra.grpc_pool.clone(),
+                    infra.settings_repo.clone(),
+                    channel_inbound,
+                    sync_service,
+                    services.message_service.clone(),
+                    infra.event_bus.clone(),
                 ),
-                infra.user_repo.clone(),
-                infra.settings_repo.clone(),
-                infra.event_bus.clone(),
-            )),
+            ),
 
             // State stores
             auth_state: AuthState::new(),

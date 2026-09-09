@@ -15,6 +15,7 @@ use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::MessageRepository;
 use crate::storage::repositories::user_repo::UserRepository;
 use crate::network::grpc::client_pool::GrpcClientPool;
+use crate::services::current_user::CurrentUserProvider;
 use crate::proto::chat_v1::channel_event;
 use crate::events::EventBus;
 use crate::inbox::DomainEvent;
@@ -43,6 +44,9 @@ pub struct ChannelEventService {
     user_repo: Arc<UserRepository>,
     grpc_pool: Arc<GrpcClientPool>,
     event_bus: EventBus,
+    /// Needed to tell "this moderation action targets ME" from "it targets
+    /// somebody else" — a ban on us has to drop our own membership.
+    settings_repo: Arc<crate::storage::repositories::settings_repo::SettingsRepository>,
 }
 
 impl ChannelEventService {
@@ -53,6 +57,7 @@ impl ChannelEventService {
         user_repo: Arc<UserRepository>,
         grpc_pool: Arc<GrpcClientPool>,
         event_bus: EventBus,
+        settings_repo: Arc<crate::storage::repositories::settings_repo::SettingsRepository>,
     ) -> Self {
         Self {
             message_repo,
@@ -60,6 +65,7 @@ impl ChannelEventService {
             user_repo,
             grpc_pool,
             event_bus,
+            settings_repo,
         }
     }
     
@@ -315,8 +321,215 @@ impl ChannelEventService {
                     );
                 }
             }
-            _ => {
-                tracing::debug!("Unhandled channel event type");
+            // ── INFRA-29: the arms that used to fall into a silent
+            // `_ => debug!("Unhandled channel event type")`.
+
+            Event::ChannelCreated(proto_channel) => {
+                use crate::services::channel::converters::proto_to_domain_channel;
+                let created = match proto_to_domain_channel(&proto_channel) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::error!("Failed to convert created channel from proto: {}", e);
+                        return;
+                    }
+                };
+                if let Err(e) = self.channel_repo.upsert(&created) {
+                    tracing::warn!("Failed to upsert created channel locally: {}", e);
+                    return;
+                }
+                let _ = self.event_bus.domain_sender().send(DomainEvent::ChannelCreated {
+                    channel_id,
+                    name: created.name.clone(),
+                });
+                tracing::info!("Channel created: channel={}, name={}", channel_id, created.name);
+            }
+
+            Event::ChannelDeleted(deleted_id) => {
+                // The id in the payload is authoritative; fall back to the
+                // envelope's channel_id when the server sent it empty.
+                let target = deleted_id
+                    .parse::<uuid::Uuid>()
+                    .map(ChannelId::from)
+                    .unwrap_or(channel_id);
+                if let Err(e) = self.channel_repo.delete_channel_cascade(&target) {
+                    tracing::warn!("Failed to delete channel locally: {}", e);
+                }
+                let _ = self
+                    .event_bus
+                    .domain_sender()
+                    .send(DomainEvent::ChannelDeleted { channel_id: target });
+                tracing::info!("Channel deleted: channel={}", target);
+            }
+
+            Event::ChannelArchived(id) => self.apply_archive_state(&id, channel_id, true),
+            Event::ChannelUnarchived(id) => self.apply_archive_state(&id, channel_id, false),
+
+            Event::ModerationAction(action) => {
+                let (Ok(user_uuid), Ok(mod_uuid)) = (
+                    action.user_id.parse::<uuid::Uuid>(),
+                    action.moderator_id.parse::<uuid::Uuid>(),
+                ) else {
+                    tracing::error!("Moderation event with unparseable user ids");
+                    return;
+                };
+                let user_id = UserId::from(user_uuid);
+                let moderator_id = UserId::from(mod_uuid);
+                let action_name = proto_moderation_action_name(action.action);
+                let is_self = self
+                    .settings_repo
+                    .current_user_id()
+                    .map(|me| me == user_id)
+                    .unwrap_or(false);
+
+                // A kick or ban that targets US means we are out of the
+                // channel: drop the local membership so the roster and the
+                // send path stop pretending otherwise.
+                if is_self && matches!(action_name, "KICK" | "BAN") {
+                    if let Err(e) = self.channel_repo.delete_membership(&channel_id, &user_id) {
+                        tracing::warn!("Failed to remove own membership after {}: {}", action_name, e);
+                    }
+                }
+
+                let reason = (!action.reason.is_empty()).then(|| action.reason.clone());
+                let _ = self.event_bus.domain_sender().send(DomainEvent::ChannelModerationAction {
+                    channel_id,
+                    user_id,
+                    moderator_id,
+                    action: action_name.to_string(),
+                    reason,
+                    is_self,
+                });
+                tracing::info!(
+                    "Channel moderation: channel={}, user={}, action={}, self={}",
+                    channel_id, user_id, action_name, is_self
+                );
+            }
+
+            Event::InvitationSent(invite) => {
+                let Ok(inviter_uuid) = invite.inviter_id.parse::<uuid::Uuid>() else {
+                    tracing::error!("Invitation event with unparseable inviter id");
+                    return;
+                };
+                let message = (!invite.message.is_empty()).then(|| invite.message.clone());
+                let _ = self.event_bus.domain_sender().send(DomainEvent::ChannelInviteReceived {
+                    channel_id,
+                    inviter_id: UserId::from(inviter_uuid),
+                    message,
+                    expires_at: invite.expires_at,
+                });
+                tracing::info!("Channel invitation received: channel={}", channel_id);
+            }
+
+            Event::InvitationResponse(response) => {
+                let Ok(inviter_uuid) = response.inviter_id.parse::<uuid::Uuid>() else {
+                    tracing::error!("Invitation response with unparseable inviter id");
+                    return;
+                };
+                let _ = self.event_bus.domain_sender().send(DomainEvent::ChannelInviteResponded {
+                    channel_id,
+                    inviter_id: UserId::from(inviter_uuid),
+                    accepted: response.accepted,
+                });
+                tracing::info!(
+                    "Channel invitation answered: channel={}, accepted={}",
+                    channel_id, response.accepted
+                );
+            }
+
+            Event::OperationStarted(started) => {
+                // Purely informational: the mutation RPCs are streams, and this
+                // is the "accepted, working on it" tick. Nothing to persist.
+                tracing::debug!(
+                    "Channel operation started: channel={}, operation={}",
+                    channel_id, started.operation_id
+                );
+            }
+
+            Event::OperationFailed(failed) => {
+                // THE saga-compensation signal. A Temporal channel workflow
+                // rolled back; whatever this client optimistically applied is
+                // wrong. Re-read the channel from the server (authoritative
+                // after compensation) before telling the UI, so by the time it
+                // reacts, local storage already matches the server.
+                let error = failed.error.unwrap_or_default();
+                let code = proto_channel_error_code_name(error.code).to_string();
+                tracing::warn!(
+                    "Channel operation FAILED (saga compensated): channel={}, operation={}, code={}, message={}",
+                    channel_id, failed.operation_id, code, error.message
+                );
+
+                self.rollback_channel(&channel_id).await;
+
+                let _ = self.event_bus.domain_sender().send(DomainEvent::ChannelOperationFailed {
+                    channel_id,
+                    operation_id: failed.operation_id.clone(),
+                    code,
+                    message: error.message.clone(),
+                });
+            }
+        }
+    }
+
+    /// Persist a channel's archived flag and announce it.
+    fn apply_archive_state(&self, payload_id: &str, envelope_id: ChannelId, archived: bool) {
+        let target = payload_id
+            .parse::<uuid::Uuid>()
+            .map(ChannelId::from)
+            .unwrap_or(envelope_id);
+
+        match self.channel_repo.get(&target) {
+            Ok(Some(mut existing)) => {
+                existing.archived = archived;
+                existing.updated_at = Utc::now();
+                if let Err(e) = self.channel_repo.update(&existing) {
+                    tracing::warn!("Failed to persist channel archive state: {}", e);
+                    return;
+                }
+            }
+            Ok(None) => {
+                tracing::debug!("Archive event for a channel we do not have locally");
+            }
+            Err(e) => {
+                tracing::warn!("Failed to read channel for archive event: {}", e);
+                return;
+            }
+        }
+
+        let _ = self
+            .event_bus
+            .domain_sender()
+            .send(DomainEvent::ChannelArchivedChanged { channel_id: target, archived });
+        tracing::info!(
+            "Channel archive state changed: channel={}, archived={}",
+            target, archived
+        );
+    }
+
+    /// Re-read a channel from the server after a failed (compensated)
+    /// operation and make local storage match: update it if it still exists,
+    /// remove it if the server no longer has it (a rolled-back creation).
+    async fn rollback_channel(&self, channel_id: &ChannelId) {
+        use crate::services::channel::converters::proto_to_domain_channel;
+
+        let mut client = self.grpc_pool.channel_client();
+        match client.get_channel(&channel_id.to_string()).await {
+            Ok(proto) => match proto_to_domain_channel(&proto) {
+                Ok(server_state) => {
+                    if let Err(e) = self.channel_repo.upsert(&server_state) {
+                        tracing::warn!("Failed to write rolled-back channel state: {}", e);
+                    }
+                }
+                Err(e) => tracing::warn!("Failed to convert channel during rollback: {}", e),
+            },
+            Err(e) => {
+                // NotFound is the expected shape of a rolled-back creation.
+                tracing::info!(
+                    "Channel unavailable after failed operation ({}); removing local copy",
+                    e
+                );
+                if let Err(e) = self.channel_repo.delete_channel_cascade(channel_id) {
+                    tracing::warn!("Failed to remove local channel after rollback: {}", e);
+                }
             }
         }
     }
@@ -436,6 +649,218 @@ impl ChannelEventService {
             mentioned_integrations: Vec::new(),
             targets_ai_bot: false,
             delivery_status: String::new(),
+        }
+    }
+}
+
+/// Proto `ChannelModeration.Action` -> stable name for the UI.
+fn proto_moderation_action_name(action: i32) -> &'static str {
+    use crate::proto::chat_v1::channel_moderation::Action;
+    match Action::try_from(action) {
+        Ok(Action::Kick) => "KICK",
+        Ok(Action::Ban) => "BAN",
+        Ok(Action::Mute) => "MUTE",
+        Ok(Action::Unban) => "UNBAN",
+        Ok(Action::Unmute) => "UNMUTE",
+        _ => "UNSPECIFIED",
+    }
+}
+
+/// Proto `ChannelError.Code` -> stable name for the UI.
+fn proto_channel_error_code_name(code: i32) -> &'static str {
+    use crate::proto::chat_v1::channel_error::Code;
+    match Code::try_from(code) {
+        Ok(Code::Unauthorized) => "UNAUTHORIZED",
+        Ok(Code::NotFound) => "NOT_FOUND",
+        Ok(Code::PermissionDenied) => "PERMISSION_DENIED",
+        Ok(Code::InvalidArgument) => "INVALID_ARGUMENT",
+        Ok(Code::RateLimited) => "RATE_LIMITED",
+        Ok(Code::ChannelFull) => "CHANNEL_FULL",
+        Ok(Code::UserBanned) => "USER_BANNED",
+        _ => "UNKNOWN",
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proto::chat_v1::{
+        ChannelError as ProtoChannelError, ChannelModeration, OperationFailed,
+    };
+    use crate::storage::Database;
+
+    fn setup() -> (Arc<ChannelEventService>, EventBus, Arc<ChannelRepository>) {
+        // SQLCipher needs a real path (see call_repo tests).
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("channel_events_test.db");
+        let db = Arc::new(Database::open(&db_path, "testpass").unwrap());
+        db.run_migrations().unwrap();
+        Box::leak(Box::new(temp_dir));
+
+        let channel_repo = Arc::new(ChannelRepository::new(db.clone()));
+        let event_bus = EventBus::new();
+        // Never reachable: the rollback fetch is expected to fail, which is
+        // the "server no longer has this channel" path.
+        let grpc_pool = Arc::new(
+            crate::network::grpc::client_pool::GrpcClientPool::new("http://127.0.0.1:1").unwrap(),
+        );
+
+        let service = Arc::new(ChannelEventService::new(
+            Arc::new(MessageRepository::new(db.clone())),
+            channel_repo.clone(),
+            Arc::new(UserRepository::new(db.clone())),
+            grpc_pool,
+            event_bus.clone(),
+            Arc::new(crate::storage::repositories::settings_repo::SettingsRepository::new(db)),
+        ));
+
+        (service, event_bus, channel_repo)
+    }
+
+    /// INFRA-29 regression: `OperationFailed` is the saga-compensation signal.
+    /// It used to fall into `_ => debug!("Unhandled channel event type")`, so a
+    /// Temporal channel workflow could roll back and the client would keep its
+    /// optimistic state forever, with nothing on screen and nothing in the log.
+    #[tokio::test]
+    async fn operation_failed_reaches_the_ui_layer() {
+        let (service, bus, _) = setup();
+        let mut rx = bus.domain_sender().subscribe();
+        let channel_id = ChannelId::from(uuid::Uuid::new_v4());
+
+        service
+            .handle_stream_event(
+                channel_event::Event::OperationFailed(OperationFailed {
+                    operation_id: "op-123".to_string(),
+                    channel_id: channel_id.to_string(),
+                    user_id: uuid::Uuid::new_v4().to_string(),
+                    error: Some(ProtoChannelError {
+                        code: crate::proto::chat_v1::channel_error::Code::PermissionDenied as i32,
+                        message: "not allowed".to_string(),
+                        details: Default::default(),
+                    }),
+                }),
+                &channel_id.to_string(),
+                0,
+            )
+            .await;
+
+        match rx.try_recv() {
+            Ok(DomainEvent::ChannelOperationFailed {
+                channel_id: got,
+                operation_id,
+                code,
+                message,
+            }) => {
+                assert_eq!(got, channel_id);
+                assert_eq!(operation_id, "op-123");
+                assert_eq!(code, "PERMISSION_DENIED");
+                assert_eq!(message, "not allowed");
+            }
+            other => panic!("OperationFailed did not reach the domain bus: {:?}", other),
+        }
+    }
+
+    /// A deleted channel must actually disappear: local rows gone and the UI
+    /// told. This arm was silently discarded too.
+    #[tokio::test]
+    async fn channel_deleted_removes_local_channel_and_notifies() {
+        let (service, bus, channel_repo) = setup();
+        let mut rx = bus.domain_sender().subscribe();
+
+        let channel = crate::domain::channel::Channel::new(
+            ChannelId::from(uuid::Uuid::new_v4()),
+            "doomed".to_string(),
+            crate::domain::channel::ChannelType::Public,
+            UserId::from(uuid::Uuid::new_v4()),
+        );
+        let channel_id = channel.id;
+        channel_repo.upsert(&channel).unwrap();
+
+        service
+            .handle_stream_event(
+                channel_event::Event::ChannelDeleted(channel_id.to_string()),
+                &channel_id.to_string(),
+                0,
+            )
+            .await;
+
+        assert!(
+            channel_repo.get(&channel_id).unwrap().is_none(),
+            "deleted channel still present locally"
+        );
+        match rx.try_recv() {
+            Ok(DomainEvent::ChannelDeleted { channel_id: got }) => assert_eq!(got, channel_id),
+            other => panic!("ChannelDeleted did not reach the domain bus: {:?}", other),
+        }
+    }
+
+    /// A ban on the local user drops our own membership and surfaces to the UI.
+    #[tokio::test]
+    async fn moderation_ban_on_self_is_applied_and_announced() {
+        let (service, bus, channel_repo) = setup();
+        let mut rx = bus.domain_sender().subscribe();
+
+        let me = UserId::from(uuid::Uuid::new_v4());
+        // Pretend we are logged in as `me`.
+        let settings = &service.settings_repo;
+        settings
+            .set_string(
+                crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID,
+                &me.to_string(),
+            )
+            .unwrap();
+
+        let channel = crate::domain::channel::Channel::new(
+            ChannelId::from(uuid::Uuid::new_v4()),
+            "banned-from".to_string(),
+            crate::domain::channel::ChannelType::Public,
+            me,
+        );
+        let channel_id = channel.id;
+        channel_repo.upsert(&channel).unwrap();
+        channel_repo
+            .insert_membership(&Membership {
+                channel_id,
+                user_id: me,
+                role: crate::domain::channel::MemberRole::Member,
+                notification_preference: crate::domain::channel::NotificationPreference::All,
+                joined_at: Utc::now(),
+                last_read_message_id: None,
+                is_muted: false,
+                muted_until: None,
+            })
+            .unwrap();
+
+        service
+            .handle_stream_event(
+                channel_event::Event::ModerationAction(ChannelModeration {
+                    channel_id: channel_id.to_string(),
+                    user_id: me.to_string(),
+                    moderator_id: uuid::Uuid::new_v4().to_string(),
+                    action: crate::proto::chat_v1::channel_moderation::Action::Ban as i32,
+                    duration: None,
+                    reason: "spam".to_string(),
+                }),
+                &channel_id.to_string(),
+                0,
+            )
+            .await;
+
+        assert!(
+            channel_repo.get_membership(&channel_id, &me).unwrap().is_none(),
+            "own membership survived a ban"
+        );
+        match rx.try_recv() {
+            Ok(DomainEvent::ChannelModerationAction { action, is_self, reason, .. }) => {
+                assert_eq!(action, "BAN");
+                assert!(is_self);
+                assert_eq!(reason.as_deref(), Some("spam"));
+            }
+            other => panic!("ModerationAction did not reach the domain bus: {:?}", other),
         }
     }
 }

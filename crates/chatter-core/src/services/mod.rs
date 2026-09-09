@@ -45,6 +45,7 @@ pub mod search;
 pub mod section_service;
 pub mod signal;
 pub mod channel_event_service;
+pub mod channel_stream;
 pub mod dm_bootstrap_service;
 pub mod pairwise;
 pub mod sealed_sender;

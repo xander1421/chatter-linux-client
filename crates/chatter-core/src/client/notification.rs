@@ -81,6 +81,7 @@ impl ChatterClient {
         let handle = crate::services::notification_stream::spawn_grpc_notification_consumer(
             self.services.grpc_pool.clone(),
             self.event_bus().clone(),
+            self.services.notification_service.clone(),
             user_id,
         );
         let mut slot = self.notif_stream_handle.lock();

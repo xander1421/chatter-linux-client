@@ -429,22 +429,29 @@ impl IntegrationClient {
 
     // ==================== Event Streaming ====================
 
-    /// Stream integration events.
+    /// Stream integration events for integrations this user owns.
     ///
-    /// Long-lived stream for real-time integration events.
-    ///
-    /// # Arguments
-    ///
-    /// * `integration_id` - Optional integration ID. If not provided, streams events for all integrations.
+    /// `integration_ids` MUST name at least one integration. The empty list
+    /// used to mean "every integration on the server" and the server now
+    /// rejects it with `InvalidArgument` (integration/handlers/handlers.go:
+    /// StreamIntegrationEvents) — it was a cross-tenant leak, not a wildcard.
+    /// This wrapper used to send `unwrap_or_default()` and document the old
+    /// semantics, so the "stream everything" call compiled and failed at the
+    /// server (INFRA-38); it is now rejected here, with the reason.
     pub async fn stream_integration_events(
         &mut self,
-        integration_id: Option<&str>,
+        integration_ids: &[String],
     ) -> Result<impl Stream<Item = Result<StreamIntegrationEventsResponse, NetworkError>>, NetworkError>
     {
+        if integration_ids.is_empty() {
+            return Err(NetworkError::InvalidRequest(
+                "stream_integration_events requires at least one integration id; \
+                 the server rejects an empty list (it is not a wildcard)"
+                    .to_string(),
+            ));
+        }
         let request = StreamIntegrationEventsRequest {
-            integration_ids: integration_id
-                .map(|id| vec![id.to_string()])
-                .unwrap_or_default(),
+            integration_ids: integration_ids.to_vec(),
             event_types: vec![],
             since: 0,
         };
