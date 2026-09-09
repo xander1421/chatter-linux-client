@@ -14,6 +14,7 @@ mod dm;
 mod dm_bootstrap;
 mod group;
 pub mod core;
+pub mod channel_inbound;
 pub mod conversion;
 mod server_dm;
 mod thread;

@@ -5706,8 +5706,8 @@ async fn v21_group_sender_key_fanout_and_plaintext_default() {
     println!("  positive control: A, B and C are all server-side members of the encrypted group");
 
     // B and C subscribe to the group stream + events BEFORE any send.
-    client_b.subscribe_channel_messages(&group_e.id);
-    client_c.subscribe_channel_messages(&group_e.id);
+    client_b.resubscribe_channel_messages();
+    client_c.resubscribe_channel_messages();
     let mut events_b = client_b.subscribe_events();
     let mut events_c = client_c.subscribe_events();
     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -6762,8 +6762,8 @@ async fn v26_first_group_message_self_heals_across_skdm_race() {
     println!("  positive control: A, B and C are all server-side members of the group");
 
     // B and C subscribe to the stream + events BEFORE any send.
-    client_b.subscribe_channel_messages(&group.id);
-    client_c.subscribe_channel_messages(&group.id);
+    client_b.resubscribe_channel_messages();
+    client_c.resubscribe_channel_messages();
     let mut events_b = client_b.subscribe_events();
     let mut events_c = client_c.subscribe_events();
     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -7991,7 +7991,7 @@ async fn v34_presence_reaches_friends_not_strangers() {
 // content is sealed, sender is NOT). So enforcement is tractable at the
 // per-subscriber DELIVERY point: each member receives channel content by
 // running their OWN StreamMessageEvents subscription (client/channels.rs
-// subscribe_channel_messages), the Signal-shaped place to filter — the message
+// the channel message stream), the Signal-shaped place to filter — the message
 // still exists for everyone else; only the blocking pair is dropped.
 //
 // THE FIX: internal/services/message/service/block_filter.go +
@@ -8100,9 +8100,9 @@ async fn v35_blocking_stops_group_message_delivery() {
     println!("  positive control: A, B, C, D are all server-side members");
 
     // B, C, D subscribe to the group stream + events BEFORE any send.
-    client_b.subscribe_channel_messages(&group_e.id);
-    client_c.subscribe_channel_messages(&group_e.id);
-    client_d.subscribe_channel_messages(&group_e.id);
+    client_b.resubscribe_channel_messages();
+    client_c.resubscribe_channel_messages();
+    client_d.resubscribe_channel_messages();
     let mut events_b = client_b.subscribe_events();
     let mut events_c = client_c.subscribe_events();
     let mut events_d = client_d.subscribe_events();
@@ -9153,8 +9153,8 @@ async fn v41_group_reply_carries_quote_to_recipient() {
     );
     println!("  positive control: A and B are both server-side members");
 
-    client_a.subscribe_channel_messages(&chan.id);
-    client_b.subscribe_channel_messages(&chan.id);
+    client_a.resubscribe_channel_messages();
+    client_b.resubscribe_channel_messages();
     let mut events_a = client_a.subscribe_events();
     let mut events_b = client_b.subscribe_events();
     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -9530,8 +9530,8 @@ async fn v44_thread_reply_groups_under_root_on_both_sides() {
         "POSITIVE CONTROL FAILED: A and B not both members of {}", chan.id
     );
 
-    client_a.subscribe_channel_messages(&chan.id);
-    client_b.subscribe_channel_messages(&chan.id);
+    client_a.resubscribe_channel_messages();
+    client_b.resubscribe_channel_messages();
     let mut events_b = client_b.subscribe_events();
     tokio::time::sleep(Duration::from_secs(3)).await;
 
@@ -9675,8 +9675,8 @@ async fn v45_reactions_edits_pins_roundtrip_in_channel() {
     assert!(members.contains(&uid_a.to_string()) && members.contains(&uid_b.to_string()),
         "POSITIVE CONTROL FAILED: A and B not both members");
 
-    client_a.subscribe_channel_messages(&chan.id);
-    client_b.subscribe_channel_messages(&chan.id);
+    client_a.resubscribe_channel_messages();
+    client_b.resubscribe_channel_messages();
     let mut events_a = client_a.subscribe_events();
     let mut events_b = client_b.subscribe_events();
     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -10824,4 +10824,184 @@ async fn v53_identity_reset_publishes_a_key_the_server_serves() {
 
     println!("\nV53 PASS — no backup is reported, never silently re-keyed; an explicit reset publishes a rotated identity key atomically and KT records it\n");
     client_fresh.shutdown().await;
+}
+
+// ============================================================================
+// V54 — channel messages survive a client restart (INFRA-1 / INFRA-2)
+// ============================================================================
+
+/// A channel message must reach a member who was NOT running when it was sent,
+/// and live delivery must resume after that member restarts.
+///
+/// WHY THIS EXISTS. Server-managed channel messages used to arrive over
+/// per-channel `StreamMessageEvents` subscriptions started from exactly two
+/// call sites — `create_channel` and `join_channel` — with no re-subscription
+/// at login and no reconnect loop, and nothing backfilled from the server when
+/// a channel was opened. After any restart a member received ZERO live
+/// messages in every channel joined in a previous session, and clicking the
+/// channel showed only what local SQLite already had. `resume_from_event_id`
+/// was decorative on both stream RPCs.
+///
+/// Three parts, in order of what they would have caught:
+///   1. B receives a message live (baseline: the stream delivers at all).
+///   2. B is shut down, A sends two messages, B RESTARTS from the same data
+///      dir. Both messages must be there — the durable half.
+///   3. A sends once more and the restarted B must get it LIVE — the
+///      re-subscription half, the actual INFRA-1 regression.
+#[tokio::test]
+async fn v54_channel_messages_survive_a_client_restart() {
+    skip_if_no_server!();
+    no_keyring_prompts();
+
+    let dir_a = tempfile::tempdir().unwrap();
+    let client_a = build_client(dir_a.path());
+    let uid_a = register_and_start(&client_a, &unique_user("v54a"), "V54 Alice").await;
+
+    let dir_b = tempfile::tempdir().unwrap();
+    let client_b = build_client(dir_b.path());
+    let uid_b = register_and_start(&client_b, &unique_user("v54b"), "V54 Bob").await;
+
+    // Public channel: the server-managed path this proof is about. A creates it
+    // with B as a member, so B is subscribed by server-side membership rather
+    // than by having called join in this process.
+    let name = format!(
+        "v54-channel-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 1_000_000
+    );
+    let channel = client_a
+        .create_channel(
+            &name,
+            chatter_core::domain::channel::ChannelType::Public,
+            None,
+            Some("V54 restart-delivery channel"),
+            None,
+            None,
+            vec![uid_b.clone()],
+        )
+        .await
+        .expect("create channel failed");
+    println!("\n  [V54] A created channel {} ({})", channel.name, channel.id);
+
+    // POSITIVE CONTROL: the SERVER records both as members, or every "B got
+    // nothing" below is vacuous. Asked over the wire so the control does not
+    // depend on the dev stack's compose environment.
+    let mut member_ids: std::collections::HashSet<UserId> = Default::default();
+    let member_deadline = Instant::now() + CONDITION_TIMEOUT;
+    while Instant::now() < member_deadline {
+        member_ids = client_a
+            .get_channel_members(&channel.id, 100, 0)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|m| m.user_id)
+            .collect();
+        if member_ids.contains(&uid_a) && member_ids.contains(&uid_b) {
+            break;
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+    for (label, uid) in [("A", &uid_a), ("B", &uid_b)] {
+        assert!(
+            member_ids.contains(uid),
+            "POSITIVE CONTROL FAILED: {label} ({uid}) is not a server-side member of {} — \
+             delivery assertions would be vacuous.",
+            channel.id
+        );
+    }
+    println!("  positive control: the server has A and B as members of this channel");
+
+    // ---- PART 1: live delivery works at all -------------------------------
+    let mut events_b = client_b.subscribe_events();
+    client_b.resubscribe_channel_messages();
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let marker_live = unique_marker();
+    client_a
+        .send_text(ActiveConversation::Channel(channel.id.clone()), &marker_live)
+        .await
+        .expect("A live send failed");
+
+    let cid = channel.id.clone();
+    let m = marker_live.clone();
+    let got_live = wait_for_event(&mut events_b, EVENT_TIMEOUT, move |e| {
+        matches!(e, DomainEvent::MessageReceived { message }
+            if message.conversation_id == cid && message.as_text() == Some(m.as_str()))
+    })
+    .await;
+    assert!(
+        got_live.is_some(),
+        "BASELINE FAILED: B never received {marker_live} live — the channel message stream is \
+         not delivering at all, so the restart assertions below would be meaningless."
+    );
+    println!("  [PART 1] B received the live message");
+
+    // ---- PART 2: messages sent while B is DOWN survive the restart --------
+    client_b.shutdown().await;
+    drop(client_b);
+    drop(events_b);
+    println!("  [PART 2] B shut down");
+
+    let marker_offline_1 = unique_marker();
+    let marker_offline_2 = unique_marker();
+    for marker in [&marker_offline_1, &marker_offline_2] {
+        client_a
+            .send_text(ActiveConversation::Channel(channel.id.clone()), marker)
+            .await
+            .expect("A offline-window send failed");
+    }
+    println!("  A sent 2 messages while B was down");
+
+    // The restart: same data dir, persisted session, `start()` — exactly what
+    // reopening the app does.
+    let (client_b2, mut events_b2) = restore_and_start(dir_b.path(), "B2").await;
+
+    for (label, marker) in [("first", &marker_offline_1), ("second", &marker_offline_2)] {
+        let deadline = Instant::now() + EVENT_TIMEOUT;
+        let mut found = false;
+        while Instant::now() < deadline {
+            let stored = client_b2
+                .get_messages(&ActiveConversation::Channel(channel.id.clone()), 50)
+                .unwrap_or_default();
+            if stored.iter().any(|msg| msg.as_text() == Some(marker.as_str())) {
+                found = true;
+                break;
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+        assert!(
+            found,
+            "INFRA-1 REGRESSION: after restarting, B does not have the {label} message \
+             ({marker}) that was sent while it was down. Nothing re-subscribed the channel \
+             stream and nothing backfilled from the server."
+        );
+    }
+    println!("  [PART 2] both offline messages are present after the restart");
+
+    // ---- PART 3: live delivery RESUMES after the restart ------------------
+    let marker_after = unique_marker();
+    client_a
+        .send_text(ActiveConversation::Channel(channel.id.clone()), &marker_after)
+        .await
+        .expect("A post-restart send failed");
+
+    let cid2 = channel.id.clone();
+    let m2 = marker_after.clone();
+    let got_after = wait_for_event(&mut events_b2, EVENT_TIMEOUT, move |e| {
+        matches!(e, DomainEvent::MessageReceived { message }
+            if message.conversation_id == cid2 && message.as_text() == Some(m2.as_str()))
+    })
+    .await;
+    assert!(
+        got_after.is_some(),
+        "INFRA-1 REGRESSION: after restarting, B received no live message ({marker_after}) in a \
+         channel it joined in a PREVIOUS session. The client is not re-subscribing at start()."
+    );
+    println!("  [PART 3] live delivery resumed after the restart");
+
+    client_a.shutdown().await;
+    client_b2.shutdown().await;
 }

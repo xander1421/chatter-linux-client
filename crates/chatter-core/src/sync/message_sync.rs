@@ -5,10 +5,10 @@
 
 use std::sync::Arc;
 
-use crate::domain::ids::{ChannelId, UserId};
+use crate::domain::ids::ChannelId;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::proto::chat_v1::MessageSortDirection;
-use crate::services::message::conversion::{conversation_type_for_channel, proto_to_domain_message_with_sender};
+use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::settings_repo::SettingsRepository;
 use crate::storage::repositories::unified_message_repo::UnifiedMessageRepository;
@@ -20,9 +20,16 @@ const PAGE_SIZE: i32 = 50;
 /// Message sync handler.
 pub struct MessageSync {
     grpc_pool: Arc<GrpcClientPool>,
+    #[allow(dead_code)]
     message_repo: Arc<UnifiedMessageRepository>,
     settings_repo: Arc<SettingsRepository>,
+    #[allow(dead_code)]
     channel_repo: Arc<ChannelRepository>,
+    /// Shared decrypt → persist path. Without it this sync wrote every
+    /// sender-key encrypted channel message to disk as the literal string
+    /// "[Encrypted message]" (`proto_content_to_domain`'s placeholder), so
+    /// catching up after being offline produced unreadable history.
+    inbound: Arc<ChannelInbound>,
 }
 
 /// Result of a message sync operation for one channel.
@@ -49,12 +56,14 @@ impl MessageSync {
         message_repo: Arc<UnifiedMessageRepository>,
         settings_repo: Arc<SettingsRepository>,
         channel_repo: Arc<ChannelRepository>,
+        inbound: Arc<ChannelInbound>,
     ) -> Self {
         Self {
             grpc_pool,
             message_repo,
             settings_repo,
             channel_repo,
+            inbound,
         }
     }
 
@@ -95,44 +104,18 @@ impl MessageSync {
             let page_count = response.messages.len();
             result.fetched += page_count;
 
-            // All messages in this page belong to `channel_id`; derive
-            // ConversationType once per page.
-            let conv_type = conversation_type_for_channel(&self.channel_repo, channel_id);
-
             for proto_msg in &response.messages {
-                // Parse sender ID
-                let sender_id: Option<UserId> = if proto_msg.author_id.is_empty() {
-                    None
-                } else {
-                    proto_msg.author_id.parse().ok()
-                };
-
-                // Convert proto to domain message using existing conversion
-                let message = match proto_to_domain_message_with_sender(proto_msg, sender_id, conv_type.clone()) {
-                    Ok(msg) => msg,
-                    Err(e) => {
-                        tracing::debug!(
-                            channel_id = %channel_id,
-                            error = %e,
-                            "Failed to convert synced message"
-                        );
-                        continue;
-                    }
-                };
-
-                // Insert (INSERT OR IGNORE handles duplicates)
-                match self.message_repo.insert(&message) {
-                    Ok(_) => {
-                        result.inserted += 1;
-                    }
-                    Err(e) => {
-                        tracing::debug!(
-                            channel_id = %channel_id,
-                            message_id = %message.id,
-                            error = %e,
-                            "Failed to insert synced message (may be duplicate)"
-                        );
-                    }
+                // Same decrypt → persist path the live stream uses, so a
+                // message read back from the server is as readable as one that
+                // arrived live. `emit = false`: a catch-up of a hundred old
+                // messages must not fire a hundred UI events.
+                match self.inbound.ingest(proto_msg, *channel_id, false).await {
+                    Ingested::Stored => result.inserted += 1,
+                    // Own messages and messages parked on a missing sender key
+                    // are expected outcomes, not sync failures.
+                    Ingested::OwnMessage
+                    | Ingested::DeferredPendingSenderKey
+                    | Ingested::Dropped => {}
                 }
             }
 

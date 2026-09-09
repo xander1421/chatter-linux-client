@@ -553,6 +553,76 @@ pub enum DomainEvent {
         role: crate::domain::channel::MemberRole,
     },
 
+    // ── Channel lifecycle (INFRA-29) ─────────────────────────────────────
+    // Every arm of the server's `ChannelEvent` oneof now reaches the UI. The
+    // consumer used to handle 4 of 11 and end in `_ => debug!("Unhandled")`,
+    // so a deleted channel never disappeared, a ban never surfaced, and — the
+    // serious one — `OperationFailed`, the saga-compensation signal, was
+    // discarded, leaving optimistic client state wrong forever.
+
+    /// A channel this user could see was deleted server-side. Core has already
+    /// removed the local rows.
+    ChannelDeleted { channel_id: ChannelId },
+
+    /// A channel appeared for this user (created by them elsewhere, or an
+    /// admin added them). Core has upserted the local row.
+    ChannelCreated {
+        channel_id: ChannelId,
+        name: String,
+    },
+
+    /// Archived state changed server-side. Core has updated the local row.
+    ChannelArchivedChanged {
+        channel_id: ChannelId,
+        archived: bool,
+    },
+
+    /// A moderation action landed on a channel (kick / ban / mute / unban /
+    /// unmute). `is_self` is true when the local user is the target — in that
+    /// case core has already dropped the local membership for a kick or ban.
+    ChannelModerationAction {
+        channel_id: ChannelId,
+        user_id: UserId,
+        moderator_id: UserId,
+        /// Proto action name: "KICK", "BAN", "MUTE", "UNBAN", "UNMUTE".
+        action: String,
+        reason: Option<String>,
+        is_self: bool,
+    },
+
+    /// An invitation to a channel arrived for this user.
+    ChannelInviteReceived {
+        channel_id: ChannelId,
+        inviter_id: UserId,
+        message: Option<String>,
+        /// Unix nanoseconds; 0 when the invite does not expire.
+        expires_at: u64,
+    },
+
+    /// Someone answered an invitation.
+    ChannelInviteResponded {
+        channel_id: ChannelId,
+        inviter_id: UserId,
+        accepted: bool,
+    },
+
+    /// An asynchronous channel mutation FAILED server-side and its Temporal
+    /// saga compensated. Every channel mutation RPC is a stream precisely so
+    /// the server can report this; a client that ignores it keeps optimistic
+    /// state the server has already rolled back.
+    ///
+    /// Core re-reads the channel from the server before emitting, so local
+    /// storage already reflects the rollback; the UI's job is to stop showing
+    /// the operation as in-flight and tell the user.
+    ChannelOperationFailed {
+        channel_id: ChannelId,
+        /// Correlation id supplied by the server, empty when it sent none.
+        operation_id: String,
+        /// Proto error code name, e.g. "PERMISSION_DENIED".
+        code: String,
+        message: String,
+    },
+
     // ========================================================================
     // Jarvis AI Events
     // ========================================================================
@@ -667,6 +737,13 @@ impl DomainEvent {
             DomainEvent::ChannelMemberLeft { channel_id, .. } => Some(*channel_id),
             DomainEvent::ChannelUpdated { channel_id, .. } => Some(*channel_id),
             DomainEvent::ChannelMemberRoleChanged { channel_id, .. } => Some(*channel_id),
+            DomainEvent::ChannelDeleted { channel_id } => Some(*channel_id),
+            DomainEvent::ChannelCreated { channel_id, .. } => Some(*channel_id),
+            DomainEvent::ChannelArchivedChanged { channel_id, .. } => Some(*channel_id),
+            DomainEvent::ChannelModerationAction { channel_id, .. } => Some(*channel_id),
+            DomainEvent::ChannelInviteReceived { channel_id, .. } => Some(*channel_id),
+            DomainEvent::ChannelInviteResponded { channel_id, .. } => Some(*channel_id),
+            DomainEvent::ChannelOperationFailed { channel_id, .. } => Some(*channel_id),
             DomainEvent::UserPresenceChanged { .. } => None,
             DomainEvent::AnonDmProfileUpdated { .. } => None,
             DomainEvent::UserProfileUpdated { .. } => None,

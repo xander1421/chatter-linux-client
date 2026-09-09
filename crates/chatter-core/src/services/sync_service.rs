@@ -12,6 +12,7 @@ use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::settings_repo::SettingsRepository;
 use crate::storage::repositories::unified_message_repo::UnifiedMessageRepository;
+use crate::services::message::channel_inbound::ChannelInbound;
 use crate::storage::repositories::user_repo::UserRepository;
 use crate::sync::sync_engine::{SyncCycleResult, SyncEngine};
 
@@ -33,6 +34,7 @@ impl SyncService {
         user_repo: Arc<UserRepository>,
         settings_repo: Arc<SettingsRepository>,
         event_bus: EventBus,
+        inbound: Arc<ChannelInbound>,
     ) -> Self {
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
 
@@ -43,6 +45,7 @@ impl SyncService {
             user_repo,
             settings_repo,
             event_bus,
+            inbound,
         ));
 
         Self {

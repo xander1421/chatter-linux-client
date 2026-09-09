@@ -16,6 +16,7 @@ use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::settings_repo::SettingsRepository;
 use crate::storage::repositories::unified_message_repo::UnifiedMessageRepository;
+use crate::services::message::channel_inbound::ChannelInbound;
 use crate::storage::repositories::user_repo::UserRepository;
 
 use super::channel_sync::{ChannelSync, ChannelSyncResult};
@@ -55,6 +56,7 @@ impl SyncEngine {
         user_repo: Arc<UserRepository>,
         settings_repo: Arc<SettingsRepository>,
         event_bus: EventBus,
+        inbound: Arc<ChannelInbound>,
     ) -> Self {
         Self {
             channel_sync: ChannelSync::new(
@@ -67,6 +69,7 @@ impl SyncEngine {
                 message_repo,
                 settings_repo.clone(),
                 channel_repo,
+                inbound,
             ),
             user_sync: UserSync::new(
                 grpc_pool,

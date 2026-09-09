@@ -229,6 +229,7 @@ impl ServiceContainer {
             infra.user_repo.clone(),
             infra.grpc_pool.clone(),
             infra.event_bus.clone(),
+            infra.settings_repo.clone(),
         ));
 
         // 12. AI service for AI integrations

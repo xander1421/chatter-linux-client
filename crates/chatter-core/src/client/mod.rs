@@ -2289,6 +2289,17 @@ impl ChatterClient {
 
         // ── Channel + DM services ───────────────────────────────────
         let h_channel_stream = self.ctx.start_channel_event_stream();
+        // Live channel messages. This is the ONLY subscriber of the
+        // server-managed channel message path: it re-subscribes on every
+        // connect from the server's membership list, so channels joined in a
+        // previous session start delivering again after a restart (INFRA-1),
+        // and it runs a durable catch-up fetch on each connect so nothing
+        // depends on the stream having been up.
+        let h_channel_messages = self
+            .services
+            .channel_stream_service
+            .clone()
+            .start_channel_message_stream();
         let h_channel_bootstrap = self.ctx.start_channel_bootstrap_service();
         let h_dm_bootstrap = self.ctx.spawn_dm_bootstrap_handler();
 
@@ -2381,7 +2392,7 @@ impl ChatterClient {
 
         // ── Store handles for shutdown ───────────────────────────────
         let mut tasks = self.tasks.lock();
-        tasks.extend([h_events, h_inbox, h_skdm_retry, h_channel_stream, h_channel_bootstrap, h_dm_bootstrap, h_ai, h_sync, h_prekey, h_key_rolling, h_ephemeral_reaper]);
+        tasks.extend([h_events, h_inbox, h_skdm_retry, h_channel_stream, h_channel_messages, h_channel_bootstrap, h_dm_bootstrap, h_ai, h_sync, h_prekey, h_key_rolling, h_ephemeral_reaper]);
         #[cfg(feature = "jarvis")]
         {
             tasks.push(jarvis.maintenance);

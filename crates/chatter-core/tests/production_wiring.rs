@@ -280,6 +280,19 @@ const TABLE: &[Entry] = &[
               did not propagate. This entry pins the top of the chain; between the \
               two, both edges that matter have a tripwire.",
     },
+    Entry {
+        symbol: "start_channel_message_stream",
+        defined_in: "chatter-core/src/services/channel_stream.rs",
+        expect: Expect::Wired,
+        why: "The ONLY subscriber of server-managed channel messages, called from \
+              ChatterClient::start. Before it existed, delivery hung off per-channel \
+              subscriptions started from create_channel and join_channel alone, with \
+              no re-subscription at login and no reconnect loop — so after any \
+              restart a user got zero live messages in every channel joined in a \
+              previous session, and opening the channel read local SQLite only \
+              (INFRA-1). If this loses its caller, that returns, and nothing else in \
+              the client notices.",
+    },
 ];
 
 // ============================================================================
