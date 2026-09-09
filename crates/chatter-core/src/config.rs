@@ -325,11 +325,14 @@ const DEV_KT_TREE_HEAD_BYTES: [u8; 32] = [
 /// `CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX` (64 hex chars) at build time to pin a
 /// real one.
 ///
-/// Note what this does NOT fix: nothing in production calls
-/// `verify_consistency_proof`, so an append-only violation still goes unnoticed
-/// however good this key is (OPEN-ITEMS §3, pinned in production_wiring.rs).
-/// Pinning a real key raises the bar from "anyone can forge a tree head" to
-/// "only the server operator can" — worth having, not sufficient on its own.
+/// The append-only half is wired now (2026-08-03, OPEN-ITEMS §3):
+/// `services/signal/kt_anchor.rs` pins the highest tree head accepted so far
+/// and only advances it through a verified `verify_consistency_proof`, on
+/// every KT-verified send — `production_wiring.rs` fails if that caller
+/// disappears. So the two checks are complementary and BOTH need a real key
+/// here: against the dev key a forged head satisfies the inclusion proof and
+/// the consistency proof alike, because the forger can sign every head in the
+/// chain. A provisioned key is what makes either one mean anything.
 #[cfg(feature = "dev-trust-root")]
 pub const KT_TREE_HEAD_PUBLIC_KEY_BYTES: [u8; 32] = DEV_KT_TREE_HEAD_BYTES;
 
