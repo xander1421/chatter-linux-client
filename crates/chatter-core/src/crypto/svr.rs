@@ -5,7 +5,7 @@
 //! attacks on short PINs. The username is used as a deterministic salt.
 
 use argon2::{Argon2, Params};
-use hmac::{Hmac, Mac};
+use hkdf::Hkdf;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroize;
@@ -296,6 +296,28 @@ pub fn derive_pin_fingerprint(pin: &str, username: &str) -> Result<[u8; 32], Cry
     Ok(fp)
 }
 
+/// Derive a purpose-specific 32-byte subkey from the SVR secret.
+///
+/// CRYPTO-3: the Argon2id output is one secret with several consumers — an
+/// AES-256-GCM key, a lookup index the server sees, an X25519 static scalar and
+/// two more authenticators. Handing the same 32 bytes to different primitives
+/// gives none of them a key of their own, so a weakness or a leak in any one of
+/// them is a weakness in all of them. Every consumer now takes an HKDF-SHA256
+/// expansion under its own info string, exactly as `message_backup::
+/// derive_server_kek` already did.
+pub fn svr_subkey(svr_secret: &[u8; 32], info: &[u8]) -> [u8; 32] {
+    let hk = Hkdf::<Sha256>::new(None, svr_secret);
+    let mut out = [0u8; 32];
+    hk.expand(info, &mut out)
+        .expect("32 bytes is a valid HKDF-SHA256 output length");
+    out
+}
+
+/// HKDF info strings. Each consumer of the SVR secret gets exactly one.
+pub(crate) const SVR_INFO_PIN_FINGERPRINT: &[u8] = b"Chatter SVR Local PIN Fingerprint v1";
+pub(crate) const SVR_INFO_REGISTRATION_LOCK: &[u8] = b"Chatter SVR Registration Lock v1";
+pub(crate) const SVR_INFO_X25519: &[u8] = b"Chatter SVR X25519 Static Secret v1";
+
 /// Same as [`derive_pin_fingerprint`] but takes an already-derived SVR secret.
 ///
 /// PERF: [`derive_svr_secret`] is a deliberately expensive memory-hard KDF
@@ -305,14 +327,7 @@ pub fn derive_pin_fingerprint(pin: &str, username: &str) -> Result<[u8; 32], Cry
 /// security benefit. Callers deriving several values from one PIN should call
 /// [`derive_svr_secret`] once and use the `*_from_secret` variants.
 pub fn pin_fingerprint_from_secret(svr_secret: &[u8; 32]) -> [u8; 32] {
-    type HmacSha256 = Hmac<Sha256>;
-    let mut mac = HmacSha256::new_from_slice(svr_secret)
-        .expect("HMAC can take key of any size");
-    mac.update(b"Chatter Local PIN Fingerprint");
-    let result = mac.finalize();
-    let mut fp = [0u8; 32];
-    fp.copy_from_slice(&result.into_bytes());
-    fp
+    svr_subkey(svr_secret, SVR_INFO_PIN_FINGERPRINT)
 }
 
 /// Derive registration lock token from PIN.
@@ -331,15 +346,7 @@ pub fn derive_registration_lock(pin: &str, username: &str) -> Result<[u8; 32], C
 /// Same as [`derive_registration_lock`] but takes an already-derived SVR secret.
 /// See [`pin_fingerprint_from_secret`] for why callers should prefer this.
 pub fn registration_lock_from_secret(svr_secret: &[u8; 32]) -> [u8; 32] {
-    type HmacSha256 = Hmac<Sha256>;
-    let mut mac = HmacSha256::new_from_slice(svr_secret)
-        .expect("HMAC can take key of any size");
-    mac.update(b"Registration Lock");
-    let result = mac.finalize();
-
-    let mut lock = [0u8; 32];
-    lock.copy_from_slice(&result.into_bytes());
-    lock
+    svr_subkey(svr_secret, SVR_INFO_REGISTRATION_LOCK)
 }
 
 /// SVR Keypair for Secure Value Recovery.
@@ -374,7 +381,11 @@ impl SvrKeypair {
     /// secret. See [`pin_fingerprint_from_secret`] for why callers should
     /// prefer this.
     pub fn from_secret(svr_secret: &[u8; 32]) -> Self {
-        let secret = StaticSecret::from(*svr_secret);
+        // CRYPTO-3: an X25519 static scalar of its own, not the raw SVR secret
+        // that also keys AES-GCM and the server-visible backup id.
+        let mut scalar = svr_subkey(svr_secret, SVR_INFO_X25519);
+        let secret = StaticSecret::from(scalar);
+        scalar.zeroize();
         let public = PublicKey::from(&secret);
         Self { secret, public }
     }
@@ -616,5 +627,51 @@ mod tests {
         assert_eq!(p.t_cost(), 8, "expected 8 iterations");
         assert_eq!(p.p_cost(), 4, "expected 4 lanes");
         assert_eq!(p.output_len(), Some(32));
+    }
+
+    /// CRYPTO-3: the Argon2id SVR secret used to be handed unmodified to an
+    /// AES-256-GCM key, an HMAC key whose output the server sees as a lookup
+    /// index, an X25519 static scalar and two more HMAC keys — one secret, five
+    /// primitives, no separation. Each consumer now takes its own HKDF-SHA256
+    /// expansion. These vectors were computed independently (Python
+    /// hmac/hashlib HKDF over ikm = 0x00..0x1f) so a silent change to an info
+    /// string — which re-keys every backup and every registration lock — fails
+    /// loudly instead.
+    #[test]
+    fn svr_subkeys_match_pinned_vectors_and_are_distinct() {
+        let secret: [u8; 32] = core::array::from_fn(|i| i as u8);
+
+        assert_eq!(
+            hex::encode(pin_fingerprint_from_secret(&secret)),
+            "1ca0b8c4ab8fc1732fd3dc28680ef40168d18cb1b50d4e6146da26a3ff8d05a9",
+        );
+        assert_eq!(
+            hex::encode(registration_lock_from_secret(&secret)),
+            "fec745f7e2513c68282a8dceb96077b0a57405e85f2f237faecef53f657ad002",
+        );
+        assert_eq!(
+            hex::encode(svr_subkey(&secret, SVR_INFO_X25519)),
+            "fae4444170eda3a0b0b22c8108d6dcb5e76ce24a711c879d3175151ca4a6b337",
+        );
+
+        // No consumer may see the raw secret, and no two may see the same bytes.
+        let subkeys = [
+            pin_fingerprint_from_secret(&secret),
+            registration_lock_from_secret(&secret),
+            svr_subkey(&secret, SVR_INFO_X25519),
+            crate::crypto::svr_backup::derive_backup_id(&secret),
+        ];
+        for (i, a) in subkeys.iter().enumerate() {
+            assert_ne!(*a, secret, "subkey {i} is the raw SVR secret");
+            for b in subkeys.iter().skip(i + 1) {
+                assert_ne!(a, b, "two consumers share key material");
+            }
+        }
+
+        // The X25519 scalar is derived, not the secret itself.
+        assert_ne!(SvrKeypair::from_secret(&secret).public_key_bytes(), {
+            use x25519_dalek::{PublicKey, StaticSecret};
+            PublicKey::from(&StaticSecret::from(secret)).to_bytes()
+        });
     }
 }

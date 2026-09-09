@@ -364,11 +364,12 @@ mod tests {
             hex::encode(derive_message_backup_id(&secret())),
             "11192d4389f60baf9f35d5fd2d18fd7f76e0578c0c046e3223ba7fa44fa81de0",
         );
-        // Distinct from the SVR key-backup id (HMAC context "BackupId") — the
-        // two backups must be independently addressable server-side.
+        // Distinct from the SVR key-backup id (HKDF info "Chatter SVR Backup Id
+        // v1" since CRYPTO-3; it was HMAC(secret, "BackupId")) — the two backups
+        // must be independently addressable server-side.
         assert_eq!(
             hex::encode(crate::crypto::svr_backup::derive_backup_id(&secret())),
-            "4d1e8edd95b19217583c78fbeb1b5e89714c551d7057e4a7b06a61606dcea3d8",
+            "c795c10a785300f313f43403a419adc4db433c5bf8148675c030aea76fbce02c",
         );
         assert_ne!(
             derive_message_backup_id(&secret()),
