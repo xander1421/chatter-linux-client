@@ -266,12 +266,13 @@ impl InfrastructureContainer {
         let identity_manager = Arc::new(IdentityKeyManager::new(key_store.clone()));
         let prekey_manager = Arc::new(PreKeyManager::new(key_store.clone()));
 
-        // 8b. Create Sesame manager for multi-session handling and message queueing
+        // 8b. Create Sesame manager for multi-session handling and message queueing.
+        // The sesame_* tables are migration v065; they are already there by the
+        // time we get here. This used to call init_tables() and log a warning on
+        // failure, which meant a database that could not hold Sesame state still
+        // produced a fully constructed manager -- startup succeeded and every
+        // session operation afterwards failed with nothing pointing at the cause.
         let sesame_store = SqliteSesameStore::new(database.clone());
-        // Initialize Sesame tables (safe to call multiple times)
-        if let Err(e) = sesame_store.init_tables() {
-            tracing::warn!("Failed to initialize Sesame tables: {}", e);
-        }
         let sesame_manager = Arc::new(SesameManager::new(sesame_store));
 
         // 9. Create network pool.

@@ -577,11 +577,12 @@ impl MessageService {
             .map_err(MessageError::from)
     }
 
-    /// Mark the message with the given sent-at timestamp as read (multi-device
+    /// Mark an inbound DM with the given sent-at timestamp as read (multi-device
     /// read-sync). See `UnifiedMessageRepository::mark_read_by_timestamp`.
     pub fn mark_read_by_timestamp(&self, sent_at: u64) -> Result<bool, MessageError> {
+        let self_user_id = self.current_user_id()?;
         self.message_repo
-            .mark_read_by_timestamp(sent_at)
+            .mark_read_by_timestamp(sent_at, &self_user_id)
             .map_err(MessageError::from)
     }
 

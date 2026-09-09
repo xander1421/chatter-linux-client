@@ -1248,22 +1248,56 @@ impl UnifiedMessageRepository {
         Ok(rows > 0)
     }
 
-    /// Mark the message with a given sent-at timestamp as read.
+    /// Mark an inbound DM with a given sent-at timestamp as read.
     ///
     /// Used for multi-device read-sync: when we read a peer's messages on one of
     /// our devices, that device self-syncs a read receipt to our others, which
     /// mark the same messages read here so the unread badge clears everywhere
-    /// (Signal's read-sync). Messages are identified Signal-style by
-    /// `(author, ns-timestamp)`, and the ns timestamp is unique, so the peer's
-    /// message is pinned by `sent_at` alone — no conversation context is needed,
-    /// and no A-self thread is ever touched (the row lives in the peer's thread).
+    /// (Signal's read-sync).
+    ///
+    /// `sent_at` is NOT a unique key, and the doc comment that used to say so was
+    /// the whole justification for running this as a bare
+    /// `WHERE sent_at = ?` UPDATE across the entire message table. Migration v061
+    /// exists precisely because it is not: mesh `sent_at` is milliseconds widened
+    /// to nanoseconds (`mapping::millis_to_nanos`), so two distinct messages from
+    /// one sender inside one millisecond collided on
+    /// `(conversation_type, conversation_id, sender_id, sent_at)` and one was
+    /// silently discarded. Unscoped, a peer's read receipt could flip a different
+    /// conversation's message — or one of our own — to read.
+    ///
+    /// Two scopes are available at this call site and both are applied:
+    ///
+    ///   * `sender_id != self_user_id`. We never mark our own messages read; the
+    ///     sending device already did, and a self-receipt is noise the send path
+    ///     drops.
+    ///   * DM conversation types only. A `DmReceipt` is by construction a
+    ///     channel-free receipt (`inbox/polling/device.rs` routes a receipt with a
+    ///     non-empty `channel_id` to the channel path instead), so a channel row
+    ///     can never be its subject — and neither can a mesh row, which is where
+    ///     v061's collisions live.
+    ///
+    /// What is still NOT scoped is *which* DM: `ReceiptMessage.channel_id` is
+    /// already the channel/DM discriminator on the wire, so a DM receipt cannot
+    /// also carry its peer without a protocol change. See docs/OPEN-ITEMS.md.
     ///
     /// Returns `true` if a row was flipped from unread to read.
-    pub fn mark_read_by_timestamp(&self, sent_at: u64) -> Result<bool, StorageError> {
+    pub fn mark_read_by_timestamp(
+        &self,
+        sent_at: u64,
+        self_user_id: &UserId,
+    ) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
         let rows = conn.execute(
-            "UPDATE messages SET is_read = 1, updated_at = ?1 WHERE sent_at = ?2 AND is_read = 0",
-            params![Utc::now().to_rfc3339(), sent_at as i64],
+            "UPDATE messages SET is_read = 1, updated_at = ?1
+             WHERE sent_at = ?2
+               AND is_read = 0
+               AND sender_id != ?3
+               AND conversation_type IN ('server_dm', 'mailbox_dm', 'anon_dm')",
+            params![
+                Utc::now().to_rfc3339(),
+                sent_at as i64,
+                self_user_id.to_string(),
+            ],
         )?;
         Ok(rows > 0)
     }
