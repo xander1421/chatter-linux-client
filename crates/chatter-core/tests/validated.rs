@@ -99,7 +99,7 @@ fn pg_dump_all() -> String {
 /// empty haystack — which then "passes" any absence grep. This dispatches on
 /// the actual type so the haystack is real.
 fn redis_dump_all() -> String {
-    sh(r##"docker compose exec -T redis sh -c '
+    sh(r##"docker compose exec -T -e REDISCLI_AUTH="$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)" redis sh -c '
         for k in $(redis-cli --scan --pattern "*"); do
           t=$(redis-cli type "$k")
           echo "--- KEY $k ($t)"
@@ -819,12 +819,12 @@ async fn v0_detector_self_check() {
     // ---- Redis: plant in a hash, the type the real envelopes use ----------
     let probe_key = format!("validated_probe:{marker}");
     sh(&format!(
-        "docker compose exec -T redis redis-cli HSET '{probe_key}' payload '{marker}' >/dev/null 2>&1"
+        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HSET '{probe_key}' payload '{marker}' >/dev/null 2>&1"
     ));
     let redis_all = redis_dump_all();
     let found_redis = redis_all.matches(&marker).count();
     sh(&format!(
-        "docker compose exec -T redis redis-cli DEL '{probe_key}' >/dev/null 2>&1"
+        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli DEL '{probe_key}' >/dev/null 2>&1"
     ));
     assert!(
         found_redis > 0,
@@ -902,7 +902,7 @@ async fn v1_server_never_holds_plaintext() {
     // absent from it. Without this, "not found" and "not there" are the same
     // observation and the test is vacuous.
     let envelope_keys = sh(
-        "docker compose exec -T redis redis-cli --scan --pattern 'device_queue_envelopes:*' 2>/dev/null",
+        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli --scan --pattern 'device_queue_envelopes:*' 2>/dev/null",
     );
     let n_keys = envelope_keys.lines().filter(|l| !l.trim().is_empty()).count();
     println!("  positive control: {n_keys} device_queue_envelopes key(s)");
@@ -1060,7 +1060,7 @@ async fn v2_corrupted_ciphertext_never_decrypts() {
     let key = format!("device_queue_envelopes:{uid_b}:1");
     let hkeys = |k: &str| -> std::collections::HashSet<String> {
         sh(&format!(
-            "docker compose exec -T redis redis-cli HKEYS '{k}' 2>/dev/null"
+            "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HKEYS '{k}' 2>/dev/null"
         ))
         .lines()
         .map(|l| l.trim().to_string())
@@ -1092,7 +1092,7 @@ async fn v2_corrupted_ciphertext_never_decrypts() {
     let field = new_fields[0].clone();
 
     let json = sh(&format!(
-        "docker compose exec -T redis redis-cli HGET '{key}' '{field}' 2>/dev/null"
+        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HGET '{key}' '{field}' 2>/dev/null"
     ));
     let envelope_b64 = extract_between(&json, "\"envelope\":\"", "\"")
         .expect("could not extract envelope base64 from queued JSON");
@@ -1112,14 +1112,14 @@ async fn v2_corrupted_ciphertext_never_decrypts() {
     std::fs::write(&tmp, corrupted_json.trim()).expect("write temp json");
     // -x reads the value from stdin, avoiding shell-quoting the JSON payload.
     sh(&format!(
-        "cat '{}' | docker compose exec -T redis redis-cli -x HSET '{key}' '{field}' >/dev/null 2>&1",
+        "cat '{}' | docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli -x HSET '{key}' '{field}' >/dev/null 2>&1",
         tmp.display()
     ));
     let _ = std::fs::remove_file(&tmp);
 
     // ---- prove the corruption actually landed -----------------------------
     let readback = sh(&format!(
-        "docker compose exec -T redis redis-cli HGET '{key}' '{field}' 2>/dev/null"
+        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HGET '{key}' '{field}' 2>/dev/null"
     ));
     let stored_b64 = extract_between(&readback, "\"envelope\":\"", "\"")
         .expect("could not re-read envelope after corruption");
@@ -1829,7 +1829,7 @@ async fn v6_delivered_message_key_is_destroyed() {
     let key = format!("device_queue_envelopes:{uid_b}:1");
     let hkeys = |k: &str| -> std::collections::HashSet<String> {
         sh(&format!(
-            "docker compose exec -T redis redis-cli HKEYS '{k}' 2>/dev/null"
+            "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HKEYS '{k}' 2>/dev/null"
         ))
         .lines()
         .map(|l| l.trim().to_string())
@@ -1859,7 +1859,7 @@ async fn v6_delivered_message_key_is_destroyed() {
             );
             let field = new_fields[0].clone();
             let json = sh(&format!(
-                "docker compose exec -T redis redis-cli HGET '{key}' '{field}' 2>/dev/null"
+                "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HGET '{key}' '{field}' 2>/dev/null"
             ));
             let b64 = extract_between(&json, "\"envelope\":\"", "\"")
                 .expect("could not extract envelope base64 from queued JSON");
@@ -1904,7 +1904,7 @@ async fn v6_delivered_message_key_is_destroyed() {
     // polls. From B's point of view this message simply never arrived — the
     // legitimately-undelivered case Signal is designed to tolerate.
     sh(&format!(
-        "docker compose exec -T redis redis-cli HDEL '{key}' '{field_u}' >/dev/null 2>&1"
+        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HDEL '{key}' '{field_u}' >/dev/null 2>&1"
     ));
     assert!(
         !hkeys(&key).contains(&field_u),
@@ -4323,7 +4323,7 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
     let queue_key = format!("device_queue_envelopes:{uid_b}:1");
     let hkeys = |k: &str| -> std::collections::HashSet<String> {
         sh(&format!(
-            "docker compose exec -T redis redis-cli HKEYS '{k}' 2>/dev/null"
+            "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HKEYS '{k}' 2>/dev/null"
         ))
         .lines()
         .map(|l| l.trim().to_string())
@@ -4345,7 +4345,7 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
             );
             let field = new_fields[0].clone();
             let json = sh(&format!(
-                "docker compose exec -T redis redis-cli HGET '{queue_key}' '{field}' 2>/dev/null"
+                "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HGET '{queue_key}' '{field}' 2>/dev/null"
             ));
             let b64 = extract_between(&json, "\"envelope\":\"", "\"")
                 .expect("could not extract envelope base64 from queued JSON");
@@ -4482,7 +4482,7 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
     assert_ne!(b64_pre, b64_post, "captured the same envelope twice");
     // Withhold it, so B's live session does not decrypt it on reconnect.
     sh(&format!(
-        "docker compose exec -T redis redis-cli HDEL '{queue_key}' '{post_field}' >/dev/null 2>&1"
+        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HDEL '{queue_key}' '{post_field}' >/dev/null 2>&1"
     ));
     assert!(
         !hkeys(&queue_key).contains(&post_field),
@@ -6269,7 +6269,7 @@ async fn v23_message_ordering_reorder_and_gap() {
     let key = format!("device_queue_envelopes:{uid_b}:1");
     let hkeys = |k: &str| -> std::collections::HashSet<String> {
         sh(&format!(
-            "docker compose exec -T redis redis-cli HKEYS '{k}' 2>/dev/null"
+            "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HKEYS '{k}' 2>/dev/null"
         ))
         .lines()
         .map(|l| l.trim().to_string())
@@ -6294,7 +6294,7 @@ async fn v23_message_ordering_reorder_and_gap() {
             );
             let field = new_fields[0].clone();
             let json = sh(&format!(
-                "docker compose exec -T redis redis-cli HGET '{key}' '{field}' 2>/dev/null"
+                "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HGET '{key}' '{field}' 2>/dev/null"
             ));
             let b64 = extract_between(&json, "\"envelope\":\"", "\"")
                 .expect("could not extract envelope base64 from queued JSON");
@@ -6331,7 +6331,7 @@ async fn v23_message_ordering_reorder_and_gap() {
     // Withhold ALL THREE from B's queue: B's poller must never touch them, so
     // this test alone controls the order in which B's session processes them.
     for f in [&f1, &f2, &f3] {
-        sh(&format!("docker compose exec -T redis redis-cli HDEL '{key}' '{f}' >/dev/null 2>&1"));
+        sh(&format!("docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HDEL '{key}' '{f}' >/dev/null 2>&1"));
     }
     let remaining = hkeys(&key);
     assert!(
