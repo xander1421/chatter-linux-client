@@ -64,7 +64,7 @@ impl From<CurrentUserError> for AIError {
 /// let integration = service.create_integration(&mut client, "my-claude-bot", IntegrationType::Claude, None).await?;
 ///
 /// // Subscribe to AI streaming events
-/// let stream = service.subscribe_events(&mut client, Some(&integration.id)).await?;
+/// let stream = service.subscribe_events(&mut client, &[integration.id.to_string()]).await?;
 /// ```
 pub struct AIService {
     settings_repo: Arc<SettingsRepository>,
@@ -324,18 +324,20 @@ impl AIService {
     /// # Arguments
     ///
     /// * `client` - Mutable reference to integration client (caller-owned)
-    /// * `integration_id` - Optional integration ID to filter events.
-    ///   If None, receives events for all integrations.
+    /// * `integration_ids` - Integrations to stream, at least one. There is no
+    ///   "all integrations" mode: the server rejects an empty list, because it
+    ///   used to mean every integration on the server, for every user
+    ///   (INFRA-38).
     pub async fn subscribe_events(
         &self,
         client: &mut IntegrationClient,
-        integration_id: Option<&str>,
+        integration_ids: &[String],
     ) -> Result<impl Stream<Item = Result<IntegrationEvent, AIError>>, AIError> {
         // Check logged in
         let _ = self.settings_repo.current_user_id()?;
 
         // Call server
-        let stream = client.stream_integration_events(integration_id).await?;
+        let stream = client.stream_integration_events(integration_ids).await?;
 
         // Map stream items to extract event and convert errors
         Ok(stream.map(|result| {
