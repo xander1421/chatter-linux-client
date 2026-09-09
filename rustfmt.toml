@@ -1,0 +1,13 @@
+# Formatting is pinned here so `cargo fmt` produces the same bytes on every
+# machine and in CI. Until now there was no rustfmt.toml at all: the formatting
+# was both unenforced (650 of 863 .rs files differ from rustfmt output, 6,735
+# hunks) and unpinned, so any two contributors on different toolchains would
+# reformat each other's code.
+#
+# These are rustfmt's own defaults, written down rather than inherited, so a
+# future rustfmt release changing a default cannot silently rewrite the tree.
+edition = "2024"
+max_width = 100
+tab_spaces = 4
+newline_style = "Unix"
+use_field_init_shorthand = true
