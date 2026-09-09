@@ -343,8 +343,27 @@ mesh = []
 # this crate's `tests/` directory (which are external consumers) can wire
 # real services against a live server. Do NOT enable for application builds —
 # chatter-ui must stay behind the façade.
+#
+# ANCHOR-TESTING: this feature used to ALSO disarm all four fail-closed trust
+# anchor guards in src/config.rs, so `--features chatter-core/testing` on a
+# release build silently pinned the dev sealed-sender root, the dev TLS CA, the
+# dev KT tree-head key and the dev VRF key — defeating the guarantee those
+# guards exist for. Accessor widening and anchor selection are now separate
+# features; this one has no security effect.
 testing = []
+# Falls the four pinned trust anchors back to their DEVELOPMENT values when
+# nothing is provisioned, so `cargo test` runs without `make provision-keys`.
+#
+# This is the ONLY thing it does, it is named for what it does, and
+# chatter-core's build.rs REFUSES to build it in a release profile — a
+# shippable artifact cannot be pinned to public keys by enabling a feature
+# whose name says "testing". Unit tests get the same fallback from `cfg(test)`
+# with no feature at all; this exists for the integration tests in `tests/`,
+# which link chatter-core as an ordinary dependency with `cfg(test)` unset.
+insecure-test-anchors = []
 
 [package.metadata.docs.rs]
-# Enable the `testing` feature in generated docs so accessors appear.
-features = ["testing"]
+# `testing` so the widened accessors appear; `insecure-test-anchors` so the
+# four fail-closed anchor guards do not stop a docs build that provisions
+# nothing (docs.rs builds in a dev profile, which build.rs permits).
+features = ["testing", "insecure-test-anchors"]

@@ -83,7 +83,7 @@ const SHIPPED_TRUST_ROOT_BYTES: Option<[u8; 32]> =
 /// leak an insecure key into anything shippable.
 pub const TRUST_ROOT_PUBLIC_KEY_BYTES: Option<[u8; 32]> = match SHIPPED_TRUST_ROOT_BYTES {
     Some(configured) => Some(configured),
-    None if cfg!(test) || cfg!(feature = "testing") => Some(DEV_TRUST_ROOT_BYTES),
+    None if cfg!(test) || cfg!(feature = "insecure-test-anchors") => Some(DEV_TRUST_ROOT_BYTES),
     None => None,
 };
 
@@ -96,9 +96,13 @@ pub const TRUST_ROOT_PUBLIC_KEY_BYTES: Option<[u8; 32]> = match SHIPPED_TRUST_RO
 /// pinned keys behave the same way, which is the whole point of having one
 /// provisioning step for both.
 ///
-/// `cfg(test)` / `feature = "testing"` are excluded because those harnesses
-/// legitimately fall back to the dev key above.
-#[cfg(all(not(feature = "dev-trust-root"), not(test), not(feature = "testing")))]
+/// `cfg(test)` / `feature = "insecure-test-anchors"` are excluded because those
+/// harnesses legitimately fall back to the dev key above. That carve-out used
+/// to be keyed on `feature = "testing"`, which exists to widen accessors and is
+/// composed into ordinary builds by the Makefile — so it disarmed this guard,
+/// and the three below, in release builds too (ANCHOR-TESTING). The feature it
+/// names now does nothing else, and build.rs refuses it in a release profile.
+#[cfg(all(not(feature = "dev-trust-root"), not(test), not(feature = "insecure-test-anchors")))]
 const _: () = {
     assert!(
         TRUST_ROOT_PUBLIC_KEY_BYTES.is_some(),
@@ -260,7 +264,7 @@ pub const TLS_ROOT_CA_PEM: Option<&str> = match SHIPPED_TLS_ROOT_CA_PEM {
     // unconfigured so the build-time guard below rejects it (or test/testing
     // falls back to the dev CA), never the user's first handshake.
     Some(pem) if !pem.is_empty() => Some(pem),
-    _ if cfg!(test) || cfg!(feature = "testing") => Some(DEV_TLS_ROOT_CA_PEM),
+    _ if cfg!(test) || cfg!(feature = "insecure-test-anchors") => Some(DEV_TLS_ROOT_CA_PEM),
     _ => None,
 };
 
@@ -270,7 +274,7 @@ pub const TLS_ROOT_CA_PEM: Option<&str> = match SHIPPED_TLS_ROOT_CA_PEM {
 /// roots), an unprovisioned build would reject every hostname-TLS connection
 /// at runtime — so, like the sealed-sender trust root, this must fail on the
 /// machine that builds it, not the user's.
-#[cfg(all(not(test), not(feature = "testing")))]
+#[cfg(all(not(test), not(feature = "insecure-test-anchors")))]
 const _: () = {
     assert!(
         TLS_ROOT_CA_PEM.is_some(),
@@ -345,13 +349,12 @@ pub const KT_TREE_HEAD_PUBLIC_KEY_BYTES: [u8; 32] =
         //
         // `cfg(test)` covers this crate's unit tests. It does NOT cover the
         // integration tests in `tests/`, which link chatter-core as an ordinary
-        // dependency with `cfg(test)` unset — hence `feature = "testing"`, which
-        // exists only to widen accessors for exactly those tests and is
-        // documented in Cargo.toml as never to be enabled for an application
-        // build (chatter-ui does not enable it).
+        // dependency with `cfg(test)` unset — hence
+        // `feature = "insecure-test-anchors"`, whose only effect is this
+        // fallback and which build.rs refuses to build in a release profile.
         //
         // Neither is `debug_assertions`, which the Android build path sets.
-        None if cfg!(test) || cfg!(feature = "testing") => DEV_KT_TREE_HEAD_BYTES,
+        None if cfg!(test) || cfg!(feature = "insecure-test-anchors") => DEV_KT_TREE_HEAD_BYTES,
         // No configured key. Falling back to the development key here is exactly
         // the defect this replaces, so the build stops instead.
         None => panic!(
@@ -367,7 +370,7 @@ pub const KT_TREE_HEAD_PUBLIC_KEY_BYTES: [u8; 32] =
 
 /// A non-dev build must not end up pinning the development tree-head key, even
 /// if someone exports its hex by mistake. Mirrors the trust-root assertion.
-#[cfg(all(not(feature = "dev-trust-root"), not(test), not(feature = "testing")))]
+#[cfg(all(not(feature = "dev-trust-root"), not(test), not(feature = "insecure-test-anchors")))]
 const _: () = {
     let mut i = 0;
     let mut same = true;
@@ -441,7 +444,7 @@ pub const KT_VRF_PUBLIC_KEY_BYTES: [u8; 32] =
         Some(hex) => decode_hex32(hex),
         // Same harness carve-out as the tree-head key above: `cargo test` must
         // not require a provisioned key. Never true for an application build.
-        None if cfg!(test) || cfg!(feature = "testing") => DEV_KT_VRF_BYTES,
+        None if cfg!(test) || cfg!(feature = "insecure-test-anchors") => DEV_KT_VRF_BYTES,
         None => panic!(
             "no key-transparency VRF public key is baked into this build.\n\n\
              Every GetProof response carries a VRF proof binding the queried user_id\n\
@@ -458,7 +461,7 @@ pub const KT_VRF_PUBLIC_KEY_BYTES: [u8; 32] =
 
 /// A non-dev build must not end up pinning the development VRF key either.
 /// Mirrors the tree-head assertion above.
-#[cfg(all(not(feature = "dev-trust-root"), not(test), not(feature = "testing")))]
+#[cfg(all(not(feature = "dev-trust-root"), not(test), not(feature = "insecure-test-anchors")))]
 const _: () = {
     let mut i = 0;
     let mut same = true;
@@ -573,6 +576,78 @@ mod tests {
         assert_eq!(
             der[0], 0x30,
             "DER certificate must begin with an ASN.1 SEQUENCE tag"
+        );
+    }
+
+    /// ANCHOR-TESTING regression test.
+    ///
+    /// `--features chatter-core/testing` used to disarm all four fail-closed
+    /// anchor guards. That feature exists to widen service accessors for the
+    /// integration tests in `tests/`, and the Makefile composes it into
+    /// ordinary builds (`check-features`, `test-rust`, `test-validated`), so a
+    /// release build carrying it silently pinned the dev sealed-sender root,
+    /// the dev TLS CA, the dev KT tree-head key and the dev VRF key — exactly
+    /// the selection the guards exist to make impossible.
+    ///
+    /// Anchor selection now lives on its own feature. This reads this file's
+    /// own source, because the property is about which cfg the guards are
+    /// keyed on and no runtime value can observe that: inside this harness
+    /// `cfg(test)` supplies the fallback either way.
+    #[test]
+    fn anchor_guards_are_not_keyed_on_the_accessor_feature() {
+        let source = include_str!("config.rs");
+        // Built, not written literally, so this scan does not match its own
+        // source lines.
+        let accessor_needle = format!("feature = {:?}", "testing");
+        let anchor_needle = format!("feature = {:?}", "insecure-test-anchors");
+
+        for (lineno, line) in source.lines().enumerate() {
+            // Skip prose.
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            assert!(
+                !line.contains(&accessor_needle),
+                "config.rs:{} keys an anchor on the accessor-widening feature: {}\n\n                 That feature is composed into ordinary builds, so this disarms a \
+                 fail-closed trust anchor in release artifacts. Use \
+                 `insecure-test-anchors`, which build.rs refuses in a release profile.",
+                lineno + 1,
+                line.trim()
+            );
+        }
+
+        // And the fallback that does exist must be the named one, on all four
+        // anchors: sealed-sender root, TLS CA, KT tree head, KT VRF.
+        let occurrences = source
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//") && l.contains(&anchor_needle))
+            .count();
+        assert!(
+            occurrences >= 8,
+            "expected each of the four anchors to name the anchor-fallback feature \
+             in both its fallback and its guard, found {occurrences} references"
+        );
+    }
+
+    /// The two features must stay distinct in Cargo.toml as well: re-adding
+    /// `insecure-test-anchors` to `testing`'s dependency list would restore the
+    /// original defect without touching a single line of this file.
+    #[test]
+    fn accessor_feature_does_not_imply_the_anchor_fallback() {
+        let manifest = include_str!("../Cargo.toml");
+        let line = manifest
+            .lines()
+            .find(|l| l.trim_start().starts_with("testing ="))
+            .expect("chatter-core must declare a `testing` feature");
+        assert_eq!(
+            line.trim(),
+            "testing = []",
+            "`testing` must stay a bare accessor-widening feature; it must not \
+             pull in `insecure-test-anchors`"
+        );
+        assert!(
+            manifest.contains("insecure-test-anchors = []"),
+            "the anchor fallback feature is missing from Cargo.toml"
         );
     }
 }
