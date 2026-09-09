@@ -63,6 +63,8 @@ mod v061_mesh_exempt_sender_sent_at;
 mod v062_section_sort_mode;
 mod v063_pending_identity_changes;
 mod v064_shared_content;
+mod v065_sesame_tables;
+mod v066_messages_sent_at_index;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -129,6 +131,8 @@ pub use v061_mesh_exempt_sender_sent_at::V061MeshExemptSenderSentAt;
 pub use v062_section_sort_mode::V062SectionSortMode;
 pub use v063_pending_identity_changes::V063PendingIdentityChanges;
 pub use v064_shared_content::V064SharedContent;
+pub use v065_sesame_tables::V065SesameTables;
+pub use v066_messages_sent_at_index::V066MessagesSentAtIndex;
 
 /// Trait for database migrations.
 ///
@@ -181,8 +185,16 @@ impl MigrationRunner {
 
     /// Run all pending migrations.
     ///
-    /// Creates the schema_version table if it doesn't exist, then applies
-    /// any migrations with version > current version in order.
+    /// Creates the schema_version table if it doesn't exist, then applies every
+    /// registered migration that is not already recorded as applied.
+    ///
+    /// The check is set membership, NOT `version > MAX(version)`. A high-water
+    /// mark silently skips any migration whose number is below it: with 8, 14
+    /// and 43 free in the sequence, adding a `v043_*` would have been applied on
+    /// a fresh install and never on an existing one, and the two databases would
+    /// diverge with nothing reporting it. The same watermark also made the
+    /// version numbers of the registered set load-bearing in a way nobody
+    /// declared.
     pub fn run(&self, conn: &Connection) -> Result<(), StorageError> {
         // Create schema_version table if not exists
         conn.execute(
@@ -194,14 +206,16 @@ impl MigrationRunner {
             [],
         )?;
 
-        // Get current version
-        let current_version: u32 = conn
-            .query_row(
-                "SELECT COALESCE(MAX(version), 0) FROM schema_version",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
+        // Which versions are already applied. A failure here must NOT be
+        // swallowed: this used to be `.unwrap_or(0)`, which turns any read error
+        // -- a locked database, a wrong passphrase, a corrupt page -- into
+        // "nothing has been applied" and replays every migration from v001 over
+        // a populated database.
+        let mut stmt = conn.prepare("SELECT version FROM schema_version")?;
+        let applied: std::collections::HashSet<u32> = stmt
+            .query_map([], |row| row.get::<_, u32>(0))?
+            .collect::<Result<_, _>>()?;
+        drop(stmt);
 
         // Sort migrations by version
         let mut sorted_migrations: Vec<_> = self.migrations.iter().collect();
@@ -210,7 +224,7 @@ impl MigrationRunner {
         // Apply pending migrations
         for migration in sorted_migrations {
             let version = migration.version();
-            if version > current_version {
+            if !applied.contains(&version) {
                 // Execute migration in a transaction
                 let tx = conn.unchecked_transaction()?;
 
@@ -310,4 +324,6 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V062SectionSortMode)
         .register(V063PendingIdentityChanges)
         .register(V064SharedContent)
+        .register(V065SesameTables)
+        .register(V066MessagesSentAtIndex)
 }

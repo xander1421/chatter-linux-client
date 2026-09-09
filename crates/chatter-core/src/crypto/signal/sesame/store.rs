@@ -50,91 +50,15 @@ pub struct SqliteSesameStore {
 
 impl SqliteSesameStore {
     /// Create a new SqliteSesameStore.
+    ///
+    /// The `sesame_*` tables come from migration v065. They used to be created
+    /// here at runtime with `CREATE TABLE IF NOT EXISTS`, outside the migration
+    /// system: no version row, no way to ALTER them later, and `IF NOT EXISTS`
+    /// silently accepting an older build's shape. `app/infrastructure.rs` then
+    /// logged the failure as a warning and built the manager anyway, so startup
+    /// succeeded and every later session operation failed with no stated cause.
     pub fn new(db: Arc<Database>) -> Self {
         Self { db }
-    }
-
-    /// Initialize the database tables.
-    pub fn init_tables(&self) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-
-        // User records table
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS sesame_users (
-                user_id TEXT PRIMARY KEY,
-                stale INTEGER NOT NULL DEFAULT 0,
-                last_directory_check TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )",
-            [],
-        )?;
-
-        // Device records table
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS sesame_devices (
-                user_id TEXT NOT NULL,
-                device_id INTEGER NOT NULL,
-                stale INTEGER NOT NULL DEFAULT 0,
-                stale_timestamp TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY (user_id, device_id),
-                FOREIGN KEY (user_id) REFERENCES sesame_users(user_id) ON DELETE CASCADE
-            )",
-            [],
-        )?;
-
-        // Sessions table (both active and inactive)
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS sesame_sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT NOT NULL,
-                device_id INTEGER NOT NULL,
-                session_id BLOB NOT NULL,
-                session_record BLOB NOT NULL,
-                is_active INTEGER NOT NULL DEFAULT 0,
-                position INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                last_send_at TEXT,
-                last_recv_at TEXT,
-                send_count INTEGER NOT NULL DEFAULT 0,
-                recv_count INTEGER NOT NULL DEFAULT 0,
-                FOREIGN KEY (user_id, device_id) REFERENCES sesame_devices(user_id, device_id) ON DELETE CASCADE
-            )",
-            [],
-        )?;
-
-        // Index for fast session lookups
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_sesame_sessions_user_device
-             ON sesame_sessions(user_id, device_id, is_active)",
-            [],
-        )?;
-
-        // Pending messages table
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS sesame_pending_messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT NOT NULL,
-                content BLOB NOT NULL,
-                timestamp TEXT NOT NULL,
-                attempts INTEGER NOT NULL DEFAULT 0,
-                attachment_ids_blob BLOB,
-                channel_id TEXT,
-                FOREIGN KEY (user_id) REFERENCES sesame_users(user_id) ON DELETE CASCADE
-            )",
-            [],
-        )?;
-
-        // Index for pending messages
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_sesame_pending_user
-             ON sesame_pending_messages(user_id)",
-            [],
-        )?;
-
-        Ok(())
     }
 }
 
