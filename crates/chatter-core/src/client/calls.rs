@@ -66,6 +66,15 @@ pub struct CallParticipantSnapshot {
     pub is_local: bool,
 }
 
+/// One load of the Calls screen: the rows to render plus the missed-call
+/// count for the tab badge. Both come from the same blocking read so the
+/// list and the badge can never disagree.
+#[derive(Clone, Debug, Default)]
+pub struct CallHistoryPage {
+    pub rows: Vec<crate::ui::CallHistoryRowData>,
+    pub missed_count: u32,
+}
+
 /// orchestrator internals. `Clone` is intentionally omitted — the anonymous
 /// setup's encryption key is `Zeroize`-only.
 #[cfg(feature = "media")]
@@ -103,8 +112,82 @@ impl ChatterClient {
     /// and dispatches to the correct signalling path. Returns an
     /// [`OutgoingCallStart`] with everything the UI needs to render the
     /// "Calling…" state.
+    ///
+    /// Also opens the call-history row for the outgoing side. The
+    /// orchestrator never announces outgoing calls (nothing calls
+    /// `orch_register_outgoing`), so this is the only place that sees an
+    /// outgoing call of *every* conversation type at the moment it is
+    /// placed; `call_history_recorder` closes the row on the terminal event.
     #[cfg(feature = "media")]
     pub async fn start_call(
+        &self,
+        conversation: crate::state::ActiveConversation,
+        call_type: crate::domain::call::CallType,
+        display_name: &str,
+    ) -> Result<OutgoingCallStart, ClientError> {
+        let start = self.dispatch_start_call(conversation, call_type, display_name).await?;
+        self.open_outgoing_history_row(conversation, &start).await;
+        Ok(start)
+    }
+
+    /// Record the "we placed a call" row.
+    ///
+    /// Both SQLite touches run on a blocking worker — this is reached from
+    /// the UI's call-start task, and a synchronous repository call there
+    /// parks a tokio async worker. Best-effort: a history write must never be
+    /// what stops a call from being placed, so failures are logged and
+    /// dropped. Awaited rather than detached so the row always exists before
+    /// the recorder can try to close it.
+    #[cfg(feature = "media")]
+    async fn open_outgoing_history_row(
+        &self,
+        conversation: crate::state::ActiveConversation,
+        start: &OutgoingCallStart,
+    ) {
+        use crate::domain::call::{CallDirection, CallHistoryEntry, CallResult};
+
+        let Some((conversation_type, conversation_id)) = conversation.routing_key() else {
+            return;
+        };
+        let conversations = self.services.conversation_repo.clone();
+        let history = self.call_history_repo();
+        let id = start.call_id.clone();
+        let has_video = start.is_video;
+
+        let written = tokio::task::spawn_blocking(move || {
+            let peer_name = conversations
+                .get_conversation(&conversation_id, &conversation_type)
+                .ok()
+                .flatten()
+                .map(|c| c.name)
+                .unwrap_or_default();
+
+            history.insert_entry(&CallHistoryEntry {
+                id,
+                conversation_id,
+                conversation_type,
+                peer_name,
+                started_at: chrono::Utc::now(),
+                ended_at: None,
+                direction: CallDirection::Outgoing,
+                // Nobody has picked up yet. The recorder promotes this to
+                // `Completed` on hangup only if the call actually connected.
+                result: CallResult::Missed,
+                duration_secs: None,
+                has_video,
+            })
+        })
+        .await;
+
+        match written {
+            Ok(Err(e)) => tracing::warn!(error = %e, "call history: outgoing insert failed"),
+            Err(e) => tracing::warn!(error = %e, "call history: outgoing insert task failed"),
+            Ok(Ok(())) => {}
+        }
+    }
+
+    #[cfg(feature = "media")]
+    async fn dispatch_start_call(
         &self,
         conversation: crate::state::ActiveConversation,
         call_type: crate::domain::call::CallType,
@@ -1052,62 +1135,69 @@ impl ChatterClient {
     // ── Local call history (v053) ──────────────────────────────────
     //
     // These methods talk to the `call_history` SQLite table via
-    // `CallHistoryRepository`. This is purely client-local state: the
-    // server exposes no call-history RPC yet. Entries are produced by
-    // `CallSignalingService` on signaling events (start / accept /
-    // decline / end / missed) and consumed by the UI bridge.
+    // `CallHistoryRepository`. Purely client-local state: the server exposes
+    // no call-history RPC yet. Rows are opened by `start_call` (outgoing)
+    // and `call_history_recorder` (incoming), and read by the Calls screen.
 
-    /// List recent local call history entries.
+    /// Build the Calls screen's rows, newest first, plus the missed-call
+    /// count the tab badge shows.
     ///
-    /// Used by the bridge `get_call_history` FFI. Results are sorted
-    /// newest-first. Pass `None` for `cursor` to start at the newest row.
-    pub fn list_call_history(
+    /// Async because `CallHistoryRepository` is a synchronous SQLite handle:
+    /// the read (and all the row shaping) runs on a blocking worker, never on
+    /// the caller's thread. The Calls screen is painted from the Slint event
+    /// loop, and a SQLite read there stalls every frame in the app.
+    ///
+    /// Returns display-ready data — the UI renders it without re-deriving
+    /// wording, durations or routing.
+    pub async fn call_history_page(
         &self,
         filter: crate::domain::call::CallHistoryFilter,
         limit: u32,
-        cursor: Option<(chrono::DateTime<chrono::Utc>, String)>,
-    ) -> Result<Vec<crate::domain::call::CallHistoryEntry>, ClientError> {
-        self.call_history_repo()
-            .list(filter, limit, cursor)
-            .map_err(|e| ClientError::Inbox(format!("call history list: {}", e)))
+    ) -> Result<CallHistoryPage, ClientError> {
+        let repo = self.call_history_repo();
+        tokio::task::spawn_blocking(move || {
+            let entries = repo
+                .list(filter, limit, None)
+                .map_err(|e| ClientError::Inbox(format!("call history list: {}", e)))?;
+            Ok(CallHistoryPage {
+                rows: entries.iter().map(crate::ui::CallHistoryRowData::from).collect(),
+                missed_count: repo.missed_count().unwrap_or(0) as u32,
+            })
+        })
+        .await
+        .map_err(|e| ClientError::Inbox(format!("call history join: {}", e)))?
     }
 
-    /// Insert (or replace) a call history entry. Invoked by the call
-    /// signaling service — exposed on the client facade so other layers
-    /// (e.g. tests, bridge-initiated anon calls) can record entries
-    /// without depending on `CallSignalingService` directly.
-    pub fn record_call_history(
+    /// Number of missed calls on its own, for painting the tab badge at
+    /// startup without loading the list.
+    pub async fn missed_call_count(&self) -> u32 {
+        let repo = self.call_history_repo();
+        tokio::task::spawn_blocking(move || repo.missed_count().unwrap_or(0) as u32)
+            .await
+            .unwrap_or(0)
+    }
+
+    /// Resolve a Calls-screen row back to the conversation it happened in,
+    /// so the UI can reopen it and redial. `None` when the row's key no
+    /// longer names a reachable conversation.
+    pub fn call_history_conversation(
         &self,
-        entry: &crate::domain::call::CallHistoryEntry,
-    ) -> Result<(), ClientError> {
-        self.call_history_repo()
-            .insert_entry(entry)
-            .map_err(|e| ClientError::Inbox(format!("call history insert: {}", e)))
-    }
-
-    /// Mark a previously-inserted call as ended with a duration.
-    pub fn mark_call_history_ended(
-        &self,
-        id: &str,
-        duration_secs: i64,
-    ) -> Result<(), ClientError> {
-        self.call_history_repo()
-            .mark_ended(id, duration_secs)
-            .map_err(|e| ClientError::Inbox(format!("call history mark_ended: {}", e)))
-    }
-
-    /// Delete a single call history entry (swipe-to-delete in the UI).
-    pub fn delete_call_history_entry(&self, id: &str) -> Result<(), ClientError> {
-        self.call_history_repo()
-            .delete(id)
-            .map_err(|e| ClientError::Inbox(format!("call history delete: {}", e)))
+        conversation_type: &str,
+        conversation_id: &str,
+    ) -> Option<crate::state::ActiveConversation> {
+        let ct = crate::domain::message::ConversationType::from_str_value(conversation_type).ok()?;
+        crate::state::ActiveConversation::from_routing_key(&ct, conversation_id)
     }
 
     /// Clear all local call history.
-    pub fn clear_call_history(&self) -> Result<u64, ClientError> {
-        self.call_history_repo()
-            .delete_all()
-            .map_err(|e| ClientError::Inbox(format!("call history clear: {}", e)))
+    pub async fn clear_call_history(&self) -> Result<u64, ClientError> {
+        let repo = self.call_history_repo();
+        tokio::task::spawn_blocking(move || {
+            repo.delete_all()
+                .map_err(|e| ClientError::Inbox(format!("call history clear: {}", e)))
+        })
+        .await
+        .map_err(|e| ClientError::Inbox(format!("call history join: {}", e)))?
     }
 
     /// Accessor used by the history helpers above and by the signaling

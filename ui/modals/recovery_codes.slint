@@ -3,7 +3,6 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
-import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
 
 export component RecoveryCodesModal inherits Rectangle {
@@ -16,7 +15,10 @@ export component RecoveryCodesModal inherits Rectangle {
     callback confirmed();
     callback copy-all();
 
-    // Custom modal (no close button - must confirm)
+    // Deliberately NOT a `Modal`: no dismissal control, no Escape, no
+    // click-outside. Losing these codes is unrecoverable, so the one exit is
+    // the Continue button, and that is gated on the "I saved them" checkbox.
+    // Same shape as sealed_sender_intro.slint's acknowledge screen.
     opacity: root.show-modal ? 1 : 0;
     visible: root.show-modal;
 

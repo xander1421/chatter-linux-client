@@ -48,7 +48,7 @@ impl MessageService {
         let sent_at = TimestampNanos::now().as_u64();
         let mut message = Message::new_text(channel_id, ConversationType::SavedMessages, Some(sender_id), trimmed_text.to_string(), sent_at);
         message.attachments = attachment_ids.clone();
-        self.message_repo.insert(&message)?;
+        self.message_repo.insert_outgoing(&message)?;
 
         // Sync to other devices (non-blocking — local message is already stored)
         if let Err(e) = self.sync_saved_message_to_devices(

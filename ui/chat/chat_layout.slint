@@ -49,7 +49,12 @@ export component ChatLayout inherits Rectangle {
     in property <int> scroll-to-message-index: -1;  // Set to scroll to a specific message
     in property <string> highlighted-message-id: "";  // Message id to briefly flash (quote jump)
     in-out property <length> message-scroll-position: 0px;  // Scroll position for message list
-    out property <bool> is-at-bottom: message-list.is-at-bottom;  // True when scrolled to bottom
+    // Two-way: the open path resets it so a conversation left scrolled up
+    // does not decide where the NEXT conversation opens.
+    in-out property <bool> is-at-bottom <=> message-list.is-at-bottom;
+    // Unread boundary from core — see MessageList.
+    in-out property <int> unread-index: -1;
+    in-out property <int> unread-count: 0;
     in property <bool> should-auto-scroll: true;  // Enable/disable auto-scroll on new messages
 
     // Picker properties
@@ -89,6 +94,9 @@ export component ChatLayout inherits Rectangle {
 
     // Mobile back button
     in property <bool> show-back-button: false;
+    // macOS traffic-light clearance the header has to add for itself — see
+    // app.slint. 0 unless the sidebar beside it is too narrow to cover them.
+    in property <length> header-leading-inset: 0px;
     callback back-clicked();
 
     // Header callbacks
@@ -172,6 +180,7 @@ export component ChatLayout inherits Rectangle {
         // Header at top (fixed 56px). Hidden during active calls — the call
         // dock already shows channel name/encryption/timer.
         if !root.hide-header: ChatHeader {
+            mobile: root.mobile;
             channel-id: root.channel-id;
             channel-name: root.channel-name;
             channel-type: root.channel-type;
@@ -184,6 +193,7 @@ export component ChatLayout inherits Rectangle {
             jarvis-thinking: root.jarvis-thinking;
             has-any-pinned: root.pinned-total-count > 0;
             show-back-button: root.show-back-button;
+            leading-inset: root.header-leading-inset;
 
             back-clicked => {
                 root.back-clicked();
@@ -444,6 +454,8 @@ export component ChatLayout inherits Rectangle {
             highlighted-message-id: root.highlighted-message-id;
             scroll-position <=> root.message-scroll-position;
             should-auto-scroll: root.should-auto-scroll;
+            unread-index <=> root.unread-index;
+            unread-count <=> root.unread-count;
 
             selection-toggled(id) => {
                 root.selection-toggled(id);
@@ -488,6 +500,7 @@ export component ChatLayout inherits Rectangle {
         MessageComposer {
             width: 100%;
             vertical-stretch: 0;
+            mobile: root.mobile;
             text <=> root.composer-text;
             placeholder: root.composer-placeholder;
             disabled: root.composer-disabled;
@@ -541,6 +554,15 @@ export component ChatLayout inherits Rectangle {
             process-text(text) => {
                 return root.process-text(text);
             }
+        }
+
+        // Thumb room under the composer. On a phone it otherwise sits flush on
+        // the bottom edge of the screen — the send/attach controls end up in
+        // the same few millimetres as the system gesture strip, and the field
+        // reads as falling off the display. Desktop keeps the composer docked.
+        if root.mobile: Rectangle {
+            vertical-stretch: 0;
+            height: Spacing.sm;
         }
     }
 }

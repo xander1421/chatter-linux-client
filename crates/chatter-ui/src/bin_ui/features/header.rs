@@ -270,10 +270,30 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
             return;
         }
 
+        // A DM's settings screen is the peer's profile — block, verify, safety
+        // number, remove friend all live there, the same way Telegram hangs a
+        // DM's settings off the contact page. The kebab used to route to
+        // channel settings instead, which for a channel-free (Signal-style)
+        // server DM missed in `get_channel_local` and silently did nothing:
+        // the button was on screen in every DM and had never worked.
+        if let ActiveConversation::ServerDm { peer_id } = conversation {
+            let weak = weak_window.clone();
+            let ui_ctx = ui_ctx.clone();
+            let auth_state = ui_ctx.auth_state().clone();
+            let user_state = ui_ctx.user_state().clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    super::modals::open_user_profile(
+                        &w, &peer_id, &auth_state, &user_state, Some(&ui_ctx),
+                    );
+                }
+            });
+            return;
+        }
+
         // Regular channel settings
         let channel_id = match conversation {
             ActiveConversation::Channel(id) | ActiveConversation::MailboxDm { channel_id: id, .. } => id,
-            ActiveConversation::ServerDm { peer_id } => peer_id.into(),
             _ => {
                 tracing::warn!("Cannot open channel settings: no active channel");
                 return;

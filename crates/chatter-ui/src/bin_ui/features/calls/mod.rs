@@ -5,7 +5,7 @@
 //! This module is organized into:
 //! - `timers` - Call duration and video frame polling timers
 //! - `key_exchange` - Ephemeral key exchange for E2EE calls
-//! - `call_history` - Call history message creation
+//! - `history` - The Calls screen (past calls, redial)
 //! - `room_events` - LiveKit room event handling
 //! - `outgoing` - Outgoing call initiation
 //! - `incoming` - Incoming call accept/decline + orchestrator event glue
@@ -21,6 +21,7 @@ use crate::MainWindow;
 mod active;
 mod device_picker;
 mod event_handlers;
+pub mod history;
 mod incoming;
 pub mod key_exchange;
 mod outgoing;
@@ -40,4 +41,5 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     device_picker::wire_device_picker(window, ui_ctx);
     active::wire_call_hangup_handler(window, ui_ctx);
     event_handlers::wire_call_key_answer_handler(window, ui_ctx);
+    history::wire(window, ui_ctx);
 }

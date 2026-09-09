@@ -321,13 +321,6 @@ impl AnonGroupService {
         )?)
     }
 
-    /// Mark all messages as read for a group.
-    pub fn mark_as_read(&self, group_id: &AnonGroupId) -> Result<(), AnonGroupError> {
-        let channel_id: ChannelId = (*group_id).into();
-        self.message_service.message_repo.mark_conversation_read(&channel_id, &ConversationType::AnonGroup)?;
-        Ok(())
-    }
-
     /// Delete a message (soft delete).
     pub fn delete_message(&self, id: &AnonGroupMessageId) -> Result<(), AnonGroupError> {
         let msg_id: MessageId = id.as_str().parse()

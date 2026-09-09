@@ -90,7 +90,7 @@ impl ChatterClient {
         &self,
         conversation_id: &crate::domain::ids::ChannelId,
         conversation_type: &crate::domain::message::ConversationType,
-    ) -> Result<(), crate::services::message::MessageError> {
+    ) -> Result<crate::domain::message::UnreadAnchor, crate::services::message::MessageError> {
         self.messages().mark_conversation_read(conversation_id, conversation_type)
     }
 
@@ -297,6 +297,113 @@ impl ChatterClient {
         self.channels().get_channel(channel_id).await
     }
 
+    /// The newest locally-stored message in a conversation, if it has one.
+    pub fn latest_message(
+        &self,
+        conversation_id: &crate::domain::ids::ChannelId,
+        conversation_type: &crate::domain::message::ConversationType,
+    ) -> Option<crate::domain::message::Message> {
+        self.get_messages_local(conversation_id, conversation_type, None, 1)
+            .ok()
+            .and_then(|msgs| msgs.into_iter().next())
+    }
+
+    /// Typed label for a message's attachments — "🖼️ Photo", "🎬 Video +2",
+    /// "📎 report.pdf". `None` when the message carries no attachment or its
+    /// metadata has not landed locally yet; the caller then falls back to a
+    /// plain count. Media categories get a kind word rather than a filename
+    /// because "IMG_4821.HEIC" tells the reader nothing a 🖼️ hasn't.
+    fn attachment_preview_label(&self, message: &crate::domain::message::Message) -> Option<String> {
+        use crate::domain::attachment::FileCategory;
+
+        let meta = self
+            .get_attachment_metadata(message.attachments.first()?)?
+            .metadata;
+        let category = meta.category();
+        let icon = crate::ui::file_data::category_icon(category.as_str());
+        let label = match category {
+            FileCategory::Image => "Photo",
+            FileCategory::Video => "Video",
+            FileCategory::Audio => "Audio",
+            _ => meta.name.as_str(),
+        };
+        let extra = message.attachments.len() - 1;
+        Some(if extra > 0 {
+            format!("{} {} +{}", icon, label, extra)
+        } else {
+            format!("{} {}", icon, label)
+        })
+    }
+
+    /// The one-line sidebar preview for a message. `Message::sidebar_preview`
+    /// owns the wording; this adds the attachment lookup the domain type has no
+    /// storage handle for.
+    pub fn message_sidebar_preview(&self, message: &crate::domain::message::Message) -> String {
+        let label = self.attachment_preview_label(message);
+        message.sidebar_preview(
+            self.auth_state().get().current_user_id.as_ref(),
+            label.as_deref(),
+        )
+    }
+
+    /// Preview + local-time stamp of a conversation's latest activity: the
+    /// second line and the right-hand time of a sidebar row. Empty pair when
+    /// nothing has happened yet, so a fresh row renders as name only.
+    ///
+    /// Every sidebar row kind — DM, channel, private group — goes through here,
+    /// which is why the anon-group store can hand its own `Message` in rather
+    /// than each caller re-deriving the wording.
+    pub fn sidebar_activity(
+        &self,
+        latest: Option<&crate::domain::message::Message>,
+    ) -> (String, String) {
+        match latest {
+            Some(msg) => (
+                self.message_sidebar_preview(msg),
+                msg.created_at
+                    .with_timezone(&chrono::Local)
+                    .format("%H:%M")
+                    .to_string(),
+            ),
+            None => (String::new(), String::new()),
+        }
+    }
+
+    /// The storage bucket a channel's messages and pins are filed under.
+    ///
+    /// Never hardcode `ConversationType::Channel` for a channel — see
+    /// `channel_sidebar_activity` for what that costs.
+    pub fn channel_conversation_type(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+    ) -> crate::domain::message::ConversationType {
+        crate::services::message::conversion::conversation_type_for_channel(
+            &self.services.channel_repo,
+            channel_id,
+        )
+    }
+
+    /// `sidebar_activity` for a channel row.
+    ///
+    /// Takes the channel rather than an id + type because the type is the trap:
+    /// a channel's messages are filed under `Channel::conversation_type()`,
+    /// which is `AnonGroup` for an encrypted channel — and encryption is the
+    /// DEFAULT (`ChannelConfig::default().require_encryption`, domain/channel.rs)
+    /// — or `SavedMessages` for the vault. It is `ConversationType::Channel`
+    /// only for a plaintext channel. Hardcoding that variant is what left every
+    /// channel row in the sidebar with a name and nothing else, and it is the
+    /// same trap `features/sidebar/channel.rs` already documents on the
+    /// message-list side. Deriving it here means no caller can repeat it.
+    pub fn channel_sidebar_activity(
+        &self,
+        channel: &crate::domain::channel::Channel,
+    ) -> (String, String) {
+        self.sidebar_activity(
+            self.latest_message(&channel.id, &channel.conversation_type())
+                .as_ref(),
+        )
+    }
+
     /// Build the complete DM sidebar list — regular server DMs plus anon DMs
     /// (active conversations first, then incoming requests) — as one ordered,
     /// fully-shaped vector the UI renders directly. Regular DMs are dropped when
@@ -312,7 +419,7 @@ impl ChatterClient {
     /// `list_dm_sidebar` and the initial-load sidebar builder use it, so
     /// the UI never iterates channels to find DMs.
     pub fn list_regular_dm_sidebar(&self) -> Vec<crate::ui::sidebar_data::DMListItemSendData> {
-        use crate::domain::message::{truncate_preview_text, ConversationType};
+        use crate::domain::message::ConversationType;
         use crate::domain::user::FriendshipStatus;
         use crate::ui::chat_data::initials_from_name;
         use crate::ui::sidebar_data::DMListItemSendData;
@@ -341,34 +448,24 @@ impl ChatterClient {
             let conversation_id: crate::domain::ids::ChannelId = peer_id.into();
 
             let display_name = self.display_name(&peer_id);
-            let avatar_bytes = self.get_profile_local(&peer_id).and_then(|p| p.avatar_bytes);
+            // Presence rides on the same stored profile as the avatar — one
+            // read, both fields. It used to be hardcoded "offline", so every
+            // friend's dot in the sidebar was grey until a live presence event
+            // happened to arrive, and grey again after the next rebuild.
+            let profile = self.get_profile_local(&peer_id);
+            let presence_status = profile
+                .as_ref()
+                .map_or("offline", |p| p.presence.as_str())
+                .to_string();
+            let avatar_bytes = profile.and_then(|p| p.avatar_bytes);
 
-            // Preview + timestamp from local DM history (empty if none).
-            let (last_message, timestamp) = self
-                .get_messages_local(&conversation_id, &ConversationType::ServerDm, None, 1)
-                .ok()
-                .and_then(|msgs| msgs.into_iter().next())
-                .map(|msg| {
-                    let is_own = msg.sender_id == Some(current_user_id);
-                    let text = msg
-                        .as_text()
-                        .map(|t| {
-                            let trimmed = truncate_preview_text(t, 50);
-                            if is_own {
-                                format!("You: {}", trimmed)
-                            } else {
-                                trimmed
-                            }
-                        })
-                        .unwrap_or_default();
-                    let ts = msg
-                        .created_at
-                        .with_timezone(&chrono::Local)
-                        .format("%H:%M")
-                        .to_string();
-                    (text, ts)
-                })
-                .unwrap_or_default();
+            // Preview + timestamp from local DM history (empty if none). This
+            // used to hand-roll the text-only case, so a DM whose last message
+            // was a file rendered blank until the next live message arrived.
+            let (last_message, timestamp) = self.sidebar_activity(
+                self.latest_message(&conversation_id, &ConversationType::ServerDm)
+                    .as_ref(),
+            );
 
             let unread_count = self
                 .messages()
@@ -383,7 +480,7 @@ impl ChatterClient {
                 display_name,
                 avatar_bytes,
                 avatar_decoded: None,
-                presence_status: "offline".to_string(),
+                presence_status,
                 last_message,
                 timestamp,
                 unread_count,
@@ -560,6 +657,100 @@ impl ChatterClient {
             // Non-anon mode: only identified, friend-keyed DMs.
             self.list_regular_dm_sidebar()
         }
+    }
+
+    /// Resolve a DM sidebar id to the conversation it names.
+    ///
+    /// The id is either an `AnonDmId` (an anon conversation) or a peer `UserId`
+    /// (a channel-free server DM — the row's id IS the peer). Both are UUIDs,
+    /// so the anon table is the discriminator, not the string shape.
+    ///
+    /// The UI used to answer this by scanning the DM sidebar model for a row
+    /// with a matching id. Rows filed into a custom folder are removed from
+    /// that model on purpose — they render inside the folder — so the lookup
+    /// came back empty and a foldered DM opened into nothing: no active
+    /// conversation, no messages, and every send silently dropped.
+    pub fn resolve_dm_conversation(&self, dm_id: &str) -> Option<crate::state::ActiveConversation> {
+        use crate::state::ActiveConversation;
+
+        if let Ok(anon_id) = dm_id.parse::<crate::domain::anon_dm::AnonDmId>() {
+            if self.get_anon_dm_conversation(&anon_id).is_some() {
+                return Some(ActiveConversation::AnonDm(anon_id));
+            }
+        }
+        dm_id
+            .parse::<crate::domain::ids::UserId>()
+            .ok()
+            .map(|peer_id| ActiveConversation::ServerDm { peer_id })
+    }
+
+    /// Every conversation a message can be forwarded to, filtered by a
+    /// case-insensitive name substring and ordered by name.
+    ///
+    /// Sources are the same mode-exclusive sidebar builders the sidebar
+    /// renders — anon mode never offers an identified destination and vice
+    /// versa — PLUS the rows those builders drop because they live in a custom
+    /// folder (filing a conversation is a layout choice, not a reason it cannot
+    /// receive a forward), PLUS Saved Messages once its channel is known
+    /// locally. Rows that cannot be resolved back to a conversation to send to
+    /// (mesh, mailbox DMs, a stale id) are not destinations and are dropped.
+    pub fn forward_destinations(&self, query: &str) -> Vec<ForwardDestination> {
+        use crate::domain::message::ConversationType as CT;
+
+        let mut out: Vec<ForwardDestination> = Vec::new();
+
+        for dm in self.list_dm_sidebar() {
+            out.push(ForwardDestination {
+                kind: if dm.is_anon { CT::AnonDm } else { CT::ServerDm },
+                id: dm.channel_id,
+                name: dm.display_name,
+            });
+        }
+        for channel in self.sidebar_channels() {
+            out.push(ForwardDestination {
+                kind: CT::Channel,
+                id: channel.id.to_string(),
+                name: channel.name,
+            });
+        }
+        for group in self.sidebar_private_groups() {
+            out.push(ForwardDestination {
+                kind: CT::AnonGroup,
+                id: group.id.to_string(),
+                name: group.name,
+            });
+        }
+        for section in self.list_sections_with_conversations().unwrap_or_default() {
+            for conv in section.conversations {
+                out.push(ForwardDestination {
+                    kind: conv.conversation_type,
+                    id: conv.conversation_id,
+                    name: conv.display_name,
+                });
+            }
+        }
+        // Saved Messages ("note to self"). Only once the channel exists
+        // locally — the send path recognises it by that row's channel_type,
+        // and without it the forward would route as a plain channel send.
+        if let Some(user_id) = self.auth_state().get().current_user_id {
+            let channel_id: crate::domain::ids::ChannelId = user_id.into();
+            if !self.anon_mode_enabled() && self.get_channel_local(&channel_id).is_some() {
+                out.push(ForwardDestination {
+                    kind: CT::SavedMessages,
+                    id: channel_id.to_string(),
+                    name: "Saved Messages".to_string(),
+                });
+            }
+        }
+
+        let needle = query.trim().to_lowercase();
+        out.retain(|d| {
+            !d.name.is_empty()
+                && (needle.is_empty() || d.name.to_lowercase().contains(&needle))
+                && ActiveConversation::from_routing_key(&d.kind, &d.id).is_some()
+        });
+        out.sort_by_key(|d| d.name.to_lowercase());
+        out
     }
 
     /// Enriched mention suggestion — everything the composer autocomplete
@@ -892,6 +1083,19 @@ pub struct ReplyParentMedia {
     /// Audio waveform (32 values, 0-100) for the inline quote player; empty when
     /// the parent carries none.
     pub waveform: Vec<i32>,
+}
+
+/// One destination row in the forward picker, shaped by
+/// [`ChatterClient::forward_destinations`].
+///
+/// `kind` is core's own conversation vocabulary, so the confirm step maps a
+/// picked row back with [`ActiveConversation::from_routing_key`] instead of the
+/// UI inventing a tag of its own.
+#[derive(Debug, Clone)]
+pub struct ForwardDestination {
+    pub id: String,
+    pub name: String,
+    pub kind: ConversationType,
 }
 
 /// A person the user can invite to a channel, shaped by

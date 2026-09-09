@@ -8,6 +8,7 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
+import { DismissButton } from "../components/dismiss_button.slint";
 
 // One fact row.
 export struct MemoryFactData {
@@ -83,7 +84,13 @@ export component JarvisMemoryModal inherits Rectangle {
                 vertical-alignment: center;
             }
             Button { text: "Refresh"; variant: "ghost"; clicked => { root.refresh(); } }
-            Button { text: "Close"; variant: "secondary"; clicked => { root.close(); } }
+            // Centered dialog → the shared X on the trailing edge. A "Close"
+            // text button was a fourth spelling of the same action, and it sat
+            // next to "Refresh" looking like another content action.
+            DismissButton {
+                back: false;
+                clicked => { root.close(); }
+            }
         }
 
         HorizontalLayout {

@@ -194,62 +194,102 @@ fn main_view_renders_its_columns_and_they_cover_the_window() {
         "BLANK SCREEN: ChatLayout rendered with no MessageComposer in it"
     );
 
-    // ---- 4. Mobile, sidebar as a rail: the chat column SURVIVES -----------
-    // `!(is-mobile-platform && !sidebar-is-rail)`. This is the exact term whose
-    // polarity, flipped, blanks the app on Android.
+    // ---- 4. Mobile shows the conversation LIST and nothing else ----------
+    // Mobile is single-pane now: there is no rail beside the chat, so exactly
+    // one of the two panes is in the tree and it covers the window. Both
+    // failure modes are still "blank screen" — a list that only covers half
+    // the width, or a chat column that quietly renders behind it.
     w.set_is_mobile_platform(true);
-    w.set_sidebar_collapsed(true);
+    w.set_mobile_show_chat(false);
     pump(&w);
-    let m_side = find(&w, "Sidebar");
-    let m_chat = find(&w, "ChatLayout");
-    assert_visible(&m_side, "Sidebar", "mobile, sidebar collapsed to a rail");
-    assert_visible(&m_chat, "ChatLayout", "mobile, sidebar collapsed to a rail");
-    let m_side = m_side.unwrap();
-    let m_chat = m_chat.unwrap();
+    let list_side = find(&w, "Sidebar");
+    assert_visible(&list_side, "Sidebar", "mobile, conversation list");
+    let list_side = list_side.unwrap();
     println!(
-        "mobile rail: sidebar={}..{} chat={}..{}",
-        m_side.x,
-        m_side.x + m_side.w,
-        m_chat.x,
-        m_chat.x + m_chat.w
-    );
-    assert!(
-        (m_chat.x + m_chat.w) >= win_w - 1.0,
-        "BLANK SCREEN on mobile: chat column ends at {} in a {win_w}px window",
-        m_chat.x + m_chat.w
-    );
-    assert!(
-        m_side.w < win_w * 0.5,
-        "the collapsed rail is {}px wide in a {win_w}px window — it is not a rail",
-        m_side.w
-    );
-
-    // ---- 5. Mobile, sidebar expanded: it must fill the window -------------
-    // Here the chat column is REMOVED on purpose (the panel takes the screen).
-    // That is only correct if the sidebar then covers the width; a half-width
-    // sidebar beside a removed chat column is a literal blank half-screen, and
-    // it is the shape the original regression shipped in.
-    w.set_sidebar_collapsed(false);
-    pump(&w);
-    let x_side = find(&w, "Sidebar");
-    assert_visible(&x_side, "Sidebar", "mobile, sidebar expanded");
-    let x_side = x_side.unwrap();
-    println!(
-        "mobile expanded: sidebar={}..{} chatlayouts={}",
-        x_side.x,
-        x_side.x + x_side.w,
+        "mobile list: sidebar={}..{} chatlayouts={}",
+        list_side.x,
+        list_side.x + list_side.w,
         count(&w, "ChatLayout")
     );
     assert!(
-        (x_side.x + x_side.w) >= win_w - 1.0 && x_side.x <= 0.5,
-        "BLANK SCREEN on mobile: the chat column is removed while the sidebar \
-         only covers {}..{} of a {win_w}px window — the rest is void",
-        x_side.x,
-        x_side.x + x_side.w
+        (list_side.x + list_side.w) >= win_w - 1.0 && list_side.x <= 0.5,
+        "BLANK SCREEN on mobile: the list covers only {}..{} of a {win_w}px \
+         window — the rest is void",
+        list_side.x,
+        list_side.x + list_side.w
     );
     assert!(
-        x_side.h >= win_h * 0.5,
-        "mobile sidebar is only {}px tall in a {win_h}px window",
-        x_side.h
+        list_side.h >= win_h * 0.5,
+        "mobile list is only {}px tall in a {win_h}px window",
+        list_side.h
+    );
+    assert_eq!(
+        count(&w, "ChatLayout"),
+        0,
+        "mobile is single-pane: the chat column must be GONE while the list is \
+         showing, not merely covered"
+    );
+
+    // ---- 5. Mobile, a conversation open: the chat takes the whole screen --
+    // The mirror image, and the one the push-navigation change could break:
+    // tapping a row must swap the panes, not leave the list on top of a chat
+    // that never becomes visible.
+    w.set_mobile_show_chat(true);
+    pump(&w);
+    let m_chat = find(&w, "ChatLayout");
+    assert_visible(&m_chat, "ChatLayout", "mobile, conversation open");
+    let m_chat = m_chat.unwrap();
+    println!(
+        "mobile chat: chat={}..{} sidebars={}",
+        m_chat.x,
+        m_chat.x + m_chat.w,
+        count(&w, "Sidebar")
+    );
+    assert!(
+        (m_chat.x + m_chat.w) >= win_w - 1.0 && m_chat.x <= 0.5,
+        "BLANK SCREEN on mobile: the conversation covers only {}..{} of a \
+         {win_w}px window",
+        m_chat.x,
+        m_chat.x + m_chat.w
+    );
+    assert_eq!(
+        count(&w, "Sidebar"),
+        0,
+        "mobile is single-pane: the list must be GONE while a conversation is \
+         open, not sitting underneath it"
+    );
+    assert!(
+        count(&w, "MessageComposer") > 0,
+        "BLANK SCREEN on mobile: the conversation has no composer"
+    );
+
+    // ---- 6. The composer does not resize on the first character -----------
+    // Geometry, because that is what the bug is. On Android the composer sits
+    // under a TextInput whose IME transaction is still in flight for a few
+    // hundred ms after the tap that focused it, and anything that grows
+    // `MessageComposer.height` inside that window hides the just-shown soft
+    // keyboard. Both gates tried so far for the formatting toolbar
+    // (`text-input.has-focus`, then `root.text != ""`) grew it there — the
+    // first mid-tap, the second on the first keystroke, which is why "press a
+    // key, keyboard vanishes, press again and it types fine".
+    //
+    // So: same conversation, empty draft vs. a one-character draft, same
+    // height. Nothing about a bare `if` on the draft text can satisfy this.
+    let empty_h = find(&w, "MessageComposer")
+        .expect("MessageComposer missing before typing")
+        .h;
+    w.set_composer_text("a".into());
+    pump(&w);
+    let typed_h = find(&w, "MessageComposer")
+        .expect("MessageComposer missing after typing")
+        .h;
+    assert!(
+        (typed_h - empty_h).abs() < 0.5,
+        "the composer grew {}px -> {}px on the FIRST character. On Android that \
+         resize lands while the IME is still animating in and hides the soft \
+         keyboard — see the show-formatting comment in \
+         ui/chat/message_composer.slint",
+        empty_h,
+        typed_h
     );
 }

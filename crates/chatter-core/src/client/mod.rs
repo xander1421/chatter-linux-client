@@ -43,6 +43,7 @@ pub struct UserSearchResult {
 mod notification;
 mod pin;
 mod profile;
+mod shared_content;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -1482,11 +1483,35 @@ impl ChatterClient {
 
     // ── Sidebar sections (custom grouping) façade ────────────────────────
 
+    /// Custom folders with their rows, already ordered by each folder's sort
+    /// mode — minus anything the current mode hides.
+    ///
+    /// A folder is not a way around Anon Mode. The loose lists hide identified
+    /// channels and friend DMs while the shield is on, and hide anon DMs while
+    /// it is off; a conversation filed into a folder kept rendering — and
+    /// stayed clickable — in the wrong mode.
     pub fn list_sections_with_conversations(
         &self,
     ) -> Result<Vec<crate::domain::section::CustomSection>, crate::services::section_service::SectionError>
     {
-        self.sections().list_sections_with_conversations()
+        use crate::domain::message::ConversationType;
+
+        let anon = self.anon_mode_enabled();
+        let mut sections = self.sections().list_sections_with_conversations()?;
+        for section in sections.iter_mut() {
+            section.conversations.retain(|c| match c.conversation_type {
+                ConversationType::AnonDm => anon,
+                ConversationType::Channel
+                | ConversationType::ServerDm
+                | ConversationType::MailboxDm
+                | ConversationType::SavedMessages => !anon,
+                // Serverless and mode-agnostic, like the lists they come from.
+                ConversationType::AnonGroup | ConversationType::Mesh | ConversationType::MeshDm => true,
+            });
+            // The aggregate badge counts what the folder actually shows.
+            section.unread_count = section.conversations.iter().map(|c| c.unread_count).sum();
+        }
+        Ok(sections)
     }
 
     pub fn create_section(
@@ -1796,11 +1821,17 @@ impl ChatterClient {
     /// `ActiveConversation::conversation_type(...)` directly so they
     /// don't need channel_repo access.
     pub fn active_conversation_type(&self) -> Option<crate::domain::message::ConversationType> {
-        self.services
-            .chat_state
-            .get()
-            .active_conversation
-            .conversation_type(&self.services.channel_repo)
+        self.conversation_type_of(&self.services.chat_state.get().active_conversation)
+    }
+
+    /// Same resolution for a conversation that isn't the active one — a handle
+    /// can be built for any conversation, and `channel_repo` is private to this
+    /// module.
+    pub fn conversation_type_of(
+        &self,
+        conversation: &crate::state::ActiveConversation,
+    ) -> Option<crate::domain::message::ConversationType> {
+        conversation.conversation_type(&self.services.channel_repo)
     }
 
     /// Shortcut for `chat_state().active_conversation()`. The typed
@@ -3164,6 +3195,22 @@ impl ChatterClient {
         let proto = crate::services::presence_service::domain_presence_to_proto(presence);
         if let Err(e) = user_client.update_presence(proto).await {
             tracing::warn!("Failed to publish identified presence to server: {}", e);
+        }
+
+        // Our own presence never comes back to us on the user-events stream —
+        // the server fans it out to our friends, not to the sender. Emit it
+        // locally so the places that show it (profile strip, collapsed rail
+        // avatar) track every transition and not only the ones the picker
+        // makes: auto-away after idle, the return to online on activity, login
+        // with a persisted manual mode.
+        if let Some(me) = self.session_current_user_id() {
+            let _ = self.services.event_bus.domain_sender().send(
+                DomainEvent::UserPresenceChanged {
+                    user_id: me,
+                    presence,
+                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                },
+            );
         }
     }
 

@@ -801,11 +801,22 @@ impl UserService {
                 &friend.status_message,
             )
             .map(StatusMessage::new);
-            profile.avatar_bytes = self.try_decrypt_avatar(
-                &current_user,
-                &friend_id,
-                &friend.encrypted_avatar,
-            );
+            // The server's copy is authoritative WHEN IT HAS ONE. It legitimately
+            // may not: the friend never set an avatar, the response omits it, or
+            // the decrypt misses. Falling through to None was not merely "no
+            // picture in this list" — the `upsert_profile` below then wrote that
+            // None straight over the locally stored avatar, the same row the DM
+            // list reads. That is why one contact showed a photo in Chats and
+            // bare initials in Contacts: opening Contacts erased it.
+            profile.avatar_bytes = self
+                .try_decrypt_avatar(&current_user, &friend_id, &friend.encrypted_avatar)
+                .or_else(|| {
+                    self.user_repo
+                        .get_profile(&friend_id)
+                        .ok()
+                        .flatten()
+                        .and_then(|stored| stored.avatar_bytes)
+                });
 
             self.user_repo.ensure_user_exists(&friend_id).ok();
             self.user_repo.upsert_profile(&profile).ok();

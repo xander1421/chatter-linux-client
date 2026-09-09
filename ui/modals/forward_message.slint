@@ -24,6 +24,7 @@ export component ForwardMessageModal inherits Rectangle {
 
     callback close();
     callback forward(string);  // target_id
+    callback search-changed(string);
 
     // Internal state
     property <string> selected-target-id: "";
@@ -74,10 +75,14 @@ export component ForwardMessageModal inherits Rectangle {
                 }
             }
 
-            // Search input
+            // Search input. The narrowing happens in core — this only reports
+            // what was typed; the modal never filters `targets` itself.
             Input {
                 placeholder: "Search channels or people...";
                 text <=> root.search-text;
+                edited(query) => {
+                    root.search-changed(query);
+                }
             }
 
             // Target list (scrollable)

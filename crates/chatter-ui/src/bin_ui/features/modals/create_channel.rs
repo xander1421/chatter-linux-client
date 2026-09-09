@@ -174,7 +174,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             }
                         });
 
-                        load_channel_into_ui(weak, channel_id, ui_ctx).await;
+                        load_channel_into_ui(weak, channel_id, ui_ctx, Default::default()).await;
                     }
                     Err(e) => {
                         let error_msg = e.to_string();

@@ -3,7 +3,7 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
-import { Icons } from "../theme/icons.slint";
+import { DismissButton } from "../components/dismiss_button.slint";
 import { AudioDeviceData, ScreenSourceData } from "types.slint";
 
 component DeviceItem inherits Rectangle {
@@ -113,36 +113,24 @@ export component DevicePicker inherits Rectangle {
             padding: Spacing.lg;
             spacing: Spacing.md;
 
-            // Header
+            // Header — centered dialog, so X on the trailing edge at the
+            // shared header geometry (was a bespoke 16px glyph in a 32px
+            // circle, below the 44px touch floor).
             HorizontalLayout {
+                height: Spacing.header-action-box;
+
                 Text {
                     text: title;
                     font-size: Typography.lg;
                     font-weight: Typography.semibold;
                     color: Colors.text-primary;
+                    vertical-alignment: center;
                     horizontal-stretch: 1;
                 }
 
-                // Close button
-                Rectangle {
-                    width: 32px;
-                    height: 32px;
-                    border-radius: 16px;
-                    background: close-touch.has-hover ? Colors.surface-hover : transparent;
-
-                    Image {
-                        source: Icons.x;
-                        colorize: Colors.text-secondary;
-                        width: 16px;
-                        height: 16px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                    }
-
-                    close-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.closed(); }
-                    }
+                DismissButton {
+                    back: false;
+                    clicked => { root.closed(); }
                 }
             }
 

@@ -98,13 +98,19 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             // Mark as read
             let handle = ui_ctx.conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
-            let _ = handle.mark_as_read().await;
+            // Where the user left off. This is the only moment it exists: the
+            // call that returns it is the call that clears `is_read`.
+            let anchor = handle.mark_as_read().await.unwrap_or_default();
             // Reading a foldered channel has to clear its folder badge too.
             let ui_ctx_badges = ui_ctx.clone();
             run_ui!(weak, |w| super::refresh_section_badges(&w, &ui_ctx_badges));
 
-            // Load pinned messages for this channel from DB
-            let (msg_ids, preview) = match ui_ctx.load_pinned_for_channel(&channel_id, &chatter_core::domain::message::ConversationType::Channel).await {
+            // Load pinned messages for this channel from DB. The bucket is the
+            // channel's own conversation type — same reason the message list
+            // below uses `channel.conversation_type()`. Hardcoding
+            // `ConversationType::Channel` here found nothing for an encrypted
+            // channel, which is the default.
+            let (msg_ids, preview) = match ui_ctx.load_pinned_for_channel(&channel_id, &ui_ctx.channel_conversation_type(&channel_id)).await {
                 Ok(pinned) if !pinned.is_empty() => {
                     let ids = pinned.iter().map(|p| p.message_id).collect();
                     let preview = pinned[0].preview.clone();
@@ -118,16 +124,23 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 weak,
                 channel_id,
                 ui_ctx.clone(),
+                anchor,
             ).await;
         });
     });
 }
 
 /// Load a channel into the UI.
+///
+/// `anchor` is the unread boundary the open captured on its way in (see
+/// `ConversationHandle::mark_as_read`); paths with no unread concept — a
+/// freshly created channel, Saved Messages — pass `UnreadAnchor::default()`,
+/// which opens at the newest message.
 pub async fn load_channel_into_ui(
     weak: slint::Weak<MainWindow>,
     channel_id: ChannelId,
     ui_ctx: Arc<ChatterClient>,
+    anchor: chatter_core::domain::message::UnreadAnchor,
 ) -> Vec<String> {
     // 1. Get channel metadata
     let channel = match ui_ctx.get_channel_local(&channel_id) {
@@ -195,7 +208,9 @@ pub async fn load_channel_into_ui(
             (rgba.into_raw(), w, h)
         });
 
+    let anchor_page = messages.clone();
     run_ui!(weak, |w| {
+        super::apply_unread_anchor(&w, anchor, &anchor_page);
         w.set_channel_name(group_name.into());
         w.set_channel_type(channel_type_str.into());
         w.set_is_dm(false);

@@ -26,6 +26,10 @@ export struct FriendData {
     is-anon: bool,
     avatar-source: image,
     has-avatar: bool,
+    // Rendered inside the avatar circle when there is no image. Derived in
+    // Rust (`get_initials`) exactly like DMListItemData's, rather than passing
+    // the display name and letting it clip.
+    initials: string,
 }
 
 // Search result for finding users
@@ -58,6 +62,17 @@ export struct BlockedUserData {
 
 export component FriendsModal inherits Rectangle {
     in property <bool> show-modal: false;
+    // "Touch input", same meaning as the sidebar's. On a phone this modal is
+    // effectively a full-screen contacts page, so its rows get the same
+    // scan-at-a-glance sizing the conversation list uses rather than the
+    // 56px mouse density that leaves a whole screen looking like a dense
+    // desktop table.
+    in property <bool> mobile-mode: false;
+    in property <length> bottom-inset: 0px;
+    property <length> row-height: root.mobile-mode ? Spacing.row-height-touch : 56px;
+    property <length> row-avatar: root.mobile-mode ? Spacing.row-avatar-touch : 40px;
+    property <length> row-name-size: root.mobile-mode ? Typography.base : Typography.sm;
+    property <length> row-sub-size: root.mobile-mode ? Typography.sm : Typography.xs;
     in-out property <string> active-tab: "find";  // "find", "friends", "requests", "blocked"
 
     // Friends tab data
@@ -141,6 +156,12 @@ export component FriendsModal inherits Rectangle {
         title: "Friends";
         modal-width: 680px;
         max-modal-height: 800px;
+        // On a phone this is the Contacts screen, not a dialog over the chat
+        // list — the bottom tab bar navigates to it the same way Telegram's
+        // does, so it gets the whole viewport.
+        full-screen: root.mobile-mode;
+        bottom-inset: root.bottom-inset;
+        fill-height: root.mobile-mode;
 
         close => {
             root.close();
@@ -150,9 +171,11 @@ export component FriendsModal inherits Rectangle {
             spacing: Spacing.md;
             vertical-stretch: 1;
 
-            // Main tab bar — Neo
+            // Main tab bar — Neo. Same box height as the dismissal control in
+            // the header row above it, so the two rows share one baseline
+            // instead of the tabs sitting 4px short of the touch floor.
             HorizontalLayout {
-                height: 44px;
+                height: root.mobile-mode ? Spacing.header-action-box-touch : Spacing.header-action-box;
 
                 for tab in [
                     { id: "find", label: "Add Friend" },
@@ -255,10 +278,16 @@ export component FriendsModal inherits Rectangle {
                         viewport-height: friends-list.preferred-height;
 
                         friends-list := VerticalLayout {
+                            // Rows stack from the TOP. A VerticalLayout with no
+                            // alignment distributes its leftover space around
+                            // fixed-height children, so one friend in a
+                            // full-screen list sank to the bottom of the
+                            // viewport with the gap above it.
+                            alignment: start;
                             spacing: Spacing.xs;
 
                             for friend in root.friends: Rectangle {
-                                height: 56px;
+                                height: root.row-height;
                                 background: friend-touch.has-hover ? Colors.surface-hover : transparent;
                                 border-radius: Spacing.radius-md;
                                 border-width: friend-touch.has-hover ? 1px : 0px;
@@ -269,8 +298,15 @@ export component FriendsModal inherits Rectangle {
                                     spacing: Spacing.sm;
 
                                     Avatar {
-                                        size: 40px;
-                                        fallback-text: friend.display-name;
+                                        size: root.row-avatar;
+                                        // `source` was never bound, so every
+                                        // contact fell back to text even when
+                                        // FriendData carried a decoded avatar.
+                                        source: friend.avatar-source;
+                                        // Initials, not the whole name: Avatar
+                                        // renders this INSIDE the circle, so a
+                                        // display name clipped to "xande".
+                                        fallback-text: friend.initials;
                                         show-presence: true;
                                         presence-color: friend.presence-status == "online" ? Colors.online
                                                      : friend.presence-status == "away" ? Colors.away
@@ -281,12 +317,12 @@ export component FriendsModal inherits Rectangle {
                                     VerticalLayout {
                                         horizontal-stretch: 1;
                                         alignment: center;
-                                        spacing: 2px;
+                                        spacing: root.mobile-mode ? 3px : 2px;
 
                                         Text {
                                             text: friend.display-name;
                                             color: Colors.text-primary;
-                                            font-size: Typography.sm;
+                                            font-size: root.row-name-size;
                                             font-weight: Typography.medium;
                                             overflow: elide;
                                         }
@@ -294,7 +330,7 @@ export component FriendsModal inherits Rectangle {
                                         if friend.custom-status != "": Text {
                                             text: friend.custom-status;
                                             color: Colors.text-muted;
-                                            font-size: Typography.xs;
+                                            font-size: root.row-sub-size;
                                             overflow: elide;
                                         }
                                     }

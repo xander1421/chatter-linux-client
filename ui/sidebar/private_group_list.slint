@@ -26,6 +26,7 @@ export component PrivateGroupList inherits Rectangle {
     // Properties
     in property <[PrivateGroupListItemData]> groups: [];
     in property <bool> collapsed: false;
+    in property <bool> mobile-mode: false;
     in property <bool> show-header: true;
 
     // Callbacks
@@ -35,13 +36,13 @@ export component PrivateGroupList inherits Rectangle {
     // Tooltip callbacks removed — PrivateGroupListItem now uses self-contained TooltipArea
 
     // Layout
-    background: Colors.surface;
+    background: root.mobile-mode ? Colors.background : Colors.surface;
 
     VerticalLayout {
         // Section header (hidden when show-header is false)
         if root.show-header: Rectangle {
             height: root.collapsed ? 0px : 32px;
-            background: Colors.surface;
+            background: root.mobile-mode ? Colors.background : Colors.surface;
 
             if !root.collapsed: HorizontalLayout {
                 padding-left: Spacing.sm;
@@ -77,6 +78,7 @@ export component PrivateGroupList inherits Rectangle {
                 spacing: 2px;
 
                 for item in root.groups: PrivateGroupListItem {
+                    mobile-mode: root.mobile-mode;
                     group-id: item.group-id;
                     name: item.name;
                     member-count: item.member-count;

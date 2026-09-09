@@ -177,7 +177,7 @@ impl AnonDmService {
             targets_ai_bot: false,
             delivery_status: String::new(),
         };
-        self.message_repo.insert(&message)?;
+        self.message_repo.insert_outgoing(&message)?;
         tracing::info!(
             conversation_id = %conversation_id,
             message_id = %message_id,

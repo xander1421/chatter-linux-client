@@ -448,13 +448,16 @@ impl MessageService {
     /// Mark all unread messages in a conversation as read (sets is_read=1).
     /// Callers use this when the user is actively viewing a conversation so new
     /// incoming messages don't bump the unread badge.
+    /// Mark a conversation read and report the boundary that was cleared.
+    /// See [`crate::domain::message::UnreadAnchor`] for why the two are one call.
     pub fn mark_conversation_read(
         &self,
         conversation_id: &crate::domain::ids::ChannelId,
         conversation_type: &crate::domain::message::ConversationType,
-    ) -> Result<(), MessageError> {
-        self.message_repo.mark_conversation_read(conversation_id, conversation_type)?;
-        Ok(())
+    ) -> Result<crate::domain::message::UnreadAnchor, MessageError> {
+        Ok(self
+            .message_repo
+            .mark_conversation_read(conversation_id, conversation_type)?)
     }
 
     pub fn set_message_pinned(

@@ -1,7 +1,7 @@
 // Chatter Linux Client - Main UI
 // Root component for the application
 
-import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem } from "app.slint";
+import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, CallHistoryRow, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem, SharedContentItem, SharedTab } from "app.slint";
 import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 import { TextFormat } from "chat/message_composer.slint";
 import { AnonMode, TorStatus } from "anon_mode/anon_mode_global.slint";
@@ -10,7 +10,7 @@ import { Typography } from "theme/typography.slint";
 import { Haptics } from "components/haptics.slint";
 
 // Re-export all types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem, SharedContentItem, SharedTab }
 export { JarvisGlobal }
 export { TextFormat }
 export { AnonMode }
@@ -38,7 +38,8 @@ export component MainWindow inherits Window {
     in property <length> safe-area-bottom <=> app.safe-area-bottom;
 
     in property <bool> is-mobile-platform <=> app.is-mobile-platform;
-    in property <length> macos-titlebar-inset <=> app.macos-titlebar-inset;
+    in property <length> macos-titlebar-height <=> app.macos-titlebar-height;
+    in property <length> macos-traffic-lights-width <=> app.macos-traffic-lights-width;
 
     // ========== Android back key ==========
     // Fired once per hardware/gesture Back press, from `back-scope` at the
@@ -149,6 +150,9 @@ export component MainWindow inherits Window {
     in property <string> highlighted-message-id <=> app.highlighted-message-id;
     in-out property <length> message-scroll-position <=> app.message-scroll-position;
     in-out property <bool> is-at-bottom <=> app.is-at-bottom;  // True when scrolled to bottom
+    // Unread boundary from core — where the conversation opens, and the pill count.
+    in-out property <int> unread-index <=> app.unread-index;
+    in-out property <int> unread-count <=> app.unread-count;
     in property <bool> should-auto-scroll <=> app.should-auto-scroll;  // Enable auto-scroll
     in-out property <string> composer-text <=> app.composer-text;
     in property <string> composer-placeholder <=> app.composer-placeholder;
@@ -284,6 +288,7 @@ export component MainWindow inherits Window {
 
     // ========== Message multi-select ==========
     in-out property <bool> selection-mode <=> app.selection-mode;
+    in-out property <bool> mobile-show-chat <=> app.mobile-show-chat;
     in property <int> selected-message-count <=> app.selected-message-count;
     callback message-selection-toggled <=> app.message-selection-toggled;
     callback selection-cleared <=> app.selection-cleared;
@@ -388,6 +393,12 @@ export component MainWindow inherits Window {
     in property <string> profile-share-link <=> app.profile-share-link;
     in property <image> profile-share-qr <=> app.profile-share-qr;
     in property <string> profile-share-status <=> app.profile-share-status;
+    in property <string> profile-last-seen <=> app.profile-last-seen;
+    in property <bool> profile-is-muted <=> app.profile-is-muted;
+    in property <[SharedTab]> profile-shared-tabs <=> app.profile-shared-tabs;
+    in-out property <string> profile-shared-tab <=> app.profile-shared-tab;
+    in property <[SharedContentItem]> profile-shared-items <=> app.profile-shared-items;
+    in property <bool> profile-shared-loading <=> app.profile-shared-loading;
 
     // Edit Profile data
     in-out property <string> edit-profile-display-name <=> app.edit-profile-display-name;
@@ -684,6 +695,11 @@ export component MainWindow inherits Window {
     callback profile-edit-profile <=> app.profile-edit-profile;
     callback profile-view-safety-number <=> app.profile-view-safety-number;
     callback profile-toggle-verified <=> app.profile-toggle-verified;
+    callback profile-toggle-mute <=> app.profile-toggle-mute;
+    callback profile-start-call <=> app.profile-start-call;
+    callback profile-shared-tab-selected <=> app.profile-shared-tab-selected;
+    callback profile-shared-load-more <=> app.profile-shared-load-more;
+    callback profile-open-shared-item <=> app.profile-open-shared-item;
     callback profile-generate-share-link <=> app.profile-generate-share-link;
     callback profile-copy-share-link <=> app.profile-copy-share-link;
     callback profile-reset-share-link <=> app.profile-reset-share-link;
@@ -722,6 +738,7 @@ export component MainWindow inherits Window {
     // Channel invites
     callback channel-invites-clicked <=> app.channel-invites-clicked;
     callback forward-message <=> app.forward-message;
+    callback forward-search-changed <=> app.forward-search-changed;
     callback revoke-session <=> app.revoke-session;
     callback revoke-all-sessions <=> app.revoke-all-sessions;
 
@@ -780,6 +797,14 @@ export component MainWindow inherits Window {
 
     // ========== Call callbacks ==========
     callback calls-tab-clicked <=> app.calls-tab-clicked;
+    in property <[CallHistoryRow]> call-history-rows <=> app.call-history-rows;
+    in property <bool> call-history-loading <=> app.call-history-loading;
+    in-out property <string> call-history-filter <=> app.call-history-filter;
+    in property <int> missed-call-count <=> app.missed-call-count;
+    callback call-history-filter-changed <=> app.call-history-filter-changed;
+    callback call-history-open <=> app.call-history-open;
+    callback call-history-redial <=> app.call-history-redial;
+    callback call-history-clear <=> app.call-history-clear;
     callback accept-incoming-call <=> app.accept-incoming-call;
     callback decline-incoming-call <=> app.decline-incoming-call;
     callback call-toggle-mute <=> app.call-toggle-mute;

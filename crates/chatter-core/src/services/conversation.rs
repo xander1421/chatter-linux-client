@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use crate::client::ChatterClient;
 use crate::domain::ids::{ChannelId, UserId};
-use crate::domain::message::ConversationType;
+use crate::domain::message::{ConversationType, UnreadAnchor};
 use crate::state::ActiveConversation;
 
 /// Unified error type for conversation operations.
@@ -35,6 +35,33 @@ pub enum ConversationError {
     Message(#[from] crate::services::MessageError),
     #[error("{0}")]
     Other(String),
+}
+
+/// Re-shape stored attachments into send inputs that reuse the CDN blob they
+/// already have, instead of re-uploading a local file that a forwarded message
+/// (received, never on this disk) does not have in the first place.
+///
+/// An attachment whose local record lost its CDN key, blob key or digest cannot
+/// be re-pointed and is dropped — a pointer the receiver cannot decrypt is
+/// worse than a missing one.
+fn forwardable_attachments(
+    attachments: &[crate::domain::attachment::Attachment],
+) -> Vec<crate::state::chat_state::PendingAttachment> {
+    use crate::state::chat_state::PendingAttachment;
+    attachments
+        .iter()
+        .filter_map(|att| {
+            let pointer = att.to_pointer()?;
+            Some(PendingAttachment::with_pointer(
+                att.id,
+                std::path::PathBuf::new(),
+                att.metadata.name.clone(),
+                att.metadata.size,
+                att.metadata.mime_type.clone(),
+                pointer,
+            ))
+        })
+        .collect()
 }
 
 /// Polymorphic conversation operations.
@@ -416,9 +443,13 @@ impl ConversationHandle {
 
     /// Forward a message from this conversation to another one.
     ///
-    /// Text-only: looks up the source message by sender + timestamp and
-    /// re-sends its text to `target` as a fresh message (Signal-style —
-    /// no forwarding envelope, the recipient sees a normal message).
+    /// Re-sends the source message's text AND its attachments to `target` as a
+    /// fresh message (Signal-style — no forwarding envelope, the recipient sees
+    /// a normal message). Attachments ride the pointer they were already
+    /// uploaded with, so forwarding a photo costs no second upload.
+    ///
+    /// The quoted parent of a reply is deliberately not carried: the target
+    /// conversation has no such message, and Signal drops it too.
     pub async fn forward_to(
         &self,
         target_author: &UserId,
@@ -427,9 +458,23 @@ impl ConversationHandle {
     ) -> ConversationResult {
         let text = self
             .get_message_text(target_author, target_sent_timestamp)?
-            .ok_or_else(|| ConversationError::Other("message to forward not found".into()))?;
+            .unwrap_or_default();
+        let attachment_ids =
+            self.get_message_attachment_ids(target_author, target_sent_timestamp)?;
+        let attachments: Vec<crate::domain::attachment::Attachment> = attachment_ids
+            .iter()
+            .filter_map(|id| self.client.attachments().get(id).ok().flatten())
+            .collect();
+        let pending = forwardable_attachments(&attachments);
+        // An attachment-only message whose blobs can no longer be re-pointed
+        // would send as an empty message; say so instead.
+        if text.is_empty() && pending.is_empty() {
+            return Err(ConversationError::Other(
+                "message to forward has no content".into(),
+            ));
+        }
         self.client
-            .send_text(target, &text)
+            .send_message(target, &text, &pending, None, None)
             .await
             .map_err(|e| ConversationError::Other(e.to_string()))?;
         Ok(())
@@ -570,74 +615,53 @@ impl ConversationHandle {
 
     /// Mark all messages in this conversation as read.
     ///
-    /// For DM/Channel, loads recent messages from the peer and sends read receipts.
-    /// For AnonDm, marks locally + sends anon read receipt.
-    /// For AnonGroup, no-op (groups don't track read state per-user).
-    pub async fn mark_as_read(&self) -> ConversationResult {
-        match &self.conversation {
-            ActiveConversation::AnonDm(id) => {
-                if let Err(e) = self.client.anon_dms().mark_as_read(id) {
-                    tracing::warn!("Failed to mark anon DM as read: {}", e);
-                }
-                // Send read receipts for peer messages
-                let current_user = self.client.auth_state().get().current_user_id;
-                if let Ok(messages) = self.client.anon_dms().get_messages(id, None, 50) {
-                    let timestamps: Vec<u64> = messages.iter()
-                        .filter(|m| current_user.map(|uid| m.sender_id != Some(uid)).unwrap_or(true))
-                        .map(|m| m.sent_at)
-                        .collect();
-                    // Same privacy gate as ConversationHandle::send_read_receipt
-                    // (this AnonDm branch calls the sub-service directly).
-                    if !timestamps.is_empty()
-                        && self.client.read_receipts_enabled().unwrap_or(true)
-                    {
-                        let _ = self.client.anon_dms().send_read_receipt(id, timestamps).await;
-                    }
-                }
-                Ok(())
-            }
-            ActiveConversation::AnonGroup(id) => {
-                if let Err(e) = self.client.anon_groups().mark_as_read(id) {
-                    tracing::warn!("Failed to mark anon group as read: {}", e);
-                }
-                Ok(())
-            }
-            ActiveConversation::MailboxDm { channel_id, .. } => {
-                let my_user_id = self.client.auth_state().get().current_user_id;
-                if let Ok(messages) = self.client.messages().get_messages_local(channel_id, &ConversationType::MailboxDm, None, 50) {
-                    let timestamps: Vec<u64> = messages.iter()
-                        .filter(|m| m.sender_id.as_ref() != my_user_id.as_ref())
-                        .map(|m| m.sent_at)
-                        .collect();
-                    self.send_read_receipt(&timestamps).await?;
-                }
-                Ok(())
-            }
-            ActiveConversation::ServerDm { peer_id } => {
-                let my_user_id = self.client.auth_state().get().current_user_id;
-                let channel_id: ChannelId = (*peer_id).into();
-                if let Ok(messages) = self.client.messages().get_messages_local(&channel_id, &ConversationType::ServerDm, None, 50) {
-                    let timestamps: Vec<u64> = messages.iter()
-                        .filter(|m| m.sender_id.as_ref() != my_user_id.as_ref())
-                        .map(|m| m.sent_at)
-                        .collect();
-                    self.send_read_receipt(&timestamps).await?;
-                }
-                Ok(())
-            }
-            ActiveConversation::Channel(channel_id) => {
-                let my_user_id = self.client.auth_state().get().current_user_id.map(|id| id.to_string());
-                if let Ok(messages) = self.client.messages().get_messages_local(channel_id, &ConversationType::AnonGroup, None, 50) {
-                    let timestamps: Vec<u64> = messages.iter()
-                        .filter(|m| m.sender_id.as_ref().map(|id| id.to_string()).as_ref() != my_user_id.as_ref())
-                        .map(|m| m.sent_at)
-                        .collect();
-                    self.send_read_receipt(&timestamps).await?;
-                }
-                Ok(())
-            }
-            ActiveConversation::None => Err(ConversationError::NoConversation),
+    /// Two halves, and the sidebar only ever sees the first one: the unread
+    /// badge is a `COUNT(is_read = 0)` over the messages table (see
+    /// `list_regular_dm_sidebar`, `channel_repo`, `conversation_stats`), so a
+    /// receipt on the wire clears nothing locally — the badge came back on the
+    /// next rebuild and survived restarts. The local write covers every
+    /// conversation type; only the receipt is per-transport, and anon groups
+    /// have no receipt at all (per-user read state would defeat the sender
+    /// anonymity the group is for).
+    /// Returns the [`UnreadAnchor`] that was just cleared, so the caller can
+    /// open the conversation where the user left off. Read-receipt failures do
+    /// not swallow it — the anchor is the caller's only chance at the boundary.
+    pub async fn mark_as_read(&self) -> Result<UnreadAnchor, ConversationError> {
+        let (Some(conversation_id), Some(conversation_type)) = (
+            self.conversation.channel_id(),
+            self.client.conversation_type_of(&self.conversation),
+        ) else {
+            return Err(ConversationError::NoConversation);
+        };
+
+        let anchor = self
+            .client
+            .messages()
+            .mark_conversation_read(&conversation_id, &conversation_type)?;
+
+        if matches!(self.conversation, ActiveConversation::AnonGroup(_)) {
+            return Ok(anchor);
         }
+
+        // Receipt the peer's messages only — receipting our own back to
+        // ourselves is noise. `send_read_receipt` holds the privacy gate and
+        // picks the transport.
+        let my_user_id = self.client.auth_state().get().current_user_id;
+        let Ok(messages) = self.client.messages().get_messages_local(
+            &conversation_id,
+            &conversation_type,
+            None,
+            50,
+        ) else {
+            return Ok(anchor);
+        };
+        let timestamps: Vec<u64> = messages
+            .iter()
+            .filter(|m| m.sender_id != my_user_id)
+            .map(|m| m.sent_at)
+            .collect();
+        let _ = self.send_read_receipt(&timestamps).await;
+        Ok(anchor)
     }
 
     // ========================================================================
@@ -920,5 +944,182 @@ impl ConversationHandle {
             ActiveConversation::Channel(channel_id) => self.send_channel_content(content, channel_id).await,
             _ => Err(ConversationError::NoConversation),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::attachment::{Attachment, FileMetadata};
+    use crate::domain::ids::AttachmentId;
+
+    fn received_photo() -> Attachment {
+        // The shape a received attachment has locally: no file on this disk,
+        // only the CDN blob and the material to decrypt it.
+        let mut att = Attachment::new(
+            AttachmentId::from_cdn_key("cdn-key-1"),
+            FileMetadata::new("photo.jpg".into(), "image/jpeg".into(), 4096),
+        );
+        att.remote_url = Some("cdn-key-1".into());
+        att.encryption_key = Some(vec![7u8; 64]);
+        att.encryption_iv = Some(vec![9u8; 32]);
+        att
+    }
+
+    /// Forwarding a photo must re-send the CDN pointer it already has. Before
+    /// this, `forward_to` was text-only: an attachment-only message resolved to
+    /// no text and the forward failed silently.
+    #[test]
+    fn forwarded_attachment_reuses_its_existing_pointer() {
+        let out = forwardable_attachments(&[received_photo()]);
+        assert_eq!(out.len(), 1, "the photo was dropped from the forward");
+        let pointer = out[0].pointer.as_ref().expect("forward must not re-upload");
+        assert_eq!(pointer.cdn_key, "cdn-key-1");
+        assert_eq!(pointer.file_name, "photo.jpg");
+        assert_eq!(pointer.plaintext_size, 4096);
+        assert!(out[0].path.as_os_str().is_empty(), "there is no local file to upload");
+    }
+
+    /// A record that can no longer be re-pointed (no digest, so the receiver
+    /// could not verify the blob) is dropped rather than shipped broken.
+    #[test]
+    fn unpointable_attachment_is_dropped() {
+        let mut att = received_photo();
+        att.encryption_iv = None;
+        assert!(forwardable_attachments(&[att]).is_empty());
+    }
+
+    // ========================================================================
+    // Read state
+    // ========================================================================
+
+    /// A client with a temp datastore and nothing behind its server URL — the
+    /// storage half of `mark_as_read` is what these tests are about. Keyring is
+    /// pointed at its in-memory mock (same reason as `client::tests`).
+    fn test_client() -> (Arc<ChatterClient>, tempfile::TempDir) {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("http://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        // Turn the wire half off at its privacy gate — there is no server here.
+        client
+            .set_read_receipts_enabled(false)
+            .expect("read-receipt setting");
+        (client, dir)
+    }
+
+    fn store_peer_message(
+        client: &ChatterClient,
+        conversation_id: ChannelId,
+        conversation_type: ConversationType,
+        peer: UserId,
+        n: u64,
+    ) {
+        let message = crate::domain::message::Message::new_text(
+            conversation_id,
+            conversation_type,
+            Some(peer),
+            format!("message {n}"),
+            n,
+        );
+        client.messages().message_repo.insert(&message).expect("store message");
+    }
+
+    fn unread(client: &ChatterClient, id: &ChannelId, conv_type: &ConversationType) -> u64 {
+        client
+            .messages()
+            .message_repo
+            .get_unread_count(id, conv_type)
+            .expect("unread count")
+    }
+
+    /// Opening a DM has to leave the sidebar badge at zero. The badge is a
+    /// `COUNT(is_read = 0)` rebuilt from storage on every refresh and every
+    /// restart, so a `mark_as_read` that only put a receipt on the wire left it
+    /// lit forever — the DM stuck on 5 that reopening would not clear.
+    #[tokio::test]
+    async fn opening_a_server_dm_clears_its_unread_count() {
+        let (client, _dir) = test_client();
+        let peer = UserId::new();
+        let conversation_id: ChannelId = peer.into();
+        for n in 1..=5 {
+            store_peer_message(&client, conversation_id, ConversationType::ServerDm, peer, n);
+        }
+        assert_eq!(
+            unread(&client, &conversation_id, &ConversationType::ServerDm),
+            5,
+            "positive control: the peer's messages must start unread"
+        );
+
+        client
+            .conversation(ActiveConversation::ServerDm { peer_id: peer })
+            .mark_as_read()
+            .await
+            .expect("mark as read");
+
+        assert_eq!(
+            unread(&client, &conversation_id, &ConversationType::ServerDm),
+            0,
+            "opening the DM must persist the read state, not only receipt it"
+        );
+    }
+
+    /// Same defect, same fix, on the channel path.
+    #[tokio::test]
+    async fn opening_a_channel_clears_its_unread_count() {
+        let (client, _dir) = test_client();
+        let channel_id = ChannelId::new();
+        let peer = UserId::new();
+        for n in 1..=3 {
+            store_peer_message(&client, channel_id, ConversationType::Channel, peer, n);
+        }
+        assert_eq!(unread(&client, &channel_id, &ConversationType::Channel), 3);
+
+        client
+            .conversation(ActiveConversation::Channel(channel_id))
+            .mark_as_read()
+            .await
+            .expect("mark as read");
+
+        assert_eq!(
+            unread(&client, &channel_id, &ConversationType::Channel),
+            0,
+            "opening the channel must persist the read state"
+        );
+    }
+
+    /// A message we sent is read by definition. Stored unread, it badged the
+    /// conversation the user was typing in — invisibly until the next sidebar
+    /// rebuild, then permanently.
+    #[tokio::test]
+    async fn our_own_sent_message_never_counts_as_unread() {
+        let (client, _dir) = test_client();
+        let me = UserId::new();
+        let conversation_id: ChannelId = UserId::new().into();
+        let message = crate::domain::message::Message::new_text(
+            conversation_id,
+            ConversationType::ServerDm,
+            Some(me),
+            "sent by us".to_string(),
+            1,
+        );
+        client
+            .messages()
+            .message_repo
+            .insert_outgoing(&message)
+            .expect("store local echo");
+
+        assert_eq!(
+            unread(&client, &conversation_id, &ConversationType::ServerDm),
+            0,
+            "our own local echo must not badge the conversation"
+        );
     }
 }

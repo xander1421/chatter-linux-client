@@ -16,8 +16,9 @@ export struct ChannelListItemData {
     name: string,
     channel-type: string,
     unread-count: int,
-    last-message: string,
+    last-message: string,   // core-composed preview of the latest activity
     timestamp: string,
+    is-typing: bool,
     avatar-source: image,
     has-avatar: bool,
     is-pinned: bool,         // local-only pin; core sorts pinned rows first
@@ -28,6 +29,8 @@ export component ChannelList inherits Rectangle {
     // Properties
     in property <[ChannelListItemData]> channels: [];
     in property <bool> collapsed: false;
+    // "Touch input", same meaning as the sidebar's — sizes the rows.
+    in property <bool> mobile-mode: false;
     in property <bool> show-header: true;
     // True when sibling lists in the same Channels section (e.g. private
     // groups) have items. Suppresses the "no channels yet" empty state so
@@ -42,13 +45,13 @@ export component ChannelList inherits Rectangle {
     // Tooltip callbacks removed — ChannelListItem now uses self-contained TooltipArea
 
     // Layout
-    background: Colors.surface;
+    background: root.mobile-mode ? Colors.background : Colors.surface;
 
     VerticalLayout {
         // Section header - simplified when collapsed (hidden when show-header is false)
         if root.show-header: Rectangle {
             height: 32px;
-            background: Colors.surface;
+            background: root.mobile-mode ? Colors.background : Colors.surface;
 
             // Expanded header
             if !root.collapsed: HorizontalLayout {
@@ -185,9 +188,13 @@ export component ChannelList inherits Rectangle {
                 spacing: 2px;
 
                 for item in root.channels: ChannelListItem {
+                    mobile-mode: root.mobile-mode;
                     name: item.name;
                     channel-type: item.channel-type;
                     unread-count: item.unread-count;
+                    last-message: item.last-message;
+                    timestamp: item.timestamp;
+                    is-typing: item.is-typing;
                     selected: item.is-selected;
                     collapsed: root.collapsed;
                     avatar-source: item.avatar-source;

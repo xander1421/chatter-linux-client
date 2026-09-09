@@ -437,7 +437,7 @@ pub async fn handle_domain_event(
             presence,
             timestamp,
         } => {
-            social::handle_presence_changed(window, user_id, presence, timestamp);
+            social::handle_presence_changed(window, ui_ctx, user_id, presence, timestamp);
         }
 
         // =========================================================================

@@ -3,7 +3,7 @@
 //! Provides Rust structs that map to Slint struct definitions for
 //! file attachment display components.
 
-use crate::domain::attachment::{Attachment, AttachmentStatus, FileCategory};
+use crate::domain::attachment::{Attachment, AttachmentStatus};
 use crate::media::code_preview::HighlightedLine;
 
 // ============================================================================
@@ -349,15 +349,7 @@ impl AttachmentItemData {
 
 impl From<&Attachment> for AttachmentItemData {
     fn from(attachment: &Attachment) -> Self {
-        let category = match attachment.metadata.category() {
-            FileCategory::Image => "image",
-            FileCategory::Video => "video",
-            FileCategory::Audio => "audio",
-            FileCategory::Document => "document",
-            FileCategory::Code => "code",
-            FileCategory::Archive => "archive",
-            FileCategory::Other => "other",
-        };
+        let category = attachment.metadata.category().as_str();
 
         let is_ready = matches!(attachment.status, AttachmentStatus::Ready);
         let is_uploading = matches!(attachment.status, AttachmentStatus::Uploading);

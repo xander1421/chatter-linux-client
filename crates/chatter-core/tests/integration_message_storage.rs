@@ -199,6 +199,61 @@ fn test_channel_message_storage() {
     }
 }
 
+/// The sidebar's channel rows rendered as a bare name because the row builder
+/// looked the latest message up under `ConversationType::Channel`, while a
+/// channel's messages are filed under `Channel::conversation_type()` —
+/// `AnonGroup` for an encrypted channel, and encryption is the DEFAULT
+/// (`ChannelConfig::default().require_encryption`). The message list never hit
+/// this because `features/sidebar/channel.rs` already derives the type from the
+/// channel; only the sidebar hardcoded it.
+///
+/// `test_channel_message_storage` above could not catch it: it reads back by
+/// message id, which is bucket-blind. This one goes through the bucketed list
+/// query the sidebar actually uses.
+#[test]
+fn test_channel_messages_are_listed_under_the_channels_own_conversation_type() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+    let conv_type = channel.conversation_type();
+    assert_ne!(
+        conv_type,
+        ConversationType::Channel,
+        "a default channel is encrypted, so its messages are NOT filed under \
+         ConversationType::Channel — hardcoding that variant is what blanked \
+         the sidebar rows. If this default ever flips, the sidebar is fine but \
+         this test's premise moved."
+    );
+
+    let msg = Message::new_text(
+        channel.id,
+        conv_type.clone(),
+        Some(UserId::new()),
+        "what the fuck9".to_string(),
+        next_timestamp_ns(),
+    );
+    message_repo.insert(&msg).unwrap();
+
+    // What the sidebar row builder asks for now.
+    let found = message_repo
+        .list_for_channel(&channel.id, &conv_type, None, 1)
+        .unwrap();
+    assert_eq!(found.len(), 1, "the channel's own bucket must hold its messages");
+    assert_eq!(found[0].as_text(), Some("what the fuck9"));
+
+    // What it used to ask for. Kept as the negative control: this is the query
+    // that returned None and produced the bare row.
+    let wrong_bucket = message_repo
+        .list_for_channel(&channel.id, &ConversationType::Channel, None, 1)
+        .unwrap();
+    assert!(
+        wrong_bucket.is_empty(),
+        "hardcoding ConversationType::Channel must stay proven wrong"
+    );
+}
+
 #[test]
 fn test_channel_message_deduplication() {
     let (_temp_dir, db) = setup_test_db();
@@ -1649,4 +1704,127 @@ fn test_thread_replies_excluded_from_channel_list() {
         .unwrap();
     assert_eq!(counts.get(&root.id), Some(&3));
     assert_eq!(counts.get(&plain.id), None);
+}
+
+// ============================================================================
+// Unread anchor — "open where I left off"
+// ============================================================================
+
+/// Opening a conversation marks it read *before* the message page is loaded
+/// (`features/sidebar/{channel,dm}.rs`), so the unread boundary only survives
+/// if `mark_conversation_read` captures it in the same call, ahead of its own
+/// UPDATE. Move that capture after the UPDATE and every assertion about the
+/// anchor below collapses to zero/None — which is the silent failure this test
+/// exists to catch: the chat still opens, just always at the bottom.
+#[test]
+fn test_mark_conversation_read_returns_the_boundary_it_erased() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+    let me = UserId::new();
+    let them = UserId::new();
+
+    // Three messages we already read, then four that arrived while away.
+    let mut read_ts = Vec::new();
+    for _ in 0..3 {
+        let mut msg = Message::new_text(
+            channel.id,
+            ConversationType::Channel,
+            Some(me),
+            "seen".to_string(),
+            next_timestamp_ns(),
+        );
+        msg.is_read = true;
+        read_ts.push(msg.sent_at);
+        message_repo.insert(&msg).unwrap();
+    }
+    let mut unread_ts = Vec::new();
+    for _ in 0..4 {
+        let msg = Message::new_text(
+            channel.id,
+            ConversationType::Channel,
+            Some(them),
+            "new".to_string(),
+            next_timestamp_ns(),
+        );
+        unread_ts.push(msg.sent_at);
+        message_repo.insert(&msg).unwrap();
+    }
+
+    // The read-only probe agrees with the state we built.
+    let peeked = message_repo
+        .unread_anchor(&channel.id, &ConversationType::Channel)
+        .unwrap();
+    assert_eq!(peeked.unread_count, 4);
+    assert_eq!(peeked.first_unread_sent_at, Some(unread_ts[0]));
+
+    // Opening the conversation: the anchor comes back from the very call that
+    // destroys it.
+    let anchor = message_repo
+        .mark_conversation_read(&channel.id, &ConversationType::Channel)
+        .unwrap();
+    assert_eq!(anchor.unread_count, 4, "anchor captured after the UPDATE, not before");
+    assert_eq!(
+        anchor.first_unread_sent_at,
+        Some(unread_ts[0]),
+        "boundary must be the oldest unread message, not the newest"
+    );
+    assert!(
+        anchor.first_unread_sent_at.unwrap() > *read_ts.last().unwrap(),
+        "boundary must sit after everything already read"
+    );
+
+    // And the conversation really is read now.
+    assert_eq!(
+        message_repo
+            .get_unread_count(&channel.id, &ConversationType::Channel)
+            .unwrap(),
+        0
+    );
+    let after = message_repo
+        .mark_conversation_read(&channel.id, &ConversationType::Channel)
+        .unwrap();
+    assert_eq!(after, chatter_core::domain::message::UnreadAnchor::default());
+
+    // The divider lands on the first unread row of the rendered page.
+    let page = message_repo
+        .list_for_channel_asc(&channel.id, &ConversationType::Channel, None, 50)
+        .unwrap();
+    assert_eq!(page.len(), 7);
+    assert_eq!(anchor.divider_index(&page), Some(3));
+}
+
+/// A conversation with nothing unread opens at the newest message: no anchor,
+/// no divider, no "N new messages" pill.
+#[test]
+fn test_unread_anchor_empty_when_all_read() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+    for _ in 0..5 {
+        let mut msg = Message::new_text(
+            channel.id,
+            ConversationType::Channel,
+            Some(UserId::new()),
+            "seen".to_string(),
+            next_timestamp_ns(),
+        );
+        msg.is_read = true;
+        message_repo.insert(&msg).unwrap();
+    }
+
+    let anchor = message_repo
+        .mark_conversation_read(&channel.id, &ConversationType::Channel)
+        .unwrap();
+    assert_eq!(anchor.unread_count, 0);
+    assert_eq!(anchor.first_unread_sent_at, None);
+
+    let page = message_repo
+        .list_for_channel_asc(&channel.id, &ConversationType::Channel, None, 50)
+        .unwrap();
+    assert_eq!(anchor.divider_index(&page), None);
 }

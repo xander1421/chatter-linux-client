@@ -487,11 +487,6 @@ impl AnonDmService {
         Ok(AnonDmMessageId::from_string(message_id.to_string()))
     }
 
-    /// Mark a conversation as read.
-    pub fn mark_as_read(&self, conversation_id: &AnonDmId) -> Result<(), AnonDmError> {
-        Ok(self.anon_dm_repo.mark_as_read(conversation_id)?)
-    }
-
     /// Update delivery status for messages by timestamps.
     pub fn update_delivery_status(
         &self,

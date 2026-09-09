@@ -31,14 +31,14 @@ pub fn wire_forward_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let timestamp_str = w.get_forward_source_timestamp().to_string();
         w.set_forward_loading(true);
 
+        // The row's type tag is core's conversation vocabulary, so the target
+        // resolves through core's own inverse — no second mapping to drift.
+        use chatter_core::domain::message::ConversationType;
         use chatter_core::state::ActiveConversation;
-        let target = match target_type.as_deref() {
-            Some("dm") => target_id_str.parse().ok().map(|peer_id| ActiveConversation::ServerDm { peer_id }),
-            Some("anon-dm") => target_id_str.parse().ok().map(ActiveConversation::AnonDm),
-            Some("group") => target_id_str.parse().ok().map(ActiveConversation::AnonGroup),
-            Some("channel") => target_id_str.parse().ok().map(ActiveConversation::Channel),
-            _ => None,
-        };
+        let target = target_type
+            .as_deref()
+            .and_then(|kind| ConversationType::from_str_value(kind).ok())
+            .and_then(|kind| ActiveConversation::from_routing_key(&kind, &target_id_str));
         let source_identity = sender_id_str
             .parse::<UserId>()
             .ok()
@@ -61,7 +61,14 @@ pub fn wire_forward_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     w.set_forward_loading(false);
                     match result {
                         Ok(()) => w.set_active_modal("none".into()),
-                        Err(e) => tracing::error!("forward failed: {e}"),
+                        Err(e) => {
+                            // A failed forward used to look identical to a
+                            // no-op: the button un-spun and nothing else moved.
+                            tracing::error!("forward failed: {e}");
+                            w.set_toast_message("Could not forward that message".into());
+                            w.set_toast_variant("error".into());
+                            w.set_toast_visible(true);
+                        }
                     }
                 }
             });

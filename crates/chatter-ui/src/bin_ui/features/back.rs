@@ -12,12 +12,17 @@
 //!      app while a modal is up — the Settings screen's only other exit is a
 //!      glyph that renders as a tofu box, so "Back does nothing" strands the
 //!      user there.
-//!   3. Otherwise the task is backgrounded, which is Android's normal
+//!   3. The mobile conversation pane returns to the conversation list. On a
+//!      phone the two are separate screens, so Back out of a chat means "up to
+//!      the list" — going straight to backgrounding the app there is the single
+//!      most jarring thing Back can do in a messenger.
+//!   4. Otherwise the task is backgrounded, which is Android's normal
 //!      back-out-of-app. `moveTaskToBack(true)`, NOT `finish()`: finishing
 //!      destroys the Activity and with it the whole in-memory session, which is
 //!      wrong for a messaging app the user expects to come back to.
 //!
-//! On desktop step 3 is a no-op — popping in-app layers is the only meaningful
+//! On desktop steps 3 and 4 are no-ops: `mobile-show-chat` is never set there
+//! (both panes are on screen at once), and — popping in-app layers is the only meaningful
 //! part, and nothing should try to "background" a desktop window.
 
 use slint::ComponentHandle;
@@ -52,6 +57,11 @@ pub fn handle_back(window: &MainWindow) -> bool {
 
     if window.get_active_modal().as_str() != "none" {
         window.set_active_modal("none".into());
+        return true;
+    }
+
+    if window.get_mobile_show_chat() {
+        window.set_mobile_show_chat(false);
         return true;
     }
 

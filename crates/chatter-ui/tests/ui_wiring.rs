@@ -1341,6 +1341,88 @@ fn profile_share_username_link_is_wired() {
     );
 }
 
+// PROFILE SHARED CONTENT — the Media/Files/Links/Voice/GIFs/Music drawer.
+//
+// The categorisation, ordering and paging are proven in core
+// (`storage::repositories::shared_content_repo` tests). This pins the UI half,
+// and NAMES which layer:
+//
+//  L1 (DYNAMIC, MainWindow boundary): the four drawer callbacks are declared,
+//     wired by the REAL `wire_profile_actions`, and safe to invoke; and the
+//     tab/loading properties round-trip through the main.slint <=> app.slint
+//     aliases (a dead alias would read back empty).
+//
+//  L2 (STATIC, reaches-core): the handlers reach the core façade methods, and
+//     the Slint modal fires the callbacks from the tab strip and the grid.
+// ============================================================================
+#[test]
+fn profile_shared_content_drawer_is_wired() {
+    let (rt, _tmp, client, w) = wired_offline();
+    chatter_ui::bin_ui::features::modals::profile::wire_profile_actions(&w, &client);
+    let _guard = rt.enter();
+
+    // Property alias liveness through MainWindow.
+    w.set_profile_shared_tab("media".into());
+    assert_eq!(
+        w.get_profile_shared_tab().as_str(),
+        "media",
+        "profile-shared-tab alias is dead (main.slint <=> app.slint)"
+    );
+    w.set_profile_shared_loading(true);
+    assert!(w.get_profile_shared_loading());
+    w.set_profile_last_seen("last seen recently".into());
+    assert_eq!(w.get_profile_last_seen().as_str(), "last seen recently");
+
+    // The wires must run the real handlers without panicking. No profile is
+    // open, so each one takes its early-return path — which is exactly the
+    // guard being asserted.
+    w.invoke_profile_shared_tab_selected("file".into());
+    w.invoke_profile_shared_load_more();
+    w.invoke_profile_open_shared_item("msg-1".into(), "".into(), "media".into());
+    w.invoke_profile_toggle_mute();
+
+    // L2: static — handlers reach core; Slint fires the callbacks.
+    let profile_src = include_str!("../src/bin_ui/features/modals/profile.rs");
+    for needle in [
+        "on_profile_shared_tab_selected",
+        "on_profile_shared_load_more",
+        "on_profile_open_shared_item",
+        "on_profile_toggle_mute",
+        "on_profile_start_call",
+    ] {
+        assert!(
+            profile_src.contains(needle),
+            "profile.rs must register {needle}"
+        );
+    }
+    for needle in [
+        ".shared_content_tabs(",
+        ".shared_content_page(",
+        ".peer_last_seen_label(",
+        ".mute_conversation(",
+    ] {
+        assert!(
+            profile_src.contains(needle),
+            "profile.rs must reach ChatterClient{needle} (dead wire otherwise)"
+        );
+    }
+    let modal_src = include_str!("../../../ui/modals/user_profile.slint");
+    assert!(
+        modal_src.contains("root.shared-tab-selected(tab.id)")
+            && modal_src.contains("root.shared-load-more()")
+            && modal_src.contains("root.open-shared-item(")
+            && modal_src.contains("root.start-call("),
+        "user_profile.slint must fire the drawer callbacks from the tab strip and the grid"
+    );
+    // Full-screen on mobile must reuse ModalContainer's existing support, not
+    // a second mechanism.
+    assert!(
+        modal_src.contains("full-screen: root.mobile-mode")
+            && modal_src.contains("bottom-inset: root.bottom-inset"),
+        "user_profile.slint must go full-screen through ModalContainer"
+    );
+}
+
 // ============================================================================
 // MESSAGE BACKUP (L7) — settings wires.
 //
@@ -1685,6 +1767,42 @@ fn back_press_closes_the_open_modal() {
     assert_eq!(w.get_active_modal().as_str(), "none");
 }
 
+/// Back inside a mobile conversation returns to the conversation list rather
+/// than leaving the app. On a phone the list and the chat are separate screens,
+/// and Back out of a chat backgrounding the whole app is the defect this pins.
+#[test]
+fn back_press_pops_the_mobile_conversation_pane() {
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+
+    w.set_mobile_show_chat(true);
+    assert!(
+        chatter_ui::bin_ui::features::back::handle_back(&w),
+        "back inside a conversation must be consumed in-app, not fall through"
+    );
+    assert!(
+        !w.get_mobile_show_chat(),
+        "back did NOT return to the conversation list"
+    );
+
+    // Back at the list falls through to backgrounding, as before.
+    assert!(
+        !chatter_ui::bin_ui::features::back::handle_back(&w),
+        "back at the conversation list must fall through to backgrounding"
+    );
+
+    // A modal over a conversation pops the MODAL first — the conversation is
+    // the layer underneath and must survive that press.
+    w.set_mobile_show_chat(true);
+    w.set_active_modal("settings".into());
+    assert!(chatter_ui::bin_ui::features::back::handle_back(&w));
+    assert_eq!(w.get_active_modal().as_str(), "none");
+    assert!(
+        w.get_mobile_show_chat(),
+        "closing a modal must not also pop the conversation underneath it"
+    );
+}
+
 /// LAYER 2: the KEY EVENT actually reaches that decision.
 ///
 /// This is the half the bug report was about — the backend already maps
@@ -1891,6 +2009,40 @@ fn message_selection_toggle_reaches_the_selection_store() {
     assert!(
         menu_src.contains(r#"label: "Select""#) && menu_src.contains("root.select-clicked(root.message-id)"),
         "the message menu must carry a Select item wired to select-clicked"
+    );
+}
+
+/// The floating reply/react/thread/more bar over a message bubble is
+/// POINTER-only.
+///
+/// `has-hover` is true while a finger is DOWN — Slint raises it from any
+/// pointer event carrying a position — so on Android the bar blinked into
+/// existence mid-press and vanished on release, including during a plain
+/// scroll. It was never aimable, and press-and-hold already opens the same
+/// actions as a real menu.
+#[test]
+fn the_message_hover_action_bar_never_appears_on_touch() {
+    let item_src = include_str!("../../../ui/chat/message_item.slint");
+    assert!(
+        item_src.contains("property <bool> is-hovered: !root.mobile && touch.has-hover;"),
+        "the message action bar's hover gate must exclude touch platforms"
+    );
+    assert!(
+        item_src.contains("visible: root.is-hovered"),
+        "the action bar is what that gate is for — if it stops reading \
+         is-hovered, the gate is guarding nothing"
+    );
+
+    // A gate on `mobile` is only worth anything if `mobile` reaches the row.
+    let list = include_str!("../../../ui/chat/message_list.slint");
+    assert!(
+        list.contains("mobile: root.mobile;"),
+        "message_list must pass the touch flag down to each MessageItem"
+    );
+    let layout = include_str!("../../../ui/chat/chat_layout.slint");
+    assert!(
+        layout.contains("mobile: root.mobile;"),
+        "chat_layout must pass the touch flag down to the message list"
     );
 }
 
@@ -2140,6 +2292,19 @@ fn folder_badges_refresh_on_message_arrival_and_on_read() {
         "reading a foldered channel must clear its folder badge too"
     );
 
+    // The DM path had no mark-as-read at all: the badge is rebuilt from
+    // `messages.is_read`, so opening a DM cleared the Slint model and nothing
+    // else — the count came straight back on the next refresh and after every
+    // restart.
+    let dm = include_str!("../src/bin_ui/features/sidebar/dm.rs");
+    let dm_read_idx = dm.find("mark_as_read()").expect(
+        "selecting a DM must mark it read in core, not just zero the sidebar model",
+    );
+    assert!(
+        dm[dm_read_idx..].contains("refresh_section_badges"),
+        "reading a foldered DM must clear its folder badge too"
+    );
+
     // The N+1 that made this impossible is gone.
     let core = include_str!("../../chatter-core/src/services/section_service.rs");
     let list_idx = core
@@ -2250,6 +2415,204 @@ fn folder_header_has_one_pointer_surface_not_two() {
         "a second TouchArea whose clicked toggles expansion steals the pointer \
          grab from the HoldArea — that is what made the folder menu unreachable \
          on touch (verified on an S25 Ultra: the hold just collapsed the folder)"
+    );
+}
+
+/// Filing a DM into a folder made it impossible to open.
+///
+/// `wire_dm_selected` answered "is this anon, and who is the peer" by scanning
+/// the `dm_conversations` Slint model — and a foldered DM is deliberately
+/// REMOVED from that model (it renders inside the folder instead). The scan
+/// came back empty, so no `ActiveConversation` was committed, the loader bailed
+/// with "Could not determine peer ID", and the row opened into nothing while
+/// every send silently dropped. The lookup lives in core now, where folder
+/// membership is irrelevant.
+#[test]
+fn a_foldered_dm_still_resolves_to_its_conversation() {
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+
+    let peer = "22222222-2222-2222-2222-222222222222";
+    let section = client.create_section("Work", "\u{1F4C1}").expect("create_section");
+    client
+        .move_conversation_to_section(
+            peer,
+            chatter_core::domain::message::ConversationType::ServerDm,
+            &section.id,
+        )
+        .expect("move_conversation_to_section");
+
+    // The loose DM list drops the row ...
+    assert!(
+        client.list_dm_sidebar().iter().all(|d| d.channel_id.as_str() != peer),
+        "a foldered DM must not also render loose"
+    );
+    // ... and opening it must still work.
+    match client.resolve_dm_conversation(peer) {
+        Some(chatter_core::state::ActiveConversation::ServerDm { peer_id }) => {
+            assert_eq!(peer_id.to_string(), peer);
+        }
+        other => panic!("a foldered DM must still resolve to its peer, got {other:?}"),
+    }
+
+    // L2 static: the handler asks core instead of the model it just emptied.
+    let src = include_str!("../src/bin_ui/features/sidebar/dm.rs");
+    assert!(
+        src.contains("resolve_dm_conversation"),
+        "DM selection must resolve the conversation through core"
+    );
+    assert!(
+        !src.contains("get_dm_conversations()"),
+        "DM selection must not scan the sidebar model — foldered rows are not in it"
+    );
+}
+
+/// A folder was a way around Anon Mode.
+///
+/// The loose lists are mode-exclusive: `sidebar_channels` returns nothing and
+/// `list_dm_sidebar` drops friend DMs while the shield is on. Folders ignored
+/// all of it, so an identified channel filed into "Work" stayed on screen — and
+/// stayed clickable — in anon mode.
+#[test]
+fn folders_hide_identified_conversations_while_anon_mode_is_on() {
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+
+    let channel = "33333333-3333-3333-3333-333333333333";
+    let section = client.create_section("Work", "\u{1F4C1}").expect("create_section");
+    client
+        .move_conversation_to_section(
+            channel,
+            chatter_core::domain::message::ConversationType::Channel,
+            &section.id,
+        )
+        .expect("move_conversation_to_section");
+
+    let listed = client.list_sections_with_conversations().expect("list sections");
+    assert_eq!(listed[0].conversations.len(), 1, "the folder holds the channel");
+
+    client.set_anon_mode_enabled(true);
+    let hidden = client.list_sections_with_conversations().expect("list sections");
+    assert!(
+        hidden[0].conversations.is_empty(),
+        "an identified channel must not surface through a folder in anon mode"
+    );
+    assert_eq!(
+        hidden[0].unread_count, 0,
+        "the aggregate badge must count what the folder actually shows"
+    );
+}
+
+/// A private group filed into a folder rendered TWICE, and stayed doubled after
+/// a restart: `list_anon_groups` had no folder filter (the one sidebar list that
+/// never got the `sidebar_channels` treatment) and no folder mutation redrew the
+/// loose group list at all.
+#[test]
+fn foldered_private_groups_leave_the_loose_list() {
+    let core = include_str!("../../chatter-core/src/client/anon_group.rs");
+    let idx = core
+        .find("pub fn sidebar_private_groups")
+        .expect("sidebar_private_groups present");
+    assert!(
+        core[idx..].contains("all_sectioned_conversation_ids"),
+        "the loose private-group list must drop groups that live in a folder"
+    );
+
+    let ui = include_str!("../src/bin_ui/features/sidebar/private_group.rs");
+    assert!(
+        ui.contains("sidebar_private_groups()"),
+        "the private-group row builder must use the folder-aware core list"
+    );
+
+    let sections = include_str!("../src/bin_ui/features/sidebar/sections.rs");
+    let refresh = sections
+        .find("fn refresh_conversation_lists")
+        .expect("refresh_conversation_lists present");
+    assert!(
+        sections[refresh..].contains("set_private_groups"),
+        "filing a group into a folder must redraw the loose group list too"
+    );
+}
+
+/// A channel row in the sidebar showed the channel name and nothing else, while
+/// the DM row beside it showed a preview and a time. The struct had carried
+/// `last-message`/`timestamp` the whole time — three separate links were cut:
+/// the converter hardcoded both to empty, `ChannelList` never forwarded them,
+/// and `ChannelListItem` had no second line to put them on. The private-group
+/// row had the last of those three (`timestamp` in, never rendered).
+#[test]
+fn channel_and_group_rows_show_their_latest_activity() {
+    // 1. Population — core composes it, the converter no longer blanks it.
+    let conv = include_str!("../src/bin_ui/converters/channel.rs");
+    let idx = conv.find("pub fn channel_to_slint").expect("channel_to_slint present");
+    let body = &conv[idx..];
+    assert!(
+        body.contains("channel_sidebar_activity(channel)"),
+        "a channel row's preview and stamp must come from core, not be hardcoded empty"
+    );
+    assert!(
+        !body.contains("last_message: SharedString::default()"),
+        "the hardcoded-empty preview must not come back"
+    );
+    // The converter must NOT name a conversation type. A channel's messages
+    // live under `Channel::conversation_type()` — `AnonGroup` for an encrypted
+    // channel, which is the default — so hardcoding `ConversationType::Channel`
+    // here queries an empty bucket and the row renders as a bare name. Core
+    // derives it from the channel; see `channel_sidebar_activity`, and
+    // `integration_message_storage.rs` for the storage-level proof.
+    assert!(
+        !body.contains("ConversationType::"),
+        "the converter must not pick the storage bucket — core derives it from the channel"
+    );
+
+    // Preview wording is core's for every row kind, so the three cannot drift.
+    let group = include_str!("../src/bin_ui/features/sidebar/private_group.rs");
+    assert!(
+        group.contains("sidebar_activity(") && !group.contains("truncate_preview_text"),
+        "private-group rows must take core's preview, not re-derive it in the UI crate"
+    );
+
+    // 2. Forwarding — the list must hand the row what it was given.
+    let list = include_str!("../../../ui/sidebar/channel_list.slint");
+    for prop in ["last-message: item.last-message", "timestamp: item.timestamp", "is-typing: item.is-typing"] {
+        assert!(list.contains(prop), "ChannelList must forward `{prop}`");
+    }
+
+    // 3. Markup — the second line and the right-hand column exist on both rows.
+    let channel_row = include_str!("../../../ui/sidebar/channel_list_item.slint");
+    assert!(
+        channel_row.contains("text: root.last-message;") && channel_row.contains("text: root.timestamp;"),
+        "the channel row must render the preview and the timestamp"
+    );
+    assert!(
+        channel_row.contains("root.dot-opacity(0)"),
+        "the channel row must animate the typing indicator like the DM row does"
+    );
+    let group_row = include_str!("../../../ui/sidebar/private_group_list_item.slint");
+    assert!(
+        group_row.contains("text: root.timestamp;"),
+        "the private-group row declared `timestamp` but never rendered it"
+    );
+
+    // 4. Typing reaches all three lists, not just DMs.
+    let typing = include_str!("../src/bin_ui/features/auth/initial_data.rs");
+    let t_idx = typing.find("pub fn update_sidebar_typing").expect("update_sidebar_typing present");
+    let t_body = &typing[t_idx..t_idx + 900];
+    assert!(
+        t_body.contains("get_channels()") && t_body.contains("get_private_groups()"),
+        "a typing event must animate a channel or group row too, not only a DM row"
     );
 }
 
@@ -2510,5 +2873,314 @@ fn the_send_toast_points_at_the_identity_change_instead_of_saying_retry() {
         msg.to_lowercase().contains("safety number"),
         "the toast must point at the identity change, which is the thing the \
          user can actually act on. Got: {msg}"
+    );
+}
+
+/// Opening a conversation marks it read, and that write is what destroys the
+/// unread boundary. So each open path must take the anchor *from*
+/// `mark_as_read` — the one call that still sees it — and hand it to the list.
+/// Ask core for the boundary anywhere after that and it truthfully answers
+/// "nothing unread": the chat then silently always opens at the bottom, which
+/// is exactly the bug this replaced and is invisible in every screenshot.
+#[test]
+fn conversation_open_anchors_on_the_unread_boundary() {
+    for (name, src) in [
+        ("channel", include_str!("../src/bin_ui/features/sidebar/channel.rs")),
+        ("dm", include_str!("../src/bin_ui/features/sidebar/dm.rs")),
+        (
+            "private_group",
+            include_str!("../src/bin_ui/features/sidebar/private_group.rs"),
+        ),
+    ] {
+        let read_idx = src
+            .find("mark_as_read()")
+            .unwrap_or_else(|| panic!("{name} open path must mark the conversation read"));
+        // The anchor is bound from the mark_as_read expression itself, not
+        // fetched afterwards from a conversation that is now fully read.
+        let bind = src[..read_idx]
+            .rfind("let anchor")
+            .unwrap_or_else(|| panic!("{name}: no `let anchor` before mark_as_read"));
+        assert!(
+            read_idx - bind < 300,
+            "{name}: the unread anchor must be captured from mark_as_read's return \
+             value — nothing else can still see the boundary"
+        );
+        assert!(
+            src.contains("apply_unread_anchor"),
+            "{name}: the captured anchor must reach the message list, or the \
+             conversation still opens wherever the last one was scrolled to"
+        );
+    }
+
+    // Core owns which row the boundary is; the UI only forwards the number.
+    let sidebar = include_str!("../src/bin_ui/features/sidebar/mod.rs");
+    assert!(
+        sidebar.contains("anchor.divider_index(page)"),
+        "the index must come from chatter-core's UnreadAnchor, not be recomputed \
+         in the presentation layer"
+    );
+    assert!(
+        sidebar.contains("set_is_at_bottom(index.is_none())"),
+        "is_at_bottom is sticky across conversations; the open has to reset it or \
+         a chat left scrolled up decides where the next one opens"
+    );
+
+    // The list has to actually consume it, all the way down the alias chain.
+    let list = include_str!("../../../ui/chat/message_list.slint");
+    assert!(
+        list.contains("in-out property <int> unread-index"),
+        "MessageList must expose the open position"
+    );
+    assert!(
+        list.contains("Unread messages"),
+        "MessageList must draw the unread divider at the boundary"
+    );
+    assert!(
+        list.contains("new messages"),
+        "MessageList must offer the jump-to-newest pill with its count"
+    );
+    let layout = include_str!("../../../ui/chat/chat_layout.slint");
+    assert!(
+        layout.contains("unread-index <=> root.unread-index"),
+        "ChatLayout must forward the open position to MessageList"
+    );
+    let app = include_str!("../../../ui/app.slint");
+    assert!(
+        app.contains("unread-index <=> root.unread-index"),
+        "App must forward the open position to ChatLayout"
+    );
+    assert!(
+        app.contains("is-at-bottom <=> root.is-at-bottom"),
+        "App must bind is-at-bottom to ChatLayout, or every set_is_at_bottom call \
+         in Rust writes to a property nothing reads"
+    );
+    let main = include_str!("../../../ui/main.slint");
+    assert!(
+        main.contains("unread-index <=> app.unread-index"),
+        "MainWindow must alias unread-index, or set_unread_index is inert"
+    );
+}
+
+// ============================================================================
+// H4 (Consistency and Standards) + H3 (User Control and Freedom): DISMISSAL.
+//
+// "The close button in some places is on left, other on right, others it's X,
+// others it's the back button." It was four spellings of one action — X
+// top-right (the shared `Modal`), X top-left (Settings, compact), chevron
+// top-left (Profile, mobile), a "Close" text button (Jarvis memory) — in three
+// geometries (18-in-40px, 16-in-32px, 14-in-44px).
+//
+// The rule now lives in exactly one component,
+// `ui/components/dismiss_button.slint`: a full-screen PAGE gets a back chevron
+// on the leading edge (you pushed into it, you pop out of it — same as
+// `chat_header.slint`), a centered DIALOG gets an X on the trailing edge, and
+// never both. `Modal` applies it for every screen it wraps; the four screens
+// that build their own header instantiate the same component.
+//
+// This test is what stops the drift coming back. It fails on the tree as it
+// stood before this change with four "defines its own dismissal glyph"
+// findings (settings_screen, user_profile, device_picker, thread_panel) and
+// one "closeable but routes through neither" (jarvis_memory).
+
+/// Every Slint screen that can present a dismissal control, paired with its
+/// source. `ui/components/` is excluded on purpose: that is where the shared
+/// control is DEFINED, and a toast or a search-field clear-X in there is not a
+/// screen exit.
+fn dismissable_screens() -> Vec<(String, String)> {
+    let ui = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui");
+    let mut out = Vec::new();
+    for dir in ["modals", "settings", "calls"] {
+        let mut entries: Vec<_> = std::fs::read_dir(ui.join(dir))
+            .unwrap_or_else(|e| panic!("read ui/{dir}: {e}"))
+            .map(|e| e.expect("dir entry").path())
+            .filter(|p| p.extension().is_some_and(|x| x == "slint"))
+            .collect();
+        entries.sort();
+        for path in entries {
+            let name = path.file_name().expect("file name").to_string_lossy().into_owned();
+            let src = std::fs::read_to_string(&path).expect("read slint source");
+            out.push((format!("ui/{dir}/{name}"), src));
+        }
+    }
+    // The one screen outside those directories that owns a dismissal: a docked
+    // side panel on a desktop, a full-width pushed page on a phone.
+    let thread = ui.join("chat/thread_panel.slint");
+    out.push((
+        "ui/chat/thread_panel.slint".into(),
+        std::fs::read_to_string(thread).expect("read thread_panel.slint"),
+    ));
+    out
+}
+
+#[test]
+fn no_screen_defines_its_own_dismissal_glyph() {
+    // `Icons.arrow-left` is an alias of `Icons.chevron-left` (icons.slint), so
+    // both spellings have to be listed or the rule is one rename from mute.
+    // The `\u{...}` escapes are the Unicode close glyphs: they are BOTH an
+    // inconsistency and an Android bug — the font has no glyph, so they render
+    // as a tofu box.
+    const OWN_GLYPH: [&str; 5] = [
+        "Icons.x",
+        "Icons.chevron-left",
+        "Icons.arrow-left",
+        "\\u{00D7}",
+        "\\u{2715}",
+    ];
+    // A screen is "dismissable" if it exposes any of these outward.
+    const DISMISS_CALLBACK: [&str; 4] =
+        ["callback close(", "callback closed(", "close-clicked", "close-settings"];
+
+    let mut findings = Vec::new();
+    for (name, src) in dismissable_screens() {
+        for needle in OWN_GLYPH {
+            if src.contains(needle) {
+                findings.push(format!(
+                    "{name} draws its own dismissal glyph ({needle}) — use \
+                     DismissButton from ui/components/dismiss_button.slint"
+                ));
+            }
+        }
+        if DISMISS_CALLBACK.iter().any(|c| src.contains(c))
+            && !src.contains("DismissButton")
+            && !src.contains("Modal {")
+        {
+            findings.push(format!(
+                "{name} can be closed but routes through neither DismissButton \
+                 nor Modal — its exit is a one-off"
+            ));
+        }
+    }
+    assert!(findings.is_empty(), "dismissal drifted:\n  {}", findings.join("\n  "));
+}
+
+#[test]
+fn dismissal_glyph_and_edge_follow_the_screen_shape() {
+    let dismiss = include_str!("../../../ui/components/dismiss_button.slint");
+    // The glyph is chosen by shape, in one expression, in one place.
+    assert!(
+        dismiss.contains("source: root.back ? Icons.chevron-left : Icons.x;"),
+        "DismissButton must pick chevron for a pushed page and X for a dialog"
+    );
+    // Both densities come from the shared header tokens, so a dismissal
+    // control is never a different size from the rest of its header row.
+    for token in [
+        "Spacing.header-action-box-touch",
+        "Spacing.header-action-box",
+        "Spacing.header-glyph-touch",
+        "Spacing.header-glyph",
+    ] {
+        assert!(
+            dismiss.contains(token),
+            "DismissButton must size itself from {token}, not a literal"
+        );
+    }
+
+    // The EDGE is a layout position, so it is pinned by ORDER inside Modal's
+    // header row: chevron before the title, X after it. `full-screen` is the
+    // only thing that selects between them, and the two are mutually exclusive
+    // `if`s so no screen can ever show both.
+    let modal = include_str!("../../../ui/components/modal.slint");
+    let leading = modal.find("if root.full-screen: DismissButton").expect(
+        "Modal must place a back chevron on the LEADING edge when full-screen",
+    );
+    let title = modal.find("text: root.title;").expect("Modal must render a title");
+    let trailing = modal
+        .find("if !root.full-screen: DismissButton")
+        .expect("Modal must place an X on the TRAILING edge when not full-screen");
+    assert!(
+        leading < title && title < trailing,
+        "Modal's dismissal edges are reversed: the chevron must precede the \
+         title and the X must follow it"
+    );
+    assert!(
+        !modal.contains("Icons."),
+        "Modal must not name a glyph itself — DismissButton owns that"
+    );
+}
+
+/// H3 (User Control and Freedom): every irreversible action in the app sat one
+/// click from done, in the same row rhythm as reversible ones ("Archive",
+/// "Unmute"). Each now takes the two-step reveal Settings already used for
+/// Delete Account — ONE destructive vocabulary, not one per screen.
+///
+/// Leave Channel is gated unconditionally rather than only for private
+/// channels: a control that is sometimes destructive and sometimes not, with
+/// no visual difference, is worse than one that always asks.
+///
+/// FAILS BEFORE: all three fired their callback straight from the button's
+/// `clicked`, and none of the three `show-*-confirm` properties existed.
+#[test]
+fn destructive_actions_need_a_second_click() {
+    // (screen, source, confirm flag, the callback it gates)
+    let screens: [(&str, &str, &str, &str); 3] = [
+        (
+            "channel_settings/delete",
+            include_str!("../../../ui/modals/channel_settings.slint"),
+            "show-delete-confirm",
+            "root.delete-channel();",
+        ),
+        (
+            "channel_settings/leave",
+            include_str!("../../../ui/modals/channel_settings.slint"),
+            "show-leave-confirm",
+            "root.leave-channel();",
+        ),
+        (
+            "call_history/clear",
+            include_str!("../../../ui/calls/call_history_screen.slint"),
+            "show-clear-confirm",
+            "root.clear-history();",
+        ),
+    ];
+
+    for (name, src, flag, callback) in screens {
+        assert!(
+            src.contains(&format!("property <bool> {flag}: false;")),
+            "{name}: must gate the destructive action behind an explicit confirm reveal"
+        );
+        // The FIRST button may only reveal the confirm — never fire.
+        let reveal = src
+            .find(&format!("root.{flag} = true;"))
+            .unwrap_or_else(|| panic!("{name}: the button must reveal the confirm step"));
+        let fire = src
+            .find(callback)
+            .unwrap_or_else(|| panic!("{name}: the confirm step must still be able to act"));
+        assert!(
+            reveal < fire,
+            "{name}: {callback} is reachable before the confirm reveal — the gate is bypassed"
+        );
+        // Reopening must not land on the confirm step (possibly for a
+        // different channel), so the reveal resets whenever the screen is
+        // shown or hidden.
+        let reset = src
+            .find("changed show-modal =>")
+            .unwrap_or_else(|| panic!("{name}: no reset-on-open handler"));
+        assert!(
+            src[reset..reset + 200].contains(&format!("self.{flag} = false;")),
+            "{name}: {flag} must reset on open, or a screen closed mid-confirm \
+             reopens already asking to do the irreversible thing"
+        );
+    }
+}
+
+/// Touch-target minimums are an accessibility floor, not a style preference.
+/// The profile's shared-content pill was a 40px shell with a 3px inset, so the
+/// chip you actually tap was 34px. The shell is now sized FROM the chip.
+#[test]
+fn shared_content_pill_tabs_clear_the_touch_floor() {
+    let src = include_str!("../../../ui/modals/user_profile.slint");
+    let strip = src
+        .find("Shared-content tab strip")
+        .expect("profile must have a shared-content tab strip");
+    // Up to the next section, so the assertion cannot pass on some other
+    // element's geometry further down the page.
+    let end = src[strip..]
+        .find("Media / GIF grid")
+        .expect("the grid follows the tab strip");
+    let block = &src[strip..strip + end];
+    assert!(
+        block.contains("height: Spacing.touch-target-min;") && block.contains("padding: 2px;"),
+        "the pill shell must be Spacing.touch-target-min with a 2px inset, so each \
+         chip lands on the 44px touch floor — a literal here is how 34px happened"
     );
 }

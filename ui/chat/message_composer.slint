@@ -127,15 +127,31 @@ export component MessageComposer inherits Rectangle {
         );
     }
 
-    // Formatting toolbar only while there's a draft — persistent chrome for a
-    // rare action wastes a row otherwise. Deliberately NOT gated on has-focus:
-    // that grows format-bar-height (and so the composer's height, via the
-    // `height:` expression below) the instant focus lands, mid-tap, before
-    // the finger lifts. The animated resize shifts text-input out from under
-    // the touch-up, which reads as a blur — the just-shown soft keyboard
-    // immediately hides itself again (GameActivity/InsetsController logs:
-    // setSoftKeyboardActive true then false within ~3ms of the same tap).
-    property <bool> show-formatting: root.text != "";
+    // Formatting toolbar only while text is SELECTED.
+    //
+    // Whatever flips this drives format-bar-height, which feeds the composer's
+    // animated `height:` below — so the composer grows 44px at that moment. On
+    // Android that growth hides the soft keyboard if it lands while the IME
+    // transaction is still in flight (GameActivity logs: setSoftKeyboardActive
+    // true then false). Two earlier gates both landed inside that window:
+    //   * `has-focus` grew it mid-tap, before the finger lifted.
+    //   * `text != ""` grew it on the FIRST character instead. The tap then
+    //     survived and the first keystroke did not — and the second attempt
+    //     worked, because by then the bar was already up and nothing moved.
+    // Slint takes focus on finger-UP on Android (i-slint-core items/text.rs,
+    // `MouseEvent::Released` -> ensure_focus_and_ime), so the IME is still
+    // animating in for a few hundred ms after the tap; a fast typist's first
+    // key lands inside that. Later growth — a line wrap at ~40 characters —
+    // is harmless because the IME has long since settled.
+    //
+    // A selection is the one trigger that can never land in that window: it
+    // takes a deliberate drag or long-press that ENDS before the bar appears,
+    // and typing collapses a selection rather than making one. The composer's
+    // height is now invariant across the whole tap-then-type sequence. It is
+    // also what the bar is for — with nothing selected the buttons wrap an
+    // empty range.
+    property <bool> show-formatting:
+        text-input.anchor-position-byte-offset != text-input.cursor-position-byte-offset;
 
     // Formatting bar height — 44px so the B/I/S/code buttons inside can be
     // 44px touch targets rather than the 28px boxes measured on a phone.
@@ -155,8 +171,18 @@ export component MessageComposer inherits Rectangle {
     // Layout - dynamic height based on content (includes Bento Box when expanded)
     height: content-height + attachment-tray-height + edit-bar-height + reply-bar-height + format-bar-height + row-padding * 2 + 1px;
     animate height { duration: 150ms; easing: ease-out; }
-    background: Colors.surface;
-    border-width: 1px;
+    // "Touch input", plumbed from ChatLayout.
+    in property <bool> mobile: false;
+
+    // On a phone the composer spans the full width against a black page, so a
+    // lifted fill with a border on all four sides draws a visible rectangle
+    // with seams down the left and right edges of the screen. Edge-to-edge it
+    // takes the page colour and keeps only the top hairline below, which is
+    // the one edge that actually separates it from the messages. Desktop keeps
+    // the bordered card — there it sits inside a column and the border is what
+    // gives it its shape.
+    background: root.mobile ? Colors.background : Colors.surface;
+    border-width: root.mobile ? 0px : 1px;
     border-color: Colors.neo-highlight;
 
     // Neo top edge — highlight border replaces flat divider

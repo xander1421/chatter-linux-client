@@ -491,10 +491,12 @@ impl MeshTimeline {
     /// on the radio) and lives on
     /// [`MeshService::mark_read`](super::MeshService::mark_read).
     pub fn mark_read(&self, conversation: &MeshConversation) -> Result<(), StorageError> {
+        // Mesh has no scroll restore, so the cleared boundary goes unused here.
         self.messages.mark_conversation_read(
             &conversation.conversation_id(),
             &conversation.conversation_type(),
-        )
+        )?;
+        Ok(())
     }
 
     /// Every mesh conversation, shaped for the unified sidebar.

@@ -13,10 +13,19 @@ use objc2::rc::Retained;
 use objc2_app_kit::{NSView, NSWindowStyleMask, NSWindowTitleVisibility};
 use raw_window_handle::HasWindowHandle;
 
-/// The standard macOS unified-toolbar titlebar height (traffic-light row),
-/// in logical points — matches every stock macOS app (Finder, Messages,
-/// Safari) and doesn't change with window size or Retina scaling.
-pub const TITLEBAR_INSET: f32 = 28.0;
+/// Height of the transparent titlebar overlay, in logical points — the
+/// standard macOS unified-toolbar row. Fixed by AppKit: it doesn't change
+/// with window size or Retina scaling.
+///
+/// App content is drawn *under* this band, not below it; the value exists so
+/// the panel that happens to be at the top-left can keep its own content out
+/// of the traffic lights' way when it is too narrow to do that horizontally.
+pub const TITLEBAR_HEIGHT: f32 = 28.0;
+
+/// Leading width the three traffic lights occupy, in logical points: a 20pt
+/// left margin, three 12pt buttons, 8pt apart, plus trailing air. Content
+/// starting after this clears them at any window size.
+pub const TRAFFIC_LIGHTS_WIDTH: f32 = 78.0;
 
 /// Apply the unified-toolbar titlebar style to the window backing `window`.
 ///
@@ -24,9 +33,10 @@ pub const TITLEBAR_INSET: f32 = 28.0;
 /// `NSWindow` only exists once the platform window has actually been
 /// created — see `slint::Window::window_handle`'s docs). Safe to call more
 /// than once; each property set is idempotent. Returns whether it succeeded
-/// — on failure the caller should not apply [`TITLEBAR_INSET`], since the
-/// titlebar is still opaque and content would then render under it instead
-/// of under the (in that case still-drawn) title text.
+/// — on failure the caller must not apply [`TRAFFIC_LIGHTS_WIDTH`] /
+/// [`TITLEBAR_HEIGHT`], since the titlebar is then still an opaque strip of
+/// its own and the app would be indenting its top row to clear something
+/// that is not overlapping it.
 pub fn apply_unified_titlebar(window: &slint::Window) -> bool {
     let slint_handle = window.window_handle();
     let Ok(handle) = slint_handle.window_handle() else {

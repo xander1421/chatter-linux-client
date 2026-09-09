@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use slint::{ComponentHandle, Timer, TimerMode};
 
 use crate::MainWindow;
-use super::super::initial_data::update_dm_typing_indicator;
+use super::super::initial_data::update_sidebar_typing;
 
 /// Typing timer state per peer.
 /// Signal uses 15-second auto-clear timers that reset on each STARTED message.
@@ -50,7 +50,7 @@ pub fn set_typing_with_timer(window: &MainWindow, peer_id: &str) {
     window.set_typing_indicator(indicator_text.into());
 
     // Also update sidebar typing state
-    update_dm_typing_indicator(window, peer_id, true);
+    update_sidebar_typing(window, peer_id, true);
 
     let after = window.get_typing_indicator().to_string();
     tracing::info!(
@@ -106,7 +106,7 @@ pub fn set_typing_with_timer(window: &MainWindow, peer_id: &str) {
                     // Clear typing indicator (header and sidebar)
                     if let Some(w) = weak_window.upgrade() {
                         w.set_typing_indicator("".into());
-                        update_dm_typing_indicator(&w, &peer_id_owned, false);
+                        update_sidebar_typing(&w, &peer_id_owned, false);
                     }
                 }
 
@@ -157,7 +157,7 @@ pub fn set_typing_with_timer(window: &MainWindow, peer_id: &str) {
                             // Clear typing indicator (header and sidebar)
                             if let Some(w) = weak_window.upgrade() {
                                 w.set_typing_indicator("".into());
-                                update_dm_typing_indicator(&w, &peer_id_owned, false);
+                                update_sidebar_typing(&w, &peer_id_owned, false);
                             }
                         }
 
@@ -206,6 +206,6 @@ pub fn clear_typing_for_peer(window: &MainWindow, peer_id: &str) {
     clear_typing_timer(peer_id);
     window.set_typing_indicator("".into());
     // Also clear sidebar typing state
-    update_dm_typing_indicator(window, peer_id, false);
+    update_sidebar_typing(window, peer_id, false);
 }
 

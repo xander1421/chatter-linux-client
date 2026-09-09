@@ -570,7 +570,8 @@ fn app_run(state: AppState) {
         timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(50), move || {
             let Some(w) = weak.upgrade() else { return };
             if crate::platform::macos::apply_unified_titlebar(w.window()) {
-                w.set_macos_titlebar_inset(crate::platform::macos::TITLEBAR_INSET);
+                w.set_macos_titlebar_height(crate::platform::macos::TITLEBAR_HEIGHT);
+                w.set_macos_traffic_lights_width(crate::platform::macos::TRAFFIC_LIGHTS_WIDTH);
                 timer_handle.stop();
             } else {
                 let left = attempts_left.get().saturating_sub(1);

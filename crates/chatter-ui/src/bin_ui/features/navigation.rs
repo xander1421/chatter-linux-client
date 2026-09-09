@@ -17,7 +17,6 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_go_to_recovery(window);
     wire_go_to_link_device(window);
     wire_continue_without_account(window, ui_ctx);
-    wire_calls_tab(window, ui_ctx);
     wire_welcome(window);
 }
 
@@ -139,21 +138,6 @@ fn wire_go_to_recovery(window: &MainWindow) {
             w.set_recovery_new_pin("".into());
             w.set_recovery_error("".into());
             w.set_recovery_success("".into());
-        }
-    });
-}
-
-/// Mobile "Calls" tab: placeholder until a full call history screen is built.
-fn wire_calls_tab(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let weak_window = window.as_weak();
-    let ui_ctx = ui_ctx.clone();
-
-    window.on_calls_tab_clicked(move || {
-        if let Some(w) = weak_window.upgrade() {
-            // Clear active conversation so the mobile view shows the calls tab state
-            w.set_channel_id("".into());
-            ui_ctx.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::None);
-            crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);
         }
     });
 }

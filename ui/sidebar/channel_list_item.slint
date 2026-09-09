@@ -1,6 +1,8 @@
 // Channel list item component — Neo 2.0
 //
-// Displays a single channel with icon, name, and unread count badge.
+// Displays a single channel with icon, name, latest-activity preview,
+// timestamp and unread count badge — the same two-line shape as DMListItem,
+// because a channel and a DM sit in the same scan of the same sidebar.
 // Neo states: flat default, highlight hover, inset active (selected).
 
 import { Colors } from "../theme/colors.slint";
@@ -15,15 +17,47 @@ export component ChannelListItem inherits Rectangle {
     in property <string> name: "channel";
     in property <string> channel-type: "public"; // "public", "private", "dm"
     in property <int> unread-count: 0;
+    // Core-composed preview of the latest activity: text, "🖼️ Photo",
+    // "📎 report.pdf", "📌 …" for a pinned one. Never assembled here.
+    in property <string> last-message: "";
+    in property <string> timestamp: "";
+    in property <bool> is-typing: false;
     in property <bool> selected: false;
     in property <bool> collapsed: false;
     in property <image> avatar-source;
     in property <bool> has-avatar: false;
     in property <bool> is-pinned: false;
+    in property <bool> mobile-mode: false;
 
     // Callbacks
     callback clicked();
     callback context-menu-requested(/* x */ length, /* y */ length);
+
+    // Typing animation (0.0 to 1.0 cycling), same as the DM row above it.
+    property <float> typing-animation-progress: 0.0;
+
+    states [
+        typing when is-typing: {
+            typing-animation-progress: 1.0;
+            in {
+                animate typing-animation-progress {
+                    duration: 600ms;
+                    iteration-count: -1;
+                }
+            }
+        }
+    ]
+
+    // Calculate dot opacity with staggered timing
+    pure function dot-opacity(dot-index: int) -> float {
+        if dot-index == 0 {
+            0.3 + 0.7 * Math.max(0.0, Math.cos(typing-animation-progress * 360deg))
+        } else if dot-index == 1 {
+            0.3 + 0.7 * Math.max(0.0, Math.cos((typing-animation-progress - 0.33) * 360deg))
+        } else {
+            0.3 + 0.7 * Math.max(0.0, Math.cos((typing-animation-progress - 0.66) * 360deg))
+        }
+    }
 
     // The collapsed rail's slot: one shape and one size for every rail item
     // (see `rail-slot-*` in sidebar.slint — kept in step by hand because the
@@ -31,9 +65,19 @@ export component ChannelListItem inherits Rectangle {
     property <length> slot-size: 44px;
     property <length> slot-glyph: 20px;
 
+    // Sizing, shared with the DM rows above it at BOTH densities — a channel
+    // and a DM sit in the same flat list, so a 44px row with 14px grey text
+    // next to a 52px row with white text reads as two lists spliced together.
+    // That was fixed for touch first; the same argument was always true of the
+    // mouse-density list, it was just quieter about it.
+    property <length> name-size: root.mobile-mode ? Typography.base : Typography.sm;
+    property <length> preview-size: root.mobile-mode ? Typography.sm : Typography.xs;
+    property <length> glyph-size: root.mobile-mode ? 24px : 16px;
+    property <length> icon-box: root.mobile-mode ? Spacing.row-avatar-touch : Spacing.row-avatar-desktop;
+
     // Layout. Collapsed rows are 48px so the 44px slot has breathing room
-    // above and below; expanded rows keep the 44px text row.
-    height: root.collapsed ? 48px : 44px;
+    // above and below.
+    height: root.collapsed ? 48px : (root.mobile-mode ? Spacing.row-height-touch : Spacing.row-height-desktop);
     border-radius: Spacing.radius-sm;
 
     // Neo 2.0 states: flat → highlight hover → inset selected.
@@ -53,17 +97,19 @@ export component ChannelListItem inherits Rectangle {
         spacing: Spacing.sm;
         alignment: stretch;
 
-        // Channel icon container (24px wide for alignment; uploaded avatar when present, else type glyph)
+        // Channel icon container (uploaded avatar when present, else type glyph).
+        // On touch it takes the DM avatar's column width so both row kinds put
+        // their text on the same left edge.
         Rectangle {
-            width: 24px;
+            width: root.icon-box;
             height: parent.height;
 
             if root.has-avatar: Rectangle {
-                width: 20px;
-                height: 20px;
+                width: root.icon-box;
+                height: root.icon-box;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                border-radius: 10px;
+                border-radius: self.width / 2;
                 clip: true;
                 Image {
                     source: root.avatar-source;
@@ -86,63 +132,126 @@ export component ChannelListItem inherits Rectangle {
 
             if !root.has-avatar && root.channel-type != "private": Image {
                 source: root.channel-type == "public" ? Icons.hash : Icons.users;
-                width: 16px;
-                height: 16px;
+                width: root.glyph-size;
+                height: root.glyph-size;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 colorize: root.selected ? Colors.primary : Colors.text-secondary;
             }
         }
 
-        // Channel name with encryption indicator
-        HorizontalLayout {
-            spacing: 4px;
+        // Name and latest-activity preview — the DM row's two-line block.
+        VerticalLayout {
             horizontal-stretch: 1;
+            alignment: center;
+            spacing: root.mobile-mode ? 3px : 2px;
+
+            HorizontalLayout {
+                spacing: 4px;
+
+                Text {
+                    // Same rule as the DM row: the name is the anchor and is
+                    // always full-strength, the preview below is the muted one.
+                    text: root.name;
+                    color: Colors.text-primary;
+                    font-size: root.name-size;
+                    font-weight: root.unread-count > 0 ? 600 : 500;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+
+                // Pin marker — explains why this row sits above the rest.
+                if root.is-pinned: VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    Image {
+                        source: Icons.pin;
+                        width: 12px;
+                        height: 12px;
+                        colorize: Colors.text-muted;
+                        accessible-role: text;
+                        accessible-label: "Pinned";
+                    }
+                }
+            }
+
+            // Typing indicator or last-message preview. A channel nobody has
+            // posted in yet keeps its old one-line look instead of reserving a
+            // blank second line.
+            if root.is-typing: HorizontalLayout {
+                spacing: 3px;
+                alignment: start;
+
+                // Animated dots with staggered opacity
+                Rectangle {
+                    width: 4px;
+                    height: 4px;
+                    border-radius: 2px;
+                    background: Colors.primary;
+                    opacity: root.dot-opacity(0);
+                }
+                Rectangle {
+                    width: 4px;
+                    height: 4px;
+                    border-radius: 2px;
+                    background: Colors.primary;
+                    opacity: root.dot-opacity(1);
+                }
+                Rectangle {
+                    width: 4px;
+                    height: 4px;
+                    border-radius: 2px;
+                    background: Colors.primary;
+                    opacity: root.dot-opacity(2);
+                }
+
+                Text {
+                    text: "typing";
+                    color: Colors.primary;
+                    font-size: Typography.xs;
+                }
+            }
+
+            if !root.is-typing && root.last-message != "": Text {
+                text: root.last-message;
+                color: Colors.text-muted;
+                font-size: root.preview-size;
+                overflow: elide;
+            }
+        }
+
+        // Right side: timestamp above the unread badge, as on DM rows.
+        if root.timestamp != "" || root.unread-count > 0: VerticalLayout {
+            alignment: center;
+            spacing: 4px;
+            horizontal-stretch: 0;
 
             Text {
-                text: root.name;
-                color: root.selected ? Colors.text-primary : Colors.text-secondary;
-                font-size: Typography.sm;
-                font-weight: root.unread-count > 0 ? 600 : 400;
-                vertical-alignment: center;
-                overflow: elide;
-                horizontal-stretch: 1;
+                text: root.timestamp;
+                color: Colors.text-muted;
+                font-size: Typography.xs2;
+                horizontal-alignment: right;
             }
-        }
 
-        // Pin marker — explains why this row sits above the rest.
-        if root.is-pinned: VerticalLayout {
-            alignment: center;
-            horizontal-stretch: 0;
-            Image {
-                source: Icons.pin;
-                width: 12px;
-                height: 12px;
-                colorize: Colors.text-muted;
-                accessible-role: text;
-                accessible-label: "Pinned";
-            }
-        }
+            if root.unread-count > 0: HorizontalLayout {
+                alignment: end;
 
-        // Unread count badge
-        if root.unread-count > 0: VerticalLayout {
-            alignment: center;
+                Rectangle {
+                    width: max(20px, badge-text.preferred-width + 12px);
+                    height: 20px;
+                    border-radius: Spacing.radius-full;
+                    background: Colors.primary;
 
-            Rectangle {
-                width: max(20px, badge-text.preferred-width + 12px);
-                height: 20px;
-                border-radius: Spacing.radius-full;
-                background: Colors.primary;
-
-                badge-text := Text {
-                    text: root.unread-count > 99 ? "99+" : root.unread-count;
-                    color: Colors.text-primary;
-                    font-size: Typography.xs2;
-                    font-weight: 600;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                    width: 100%;
-                    height: 100%;
+                    badge-text := Text {
+                        text: root.unread-count > 99 ? "99+" : root.unread-count;
+                        color: Colors.text-primary;
+                        font-size: Typography.xs2;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
                 }
             }
         }

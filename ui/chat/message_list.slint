@@ -36,9 +36,44 @@ export component MessageList inherits Rectangle {
     in property <float> audio-progress: 0.0;
     in property <string> audio-elapsed: "0:00";
 
-    // Scroll state - exposed for parent to detect and control auto-scroll
-    out property <bool> is-at-bottom: true;
+    // Scroll state - exposed for parent to detect and control auto-scroll.
+    // in-out, not out: opening a conversation has to be able to reset it. When
+    // it was write-only-upward, a list left scrolled up in one conversation
+    // stayed "not at bottom" in the next one, and the next one opened wherever
+    // the previous scroll happened to leave the viewport.
+    in-out property <bool> is-at-bottom: true;
     in property <bool> should-auto-scroll: true;  // Enable/disable auto-scroll behavior
+
+    // ── Where this conversation opens ────────────────────────────────────────
+    // Row index of the first unread message, decided by core
+    // (`UnreadAnchor::divider_index`, captured before the open marks everything
+    // read). -1 = nothing unread, open at the newest message. in-out because
+    // tapping the "N new messages" pill consumes the anchor.
+    in-out property <int> unread-index: -1;
+    // Unread total behind that boundary — the pill's number. May exceed the
+    // loaded page.
+    in-out property <int> unread-count: 0;
+    // y of the unread row within the message layout. 0 until that row has been
+    // laid out; learned from the row itself so the open lands on the real
+    // boundary rather than an index-proportional guess.
+    private property <length> unread-divider-y: 0px;
+    // Anchoring is a once-per-open event. After it, the viewport belongs to the
+    // user — otherwise every later content resize (a GIF registering, a
+    // thumbnail swapping in) would yank them back to the divider.
+    private property <bool> anchor-consumed: false;
+
+    // Every conversation open raises `loading` before it installs a model, and
+    // only the server-backed opens then supply an anchor. Clearing on that one
+    // edge is what stops a mesh room or the AI channel from inheriting the
+    // previous DM's divider and opening three rows from the top.
+    changed loading => {
+        if (root.loading) {
+            root.unread-index = -1;
+            root.unread-count = 0;
+            root.unread-divider-y = 0px;
+            root.anchor-consumed = false;
+        }
+    }
 
     // Internal animated scroll target
     property <length> scroll-target: 0px;
@@ -213,6 +248,12 @@ export component MessageList inherits Rectangle {
                 // viewport-y >= -(viewport-height - self.height)
                 // Rearranged: viewport-height + viewport-y <= self.height + threshold
                 root.is-at-bottom = (self.viewport-height + self.viewport-y) <= (self.height + 50px);
+                // Reaching the newest message is what "caught up" means; the
+                // pill must stop claiming N new messages after that, including
+                // when the user scrolls back up later in the same session.
+                if (root.is-at-bottom) {
+                    root.unread-count = 0;
+                }
             }
 
             // Auto-snap to bottom when content grows AND user is currently at bottom.
@@ -222,16 +263,47 @@ export component MessageList inherits Rectangle {
             // Reacting to viewport-height changes lets Slint own the math inside
             // Flickable scope, where `self.height` and `self.viewport-height` are
             // both concrete.
+            // One place decides where the viewport sits after the content
+            // resizes: the unread boundary if this open has one, otherwise the
+            // bottom. Two callers (content grew; the divider row reported its
+            // position) so the two cannot race each other to a different answer.
+            function settle() {
+                if (root.unread-index >= 0 && !root.anchor-consumed) {
+                    // Wait for the divider row to report a real y, unless it is
+                    // the very first row (y == 0 is its correct answer).
+                    if (root.unread-divider-y > 0px || root.unread-index == 0) {
+                        // Telegram parity: the divider sits just under the top
+                        // edge, so you read forward from where you stopped with
+                        // a sliver of the last-read message still above it.
+                        self.viewport-y = min(0px,
+                            max(self.height - self.viewport-height,
+                                -root.unread-divider-y + Spacing.xl));
+                        root.anchor-consumed = true;
+                    }
+                } else if (root.should-auto-scroll && root.is-at-bottom) {
+                    self.viewport-y = min(0px, self.height - self.viewport-height);
+                }
+            }
+
             changed viewport-height => {
                 // Decide before writing viewport-y: the animation reads its
                 // duration at the moment the property changes.
                 root.jump-without-animation =
                     (self.viewport-height - root.previous-viewport-height) > self.height;
                 root.previous-viewport-height = self.viewport-height;
+                self.settle();
+            }
 
-                if (root.should-auto-scroll && root.is-at-bottom) {
-                    self.viewport-y = min(0px, self.height - self.viewport-height);
-                }
+            // Mirror the root properties locally so `changed` fires inside
+            // Flickable scope (same trick as `jump-index` below).
+            property <length> anchor-y: root.unread-divider-y;
+            changed anchor-y => {
+                self.settle();
+            }
+            property <int> open-index: root.unread-index;
+            changed open-index => {
+                root.anchor-consumed = false;
+                self.settle();
             }
 
             // Jump-to-message (quote click, search result): move the viewport to
@@ -267,9 +339,52 @@ export component MessageList inherits Rectangle {
                 }
             }
 
-            for item in root.messages: VerticalLayout {
+            for item[idx] in root.messages: VerticalLayout {
                 width: parent.width - Spacing.md * 2;
                 spacing: 2px;
+
+                // Report where the unread boundary actually ended up, so the
+                // open scrolls to the real row instead of guessing from the
+                // index (an image bubble is ten times a text bubble tall).
+                changed y => {
+                    if (idx == root.unread-index) {
+                        root.unread-divider-y = self.y;
+                    }
+                }
+
+                // Unread divider — everything below this line arrived while
+                // the user was away.
+                if idx == root.unread-index: HorizontalLayout {
+                    width: 100%;
+                    height: 32px;
+                    spacing: Spacing.md;
+                    alignment: center;
+                    padding-top: Spacing.sm;
+                    padding-bottom: Spacing.sm;
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        height: 1px;
+                        background: Colors.primary;
+                        opacity: 0.5;
+                    }
+
+                    Text {
+                        text: "Unread messages";
+                        color: Colors.primary;
+                        font-size: Typography.xs;
+                        font-weight: Typography.medium;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        height: 1px;
+                        background: Colors.primary;
+                        opacity: 0.5;
+                    }
+                }
 
                 // Date separator bar
                 if item.show-date-separator: HorizontalLayout {
@@ -403,17 +518,22 @@ export component MessageList inherits Rectangle {
         // Scroll-to-bottom floating button
         // Appears when user has scrolled up from the bottom
         // Scroll-to-bottom — Neo convex floating button
+        // Scroll-to-bottom, which becomes a "N new messages" pill when the
+        // conversation opened on an unread boundary — the affordance that says
+        // how much is below you and takes you there in one tap.
         if !root.is-at-bottom: Rectangle {
-            x: root.width - 60px;
+            x: root.width - self.width - 16px;
             y: root.height - 60px;
-            width: 44px;
+            width: pill-content.preferred-width + Spacing.lg * 2;
             height: 44px;
             border-radius: 22px;
             background: Colors.primary;
             border-width: 1px;
             border-color: Colors.neo-highlight-strong;
             accessible-role: button;
-            accessible-label: "Scroll to bottom";
+            accessible-label: root.unread-count > 0
+                ? root.unread-count + " new messages, jump to newest"
+                : "Scroll to bottom";
             drop-shadow-blur: Spacing.neo-blur-lg;
             drop-shadow-offset-x: Spacing.neo-offset-md;
             drop-shadow-offset-y: Spacing.neo-offset-md;
@@ -426,13 +546,28 @@ export component MessageList inherits Rectangle {
                 easing: ease-out;
             }
 
-            // Down arrow icon
-            Text {
-                text: "↓";
-                color: Colors.text-primary;
-                font-size: Typography.xl;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+            pill-content := HorizontalLayout {
+                alignment: center;
+                spacing: Spacing.sm;
+
+                if root.unread-count > 0: Text {
+                    text: root.unread-count == 1
+                        ? "1 new message"
+                        : root.unread-count + " new messages";
+                    color: Colors.text-primary;
+                    font-size: Typography.sm;
+                    font-weight: Typography.medium;
+                    vertical-alignment: center;
+                }
+
+                // Down arrow icon
+                Text {
+                    text: "↓";
+                    color: Colors.text-primary;
+                    font-size: Typography.xl;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
             }
 
             scroll-btn := TouchArea {
@@ -440,6 +575,10 @@ export component MessageList inherits Rectangle {
                     // Scroll to bottom: viewport-y = -(viewport-height - visible-height)
                     root.scroll-position = -(flickable.viewport-height - flickable.height);
                     root.is-at-bottom = true;
+                    // Consume the anchor: the user has chosen the newest
+                    // message, so no later relayout may drag them back up.
+                    root.unread-index = -1;
+                    root.unread-count = 0;
                     root.scroll-to-bottom-clicked();
                 }
             }

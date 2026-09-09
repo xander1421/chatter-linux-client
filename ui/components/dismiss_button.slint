@@ -1,0 +1,62 @@
+// DismissButton — the ONE control that gets you out of a screen.
+//
+// Nielsen H4 (consistency) and H3 (user control): the same component must mean
+// the same thing everywhere, and every screen needs exactly one obvious exit.
+// This app had four spellings of "leave" — X top-right, X top-left, a back
+// chevron top-left, and a "Close" text button — so which glyph, which edge and
+// which size is no longer a per-screen decision. It follows the screen's SHAPE:
+//
+//   back: true    a full-screen PAGE (mobile Contacts / Calls / Profile /
+//                 Thread, Settings). You pushed into it, so you pop out of it:
+//                 chevron on the LEADING edge, exactly like chat_header.slint.
+//   back: false   a centered DIALOG or sheet (Create channel, Join, Invite,
+//                 Forward, PIN, device picker). X on the TRAILING edge.
+//
+// Placement stays with the caller because it is a position in that screen's
+// header layout, not a property of the button — but the glyph, the geometry,
+// the hover treatment and the accessible label all live here so they cannot
+// drift apart again. Nothing else under ui/modals, ui/settings, ui/calls or
+// ui/chat/thread_panel.slint may draw its own close glyph; the test
+// `no_screen_defines_its_own_dismissal_glyph` in ui_wiring.rs fails if one does.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Icons } from "../theme/icons.slint";
+
+export component DismissButton inherits Rectangle {
+    in property <bool> back: false;
+    // Density. Defaults to `back` because every `full-screen:` binding in ui/
+    // is `mobile-mode` — a full-screen modal only exists on a phone. Settings
+    // is the one page that is full-window at MOUSE density too, so it is the
+    // only caller that sets this apart from `back`.
+    in property <bool> touch: root.back;
+
+    callback clicked();
+
+    accessible-role: button;
+    accessible-label: root.back ? "Back" : "Close";
+
+    width: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
+    height: self.width;
+    border-radius: Spacing.radius-md;
+    background: touch-area.has-hover ? Colors.surface-hover : transparent;
+    border-width: touch-area.has-hover ? 1px : 0px;
+    border-color: Colors.neo-highlight;
+
+    // SVG, never a Unicode glyph: "✕" and "×" are missing from the Android
+    // font and render as a tofu box.
+    Image {
+        source: root.back ? Icons.chevron-left : Icons.x;
+        width: root.touch ? Spacing.header-glyph-touch : Spacing.header-glyph;
+        height: self.width;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        colorize: touch-area.pressed ? Colors.text-muted
+            : (touch-area.has-hover ? Colors.text-primary : Colors.text-secondary);
+    }
+
+    touch-area := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}

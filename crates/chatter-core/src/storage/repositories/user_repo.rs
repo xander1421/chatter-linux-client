@@ -236,6 +236,46 @@ impl UserRepository {
         Ok(())
     }
 
+    /// Update only a user's presence.
+    ///
+    /// Presence arrives on its own event (StreamUserEvents) carrying none of
+    /// the rest of the profile, so it must NOT go through `upsert_profile` —
+    /// that would write an empty display name over the decrypted one. A user
+    /// with no profile row is a user we render nowhere, so there is nothing
+    /// to store.
+    ///
+    /// `last_seen_at` is the unix-seconds stamp the presence update carried
+    /// (`PresenceUpdate.timestamp`). It is what the profile screen's "last
+    /// seen" line reads, and the only reason we know when an offline contact
+    /// was last around. `None` leaves the stored value alone.
+    pub fn set_presence(
+        &self,
+        user_id: &UserId,
+        presence: PresenceStatus,
+        last_seen_at: Option<i64>,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        conn.execute(
+            "UPDATE profiles
+             SET presence = ?2, last_seen_at = COALESCE(?3, last_seen_at)
+             WHERE user_id = ?1",
+            params![user_id.to_string(), presence_to_i32(presence), last_seen_at],
+        )?;
+        Ok(())
+    }
+
+    /// When we last saw a presence update for this user, in unix seconds.
+    /// `None` when we have never seen one (or have no profile row).
+    pub fn last_seen_at(&self, user_id: &UserId) -> Result<Option<i64>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare("SELECT last_seen_at FROM profiles WHERE user_id = ?1")?;
+        match stmt.query_row(params![user_id.to_string()], |row| row.get(0)) {
+            Ok(v) => Ok(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::Database(e)),
+        }
+    }
+
     // ========================================================================
     // Device operations
     // ========================================================================
@@ -752,6 +792,64 @@ mod tests {
         assert!(
             repo.is_blocked(&me, &them).unwrap(),
             "blocking an existing friend takes the UPDATE branch in block_user"
+        );
+    }
+
+    /// Presence has to SURVIVE, and it has to survive alone.
+    ///
+    /// Every list that shows a contact's dot (the DM sidebar, the Contacts
+    /// tab, the chat header on reopen) rebuilds from `profiles.presence`, so a
+    /// presence event that only patched the on-screen rows went grey again at
+    /// the next rebuild. The event carries presence and nothing else, so the
+    /// write must not travel through `upsert_profile` — that would put an
+    /// empty display name and a null avatar over the decrypted ones.
+    #[test]
+    fn set_presence_persists_without_erasing_the_rest_of_the_profile() {
+        let (_d, repo) = setup();
+        let them = UserId::new();
+        repo.ensure_user_exists(&them).unwrap();
+        repo.upsert_profile(&Profile {
+            user_id: them,
+            display_name: "Alice".to_string(),
+            avatar_bytes: Some(vec![1, 2, 3]),
+            status_message: None,
+            presence: PresenceStatus::Offline,
+        })
+        .unwrap();
+
+        repo.set_presence(&them, PresenceStatus::Online, None).unwrap();
+
+        let stored = repo.get_profile(&them).unwrap().expect("profile row");
+        assert_eq!(
+            stored.presence,
+            PresenceStatus::Online,
+            "presence did not persist — every rebuilt list shows this contact offline \
+             again the moment anything refreshes"
+        );
+        assert_eq!(
+            stored.display_name, "Alice",
+            "a presence write erased the decrypted display name"
+        );
+        assert_eq!(
+            stored.avatar_bytes,
+            Some(vec![1, 2, 3]),
+            "a presence write erased the decrypted avatar"
+        );
+    }
+
+    /// No profile row means a user we render nowhere, so a presence event for
+    /// them is a no-op — not an error, and not a half-built row whose empty
+    /// display name would later read as their name.
+    #[test]
+    fn set_presence_for_an_unknown_user_stores_nothing() {
+        let (_d, repo) = setup();
+        let stranger = UserId::new();
+
+        repo.set_presence(&stranger, PresenceStatus::Online, None).unwrap();
+
+        assert!(
+            repo.get_profile(&stranger).unwrap().is_none(),
+            "presence for an unknown user invented a profile row"
         );
     }
 }

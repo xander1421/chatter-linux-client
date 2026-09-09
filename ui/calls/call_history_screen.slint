@@ -1,0 +1,338 @@
+// CallHistoryScreen — the mobile bottom nav's "Calls" tab.
+//
+// A list of past calls across every conversation type that can host one
+// (channel, server DM, anon DM, anon group). Rows are built by core; this
+// file only lays them out. Tapping a row reopens the conversation, the two
+// buttons redial it as voice or video.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { Modal } from "../components/modal.slint";
+import { Button } from "../components/button.slint";
+import { Avatar } from "../components/avatar.slint";
+import { CallHistoryRow } from "types.slint";
+
+export component CallHistoryScreen inherits Rectangle {
+    in property <bool> show-modal: false;
+    // "Touch input", same meaning as the sidebar's and the Contacts screen's.
+    // On a phone this is a full-screen page reached from the tab bar, so its
+    // rows read the shared touch geometry rather than desktop density.
+    in property <bool> mobile-mode: false;
+    in property <length> bottom-inset: 0px;
+    in property <[CallHistoryRow]> rows: [];
+    in property <bool> loading: false;
+    in property <string> active-filter: "all";  // "all" or "missed"
+
+    property <length> row-height: root.mobile-mode ? Spacing.row-height-touch : 56px;
+    property <length> row-avatar: root.mobile-mode ? Spacing.row-avatar-touch : 40px;
+    property <length> row-name-size: root.mobile-mode ? Typography.base : Typography.sm;
+    property <length> row-sub-size: root.mobile-mode ? Typography.sm : Typography.xs;
+
+    callback close();
+    callback filter-changed(string);
+    // conversation-id, conversation-type
+    callback open-conversation(string, string);
+    // conversation-id, conversation-type, is-video
+    callback call-back(string, string, bool);
+    callback clear-history();
+
+    // Clear-history confirmation reveal. Presentation state only — nothing
+    // leaves the UI until the second click. Reset on every open, or a screen
+    // closed mid-confirm reopens already asking to wipe the list.
+    property <bool> show-clear-confirm: false;
+    changed show-modal => { self.show-clear-confirm = false; }
+
+    Modal {
+        show: root.show-modal;
+        title: "Calls";
+        modal-width: 560px;
+        max-modal-height: 800px;
+        full-screen: root.mobile-mode;
+        bottom-inset: root.bottom-inset;
+        fill-height: root.mobile-mode;
+
+        close => {
+            root.close();
+        }
+
+        VerticalLayout {
+            spacing: Spacing.md;
+            vertical-stretch: 1;
+
+            // Filter tabs — mirrors core's `CallHistoryFilter`. Same box
+            // height as the header row's dismissal control above it.
+            HorizontalLayout {
+                height: root.mobile-mode ? Spacing.header-action-box-touch : Spacing.header-action-box;
+
+                for tab in [
+                    { id: "all", label: "All" },
+                    { id: "missed", label: "Missed" }
+                ]: Rectangle {
+                    horizontal-stretch: 1;
+                    background: root.active-filter == tab.id ? Colors.neo-inset-bg : (tab-touch.has-hover ? Colors.surface-hover.with-alpha(0.3) : transparent);
+
+                    VerticalLayout {
+                        HorizontalLayout {
+                            alignment: center;
+                            vertical-stretch: 1;
+
+                            Text {
+                                text: tab.label;
+                                color: root.active-filter == tab.id ? Colors.text-primary : Colors.text-secondary;
+                                font-size: Typography.sm;
+                                font-weight: root.active-filter == tab.id ? Typography.semibold : Typography.normal;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        Rectangle {
+                            height: 2px;
+                            background: root.active-filter == tab.id ? Colors.primary : transparent;
+                        }
+                    }
+
+                    tab-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.filter-changed(tab.id);
+                        }
+                    }
+                }
+            }
+
+            if root.loading: HorizontalLayout {
+                alignment: center;
+                vertical-stretch: 1;
+
+                Text {
+                    text: "Loading…";
+                    color: Colors.text-muted;
+                    font-size: Typography.sm;
+                    vertical-alignment: center;
+                }
+            }
+
+            if !root.loading && root.rows.length == 0: VerticalLayout {
+                alignment: center;
+                vertical-stretch: 1;
+                spacing: Spacing.sm;
+
+                Image {
+                    source: Icons.phone;
+                    colorize: Colors.text-muted;
+                    width: 32px;
+                    height: 32px;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: root.active-filter == "missed" ? "No missed calls" : "No calls yet";
+                    color: Colors.text-muted;
+                    font-size: Typography.base;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Calls you make or receive show up here.";
+                    color: Colors.text-muted;
+                    font-size: Typography.sm;
+                    horizontal-alignment: center;
+                }
+            }
+
+            if !root.loading && root.rows.length > 0: Flickable {
+                vertical-stretch: 1;
+                viewport-height: calls-list.preferred-height;
+
+                calls-list := VerticalLayout {
+                    spacing: Spacing.xs;
+
+                    for row in root.rows: Rectangle {
+                        height: root.row-height;
+                        background: row-touch.has-hover ? Colors.surface-hover : transparent;
+                        border-radius: Spacing.radius-md;
+                        border-width: row-touch.has-hover ? 1px : 0px;
+                        border-color: Colors.neo-highlight;
+
+                        HorizontalLayout {
+                            padding: Spacing.sm;
+                            spacing: Spacing.sm;
+
+                            Avatar {
+                                size: root.row-avatar;
+                                fallback-text: row.name;
+                            }
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                alignment: center;
+                                spacing: root.mobile-mode ? 3px : 2px;
+
+                                Text {
+                                    // A missed call is the one thing on this
+                                    // screen you came looking for, so it is the
+                                    // name that carries the colour, not a badge
+                                    // tucked into the second line.
+                                    text: row.name;
+                                    color: row.is-missed ? Colors.error : Colors.text-primary;
+                                    font-size: root.row-name-size;
+                                    font-weight: Typography.medium;
+                                    overflow: elide;
+                                }
+
+                                HorizontalLayout {
+                                    spacing: Spacing.xs;
+
+                                    Image {
+                                        source: row.is-video ? Icons.video : Icons.phone;
+                                        colorize: row.is-missed ? Colors.error : Colors.text-muted;
+                                        width: 12px;
+                                        height: 12px;
+                                        y: (parent.height - self.height) / 2;
+                                    }
+
+                                    Text {
+                                        text: row.detail + " · " + row.timestamp;
+                                        color: Colors.text-muted;
+                                        font-size: root.row-sub-size;
+                                        overflow: elide;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+
+                            // Redial. Both types are offered rather than
+                            // repeating the original call's type: wanting to
+                            // switch is exactly why you'd come back to a row.
+                            if row.can-call-back: HorizontalLayout {
+                                spacing: Spacing.xs;
+                                alignment: center;
+
+                                Rectangle {
+                                    width: 44px;
+                                    height: 44px;
+                                    border-radius: Spacing.radius-sm;
+                                    background: voice-touch.has-hover ? Colors.surface : transparent;
+
+                                    Image {
+                                        source: Icons.phone;
+                                        colorize: Colors.primary;
+                                        width: 18px;
+                                        height: 18px;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                    }
+
+                                    voice-touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.call-back(row.conversation-id, row.conversation-type, false);
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: 44px;
+                                    height: 44px;
+                                    border-radius: Spacing.radius-sm;
+                                    background: video-touch.has-hover ? Colors.surface : transparent;
+
+                                    Image {
+                                        source: Icons.video;
+                                        colorize: Colors.primary;
+                                        width: 18px;
+                                        height: 18px;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                    }
+
+                                    video-touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.call-back(row.conversation-id, row.conversation-type, true);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        row-touch := TouchArea {
+                            clicked => {
+                                root.open-conversation(row.conversation-id, row.conversation-type);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Clearing is irreversible, so it takes the same two-step reveal
+            // Channel Settings uses for Leave and Delete — one destructive
+            // vocabulary across the app, not one per screen.
+            if !root.loading && root.rows.length > 0 && !root.show-clear-confirm: HorizontalLayout {
+                alignment: center;
+                padding-bottom: Spacing.sm;
+
+                Rectangle {
+                    height: Spacing.touch-target-min;
+                    width: clear-label.preferred-width + 2 * Spacing.md;
+                    border-radius: Spacing.radius-sm;
+                    background: clear-touch.has-hover ? Colors.surface-hover : transparent;
+
+                    clear-label := Text {
+                        text: "Clear call history";
+                        color: Colors.error;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
+
+                    clear-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.show-clear-confirm = true;
+                        }
+                    }
+                }
+            }
+
+            if !root.loading && root.show-clear-confirm: VerticalLayout {
+                spacing: Spacing.sm;
+                padding-bottom: Spacing.sm;
+
+                Text {
+                    text: "Delete every call in this list? This cannot be undone.";
+                    color: Colors.error;
+                    font-size: Typography.sm;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: Spacing.sm;
+
+                    // Cancel first and non-danger: the safe answer is the one
+                    // the eye and the thumb land on.
+                    Button {
+                        text: "Cancel";
+                        variant: "secondary";
+                        clicked => { root.show-clear-confirm = false; }
+                    }
+
+                    Button {
+                        text: "Clear history";
+                        variant: "danger";
+                        clicked => {
+                            root.show-clear-confirm = false;
+                            root.clear-history();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

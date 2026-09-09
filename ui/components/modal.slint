@@ -4,8 +4,8 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
-import { Icons } from "../theme/icons.slint";
 import { ModalContainer } from "modal_container.slint";
+import { DismissButton } from "dismiss_button.slint";
 
 export component Modal inherits Rectangle {
     in property <bool> show: false;
@@ -13,6 +13,8 @@ export component Modal inherits Rectangle {
     in property <length> modal-width: 480px;
     in property <length> max-modal-height: 600px;
     in property <bool> fill-height: false;
+    in property <bool> full-screen: false;
+    in property <length> bottom-inset: 0px;
 
     callback close();
 
@@ -27,16 +29,34 @@ export component Modal inherits Rectangle {
         modal-width: root.modal-width;
         max-modal-height: min(root.max-modal-height, root.viewport-height-cap);
         fill-height: root.fill-height;
+        full-screen: root.full-screen;
+        bottom-inset: root.bottom-inset;
         close => { root.close(); }
 
         modal-layout := VerticalLayout {
             padding: Spacing.lg;
             spacing: Spacing.md;
 
-            // Header row
+            // Header row.
+            //
+            // THE dismissal rule, implemented once for every screen that uses
+            // `Modal`. `full-screen` is what separates the two shapes, and it
+            // is already the property that decides whether this is a page or a
+            // card, so nothing new has to be plumbed: full-screen means the
+            // user pushed into a page and pops back out of it (chevron,
+            // LEADING edge, matching chat_header.slint); otherwise it is a
+            // floating dialog they close (X, TRAILING edge). Exactly one of
+            // the two exists at a time — never both.
             HorizontalLayout {
                 spacing: Spacing.md;
-                height: 40px;
+                // The row is as tall as its one control, so title and glyph
+                // share a vertical centre at both densities.
+                height: root.full-screen ? Spacing.header-action-box-touch : Spacing.header-action-box;
+
+                if root.full-screen: DismissButton {
+                    back: true;
+                    clicked => { root.close(); }
+                }
 
                 // Title
                 Text {
@@ -49,36 +69,9 @@ export component Modal inherits Rectangle {
                     overflow: elide;
                 }
 
-                // Close button — 40px touch target for mobile, Neo hover
-                Rectangle {
-                    width: 40px;
-                    height: 40px;
-                    border-radius: Spacing.radius-sm;
-                    background: close-area.has-hover ? Colors.neo-inset-bg : transparent;
-                    border-width: close-area.has-hover ? 1px : 0px;
-                    border-color: Colors.neo-inset-shadow;
-                    accessible-role: button;
-                    accessible-label: "Close dialog";
-
-                    // X icon — SVG, not a Unicode glyph (the glyph is missing
-                    // from the Android font and renders as a tofu box)
-                    Image {
-                        source: Icons.x;
-                        width: 18px;
-                        height: 18px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        colorize: close-area.pressed ? Colors.text-muted :
-                                  (close-area.has-hover ? Colors.text-primary : Colors.text-secondary);
-                    }
-
-                    close-area := TouchArea {
-                        width: 100%;
-                        height: 100%;
-                        clicked => {
-                            root.close();
-                        }
-                    }
+                if !root.full-screen: DismissButton {
+                    back: false;
+                    clicked => { root.close(); }
                 }
             }
 

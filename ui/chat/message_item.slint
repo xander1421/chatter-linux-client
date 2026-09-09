@@ -108,14 +108,14 @@ export component MessageItem inherits Rectangle {
 
     // Internal hover state — touch covers entire message row.
     //
-    // NOTE for anyone reading this on a touch device: `has-hover` is true while
-    // a finger is DOWN, not just under a mouse. Slint sets it from any pointer
-    // event carrying a position (i-slint-core input_items.rs), so on Android
-    // the hover action bar below appears mid-press and vanishes on release.
-    // That is why it was never a usable touch affordance — you had to predict
-    // where it would draw and land on it blind. Hold-to-open (below) is the
-    // real touch entry point; this stays hover-gated for the mouse.
-    property <bool> is-hovered: touch.has-hover;
+    // Pointer-only, deliberately. `has-hover` is true while a finger is DOWN,
+    // not just under a mouse: Slint sets it from any pointer event carrying a
+    // position (i-slint-core input_items.rs), so on Android the action bar
+    // below flashed into existence mid-press and vanished on release. You had
+    // to predict where it would draw and land on it blind, and a plain scroll
+    // spawned it under the thumb. Press-and-hold (below) is the touch entry
+    // point to the same menu, so gating this on `!mobile` costs touch nothing.
+    property <bool> is-hovered: !root.mobile && touch.has-hover;
 
     // Multi-select
     in property <bool> selected: false;

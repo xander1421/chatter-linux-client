@@ -7,12 +7,18 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 
 component NavTab inherits Rectangle {
     in property <image> icon;
     in property <string> label;
     in property <bool> active: false;
     in property <int> badge-count: 0;
+    // Profile shows the user's own avatar rather than a glyph — it is the one
+    // tab that means "you", and an outlined person icon says that far less
+    // directly than the face already on the account.
+    in property <image> avatar;
+    in property <bool> use-avatar: false;
     callback clicked();
 
     height: Spacing.bottom-nav-height;
@@ -31,11 +37,28 @@ component NavTab inherits Rectangle {
             height: 24px;
             x: (parent.width - self.width) / 2;
 
-            Image {
+            if !root.use-avatar: Image {
                 source: root.icon;
                 width: 24px;
                 height: 24px;
                 colorize: root.active ? Colors.primary : Colors.text-muted;
+            }
+
+            if root.use-avatar: Rectangle {
+                width: 24px;
+                height: 24px;
+                border-radius: 12px;
+                clip: true;
+                // Ringed when active, so it reads as selected the same way a
+                // colorized glyph does.
+                border-width: root.active ? 2px : 0px;
+                border-color: Colors.primary;
+                Image {
+                    source: root.avatar;
+                    width: 100%;
+                    height: 100%;
+                    image-fit: cover;
+                }
             }
 
             // Badge dot
@@ -76,55 +99,120 @@ component NavTab inherits Rectangle {
 
 export component MobileBottomNav inherits Rectangle {
     in property <string> active-tab: "chats";
+    in property <image> user-avatar;
     in property <int> chats-badge: 0;
+    in property <int> calls-badge: 0;
     in property <int> contacts-badge: 0;
     // Extra padding at the bottom to extend behind the system gesture area
     in property <length> safe-area-bottom: 0px;
     callback tab-selected(/* tab */ string);
 
-    height: Spacing.bottom-nav-height + root.safe-area-bottom;
-    background: Colors.surface;
+    // Floating dock, not a bar welded to the bottom edge. The tabs live on a
+    // rounded translucent slab inset from all three edges, so the conversation
+    // list scrolls visibly beneath it — same Neo glassmorphism the chat header
+    // already uses (chat_header.slint: translucent surface + edge highlight),
+    // not a new visual language.
+    //
+    // Slint has no backdrop blur, so "glass" here is what actually reads as
+    // glass without one: a translucent fill over moving content, a bright hair-
+    // line along the top edge to catch the light, and a soft shadow to lift it
+    // off the page. Blur would add little on a near-black background anyway.
+    in property <length> side-inset: Spacing.md;
+    in property <length> bottom-gap: Spacing.sm;
+    // What the dock occupies in total, for whoever reserves space for it.
+    out property <length> occupied-height:
+        Spacing.bottom-nav-height + root.bottom-gap + root.safe-area-bottom;
 
-    // Top border
-    Rectangle {
+    height: root.occupied-height;
+    background: transparent;
+
+    dock := Rectangle {
+        x: root.side-inset;
         y: 0;
-        width: 100%;
-        height: 1px;
-        background: Colors.border;
+        width: parent.width - root.side-inset * 2;
+        height: Spacing.bottom-nav-height;
+        border-radius: Spacing.radius-xl;
+        background: Colors.surface.with-alpha(0.85);
+        border-width: 1px;
+        border-color: Colors.neo-highlight-strong;
+        drop-shadow-blur: Spacing.neo-blur-lg;
+        drop-shadow-offset-y: Spacing.neo-offset-md;
+        drop-shadow-color: Colors.neo-shadow-strong;
+        clip: true;
     }
 
-    HorizontalLayout {
-        y: 1px;
-        height: Spacing.bottom-nav-height - 1px;
+    // Four equal columns, positioned explicitly rather than by a
+    // HorizontalLayout. `horizontal-stretch` on the tabs does not spread them
+    // here — with or without an explicit width on the layout they stay packed
+    // against the left edge — so the widths are computed directly. Four tabs
+    // is a fixed set, so there is nothing a layout would buy us anyway.
+    property <length> tab-width: (root.width - root.side-inset * 2) / 6;
 
-        NavTab {
-            icon: Icons.message-circle;
-            label: "Chats";
-            active: root.active-tab == "chats";
-            badge-count: root.chats-badge;
-            clicked => { root.tab-selected("chats"); }
-        }
+    NavTab {
+        x: root.side-inset;
+        y: 0;
+        width: root.tab-width;
+        icon: Icons.message-circle;
+        label: "Chats";
+        active: root.active-tab == "chats";
+        badge-count: root.chats-badge;
+        clicked => { root.tab-selected("chats"); }
+    }
 
-        NavTab {
-            icon: Icons.phone;
-            label: "Calls";
-            active: root.active-tab == "calls";
-            clicked => { root.tab-selected("calls"); }
-        }
+    NavTab {
+        x: root.side-inset + root.tab-width;
+        y: 0;
+        width: root.tab-width;
+        icon: Icons.phone;
+        label: "Calls";
+        active: root.active-tab == "calls";
+        badge-count: root.calls-badge;
+        clicked => { root.tab-selected("calls"); }
+    }
 
-        NavTab {
-            icon: Icons.users;
-            label: "Contacts";
-            active: root.active-tab == "contacts";
-            badge-count: root.contacts-badge;
-            clicked => { root.tab-selected("contacts"); }
-        }
+    // Shield in the middle slot. Anon mode is a MODE, not a destination, so
+    // it reads its active state from AnonMode rather than `active-tab` — the
+    // tab highlight follows where you are, this follows what you have switched
+    // on, and both can be true at once.
+    NavTab {
+        x: root.side-inset + root.tab-width * 2;
+        y: 0;
+        width: root.tab-width;
+        icon: Icons.shield;
+        label: "Shield";
+        active: AnonMode.enabled;
+        clicked => { root.tab-selected("shield"); }
+    }
 
-        NavTab {
-            icon: Icons.settings;
-            label: "Settings";
-            active: root.active-tab == "settings";
-            clicked => { root.tab-selected("settings"); }
-        }
+    NavTab {
+        x: root.side-inset + root.tab-width * 3;
+        y: 0;
+        width: root.tab-width;
+        icon: Icons.users;
+        label: "Contacts";
+        active: root.active-tab == "contacts";
+        badge-count: root.contacts-badge;
+        clicked => { root.tab-selected("contacts"); }
+    }
+
+    NavTab {
+        x: root.side-inset + root.tab-width * 4;
+        y: 0;
+        width: root.tab-width;
+        icon: Icons.settings;
+        label: "Settings";
+        active: root.active-tab == "settings";
+        clicked => { root.tab-selected("settings"); }
+    }
+
+    NavTab {
+        x: root.side-inset + root.tab-width * 5;
+        y: 0;
+        width: root.tab-width;
+        label: "Profile";
+        avatar: root.user-avatar;
+        use-avatar: true;
+        active: root.active-tab == "profile";
+        clicked => { root.tab-selected("profile"); }
     }
 }

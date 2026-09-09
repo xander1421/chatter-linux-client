@@ -26,49 +26,37 @@ fn init_mode(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 }
 
 /// Wire the status change callback.
+///
+/// The picker only tells core what the user chose. Reflecting it back into
+/// `user-presence-status` is not this handler's job: `set_presence` emits a
+/// self `UserPresenceChanged`, and the domain handler owns that property for
+/// every transition — including the two the picker never sees (auto-away and
+/// the return to online on activity).
 fn wire_status_change(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
-    let weak_window = window.as_weak();
-    
+
     window.on_change_user_status(move |status: slint::SharedString| {
         let status = status.to_string();
         let ui_ctx = ui_ctx.clone();
-        let weak = weak_window.clone();
-        
+
         crate::rt_handle().spawn(async move {
-            // Change the status
             super::auth::presence_integration::set_user_status(&ui_ctx, &status).await;
-            
-            // Update UI to reflect new status
-            let new_status = super::auth::presence_integration::get_current_status().await;
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    w.set_user_presence_status(new_status.into());
-                }
-            });
         });
     });
 }
 
-/// Wire the status getter callback.
+/// Answer the `get-user-status` callback from the live presence property.
+///
+/// Slint reads the dot's colour from `user-presence-status`; this exists for
+/// callers that want the value pulled rather than bound. It used to return the
+/// literal "online" whatever the user's status was.
 fn wire_status_getter(window: &MainWindow) {
     let weak_window = window.as_weak();
-    
+
     window.on_get_user_status(move || -> slint::SharedString {
-        // This needs to be synchronous for the UI callback
-        // We'll use the last known status from when it was set
-        // For now, return a default
-        "online".into()
-    });
-    
-    // Set initial status on startup
-    let weak = weak_window.clone();
-    crate::rt_handle().spawn(async move {
-        let status = super::auth::presence_integration::get_current_status().await;
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                w.set_user_presence_status(status.into());
-            }
-        });
+        weak_window
+            .upgrade()
+            .map(|w| w.get_user_presence_status())
+            .unwrap_or_else(|| "offline".into())
     });
 }

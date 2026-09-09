@@ -48,6 +48,11 @@ export component Sidebar inherits Rectangle {
     // banner can be dismissed without the outage becoming invisible.
     in property <bool> server-unreachable: false;
     in property <length> mobile-width: 360px;
+    // macOS unified titlebar: the traffic lights are drawn over this panel's
+    // top-left corner (app.slint stopped reserving a row for them). Both are
+    // 0 everywhere else, which turns every use below into a no-op.
+    in property <length> traffic-lights-width: 0px;
+    in property <length> titlebar-height: 0px;
 
     // ── Properties: Badges ──
     in property <int> pending-friend-requests: 0;
@@ -88,7 +93,28 @@ export component Sidebar inherits Rectangle {
     // ── Internal state ──
     // Quick-link rows are 34px for mouse density; on a touch screen that is
     // under a finger's width, so touch gets the 48px minimum instead.
-    property <length> quick-link-height: root.mobile-mode ? Spacing.touch-target-min : 34px;
+    // Quick-links (Search, Saved Messages) sit in the same column as the
+    // conversation rows, so on touch they take the same geometry and the same
+    // type. They were 48px tall with 14px grey labels next to 72px rows with
+    // 16px white names — close enough to look like a mistake rather than a
+    // distinction, which is what "the text is different sizes" is.
+    // NOT the conversation-row height. A conversation row is 72px because it
+    // carries a 52px avatar and two lines of text; a quick link carries one
+    // icon and one word. At the same 72px the two read as different sizes —
+    // the conversation rows look dense and the quick links look like they have
+    // a hole punched between them, which is the "huge space from Search to
+    // Saved" complaint. 56px is the standard list row: same type, same tap
+    // target, no cavern.
+    property <length> quick-link-height: root.mobile-mode ? 56px : 34px;
+    // The panel's first row, pinned above the scroll. On desktop it takes the
+    // shared header height so it and the conversation header beside it read as
+    // one row across the seam — and on macOS that is the row the traffic
+    // lights are in. Mobile keeps the conversation-row geometry: there the
+    // panel IS the screen, so its first row belongs to the list.
+    property <length> top-row-height: root.mobile-mode ? Spacing.row-height-touch : Spacing.header-height;
+    property <length> quick-link-text-size: root.mobile-mode ? Typography.base : Typography.sm2;
+    property <brush> quick-link-text-color: root.mobile-mode ? Colors.text-primary : Colors.text-secondary;
+    property <length> quick-link-icon-size: root.mobile-mode ? 24px : 14px;
     // The expanded panel's footer row. 36px on touch, not the full 48px
     // minimum: the panel is capped at 45% of a phone's width, and three 48px
     // buttons plus the avatar and name overflowed it — which silently pushed
@@ -150,17 +176,56 @@ export component Sidebar inherits Rectangle {
     // Neo 2.0: sidebar is a raised surface with right-edge highlight.
     // In Anon Mode, slightly shift the surface tint toward primary so the
     // user has a constant visual cue the mode is active.
-    background: AnonMode.enabled ? Colors.primary.with-alpha(0.08) : Colors.surface;
-    border-width: 1px;
-    border-color: AnonMode.enabled ? Colors.primary.with-alpha(0.4) : Colors.neo-highlight;
-    drop-shadow-blur: Spacing.neo-blur-md;
-    drop-shadow-offset-x: Spacing.neo-offset-md;
+    // Same reasoning as the lists inside it: a phone shows this panel full
+    // screen, so it is the page and takes the page colour. Desktop keeps the
+    // raised-panel tone that separates it from the chat column beside it.
+    background: AnonMode.enabled ? Colors.primary.with-alpha(0.08)
+              : root.mobile-mode ? Colors.background
+              : Colors.surface;
+    // No `border-width` here: this is a right-EDGE highlight in intent and
+    // Slint's border draws all four sides. On a phone that traced a hairline
+    // rectangle around the whole display; on desktop it now also ran a line
+    // across the top of the title row, right under the traffic lights. The
+    // edge is drawn explicitly below instead, on the one side that means
+    // something. The shadow has nothing to cast onto on a phone either.
+    drop-shadow-blur: root.mobile-mode ? 0px : Spacing.neo-blur-md;
+    drop-shadow-offset-x: root.mobile-mode ? 0px : Spacing.neo-offset-md;
     drop-shadow-color: Colors.neo-shadow;
 
     animate width { duration: 200ms; easing: ease-out; }
 
     VerticalLayout {
-        padding-top: Spacing.sm;
+        // ════════════════════════════════════════
+        // FIXED TOP ROW — the app's title row
+        // ════════════════════════════════════════
+        // Search sits here rather than at the head of the scroll below for two
+        // reasons: it is the row Telegram (and every native list app) keeps
+        // pinned, and on macOS the traffic lights are painted over this corner,
+        // so a row that scrolls would slide conversations under them.
+        if !root.collapsed: Rectangle {
+            horizontal-stretch: 1;
+            height: root.top-row-height;
+            background: search-touch.has-hover ? Colors.surface-hover : transparent;
+            accessible-role: button;
+            accessible-label: "Search";
+            HorizontalLayout {
+                // The traffic lights own the leading edge of this row on macOS
+                // (0px elsewhere), so the search entry starts after them.
+                padding-left: Spacing.sm + root.traffic-lights-width;
+                padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
+                VerticalLayout { alignment: center; horizontal-stretch: 0;
+                    Image { source: Icons.search; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; }
+                }
+                Text { text: "Search"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; }
+            }
+            search-touch := TouchArea { mouse-cursor: pointer; clicked => { root.search-clicked(); } }
+        }
+        // Collapsed to the rail, the panel is narrower than the traffic lights
+        // are wide, so nothing can share their row — the rail's slots start
+        // below them instead. Zero height off macOS.
+        if root.collapsed && root.traffic-lights-width > 0px: Rectangle {
+            height: root.titlebar-height;
+        }
 
         // ════════════════════════════════════════
         // SCROLLABLE CENTRAL CONTENT
@@ -170,29 +235,24 @@ export component Sidebar inherits Rectangle {
             viewport-height: central-layout.preferred-height;
 
             central-layout := VerticalLayout {
+                padding-top: Spacing.sm;
                 padding-bottom: Spacing.md;
 
                 // QUICK LINKS (top navigation)
 
-                // Unified search trigger — opens the search palette overlay.
-                Rectangle {
+                // Search's rail slot. The expanded row is pinned above the
+                // scroll; the rail has no room to pin anything, so here it is
+                // an ordinary slot at the head of the stack.
+                if root.collapsed: Rectangle {
                     height: root.quick-link-height;
-                    background: search-touch.has-hover ? Colors.surface-hover : transparent;
                     accessible-role: button;
                     accessible-label: "Search";
-                    if !root.collapsed: HorizontalLayout {
-                        padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
-                        VerticalLayout { alignment: center; horizontal-stretch: 0;
-                            Image { source: Icons.search; width: 14px; height: 14px; colorize: Colors.text-secondary; }
-                        }
-                        Text { text: "Search"; color: Colors.text-secondary; font-size: Typography.sm2; vertical-alignment: center; }
-                    }
-                    if root.collapsed: TooltipArea {
+                    TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
                         tooltip-text: "Search"; tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg; Image { source: Icons.search; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; } } } }
                     }
-                    search-touch := TouchArea { clicked => { root.search-clicked(); } }
+                    TouchArea { mouse-cursor: pointer; clicked => { root.search-clicked(); } }
                 }
 
                 if !AnonMode.enabled : Rectangle {
@@ -203,9 +263,9 @@ export component Sidebar inherits Rectangle {
                     if !root.collapsed: HorizontalLayout {
                         padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
                         VerticalLayout { alignment: center; horizontal-stretch: 0;
-                            Image { source: Icons.bookmark; width: 14px; height: 14px; colorize: Colors.text-secondary; }
+                            Image { source: Icons.bookmark; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; }
                         }
-                        Text { text: "Saved Messages"; color: Colors.text-secondary; font-size: Typography.sm2; vertical-alignment: center; }
+                        Text { text: "Saved Messages"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; }
                     }
                     if root.collapsed: TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
@@ -218,7 +278,12 @@ export component Sidebar inherits Rectangle {
                 // Visible in BOTH modes. In shield mode it's the entry to add an
                 // ANON contact via private code (the modal is private-only there);
                 // labelled "Add Contact" to avoid implying the server friend list.
-                Rectangle {
+                //
+                // Hidden on mobile: the bottom tab bar's Contacts tab opens the
+                // very same modal, and two permanent entry points to one screen
+                // is the duplication that made the phone layout read as two
+                // navigation systems running at once.
+                if !root.mobile-mode: Rectangle {
                     height: root.quick-link-height;
                     background: friends-touch.has-hover ? Colors.surface-hover : transparent;
                     accessible-role: button;
@@ -226,9 +291,9 @@ export component Sidebar inherits Rectangle {
                     if !root.collapsed: HorizontalLayout {
                         padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
                         VerticalLayout { alignment: center; horizontal-stretch: 0;
-                            Image { source: AnonMode.enabled ? Icons.user-plus : Icons.users; width: 14px; height: 14px; colorize: Colors.text-secondary; }
+                            Image { source: AnonMode.enabled ? Icons.user-plus : Icons.users; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; }
                         }
-                        Text { text: AnonMode.enabled ? "Add Contact" : "Friends"; color: Colors.text-secondary; font-size: Typography.sm2; vertical-alignment: center; }
+                        Text { text: AnonMode.enabled ? "Add Contact" : "Friends"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; }
                     }
                     if root.collapsed: TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
@@ -263,7 +328,7 @@ export component Sidebar inherits Rectangle {
                         VerticalLayout { alignment: center; horizontal-stretch: 0;
                             Image { source: Icons.user-plus; width: 14px; height: 14px; colorize: Colors.text-secondary; }
                         }
-                        Text { text: "Requests"; color: Colors.text-secondary; font-size: Typography.sm2; vertical-alignment: center; horizontal-stretch: 1; }
+                        Text { text: "Requests"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; horizontal-stretch: 1; }
                         Rectangle {
                             width: root.total-pending-requests > 9 ? 22px : 18px;
                             height: 18px;
@@ -320,8 +385,14 @@ export component Sidebar inherits Rectangle {
                     // distance from the group above as from the group it names,
                     // so it binds to neither and the list reads as one long run
                     // of rows. The extra space goes above the label only.
-                    height: root.collapsed ? 0px : 42px;
-                    if !root.collapsed: HorizontalLayout {
+                    // Telegram has no section headers — one flat run of
+                    // conversations, newest first. Grouping DMs apart from
+                    // channels is a desktop convenience that on a phone just
+                    // spends a row telling you what the next rows obviously
+                    // are, and the collapse chevrons hide conversations behind
+                    // a tap for no gain. Desktop keeps them.
+                    height: root.collapsed || root.mobile-mode ? 0px : 42px;
+                    if !root.collapsed && !root.mobile-mode: HorizontalLayout {
                         padding-top: 10px;
                         padding-left: 6px;
                         padding-right: 4px;
@@ -389,6 +460,7 @@ export component Sidebar inherits Rectangle {
                     vertical-stretch: 0;
                     conversations: root.dm-conversations;
                     collapsed: root.collapsed;
+                    mobile-mode: root.mobile-mode;
                     show-header: false;
                     conversation-selected(id) => { root.dm-selected(id); }
                     add-friend-clicked => { root.friends-clicked(); }
@@ -417,8 +489,14 @@ export component Sidebar inherits Rectangle {
                     // distance from the group above as from the group it names,
                     // so it binds to neither and the list reads as one long run
                     // of rows. The extra space goes above the label only.
-                    height: root.collapsed ? 0px : 42px;
-                    if !root.collapsed: HorizontalLayout {
+                    // Telegram has no section headers — one flat run of
+                    // conversations, newest first. Grouping DMs apart from
+                    // channels is a desktop convenience that on a phone just
+                    // spends a row telling you what the next rows obviously
+                    // are, and the collapse chevrons hide conversations behind
+                    // a tap for no gain. Desktop keeps them.
+                    height: root.collapsed || root.mobile-mode ? 0px : 42px;
+                    if !root.collapsed && !root.mobile-mode: HorizontalLayout {
                         padding-top: 10px;
                         padding-left: 6px;
                         padding-right: 4px;
@@ -518,6 +596,7 @@ export component Sidebar inherits Rectangle {
                     vertical-stretch: 0;
                     channels: root.channels;
                     collapsed: root.collapsed;
+                    mobile-mode: root.mobile-mode;
                     show-header: false;
                     has-sibling-content: root.private-groups.length > 0;
                     channel-selected(id) => { root.channel-selected(id); }
@@ -535,6 +614,7 @@ export component Sidebar inherits Rectangle {
 
                 if root.channels-expanded && root.private-groups.length > 0: PrivateGroupList {
                     vertical-stretch: 0;
+                    mobile-mode: root.mobile-mode;
                     groups: root.private-groups;
                     collapsed: root.collapsed;
                     show-header: false;
@@ -599,8 +679,12 @@ export component Sidebar inherits Rectangle {
             }
         }
 
-        // 7. BOTTOM UTILITY BAR — Neo 2.0 glass surface
-        Rectangle {
+        // 7. BOTTOM UTILITY BAR — Neo 2.0 glass surface.
+        // Desktop only. On mobile its last occupant (the shield) moved up onto
+        // the search row, and what remained was a translucent grey strip across
+        // the foot of the list holding nothing — visible as a lighter rectangle
+        // above the floating dock.
+        if !root.mobile-mode: Rectangle {
             // Derived, not a magic number: this was hardcoded at 140px, which
             // fit the three 32px buttons the rail used to have and silently
             // clipped everything past them off the bottom of the screen once
@@ -611,11 +695,19 @@ export component Sidebar inherits Rectangle {
                     + (root.rail-button-count - 1) * 8px + 16px
                 : 44px;
             background: Colors.surface.with-alpha(0.85);
-            border-width: 1px;
-            border-color: Colors.neo-highlight;
             drop-shadow-blur: Spacing.neo-blur-sm;
             drop-shadow-offset-y: -2px;
             drop-shadow-color: Colors.neo-shadow;
+
+            // Top edge only — the one side that separates this strip from the
+            // list. The four-sided border it replaces doubled up against the
+            // panel's own left/right edges and closed a box around the footer.
+            Rectangle {
+                y: 0;
+                width: 100%;
+                height: 1px;
+                background: Colors.neo-highlight;
+            }
 
             // Expanded view: Profile + Jarvis + Settings on same row
             // No `alignment` — under any alignment other than stretch, Slint
@@ -625,7 +717,11 @@ export component Sidebar inherits Rectangle {
             // Stretching lets the name elide and keeps the buttons on screen.
             if !root.collapsed: HorizontalLayout {
                 padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm;
-                TouchArea {
+                // Profile moved to the bottom tab bar's rightmost tab on mobile,
+                // where it carries the user's avatar — a name-and-avatar strip
+                // wedged between the last conversation and the tab bar was
+                // neither a list row nor navigation, and read as leftover.
+                if !root.mobile-mode: TouchArea {
                     horizontal-stretch: 1;
                     mouse-cursor: pointer;
                     clicked => { root.profile-clicked(); }
@@ -639,6 +735,8 @@ export component Sidebar inherits Rectangle {
                         Text { text: root.user-display-name; color: Colors.text-secondary; font-size: Typography.xs; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                     }
                 }
+                // Keeps the shield on the right edge now that nothing precedes it.
+                if root.mobile-mode: Rectangle { horizontal-stretch: 1; }
                 // Anon mode toggle — shield icon, glows when active
                 VerticalLayout { alignment: center; horizontal-stretch: 0;
                     Rectangle {
@@ -659,7 +757,9 @@ export component Sidebar inherits Rectangle {
                         anon-touch := TouchArea { clicked => { root.anon-mode-clicked(); } }
                     }
                 }
-                VerticalLayout { alignment: center; horizontal-stretch: 0;
+                // Settings lives in the bottom tab bar on mobile — this is the
+                // same destination, so keeping both is the duplication again.
+                if !root.mobile-mode: VerticalLayout { alignment: center; horizontal-stretch: 0;
                     Rectangle {
                         width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
                         background: sett-touch.has-hover ? Colors.surface-hover : transparent;
@@ -678,7 +778,11 @@ export component Sidebar inherits Rectangle {
                 // Collapse back to the rail. The expanded panel needs its own
                 // copy: the rail's cluster only exists while collapsed, so
                 // without this, expanding was a one-way trip.
-                VerticalLayout { alignment: center; horizontal-stretch: 0;
+                //
+                // There is no rail on mobile to collapse into — the list either
+                // is the screen or the conversation is — so the control has
+                // nothing to do there.
+                if !root.mobile-mode: VerticalLayout { alignment: center; horizontal-stretch: 0;
                     Rectangle {
                         width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
                         background: collapse-touch.has-hover ? Colors.surface-hover : transparent;
@@ -796,6 +900,15 @@ export component Sidebar inherits Rectangle {
 
             }
         }
+    }
+
+    // Right edge — the seam against the chat column. Desktop only: on a phone
+    // this panel is the whole screen and has no column beside it.
+    if !root.mobile-mode: Rectangle {
+        x: parent.width - 1px;
+        width: 1px;
+        height: 100%;
+        background: AnonMode.enabled ? Colors.primary.with-alpha(0.4) : Colors.neo-highlight;
     }
 
     // Section context menu overlay (renders on top of all sidebar content)

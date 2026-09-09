@@ -1,15 +1,14 @@
 //! Call history repository.
 //!
-//! Local-only record of past calls. Written by the call signaling service on
-//! observable events (start / accept / decline / end / missed) and read by
-//! the UI / bridge `get_call_history` RPC. No server sync yet — the server
-//! exposes no call-history RPC.
+//! Local-only record of past calls. Written by `call_history_recorder` on
+//! observable orchestrator events (ring / accept / decline / end / missed)
+//! and by `ChatterClient::start_call` for the outgoing side; read by the
+//! Calls screen. No server sync yet — the server exposes no call-history RPC.
 //!
 //! Table defined in migration v053 (`call_history`).
 
-use crate::domain::call::{
-    CallDirection, CallHistoryEntry, CallHistoryFilter, CallHistoryPeerType, CallResult,
-};
+use crate::domain::call::{CallDirection, CallHistoryEntry, CallHistoryFilter, CallResult};
+use crate::domain::message::ConversationType;
 use crate::error::StorageError;
 use crate::storage::Database;
 use chrono::{DateTime, Utc};
@@ -43,12 +42,12 @@ impl CallHistoryRepository {
         let conn = self.db.connection()?;
         conn.execute(
             "INSERT INTO call_history (
-                id, peer_id, peer_type, peer_name,
+                id, conversation_id, conversation_type, peer_name,
                 started_at, ended_at, direction, result, duration_secs, has_video
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(id) DO UPDATE SET
-                 peer_id = excluded.peer_id,
-                 peer_type = excluded.peer_type,
+                 conversation_id = excluded.conversation_id,
+                 conversation_type = excluded.conversation_type,
                  peer_name = excluded.peer_name,
                  started_at = excluded.started_at,
                  ended_at = excluded.ended_at,
@@ -58,8 +57,8 @@ impl CallHistoryRepository {
                  has_video = excluded.has_video",
             params![
                 entry.id,
-                entry.peer_id,
-                entry.peer_type.as_str(),
+                entry.conversation_id,
+                entry.conversation_type.as_str(),
                 entry.peer_name,
                 entry.started_at.to_rfc3339(),
                 entry.ended_at.map(|dt| dt.to_rfc3339()),
@@ -90,6 +89,29 @@ impl CallHistoryRepository {
                  END
              WHERE id = ?3",
             params![now, duration_secs, id],
+        )?;
+        if rows == 0 {
+            return Err(StorageError::NotFound(format!(
+                "Call history entry {} not found",
+                id
+            )));
+        }
+        Ok(())
+    }
+
+    /// Close out a call that never connected: stamp `ended_at`, leave
+    /// `duration_secs` NULL, and record the terminal `result`.
+    ///
+    /// Separate from [`mark_ended`](Self::mark_ended) because that one exists
+    /// to *preserve* an already-terminal result; this one is the write that
+    /// sets it.
+    pub fn mark_unconnected(&self, id: &str, result: CallResult) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE call_history
+             SET ended_at = ?1, duration_secs = NULL, result = ?2
+             WHERE id = ?3",
+            params![Utc::now().to_rfc3339(), result.as_str(), id],
         )?;
         if rows == 0 {
             return Err(StorageError::NotFound(format!(
@@ -136,7 +158,7 @@ impl CallHistoryRepository {
     ) -> Result<Vec<CallHistoryEntry>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut sql = String::from(
-            "SELECT id, peer_id, peer_type, peer_name,
+            "SELECT id, conversation_id, conversation_type, peer_name,
                     started_at, ended_at, direction, result, duration_secs, has_video
              FROM call_history
              WHERE 1=1",
@@ -211,8 +233,8 @@ fn parse_datetime(s: &str) -> Result<DateTime<Utc>, StorageError> {
 
 fn row_to_entry(row: &rusqlite::Row<'_>) -> Result<CallHistoryEntry, StorageError> {
     let id: String = row.get(0)?;
-    let peer_id: String = row.get(1)?;
-    let peer_type_str: String = row.get(2)?;
+    let conversation_id: String = row.get(1)?;
+    let conversation_type_str: String = row.get(2)?;
     let peer_name: String = row.get(3)?;
     let started_at_str: String = row.get(4)?;
     let ended_at_str: Option<String> = row.get(5)?;
@@ -221,9 +243,7 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> Result<CallHistoryEntry, StorageErro
     let duration_secs: Option<i64> = row.get(8)?;
     let has_video_i: i64 = row.get(9)?;
 
-    let peer_type = CallHistoryPeerType::from_str(&peer_type_str).ok_or_else(|| {
-        StorageError::InvalidData(format!("Invalid peer_type '{}'", peer_type_str))
-    })?;
+    let conversation_type = ConversationType::from_str_value(&conversation_type_str)?;
     let direction = CallDirection::from_str(&direction_str).ok_or_else(|| {
         StorageError::InvalidData(format!("Invalid direction '{}'", direction_str))
     })?;
@@ -238,8 +258,8 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> Result<CallHistoryEntry, StorageErro
 
     Ok(CallHistoryEntry {
         id,
-        peer_id,
-        peer_type,
+        conversation_id,
+        conversation_type,
         peer_name,
         started_at,
         ended_at,
@@ -275,8 +295,8 @@ mod tests {
     fn sample_entry(id: &str, started_at: DateTime<Utc>) -> CallHistoryEntry {
         CallHistoryEntry {
             id: id.to_string(),
-            peer_id: "peer-1".to_string(),
-            peer_type: CallHistoryPeerType::User,
+            conversation_id: "peer-1".to_string(),
+            conversation_type: ConversationType::ServerDm,
             peer_name: "Alice".to_string(),
             started_at,
             ended_at: None,
@@ -476,8 +496,8 @@ mod tests {
         let t = Utc::now();
         let entry = CallHistoryEntry {
             id: "ring-42".to_string(),
-            peer_id: "peer-bob".to_string(),
-            peer_type: CallHistoryPeerType::User,
+            conversation_id: "peer-bob".to_string(),
+            conversation_type: ConversationType::ServerDm,
             peer_name: "Bob".to_string(),
             started_at: t,
             ended_at: Some(t + chrono::Duration::seconds(30)),
@@ -497,4 +517,32 @@ mod tests {
         assert!(rows[0].has_video);
     }
 
+    /// Every conversation type that can host a call must survive the round
+    /// trip — the `conversation_type` CHECK constraint and `from_str_value`
+    /// are two separate vocabularies and this is what pins them together.
+    #[test]
+    fn every_call_capable_conversation_type_roundtrips() {
+        let db = setup_db();
+        let repo = CallHistoryRepository::new(db);
+
+        let t0 = Utc::now();
+        let types = [
+            ConversationType::Channel,
+            ConversationType::ServerDm,
+            ConversationType::MailboxDm,
+            ConversationType::AnonDm,
+            ConversationType::AnonGroup,
+        ];
+        for (i, ct) in types.iter().enumerate() {
+            let mut e = sample_entry(ct.as_str(), t0 - chrono::Duration::minutes(i as i64));
+            e.conversation_type = ct.clone();
+            repo.insert_entry(&e).unwrap();
+        }
+
+        let rows = repo.list(CallHistoryFilter::All, 10, None).unwrap();
+        assert_eq!(rows.len(), types.len());
+        for ct in &types {
+            assert!(rows.iter().any(|r| &r.conversation_type == ct), "{ct:?} lost");
+        }
+    }
 }

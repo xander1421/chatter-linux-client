@@ -1,6 +1,6 @@
 //! Channel and DM converters.
 
-use slint::SharedString;
+use super::get_initials;
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::Channel;
@@ -21,13 +21,19 @@ pub fn channel_to_slint(channel: &Channel, ui_ctx: &ChatterClient) -> crate::Cha
         _ => (slint::Image::default(), false),
     };
 
+    // Latest-activity preview + stamp, composed by core. Core takes the whole
+    // channel because the storage bucket depends on it — see
+    // `channel_sidebar_activity`.
+    let (last_message, timestamp) = ui_ctx.channel_sidebar_activity(channel);
+
     crate::ChannelListItemData {
         channel_id: channel.id.to_string().into(),
         name: channel.name.clone().into(),
         channel_type: channel_type_to_string(channel.channel_type).into(),
         unread_count: channel.unread_count as i32,
-        last_message: SharedString::default(),
-        timestamp: SharedString::default(),
+        last_message: last_message.into(),
+        timestamp: timestamp.into(),
+        is_typing: false,
         avatar_source,
         has_avatar,
         // Pin state is core's (settings-backed, local-only). One indexed
@@ -98,6 +104,7 @@ impl FriendDataExt for chatter_core::ui::sidebar_data::FriendDataSendData {
             (slint::Image::default(), false)
         };
         crate::FriendData {
+            initials: get_initials(&self.display_name).into(),
             user_id: self.user_id.into(),
             display_name: self.display_name.into(),
             username: self.username.into(),

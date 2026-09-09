@@ -21,6 +21,8 @@ pub mod attachment;
 pub mod call_worker;
 #[cfg(feature = "media")]
 pub mod call_notification_bridge;
+#[cfg(feature = "media")]
+pub mod call_history_recorder;
 pub mod call_verification;
 pub mod notification_service;
 pub mod notification_stream;

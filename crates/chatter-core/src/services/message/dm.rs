@@ -205,7 +205,7 @@ impl MessageService {
         let our_user_id = self.settings_repo.current_user_id()?;
         if let Ok(Some(dm_channel)) = self.channel_repo.get_dm_channel_by_peer(&our_user_id, peer_id) {
             let message = Message::new_text(dm_channel.id, ConversationType::MailboxDm, Some(our_user_id), text.to_string(), sent_at);
-            if let Err(e) = self.message_repo.insert(&message) {
+            if let Err(e) = self.message_repo.insert_outgoing(&message) {
                 tracing::warn!(peer_id = %peer_id, error = %e, "Failed to store sent text DM");
             }
         }
@@ -316,7 +316,7 @@ impl MessageService {
         match send_result {
             Ok(()) => {
                 // Message sent successfully - save to DB
-                if let Err(e) = self.message_repo.insert(&message) {
+                if let Err(e) = self.message_repo.insert_outgoing(&message) {
                     tracing::warn!(
                         peer_id = %peer_id,
                         error = %e,
@@ -328,7 +328,7 @@ impl MessageService {
             Err(MessageError::BootstrapInitiated) => {
                 // Bootstrap initiated - message queued, but STILL save to DB
                 // so it persists when switching conversations
-                if let Err(e) = self.message_repo.insert(&message) {
+                if let Err(e) = self.message_repo.insert_outgoing(&message) {
                     tracing::warn!(
                         peer_id = %peer_id,
                         error = %e,
@@ -452,7 +452,7 @@ impl MessageService {
         message.reply_to_thumbnail_mime = parts.reply_to_thumbnail_mime;
 
         // Store in database
-        if let Err(e) = self.message_repo.insert(&message) {
+        if let Err(e) = self.message_repo.insert_outgoing(&message) {
             tracing::warn!(
                 peer_id = %peer_id,
                 error = %e,

@@ -8,7 +8,9 @@
 //! in sync.
 
 use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId, ReactionId, UserId};
-use crate::domain::message::{ConversationType, Message, MessageContent, ReactionCount, Thread};
+use crate::domain::message::{
+    ConversationType, Message, MessageContent, ReactionCount, Thread, UnreadAnchor,
+};
 use crate::domain::reaction::{Emoji, Reaction};
 use crate::error::StorageError;
 use crate::storage::serialization::{db_deserialize, db_serialize};
@@ -27,6 +29,17 @@ pub struct UnifiedMessageRepository {
     db: Arc<Database>,
 }
 
+/// Add a freshly-inserted message's attachments and links to the
+/// shared-content index (the profile screen's media drawer).
+///
+/// Best-effort: a failure here costs one tile in a media tab, and must never
+/// take the message insert down with it.
+fn index_shared_content(conn: &rusqlite::Connection, message: &Message) {
+    if let Err(e) = super::shared_content_repo::index_message(conn, message) {
+        tracing::warn!(message_id = %message.id, error = %e, "shared-content index failed");
+    }
+}
+
 impl UnifiedMessageRepository {
     /// Create a new UnifiedMessageRepository.
     pub fn new(db: Arc<Database>) -> Self {
@@ -36,6 +49,20 @@ impl UnifiedMessageRepository {
     // ========================================================================
     // CRUD
     // ========================================================================
+
+    /// Insert the local echo of a message THIS device just sent.
+    ///
+    /// Same row as [`insert`](Self::insert) except it lands read. `is_read` is
+    /// "the local user has seen this" (the peer's side of a conversation lives
+    /// in `delivery_status`), and the unread badge is a `COUNT(is_read = 0)` —
+    /// so an echo stored unread badges the conversation the user is typing in,
+    /// and keeps it badged across restarts, since the badge is rebuilt from
+    /// this table.
+    pub fn insert_outgoing(&self, message: &Message) -> Result<(), StorageError> {
+        let mut sent = message.clone();
+        sent.is_read = true;
+        self.insert(&sent)
+    }
 
     /// Insert a new message.
     pub fn insert(&self, message: &Message) -> Result<(), StorageError> {
@@ -94,6 +121,7 @@ impl UnifiedMessageRepository {
                 message.reply_to_thumbnail_mime.as_deref(),
             ],
         )?;
+        index_shared_content(&conn, message);
         Ok(())
     }
 
@@ -156,6 +184,9 @@ impl UnifiedMessageRepository {
                 message.reply_to_thumbnail_mime.as_deref(),
             ],
         )?;
+        if rows > 0 {
+            index_shared_content(&conn, message);
+        }
         Ok(rows > 0)
     }
 
@@ -498,18 +529,50 @@ impl UnifiedMessageRepository {
         Ok(())
     }
 
-    /// Mark all messages in a conversation as read.
+    /// Mark all messages in a conversation as read, returning the boundary it
+    /// just erased.
+    ///
+    /// The read *has* to happen here rather than in the caller: opening a
+    /// conversation marks it read before the message page is loaded, so any
+    /// caller that asks for the boundary afterwards gets an empty one. Both
+    /// halves in one call means that ordering cannot be got wrong.
     pub fn mark_conversation_read(
         &self,
         conversation_id: &ChannelId,
         conversation_type: &ConversationType,
-    ) -> Result<(), StorageError> {
+    ) -> Result<UnreadAnchor, StorageError> {
+        let anchor = self.unread_anchor(conversation_id, conversation_type)?;
         let conn = self.db.connection()?;
         conn.execute(
             "UPDATE messages SET is_read = 1              WHERE conversation_id = ?1 AND conversation_type = ?2 AND is_read = 0",
             params![conversation_id.to_string(), conversation_type.as_str()],
         )?;
-        Ok(())
+        Ok(anchor)
+    }
+
+    /// The unread boundary of a conversation, without clearing it.
+    ///
+    /// One query, served by `idx_messages_unread`
+    /// (conversation_type, conversation_id, is_read) WHERE is_read = 0.
+    pub fn unread_anchor(
+        &self,
+        conversation_id: &ChannelId,
+        conversation_type: &ConversationType,
+    ) -> Result<UnreadAnchor, StorageError> {
+        let conn = self.db.read_connection()?;
+        let anchor = conn.query_row(
+            "SELECT COUNT(*), MIN(sent_at) FROM messages \
+             WHERE conversation_id = ?1 AND conversation_type = ?2 \
+               AND is_read = 0 AND is_deleted = 0",
+            params![conversation_id.to_string(), conversation_type.as_str()],
+            |row| {
+                Ok(UnreadAnchor {
+                    unread_count: row.get::<_, i64>(0)? as u32,
+                    first_unread_sent_at: row.get::<_, Option<i64>>(1)?.map(|v| v as u64),
+                })
+            },
+        )?;
+        Ok(anchor)
     }
 
     /// Get the count of unread messages in a conversation.

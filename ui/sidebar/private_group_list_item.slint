@@ -15,6 +15,8 @@ export component PrivateGroupListItem inherits Rectangle {
     in property <string> name;
     in property <int> member-count: 0;
     in property <int> unread-count: 0;
+    // Core-composed preview of the latest activity: text, "🖼️ Photo",
+    // "📎 report.pdf", "📌 …" for a pinned one. Never assembled here.
     in property <string> last-message: "";
     in property <string> timestamp: "";
     in property <bool> is-typing: false;
@@ -57,9 +59,17 @@ export component PrivateGroupListItem inherits Rectangle {
     property <length> slot-size: 44px;
     property <length> slot-glyph: 20px;
 
+    // Touch sizing, shared with the DM and channel rows this sits between —
+    // a flat mobile list where one row kind is 44px and its neighbours are 72px
+    // reads as three lists spliced together.
+    in property <bool> mobile-mode: false;
+    property <length> name-size: root.mobile-mode ? Typography.base : Typography.sm;
+    property <length> preview-size: root.mobile-mode ? Typography.sm : Typography.xs;
+
     // Collapsed rows are 48px so the 44px slot has breathing room above and
-    // below.
-    height: root.collapsed ? 48px : 44px;
+    // below. Expanded takes the shared row height at both densities — see the
+    // DM row for why one number, not one per row kind.
+    height: root.collapsed ? 48px : (root.mobile-mode ? Spacing.row-height-touch : Spacing.row-height-desktop);
     border-radius: Spacing.radius-sm;
 
     // Use purple accent for private groups
@@ -80,7 +90,9 @@ export component PrivateGroupListItem inherits Rectangle {
         padding-left: Spacing.sm;
         padding-right: Spacing.sm;
         spacing: Spacing.sm;
-        alignment: start;
+        // `stretch`, not `start`: the text column claims the slack so the
+        // timestamp and badge sit on the right edge like every DM row's do.
+        alignment: stretch;
 
         // Shield icon with purple background
         Rectangle {
@@ -109,10 +121,12 @@ export component PrivateGroupListItem inherits Rectangle {
                 spacing: Spacing.xs;
 
                 Text {
+                    // Same rule as the DM and channel rows: name full-strength
+                    // at all times, preview muted below it.
                     text: root.name;
-                    color: root.selected ? Colors.text-primary : Colors.text-secondary;
-                    font-size: Typography.sm;
-                    font-weight: root.selected ? Typography.semibold : Typography.normal;
+                    color: Colors.text-primary;
+                    font-size: root.name-size;
+                    font-weight: root.selected ? Typography.semibold : 500;
                     overflow: elide;
                     horizontal-stretch: 1;
                 }
@@ -171,25 +185,43 @@ export component PrivateGroupListItem inherits Rectangle {
             if !root.is-typing && root.last-message != "": Text {
                 text: root.last-message;
                 color: Colors.text-muted;
-                font-size: Typography.xs;
+                font-size: root.preview-size;
                 overflow: elide;
             }
         }
 
-        // Unread badge
-        if root.unread-count > 0: Rectangle {
-            width: max(18px, unread-text.preferred-width + 8px);
-            height: 18px;
-            border-radius: 9px;
-            background: accent-color;
+        // Right side: timestamp above the unread badge, as on DM rows. The
+        // timestamp reached this component but was never rendered.
+        if root.timestamp != "" || root.unread-count > 0: VerticalLayout {
+            alignment: center;
+            spacing: 4px;
+            horizontal-stretch: 0;
 
-            unread-text := Text {
-                text: root.unread-count > 99 ? "99+" : root.unread-count;
-                color: Colors.text-primary;
-                font-size: Typography.xs;
-                font-weight: Typography.semibold;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+            Text {
+                text: root.timestamp;
+                color: Colors.text-muted;
+                font-size: Typography.xs2;
+                horizontal-alignment: right;
+            }
+
+            if root.unread-count > 0: HorizontalLayout {
+                alignment: end;
+
+                Rectangle {
+                    width: max(18px, unread-text.preferred-width + 8px);
+                    height: 18px;
+                    border-radius: 9px;
+                    background: accent-color;
+
+                    unread-text := Text {
+                        text: root.unread-count > 99 ? "99+" : root.unread-count;
+                        color: Colors.text-primary;
+                        font-size: Typography.xs;
+                        font-weight: Typography.semibold;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
             }
         }
 

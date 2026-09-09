@@ -33,7 +33,40 @@ export global Spacing {
 
     // Mobile-specific
     out property <length> touch-target-min: 48px;
+    // ONE geometry for a touch row that shows a person or a conversation —
+    // the sidebar's chat list, the Contacts screen, Saved Messages. These
+    // were each carrying their own numbers (52px/32px here, 56px/40px there)
+    // and read as three different apps stacked together. Anything that lists
+    // people reads these, so they cannot drift apart again.
+    out property <length> row-height-touch: 72px;
+    out property <length> row-avatar-touch: 52px;
     out property <length> bottom-nav-height: 56px;
+
+    // The same two roles at mouse density. Desktop was hardcoding them per
+    // component — 52px/32px in the DM row, 44px in the channel and private-
+    // group rows — so a list that is one flat run of conversations rendered
+    // in two heights depending on what kind of conversation each row was.
+    // Same rule as the touch pair: one number per role, read by everything
+    // that lists a conversation.
+    out property <length> row-height-desktop: 52px;
+    out property <length> row-avatar-desktop: 32px;
+
+    // The app's top row: the sidebar's first row and the conversation header
+    // are the same row across the seam between the two panes, and on macOS
+    // the native traffic lights sit inside it. One number, or the seam shows.
+    out property <length> header-height: 52px;
+    out property <length> header-height-touch: 64px;
+    // Every control in a header/toolbar row — back, close, call, video, pin,
+    // kebab — is ONE glyph size in ONE box size, so the row sits on a single
+    // vertical centre. Screens were each picking their own (24-in-48 next to
+    // 18-in-44 in the chat header; 18-in-40 in Modal; 16-in-32 in the device
+    // picker; 14-in-44 in the thread panel), which read as one big control
+    // beside several small ones. Numbers are chat_header.slint's, which is the
+    // reference row.
+    out property <length> header-glyph: 18px;
+    out property <length> header-glyph-touch: 26px;
+    out property <length> header-action-box: 44px;
+    out property <length> header-action-box-touch: 48px;
 
     // Neo 2.0 shadow offsets — 145° light angle
     out property <length> neo-offset-sm: 3px;          // Small elements (toggles, chips)

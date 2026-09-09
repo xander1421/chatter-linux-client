@@ -2,9 +2,9 @@
 //!
 //! Client-local record of observed call signaling events (start / accept /
 //! decline / end / missed). Not server-synced — the server does not expose a
-//! call-history RPC yet. Entries are written from the call signaling service
-//! and surfaced to the UI via `ChatterClient::get_call_history` (mobile
-//! bridge `getCallHistory`).
+//! call-history RPC yet. Entries are written by `call_history_recorder`
+//! (incoming side) and `ChatterClient::start_call` (outgoing side), and read
+//! by the Calls screen via `ChatterClient::call_history_rows`.
 
 use super::Migration;
 
@@ -27,14 +27,20 @@ impl Migration for V053CallHistory {
             -- unique identifier works — deterministic so the same call is
             -- not re-inserted on reconnect).
             id TEXT PRIMARY KEY,
-            -- Peer identity. For DM/channel calls this is the remote UserId
-            -- (or ChannelId for channel calls); for anonymous calls it's
-            -- the AnonDmId / AnonGroupId; for group calls it's the group id.
-            peer_id TEXT NOT NULL,
-            -- Peer entity kind. One of: 'user', 'anon', 'group'.
-            peer_type TEXT NOT NULL CHECK (peer_type IN ('user', 'anon', 'group')),
-            -- Peer display name (snapshot at call time; may be empty for
-            -- anonymous callers who never shared a name).
+            -- The conversation the call happened in: peer UserId for a server
+            -- DM, ChannelId for a channel call, AnonDmId / AnonGroupId for the
+            -- anonymous flavours. Same key the sidebar routes on, so a row can
+            -- reopen its conversation and redial.
+            conversation_id TEXT NOT NULL,
+            -- Which flavour `conversation_id` names — `ConversationType::as_str`.
+            -- Only call-capable types are ever written; the CHECK lists the full
+            -- vocabulary so a mislabelled row fails loudly at insert.
+            conversation_type TEXT NOT NULL CHECK (conversation_type IN (
+                'channel', 'server_dm', 'mailbox_dm', 'anon_dm', 'anon_group',
+                'saved_messages', 'mesh', 'mesh_dm'
+            )),
+            -- Conversation/peer display name (snapshot at call time; may be
+            -- empty for anonymous callers who never shared a name).
             peer_name TEXT NOT NULL DEFAULT '',
             -- When the call started ringing (our clock, RFC3339).
             started_at TEXT NOT NULL,
@@ -55,8 +61,9 @@ impl Migration for V053CallHistory {
         -- Primary query pattern: list recent calls, newest first.
         CREATE INDEX idx_call_history_started_at ON call_history(started_at DESC);
 
-        -- Filter by peer (e.g. "show calls with Alice").
-        CREATE INDEX idx_call_history_peer ON call_history(peer_id, started_at DESC);
+        -- Filter by conversation (e.g. "show calls with Alice").
+        CREATE INDEX idx_call_history_peer
+            ON call_history(conversation_id, started_at DESC);
 
         -- Missed-call filter (for the "Missed" tab / badge counts).
         CREATE INDEX idx_call_history_missed

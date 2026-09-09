@@ -78,6 +78,22 @@ pub enum OrchestratedCallKind {
     GroupChannel,
 }
 
+impl OrchestratedCallKind {
+    /// Which conversation flavour this transport belongs to. Total by
+    /// construction — every call-capable conversation type has exactly one
+    /// signalling transport, so call history can label a row from `kind`
+    /// alone and does not carry a second discriminant.
+    pub fn conversation_type(self) -> crate::domain::message::ConversationType {
+        use crate::domain::message::ConversationType as CT;
+        match self {
+            Self::DmStandard => CT::ServerDm,
+            Self::AnonDm => CT::AnonDm,
+            Self::AnonGroup => CT::AnonGroup,
+            Self::GroupChannel => CT::Channel,
+        }
+    }
+}
+
 /// Reason an active call ended.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum CallEndReason {
@@ -116,6 +132,11 @@ pub enum CallOrchestratorEvent {
         /// name, group id) — opaque to the orchestrator, used by the UI and
         /// the signalling services for accept/decline.
         channel_context: Option<String>,
+        /// The conversation this call arrived in, as `ConversationType`
+        /// dictates for `kind` (peer `UserId` for a DM, `AnonDmId` /
+        /// `AnonGroupId` for the anonymous flavours). Call history needs it
+        /// to offer "call back" — `call` alone is a signaling id.
+        conversation_id: String,
         replaces_active: bool,
     },
 
@@ -191,6 +212,7 @@ struct PendingIncoming {
     identity_warning: String,
     ephemeral_public_key: Option<[u8; 32]>,
     channel_context: Option<String>,
+    conversation_id: String,
 }
 
 /// Bookkeeping for an outgoing call dialed but not yet connected.
@@ -239,6 +261,7 @@ pub struct PendingIncomingSnapshot {
     pub identity_warning: String,
     pub ephemeral_public_key: Option<[u8; 32]>,
     pub channel_context: Option<String>,
+    pub conversation_id: String,
 }
 
 impl From<PendingIncoming> for PendingIncomingSnapshot {
@@ -253,6 +276,7 @@ impl From<PendingIncoming> for PendingIncomingSnapshot {
             identity_warning: p.identity_warning,
             ephemeral_public_key: p.ephemeral_public_key,
             channel_context: p.channel_context,
+            conversation_id: p.conversation_id,
         }
     }
 }
@@ -570,6 +594,7 @@ impl CallWorkerHandle {
         identity_warning: String,
         ephemeral_public_key: Option<[u8; 32]>,
         channel_context: Option<String>,
+        conversation_id: String,
     ) {
         let incoming = PendingIncoming {
             call,
@@ -581,6 +606,7 @@ impl CallWorkerHandle {
             identity_warning,
             ephemeral_public_key,
             channel_context,
+            conversation_id,
         };
         let _ = self.cmd_tx.try_send(CallCommand::OrchPresentIncoming { incoming });
     }
@@ -1523,6 +1549,7 @@ fn run_call_worker(
                         identity_warning: snapshot.identity_warning,
                         ephemeral_public_key: snapshot.ephemeral_public_key,
                         channel_context: snapshot.channel_context,
+                        conversation_id: snapshot.conversation_id,
                         replaces_active,
                     });
                 }
@@ -1595,10 +1622,20 @@ fn run_call_worker(
                             reason,
                         });
                     } else {
+                        // Not in any slot — an outgoing call, which nothing
+                        // registers. The caller is still telling us the call
+                        // is over, and swallowing that left the "Calling…"
+                        // view up after a peer declined and left call history
+                        // with a row that never closed. Announce it anyway;
+                        // subscribers key off the handle, not the slot.
                         tracing::debug!(
                             call = %call.as_str(),
-                            "OrchMarkEnded: no matching call in orchestrator state"
+                            "OrchMarkEnded: untracked call — forwarding terminal event"
                         );
+                        let _ = call_events_tx.send(CallOrchestratorEvent::ActiveEnded {
+                            call,
+                            reason,
+                        });
                     }
                 }
 
@@ -2298,6 +2335,8 @@ fn handle_domain_event(
                 Some(ephemeral_public_key),
                 // DM has no channel name — notification reads "X is calling".
                 None,
+                // DMs are channel-free: the conversation key IS the peer.
+                peer_id.to_string(),
             );
         }
 
@@ -2335,6 +2374,7 @@ fn handle_domain_event(
                 None,
                 // 1:1 anon DM — no channel name.
                 None,
+                conversation_id.to_string(),
             );
         }
 
@@ -2368,7 +2408,7 @@ fn handle_domain_event(
             room_name,
             call_type,
             caller_display_name,
-            group_id: _,
+            group_id,
             ..
         } => {
             let is_video = call_type == 2;
@@ -2390,6 +2430,7 @@ fn handle_domain_event(
                 // resolver wired yet — None beats leaking the raw group UUID. Pass a
                 // resolved name here when a group-name lookup exists.
                 None,
+                group_id.to_string(),
             );
         }
 

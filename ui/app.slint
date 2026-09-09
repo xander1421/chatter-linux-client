@@ -26,7 +26,7 @@ import { MentionAutocomplete, MentionSuggestion } from "components/mention_autoc
 
 // Import modals
 import { CreateChannelModal, AIProviderOption, AIModelOption, CreateChannelConfig, PrivateGroupFriend } from "modals/create_channel.slint";
-import { UserProfileModal, EditProfileModal, RecoveryCodesModal, SealedSenderIntroModal, LinkDeviceApproveModal } from "modals/mod.slint";
+import { UserProfileModal, SharedContentItem, SharedTab, EditProfileModal, RecoveryCodesModal, SealedSenderIntroModal, LinkDeviceApproveModal } from "modals/mod.slint";
 import { FriendsModal, FriendData, UserSearchResult, FriendRequestData, BlockedUserData } from "modals/friends.slint";
 import { ForwardMessageModal, ForwardTarget } from "modals/forward_message.slint";
 import { SessionsModal, SessionInfo } from "modals/sessions.slint";
@@ -51,7 +51,7 @@ import { VideoPlayer } from "components/mod.slint";
 import { MobileBottomNav } from "components/mobile_bottom_nav.slint";
 
 // Import call UI
-import { IncomingCallModal, ActiveCallView, DevicePicker, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData } from "calls/mod.slint";
+import { IncomingCallModal, ActiveCallView, DevicePicker, CallHistoryScreen, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, CallHistoryRow } from "calls/mod.slint";
 
 // Jarvis AI: feature-gate global (the AI channel is the Jarvis surface)
 import { JarvisGlobal } from "jarvis/jarvis_global.slint";
@@ -60,7 +60,7 @@ import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 import { AnonModePinModal } from "modals/anon_mode_pin.slint";
 
 // Re-export types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, CustomSectionData, SectionConversationData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, QuickSwitcherItem }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, CustomSectionData, SectionConversationData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, CallHistoryRow, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, QuickSwitcherItem, SharedContentItem, SharedTab }
 
 export component App inherits Rectangle {
     // ========== Safe area insets (set by Rust on Android) ==========
@@ -71,11 +71,24 @@ export component App inherits Rectangle {
     // wiring on the Rust side; the Slint layout itself is platform-agnostic
     // (mobile renders the same split view as a narrow desktop window).
     in property <bool> is-mobile-platform: false;
-    // macOS only, set by Rust once the native titlebar is made transparent/
-    // unified (platform::macos::apply_unified_titlebar) — the standard
-    // traffic-light row height, so content clears it instead of rendering
-    // underneath. 0 on every other platform.
-    in property <length> macos-titlebar-inset: 0px;
+    // macOS only, both set by Rust once the native titlebar is made
+    // transparent/unified (platform::macos::apply_unified_titlebar). 0 on
+    // every other platform, which is what makes the bindings below no-ops
+    // there.
+    //
+    // The app does NOT reserve a row for the titlebar: the whole point of the
+    // unified look is that the traffic lights sit *inside* the app's own top
+    // row, level with the sidebar's first row and the conversation header —
+    // one row, the way every native macOS chat app does it. So content runs
+    // to y=0 and the only thing that moves is whatever would otherwise be
+    // drawn beneath the lights themselves.
+    in property <length> macos-titlebar-height: 0px;
+    in property <length> macos-traffic-lights-width: 0px;
+    // Leading clearance the conversation header has to add for itself: the
+    // sidebar absorbs the traffic lights when it is wide enough, and the rail
+    // (60px) is not. Zero whenever the panel already covers them.
+    property <length> chat-traffic-lights-lead: max(0px, root.macos-traffic-lights-width
+        - (root.sidebar-is-rail ? Spacing.sidebar-width-collapsed : Spacing.sidebar-width));
     // Keyboard is considered open when bottom inset exceeds the nav bar threshold
     property <bool> keyboard-open: safe-area-bottom > 80px;
 
@@ -248,6 +261,26 @@ export component App inherits Rectangle {
     // the entire chat column and left a blank screen.
     property <bool> sidebar-is-rail: root.is-small-screen || root.sidebar-collapsed;
     in-out property <bool> sidebar-hidden: false;
+    // Which mobile bottom-nav tab reads as current. Purely the bar's own
+    // highlight — the destinations it opens are modals and panels that already
+    // own their state, so nothing else reads this.
+    property <string> mobile-nav-tab: "chats";
+    // What the bar actually highlights. Derived, not stored: the destinations
+    // are modals and panes that can be left by their own X or back button
+    // without the bar hearing about it, and a stored value went stale every
+    // time that happened — sitting on "Contacts" while you were back in a chat.
+    property <string> mobile-nav-tab-effective:
+          root.active-modal == "friends" ? "contacts"
+        : root.active-modal == "settings" ? "settings"
+        : root.active-modal == "calls" ? "calls"
+        : root.mobile-show-chat ? "chats"
+        : root.mobile-nav-tab;
+    // Single-pane routing on mobile: false = conversation list, true = the
+    // conversation itself. The two are mutually exclusive and each takes the
+    // whole width — there is no rail beside them, because the bottom tab bar
+    // is what keeps navigation always-available now. Desktop ignores this
+    // entirely and keeps the side-by-side panel it has always had.
+    in-out property <bool> mobile-show-chat: false;
 
     // ========== Chat properties ==========
     in property <string> channel-id: "";
@@ -266,6 +299,9 @@ export component App inherits Rectangle {
     in property <string> highlighted-message-id: "";  // Message id to briefly flash (quote jump)
     in-out property <length> message-scroll-position: 0px;  // Scroll position for message list
     in-out property <bool> is-at-bottom: true;  // True when message list is scrolled to bottom
+    // Unread boundary from core — see MessageList.
+    in-out property <int> unread-index: -1;
+    in-out property <int> unread-count: 0;
     in property <bool> should-auto-scroll: true;  // Enable/disable auto-scroll on new messages
     in-out property <string> composer-text: "";
     in property <string> composer-placeholder: "Type a message...";
@@ -525,6 +561,15 @@ export component App inherits Rectangle {
     in property <string> profile-safety-number: "";
     in-out property <bool> profile-show-safety-number: false;
     // Username link (self view)
+    // Profile shared-content drawer (Media/Files/Links/Voice/GIFs/Music).
+    // Rows, tab labels and counts are all built by chatter-core.
+    in property <[SharedTab]> profile-shared-tabs: [];
+    in-out property <string> profile-shared-tab: "";
+    in property <[SharedContentItem]> profile-shared-items: [];
+    in property <bool> profile-shared-loading: false;
+    // Presence as words ("last seen yesterday 4:12 pm"), shaped by core.
+    in property <string> profile-last-seen: "";
+    in property <bool> profile-is-muted: false;
     in property <string> profile-share-link: "";
     in property <image> profile-share-qr;
     in property <string> profile-share-status: "";
@@ -796,6 +841,12 @@ export component App inherits Rectangle {
     callback profile-edit-profile();
     callback profile-view-safety-number();
     callback profile-toggle-verified();
+    callback profile-toggle-mute();
+    callback profile-start-call(bool /* is-video */);
+    callback profile-shared-tab-selected(string /* category */);
+    callback profile-shared-load-more();
+    // message-id, attachment-id, category
+    callback profile-open-shared-item(string, string, string);
     callback profile-generate-share-link();
     callback profile-copy-share-link();
     callback profile-reset-share-link();
@@ -844,6 +895,7 @@ export component App inherits Rectangle {
 
     // Forward message
     callback forward-message(string);
+    callback forward-search-changed(string);
 
     // Sessions
     callback revoke-session(int);
@@ -906,7 +958,16 @@ export component App inherits Rectangle {
     callback channel-settings-delete();
 
     // ========== Call callbacks ==========
-    callback calls-tab-clicked();  // mobile nav "Calls" tab — show call history
+    callback calls-tab-clicked();  // mobile nav "Calls" tab — loads call history
+    // Call history (Calls screen). Rows come from core pre-formatted.
+    in property <[CallHistoryRow]> call-history-rows: [];
+    in property <bool> call-history-loading: false;
+    in-out property <string> call-history-filter: "all";  // "all" | "missed"
+    in property <int> missed-call-count: 0;
+    callback call-history-filter-changed(string);
+    callback call-history-open(string, string);        // conversation-id, conversation-type
+    callback call-history-redial(string, string, bool); // conversation-id, conversation-type, is-video
+    callback call-history-clear();
     callback accept-incoming-call(string);  // call_id
     callback decline-incoming-call(string); // call_id
     callback call-toggle-mute();
@@ -1006,8 +1067,8 @@ export component App inherits Rectangle {
     // one rectangle, all insets.
     Rectangle {
         width: root.width;
-        height: root.height - root.safe-area-top - root.macos-titlebar-inset - root.safe-area-bottom;
-        y: root.safe-area-top + root.macos-titlebar-inset;
+        height: root.height - root.safe-area-top - root.safe-area-bottom;
+        y: root.safe-area-top;
 
         // Loading page
         if current-view == "loading": LoadingPage {
@@ -1159,19 +1220,30 @@ export component App inherits Rectangle {
             // Sidebar (width controlled by collapsed state; mobile-mode for full-width).
             // Hidden entirely in call-fullscreen so the call view fills the whole
             // window width — a landscape viewport for a landscape screen share.
-            if !root.active-call-fullscreen: Sidebar {
+            if !root.active-call-fullscreen
+                && !(root.is-mobile-platform && root.mobile-show-chat): Sidebar {
                 // Survives dismissing the connection banner: the dot on the
                 // settings button is what keeps saying the server is down.
                 server-unreachable: root.server-unreachable;
                 // `mobile-mode` means "touch input" — it sizes the panel's
-                // targets, it does NOT change the layout. The panel stays on
-                // screen on every platform, Discord-style: an icon rail by
-                // default, expanded to the full list by the toggle in its
-                // footer. A phone-style swap-the-whole-screen navigation was
-                // tried and rejected: it costs a tap for every glance at the
-                // conversation list.
+                // targets. On desktop the panel also keeps its Discord-style
+                // layout role: an icon rail by default, expanded to the full
+                // list by the toggle in its footer.
+                //
+                // On mobile it no longer does. The rail was kept because it was
+                // the only always-available navigation, and swapping the whole
+                // screen "costs a tap for every glance at the conversation
+                // list" — but the bottom tab bar now pays that cost instead
+                // (Chats is one tap from anywhere), and the rail was spending
+                // 16% of the width of every conversation to avoid it. So on a
+                // phone this is a full-width list that the chat replaces, never
+                // a rail beside it.
                 mobile-mode: root.is-mobile-platform;
                 mobile-width: root.width;
+                // The panel is the top-left thing on screen, so it is the one
+                // that has to keep the macOS traffic lights clear.
+                traffic-lights-width: root.macos-traffic-lights-width;
+                titlebar-height: root.macos-titlebar-height;
                 channels: root.channels;
                 dm-conversations: root.dm-conversations;
                 private-groups: root.private-groups;
@@ -1183,20 +1255,25 @@ export component App inherits Rectangle {
                 // Narrow screens start on the rail and expand on demand. The
                 // user drives this — `sidebar-user-collapsed` keeps their choice
                 // from being undone by a resize.
-                collapsed: root.sidebar-is-rail;
-                hidden: root.sidebar-hidden;
+                // Never a rail on mobile — when this panel is on screen at all
+                // it is the whole screen.
+                collapsed: root.is-mobile-platform ? false : root.sidebar-is-rail;
+                hidden: root.is-mobile-platform ? false : root.sidebar-hidden;
                 pending-friend-requests: root.friends-received-requests.length;
                 pending-message-requests: root.pending-message-requests;
                 pending-group-invites: root.pending-group-invites;
                 pending-channel-invites: root.pending-channel-invites;
 
                 channel-selected(id) => {
+                    root.mobile-show-chat = true;
                     root.channel-selected(id);
                 }
                 dm-selected(id) => {
+                    root.mobile-show-chat = true;
                     root.dm-selected(id);
                 }
                 private-group-selected(id) => {
+                    root.mobile-show-chat = true;
                     root.private-group-selected(id);
                 }
                 search-clicked => {
@@ -1206,6 +1283,10 @@ export component App inherits Rectangle {
                     root.unified-search-opened();
                 }
                 saved-messages-clicked => {
+                    // Saved Messages IS a conversation, so it routes like one —
+                    // without this the chat loads behind the list and the tap
+                    // reads as doing nothing.
+                    root.mobile-show-chat = true;
                     root.saved-messages-clicked();
                 }
                 friends-clicked => {
@@ -1270,6 +1351,7 @@ export component App inherits Rectangle {
                     root.section-toggle-expanded(id);
                 }
                 section-conversation-selected(conv-id, conv-type) => {
+                    root.mobile-show-chat = true;
                     root.section-conversation-selected(conv-id, conv-type);
                 }
                 delete-section-clicked(id) => {
@@ -1314,7 +1396,7 @@ export component App inherits Rectangle {
             // below: a hidden element still occupies its layout slot, and a
             // zero-width chat column beside a full-width panel is exactly the
             // shape that pushes content past the clipped edge.
-            if !(root.is-mobile-platform && !root.sidebar-is-rail): chat-panel-area := Rectangle {
+            if !(root.is-mobile-platform && !root.mobile-show-chat): chat-panel-area := Rectangle {
                 horizontal-stretch: 1;
                 vertical-stretch: 1;
                 visible: true;
@@ -1407,8 +1489,12 @@ export component App inherits Rectangle {
                     // No back button: the conversation list is always on
                     // screen beside this, so there is nothing to go back to —
                     // and the header is tight enough already.
-                    show-back-button: false;
-                    back-clicked => { }
+                    // The only way back to the list on a phone, so it is not
+                    // optional there. Desktop still shows both panes at once
+                    // and has nothing to go back to.
+                    show-back-button: root.is-mobile-platform;
+                    header-leading-inset: root.chat-traffic-lights-lead;
+                    back-clicked => { root.mobile-show-chat = false; }
                     selection-mode: root.selection-mode;
                     // Press-and-hold on a bubble is a touch gesture only.
                     mobile: root.is-mobile-platform;
@@ -1437,6 +1523,9 @@ export component App inherits Rectangle {
                     scroll-to-message-index: root.scroll-to-message-index;
                     highlighted-message-id: root.highlighted-message-id;
                     message-scroll-position <=> root.message-scroll-position;
+                    is-at-bottom <=> root.is-at-bottom;
+                    unread-index <=> root.unread-index;
+                    unread-count <=> root.unread-count;
                     should-auto-scroll: root.should-auto-scroll;
                     current-playing-attachment-id: root.current-playing-attachment-id;
                     is-media-playing: root.is-media-playing;
@@ -1544,6 +1633,10 @@ export component App inherits Rectangle {
                     y: 0;
                     width: chat-panel-area.thread-panel-w;
                     height: 100%;
+                    // Same expression `thread-panel-w` uses to give the panel
+                    // the whole row: at that width it is a pushed page, so it
+                    // dismisses with a back chevron rather than an X.
+                    mobile: root.is-small-screen;
                     root-message-id: root.thread-root-message-id;
                     root-sender-name: root.thread-root-sender-name;
                     root-content-preview: root.thread-root-content-preview;
@@ -1569,11 +1662,21 @@ export component App inherits Rectangle {
 
             } // end chat-panel-area Rectangle
         } // end inner HorizontalLayout (sidebar + chat)
-        } // end VerticalLayout (banner + chat area)
 
-    // Mobile bottom navigation removed — the single-tab bar that remained after
-    // dropping Calls / Contacts / Settings served no purpose and clipped the
-    // sidebar profile button. Navigation now goes through the sidebar only.
+            // Space held for the bottom tab bar. The bar ITSELF is drawn
+            // further down, after the modals, so that it sits above them in
+            // z-order and keeps taking taps while a full-screen Contacts or
+            // Settings is open — as a child here it rendered under them and
+            // went inert. Reserving the height here (rather than overlaying
+            // the bar on the chat) keeps the original property that nothing
+            // above is clipped by it.
+            if root.is-mobile-platform && !root.keyboard-open && !root.mobile-show-chat: Rectangle {
+                // Must match MobileBottomNav's own `occupied-height` — the dock
+                // floats with a gap under it, so reserving only the bar height
+                // would let the last row slide beneath the glass.
+                height: Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom;
+            }
+        } // end VerticalLayout (banner + chat area)
 
     // ========== Modal overlay layer ==========
     // Semi-transparent backdrop when any modal is active
@@ -1714,10 +1817,37 @@ export component App inherits Rectangle {
         share-link: root.profile-share-link;
         share-qr: root.profile-share-qr;
         share-status: root.profile-share-status;
+        last-seen: root.profile-last-seen;
+        is-muted: root.profile-is-muted;
+        shared-tabs: root.profile-shared-tabs;
+        shared-tab <=> root.profile-shared-tab;
+        shared-items: root.profile-shared-items;
+        shared-loading: root.profile-shared-loading;
+        mobile-mode: root.is-mobile-platform;
+        // Keep the tab bar visible under the profile page — unless the
+        // keyboard has replaced it, in which case there is nothing to leave
+        // room for. Same expression the Contacts screen uses.
+        bottom-inset: root.is-mobile-platform && !root.keyboard-open ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
 
         close => {
             root.active-modal = "none";
             root.profile-show-safety-number = false;
+        }
+        toggle-mute => {
+            root.profile-toggle-mute();
+        }
+        start-call(is-video) => {
+            root.profile-start-call(is-video);
+        }
+        shared-tab-selected(category) => {
+            root.profile-shared-tab = category;
+            root.profile-shared-tab-selected(category);
+        }
+        shared-load-more => {
+            root.profile-shared-load-more();
+        }
+        open-shared-item(message-id, attachment-id, category) => {
+            root.profile-open-shared-item(message-id, attachment-id, category);
         }
         change-status(mode) => {
             root.user-presence-mode = mode;
@@ -1825,9 +1955,47 @@ export component App inherits Rectangle {
         approve(p) => { root.link-approve-submit(p); }
     }
 
+    // Calls screen — the bottom nav's "Calls" tab. A modal for the same
+    // reason Contacts and Settings are: on a phone it is a full-screen page
+    // reached from the tab bar, and the bar keeps its strip at the bottom.
+    if root.active-modal == "calls": CallHistoryScreen {
+        mobile-mode: root.is-mobile-platform;
+        bottom-inset: root.is-mobile-platform && !root.keyboard-open ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
+        show-modal: true;
+        rows: root.call-history-rows;
+        loading: root.call-history-loading;
+        active-filter: root.call-history-filter;
+
+        close => {
+            root.active-modal = "none";
+        }
+        filter-changed(f) => {
+            root.call-history-filter = f;
+            root.call-history-filter-changed(f);
+        }
+        open-conversation(id, kind) => {
+            root.active-modal = "none";
+            root.mobile-show-chat = true;
+            root.call-history-open(id, kind);
+        }
+        call-back(id, kind, video) => {
+            root.active-modal = "none";
+            root.mobile-show-chat = true;
+            root.call-history-redial(id, kind, video);
+        }
+        clear-history => {
+            root.call-history-clear();
+        }
+    }
+
     // Friend Requests Modal (legacy)
     // Friends Modal (comprehensive)
     if root.active-modal == "friends": FriendsModal {
+        mobile-mode: root.is-mobile-platform;
+        // Keep the tab bar visible under the Contacts screen — unless the
+        // keyboard has replaced it, in which case there is nothing to leave
+        // room for.
+        bottom-inset: root.is-mobile-platform && !root.keyboard-open ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
         show-modal: true;
         active-tab <=> root.friends-modal-tab;
         friends: root.friends-list;
@@ -1937,6 +2105,9 @@ export component App inherits Rectangle {
         }
         forward(target-id) => {
             root.forward-message(target-id);
+        }
+        search-changed(query) => {
+            root.forward-search-changed(query);
         }
     }
 
@@ -2815,6 +2986,65 @@ export component App inherits Rectangle {
         running: root.toast-visible;
         triggered => {
             root.toast-visible = false;
+        }
+    }
+    // Mobile bottom navigation. Restored as the full multi-tab bar it was
+    // designed to be — the previous removal was of a one-tab remnant,
+    // which is a different thing: a single tab is decoration, four tabs
+    // are navigation, and the destinations (Calls, Contacts, Settings)
+    // all existed already, just buried in the rail's bottom cluster
+    // where they cost an expand-collapse round trip to reach.
+    //
+    // Declared last so it paints AND receives input above the full-screen
+    // modals (Contacts, Settings). Those carve a strip out of themselves so
+    // the bar stays visible, but z-order is what decides who gets the tap,
+    // and as a child of the main column the bar lost it every time — visible,
+    // undimmed, and completely inert. A matching spacer up in that column
+    // reserves its height, so nothing above is overlapped.
+    // Hidden while the IME is up, where it would otherwise sit on the keyboard.
+    // Not inside a conversation: a chat is a pushed screen, and the tab bar
+    // belongs to the level you pushed FROM. Keeping it there costs a row of
+    // the message view and offers navigation that the back arrow already
+    // covers — Telegram drops it on the same transition.
+    if root.is-mobile-platform && !root.keyboard-open && !root.mobile-show-chat: MobileBottomNav {
+        width: parent.width;
+        y: parent.height - self.height;
+        active-tab: root.mobile-nav-tab-effective;
+        user-avatar: root.user-avatar-source;
+        chats-badge: root.total-unread-count;
+        calls-badge: root.missed-call-count;
+        contacts-badge: root.friends-received-requests.length;
+        safe-area-bottom: root.safe-area-bottom;
+        tab-selected(tab) => {
+            root.mobile-nav-tab = tab;
+            if (tab == "chats") {
+                // Back to the list from wherever you are — this tab is
+                // what replaced the rail as always-available navigation.
+                // That includes leaving a full-screen modal: Contacts
+                // and Settings ARE modals here, so without dismissing
+                // one the tab press lands correctly and then stays
+                // hidden behind the screen you were trying to leave.
+                root.active-modal = "none";
+                root.mobile-show-chat = false;
+                root.sidebar-user-collapsed = false;
+                root.sidebar-collapsed = false;
+            } else if (tab == "calls") {
+                root.active-modal = "calls";
+                root.calls-tab-clicked();
+            } else if (tab == "contacts") {
+                // Land on the contacts list. The default tab is the
+                // add-by-code form, which is the right landing spot for
+                // a "Friends" dialog opened deliberately, and the wrong
+                // one for a Contacts tab you press to see your contacts.
+                root.friends-modal-tab = "friends";
+                root.active-modal = "friends";
+            } else if (tab == "settings") {
+                root.active-modal = "settings";
+                root.settings-clicked();
+            } else if (tab == "profile") {
+                root.active-modal = "none";
+                root.profile-clicked();
+            }
         }
     }
     }

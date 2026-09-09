@@ -74,6 +74,17 @@ export component ChannelSettingsModal inherits Rectangle {
     callback leave-channel();
     callback delete-channel();
 
+    // Confirmation reveals for the two irreversible actions in Danger Zone.
+    // Presentation state only — nothing leaves the UI until the second click.
+    // Reset on every open, or a modal closed mid-confirm reopens (possibly on
+    // a DIFFERENT channel) already asking to leave or delete.
+    property <bool> show-delete-confirm: false;
+    property <bool> show-leave-confirm: false;
+    changed show-modal => {
+        self.show-delete-confirm = false;
+        self.show-leave-confirm = false;
+    }
+
     // Private group helper
     property <bool> is-private-group: channel-type == "private-group";
 
@@ -759,8 +770,12 @@ export component ChannelSettingsModal inherits Rectangle {
                                 background: Colors.error.with-alpha(0.3);
                             }
 
-                            // Leave channel
-                            if !root.is-owner: HorizontalLayout {
+                            // Leave channel. Gated unconditionally, not just
+                            // for private channels: leaving a private one has
+                            // no rejoin path, and a control that is sometimes
+                            // destructive and sometimes not, with no visual
+                            // difference, is worse than one that always asks.
+                            if !root.is-owner && !root.show-leave-confirm: HorizontalLayout {
                                 spacing: Spacing.sm;
 
                                 VerticalLayout {
@@ -783,7 +798,39 @@ export component ChannelSettingsModal inherits Rectangle {
                                     variant: "secondary";
 
                                     clicked => {
-                                        root.leave-channel();
+                                        root.show-leave-confirm = true;
+                                    }
+                                }
+                            }
+
+                            if !root.is-owner && root.show-leave-confirm: VerticalLayout {
+                                spacing: Spacing.sm;
+
+                                Text {
+                                    text: "Leave \"" + root.channel-name + "\"? You lose access to its messages, and an invite-only channel cannot be rejoined on your own.";
+                                    color: Colors.error;
+                                    font-size: Typography.sm;
+                                    wrap: word-wrap;
+                                }
+
+                                HorizontalLayout {
+                                    spacing: Spacing.sm;
+
+                                    Button {
+                                        text: "Cancel";
+                                        variant: "secondary";
+                                        clicked => {
+                                            root.show-leave-confirm = false;
+                                        }
+                                    }
+
+                                    Button {
+                                        text: "Leave channel";
+                                        variant: "danger";
+                                        clicked => {
+                                            root.show-leave-confirm = false;
+                                            root.leave-channel();
+                                        }
                                     }
                                 }
                             }
@@ -817,8 +864,15 @@ export component ChannelSettingsModal inherits Rectangle {
                                 }
                             }
 
-                            // Delete channel
-                            if root.can-delete: HorizontalLayout {
+                            // Delete channel. H3: the one irreversible action
+                            // in this modal was a single click on a button
+                            // sitting in the same row rhythm as "Archive" —
+                            // one slip and the channel and every message in it
+                            // are gone. Same two-step reveal Settings uses for
+                            // Delete Account (settings_screen.slint
+                            // `show-delete-confirm`): the first click only
+                            // asks, and the answer defaults to Cancel.
+                            if root.can-delete && !root.show-delete-confirm: HorizontalLayout {
                                 spacing: Spacing.sm;
 
                                 VerticalLayout {
@@ -842,7 +896,42 @@ export component ChannelSettingsModal inherits Rectangle {
                                     variant: "danger";
 
                                     clicked => {
-                                        root.delete-channel();
+                                        root.show-delete-confirm = true;
+                                    }
+                                }
+                            }
+
+                            if root.can-delete && root.show-delete-confirm: VerticalLayout {
+                                spacing: Spacing.sm;
+
+                                Text {
+                                    text: "Delete \"" + root.channel-name + "\" permanently? Every message in it goes with it. This cannot be undone.";
+                                    color: Colors.error;
+                                    font-size: Typography.sm;
+                                    wrap: word-wrap;
+                                }
+
+                                HorizontalLayout {
+                                    spacing: Spacing.sm;
+
+                                    // Cancel first, and it is the non-danger
+                                    // variant: the safe answer is the one the
+                                    // eye and the thumb land on.
+                                    Button {
+                                        text: "Cancel";
+                                        variant: "secondary";
+                                        clicked => {
+                                            root.show-delete-confirm = false;
+                                        }
+                                    }
+
+                                    Button {
+                                        text: "Delete channel";
+                                        variant: "danger";
+                                        clicked => {
+                                            root.show-delete-confirm = false;
+                                            root.delete-channel();
+                                        }
                                     }
                                 }
                             }

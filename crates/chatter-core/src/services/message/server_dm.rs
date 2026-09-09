@@ -166,7 +166,7 @@ impl MessageService {
             message.reply_to_thumbnail_mime = parts.reply_to_thumbnail_mime;
         }
 
-        if let Err(e) = self.message_repo.insert(&message) {
+        if let Err(e) = self.message_repo.insert_outgoing(&message) {
             tracing::warn!(
                 peer_id = %peer_id,
                 error = %e,
@@ -308,7 +308,9 @@ impl MessageService {
             .deposit_sealed_to_all_devices(&mut auth_client, &mut message_client, &peer_id_str, &plaintext, None)
             .await;
 
-        if peer.delivered == 0 {
+        // Retry only when a refetch could plausibly change the answer. A
+        // throttled prekey fetch is not that case — see `rate_limited` above.
+        if peer.delivered == 0 && !peer.rate_limited {
             tracing::warn!(
                 peer_id = %peer_id,
                 "Sealed DM send reached zero peer devices, refetching prekeys and retrying once"
@@ -319,6 +321,12 @@ impl MessageService {
         }
 
         if peer.delivered == 0 {
+            if peer.rate_limited {
+                return Err(MessageError::DmError(format!(
+                    "Could not reach {peer_id}: the server is throttling prekey \
+                     fetches for this recipient. Retry in a moment."
+                )));
+            }
             return Err(MessageError::DmError(format!(
                 "Failed to deliver sealed DM to any device of {peer_id}"
             )));
@@ -467,12 +475,19 @@ impl MessageService {
         {
             Ok(c) => c,
             Err(e) => {
+                let rate_limited = matches!(
+                    e,
+                    crate::error::service_error::ServiceError::Network(
+                        crate::error::NetworkError::RateLimited
+                    )
+                );
                 tracing::warn!(
                     recipient = recipient_id,
                     error = %e,
+                    rate_limited,
                     "Sealed DM: failed to encrypt for recipient's devices"
                 );
-                return DepositOutcome::default();
+                return DepositOutcome { rate_limited, ..Default::default() };
             }
         };
 
@@ -565,6 +580,14 @@ impl MessageService {
 struct DepositOutcome {
     /// Devices the message actually reached.
     delivered: usize,
+    /// Zero devices because the SERVER refused to serve the prekey bundle, not
+    /// because our session state was stale. The retry below must not fire on
+    /// this: a prekey fetch is rate limited per (caller, target) pair, so an
+    /// immediate refetch cannot succeed and spends another token from the very
+    /// bucket that is refusing us. One send was burning ~5 tokens against a
+    /// 20-token bucket that refills at 6/min, which turned a brief throttle
+    /// into a self-sustaining one.
+    rate_limited: bool,
     /// Of those, how many were sent identified (Basic auth) because no UAK was
     /// available — i.e. sealed sender did NOT engage and the server recorded us.
     degraded: usize,

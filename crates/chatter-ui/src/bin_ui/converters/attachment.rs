@@ -55,31 +55,16 @@ impl AttachmentDisplayData {
         if !self.is_image && !self.is_video {
             return;
         }
-        // Prefer the full-resolution local file for images (sender's picked file,
-        // or the receiver's copy after download) — the transmitted thumbnail is a
-        // low-res placeholder only. Downscale to a display cap with Lanczos3 so the
-        // bubble is crisp (Telegram-parity) without decoding a multi-MP image on
-        // the UI thread. Videos have no still to load here, so they keep using the
-        // sender-provided thumbnail bytes below.
-        if self.is_image {
-            if let Some(path) = self
-                .local_path
-                .as_deref()
-                .filter(|p| std::path::Path::new(p).exists())
-            {
-                if let Ok(img) = image::open(path) {
-                    // Cap the long edge; the bubble is ~280 logical px, so this is
-                    // ample even at 2x HiDPI while staying cheap to hold in memory.
-                    const DISPLAY_MAX: u32 = 1024;
-                    let rgba = img
-                        .resize(DISPLAY_MAX, DISPLAY_MAX, image::imageops::FilterType::Lanczos3)
-                        .to_rgba8();
-                    let (w, h) = rgba.dimensions();
-                    self.thumbnail_pixels = Some((rgba.into_raw(), w, h));
-                    return;
-                }
-            }
-        }
+        // The stored thumbnail is not a postage stamp: it is generated at
+        // `INLINE_THUMBNAIL_MAX_SIZE` = 768px (media/image_processor.rs), ~2.7x
+        // the ~280 logical px the bubble draws. Decoding it costs ~0.08 ms.
+        //
+        // This used to prefer the full-resolution original instead, downscaled
+        // with Lanczos3 "so the bubble is crisp". Measured on a 12 MP photo
+        // (`chatter-core/tests/conversation_open_bench.rs`): 46 ms to decode +
+        // 900 ms to Lanczos3-resize, per image, every time the conversation is
+        // opened — 95% of the entire conversation-open budget, for a difference
+        // invisible at 280px. Cheap first, original only as a fallback.
         if !self.thumbnail_bytes.is_empty() {
             self.thumbnail_pixels = image::load_from_memory(&self.thumbnail_bytes)
                 .ok()
@@ -88,6 +73,29 @@ impl AttachmentDisplayData {
                     let (w, h) = rgba.dimensions();
                     (rgba.into_raw(), w, h)
                 });
+            if self.thumbnail_pixels.is_some() {
+                return;
+            }
+        }
+        // No stored thumbnail (sidecar not fetched yet, or a pre-thumbnail
+        // local file). Downscale the original with the fast box sampler —
+        // `thumbnail()`, not `resize(Lanczos3)`: 6.6x cheaper and the
+        // difference does not survive being drawn at bubble width.
+        if self.is_image {
+            if let Some(path) = self
+                .local_path
+                .as_deref()
+                .filter(|p| std::path::Path::new(p).exists())
+            {
+                if let Ok(img) = image::open(path) {
+                    // Cap the long edge; ample even at 2x HiDPI while staying
+                    // cheap to hold in memory.
+                    const DISPLAY_MAX: u32 = 1024;
+                    let rgba = img.thumbnail(DISPLAY_MAX, DISPLAY_MAX).to_rgba8();
+                    let (w, h) = rgba.dimensions();
+                    self.thumbnail_pixels = Some((rgba.into_raw(), w, h));
+                }
+            }
         }
     }
 

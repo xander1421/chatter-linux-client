@@ -12,6 +12,21 @@ use chrono::{DateTime, Utc};
 use rusqlite::params;
 use std::sync::Arc;
 
+/// Let the shared-content index know an attachment's metadata now exists, so
+/// any row the message side parked as `'unsorted'` lands in its real tab.
+///
+/// Best-effort — losing a tile in a media drawer must not fail the insert that
+/// makes the attachment itself usable.
+fn resolve_shared_content(conn: &rusqlite::Connection, attachment: &Attachment) {
+    if let Err(e) = super::shared_content_repo::resolve_attachment(
+        conn,
+        &attachment.id,
+        &attachment.metadata,
+    ) {
+        tracing::warn!(attachment_id = %attachment.id, error = %e, "shared-content resolve failed");
+    }
+}
+
 /// Attachment data repository.
 pub struct AttachmentRepository {
     db: Arc<Database>,
@@ -54,6 +69,7 @@ impl AttachmentRepository {
                 attachment.created_at.to_rfc3339(),
             ],
         )?;
+        resolve_shared_content(&conn, attachment);
 
         Ok(())
     }
@@ -93,6 +109,7 @@ impl AttachmentRepository {
                 attachment.created_at.to_rfc3339(),
             ],
         )?;
+        resolve_shared_content(&conn, attachment);
 
         Ok(())
     }
@@ -262,6 +279,7 @@ impl AttachmentRepository {
                 attachment.created_at.to_rfc3339(),
             ],
         )?;
+        resolve_shared_content(&conn, attachment);
 
         Ok(())
     }

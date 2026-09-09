@@ -571,43 +571,6 @@ impl std::fmt::Debug for MobileCallSetup {
 // Call History (local-only record of past calls)
 // ============================================================================
 
-/// Kind of peer a call was with.
-///
-/// Maps directly to the `peer_type` column in the `call_history` table
-/// (`'user' | 'anon' | 'group'`). Kept distinct from `CallType` because a
-/// video group call and a voice group call share a peer_type but differ
-/// in `has_video`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum CallHistoryPeerType {
-    /// A known user (DM / channel call).
-    User,
-    /// An anonymous-DM peer (onion-style).
-    Anon,
-    /// A group call (anon group or regular channel group call).
-    Group,
-}
-
-impl CallHistoryPeerType {
-    /// Serialize for the `peer_type` TEXT column.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::User => "user",
-            Self::Anon => "anon",
-            Self::Group => "group",
-        }
-    }
-
-    /// Parse a `peer_type` TEXT column value.
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "user" => Some(Self::User),
-            "anon" => Some(Self::Anon),
-            "group" => Some(Self::Group),
-            _ => None,
-        }
-    }
-}
-
 /// Direction of the call relative to this device.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CallDirection {
@@ -666,19 +629,25 @@ impl CallResult {
 
 /// A single entry in the local call history.
 ///
-/// Written by the call signaling service when observable events occur
-/// (start, accept, decline, end, missed). Read by the UI via the bridge's
-/// `get_call_history` RPC. Purely local — no server sync until a call-history
-/// RPC exists.
+/// Written by `call_history_recorder` (incoming / connected / ended) and by
+/// `ChatterClient::start_call` (outgoing). Read by the Calls screen. Purely
+/// local — no server sync until a call-history RPC exists.
+///
+/// `conversation_id` + `conversation_type` are the same pair the sidebar
+/// routes on (`ConversationType::as_str`), so a history row can reopen its
+/// conversation and redial without the UI re-deriving routing rules.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CallHistoryEntry {
-    /// Stable local ID (typically the signaling `call_id` / room name).
+    /// Stable local ID: the signaling call id for DM/channel calls, the
+    /// LiveKit room name for anonymous ones. Same string the call
+    /// orchestrator uses as its `CallHandle`.
     pub id: String,
-    /// Remote peer identifier (user id, anon id, or group id — opaque to repo).
-    pub peer_id: String,
-    /// Peer entity kind.
-    pub peer_type: CallHistoryPeerType,
-    /// Peer display name at call time. Empty string when unknown.
+    /// Conversation the call happened in (`ChannelId`, peer `UserId`,
+    /// `AnonDmId`, or `AnonGroupId` as a string).
+    pub conversation_id: String,
+    /// Which flavour of conversation `conversation_id` names.
+    pub conversation_type: crate::domain::message::ConversationType,
+    /// Conversation/peer display name at call time. Empty when unknown.
     pub peer_name: String,
     /// When the call started (our clock).
     pub started_at: DateTime<Utc>,

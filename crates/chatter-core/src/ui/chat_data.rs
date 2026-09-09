@@ -5,6 +5,7 @@
 
 use crate::domain::channel::{Channel, ChannelType};
 use crate::domain::message::{Message, MessageContent, ReactionCount};
+use crate::domain::user::PresenceStatus;
 use chrono::{DateTime, Datelike, Duration, Local, Utc};
 
 // ============================================================================
@@ -434,6 +435,29 @@ pub fn format_timestamp(datetime: DateTime<Utc>) -> String {
 
     // Older
     local.format("%b %-d, %Y").to_string()
+}
+
+/// The line under a contact's name on the profile screen.
+///
+/// A live presence outranks any stamp — someone who is online now is not
+/// "last seen 3 minutes ago". Offline falls back to the stored
+/// `profiles.last_seen_at`, and to "last seen recently" when we have never
+/// received a presence timestamp for them, which is the honest answer: we
+/// know they exist, not when they were here.
+#[must_use]
+pub fn last_seen_label(presence: PresenceStatus, last_seen_at: Option<i64>) -> String {
+    match presence {
+        PresenceStatus::Online => "online".to_string(),
+        PresenceStatus::Away => "away".to_string(),
+        PresenceStatus::DoNotDisturb => "do not disturb".to_string(),
+        PresenceStatus::Offline => match last_seen_at {
+            Some(secs) => match DateTime::<Utc>::from_timestamp(secs, 0) {
+                Some(dt) => format!("last seen {}", format_timestamp(dt).to_lowercase()),
+                None => "last seen recently".to_string(),
+            },
+            None => "last seen recently".to_string(),
+        },
+    }
 }
 
 /// Format reaction counts to a summary string.

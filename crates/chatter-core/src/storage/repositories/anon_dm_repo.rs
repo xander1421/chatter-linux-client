@@ -326,18 +326,6 @@ impl AnonDmRepository {
         Ok(())
     }
 
-    /// Reset unread count for a conversation.
-    pub fn mark_as_read(&self, id: &AnonDmId) -> Result<(), StorageError> {
-        // Mark messages as read in the unified messages table
-        let conn = self.db.connection()?;
-        conn.execute(
-            "UPDATE messages SET is_read = 1 \
-             WHERE conversation_id = ?1 AND conversation_type = 'anon_dm' AND is_read = 0",
-            params![id.to_string()],
-        )?;
-        Ok(())
-    }
-
     // ========================================================================
     // Mailbox CRUD
     // ========================================================================

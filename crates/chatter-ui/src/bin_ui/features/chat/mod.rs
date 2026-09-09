@@ -23,6 +23,10 @@ use chatter_core::client::ChatterClient;
 use crate::MainWindow;
 
 pub(crate) use helpers::update_reaction_in_ui;
+// Re-exported so the ui_wiring harness can wire ONLY the forward-picker search
+// against a real offline ChatterClient, without the full `wire` (which needs a
+// live event loop). Registration-only; no behavioural change to the app.
+pub use actions::wire_forward_search;
 
 /// Wire chat callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -38,6 +42,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     pin::wire_pin_message(window, ui_ctx);
     actions::wire_reply_message(window, ui_ctx);
     actions::wire_forward_message_action(window, ui_ctx);
+    actions::wire_forward_search(window, ui_ctx);
     actions::wire_copy_message(window, ui_ctx);
     actions::wire_download_message(window, ui_ctx);
     selection::wire_selection(window, ui_ctx);

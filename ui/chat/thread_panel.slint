@@ -6,6 +6,7 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+import { DismissButton } from "../components/dismiss_button.slint";
 import { Skeleton } from "../components/skeleton.slint";
 import { MessageItemData } from "message_list.slint";
 import { MessageItem } from "message_item.slint";
@@ -23,6 +24,12 @@ export component ThreadPanel inherits Rectangle {
 
     // State
     in property <bool> loading: false;
+
+    // Touch input / small screen. On a phone this panel takes the whole width
+    // and the chat column behind it is hidden (app.slint `thread-panel-w`), so
+    // it is a pushed PAGE, not a side panel — and a page is left with a back
+    // chevron on the leading edge, not an X on the trailing one.
+    in property <bool> mobile: false;
 
     // Composer text (two-way binding)
     in-out property <string> composer-text;
@@ -76,14 +83,21 @@ export component ThreadPanel inherits Rectangle {
     }
 
     VerticalLayout {
-        // Header (48px)
+        // Header — same height as the conversation header it sits beside, so
+        // the two panes share one top row instead of stepping.
         Rectangle {
-            height: 48px;
+            height: root.mobile ? Spacing.header-height-touch : Spacing.header-height;
             background: Colors.surface;
 
             HorizontalLayout {
                 padding: Spacing.sm;
                 spacing: Spacing.sm;
+
+                // Full-screen on a phone → back chevron, leading edge.
+                if root.mobile: DismissButton {
+                    back: true;
+                    clicked => { root.close-clicked(); }
+                }
 
                 VerticalLayout {
                     horizontal-stretch: 1;
@@ -128,35 +142,11 @@ export component ThreadPanel inherits Rectangle {
                     }
                 }
 
-                // Close button (visual 28px, touch target 44px)
-                Rectangle {
-                    width: Spacing.touch-target-min;
-                    height: Spacing.touch-target-min;
-
-                    Rectangle {
-                        width: 28px;
-                        height: 28px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        border-radius: Spacing.radius-sm;
-                        background: close-area.has-hover ? Colors.surface-hover : transparent;
-
-                        Image {
-                            source: Icons.x;
-                            colorize: Colors.text-secondary;
-                            width: 14px;
-                            height: 14px;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                        }
-                    }
-
-                    close-area := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.close-clicked();
-                        }
-                    }
+                // Docked side panel on desktop → X, trailing edge. Exactly one
+                // of these two ever exists.
+                if !root.mobile: DismissButton {
+                    back: false;
+                    clicked => { root.close-clicked(); }
                 }
             }
 

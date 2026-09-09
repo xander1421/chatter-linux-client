@@ -85,10 +85,13 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
             }
 
             // Load the saved messages channel and its messages
+            // Saved Messages is your own notepad: nothing in it is ever
+            // "unread", so it always opens at the newest entry.
             load_channel_into_ui(
                 weak,
                 channel_id,
                 ui_ctx,
+                Default::default(),
             ).await;
         });
     });

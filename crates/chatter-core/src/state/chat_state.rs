@@ -90,6 +90,48 @@ impl ActiveConversation {
         }
     }
 
+    /// The `(type, id)` pair that names this conversation in the sidebar's
+    /// routing vocabulary, and the pair call history stores so a past call
+    /// can be redialled.
+    ///
+    /// The type here is the *variant's* type, not the message-storage type
+    /// [`conversation_type`](Self::conversation_type) returns — an encrypted
+    /// channel stores its messages as `AnonGroup` but is still routed as
+    /// `Channel(id)`, and round-tripping through the storage type would
+    /// reopen it as an anonymous group.
+    pub fn routing_key(&self) -> Option<(crate::domain::message::ConversationType, String)> {
+        use crate::domain::message::ConversationType as CT;
+        let ct = match self {
+            Self::Channel(_) => CT::Channel,
+            Self::ServerDm { .. } => CT::ServerDm,
+            Self::MailboxDm { .. } => CT::MailboxDm,
+            Self::AnonDm(_) => CT::AnonDm,
+            Self::AnonGroup(_) => CT::AnonGroup,
+            Self::None => return None,
+        };
+        self.sidebar_key().map(|id| (ct, id))
+    }
+
+    /// Inverse of [`routing_key`](Self::routing_key).
+    ///
+    /// `MailboxDm` is the one arm that cannot come back: it is keyed by a
+    /// channel id *and* a peer id, and only the channel id survives the
+    /// round trip. Nothing in the live client constructs that variant, so
+    /// this returns `None` rather than inventing the missing half.
+    pub fn from_routing_key(
+        conversation_type: &crate::domain::message::ConversationType,
+        id: &str,
+    ) -> Option<Self> {
+        use crate::domain::message::ConversationType as CT;
+        match conversation_type {
+            CT::Channel | CT::SavedMessages => id.parse().ok().map(Self::Channel),
+            CT::ServerDm => id.parse().ok().map(|peer_id| Self::ServerDm { peer_id }),
+            CT::AnonDm => id.parse().ok().map(Self::AnonDm),
+            CT::AnonGroup => id.parse().ok().map(Self::AnonGroup),
+            CT::MailboxDm | CT::Mesh | CT::MeshDm => None,
+        }
+    }
+
     /// Check if any conversation is active.
     pub fn is_active(&self) -> bool {
         !matches!(self, Self::None)
@@ -932,6 +974,24 @@ impl std::fmt::Debug for ChatState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Call history stores `routing_key()` and redials through
+    /// `from_routing_key()`. Every conversation that can host a call has to
+    /// survive that round trip, or "call back" opens the wrong thing.
+    #[test]
+    fn routing_key_round_trips_every_call_capable_conversation() {
+        let cases = [
+            ActiveConversation::Channel(ChannelId::new()),
+            ActiveConversation::ServerDm { peer_id: UserId::new() },
+            ActiveConversation::AnonDm(AnonDmId::new()),
+            ActiveConversation::AnonGroup(AnonGroupId::new()),
+        ];
+        for conv in cases {
+            let (ct, id) = conv.routing_key().expect("call-capable conversation has a key");
+            assert_eq!(ActiveConversation::from_routing_key(&ct, &id), Some(conv));
+        }
+        assert!(ActiveConversation::None.routing_key().is_none());
+    }
 
     #[test]
     fn test_chat_state_default() {

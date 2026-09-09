@@ -116,6 +116,49 @@ impl std::fmt::Display for ConversationType {
 }
 
 // ============================================================================
+// UnreadAnchor
+// ============================================================================
+
+/// Where the user left off in a conversation.
+///
+/// Opening a conversation clears `is_read` for the whole conversation, which
+/// destroys the boundary — so this is captured *inside*
+/// `UnifiedMessageRepository::mark_conversation_read`, in the same call, before
+/// the `UPDATE`. There is deliberately no way to ask for it afterwards: that
+/// ordering bug is what makes "open where I left off" quietly degrade to "open
+/// at the bottom" and nobody notices.
+///
+/// Our own sent messages land `is_read = 1` (`insert_outgoing`), so the
+/// boundary always points at a message somebody else sent.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UnreadAnchor {
+    /// `sent_at` of the oldest unread message. `None` when nothing was unread —
+    /// the common case, and the caller should open at the newest message.
+    pub first_unread_sent_at: Option<u64>,
+    /// How many unread messages the conversation held. May exceed one page.
+    pub unread_count: u32,
+}
+
+impl UnreadAnchor {
+    /// Index of the unread divider in an ascending (oldest-first) page.
+    ///
+    /// The divider sits *above* the first message at or after the boundary, so
+    /// the returned index is the row the viewport should open on. `None` means
+    /// open at the newest message: either nothing was unread, or the page does
+    /// not reach back far enough to contain the boundary (every loaded row is
+    /// older than it, which cannot happen for a newest-N page but is handled
+    /// rather than panicked on).
+    ///
+    /// Row 0 is a legitimate answer — a conversation whose entire loaded page
+    /// is unread opens at the top with the divider above the first row.
+    #[must_use]
+    pub fn divider_index(&self, page: &[Message]) -> Option<usize> {
+        let boundary = self.first_unread_sent_at?;
+        page.iter().position(|m| m.sent_at >= boundary)
+    }
+}
+
+// ============================================================================
 // Message
 // ============================================================================
 
@@ -295,36 +338,52 @@ impl Message {
 
     /// Compose a one-line sidebar preview for this message.
     ///
-    /// - Text messages are truncated to 50 chars.
-    /// - Empty-body messages with attachments render as "📎 N attachment(s)".
+    /// - Text messages (emoji-only included — an emoji IS the text) are
+    ///   truncated to 50 chars.
+    /// - Empty-body messages take `attachment_label` when the caller resolved
+    ///   one ("🖼️ Photo", "📎 report.pdf"), else "📎 N attachment(s)".
     /// - Empty-body messages with no attachments render as "[Message]".
     /// - If `current_user_id` is provided and matches this message's sender,
     ///   the preview is prefixed with "You: " (text messages only).
+    /// - A pinned message carries a 📌 marker, so the row says *why* this is
+    ///   the last thing that happened here.
+    ///
+    /// Attachment names and MIME types live in storage, not on the message, so
+    /// the typed label is passed in — `ChatterClient::message_sidebar_preview`
+    /// is the one caller that resolves it.
     ///
     /// Lives in core because "how do we describe a message in the sidebar"
     /// is a domain decision shared by every UI surface, not a presentation
     /// concern owned by Slint.
     #[must_use]
-    pub fn sidebar_preview(&self, current_user_id: Option<&crate::domain::ids::UserId>) -> String {
+    pub fn sidebar_preview(
+        &self,
+        current_user_id: Option<&crate::domain::ids::UserId>,
+        attachment_label: Option<&str>,
+    ) -> String {
         let is_own = matches!(
             (current_user_id, self.sender_id),
             (Some(u), Some(s)) if *u == s
         );
+        let pin = if self.is_pinned { "\u{1F4CC} " } else { "" };
         let text = self.as_text().unwrap_or("");
         let att_count = self.attachments.len();
 
-        if text.is_empty() && att_count > 0 {
-            let suffix = if att_count == 1 { "" } else { "s" };
-            return format!("\u{1F4CE} {} attachment{}", att_count, suffix);
-        }
         if text.is_empty() {
-            return "[Message]".to_string();
+            if let Some(label) = attachment_label {
+                return format!("{}{}", pin, label);
+            }
+            if att_count > 0 {
+                let suffix = if att_count == 1 { "" } else { "s" };
+                return format!("{}\u{1F4CE} {} attachment{}", pin, att_count, suffix);
+            }
+            return format!("{}[Message]", pin);
         }
         let truncated = truncate_preview_text(text, 50);
         if is_own {
-            format!("You: {}", truncated)
+            format!("{}You: {}", pin, truncated)
         } else {
-            truncated
+            format!("{}{}", pin, truncated)
         }
     }
 }
@@ -823,6 +882,49 @@ mod tests {
         assert_eq!(ordered_insert_position(&[], 1, "a"), InsertPosition::At(0));
     }
 
+    /// The unread divider must land on the first message at-or-after the
+    /// boundary, never "somewhere near it". Every case here is a way the chat
+    /// opens on the wrong row if `divider_index` drifts.
+    #[test]
+    fn unread_anchor_divider_index() {
+        let cid = ChannelId::new();
+        let them = Some(UserId::new());
+        let page: Vec<Message> = [10u64, 20, 30, 40, 50]
+            .into_iter()
+            .map(|ts| Message::new_text(cid, ConversationType::ServerDm, them, "m".into(), ts))
+            .collect();
+
+        // Nothing unread → open at the newest message, no divider.
+        assert_eq!(UnreadAnchor::default().divider_index(&page), None);
+
+        // Boundary exactly on a loaded row.
+        let anchor = UnreadAnchor { first_unread_sent_at: Some(30), unread_count: 3 };
+        assert_eq!(anchor.divider_index(&page), Some(2));
+
+        // Boundary between rows → the first row after it.
+        let anchor = UnreadAnchor { first_unread_sent_at: Some(35), unread_count: 2 };
+        assert_eq!(anchor.divider_index(&page), Some(3));
+
+        // Whole page unread (boundary older than the oldest loaded row) → open
+        // at the top, divider above row 0. Not None: "everything is new" is
+        // exactly when the divider matters most.
+        let anchor = UnreadAnchor { first_unread_sent_at: Some(1), unread_count: 99 };
+        assert_eq!(anchor.divider_index(&page), Some(0));
+
+        // Only the newest row is unread.
+        let anchor = UnreadAnchor { first_unread_sent_at: Some(50), unread_count: 1 };
+        assert_eq!(anchor.divider_index(&page), Some(4));
+
+        // Boundary newer than everything loaded → nothing to anchor on; open
+        // at the bottom rather than off the end of the model.
+        let anchor = UnreadAnchor { first_unread_sent_at: Some(60), unread_count: 1 };
+        assert_eq!(anchor.divider_index(&page), None);
+
+        // Empty page never yields an index.
+        let anchor = UnreadAnchor { first_unread_sent_at: Some(10), unread_count: 1 };
+        assert_eq!(anchor.divider_index(&[]), None);
+    }
+
     #[test]
     fn test_message_new_text() {
         let conversation_id = ChannelId::new();
@@ -920,6 +1022,42 @@ mod tests {
         msg.reaction_counts.push(ReactionCount::new("❤️".to_string(), 3));
 
         assert_eq!(msg.total_reactions(), 8);
+    }
+
+    /// The sidebar's second line is the one place every activity kind has to
+    /// come out as *something*. Each branch of `sidebar_preview` is a row a
+    /// user would otherwise see blank.
+    #[test]
+    fn test_sidebar_preview_covers_every_activity_kind() {
+        let conv = ChannelId::new();
+        let me = UserId::new();
+        let them = UserId::new();
+        let text = |sender, body: &str| {
+            Message::new_text(conv, ConversationType::Channel, Some(sender), body.to_string(), 0)
+        };
+
+        // Plain text, and the same text from us.
+        assert_eq!(text(them, "hello").sidebar_preview(Some(&me), None), "hello");
+        assert_eq!(text(me, "hello").sidebar_preview(Some(&me), None), "You: hello");
+        // Emoji-only is just text — it must survive, not become "[Message]".
+        assert_eq!(text(them, "\u{1F389}").sidebar_preview(Some(&me), None), "\u{1F389}");
+
+        // Attachment with no caption: typed label when resolved, count when not.
+        let mut file = text(them, "");
+        file.attachments = vec![AttachmentId::new(), AttachmentId::new()];
+        assert_eq!(
+            file.sidebar_preview(Some(&me), Some("\u{1F5BC}\u{FE0F} Photo +1")),
+            "\u{1F5BC}\u{FE0F} Photo +1"
+        );
+        assert_eq!(file.sidebar_preview(Some(&me), None), "\u{1F4CE} 2 attachments");
+
+        // Nothing renderable at all still names the row.
+        assert_eq!(text(them, "").sidebar_preview(Some(&me), None), "[Message]");
+
+        // A pin marks every kind, and does not eat the body.
+        let mut pinned = text(them, "hello");
+        pinned.is_pinned = true;
+        assert_eq!(pinned.sidebar_preview(Some(&me), None), "\u{1F4CC} hello");
     }
 
     #[test]

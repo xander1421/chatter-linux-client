@@ -251,6 +251,23 @@ async fn handle_user_event(
                 proto_presence,
             );
 
+            // Persist before emitting. The event only patches the rows that are
+            // on screen right now; every list that rebuilds from storage (the DM
+            // sidebar, the Contacts tab, the header on reopen) reads
+            // `profiles.presence`, so without this a contact's dot went green on
+            // the live event and back to grey at the next rebuild.
+            // `PresenceUpdate.timestamp` is unix NANOseconds; `last_seen_at`
+            // stores seconds. A zero timestamp means the server sent none, in
+            // which case keep whatever we already had rather than stamping the
+            // epoch.
+            let last_seen_at = match presence.timestamp {
+                0 => None,
+                ns => Some((ns / 1_000_000_000) as i64),
+            };
+            if let Err(e) = user_repo.set_presence(&user_id, domain_presence, last_seen_at) {
+                tracing::warn!(error = %e, %user_id, "Failed to persist peer presence");
+            }
+
             if let Some(tx) = domain_tx {
                 let _ = tx.send(DomainEvent::UserPresenceChanged {
                     user_id,

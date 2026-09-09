@@ -103,58 +103,18 @@ pub fn wire_forward_message_action(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                 .map(|t| ui_ctx.truncate_message_preview(&t))
                 .unwrap_or_else(|| "Message".to_string());
 
+            // The destination list is core's — which conversations exist, which
+            // the current mode may show, and Saved Messages. The UI renders it.
+            let targets = forward_targets(&ui_ctx, "");
+
             run_ui!(weak, |w| {
                 w.set_forward_message_preview(preview.into());
                 // Stash the source-message identity for the confirm handler
                 // (modal blocks conversation switches, but confirm runs later).
                 w.set_forward_source_sender_id(sender_id_str.clone().into());
                 w.set_forward_source_timestamp(timestamp_ns_str.clone().into());
-
-                // Populate forward targets from sidebar data
-                let mut targets: Vec<ForwardTarget> = Vec::new();
-
-                // Add DM conversations. Regular DM rows are keyed by the peer
-                // UserId (ChannelId::from(peer) is byte-identical); anon rows
-                // carry an AnonDmId — the type tag tells the confirm handler
-                // which way to parse.
-                let dms = w.get_dm_conversations();
-                for i in 0..dms.row_count() {
-                    if let Some(dm) = dms.row_data(i) {
-                        targets.push(ForwardTarget {
-                            id: dm.channel_id.clone(),
-                            name: dm.display_name.clone(),
-                            target_type: if dm.is_anon { "anon-dm".into() } else { "dm".into() },
-                        });
-                    }
-                }
-
-                // Add channels
-                let channels = w.get_channels();
-                for i in 0..channels.row_count() {
-                    if let Some(ch) = channels.row_data(i) {
-                        targets.push(ForwardTarget {
-                            id: ch.channel_id.clone(),
-                            name: ch.name.clone(),
-                            target_type: "channel".into(),
-                        });
-                    }
-                }
-
-                // Add private groups
-                let groups = w.get_private_groups();
-                for i in 0..groups.row_count() {
-                    if let Some(g) = groups.row_data(i) {
-                        targets.push(ForwardTarget {
-                            id: g.group_id.clone(),
-                            name: g.name.clone(),
-                            target_type: "group".into(),
-                        });
-                    }
-                }
-
-                w.set_forward_targets(ModelRc::from(
-                    std::rc::Rc::new(VecModel::from(targets)),
-                ));
+                w.set_forward_search_text("".into());
+                w.set_forward_targets(ModelRc::from(std::rc::Rc::new(VecModel::from(targets))));
 
                 w.set_active_modal("forward-message".into());
                 tracing::debug!(
@@ -165,6 +125,36 @@ pub fn wire_forward_message_action(window: &MainWindow, ui_ctx: &Arc<ChatterClie
             });
         });
     });
+}
+
+/// Wire the forward picker's search box. The filter itself is core's — this
+/// re-asks for the destination list narrowed by what was typed.
+pub fn wire_forward_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let ui_ctx = ui_ctx.clone();
+    let weak_window = window.as_weak();
+
+    window.on_forward_search_changed(move |query: SharedString| {
+        // Synchronous, core-ranked — same shape as the unified search palette's
+        // conversation list. A local read per keystroke over the sidebar's
+        // conversations, not a network call.
+        if let Some(w) = weak_window.upgrade() {
+            let targets = forward_targets(&ui_ctx, query.as_str());
+            w.set_forward_targets(ModelRc::from(std::rc::Rc::new(VecModel::from(targets))));
+        }
+    });
+}
+
+/// Core's forward destinations in the row shape the picker renders.
+fn forward_targets(ui_ctx: &Arc<ChatterClient>, query: &str) -> Vec<ForwardTarget> {
+    ui_ctx
+        .forward_destinations(query)
+        .into_iter()
+        .map(|d| ForwardTarget {
+            id: d.id.into(),
+            name: d.name.into(),
+            target_type: d.kind.as_str().into(),
+        })
+        .collect()
 }
 
 /// Wire copy-message callback to copy message text to clipboard.

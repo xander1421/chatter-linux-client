@@ -48,6 +48,21 @@ pub enum FileCategory {
 }
 
 impl FileCategory {
+    /// Lowercase name used wherever a category crosses into presentation
+    /// (Slint bindings, `ui::file_data::category_icon`).
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Image => "image",
+            Self::Video => "video",
+            Self::Audio => "audio",
+            Self::Document => "document",
+            Self::Archive => "archive",
+            Self::Code => "code",
+            Self::Other => "other",
+        }
+    }
+
     /// Infer category from MIME type.
     #[must_use]
     pub fn from_mime_type(mime: &str) -> Self {
@@ -121,6 +136,109 @@ impl FileCategory {
         // Otherwise fall back to extension
         from_ext
     }
+}
+
+/// Which tab of a conversation's shared-content view an item belongs to.
+///
+/// Deliberately NOT [`FileCategory`]: that one answers "what kind of file is
+/// this" for a single attachment bubble. A shared-content view asks a
+/// different question and has two things `FileCategory` cannot express — a
+/// link is not an attachment at all, and the Audio bucket has to split into
+/// voice notes and music the way every messenger's media drawer does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SharedCategory {
+    /// Photos and videos — the grid.
+    Media,
+    /// Any other attachment: documents, archives, code.
+    File,
+    /// A URL found in message text. Has no attachment record behind it.
+    Link,
+    /// An audio attachment recorded in-app — it carries a waveform.
+    Voice,
+    /// An audio attachment that is not a voice note.
+    Music,
+    /// `image/gif`, split out of Media the way every messenger does.
+    Gif,
+    /// Transient: an attachment whose `attachments` row has not landed yet,
+    /// so its MIME type is not known. Never rendered — `AttachmentRepository`
+    /// resolves it to a real category when the row arrives. See the
+    /// `shared_content` migration for why both write orders happen.
+    Unsorted,
+}
+
+impl SharedCategory {
+    /// Lowercase name — the value stored in `shared_content.category` and the
+    /// tab id the UI sends back.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Media => "media",
+            Self::File => "file",
+            Self::Link => "link",
+            Self::Voice => "voice",
+            Self::Music => "music",
+            Self::Gif => "gif",
+            Self::Unsorted => "unsorted",
+        }
+    }
+
+    /// Parse a stored/UI category name. Unknown names are `None` rather than
+    /// a silent default — a typo'd tab id should show nothing, not photos.
+    #[must_use]
+    pub fn from_str_value(s: &str) -> Option<Self> {
+        Some(match s {
+            "media" => Self::Media,
+            "file" => Self::File,
+            "link" => Self::Link,
+            "voice" => Self::Voice,
+            "music" => Self::Music,
+            "gif" => Self::Gif,
+            "unsorted" => Self::Unsorted,
+            _ => return None,
+        })
+    }
+
+    /// Which tab an attachment belongs in.
+    ///
+    /// Order matters: GIF is checked before Media (a GIF is an image), and
+    /// the waveform check before Music (a voice note is audio).
+    #[must_use]
+    pub fn of(meta: &FileMetadata) -> Self {
+        if meta.is_gif() {
+            return Self::Gif;
+        }
+        if meta.is_audio() {
+            // A waveform is only ever attached by the in-app recorder, so it
+            // is the one honest voice-note marker we have. The proto's
+            // `voice_note` bool is written `false` everywhere and read
+            // nowhere.
+            return if meta.waveform_samples.is_some() {
+                Self::Voice
+            } else {
+                Self::Music
+            };
+        }
+        match FileCategory::from_mime_and_filename(&meta.mime_type, &meta.name) {
+            FileCategory::Image | FileCategory::Video => Self::Media,
+            _ => Self::File,
+        }
+    }
+}
+
+/// Pull the URLs out of a message's text.
+///
+/// Deliberately a scheme-prefix scan over whitespace-separated words, not a
+/// regex: the Links tab wants "things the user can tap", and anything that
+/// does not start `http://` or `https://` is not that. Trailing sentence
+/// punctuation is trimmed so "see https://x.dev." does not store the period.
+#[must_use]
+pub fn extract_links(text: &str) -> Vec<String> {
+    text.split_whitespace()
+        .filter(|w| w.starts_with("http://") || w.starts_with("https://"))
+        .map(|w| w.trim_end_matches(['.', ',', ')', ']', '>', '!', '?', ';', ':', '"', '\'']))
+        .filter(|w| w.len() > "https://".len())
+        .map(str::to_string)
+        .collect()
 }
 
 /// Represents a file attachment.
@@ -373,19 +491,25 @@ impl FileMetadata {
     /// Human-readable file size.
     #[must_use]
     pub fn formatted_size(&self) -> String {
-        const KB: u64 = 1024;
-        const MB: u64 = KB * 1024;
-        const GB: u64 = MB * 1024;
+        format_bytes(self.size)
+    }
+}
 
-        if self.size >= GB {
-            format!("{:.1} GB", self.size as f64 / GB as f64)
-        } else if self.size >= MB {
-            format!("{:.1} MB", self.size as f64 / MB as f64)
-        } else if self.size >= KB {
-            format!("{:.1} KB", self.size as f64 / KB as f64)
-        } else {
-            format!("{} bytes", self.size)
-        }
+/// Human-readable byte count ("2.5 MB").
+#[must_use]
+pub fn format_bytes(size: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if size >= GB {
+        format!("{:.1} GB", size as f64 / GB as f64)
+    } else if size >= MB {
+        format!("{:.1} MB", size as f64 / MB as f64)
+    } else if size >= KB {
+        format!("{:.1} KB", size as f64 / KB as f64)
+    } else {
+        format!("{} bytes", size)
     }
 }
 

@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::{ChannelId, UserId};
@@ -35,48 +35,26 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         // Clear inline GIF animations
         crate::bin_ui::gif_state::clear_inline_gifs();
 
-        // Look up is_anon + peer_id BEFORE spawning (we're on UI thread here).
-        // The DM model stores raw uuids; the `is_anon` flag discriminates
-        // anon conversations from regular ones.
-        let (is_anon_dm, peer_id_for_dm) = weak
-            .upgrade()
-            .map(|w| {
-                let conversations = w.get_dm_conversations();
-                for i in 0..conversations.row_count() {
-                    if let Some(item) = conversations.row_data(i) {
-                        if item.channel_id.as_str() == dm_id_str {
-                            let peer = item.user_id.to_string().parse::<UserId>().ok();
-                            return (item.is_anon, peer);
-                        }
-                    }
-                }
-                (false, None)
-            })
-            .unwrap_or((false, None));
+        // What kind of DM is this? Core answers from storage, not from the
+        // sidebar model: a DM filed into a custom folder is deliberately absent
+        // from that model, and scanning it here made every foldered DM
+        // unopenable.
+        let active_pre_spawn = ui_ctx.resolve_dm_conversation(&dm_id_str);
+        let is_anon_dm = matches!(
+            active_pre_spawn,
+            Some(chatter_core::state::ActiveConversation::AnonDm(_))
+        );
+        let peer_id_for_dm: Option<UserId> = match active_pre_spawn {
+            Some(chatter_core::state::ActiveConversation::ServerDm { peer_id }) => Some(peer_id),
+            _ => None,
+        };
 
         // Commit active-conversation state SYNCHRONOUSLY on the UI thread,
         // before spawning the async loader. Sends + incoming-message gates
         // both read `active_channel_id`; if they fire before the async task
         // sets it, send_message.rs:86 early-returns and
         // handle_message_received drops the bubble (`is_active=false`).
-        let active_pre_spawn: Option<chatter_core::state::ActiveConversation> = if is_anon_dm {
-            match dm_id_str.parse::<AnonDmId>() {
-                Ok(id) => Some(chatter_core::state::ActiveConversation::AnonDm(id)),
-                Err(e) => {
-                    tracing::error!("Invalid anon DM ID: {}", e);
-                    None
-                }
-            }
-        } else if let Some(ref peer) = peer_id_for_dm {
-            // Regular (non-anon) DM sidebar rows are built entirely from the
-            // friends list (`list_dm_sidebar`) and keyed by peer_id — there
-            // is no server DM channel anymore, so this is unconditionally
-            // a ServerDm keyed by the peer.
-            Some(chatter_core::state::ActiveConversation::ServerDm { peer_id: peer.clone() })
-        } else {
-            None
-        };
-        if let Some(active) = active_pre_spawn.clone() {
+        if let Some(active) = active_pre_spawn {
             tracing::info!(?active, dm_id = %dm_id_str, is_anon = is_anon_dm, "[UI_OPEN_DM] committing active conversation pre-spawn");
             ui_ctx.chat_state().set_active_conversation(active);
         } else {
@@ -116,6 +94,21 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         });
 
         tokio::spawn(async move {
+            // Mark as read — the local half persists `is_read`, which is what
+            // the sidebar badge counts. Clearing the Slint model above only
+            // hides the badge until the next rebuild. Same call the channel
+            // path makes; covers anon and server DMs alike.
+            // Where the user left off. This is the only moment it exists:
+            // the call that returns it is the call that clears `is_read`.
+            let anchor = match active_pre_spawn {
+                Some(active) => ui_ctx
+                    .conversation(active)
+                    .mark_as_read()
+                    .await
+                    .unwrap_or_default(),
+                None => Default::default(),
+            };
+
             // 1. Handle Anon DM selection
             if is_anon_dm {
                 let anon_dm_id: AnonDmId = match dm_id_str.parse() {
@@ -178,8 +171,10 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                 let initial_count = display_messages.len();
                 tracing::info!(dm_id = %anon_dm_id, count = initial_count, "[UI_OPEN_DM] anon DM spawn run_ui firing");
+                let anchor_page = messages.clone();
                 run_ui!(weak, |w| {
                     use slint::Model;
+                    super::apply_unread_anchor(&w, anchor, &anchor_page);
                     let before = w.get_messages().row_count();
                     let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
                     let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
@@ -279,7 +274,9 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     })
                 });
 
+            let anchor_page = messages.clone();
             run_ui!(weak, |w| {
+                super::apply_unread_anchor(&w, anchor, &anchor_page);
                 let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
                 let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
                 w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
@@ -287,7 +284,11 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 w.set_channel_type("dm".into());
                 w.set_is_dm(true);
                 w.set_channel_name(title.into());
-                w.set_topic(status_str.into());
+                // A DM has no topic. This used to carry the presence word
+                // ("online"/"offline"), which the header centres beside the
+                // name — so every DM header spelled out what the dot next to
+                // the name already says, in the row with the least room for it.
+                w.set_topic("".into());
                 w.set_header_presence_status(status_str.into());
                 if let Some((aw, ah, px)) = &header_avatar {
                     let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(px, *aw, *ah);

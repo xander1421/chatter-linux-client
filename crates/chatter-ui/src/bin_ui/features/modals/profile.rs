@@ -12,10 +12,32 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
 
 use crate::bin_ui::converters::{get_initials, DMListItemExt, DMListItemSendData};
-use crate::{DMListItemData, MainWindow};
+use crate::{DMListItemData, MainWindow, SharedContentItem, SharedTab};
 
 thread_local! {
     static PENDING_AVATAR_PATH: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    /// Paging cursor for the profile's shared-content drawer. UI-thread only —
+    /// every reader and writer runs inside the Slint event loop.
+    static SHARED_PAGE: RefCell<SharedPage> = RefCell::new(SharedPage::default());
+}
+
+/// How many items one page of a shared-content tab pulls. Big enough that a
+/// 3-column grid fills several screens, small enough that decoding that many
+/// thumbnails does not stall a frame.
+const SHARED_PAGE_SIZE: u32 = 60;
+
+/// Where the open profile's shared-content list has got to.
+///
+/// `exhausted` is what stops the Flickable's scroll callback from asking for
+/// page after page at the bottom of a finished list, and `in_flight` stops it
+/// from asking again while the previous request is still running.
+#[derive(Default)]
+struct SharedPage {
+    peer: Option<UserId>,
+    tab: String,
+    loaded: usize,
+    exhausted: bool,
+    in_flight: bool,
 }
 
 /// Open the user profile modal with all properties populated correctly.
@@ -138,7 +160,215 @@ pub fn open_user_profile(
         w.set_profile_is_verified(is_verified);
     }
 
+    // Shared-content drawer. Reset first so the previous profile's media never
+    // flashes under the new name, then load this conversation's tabs.
+    w.set_profile_shared_tabs(ModelRc::new(VecModel::<SharedTab>::from(vec![])));
+    w.set_profile_shared_items(ModelRc::new(VecModel::<SharedContentItem>::from(vec![])));
+    w.set_profile_shared_tab("".into());
+    w.set_profile_last_seen("".into());
+    w.set_profile_is_muted(false);
+    SHARED_PAGE.with(|p| *p.borrow_mut() = SharedPage { peer: Some(*user_id), ..Default::default() });
+
+    if !is_self {
+        if let Some(ctx) = ui_ctx {
+            // Loading from the first frame: an empty strip is also what "no
+            // tabs" looks like, and flashing "Nothing shared yet" for the
+            // length of one query reads as a bug.
+            w.set_profile_shared_loading(true);
+            w.set_profile_last_seen(ctx.peer_last_seen_label(user_id).into());
+            w.set_profile_is_muted(
+                ctx.is_conversation_muted(dm_conversation(user_id)).unwrap_or(false),
+            );
+            load_shared_tabs(w.as_weak(), ctx.clone(), *user_id);
+        }
+    }
+
     w.set_active_modal("user-profile".into());
+}
+
+/// The conversation whose shared content a contact's profile shows: the DM
+/// with them. Same key `routing_key()` produces, so it matches the rows the
+/// index stored.
+fn dm_conversation(peer_id: &UserId) -> chatter_core::state::ActiveConversation {
+    chatter_core::state::ActiveConversation::ServerDm { peer_id: *peer_id }
+}
+
+/// Load the tab strip, then open whichever tab comes first.
+///
+/// Core decides which tabs exist and in what order — an empty strip means
+/// nothing has ever been shared, and the UI renders the empty state.
+fn load_shared_tabs(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, peer_id: UserId) {
+    tokio::spawn(async move {
+        let tabs = ui_ctx.shared_content_tabs(dm_conversation(&peer_id)).await;
+        let first = tabs.first().map(|t| t.id.clone());
+        let rows: Vec<SharedTab> = tabs
+            .into_iter()
+            .map(|t| SharedTab {
+                id: t.id.into(),
+                label: t.label.into(),
+                count: t.count,
+            })
+            .collect();
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(w) = weak.upgrade() else { return };
+            // A different profile may have been opened while this was in
+            // flight — do not paint its tabs over the current one.
+            if SHARED_PAGE.with(|p| p.borrow().peer) != Some(peer_id) {
+                return;
+            }
+            w.set_profile_shared_tabs(ModelRc::new(VecModel::from(rows)));
+            match first {
+                Some(tab) => {
+                    w.set_profile_shared_tab(tab.clone().into());
+                    // `request_shared_page` owns the loading flag from here.
+                    request_shared_page(&w, &ui_ctx, peer_id, tab, false);
+                }
+                // Nothing shared at all — clear the flag ourselves, or the
+                // spinner outlives the query that would have cleared it.
+                None => w.set_profile_shared_loading(false),
+            }
+        });
+    });
+}
+
+/// Fetch one page of a tab and paint it. `append` continues the open tab;
+/// otherwise the list is replaced (a tab switch).
+///
+/// Must be called on the UI thread — it owns the paging cursor.
+fn request_shared_page(
+    w: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    peer_id: UserId,
+    tab: String,
+    append: bool,
+) {
+    let offset = SHARED_PAGE.with(|p| {
+        let mut p = p.borrow_mut();
+        if append && (p.exhausted || p.in_flight || p.tab != tab) {
+            return None;
+        }
+        if !append {
+            p.tab = tab.clone();
+            p.loaded = 0;
+            p.exhausted = false;
+        }
+        p.in_flight = true;
+        Some(p.loaded as u32)
+    });
+    let Some(offset) = offset else { return };
+
+    w.set_profile_shared_loading(true);
+    let weak = w.as_weak();
+    let ui_ctx = ui_ctx.clone();
+    tokio::spawn(async move {
+        let page = ui_ctx
+            .shared_content_page(dm_conversation(&peer_id), &tab, SHARED_PAGE_SIZE, offset)
+            .await;
+        let short = page.len() < SHARED_PAGE_SIZE as usize;
+        let count = page.len();
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(w) = weak.upgrade() else { return };
+            SHARED_PAGE.with(|p| {
+                let mut p = p.borrow_mut();
+                p.in_flight = false;
+                // Stale response (profile closed, or tab switched underneath).
+                if p.peer != Some(peer_id) || p.tab != tab {
+                    return;
+                }
+                p.loaded += count;
+                p.exhausted = short;
+            });
+            if SHARED_PAGE.with(|p| p.borrow().peer) != Some(peer_id) {
+                return;
+            }
+            w.set_profile_shared_loading(false);
+
+            // Thumbnails decode here, on the UI thread, because a
+            // `slint::Image` cannot cross threads.
+            let mut rows: Vec<SharedContentItem> = if append {
+                let cur = w.get_profile_shared_items();
+                (0..cur.row_count()).filter_map(|i| cur.row_data(i)).collect()
+            } else {
+                Vec::new()
+            };
+            rows.extend(page.iter().map(|item| SharedContentItem {
+                message_id: item.message_id.clone().into(),
+                attachment_id: item.attachment_id.clone().into(),
+                category: item.category.clone().into(),
+                title: item.title.clone().into(),
+                subtitle: item.subtitle.clone().into(),
+                thumbnail: crate::bin_ui::converters::avatar_bytes_to_image(&item.thumbnail)
+                    .unwrap_or_default(),
+                has_thumbnail: item.has_thumbnail,
+                is_video: item.is_video,
+            }));
+            w.set_profile_shared_items(ModelRc::new(VecModel::from(rows)));
+        });
+    });
+}
+
+/// Wire the shared-content drawer: tab switches, paging, and opening an item.
+fn wire_shared_content(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak_window = window.as_weak();
+    let ui_ctx_tab = ui_ctx.clone();
+    window.on_profile_shared_tab_selected(move |tab| {
+        let Some(w) = weak_window.upgrade() else { return };
+        let Some(peer) = SHARED_PAGE.with(|p| p.borrow().peer) else { return };
+        w.set_profile_shared_items(ModelRc::new(VecModel::<SharedContentItem>::from(vec![])));
+        request_shared_page(&w, &ui_ctx_tab, peer, tab.to_string(), false);
+    });
+
+    let weak_window = window.as_weak();
+    let ui_ctx_more = ui_ctx.clone();
+    window.on_profile_shared_load_more(move || {
+        let Some(w) = weak_window.upgrade() else { return };
+        let Some(peer) = SHARED_PAGE.with(|p| p.borrow().peer) else { return };
+        let tab = w.get_profile_shared_tab().to_string();
+        if tab.is_empty() {
+            return;
+        }
+        request_shared_page(&w, &ui_ctx_more, peer, tab, true);
+    });
+
+    // Opening an item: a link goes to the browser, everything else jumps the
+    // conversation to the message it arrived in — which is the existing
+    // quote-click path, including its "not loaded yet, fetch older history"
+    // retry.
+    let weak_window = window.as_weak();
+    window.on_profile_open_shared_item(move |message_id, _attachment_id, category| {
+        let Some(w) = weak_window.upgrade() else { return };
+        if category.as_str() == "link" {
+            // For a link the title IS the URL; find it in the painted model
+            // rather than re-querying.
+            let items = w.get_profile_shared_items();
+            let url = (0..items.row_count())
+                .filter_map(|i| items.row_data(i))
+                .find(|i| i.message_id == message_id)
+                .map(|i| i.subtitle.to_string());
+            if let Some(url) = url {
+                // `ExternalOpener` is desktop-only (chatter-core/src/system/mod.rs
+                // gates it on `not(android/ios)`), which is why every other caller
+                // — pdf_preview.rs, code_preview.rs, attachment_view.rs — guards
+                // the import the same way. Unguarded it compiles on the host and
+                // breaks only the Android build, where `cargo check` never looks.
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                if let Err(e) = chatter_core::system::ExternalOpener.open_url(&url) {
+                    tracing::warn!(error = %e, %url, "Failed to open shared link");
+                }
+                #[cfg(any(target_os = "android", target_os = "ios"))]
+                tracing::warn!(
+                    %url,
+                    "Opening a shared link needs a platform intent on mobile; \
+                     no opener is wired yet"
+                );
+            }
+            return;
+        }
+        let Some(peer) = SHARED_PAGE.with(|p| p.borrow().peer) else { return };
+        w.set_active_modal("none".into());
+        w.invoke_dm_selected(peer.to_string().into());
+        w.invoke_quote_clicked(message_id);
+    });
 }
 
 /// Push a username-link URL + its QR image into the profile-modal properties.
@@ -263,6 +493,48 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     // Username-link share (self profile view)
     wire_share_link(window, ui_ctx);
+
+    // Shared-content drawer (Media / Files / Links / Voice / GIFs / Music)
+    wire_shared_content(window, ui_ctx);
+
+    // Mute — persists through the same `mute_conversation` path channel
+    // settings uses, keyed on the DM with this peer.
+    let weak_window = window.as_weak();
+    let ui_ctx_mute = ui_ctx.clone();
+    window.on_profile_toggle_mute(move || {
+        let Some(w) = weak_window.upgrade() else { return };
+        let Ok(peer_id) = w.get_profile_user_id().parse::<UserId>() else { return };
+        let muted = !w.get_profile_is_muted();
+        // Reflect immediately, then persist — snapping back on failure.
+        w.set_profile_is_muted(muted);
+        if let Err(e) = ui_ctx_mute.mute_conversation(dm_conversation(&peer_id), muted) {
+            tracing::error!(error = %e, "Failed to persist profile mute");
+            w.set_profile_is_muted(!muted);
+        }
+    });
+
+    // Call / Video. `start-voice-call` deliberately takes no target — it reads
+    // the ACTIVE conversation. So the profile's buttons open the DM first,
+    // exactly the way the Calls screen's redial does, and only then place the
+    // call.
+    let weak_window = window.as_weak();
+    window.on_profile_start_call(move |is_video| {
+        let Some(w) = weak_window.upgrade() else { return };
+        let peer_id = w.get_profile_user_id().to_string();
+        if peer_id.is_empty() {
+            return;
+        }
+        w.set_active_modal("none".into());
+        // Opening first commits `ActiveConversation`, which is what
+        // `start_*_call` dispatches on — same ordering the Calls screen's
+        // redial uses.
+        w.invoke_dm_selected(peer_id.into());
+        if is_video {
+            w.invoke_start_video_call();
+        } else {
+            w.invoke_start_voice_call();
+        }
+    });
 
     // Add friend
     let weak_window = window.as_weak();

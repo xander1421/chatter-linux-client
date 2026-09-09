@@ -349,9 +349,15 @@ fn wire_move_to_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
-            if let Ok(()) = ui_ctx.move_conversation_to_section(&conv_id_str, conv_type, &sid) {
-                refresh_sections_ui(&weak_clone, &ui_ctx);
-                refresh_conversation_lists(&weak_clone, &ui_ctx);
+            match ui_ctx.move_conversation_to_section(&conv_id_str, conv_type, &sid) {
+                Ok(()) => {
+                    refresh_sections_ui(&weak_clone, &ui_ctx);
+                    refresh_conversation_lists(&weak_clone, &ui_ctx);
+                }
+                Err(e) => tracing::error!(
+                    error = %e, conversation_id = %conv_id_str, section_id = %section_id_str,
+                    "Failed to move conversation into folder"
+                ),
             }
         });
     });
@@ -367,9 +373,15 @@ fn wire_remove_from_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak_clone = weak.clone();
 
         tokio::spawn(async move {
-            if let Ok(()) = ui_ctx.remove_conversation_from_section(&conv_id_str) {
-                refresh_sections_ui(&weak_clone, &ui_ctx);
-                refresh_conversation_lists(&weak_clone, &ui_ctx);
+            match ui_ctx.remove_conversation_from_section(&conv_id_str) {
+                Ok(()) => {
+                    refresh_sections_ui(&weak_clone, &ui_ctx);
+                    refresh_conversation_lists(&weak_clone, &ui_ctx);
+                }
+                Err(e) => tracing::error!(
+                    error = %e, conversation_id = %conv_id_str,
+                    "Failed to remove conversation from folder"
+                ),
             }
         });
     });
@@ -405,10 +417,12 @@ fn refresh_sections_ui(
     }
 }
 
-/// Rebuild the loose Channels and Messages lists.
+/// Rebuild the loose Channels, Messages and Private-group lists.
 ///
-/// Both exclude anything that lives in a folder and both put pinned rows first,
-/// so any change to folder membership or to a pin has to redraw them.
+/// All three exclude anything that lives in a folder and the first two put
+/// pinned rows first, so any change to folder membership or to a pin has to
+/// redraw them. Private groups were left out of this rebuild, so filing one
+/// into a folder left the loose row on screen next to its copy in the folder.
 fn refresh_conversation_lists(
     weak: &slint::Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
@@ -420,12 +434,14 @@ fn refresh_conversation_lists(
     for dm in dms.iter_mut() {
         dm.pre_decode_avatar();
     }
+    let groups = super::private_group::private_group_rows(ui_ctx);
     let ui_ctx_convert = ui_ctx.clone();
     run_ui!(weak, |w| {
         let channel_list: Vec<_> = filtered.iter().map(|c| channel_to_slint(c, &ui_ctx_convert)).collect();
         w.set_channels(ModelRc::new(VecModel::from(channel_list)));
         let dm_list: Vec<_> = dms.into_iter().map(|d| d.to_slint()).collect();
         w.set_dm_conversations(ModelRc::new(VecModel::from(dm_list)));
+        w.set_private_groups(ModelRc::new(VecModel::from(groups)));
         crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx_convert);
     });
 }

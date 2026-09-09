@@ -44,6 +44,7 @@ pub mod jarvis_memory_repo;
 #[cfg(feature = "jarvis")]
 pub mod jarvis_graph_repo;
 pub mod section_repo;
+pub mod shared_content_repo;
 pub mod unified_conversation_repo;
 pub mod unified_message_repo;
 pub mod vector_repo;
@@ -60,6 +61,7 @@ pub use unified_message_repo::UnifiedMessageRepository as MessageRepository;
 pub use unified_message_repo::UnifiedMessageRepository;
 pub use reaction_repo::ReactionRepository;
 pub use search_index::{SearchIndex, SearchResult};
+pub use shared_content_repo::{SharedContentRepository, SharedContentRow};
 pub use settings_repo::{keys as settings_keys, SettingsRepository};
 pub use user_repo::UserRepository;
 pub use anon_group_repo::AnonGroupRepository;

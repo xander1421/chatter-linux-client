@@ -51,6 +51,24 @@ export struct IncomingCallData {
     call-start-timestamp-ns: string,
 }
 
+// One row of the Calls screen. Built by core
+// (`chatter_core::ui::CallHistoryRowData`) — every string here is already
+// formatted, and `conversation-id` / `conversation-type` are the same pair
+// the sidebar's section rows route on.
+export struct CallHistoryRow {
+    id: string,
+    conversation-id: string,
+    conversation-type: string,   // "channel" | "server_dm" | "anon_dm" | "anon_group" | ...
+    name: string,
+    initials: string,
+    timestamp: string,           // "Yesterday 4:12 PM"
+    detail: string,              // "Outgoing · 3:42" | "Missed"
+    is-missed: bool,
+    is-video: bool,
+    is-incoming: bool,
+    can-call-back: bool,
+}
+
 // Device/source selection types
 export struct AudioDeviceData {
     id: string,

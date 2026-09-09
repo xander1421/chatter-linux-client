@@ -162,6 +162,7 @@ pub(super) fn handle_friend_accepted(
 /// Handle user presence changed event.
 pub(super) fn handle_presence_changed(
     window: &Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
     user_id: UserId,
     presence: chatter_core::domain::user::PresenceStatus,
     timestamp: u64,
@@ -169,11 +170,25 @@ pub(super) fn handle_presence_changed(
     let weak = window.clone();
     let user_id_str = user_id.to_string();
     let presence_str = presence.as_str();
+    // Our own presence arrives here too — `set_presence` emits it locally,
+    // since the server fans presence out to friends and not back to us.
+    let is_self = ui_ctx.session_current_user_id() == Some(user_id);
 
     let presence_slint: slint::SharedString = presence_str.into();
 
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
+
+        // 0. Our own dot — profile strip and collapsed-rail avatar both read
+        // this one property. Nothing below matches self (we are not our own
+        // DM row or contact), so this is the whole self case.
+        if is_self {
+            w.set_user_presence_status(presence_slint.clone());
+            if w.get_profile_is_self() {
+                w.set_profile_presence(presence_slint.clone());
+            }
+            return;
+        }
 
         // 1. Update sidebar DM presence dots
         let dms = w.get_dm_conversations();
@@ -207,6 +222,22 @@ pub(super) fn handle_presence_changed(
         // 3. Update profile modal presence if showing this user
         if w.get_profile_user_id() == user_id_str {
             w.set_profile_presence(presence_slint.clone());
+        }
+
+        // 4. Contacts tab rows. Same in-place patch as the DM rows above —
+        // without it the Friends list only ever showed the presence it was
+        // built with, so a contact coming online was visible in Chats and
+        // stale in Contacts at the same time. Anon rows carry an anon_dm_id
+        // in `user_id`, never a real one, so they never match.
+        let friends = w.get_friends_list();
+        for i in 0..friends.row_count() {
+            if let Some(mut f) = friends.row_data(i) {
+                if !f.is_anon && f.user_id == user_id_str {
+                    f.presence_status = presence_slint.clone();
+                    friends.set_row_data(i, f);
+                    break;
+                }
+            }
         }
 
         tracing::debug!(

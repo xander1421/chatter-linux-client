@@ -187,7 +187,8 @@ impl AppContext {
     /// Initialize the call worker (call after grpc connect).
     ///
     /// Also spawns the EventBus → orchestrator bridge so incoming-call offers
-    /// reach the worker without UI-layer dispatch.
+    /// reach the worker without UI-layer dispatch, and the orchestrator →
+    /// `call_history` recorder that feeds the Calls screen.
     #[cfg(feature = "media")]
     pub fn init_call_service(&self) {
         let mut newly_created = false;
@@ -205,6 +206,10 @@ impl AppContext {
                     self.core_services.anon_group_service.clone(),
                     self.core_services.signal_service.clone(),
                     self.infrastructure.grpc_pool.clone(),
+                );
+                crate::services::call_history_recorder::spawn_call_history_recorder(
+                    &handle,
+                    self.infrastructure.database.clone(),
                 );
                 let _ = crate::services::call_worker::spawn_call_orchestrator_bridge(
                     &self.core_services.event_bus,

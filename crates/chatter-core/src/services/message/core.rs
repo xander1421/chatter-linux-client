@@ -223,7 +223,7 @@ impl MessageService {
             text_len = trimmed_text.len(),
             "[SEND_MESSAGE] Storing message locally"
         );
-        self.message_repo.insert(&message)?;
+        self.message_repo.insert_outgoing(&message)?;
         tracing::info!(
             channel_id = %channel_id,
             message_id = %message.id,
@@ -803,7 +803,7 @@ impl MessageService {
         }
 
         // Store locally
-        self.message_repo.insert(&message)?;
+        self.message_repo.insert_outgoing(&message)?;
 
         Ok(message)
     }

@@ -25,6 +25,7 @@ export component DMListItem inherits Rectangle {
     in property <bool> is-pinned: false;
     in property <bool> selected: false;
     in property <bool> collapsed: false;
+    in property <bool> mobile-mode: false;
 
     // Callbacks
     callback clicked();
@@ -62,9 +63,26 @@ export component DMListItem inherits Rectangle {
     // list components between here and there don't forward sizing).
     property <length> slot-size: 44px;
 
+    // Row geometry, both densities from Spacing — the channel and private-group
+    // rows this sits between read the same two tokens, so a list that is one
+    // flat run of conversations cannot render in two heights again.
+    //
+    // Touch is not just "the same row, bigger": the eye needs somewhere to land
+    // when scanning at arm's length, so the avatar is large enough to identify
+    // at a glance and the name steps up a full size over the preview. Mouse
+    // density keeps the tighter pair — but the *hierarchy* is the same on both,
+    // which is what the colours below say.
+    property <length> row-height: root.mobile-mode ? Spacing.row-height-touch : Spacing.row-height-desktop;
+    property <length> avatar-size: root.mobile-mode ? Spacing.row-avatar-touch : Spacing.row-avatar-desktop;
+    // The selected-state ring sits 2px outside the avatar on every density.
+    property <length> avatar-ring: root.avatar-size + 4px;
+    property <length> name-size: root.mobile-mode ? Typography.base : Typography.sm;
+    property <length> preview-size: root.mobile-mode ? Typography.sm : Typography.xs;
+    property <length> badge-size: root.mobile-mode ? 22px : 20px;
+
     // Layout. Collapsed rows are 48px so the 44px slot has breathing room
     // above and below.
-    height: root.collapsed ? 48px : 52px;
+    height: root.collapsed ? 48px : root.row-height;
     border-radius: Spacing.radius-sm;
 
     // Neo 2.0 states: flat → highlight hover → inset selected.
@@ -89,14 +107,14 @@ export component DMListItem inherits Rectangle {
             alignment: center;
 
             Rectangle {
-                width: 36px;
-                height: 36px;
-                border-radius: 18px;
+                width: root.avatar-ring;
+                height: root.avatar-ring;
+                border-radius: root.avatar-ring / 2;
                 border-width: root.selected ? 2px : 0px;
                 border-color: Colors.primary;
 
                 Avatar {
-                    size: 32px;
+                    size: root.avatar-size;
                     source: root.avatar-source;
                     fallback-text: root.initials;
                     show-presence: true;
@@ -112,7 +130,7 @@ export component DMListItem inherits Rectangle {
         VerticalLayout {
             horizontal-stretch: 1;
             alignment: center;
-            spacing: 2px;
+            spacing: root.mobile-mode ? 3px : 2px;
 
             // Display name with encryption indicator
             HorizontalLayout {
@@ -120,9 +138,14 @@ export component DMListItem inherits Rectangle {
 
                 Text {
                     text: root.display-name;
-                    color: root.selected ? Colors.text-primary : Colors.text-secondary;
-                    font-size: Typography.sm;
-                    font-weight: root.unread-count > 0 ? 600 : 400;
+                    // The name is the anchor of the row on every density, so it
+                    // carries full-strength text at all times. Desktop used to
+                    // hold it in grey until selected, one step above a grey
+                    // preview — two greys 2px apart is not a hierarchy, it is
+                    // the flatness the phone list was just fixed for.
+                    color: Colors.text-primary;
+                    font-size: root.name-size;
+                    font-weight: root.unread-count > 0 ? 600 : 500;
                     overflow: elide;
                     horizontal-stretch: 1;
                 }
@@ -180,7 +203,7 @@ export component DMListItem inherits Rectangle {
             if !root.is-typing: Text {
                 text: root.last-message;
                 color: Colors.text-muted;
-                font-size: Typography.xs;
+                font-size: root.preview-size;
                 overflow: elide;
             }
         }
@@ -203,8 +226,8 @@ export component DMListItem inherits Rectangle {
                 alignment: end;
 
                 Rectangle {
-                    width: max(20px, badge-text.preferred-width + 12px);
-                    height: 20px;
+                    width: max(root.badge-size, badge-text.preferred-width + 12px);
+                    height: root.badge-size;
                     border-radius: Spacing.radius-full;
                     background: Colors.primary;
 

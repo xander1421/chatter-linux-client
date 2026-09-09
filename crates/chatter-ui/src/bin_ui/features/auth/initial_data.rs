@@ -14,14 +14,7 @@ use crate::bin_ui::converters::{
     DMListItemExt, DMListItemSendData, FriendDataExt, FriendDataSendData,
     FriendRequestExt, FriendRequestSendData,
 };
-use crate::{ChannelListItemData, DMListItemData, FriendData, FriendRequestData, MainWindow, PrivateGroupListItemData};
-
-use chatter_core::domain::message::truncate_preview_text;
-
-/// Truncate text for sidebar preview via the shared core helper (50 chars).
-fn truncate_sidebar_preview(text: &str) -> String {
-    truncate_preview_text(text, 50)
-}
+use crate::{ChannelListItemData, DMListItemData, FriendData, FriendRequestData, MainWindow};
 
 /// Rebuild the FriendsModal "Friends" tab list — accepted friendships
 /// plus Active anon-DM peers — and push it into the UI. Cheap enough to
@@ -205,45 +198,9 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         }
     }
 
-    // Load private groups from local storage
-    let private_groups: Vec<PrivateGroupListItemData> = match ui_ctx.list_anon_groups() {
-        Ok(groups) => groups
-            .into_iter()
-            .map(|g| {
-                let member_count = ui_ctx.get_anon_group_members(&g.id).len() as i32;
-
-                // Get the latest message for preview
-                let (last_message, timestamp) = match ui_ctx.get_latest_anon_group_message(&g.id) {
-                    Some(msg) => {
-                        let preview = msg.as_text()
-                            .map(|text| truncate_sidebar_preview(text))
-                            .unwrap_or_default();
-                        let ts = msg.created_at
-                            .with_timezone(&chrono::Local)
-                            .format("%H:%M")
-                            .to_string();
-                        (preview, ts)
-                    }
-                    _ => (String::new(), String::new()),
-                };
-
-                PrivateGroupListItemData {
-                    group_id: g.id.to_string().into(),
-                    name: g.name.into(),
-                    member_count,
-                    unread_count: 0, // TODO: track unread
-                    last_message: last_message.into(),
-                    timestamp: timestamp.into(),
-                    is_typing: false,
-                    is_selected: false,
-                }
-            })
-            .collect(),
-        Err(e) => {
-            tracing::warn!("Failed to load private groups: {}", e);
-            Vec::new()
-        }
-    };
+    // Load private groups from local storage (folder-aware — see
+    // `private_group::private_group_rows`).
+    let private_groups = crate::bin_ui::features::sidebar::private_group::private_group_rows(&ui_ctx);
 
     tracing::info!("Loaded {} private groups", private_groups.len());
 
@@ -346,7 +303,6 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
 
             w.set_user_display_name(user_display_name.into());
             w.set_user_initials(user_initials.into());
-            w.set_user_presence_status("online".into());
 
             // Hydrate the persisted search-shortcut preference so the
             // FocusScope picks the right combo (Ctrl+K / Ctrl+F / Both) at startup.
@@ -542,63 +498,46 @@ pub fn refresh_anon_groups(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let window_weak = window.as_weak();
 
     tokio::spawn(async move {
-        let mut private_group_list: Vec<PrivateGroupListItemData> = Vec::new();
+        // DB work off the UI thread; the rows are plain SharedStrings so they
+        // cross the boundary. The old body built a degraded row here (no member
+        // count, no preview) AND upgraded the weak handle off the event loop,
+        // where Slint hands back None — so this refresh wrote nothing at all.
+        let private_group_list = crate::bin_ui::features::sidebar::private_group::private_group_rows(&ui_ctx);
 
-        // Load anonymous groups
-        match ui_ctx.list_anon_groups() {
-            Ok(groups) => {
-                for group in groups {
-                    let group_item = PrivateGroupListItemData {
-                        group_id: SharedString::from(group.id.to_string()),
-                        name: SharedString::from(group.name.clone()),
-                        member_count: 0, // Could query member count from storage if needed
-                        unread_count: 0,
-                        last_message: SharedString::from(""),
-                        timestamp: SharedString::from(""),
-                        is_typing: false,
-                        is_selected: false,
-                    };
-                    private_group_list.push(group_item);
-                }
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = window_weak.upgrade() {
+                w.set_private_groups(ModelRc::new(VecModel::from(private_group_list)));
+                crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);
             }
-            Err(e) => {
-                tracing::warn!("Failed to load anonymous groups: {}", e);
-            }
-        }
-
-        // Update UI on the main thread
-        if let Some(w) = window_weak.upgrade() {
-            let private_group_model = VecModel::from(private_group_list);
-            w.set_private_groups(ModelRc::new(private_group_model));
-            crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);
-        }
+        });
     });
 }
 
-/// Update typing indicator for a specific user in a DM.
-pub fn update_dm_typing_indicator(window: &MainWindow, user_id: &str, is_typing: bool) {
-    let dm_list = window.get_dm_conversations();
-    
-    // Find and update the specific DM
-    let dm_count = dm_list.iter().count();
-    for i in 0..dm_count {
-        if let Some(dm) = dm_list.iter().nth(i) {
-            if dm.user_id.to_string() == user_id {
-                // Need to recreate the model to update
-                let mut all_dms = Vec::new();
-                for j in 0..dm_count {
-                    if let Some(mut item) = dm_list.iter().nth(j) {
-                        if j == i {
-                            item.is_typing = is_typing;
-                        }
-                        all_dms.push(item);
+/// Flip the typing flag on whichever sidebar row a typing event names.
+///
+/// `id` is the key `typing_key` produced: a peer user-id for a DM, a channel-id
+/// for a channel, a group-id for a private group. All three lists are scanned
+/// because to the user they are the same kind of row — only the DM one used to
+/// animate, so a channel that someone was typing in sat there looking idle.
+/// Rows are edited in place, so no model swap and no scroll reset.
+pub fn update_sidebar_typing(window: &MainWindow, id: &str, is_typing: bool) {
+    macro_rules! flip {
+        ($model:expr, $id_field:ident) => {{
+            let model = $model;
+            for i in 0..model.row_count() {
+                if let Some(mut row) = model.row_data(i) {
+                    if row.$id_field.as_str() == id && row.is_typing != is_typing {
+                        row.is_typing = is_typing;
+                        model.set_row_data(i, row);
                     }
                 }
-                window.set_dm_conversations(ModelRc::new(VecModel::from(all_dms)));
-                break;
             }
-        }
+        }};
     }
+
+    flip!(window.get_dm_conversations(), user_id);
+    flip!(window.get_channels(), channel_id);
+    flip!(window.get_private_groups(), group_id);
 }
 
 /// Show incoming call modal with caller information.

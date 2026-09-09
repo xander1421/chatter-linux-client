@@ -184,12 +184,13 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
 
             // Mark messages as read
             let handle = ui_ctx.conversation(chatter_core::state::ActiveConversation::AnonGroup(group_id));
-            let _ = handle.mark_as_read().await;
+            // Where the user left off — the mark is what destroys it.
+            let anchor = handle.mark_as_read().await.unwrap_or_default();
             // Reading a foldered group has to clear its folder badge too.
             let ui_ctx_badges = ui_ctx.clone();
             run_ui!(weak, |w| super::refresh_section_badges(&w, &ui_ctx_badges));
 
-            load_private_group_messages_internal(weak, group_id, ui_ctx).await;
+            load_private_group_messages_internal(weak, group_id, ui_ctx, anchor).await;
         });
     });
 }
@@ -199,6 +200,7 @@ async fn load_private_group_messages_internal(
     weak: slint::Weak<MainWindow>,
     group_id: AnonGroupId,
     ui_ctx: Arc<ChatterClient>,
+    anchor: chatter_core::domain::message::UnreadAnchor,
 ) {
     let auth_state = ui_ctx.auth_state().clone();
 
@@ -254,7 +256,9 @@ async fn load_private_group_messages_internal(
     let group_id_str = group_id.to_string();
     let ui_ctx_gifs = ui_ctx.clone();
     let ui_ctx_for_ui = ui_ctx.clone();
+    let anchor_page = messages.clone();
     run_ui!(weak, |w| {
+        super::apply_unread_anchor(&w, anchor, &anchor_page);
         // Clear unread count in sidebar
         crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(&w, &ui_ctx_for_ui, &group_id_str, 0);
 
@@ -273,6 +277,35 @@ async fn load_private_group_messages_internal(
         
         crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx_gifs);
     });
+}
+
+/// Build the loose private-group sidebar rows.
+///
+/// The one builder for every path that writes `private_groups` — initial load,
+/// the anon-group refresh, and folder mutations — so the folder exclusion
+/// (`sidebar_private_groups`) and the row shape cannot drift between them.
+/// The rows carry only `SharedString`s, so they cross a thread boundary fine.
+pub fn private_group_rows(ui_ctx: &Arc<ChatterClient>) -> Vec<PrivateGroupListItemData> {
+    ui_ctx
+        .sidebar_private_groups()
+        .into_iter()
+        .map(|group| {
+            // Preview wording is core's — this used to hand-roll the text-only
+            // case here, so a group whose last post was a file rendered blank.
+            let (last_message, timestamp) =
+                ui_ctx.sidebar_activity(ui_ctx.get_latest_anon_group_message(&group.id).as_ref());
+            PrivateGroupListItemData {
+                group_id: group.id.to_string().into(),
+                name: group.name.into(),
+                member_count: ui_ctx.get_anon_group_members(&group.id).len() as i32,
+                unread_count: 0,
+                last_message: last_message.into(),
+                timestamp: timestamp.into(),
+                is_typing: false,
+                is_selected: false,
+            }
+        })
+        .collect()
 }
 
 pub fn add_private_group_to_sidebar(window: &MainWindow, group_id: &str, name: &str, member_count: i32) {

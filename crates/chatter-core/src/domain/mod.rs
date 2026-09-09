@@ -45,7 +45,8 @@ pub use channel::{
     NotificationPreference, Permissions, Template,
 };
 pub use attachment::{
-    Attachment, AttachmentStatus, FileCategory, FileMetadata, GifMetadata, GifProvider, Thumbnail,
+    extract_links, Attachment, AttachmentStatus, FileCategory, FileMetadata, GifMetadata,
+    GifProvider, SharedCategory, Thumbnail,
 };
 pub use reaction::{Emoji, EmojiCategory, Reaction};
 pub use notification::{
@@ -53,7 +54,7 @@ pub use notification::{
 };
 pub use call::{
     Call, CallDirection, CallEndReason, CallHistoryEntry, CallHistoryFilter,
-    CallHistoryPeerType, CallResult, CallState, CallType, Participant, VerificationBadge,
+    CallResult, CallState, CallType, Participant, VerificationBadge,
 };
 pub use moderation::{Ban, ModerationAction, ModerationLogEntry, Mute};
 pub use draft::{Draft, DraftKey};

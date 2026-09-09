@@ -60,8 +60,7 @@ pub(super) fn handle_message_received(
         .unwrap_or_else(|| ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default());
 
     // Build sidebar preview via the shared core helper.
-    let current_user = ui_ctx.auth_state().get().current_user_id;
-    let preview = message.sidebar_preview(current_user.as_ref());
+    let preview = ui_ctx.message_sidebar_preview(&message);
     let timestamp_str = super::super::utils::format_timestamp(timestamp);
 
     // Determine if this conversation is currently active

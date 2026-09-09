@@ -59,6 +59,23 @@ impl ChatterClient {
         self.anon_groups().list_groups()
     }
 
+    /// Anon groups to list loose in the sidebar: anything filed into a custom
+    /// section is excluded, because it renders inside that folder instead — it
+    /// used to render in BOTH. Same rule `sidebar_channels` and the DM sidebar
+    /// already apply; private groups were the one list that never got it, so a
+    /// foldered group showed twice and stayed doubled across restarts.
+    pub fn sidebar_private_groups(&self) -> Vec<crate::domain::anon_group::AnonGroup> {
+        let sectioned = self
+            .sections()
+            .all_sectioned_conversation_ids()
+            .unwrap_or_default();
+        self.list_anon_groups()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|g| !sectioned.contains(&g.id.to_string()))
+            .collect()
+    }
+
     pub fn get_anon_group(
         &self,
         group_id: &crate::domain::anon_group::AnonGroupId,

@@ -7,6 +7,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { NeoActionToggle } from "../components/neo_action_toggle.slint";
+import { Avatar } from "../components/avatar.slint";
 import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 import { MeshGlobal } from "../mesh/mesh_global.slint";
 
@@ -27,12 +28,20 @@ export struct ChatHeaderData {
 // icons being loosely spaced rather than as a bigger target.
 component IconButton inherits Rectangle {
     in property <image> icon;
+    // Vertical centring comes from the box size being identical across every
+    // button in the row: a fixed-size child is centred in a HorizontalLayout's
+    // cross axis, so equal sizes put them all on one line. (A `y:` binding here
+    // cannot work — a component's root cannot see `parent`.)
+    // Touch wants a bigger glyph, not just a bigger box — the box was already
+    // 44px and the chevron inside it still read as tiny next to a 20px title.
+    in property <length> glyph-size: 18px;
+    in property <length> box-size: 44px;
     in property <color> icon-color: Colors.text-secondary;
     in property <color> hover-color: Colors.text-primary;
     callback clicked();
 
-    width: 44px;
-    height: 44px;
+    width: root.box-size;
+    height: root.box-size;
     background: touch.has-hover ? Colors.surface-hover : transparent;
     border-radius: Spacing.radius-md;
     border-width: touch.has-hover ? 1px : 0px;
@@ -47,8 +56,8 @@ component IconButton inherits Rectangle {
     // shouty than the channel name beside it.
     Image {
         source: icon;
-        width: 18px;
-        height: 18px;
+        width: root.glyph-size;
+        height: root.glyph-size;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         colorize: touch.has-hover ? hover-color : icon-color;
@@ -91,6 +100,14 @@ export component ChatHeader inherits Rectangle {
     callback voice-call-clicked();
     callback video-call-clicked();
     callback invite-clicked();
+
+    // Presence dot colour. Defined once because two things draw it: the `@`
+    // glyph row, and the peer avatar that replaces the glyph.
+    property <color> presence-dot:
+        root.presence-status == "online" ? Colors.online
+      : root.presence-status == "away" ? Colors.away
+      : root.presence-status == "dnd" ? Colors.dnd
+      : Colors.offline;
 
     // Type detection properties
     property <bool> is-private: channel-type == "private";
@@ -162,15 +179,41 @@ export component ChatHeader inherits Rectangle {
     // Show call buttons for everything except saved messages
     property <bool> show-calls: has-channel && !is-saved && !is-mesh;
 
-    // Layout (52px header) — Neo glassmorphism: translucent surface with edge
-    // definition. 52px is a 44px touch row plus 4px of air above and below; the
-    // old 56px was that plus a spare row of nothing, repeated at the top of every
+    // "Touch input", plumbed from ChatLayout. The 52px/28px/18px set below is
+    // mouse density; on a phone this is the bar you navigate the whole app from
+    // and it read as a strip of small grey furniture above a 72px conversation
+    // list. Touch gets the proportions a native messenger header actually uses.
+    in property <bool> mobile: false;
+    // Both from Spacing: on desktop this row and the panel's first row beside
+    // it are the same row across the seam, so they read one number.
+    property <length> header-height: root.mobile ? Spacing.header-height-touch : Spacing.header-height;
+    property <length> header-avatar: root.mobile ? 40px : 28px;
+    // One glyph size and one box size for EVERY button in this row — back,
+    // call, video, pin, kebab. They were two sets: the back button was given
+    // 24px-in-48px while the rest kept IconButton's 18px-in-44px defaults, so
+    // the row read as one big control and four small ones, sitting on two
+    // different vertical centres.
+    property <length> header-glyph: root.mobile ? Spacing.header-glyph-touch : Spacing.header-glyph;
+    property <length> header-action-box: root.mobile ? Spacing.header-action-box-touch : Spacing.header-action-box;
+    property <length> header-title-size: root.mobile ? Typography.xl : Typography.lg;
+
+    // Leading clearance for the macOS traffic lights, from app.slint. Nonzero
+    // only when the sidebar beside this is too narrow to cover them itself
+    // (the rail), and 0 on every other platform.
+    in property <length> leading-inset: 0px;
+
+    // Layout — Neo glassmorphism: translucent surface with edge definition.
+    // 52px is a 44px touch row plus 4px of air above and below; the old 56px was
+    // that plus a spare row of nothing, repeated at the top of every
     // conversation.
-    height: 52px;
+    height: root.header-height;
     background: Colors.surface.with-alpha(0.85);
-    border-width: 1px;
-    border-color: Colors.neo-highlight;
-    drop-shadow-blur: Spacing.neo-blur-sm;
+    // No `border-width`: this read as "edge definition" but Slint draws all
+    // four sides, which put a hairline down both edges of the chat column (and
+    // both screen edges on a phone). The explicit bottom-edge Rectangle at the
+    // end of this file is the separation that actually matters, on the one
+    // side that has something to separate from.
+    drop-shadow-blur: root.mobile ? 0px : Spacing.neo-blur-sm;
     drop-shadow-offset-y: Spacing.neo-offset-sm;
     drop-shadow-color: Colors.neo-shadow;
 
@@ -179,7 +222,7 @@ export component ChatHeader inherits Rectangle {
         // the whole chat column past the screen (which clipped the composer's
         // Send button in channels/groups, where the header has more icons).
         width: 100%;
-        padding-left: Spacing.sm;
+        padding-left: Spacing.sm + root.leading-inset;
         padding-right: Spacing.sm;
         spacing: Spacing.sm;
         // No `alignment` here, and none on the left section below. Under any
@@ -193,9 +236,12 @@ export component ChatHeader inherits Rectangle {
         // Left section: Back button + Icon + Name
         HorizontalLayout {
             spacing: Spacing.sm;
+            alignment: start;
 
             // Mobile back button (returns to chat list)
             if root.show-back-button: IconButton {
+                glyph-size: root.header-glyph;
+                box-size: root.header-action-box;
                 icon: Icons.chevron-left;
                 clicked => { root.back-clicked(); }
             }
@@ -212,18 +258,17 @@ export component ChatHeader inherits Rectangle {
             //   private-group  → purple shield
             //   saved          → bookmark
 
-            if root.has-avatar: Rectangle {
-                width: 28px;
-                height: 28px;
-                border-radius: 14px;
-                clip: true;
+            // The peer's picture replaces the type glyph — but not the presence
+            // dot. A DM whose peer had uploaded an avatar was the one DM that
+            // never showed presence anywhere in the header, because the dot
+            // lived inside the `@` block this branch skips. Avatar already
+            // draws the dot; this is that same idiom, not a second one.
+            if root.has-avatar: Avatar {
+                size: root.header-avatar;
+                source: root.avatar-source;
                 y: (parent.height - self.height) / 2;
-                Image {
-                    source: root.avatar-source;
-                    width: 100%;
-                    height: 100%;
-                    image-fit: cover;
-                }
+                show-presence: root.is-dm;
+                presence-color: root.presence-dot;
             }
 
             // Mesh conversations are pushed in as `channel-type == "public"` so
@@ -235,7 +280,7 @@ export component ChatHeader inherits Rectangle {
             if has-channel && !root.has-avatar && channel-type == "public" && !root.is-mesh: Text {
                 text: "#";
                 color: Colors.text-muted;
-                font-size: Typography.lg;
+                font-size: root.header-title-size;
                 vertical-alignment: center;
             }
 
@@ -254,7 +299,7 @@ export component ChatHeader inherits Rectangle {
                 Text {
                     text: "@";
                     color: Colors.text-muted;
-                    font-size: Typography.lg;
+                    font-size: root.header-title-size;
                     vertical-alignment: center;
                 }
                 Rectangle {
@@ -262,10 +307,7 @@ export component ChatHeader inherits Rectangle {
                     height: 8px;
                     border-radius: 4px;
                     y: (parent.height - self.height) / 2;
-                    background: root.presence-status == "online" ? Colors.online
-                             : root.presence-status == "away" ? Colors.away
-                             : root.presence-status == "dnd" ? Colors.dnd
-                             : Colors.offline;
+                    background: root.presence-dot;
                 }
             }
 
@@ -299,16 +341,32 @@ export component ChatHeader inherits Rectangle {
 
             // Channel/conversation name (stretches to fill, then elides).
             // min-width: 0 so a long name shrinks/elides instead of forcing the
-            // header — and the whole chat column — wider than the screen.
-            Text {
-                text: root.channel-name;
-                color: Colors.text-primary;
-                font-size: Typography.base;
-                font-weight: Typography.semibold;
-                vertical-alignment: center;
-                overflow: elide;
+            // header — and the whole chat column — wider than the screen. The
+            // stretch lives on the wrapper so the Text keeps eliding inside it.
+            //
+            // Tapping the name opens the conversation's own screen — the peer's
+            // profile for a DM, channel settings for a channel — which is the
+            // same thing the kebab does and where a user reaches for it first.
+            // Anon DMs and saved messages have no such screen (`show-settings`
+            // is false for both), so there the name is not a target.
+            Rectangle {
                 horizontal-stretch: 1;
                 min-width: 0px;
+                Text {
+                    width: 100%;
+                    height: 100%;
+                    text: root.channel-name;
+                    color: name-touch.has-hover ? Colors.primary : Colors.text-primary;
+                    font-size: root.header-title-size;
+                    font-weight: Typography.semibold;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                name-touch := TouchArea {
+                    enabled: root.show-settings;
+                    mouse-cursor: pointer;
+                    clicked => { root.settings-clicked(); }
+                }
             }
 
             // Mesh status, inline. The strip below the header used to carry three
@@ -444,10 +502,14 @@ export component ChatHeader inherits Rectangle {
                 spacing: 0px;
                 alignment: center;
                 IconButton {
+                    glyph-size: root.header-glyph;
+                    box-size: root.header-action-box;
                     icon: Icons.phone;
                     clicked => { root.voice-call-clicked(); }
                 }
                 IconButton {
+                    glyph-size: root.header-glyph;
+                    box-size: root.header-action-box;
                     icon: Icons.video;
                     clicked => { root.video-call-clicked(); }
                 }
@@ -513,15 +575,21 @@ export component ChatHeader inherits Rectangle {
                 spacing: 0px;
                 alignment: center;
                 if root.show-invite: IconButton {
+                    glyph-size: root.header-glyph;
+                    box-size: root.header-action-box;
                     icon: Icons.user-plus;
                     clicked => { root.invite-clicked(); }
                 }
                 if has-channel && root.has-any-pinned: IconButton {
+                    glyph-size: root.header-glyph;
+                    box-size: root.header-action-box;
                     icon: Icons.pin;
                     icon-color: Colors.primary;
                     clicked => { root.pin-clicked(); }
                 }
                 if root.show-settings: IconButton {
+                    glyph-size: root.header-glyph;
+                    box-size: root.header-action-box;
                     icon: Icons.more-vertical;
                     clicked => { root.settings-clicked(); }
                 }
