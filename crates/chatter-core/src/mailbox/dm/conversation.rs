@@ -257,6 +257,17 @@ impl ConversationKey {
         // Compute raw shared secret via ECDH
         let raw_shared = our_secret.diffie_hellman(&their_public_key);
 
+        // RFC 7748 §6.1: reject low-order peer keys that collapse ECDH to a
+        // constant. Without this gate a peer (or the server relaying their
+        // ephemeral key) forces an all-zero DH and a predictable conversation
+        // key — HKDF over a known input derives a known output. Every other
+        // X25519 site in the tree has this check; this one did not (CRYPTO-10).
+        if !raw_shared.was_contributory() {
+            return Err(MailboxError::KeyDerivationFailed(
+                "non-contributory ECDH (low-order public key)".into(),
+            ));
+        }
+
         // Derive encryption key via HKDF-SHA256 (never use raw DH output directly)
         let derived_key: [u8; 32] = hkdf_sha256(raw_shared.as_bytes(), None, b"chatter-dm-conversation-v1")
             .map_err(|e| MailboxError::KeyDerivationFailed(e.to_string()))?;
@@ -1232,5 +1243,66 @@ mod tests {
             candidates.is_empty(),
             "conversation with a fresh row must not be re-selected for rotation"
         );
+    }
+
+    // CRYPTO-10: every other X25519 site in the tree rejects a non-contributory
+    // ECDH; this one did not. A peer offering a low-order public key forced an
+    // all-zero DH output, and HKDF over a known input is a known conversation
+    // key — the attacker decrypts and forges the whole conversation.
+    #[test]
+    fn derive_shared_secret_rejects_low_order_peer_keys() {
+        // RFC 7748 §6.1 / the standard small-order point set: each of these
+        // drives the DH output to a constant.
+        const LOW_ORDER: [[u8; 32]; 7] = [
+            // 0 (order 1)
+            [0u8; 32],
+            // 1 (order 4)
+            [
+                1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0,
+            ],
+            [
+                0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, 0x16, 0x56, 0xe3, 0xfa, 0xf1, 0x9f,
+                0xc4, 0x6a, 0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd, 0x86, 0x62, 0x05, 0x16,
+                0x5f, 0x49, 0xb8, 0x00,
+            ],
+            [
+                0x5f, 0x9c, 0x95, 0xbc, 0xa3, 0x50, 0x8c, 0x24, 0xb1, 0xd0, 0xb1, 0x55, 0x9c, 0x83,
+                0xef, 0x5b, 0x04, 0x44, 0x5c, 0xc4, 0x58, 0x1c, 0x8e, 0x86, 0xd8, 0x22, 0x4e, 0xdd,
+                0xd0, 0x9f, 0x11, 0x57,
+            ],
+            // p-1, p, p+1
+            [
+                0xec, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0xff, 0xff, 0xff, 0x7f,
+            ],
+            [
+                0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0xff, 0xff, 0xff, 0x7f,
+            ],
+            [
+                0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0xff, 0xff, 0xff, 0x7f,
+            ],
+        ];
+
+        for (i, peer) in LOW_ORDER.iter().enumerate() {
+            let mut key = ConversationKey::new();
+            assert!(
+                key.derive_shared_secret(*peer).is_err(),
+                "low-order peer key #{i} was accepted"
+            );
+            assert!(!key.is_established(), "a rejected DH still established a key");
+        }
+
+        // An honest peer key still works.
+        let peer = ConversationKey::new();
+        let mut ours = ConversationKey::new();
+        ours.derive_shared_secret(peer.our_ephemeral_public)
+            .expect("contributory ECDH must succeed");
+        assert!(ours.is_established());
     }
 }
