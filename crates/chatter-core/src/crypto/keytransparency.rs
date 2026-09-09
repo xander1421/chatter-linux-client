@@ -183,27 +183,49 @@ fn interior_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     h.finalize().into()
 }
 
+/// Depth of the sparse prefix tree: 256-bit keys, one level per bit.
+/// Mirrors `crypto.TreeDepth` (merkle.go).
+const TREE_DEPTH: usize = 256;
+
+/// The direction taken at `level` on the root-to-leaf path for `key`.
+/// Port of `crypto.getBit`: level 255 is the most significant bit, used at the
+/// root. This is the ONLY source of direction in the verifier — see
+/// `recompute_root`.
+fn path_bit(key: &[u8; 32], level: usize) -> u8 {
+    let n = TREE_DEPTH - 1 - level; // 0 = most significant bit
+    (key[n / 8] >> (7 - (n % 8))) & 1
+}
+
 /// Verify a Merkle inclusion proof, returning the recomputed root.
-/// Port of `crypto.VerifyInclusion` (merkle.go): walk from the leaf toward the
-/// root, folding each sibling in on the side indicated by `bits`.
+/// Port of `crypto.VerifyInclusion` (merkle.go).
 ///
-/// Returns `None` if the proof is structurally invalid (length mismatch, bad
-/// sibling size), otherwise `Some(root)` — the caller compares it to the tree
-/// head's `root_hash`.
-fn recompute_root(
-    key: &[u8; 32],
-    value: &[u8],
-    sibling_hashes: &[Vec<u8>],
-    bits: &[u32],
-) -> Option<[u8; 32]> {
-    if sibling_hashes.len() != bits.len() {
+/// CRYPTO-1: the side each sibling is folded in on is derived from `key` and
+/// NOTHING ELSE. The wire `InclusionProof.bits` field is deliberately not a
+/// parameter: it is a function of the key, so a server that gets to state it can
+/// place a leaf at a position the key does not determine — and then commit two
+/// leaves for one VRF index at two positions in one tree, serving different
+/// identity keys to different clients under one validly signed root. Signal's
+/// verifier does the same thing (`libsignal/rust/keytrans/src/prefix.rs`
+/// `evaluate_proof`: "Read n^th bit of key", and a hard `proof.len() != 8 *
+/// KEY_LENGTH` check).
+///
+/// The proof must span the full tree. A short proof used to need no hashing at
+/// all: an empty one made this function return the leaf hash, so a server
+/// publishing `prefix_root = leaf_hash(K, attacker_key)` passed.
+///
+/// Returns `None` if the proof is structurally invalid (wrong number of levels,
+/// bad sibling size), otherwise `Some(root)` — the caller compares it to the
+/// served `prefix_root`.
+fn recompute_root(key: &[u8; 32], value: &[u8], sibling_hashes: &[Vec<u8>]) -> Option<[u8; 32]> {
+    if sibling_hashes.len() != TREE_DEPTH {
         return None;
     }
     let mut current = leaf_hash(key, value);
-    // Leaf -> root: Go iterates i from len-1 down to 0.
-    for i in (0..sibling_hashes.len()).rev() {
+    // Leaf -> root. `sibling_hashes` is indexed from the root level down, so
+    // entry i belongs to level TREE_DEPTH-1-i.
+    for i in (0..TREE_DEPTH).rev() {
         let sib: &[u8; 32] = sibling_hashes[i].as_slice().try_into().ok()?;
-        current = if bits[i] == 0 {
+        current = if path_bit(key, TREE_DEPTH - 1 - i) == 0 {
             interior_hash(&current, sib)
         } else {
             interior_hash(sib, &current)
@@ -414,7 +436,8 @@ pub fn verify_proof(
         .as_slice()
         .try_into()
         .map_err(|_| KtError::Malformed("prefix_root is not 32 bytes"))?;
-    let recomputed = recompute_root(proof_key, &proof.value, &proof.sibling_hashes, &proof.bits)
+    // `proof.bits` is ignored on purpose: see recompute_root.
+    let recomputed = recompute_root(proof_key, &proof.value, &proof.sibling_hashes)
         .ok_or(KtError::InclusionInvalid)?;
     if &recomputed != prefix_root {
         return Err(KtError::InclusionInvalid);
@@ -575,37 +598,169 @@ mod tests {
         assert_eq!(leaf_key(uid), expected);
     }
 
-    // A single-leaf tree: root == leaf_hash, no siblings. Mirrors the Go tree
-    // when exactly one user is in the log.
+    // ── CRYPTO-1: the prefix-tree path must be bound to the key ─────────────
+    //
+    // `recompute_root` used to fold each sibling on the side the SERVER's `bits`
+    // array named, and never checked it against the key. A proof therefore said
+    // only "a leaf committing to (key, value) hashes up to this root somewhere".
+    // The helpers below rebuild that old verifier so the exploits can be shown
+    // to be accepted by it and rejected by the current one.
+
+    /// The empty-subtree hash ladder: `d[0]` is an empty slot, `d[k+1] =
+    /// H(0x01 || d[k] || d[k])`. Port of Go's `defaultHashes`.
+    fn default_hashes() -> Vec<[u8; 32]> {
+        let mut d = vec![[0u8; 32]];
+        for k in 1..=TREE_DEPTH {
+            d.push(interior_hash(&d[k - 1], &d[k - 1]));
+        }
+        d
+    }
+
+    /// The pre-fix verifier, verbatim: fold on the side `bits` says.
+    fn legacy_recompute_root(
+        key: &[u8; 32],
+        value: &[u8],
+        sibling_hashes: &[Vec<u8>],
+        bits: &[u32],
+    ) -> Option<[u8; 32]> {
+        if sibling_hashes.len() != bits.len() {
+            return None;
+        }
+        let mut current = leaf_hash(key, value);
+        for i in (0..sibling_hashes.len()).rev() {
+            let sib: &[u8; 32] = sibling_hashes[i].as_slice().try_into().ok()?;
+            current = if bits[i] == 0 {
+                interior_hash(&current, sib)
+            } else {
+                interior_hash(sib, &current)
+            };
+        }
+        Some(current)
+    }
+
+    /// A full-depth proof for `key` in a tree that holds only `key`: every
+    /// sibling is the empty subtree for its level. This is what the Go prover
+    /// emits for a one-leaf tree.
+    fn lone_leaf_proof() -> Vec<Vec<u8>> {
+        let d = default_hashes();
+        (0..TREE_DEPTH).map(|i| d[TREE_DEPTH - 1 - i].to_vec()).collect()
+    }
+
     #[test]
-    fn single_leaf_inclusion_recomputes_to_leaf_hash() {
+    fn a_proof_must_span_the_whole_tree() {
         let key = leaf_key("00000000-0000-0000-0000-000000000000");
         let value = vec![0x05u8; 33];
-        let root = recompute_root(&key, &value, &[], &[]).unwrap();
-        assert_eq!(root, leaf_hash(&key, &value));
+
+        // The degenerate exploit: no siblings at all. The old verifier returned
+        // the bare leaf hash, so a server publishing that as `prefix_root`
+        // passed with an empty proof and an attacker-chosen value.
+        assert_eq!(
+            legacy_recompute_root(&key, &value, &[], &[]),
+            Some(leaf_hash(&key, &value)),
+            "the empty-proof exploit did not reproduce against the legacy verifier"
+        );
+        assert!(recompute_root(&key, &value, &[]).is_none());
+
+        let full = lone_leaf_proof();
+        assert!(recompute_root(&key, &value, &full).is_some());
+        assert!(recompute_root(&key, &value, &full[..TREE_DEPTH - 1]).is_none());
+        assert!(recompute_root(&key, &value, &full[..1]).is_none());
+        let mut too_long = full.clone();
+        too_long.push(vec![0u8; 32]);
+        assert!(recompute_root(&key, &value, &too_long).is_none());
+        // A sibling that is not 32 bytes is malformed, not "close enough".
+        let mut bad = full.clone();
+        bad[7] = vec![0u8; 31];
+        assert!(recompute_root(&key, &value, &bad).is_none());
     }
 
-    // Two-leaf tree, hand-built exactly as Go's split would produce it, to
-    // exercise both a left- and right-fold and the bit direction.
     #[test]
-    fn two_leaf_inclusion_folds_sibling_correctly() {
-        let key = [0xAAu8; 32];
-        let value = vec![1u8, 2, 3];
-        let sibling = [0xBBu8; 32];
-        // bit=1 => leaf is the right child: root = H(0x01 || sibling || leaf)
-        let leaf = leaf_hash(&key, &value);
-        let expected = interior_hash(&sibling, &leaf);
-        let got = recompute_root(&key, &value, &[sibling.to_vec()], &[1]).unwrap();
-        assert_eq!(got, expected);
-        // Flipping the bit must change the root (direction matters).
-        let flipped = recompute_root(&key, &value, &[sibling.to_vec()], &[0]).unwrap();
-        assert_ne!(flipped, expected);
+    fn a_path_that_contradicts_the_key_is_rejected() {
+        let key = leaf_key("11111111-1111-1111-1111-111111111111");
+        let value = vec![0x05u8; 33];
+        let siblings = lone_leaf_proof();
+        let honest = recompute_root(&key, &value, &siblings).expect("full-depth proof");
+
+        // The key's own bits reproduce the honest root, so the only thing that
+        // changes below is the path.
+        let key_bits: Vec<u32> =
+            (0..TREE_DEPTH).map(|i| path_bit(&key, TREE_DEPTH - 1 - i) as u32).collect();
+        assert_eq!(
+            legacy_recompute_root(&key, &value, &siblings, &key_bits),
+            Some(honest)
+        );
+
+        for level in [0usize, 1, 128, TREE_DEPTH - 1] {
+            let mut forged_bits = key_bits.clone();
+            forged_bits[TREE_DEPTH - 1 - level] ^= 1;
+            let attacker = vec![0x42u8; 33];
+            let forged_root =
+                legacy_recompute_root(&key, &attacker, &siblings, &forged_bits).unwrap();
+            // The old verifier accepted this: it folded where it was told.
+            assert_eq!(
+                legacy_recompute_root(&key, &attacker, &siblings, &forged_bits),
+                Some(forged_root),
+                "level {level}: the forged-path exploit did not reproduce"
+            );
+            // The current one derives the path from the key, so it does not.
+            assert_ne!(
+                recompute_root(&key, &attacker, &siblings).unwrap(),
+                forged_root,
+                "level {level}: a path contradicting the key still verified"
+            );
+            assert_ne!(
+                recompute_root(&key, &value, &siblings).unwrap(),
+                forged_root,
+                "level {level}: honest leaf verified against the forged root"
+            );
+        }
     }
 
     #[test]
-    fn recompute_root_rejects_length_mismatch() {
-        let key = [0u8; 32];
-        assert!(recompute_root(&key, b"v", &[vec![0u8; 32]], &[]).is_none());
+    fn one_root_admits_one_value_per_key() {
+        let key = leaf_key("22222222-2222-2222-2222-222222222222");
+        let siblings = lone_leaf_proof();
+        let root = recompute_root(&key, &vec![0x05u8; 33], &siblings).unwrap();
+        assert_ne!(recompute_root(&key, &vec![0x42u8; 33], &siblings).unwrap(), root);
+    }
+
+    #[test]
+    fn path_bit_matches_go_get_bit() {
+        // Go: getBit(key, 255) is the MSB of key[0]; getBit(key, 0) is the LSB
+        // of key[31].
+        let mut key = [0u8; 32];
+        key[0] = 0b1000_0000;
+        assert_eq!(path_bit(&key, 255), 1);
+        assert_eq!(path_bit(&key, 254), 0);
+        key = [0u8; 32];
+        key[31] = 1;
+        assert_eq!(path_bit(&key, 0), 1);
+        assert_eq!(path_bit(&key, 1), 0);
+    }
+
+    /// Cross-implementation vector for the PREFIX tree, produced by the Go
+    /// prover (`SparseMerkleTree.ProveInclusion`) over a 5-leaf tree whose leaf
+    /// i is (SHA-256([i]), "identity-key-i"). Every sibling is the empty-subtree
+    /// default for its level except the two listed, so the whole 8 KiB proof is
+    /// reconstructed here rather than pasted. If the two sides ever disagree on
+    /// the leaf/interior tags, the fold order, the bit convention or the
+    /// full-depth padding, this fails — which would otherwise show up in
+    /// production as "every client rejects every honest proof".
+    #[test]
+    fn go_prefix_tree_inclusion_vector() {
+        let key = unhex("dbc1b4c900ffe48d575b5da5c638040125f65db0fe3e24494b76ea986457d986");
+        let value = b"identity-key-2";
+        let expected_root =
+            unhex("7bdd6d14a174a33ac610c1fbd6219a0cfd57d23993faa282ae4f1be5cf03dc8b");
+
+        let mut siblings = lone_leaf_proof();
+        siblings[0] =
+            unhex("54a7d0680bcb2a192723a932178cb2efdb56aa1f2ac6b03a4f2f9b038596194e").to_vec();
+        siblings[2] =
+            unhex("5562603069ddc9a5402b15bbb4238464b3af2f1a3d6518ad8eba5caecd984db3").to_vec();
+
+        assert_eq!(siblings.len(), TREE_DEPTH);
+        assert_eq!(recompute_root(&key, value, &siblings), Some(expected_root));
     }
 
     // ── Cross-language interop with the Go log tree ──────────────────────────
