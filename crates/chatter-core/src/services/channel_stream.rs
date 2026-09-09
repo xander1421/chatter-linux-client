@@ -61,6 +61,13 @@ const MAX_BACKOFF: Duration = Duration::from_secs(30);
 /// cannot turn the reconnect loop into a sync storm.
 const MIN_CATCHUP_INTERVAL: Duration = Duration::from_secs(15);
 
+/// True when the server refused the stream because this user is in no
+/// channels — the one "error" that is really just an empty account.
+fn is_no_channels(e: &crate::error::NetworkError) -> bool {
+    matches!(e, crate::error::NetworkError::InvalidRequest(msg)
+        if msg.contains("no channels") || msg.contains("channel_ids must be provided"))
+}
+
 /// Live message-event stream for every server-managed channel the user is in.
 pub struct ChannelStreamService {
     grpc_pool: Arc<GrpcClientPool>,
@@ -120,6 +127,15 @@ impl ChannelStreamService {
                         tracing::info!("Channel message stream ended; reconnecting");
                         backoff = INITIAL_BACKOFF;
                     }
+                    Err(e) if is_no_channels(&e) => {
+                        // The server refuses a global stream for a user who is
+                        // in no channels. That is a normal state for a fresh
+                        // account, not an error to shout about every second —
+                        // wait out the full backoff quietly and try again
+                        // (joining a channel nudges us awake immediately).
+                        tracing::debug!("No channels to stream yet; will retry");
+                        backoff = MAX_BACKOFF;
+                    }
                     Err(e) => {
                         tracing::warn!(
                             error = %e,
@@ -128,7 +144,15 @@ impl ChannelStreamService {
                         );
                     }
                 }
-                tokio::time::sleep(backoff).await;
+
+                // A resubscribe nudge cuts the wait short: joining a channel
+                // should start delivering now, not after the backoff.
+                tokio::select! {
+                    _ = tokio::time::sleep(backoff) => {}
+                    _ = self.resubscribe.notified() => {
+                        backoff = INITIAL_BACKOFF;
+                    }
+                }
                 backoff = (backoff * 2).min(MAX_BACKOFF);
             }
         })

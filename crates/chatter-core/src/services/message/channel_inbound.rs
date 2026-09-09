@@ -67,7 +67,13 @@ impl ChannelInbound {
         channel_id: ChannelId,
         emit: bool,
     ) -> Ingested {
-        let mut message = match self.prepare(proto_msg, channel_id).await {
+        // Own messages are skipped only on the LIVE path, where they are
+        // already on screen from the optimistic send. On a backfill they must
+        // still be stored, or a reinstall loses this user's own half of the
+        // conversation. (An own message in an ENCRYPTED channel still drops
+        // out below — we cannot decrypt our own sender-key ciphertext — which
+        // is what the message-backup path exists for.)
+        let mut message = match self.prepare(proto_msg, channel_id, emit).await {
             Ok(m) => m,
             Err(outcome) => return outcome,
         };
@@ -97,7 +103,7 @@ impl ChannelInbound {
         proto_msg: &chat_v1::Message,
         channel_id: ChannelId,
     ) -> Ingested {
-        let mut message = match self.prepare(proto_msg, channel_id).await {
+        let mut message = match self.prepare(proto_msg, channel_id, true).await {
             Ok(m) => m,
             Err(outcome) => return outcome,
         };
@@ -125,12 +131,16 @@ impl ChannelInbound {
 
     /// Decrypt + convert, without touching storage.
     ///
+    /// `skip_own` drops messages this user authored — right for the live
+    /// stream (already rendered optimistically), wrong for a backfill.
+    ///
     /// `Err(outcome)` is the non-message result (own message, deferred on a
     /// missing sender key, or dropped).
     async fn prepare(
         &self,
         proto_msg: &chat_v1::Message,
         channel_id: ChannelId,
+        skip_own: bool,
     ) -> Result<Message, Ingested> {
         let sender_id: Option<UserId> = if proto_msg.author_id.is_empty() {
             None
@@ -142,14 +152,16 @@ impl ChannelInbound {
                 .map(UserId::from)
         };
 
-        // Our own messages are already on screen (optimistic send) and we
-        // cannot decrypt our own sender-key ciphertext anyway.
-        if let (Some(sid), Ok(current)) = (
-            sender_id.as_ref(),
-            self.messages.settings_repo.current_user_id(),
-        ) {
-            if *sid == current {
-                return Err(Ingested::OwnMessage);
+        if skip_own {
+            // Already on screen from the optimistic send, and we cannot
+            // decrypt our own sender-key ciphertext anyway.
+            if let (Some(sid), Ok(current)) = (
+                sender_id.as_ref(),
+                self.messages.settings_repo.current_user_id(),
+            ) {
+                if *sid == current {
+                    return Err(Ingested::OwnMessage);
+                }
             }
         }
 
