@@ -8,7 +8,6 @@
 //! - [`ChannelRepository`] - Channel and membership CRUD
 //! - [`MessageRepository`] - Message storage with cursor pagination
 //! - [`AttachmentRepository`] - File attachment metadata
-//! - [`ReactionRepository`] - Message reactions (toggle pattern)
 //! - [`DraftRepository`] - Message draft persistence
 //! - [`SettingsRepository`] - Key-value application settings
 //! - [`SearchIndex`] - FTS5 full-text message search
@@ -29,7 +28,6 @@ pub mod channel_repo;
 pub mod draft_repo;
 pub mod ephemeral_repo;
 // message_repo.rs deleted — all callers now use UnifiedMessageRepository via `MessageRepository` alias.
-pub mod reaction_repo;
 pub mod search_index;
 pub mod settings_repo;
 pub mod user_repo;
@@ -59,7 +57,6 @@ pub use unified_conversation_repo::UnifiedConversationRepository;
 /// unified implementation. The old `message_repo` module is kept for step 5 deletion.
 pub use unified_message_repo::UnifiedMessageRepository as MessageRepository;
 pub use unified_message_repo::UnifiedMessageRepository;
-pub use reaction_repo::ReactionRepository;
 pub use search_index::{SearchIndex, SearchResult};
 pub use shared_content_repo::{SharedContentRepository, SharedContentRow};
 pub use settings_repo::{keys as settings_keys, SettingsRepository};
