@@ -418,13 +418,20 @@ const DEV_KT_VRF_BYTES: [u8; 32] = [
 /// production path existed on neither side. `make provision-keys` now generates
 /// it and emits both halves.
 ///
-/// UNLIKE the other two, a missing value here is NOT a build failure, and the
-/// server fails OPEN to its dev seed. That asymmetry is deliberate and matches
-/// the server's reasoning (`keytransparency/vrfkey.go`): the VRF key's secrecy
-/// buys QUERY PRIVACY — it keeps `user_id -> leaf index` unlinkable to an
-/// auditor scanning the log — and leaking it cannot forge an identity key, which
-/// still needs the tree-head signing key. Degraded unlinkability should not stop
-/// a build the way a forgeable trust anchor must.
+/// CRYPTO-6: this used to be the one anchor of the four that failed OPEN on both
+/// halves — a missing value silently pinned the dev key here, and the server
+/// silently signed with the matching dev seed. The old justification (the VRF
+/// key's secrecy buys QUERY PRIVACY, not integrity, so degraded unlinkability
+/// should not stop a build) understates two real failures:
+///
+///   - a shipped client that pins the dev key against a *provisioned* server
+///     rejects every VRF proof, so KT verifies nothing at all — silently; and
+///   - a deploy where both halves fall back runs on a world-known key, and
+///     anyone with this repository can compute `user_id -> leaf index` and
+///     de-anonymise the entire log.
+///
+/// So it now fails closed exactly like the tree-head key and the TLS root: no
+/// provisioned value, no build. `make provision-keys` emits both halves.
 #[cfg(feature = "dev-trust-root")]
 pub const KT_VRF_PUBLIC_KEY_BYTES: [u8; 32] = DEV_KT_VRF_BYTES;
 
@@ -432,8 +439,42 @@ pub const KT_VRF_PUBLIC_KEY_BYTES: [u8; 32] = DEV_KT_VRF_BYTES;
 pub const KT_VRF_PUBLIC_KEY_BYTES: [u8; 32] =
     match option_env!("CHATTER_KT_VRF_PUBLIC_KEY_HEX") {
         Some(hex) => decode_hex32(hex),
-        None => DEV_KT_VRF_BYTES,
+        // Same harness carve-out as the tree-head key above: `cargo test` must
+        // not require a provisioned key. Never true for an application build.
+        None if cfg!(test) || cfg!(feature = "testing") => DEV_KT_VRF_BYTES,
+        None => panic!(
+            "no key-transparency VRF public key is baked into this build.\n\n\
+             Every GetProof response carries a VRF proof binding the queried user_id\n\
+             to the leaf index served. Pinned against the development key, that proof\n\
+             either verifies nothing (dev server) or fails outright (real server), and\n\
+             the log's user_id -> leaf-index mapping is public to anyone with this\n\
+             repository.\n\n\
+             Build with the production key:\n\n  \
+             CHATTER_KT_VRF_PUBLIC_KEY_HEX=<64 hex chars> cargo build --release\n\n\
+             It is printed by `make provision-keys` alongside the tree-head key.\n\n\
+             For local development only, build with --features dev-trust-root."
+        ),
     };
+
+/// A non-dev build must not end up pinning the development VRF key either.
+/// Mirrors the tree-head assertion above.
+#[cfg(all(not(feature = "dev-trust-root"), not(test), not(feature = "testing")))]
+const _: () = {
+    let mut i = 0;
+    let mut same = true;
+    while i < 32 {
+        if KT_VRF_PUBLIC_KEY_BYTES[i] != DEV_KT_VRF_BYTES[i] {
+            same = false;
+        }
+        i += 1;
+    }
+    assert!(
+        !same,
+        "CHATTER_KT_VRF_PUBLIC_KEY_HEX is the publicly-known development VRF key, \
+         whose private half derives from a seed phrase in source. Provision a real \
+         key or build with --features dev-trust-root."
+    );
+};
 
 // ─── Shared constants ──────────────────────────────────────────────────────
 
