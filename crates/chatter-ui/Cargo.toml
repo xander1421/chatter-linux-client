@@ -161,6 +161,14 @@ jarvis = ["chatter-core/jarvis"]
 # Build against the local dev Vault's sealed-sender trust root. Insecure by
 # construction (its private key is in this repo) — see chatter-core/config.rs.
 dev-trust-root = ["chatter-core/dev-trust-root"]
+# Auto-register a throwaway account on first launch with fixed, publicly-known
+# credentials (lib.rs `dev_auto_register`). Insecure by construction, same as
+# dev-trust-root: it is an explicit opt-in feature and NOT in `default`, so the
+# credential literals are compiled out of every build that does not ask for it.
+# This was previously a runtime `cfg!(target_os = "android")` test, which meant
+# release APKs auto-registered too. Enabled by dev-run.sh and, on the debug path
+# only, android/build-android.sh.
+dev-auto-register = []
 # Route the network transport over Tor for anon mode. Forwards to chatter-core,
 # which owns the onion connector. See docs/ONION_DEPLOYMENT.md §8.3.
 onion = ["chatter-core/onion"]

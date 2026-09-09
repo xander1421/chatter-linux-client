@@ -147,8 +147,25 @@ fi
 # transport, not an opt-in layered on top of one.
 QUIC_FEATURE=",quic"
 
+# Auto-register a throwaway dev account on first launch, with fixed credentials
+# that are in this repository in plain sight (chatter-ui `dev_auto_register`).
+#
+# This is a compile-time cargo feature, NOT a runtime OS check. It used to be
+# `cfg!(target_os = "android")` in lib.rs, which is true for every Android build
+# — so a RELEASE APK auto-registered with those credentials too. This script only
+# ever produces a debug APK against the local docker-compose stack, so it opts in
+# by default; any release Android pipeline added later must simply not pass this
+# feature, and the literals will not be in the binary.
+#
+# Set DEV_AUTO_REGISTER=0 to build the debug APK with the normal register screen.
+DEV_AUTO_REGISTER_FEATURE=""
+if [ "${DEV_AUTO_REGISTER:-1}" = "1" ]; then
+    DEV_AUTO_REGISTER_FEATURE=",dev-auto-register"
+    echo ">> !! dev auto-register enabled — first launch self-registers with public credentials"
+fi
+
 ( cd "$PROJECT_ROOT" && cargo ndk -t arm64-v8a build -p chatter-ui \
-    --no-default-features --features "mobile${MESH_FEATURE}${TRUST_ROOT_FEATURE}${QUIC_FEATURE}" --lib )
+    --no-default-features --features "mobile${MESH_FEATURE}${TRUST_ROOT_FEATURE}${QUIC_FEATURE}${DEV_AUTO_REGISTER_FEATURE}" --lib )
 
 # ── 2. Stage the .so into the Gradle module ─────────────────────────────────
 JNI_DIR="app/src/main/jniLibs/arm64-v8a"

@@ -3,7 +3,8 @@
 //! designed (the SVR escrow path).
 //!
 //! Inputs are hardcoded for the two Dev User accounts auto-created by
-//! `linux-client/crates/chatter-ui/src/lib.rs:344-371` (`CHATTER_DEV=1`).
+//! `chatter-ui`'s `dev_auto_register` (src/lib.rs) — which needs BOTH the
+//! `dev-auto-register` cargo feature and `CHATTER_DEV=1`; `dev-run.sh` sets both.
 //!
 //!     cargo run --example decrypt_dev_user -p chatter-core
 

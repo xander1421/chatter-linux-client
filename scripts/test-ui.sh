@@ -27,6 +27,17 @@ set -uo pipefail
 cd "$(dirname "$0")/.."   # linux-client/
 
 echo "=================================================================="
+echo " VALIDATED-UI  ·  LAYER 0 — dev-credential gate"
+echo "=================================================================="
+# Cheapest layer, so it runs first: the dev auto-register path (fixed password
+# and PIN, both public in this repo) must be behind a compile-time cargo
+# feature, not a runtime `cfg!(target_os = "android")` test that is true for
+# release APKs too. See scripts/dev-gate-lint.py.
+python3 scripts/dev-gate-lint.py
+DEVGATE_RC=$?
+
+echo
+echo "=================================================================="
 echo " VALIDATED-UI  ·  LAYER 2 — static wiring lint"
 echo "=================================================================="
 python3 scripts/ui-wiring-lint.py
@@ -69,6 +80,7 @@ echo
 echo "=================================================================="
 echo " RESULT"
 echo "=================================================================="
+echo "  dev-credential gate: $([ $DEVGATE_RC -eq 0 ] && echo PASS || echo 'FAIL (dev creds would ship)')"
 echo "  static wiring lint : $([ $LINT_RC -eq 0 ] && echo PASS || echo 'FAIL (stub/dead wire)')"
 echo "  headless UI suite  : $([ $TEST_RC -eq 0 ] && echo PASS || echo FAIL)"
 echo "  layout suite       : $([ $LAYOUT_RC -eq 0 ] && echo PASS || echo FAIL)"
@@ -78,4 +90,5 @@ echo "  render smoke       : $([ $RENDER_RC -eq 0 ] && echo PASS || echo FAIL)"
 # scripts/ui-wiring-lint.py — 3 code-preview no-ops, 1 never-rendered import,
 # 7 never-invoked callbacks. Those allowlists are the positive control: they are
 # real findings the gate CAN see, held green so a NEW one stands out.
-[ $TEST_RC -eq 0 ] && [ $LINT_RC -eq 0 ] && [ $LAYOUT_RC -eq 0 ] && [ $RENDER_RC -eq 0 ]
+[ $TEST_RC -eq 0 ] && [ $LINT_RC -eq 0 ] && [ $LAYOUT_RC -eq 0 ] && [ $RENDER_RC -eq 0 ] \
+    && [ $DEVGATE_RC -eq 0 ]
