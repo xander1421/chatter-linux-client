@@ -32,10 +32,22 @@ chmod +w "$APP/Contents/MacOS/chatter-ui"
 # --- icon: build .icns from the PNGs already in assets/ ------------------
 ICONSET="$(mktemp -d)/Chatter.iconset"
 mkdir -p "$ICONSET"
-for sz in 32 128 256; do
-	[ -f "$ROOT/assets/icon-$sz.png" ] && cp "$ROOT/assets/icon-$sz.png" "$ICONSET/icon_${sz}x${sz}.png"
-done
-[ -f "$ROOT/assets/icon-64.png" ] && cp "$ROOT/assets/icon-64.png" "$ICONSET/icon_32x32@2x.png"
+# iconset name -> source png. The @2x entries are what Retina actually draws;
+# without them macOS upscales the 1x and the icon looks soft in the Dock.
+while read -r name src; do
+	[ -f "$ROOT/assets/$src" ] && cp "$ROOT/assets/$src" "$ICONSET/$name"
+done <<-'ICONS'
+	icon_16x16.png        icon-16.png
+	icon_16x16@2x.png     icon-32.png
+	icon_32x32.png        icon-32.png
+	icon_32x32@2x.png     icon-64.png
+	icon_128x128.png      icon-128.png
+	icon_128x128@2x.png   icon-256.png
+	icon_256x256.png      icon-256.png
+	icon_256x256@2x.png   icon-512.png
+	icon_512x512.png      icon-512.png
+	icon_512x512@2x.png   icon-1024.png
+ICONS
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/Chatter.icns" 2>/dev/null \
 	|| echo "warn: iconutil failed, shipping without icon" >&2
 

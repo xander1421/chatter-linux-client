@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Chatter "Split", full-bleed. The two halves run past the 108dp canvas on
+     purpose: every launcher mask (circle, squircle, teardrop) crops the corners,
+     and the design carries no detail there — only the diagonal seam, which
+     always passes through the centre. Seam lines are x+y=474 and x+y=548. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+    <path
+        android:fillColor="#E9E7E2"
+        android:pathData="M0,0 L474,0 L0,474 Z" />
+    <path
+        android:fillColor="#2DD4BF"
+        android:pathData="M512,36 L512,512 L36,512 Z" />
+</vector>
