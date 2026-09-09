@@ -238,66 +238,20 @@ impl AnonDmService {
         Ok(())
     }
     
-    /// Direct (non-Tor) avatar fetch with a 15s timeout. Used only when the
-    /// transport is not routed over Tor.
-    async fn download_avatar_direct(&self, url: &str) -> Result<Vec<u8>, AnonDmError> {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(15))
-            .build()
-            .map_err(|e| AnonDmError::MessageError(format!("HTTP client error: {}", e)))?;
-
-        let response = client.get(url).send().await
-            .map_err(|e| AnonDmError::MessageError(format!("Avatar download failed: {}", e)))?;
-
-        if !response.status().is_success() {
-            return Err(AnonDmError::MessageError(
-                format!("Avatar download HTTP {}", response.status())
-            ));
-        }
-
-        Ok(response.bytes().await
-            .map_err(|e| AnonDmError::MessageError(format!("Avatar read failed: {}", e)))?
-            .to_vec())
-    }
-
-    /// Download avatar from URL and store it in the conversation record.
-    ///
-    /// Returns the downloaded bytes on success (for UI display).
-    pub async fn download_and_store_avatar(
-        &self,
-        conversation_id: &crate::domain::anon_dm::AnonDmId,
-        url: &str,
-    ) -> Result<Vec<u8>, AnonDmError> {
-        // Avatar bytes are anon-DM content: in anon mode they MUST ride the Tor
-        // circuit (a direct request would leak the real IP to the avatar host);
-        // direct otherwise.
-        #[cfg(feature = "onion")]
-        let bytes = if self.grpc_pool.transport_mode()
-            == crate::network::grpc::client_pool::TransportMode::Onion
-        {
-            let tor = self.grpc_pool.onion_tor();
-            crate::network::anon_http::get(&tor, url)
-                .await
-                .map_err(|e| AnonDmError::MessageError(format!("Avatar download over Tor failed: {}", e)))?
-        } else {
-            self.download_avatar_direct(url).await?
-        };
-        #[cfg(not(feature = "onion"))]
-        let bytes = self.download_avatar_direct(url).await?;
-
-        if bytes.is_empty() {
-            return Err(AnonDmError::MessageError("Empty avatar response".into()));
-        }
-
-        // Persist to DB
-        if let Ok(Some(mut conv)) = self.anon_dm_repo.get_conversation(conversation_id) {
-            conv.peer_avatar = Some(bytes.clone());
-            self.anon_dm_repo.update_conversation(&conv)
-                .map_err(|e| AnonDmError::MessageError(format!("Avatar store failed: {}", e)))?;
-        }
-
-        Ok(bytes)
-    }
+    // CRYPTO-2: there used to be `download_avatar_direct` / `download_and_store_avatar`
+    // here, which GETted a URL chosen by an anonymous DM peer with no user
+    // interaction, no scheme allowlist, no size cap (`response.bytes()` buffers
+    // whatever the host sends), no digest to check the bytes against, and — on
+    // the direct path — reqwest's default root store rather than the CA this
+    // build pins. A peer picked the host, so the fetch was an SSRF and an
+    // IP-disclosure primitive against whoever received their profile update, and
+    // an unbounded allocation besides.
+    //
+    // Nothing is lost by deleting it: a profile update already carries the
+    // avatar inline, encrypted under the conversation key and size-bounded like
+    // any other message body, and the receiving path has always preferred those
+    // bytes (see the `avatar` branch in the UI's anon-DM profile handler). The
+    // URL was only ever the fallback. Peer-supplied URLs are now ignored.
 
     /// Get an available call room token.
     pub fn get_available_call_room_token(&self) -> Result<Option<crate::mailbox::CallRoomToken>, AnonDmError> {

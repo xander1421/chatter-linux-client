@@ -447,14 +447,6 @@ impl ChatterClient {
         self.anon_dms().send_presence_update(conversation_id, presence).await
     }
 
-    pub async fn download_and_store_anon_dm_avatar(
-        &self,
-        conversation_id: &crate::domain::anon_dm::AnonDmId,
-        url: &str,
-    ) -> Result<Vec<u8>, crate::services::anon_dm::AnonDmError> {
-        self.anon_dms().download_and_store_avatar(conversation_id, url).await
-    }
-
     pub async fn send_anon_dm_profile_update(
         &self,
         conversation_id: &crate::domain::anon_dm::AnonDmId,

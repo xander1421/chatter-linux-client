@@ -303,31 +303,17 @@ pub(super) fn handle_anon_dm_profile_updated(
                 update_dm_avatar(&w, &channel_id_for_avatar, &avatar_bytes);
             }
         });
-    } else if let Some(ref url) = avatar_url {
-        // Fallback to URL if no inline avatar was provided
-        let ui_ctx_avatar = ui_ctx.clone();
-        let weak_for_avatar = weak.clone();
-        let channel_id_for_avatar = channel_id_str.clone();
-        let url_for_task = url.clone();
-
-        tokio::spawn(async move {
-            let bytes = match ui_ctx_avatar.download_and_store_anon_dm_avatar(&conversation_id, &url_for_task).await {
-                Ok(b) => b,
-                Err(e) => {
-                    tracing::warn!("Failed to download avatar for anon DM {}: {}", conversation_id, e);
-                    return;
-                }
-            };
-
-            // Update avatar in sidebar UI
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_for_avatar.upgrade() {
-                    update_dm_avatar(&w, &channel_id_for_avatar, &bytes);
-                }
-            });
-
-            tracing::info!("Downloaded and stored avatar for anon DM from URL");
-        });
+    } else if avatar_url.is_some() {
+        // CRYPTO-2: a peer-supplied avatar URL is NOT fetched. It used to be
+        // GETted with no user interaction, no scheme allowlist, no size cap, no
+        // digest and, off the Tor path, the system root store instead of the
+        // pinned CA — with the host chosen by an anonymous peer. The inline,
+        // conversation-key-encrypted avatar above is the supported path; a URL
+        // is ignored.
+        tracing::debug!(
+            conversation_id = %conversation_id,
+            "Ignoring peer-supplied avatar URL in anon-DM profile update (inline avatar only)"
+        );
     } else {
         // No inline avatar or URL — check if the DB already has it (fallback)
         let weak_for_avatar = weak.clone();
