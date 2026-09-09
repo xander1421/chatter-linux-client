@@ -93,6 +93,110 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeOnFilesPicked(
     }
 }
 
+// ── Saving (ACTION_CREATE_DOCUMENT) ─────────────────────────────────────────
+//
+// Inverted relative to picking: SAF gives a content:// URI, but core code
+// writes to plain paths. So Kotlin stages a cache file, `save_file` hands that
+// path back, the caller writes to it, and `finish_save` copies it into the URI.
+// Two calls rather than one because the write happens in between.
+
+static PENDING_SAVE: Mutex<Option<oneshot::Sender<Option<PathBuf>>>> = Mutex::new(None);
+
+/// Open the "create document" chooser and await a writable staging path.
+///
+/// `None` means the user cancelled or the chooser failed. On `Some(path)`,
+/// write the file there and then call [`finish_save`] with the same path —
+/// without that second call nothing reaches the location the user chose.
+pub async fn save_file(suggested_name: &str) -> Option<PathBuf> {
+    let (tx, rx) = oneshot::channel();
+    *PENDING_SAVE.lock().unwrap() = Some(tx);
+
+    if let Err(e) = launch_saver(suggested_name) {
+        tracing::error!("Android file saver: failed to launch chooser: {e}");
+        *PENDING_SAVE.lock().unwrap() = None;
+        return None;
+    }
+
+    rx.await.ok().flatten()
+}
+
+/// JNI: invoke `MainActivity.launchFileSaver(String suggestedName)`.
+fn launch_saver(suggested_name: &str) -> Result<(), String> {
+    let mut env = activity::jni_env()?;
+    let act = activity::activity()?;
+
+    let name = env.new_string(suggested_name).map_err(|e| e.to_string())?;
+    let res = env.call_method(
+        act,
+        "launchFileSaver",
+        "(Ljava/lang/String;)V",
+        &[JValue::Object(&name)],
+    );
+    if res.is_err() {
+        activity::clear_exception(&mut env);
+    }
+    res.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Copy the written staging file into the URI the user chose.
+///
+/// Returns false if the copy failed or no save was pending — callers must not
+/// report success on a false.
+pub fn finish_save(staging: &std::path::Path) -> bool {
+    match finish_save_inner(staging) {
+        Ok(ok) => ok,
+        Err(e) => {
+            tracing::error!("Android file saver: finish failed: {e}");
+            false
+        }
+    }
+}
+
+fn finish_save_inner(staging: &std::path::Path) -> Result<bool, String> {
+    let mut env = activity::jni_env()?;
+    let act = activity::activity()?;
+
+    let path = env
+        .new_string(staging.to_string_lossy().as_ref())
+        .map_err(|e| e.to_string())?;
+    let res = env.call_method(
+        act,
+        "finishFileSave",
+        "(Ljava/lang/String;)Z",
+        &[JValue::Object(&path)],
+    );
+    if res.is_err() {
+        activity::clear_exception(&mut env);
+    }
+    res.map_err(|e| e.to_string())?.z().map_err(|e| e.to_string())
+}
+
+/// JNI callback from `MainActivity.nativeOnSaveTargetChosen`. An empty string
+/// means the user cancelled.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_chatter_client_MainActivity_nativeOnSaveTargetChosen(
+    mut env: JNIEnv,
+    _this: JObject,
+    staging_path: JString,
+) {
+    let path: Option<PathBuf> = match env.get_string(&staging_path) {
+        Ok(s) => {
+            let s: String = s.into();
+            if s.is_empty() { None } else { Some(PathBuf::from(s)) }
+        }
+        Err(e) => {
+            tracing::error!("Android file saver: bad callback payload: {e}");
+            None
+        }
+    };
+
+    tracing::info!("Android file saver: target {}", if path.is_some() { "chosen" } else { "cancelled" });
+    if let Some(tx) = PENDING_SAVE.lock().unwrap().take() {
+        let _ = tx.send(path);
+    }
+}
+
 fn read_string_array(env: &mut JNIEnv, arr: &JObjectArray) -> Result<Vec<String>, String> {
     let len = env.get_array_length(arr).map_err(|e| e.to_string())?;
     let mut out = Vec::with_capacity(len as usize);

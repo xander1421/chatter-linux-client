@@ -290,21 +290,47 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         let weak = weak_mb_export.clone();
         let passphrase = passphrase.to_string();
         tokio::spawn(async move {
-            use chatter_core::media::{FileFilter, FilePicker, FilePickerConfig};
-            let Some(path) = FilePicker::save_file(
-                FilePickerConfig::new()
-                    .with_title("Export message backup")
-                    .with_filter(FileFilter::new("Chatter backup", vec!["chbk"])),
-            )
-            .await
-            else {
-                return; // user cancelled
-            };
-            let status = match ui_ctx.export_message_backup(&path, &passphrase).await {
-                Ok(stats) => format!("Backup exported ({} rows)", stats.rows),
-                Err(e) => format!("Export failed: {e}"),
-            };
-            set_message_backup_status(&weak, status);
+            // Android has no rfd backend, so the chooser is the Storage Access
+            // Framework via Kotlin: pick a target, write the staging file, then
+            // publish it into the chosen URI.
+            #[cfg(target_os = "android")]
+            {
+                use crate::platform::android::file_picker;
+                let Some(staging) = file_picker::save_file("chatter-backup.chbk").await else {
+                    return; // user cancelled
+                };
+                let status = match ui_ctx.export_message_backup(&staging, &passphrase).await {
+                    Ok(stats) => {
+                        if file_picker::finish_save(&staging) {
+                            format!("Backup exported ({} rows)", stats.rows)
+                        } else {
+                            // The rows were written to the staging file but never
+                            // reached the URI, so this is not an export.
+                            "Export failed: could not write to the chosen location".to_string()
+                        }
+                    }
+                    Err(e) => format!("Export failed: {e}"),
+                };
+                set_message_backup_status(&weak, status);
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                use chatter_core::media::{FileFilter, FilePicker, FilePickerConfig};
+                let Some(path) = FilePicker::save_file(
+                    FilePickerConfig::new()
+                        .with_title("Export message backup")
+                        .with_filter(FileFilter::new("Chatter backup", vec!["chbk"])),
+                )
+                .await
+                else {
+                    return; // user cancelled
+                };
+                let status = match ui_ctx.export_message_backup(&path, &passphrase).await {
+                    Ok(stats) => format!("Backup exported ({} rows)", stats.rows),
+                    Err(e) => format!("Export failed: {e}"),
+                };
+                set_message_backup_status(&weak, status);
+            }
         });
     });
 
@@ -316,15 +342,30 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         let weak = weak_mb_import.clone();
         let passphrase = passphrase.to_string();
         tokio::spawn(async move {
-            use chatter_core::media::{FileFilter, FilePicker, FilePickerConfig};
-            let Some(path) = FilePicker::pick_file(
-                FilePickerConfig::new()
-                    .with_title("Restore message backup")
-                    .with_filter(FileFilter::new("Chatter backup", vec!["chbk"])),
-            )
-            .await
-            else {
-                return; // user cancelled
+            // SAF on Android; rfd elsewhere. `*/*` rather than a .chbk-specific
+            // type because most providers report unknown extensions as
+            // application/octet-stream and would otherwise grey the file out.
+            #[cfg(target_os = "android")]
+            let path = {
+                let picked = crate::platform::android::file_picker::pick_files(&["*/*"]).await;
+                let Some(path) = picked.into_iter().next() else {
+                    return; // user cancelled
+                };
+                path
+            };
+            #[cfg(not(target_os = "android"))]
+            let path = {
+                use chatter_core::media::{FileFilter, FilePicker, FilePickerConfig};
+                let Some(path) = FilePicker::pick_file(
+                    FilePickerConfig::new()
+                        .with_title("Restore message backup")
+                        .with_filter(FileFilter::new("Chatter backup", vec!["chbk"])),
+                )
+                .await
+                else {
+                    return; // user cancelled
+                };
+                path
             };
             let status = match ui_ctx.import_message_backup(&path, &passphrase).await {
                 Ok(s) => format!("Restored {} of {} rows (rest already present)", s.rows_inserted, s.rows_seen),

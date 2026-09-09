@@ -117,6 +117,72 @@ class MainActivity : GameActivity() {
     /** Implemented in Rust (libchatter_ui.so). Delivers picked file paths. */
     private external fun nativeOnFilesPicked(paths: Array<String>)
 
+    // --- File saver (Storage Access Framework) ---------------------------------
+    // ACTION_CREATE_DOCUMENT's counterpart to the picker above. SAF hands back a
+    // content:// URI, but Rust writes to plain paths, so the flow is inverted
+    // relative to picking: we stage a cache file, let Rust fill it, then copy it
+    // into the URI on `finishFileSave`. The URI is held between those two calls.
+    private var pendingSaveUri: Uri? = null
+
+    private val createDocument =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+            pendingSaveUri = uri
+            // Cancel yields a null URI; report it as an empty path so the Rust
+            // side resolves its oneshot instead of hanging on a chooser that is
+            // already gone.
+            val staging = uri?.let { stagingFileFor(it) } ?: ""
+            nativeOnSaveTargetChosen(staging)
+        }
+
+    /** Called from Rust (JNI) to open the "create document" chooser. */
+    @Suppress("unused")
+    fun launchFileSaver(suggestedName: String) {
+        runOnUiThread { createDocument.launch(suggestedName) }
+    }
+
+    private fun stagingFileFor(uri: Uri): String {
+        return try {
+            val name = queryDisplayName(uri)
+                ?.substringAfterLast('/')
+                ?.takeIf { it.isNotBlank() && it != "." && it != ".." }
+                ?: "export_${System.nanoTime()}"
+            val dir = File(cacheDir, "saving").apply { mkdirs() }
+            File(dir, name).absolutePath
+        } catch (e: Exception) {
+            Log.e(TAG, "stagingFileFor failed for $uri", e)
+            ""
+        }
+    }
+
+    /**
+     * Called from Rust (JNI) once the staging file is written. Copies it into
+     * the URI the user chose and deletes the staging copy.
+     *
+     * Returns false on any failure — the caller reports it rather than claiming
+     * a save that did not happen.
+     */
+    @Suppress("unused")
+    fun finishFileSave(stagingPath: String): Boolean {
+        val uri = pendingSaveUri ?: return false
+        return try {
+            val src = File(stagingPath)
+            if (!src.exists()) return false
+            contentResolver.openOutputStream(uri)?.use { out ->
+                src.inputStream().use { it.copyTo(out) }
+            } ?: return false
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "finishFileSave failed for $uri", e)
+            false
+        } finally {
+            pendingSaveUri = null
+            runCatching { File(stagingPath).delete() }
+        }
+    }
+
+    /** Implemented in Rust (libchatter_ui.so). Delivers the staging path ("" = cancelled). */
+    private external fun nativeOnSaveTargetChosen(stagingPath: String)
+
     // --- Runtime permissions ---------------------------------------------------
     private val permissionRequest =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
