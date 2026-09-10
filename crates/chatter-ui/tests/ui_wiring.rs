@@ -9,6 +9,8 @@
 
 use i_slint_backend_testing as testing;
 use chatter_ui::MainWindow;
+// DROPPED-P1s: feature-mirror globals asserted by the anon-mode / AI-template tests.
+use chatter_ui::{AiIntegrationGlobal, AnonMode};
 
 /// Route the SQLCipher passphrase through the documented env override so offline
 /// `ChatterClient::build()` never touches the OS keyring / Secret Service (absent
@@ -770,6 +772,14 @@ fn link_device_page_start_and_cancel_are_wired() {
 
 /// The sidebar injects the virtual AI channel (nil-UUID) at the top when
 /// local AI is enabled — pure core logic, provable offline.
+///
+/// This test asserted "local AI defaults on" and so had been failing since
+/// 69fd7878 ("fix(client): local AI off by default", 2026-08-16) flipped
+/// `LocalAISettings::default().enabled` to false
+/// (`crates/chatter-core/src/local_ai/settings.rs:40`). Nothing ran the suite,
+/// so nobody saw it; CI now does. The property under test is unchanged — it
+/// just has to turn local AI on first, and the default-off case is now pinned
+/// too, since that is the state a fresh install is actually in.
 #[cfg(feature = "jarvis")]
 #[test]
 fn sidebar_injects_ai_channel_and_never_autoselects_it() {
@@ -777,13 +787,38 @@ fn sidebar_injects_ai_channel_and_never_autoselects_it() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let _guard = rt.enter();
     let tmp = tempfile::tempdir().unwrap();
+    let data_dir = tmp.path().to_string_lossy().to_string();
     let client = chatter_core::client::ChatterClient::builder()
-        .data_dir(tmp.path().to_string_lossy().to_string())
+        .data_dir(data_dir.clone())
         .build()
         .expect("offline ChatterClient::build");
 
+    // Default-off: a fresh install shows no AI channel at all.
+    assert!(
+        client.sidebar_channels().is_empty(),
+        "local AI is off by default (settings.rs:40), so a fresh profile must \
+         show no AI channel — if this fails the default flipped back"
+    );
+
+    client
+        .set_local_ai_enabled(true)
+        .expect("enabling local AI is a settings write, not a network call");
+
+    // Rebuild the client rather than reusing it: LocalAIService holds a
+    // settings SNAPSHOT taken at construction
+    // (chatter-core/src/services/local_ai_service.rs:434), so a running client
+    // does not observe its own write and the AI channel appears only after a
+    // restart. That staleness is a separate bug — docs/OPEN-ITEMS.md §64 — and
+    // is deliberately NOT asserted here, so fixing it does not turn this test
+    // red. What is under test is the injection itself.
+    drop(client);
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(data_dir)
+        .build()
+        .expect("offline ChatterClient::build (restart)");
+
     let channels = client.sidebar_channels();
-    assert!(!channels.is_empty(), "AI channel missing from sidebar (local AI defaults on)");
+    assert!(!channels.is_empty(), "AI channel missing from sidebar with local AI ON");
     let first = &channels[0];
     assert!(
         chatter_core::client::is_jarvis_channel(&first.id),
@@ -3182,5 +3217,233 @@ fn shared_content_pill_tabs_clear_the_touch_floor() {
         block.contains("height: Spacing.touch-target-min;") && block.contains("padding: 2px;"),
         "the pill shell must be Spacing.touch-target-min with a 2px inset, so each \
          chip lands on the 44px touch floor — a literal here is how 34px happened"
+    );
+}
+
+// ============================================================================
+// DROPPED-P1s — findings that a completeness review found were never assigned
+// to any work package. See docs/OPEN-ITEMS.md §58, §59, §63.
+// ============================================================================
+
+/// FEAT-8: the empty-state "Browse channels" CTA — the first control a
+/// brand-new account ever sees — was dead.
+///
+/// `ChannelList` emits `join-channel-clicked` from its empty-state CTA
+/// (`ui/sidebar/channel_list.slint`), and the empty state renders exactly when
+/// `channels.length == 0`. Its ONLY instantiation, in
+/// `ui/sidebar/sidebar.slint`, bound `channel-selected` and
+/// `channel-context-menu-requested` and not this one, and no Rust `on_*`
+/// existed either — so the button did nothing at all.
+///
+/// This pins the whole chain: emitter -> ChannelList instantiation -> sidebar
+/// root callback -> app.slint, which opens the join tab of CreateChannelModal.
+#[test]
+fn sidebar_empty_state_join_cta_is_wired_end_to_end() {
+    let list_src = include_str!("../../../ui/sidebar/channel_list.slint");
+    let sidebar_src = include_str!("../../../ui/sidebar/sidebar.slint");
+    let app_src = include_str!("../../../ui/app.slint");
+
+    // The emitter still exists and the empty-state CTA still fires it.
+    assert!(
+        list_src.contains("callback join-channel-clicked();"),
+        "ChannelList must still declare join-channel-clicked"
+    );
+    let cta = list_src
+        .find("cta-clicked =>")
+        .expect("the empty state must still have a CTA");
+    assert!(
+        list_src[cta..cta + 120].contains("root.join-channel-clicked()"),
+        "the empty-state CTA must emit join-channel-clicked"
+    );
+
+    // The instantiation binds it. This is the assertion that was missing.
+    let inst = sidebar_src
+        .find(": ChannelList {")
+        .expect("sidebar must instantiate ChannelList");
+    let block = &sidebar_src[inst..];
+    let block_end = block.find("\n                }").unwrap_or(block.len());
+    assert!(
+        block[..block_end].contains("join-channel-clicked() => { root.join-channel-clicked(); }"),
+        "the ChannelList instantiation in sidebar.slint must bind \
+         join-channel-clicked — without it the empty-state CTA a brand-new \
+         account sees first is dead (FEAT-8)"
+    );
+
+    // The sidebar re-emits it, and app.slint turns it into the join modal.
+    assert!(
+        sidebar_src.contains("callback join-channel-clicked();"),
+        "Sidebar must declare the callback it forwards to"
+    );
+    let handler = app_src
+        .find("join-channel-clicked =>")
+        .expect("app.slint must handle the sidebar's join-channel-clicked");
+    let tail = &app_src[handler..handler + 220];
+    assert!(
+        tail.contains(r#"root.create-channel-initial-tab = 1"#)
+            && tail.contains(r#"root.active-modal = "create-channel""#),
+        "join-channel-clicked must open the JOIN tab of CreateChannelModal"
+    );
+}
+
+/// STUB-1a: the Tor status dot must not render "Off" as amber "connecting".
+///
+/// `TorStatus.state == 0` means Off — not on onion, traffic going direct
+/// (`ui/anon_mode/anon_mode_global.slint`;
+/// `chatter-core/src/client/mod.rs` sets it). The dot's ternary fell through to
+/// `Colors.warning` for every state that was not 2 or 3, and the file's own
+/// comment defined amber as "connecting" — so a build with no Tor in it showed
+/// a reassuring amber dot forever, and
+/// `ui/components/connection_banner.slint` only banners states 1 and 3, so
+/// nothing else told the user.
+#[test]
+fn tor_status_dot_does_not_report_off_as_connecting() {
+    let src = include_str!("../../../ui/sidebar/sidebar.slint");
+
+    // Both shield entry points (expanded footer + collapsed rail) carry a dot.
+    let dots: Vec<_> = src.match_indices("TorStatus.state == 2 ? Colors.success").collect();
+    assert_eq!(
+        dots.len(),
+        2,
+        "expected the Tor dot at both shield entry points (expanded footer and \
+         collapsed rail); found {}",
+        dots.len()
+    );
+
+    for (at, _) in dots {
+        let ternary = &src[at..at + 260];
+        assert!(
+            ternary.contains("TorStatus.state == 1 ? Colors.warning"),
+            "amber must be reserved for state 1 (Connecting); this dot still \
+             uses it as the fallback, which renders state 0 (Off — traffic is \
+             going direct) as 'connecting' (STUB-1)"
+        );
+        // The fallback arm must not be warning.
+        let fallback = ternary
+            .split(": ")
+            .last()
+            .unwrap_or("");
+        assert!(
+            !fallback.starts_with("Colors.warning"),
+            "the fallback arm of the Tor dot must not be amber"
+        );
+    }
+}
+
+/// STUB-1b: Anon Mode must not be offered by a build that has no Tor in it.
+///
+/// The default build does NOT include the `onion` feature
+/// (`crates/chatter-ui/Cargo.toml`, `default = ["desktop", "jarvis"]`), and no
+/// anon surface was gated on it — unlike `jarvis` and `mesh`, which mirror
+/// their Cargo feature into a Slint global and render nothing when off. The
+/// user passed a PIN gate, the shield glowed, and traffic went direct.
+///
+/// The dynamic half is the point: with the default features this test builds
+/// under, `AnonMode.onion-built` must be false at runtime.
+#[test]
+fn anon_mode_shield_is_gated_on_the_onion_feature() {
+    let global_src = include_str!("../../../ui/anon_mode/anon_mode_global.slint");
+    assert!(
+        global_src.contains("in-out property <bool> onion-built"),
+        "AnonMode must carry the mirrored `onion` Cargo feature flag"
+    );
+
+    // Every shield entry point is behind the gate.
+    let sidebar_src = include_str!("../../../ui/sidebar/sidebar.slint");
+    let shields = sidebar_src.matches("root.anon-mode-clicked()").count();
+    let gates = sidebar_src.matches("if AnonMode.onion-built:").count();
+    assert_eq!(
+        gates, shields,
+        "every anon-mode entry point ({shields}) must sit behind \
+         `if AnonMode.onion-built:` ({gates} gates found) — a build that cannot \
+         put traffic on the onion must not offer a control that says it will \
+         (STUB-1)"
+    );
+
+    // Rust mirrors the Cargo feature, exactly as it does for jarvis.
+    let lib_src = include_str!("../src/lib.rs");
+    assert!(
+        lib_src.contains(r#"set_onion_built(cfg!(feature = "onion"))"#),
+        "lib.rs must mirror the `onion` Cargo feature into AnonMode.onion-built"
+    );
+
+    // Dynamic: under this test binary's feature set the global reflects reality.
+    use slint::ComponentHandle;
+    let w = boot();
+    assert_eq!(
+        w.global::<AnonMode>().get_onion_built(),
+        cfg!(feature = "onion"),
+        "AnonMode.onion-built must equal the compiled-in `onion` feature"
+    );
+}
+
+/// FEAT-5: the "AI assistant" channel template always produced an empty
+/// channel, and said nothing.
+///
+/// `integration_client.rs` hardcodes `secrets: Default::default()`, the server
+/// requires `secrets["api_key"]` unconditionally
+/// (`internal/services/ai/providers/factory.go:85`) and validates BEFORE it
+/// writes (`integration/service/service.go:89` runs `handler.Initialize` ahead
+/// of `CreateIntegration` at `:96`), so the integration was never created — and
+/// the client swallowed the error with a `tracing::error!`.
+///
+/// The honest resolution is removal: the template is gated on the
+/// off-by-default `ai-channel-template` Cargo feature, mirrored into
+/// `AiIntegrationGlobal.channel-template-enabled`, so it is not rendered at
+/// all in a default build. The error is surfaced rather than logged for the
+/// build that turns it on.
+#[test]
+fn ai_assistant_channel_template_is_off_and_its_failure_is_surfaced() {
+    let global_src = include_str!("../../../ui/ai/ai_global.slint");
+    assert!(
+        global_src.contains("in-out property <bool> channel-template-enabled: false"),
+        "the AI-assistant template flag must default to false"
+    );
+
+    // The whole template block is behind the gate.
+    let modal_src = include_str!("../../../ui/modals/create_channel.slint");
+    assert!(
+        modal_src
+            .contains("if AiIntegrationGlobal.channel-template-enabled: VerticalLayout {"),
+        "the AI-assistant block in create_channel.slint must be gated on \
+         AiIntegrationGlobal.channel-template-enabled (FEAT-5)"
+    );
+
+    // Rust mirrors the Cargo feature.
+    let lib_src = include_str!("../src/lib.rs");
+    assert!(
+        lib_src
+            .contains(r#"set_channel_template_enabled(cfg!(feature = "ai-channel-template"))"#),
+        "lib.rs must mirror the `ai-channel-template` Cargo feature"
+    );
+
+    // The failure is reported, not swallowed. The old code's whole response to
+    // a failed integration was a tracing::error!.
+    let handler_src = include_str!("../src/bin_ui/features/modals/create_channel.rs");
+    let at = handler_src
+        .find("Failed to create AI integration")
+        .expect("the AI integration failure path must still exist");
+    let tail = &handler_src[at..];
+    assert!(
+        tail.contains("set_toast_message") && tail.contains(r#"set_toast_variant("error""#),
+        "a failed AI integration must surface an error toast, not only a log \
+         line — the channel is created either way and the user was told nothing"
+    );
+    assert!(
+        tail.contains("the AI assistant was not added"),
+        "the toast must say what actually happened"
+    );
+
+    // Dynamic: default build renders no AI template.
+    use slint::ComponentHandle;
+    let w = boot();
+    assert_eq!(
+        w.global::<AiIntegrationGlobal>().get_channel_template_enabled(),
+        cfg!(feature = "ai-channel-template"),
+        "AiIntegrationGlobal.channel-template-enabled must equal the compiled-in feature"
+    );
+    assert!(
+        !cfg!(feature = "ai-channel-template"),
+        "the ai-channel-template feature must stay OFF in the default test build: \
+         nothing on that path can supply the provider API key the server requires"
     );
 }
