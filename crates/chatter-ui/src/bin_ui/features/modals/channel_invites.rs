@@ -142,8 +142,16 @@ fn respond(
         };
 
         match ui_ctx.respond_to_channel_invite(&cid, accept).await {
-            Ok(()) => {
+            Ok(joined) => {
                 tracing::info!(channel_id = %cid_str, accept, "Responded to channel invite");
+                // An accepted invite is a join: the channel exists locally now
+                // (core writes the rows), but the sidebar was built before it
+                // did. Rebuild it the same way a created or deleted channel
+                // does, so the channel the user just accepted appears without
+                // waiting for the next sync (OPEN-ITEMS §69).
+                if joined.is_some() {
+                    crate::bin_ui::features::auth::load_initial_data(weak.clone(), &ui_ctx).await;
+                }
             }
             Err(e) => {
                 tracing::error!(channel_id = %cid_str, error = %e, "Failed to respond to channel invite");

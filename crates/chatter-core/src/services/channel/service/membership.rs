@@ -377,24 +377,24 @@ impl ChannelService {
 
     /// Respond to a channel invitation.
     ///
-    /// # Arguments
+    /// On accept, returns the channel and leaves this device in the same local
+    /// state a join does: the channel row upserted and our membership row
+    /// written. On decline, returns `None`.
     ///
-    /// * `channel_id` - The channel invitation to respond to
-    /// * `accept` - Whether to accept or decline the invitation
-    /// * `setup_mailbox` - Whether to setup group mailbox if accepting
+    /// # Which event ends the stream
     ///
-    /// # Group Mailbox Setup
-    ///
-    /// If `setup_mailbox` is true, accepting an invitation will automatically:
-    /// 1. Create an ephemeral group mailbox for receiving messages
-    /// 2. The caller should send the returned announcement via
-    ///    `MessageService::send_group_mailbox_announcement()`
+    /// The server's `RespondToInvite` emits `OperationStarted` and then an
+    /// accepted/declined payload, which the handler maps to
+    /// `InvitationResponse` (`internal/services/channel/handlers/invitation.go`).
+    /// It never sends `MemberAdded` — waiting for one, as this method used to,
+    /// made every accept run the stream to exhaustion and return
+    /// "no response event received" *after* the server had already made the
+    /// user a member (OPEN-ITEMS §70).
     pub async fn respond_to_invite(
         &self,
         channel_id: &ChannelId,
         accept: bool,
-        setup_mailbox: bool,
-    ) -> Result<Option<(crate::domain::channel::Channel, Option<GroupMailboxSetupResult>)>, ChannelError> {
+    ) -> Result<Option<crate::domain::channel::Channel>, ChannelError> {
         let current_user = self.settings_repo.current_user_id()?;
 
         let channel_id_str = channel_id.to_string();
@@ -408,18 +408,10 @@ impl ChannelService {
         while let Some(event_result) = stream.next().await {
             let event = event_result?;
             match event.event {
-                Some(channel_event::Event::MemberAdded(member)) => {
-                    if accept && member.user_id == current_user.to_string() {
-                        joined = true;
-                        responded = true;
-                        break;
-                    }
-                }
-                Some(channel_event::Event::InvitationResponse(_response)) => {
-                    if !accept {
-                        responded = true;
-                        break;
-                    }
+                Some(channel_event::Event::InvitationResponse(response)) => {
+                    responded = true;
+                    joined = accept && response.accepted;
+                    break;
                 }
                 Some(channel_event::Event::OperationFailed(failure)) => {
                     let err_msg = failure
@@ -440,29 +432,30 @@ impl ChannelService {
 
         drop(stream);
 
-        if joined {
-            let channel = self.get_channel_internal(&mut channel_client, channel_id).await?;
-
-            let membership = Membership {
-                channel_id: *channel_id,
-                user_id: current_user,
-                role: MemberRole::Member,
-                joined_at: Utc::now(),
-                last_read_message_id: None,
-                is_muted: false,
-                muted_until: None,
-                notification_preference: NotificationPreference::All,
-            };
-            self.channel_repo.insert_membership(&membership)?;
-
-            // Server-managed channels: control/SKDM fanout via device inbox;
-            // no group mailbox to register.
-            let _ = setup_mailbox;
-
-            Ok(Some((channel, None)))
-        } else {
-            Ok(None)
+        if !joined {
+            return Ok(None);
         }
+
+        // Accepting an invitation IS a join as far as this device is
+        // concerned, so the local rows a join writes get written here too —
+        // otherwise the user is a member on the server with nothing in their
+        // own store, and the channel is missing from the sidebar until the
+        // next sync (OPEN-ITEMS §69).
+        let channel = self.get_channel_internal(&mut channel_client, channel_id).await?;
+
+        let membership = Membership {
+            channel_id: *channel_id,
+            user_id: current_user,
+            role: MemberRole::Member,
+            joined_at: Utc::now(),
+            last_read_message_id: None,
+            is_muted: false,
+            muted_until: None,
+            notification_preference: NotificationPreference::All,
+        };
+        self.channel_repo.insert_membership(&membership)?;
+
+        Ok(Some(channel))
     }
 
     /// Get channel members with pagination.

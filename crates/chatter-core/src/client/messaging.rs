@@ -876,21 +876,56 @@ impl ChatterClient {
         }
     }
 
-    /// Accept or decline a channel invitation; drives the response stream to
-    /// completion.
+    /// Accept or decline a channel invitation. Returns the channel on accept,
+    /// `None` on decline.
+    ///
+    /// Accepting is a join, so this finishes the join the same way
+    /// [`ChatterClient::join_channel`] — the other way into a channel — does.
+    /// The service writes the channel and membership rows; on top of that this
+    /// nudges the live message stream and pulls the existing members' sender
+    /// keys. Without those three the user was a member on the server with
+    /// nothing locally: no channel in the sidebar and no live message in it
+    /// until the next sync (OPEN-ITEMS §69).
     pub async fn respond_to_channel_invite(
-        &self,
+        self: &Arc<Self>,
         channel_id: &crate::domain::ids::ChannelId,
         accept: bool,
-    ) -> Result<(), crate::services::channel::ChannelError> {
-        use futures::StreamExt;
-        let cid = channel_id.to_string();
-        let mut client = self.services.grpc_pool.channel_client();
-        let mut stream = client.respond_to_invite(&cid, accept).await?;
-        while let Some(ev) = stream.next().await {
-            ev?;
+    ) -> Result<Option<Channel>, crate::services::channel::ChannelError> {
+        let Some(channel) = self.channels().respond_to_invite(channel_id, accept).await? else {
+            return Ok(None);
+        };
+
+        // Nudge the stream FIRST, ahead of the slower calls below. A brand-new
+        // invitee was in no channel when their client started, so the server
+        // refused their global stream and the stream task is sitting in its
+        // reconnect backoff with no subscription at all — the membership
+        // change the server publishes on accept (§68) reaches nobody. Starting
+        // the reconnect here lets its catch-up run while the sender-key work
+        // below is still going, rather than inside the window the user is
+        // waiting for their first message in.
+        self.resubscribe_channel_messages();
+
+        // The SKDM request below asks every member the LOCAL membership list
+        // names, so the member list has to be local first.
+        if let Err(e) = self.channels().sync_channel_members(channel_id).await {
+            tracing::warn!(
+                channel_id = %channel_id,
+                error = %e,
+                "Failed to sync channel members after accepting an invite"
+            );
         }
-        Ok(())
+
+        // Pull SKDMs from the existing members so their next message decrypts
+        // without the no-sender-key defer/retry round-trip.
+        if let Err(e) = self.messages().request_skdms_from_channel_members(channel_id).await {
+            tracing::warn!(
+                channel_id = %channel_id,
+                error = %e,
+                "Failed to request SKDMs after accepting an invite"
+            );
+        }
+
+        Ok(Some(channel))
     }
 
     /// Build the list of people the user can invite to `channel_id`: their DM
