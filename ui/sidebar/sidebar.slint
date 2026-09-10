@@ -600,6 +600,13 @@ export component Sidebar inherits Rectangle {
                     show-header: false;
                     has-sibling-content: root.private-groups.length > 0;
                     channel-selected(id) => { root.channel-selected(id); }
+                    // FEAT-8: ChannelList emits this from its header search
+                    // button AND from the empty-state CTA, which is the FIRST
+                    // control a brand-new account ever sees (the empty state
+                    // renders exactly when channels.length == 0). This binding
+                    // was missing, so that button did nothing at all. app.slint
+                    // turns it into the join tab of CreateChannelModal.
+                    join-channel-clicked() => { root.join-channel-clicked(); }
                     channel-context-menu-requested(id, pinned, x, y) => {
                         root.ctx-menu-conv-id = id;
                         root.ctx-menu-conv-type = "channel";
@@ -737,14 +744,23 @@ export component Sidebar inherits Rectangle {
                 }
                 // Keeps the shield on the right edge now that nothing precedes it.
                 if root.mobile-mode: Rectangle { horizontal-stretch: 1; }
-                // Anon mode toggle — shield icon, glows when active
-                VerticalLayout { alignment: center; horizontal-stretch: 0;
+                // Anon mode toggle — shield icon, glows when active.
+                //
+                // STUB-1: gated on the `onion` Cargo feature (mirrored into
+                // AnonMode.onion-built from lib.rs). A build without it cannot
+                // put traffic on the onion, so it must not offer a control that
+                // says it will.
+                if AnonMode.onion-built: VerticalLayout { alignment: center; horizontal-stretch: 0;
                     Rectangle {
                         width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
                         background: anon-touch.has-hover ? Colors.surface-hover : (AnonMode.enabled ? Colors.primary.with-alpha(0.15) : transparent);
                         Image { source: Icons.shield; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                             colorize: AnonMode.enabled ? Colors.primary : Colors.text-muted; }
-                        // Tor status dot: green=connected, amber=connecting, red=error. Shield mode only.
+                        // Tor status dot: green=connected, amber=CONNECTING ONLY,
+                        // red=error, muted=off. State 0 is Off — traffic is going
+                        // direct — and it used to fall through to amber, i.e. the
+                        // dot claimed "connecting" forever on a build with no Tor
+                        // in it. Shield mode only.
                         Rectangle {
                             visible: AnonMode.enabled;
                             width: 8px; height: 8px; border-radius: 4px;
@@ -752,7 +768,8 @@ export component Sidebar inherits Rectangle {
                             border-width: 1px; border-color: Colors.surface;
                             background: TorStatus.state == 2 ? Colors.success
                                 : TorStatus.state == 3 ? Colors.error
-                                : Colors.warning;
+                                : TorStatus.state == 1 ? Colors.warning
+                                : Colors.text-muted;
                         }
                         anon-touch := TouchArea { clicked => { root.anon-mode-clicked(); } }
                     }
@@ -797,7 +814,8 @@ export component Sidebar inherits Rectangle {
             // Collapsed view: Vertical stack of icons
             if root.collapsed: VerticalLayout {
                 alignment: end; spacing: 8px; padding-bottom: 8px;
-                TooltipArea {
+                // STUB-1: same gate as the expanded footer shield.
+                if AnonMode.onion-built: TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: AnonMode.enabled ? "Anon Mode (active) - tap to disable" : "Anon Mode";
                     tooltip-enabled: true; placement: "right";
@@ -805,7 +823,8 @@ export component Sidebar inherits Rectangle {
                         background: AnonMode.enabled ? Colors.primary.with-alpha(0.2) : root.rail-slot-bg;
                         Image { source: Icons.shield; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                             colorize: AnonMode.enabled ? Colors.primary : Colors.text-secondary; }
-                        // Tor status dot: green=connected, amber=connecting, red=error. Shield mode only.
+                        // Tor status dot: green=connected, amber=CONNECTING ONLY,
+                        // red=error, muted=off. See the expanded shield above.
                         Rectangle {
                             visible: AnonMode.enabled;
                             width: 10px; height: 10px; border-radius: 5px;
@@ -813,7 +832,8 @@ export component Sidebar inherits Rectangle {
                             border-width: 1px; border-color: Colors.surface;
                             background: TorStatus.state == 2 ? Colors.success
                                 : TorStatus.state == 3 ? Colors.error
-                                : Colors.warning;
+                                : TorStatus.state == 1 ? Colors.warning
+                                : Colors.text-muted;
                         }
                         TouchArea { clicked => { root.anon-mode-clicked(); } }
                     } }
