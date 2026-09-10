@@ -510,49 +510,18 @@ pub async fn app_init() -> AppState {
         }
     };
 
-    // Dev mode auto-register (desktop: CHATTER_DEV=1, Android: always in dev builds)
-    let dev_mode = std::env::var("CHATTER_DEV").is_ok() || cfg!(target_os = "android");
-    if dev_mode && !ui_ctx.is_logged_in() && !ui_ctx.has_registered_before() {
-        let suffix: u16 = rand::random();
-        let username = format!("dev{}", suffix);
-        let display_name = format!("Dev User {}", suffix);
-        let password = "devpass123";
-        // PIN must satisfy `crypto::svr::validate_pin`: 8-64 ASCII printable AND
-        // clear the entropy floor (audit M1). Mixed alnum → ~46 bits, passes.
-        // (was "123456", then "12345678" — both rejected now.)
-        let pin = "devpin123";
-        let server_url: String = if cfg!(target_os = "android") {
-            // Android dev defaults to localhost via `adb reverse` tunnels
-            // (50051 gRPC, 9000 RustFS, 7880/7881 LiveKit). For tunnel-free LAN
-            // testing (needed for WebRTC UDP media), build with
-            // CHATTER_ANDROID_SERVER=https://<host-lan-ip>:50051 and point the
-            // server's LIVEKIT_URL + S3 endpoint at the same LAN IP. TLS is
-            // required — the server has no plaintext mode.
-            option_env!("CHATTER_ANDROID_SERVER")
-                .unwrap_or("https://localhost:50051")
-                .to_string()
-        } else {
-            // Desktop dev: override the gRPC server at runtime with CHATTER_SERVER_URL
-            // (e.g. https://192.168.122.1:50051 to reach the host from a VM guest),
-            // otherwise default to localhost. TLS is required in every
-            // environment now — there is no plaintext server mode.
-            std::env::var("CHATTER_SERVER_URL")
-                .unwrap_or_else(|_| "https://localhost:50051".to_string())
-        };
-
-        window.set_register_username(username.clone().into());
-        window.set_register_display_name(display_name.clone().into());
-        window.set_register_password(password.into());
-        window.set_register_confirm_password(password.into());
-        window.set_register_pin(pin.into());
-        window.set_register_server_url(server_url.clone().into());
-
-        tracing::info!("DEV MODE: Auto-registering as {} ({}) against {}", username, display_name, server_url);
-        window.invoke_register(
-            username.into(), password.into(), display_name.into(),
-            pin.into(), server_url.into(),
-        );
-    }
+    // Dev-mode auto-register. The whole path — including its fixed, publicly
+    // known password and PIN — is COMPILED OUT unless the `dev-auto-register`
+    // cargo feature is on, so the credentials cannot exist in a shipped binary.
+    //
+    // It used to be gated on a RUNTIME `target_os` test, which is true for every
+    // Android build including release ones, so a shipped APK auto-registered an
+    // account with credentials anyone can read here. Same mistake the
+    // dev sealed-sender trust root made with `cfg(debug_assertions)`, and the
+    // same fix — an explicit cargo feature (Cargo.toml:47-57 of the workspace,
+    // chatter-core/src/config.rs:326).
+    #[cfg(feature = "dev-auto-register")]
+    dev_auto_register(&window, &ui_ctx);
 
     // Anti-debug check (background task on tokio workers)
     let shutdown_for_antidebug = shutdown_token.clone();
@@ -573,6 +542,75 @@ pub async fn app_init() -> AppState {
         #[cfg(target_os = "linux")]
         _tray_handle: tray_handle,
     }
+}
+
+/// Register a throwaway development account on first launch so a dev build lands
+/// in the app instead of on the register screen.
+///
+/// Compiled out entirely unless the `dev-auto-register` cargo feature is enabled
+/// — this function and every literal in it. That feature is enabled by
+/// `dev-run.sh` (desktop) and by `android/build-android.sh` (the debug APK that
+/// targets the local docker-compose stack); nothing else turns it on, and it is
+/// deliberately not in `default`.
+///
+/// Desktop additionally requires `CHATTER_DEV=1` at runtime, so a dev-featured
+/// desktop build does not auto-register on every launch. Android has no way to
+/// set an env var before `android_main`, so there the feature flag alone is the
+/// switch.
+#[cfg(feature = "dev-auto-register")]
+fn dev_auto_register(
+    window: &MainWindow,
+    ui_ctx: &std::sync::Arc<chatter_core::client::ChatterClient>,
+) {
+    // Desktop opt-in, per run.
+    #[cfg(not(target_os = "android"))]
+    if std::env::var("CHATTER_DEV").is_err() {
+        return;
+    }
+
+    if ui_ctx.is_logged_in() || ui_ctx.has_registered_before() {
+        return;
+    }
+
+    let suffix: u16 = rand::random();
+    let username = format!("dev{}", suffix);
+    let display_name = format!("Dev User {}", suffix);
+    let password = "devpass123";
+    // PIN must satisfy `crypto::svr::validate_pin`: 8-64 ASCII printable AND
+    // clear the entropy floor (audit M1). Mixed alnum -> ~46 bits, passes.
+    // (was "123456", then "12345678" — both rejected now.)
+    let pin = "devpin123";
+
+    // Android dev defaults to localhost via `adb reverse` tunnels (50051 gRPC,
+    // 9000 RustFS, 7880/7881 LiveKit). For tunnel-free LAN testing (needed for
+    // WebRTC UDP media), build with CHATTER_ANDROID_SERVER=https://<host-lan-ip>:50051
+    // and point the server's LIVEKIT_URL + S3 endpoint at the same LAN IP. TLS is
+    // required — the server has no plaintext mode.
+    #[cfg(target_os = "android")]
+    let server_url: String = option_env!("CHATTER_ANDROID_SERVER")
+        .unwrap_or("https://localhost:50051")
+        .to_string();
+
+    // Desktop dev: override the gRPC server at runtime with CHATTER_SERVER_URL
+    // (e.g. https://192.168.122.1:50051 to reach the host from a VM guest),
+    // otherwise default to localhost. TLS is required in every environment now
+    // — there is no plaintext server mode.
+    #[cfg(not(target_os = "android"))]
+    let server_url: String = std::env::var("CHATTER_SERVER_URL")
+        .unwrap_or_else(|_| "https://localhost:50051".to_string());
+
+    window.set_register_username(username.clone().into());
+    window.set_register_display_name(display_name.clone().into());
+    window.set_register_password(password.into());
+    window.set_register_confirm_password(password.into());
+    window.set_register_pin(pin.into());
+    window.set_register_server_url(server_url.clone().into());
+
+    tracing::info!("DEV MODE: Auto-registering as {} ({}) against {}", username, display_name, server_url);
+    window.invoke_register(
+        username.into(), password.into(), display_name.into(),
+        pin.into(), server_url.into(),
+    );
 }
 
 /// Phase 2: Sync event loop (runs OUTSIDE block_on — rt.enter() keeps reactor accessible).

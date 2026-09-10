@@ -34,6 +34,10 @@ CHATTER_MESH_SEAL_KEY="$(cat "$seal_key_file")"
 export CHATTER_MESH_SEAL_KEY
 
 # Auto-register a dev account rather than prompting for one.
+#
+# TWO switches, both required on desktop: the `dev-auto-register` cargo feature
+# below compiles the path in at all (without it the fixed dev password/PIN are
+# not in the binary), and CHATTER_DEV=1 arms it for this run.
 export CHATTER_DEV=1
 
 # `--features mesh` is not optional and is easy to lose: any plain
@@ -44,4 +48,4 @@ export CHATTER_DEV=1
 # here means the binary is always rebuilt with it.
 #
 # To check a binary by hand:  strings target/debug/chatter-ui | grep 'mesh: started'
-exec cargo run -p chatter-ui --features mesh "$@"
+exec cargo run -p chatter-ui --features mesh,dev-auto-register "$@"

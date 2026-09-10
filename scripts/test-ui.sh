@@ -15,10 +15,14 @@
 # SLINT_EMIT_DEBUG_INFO=1 is REQUIRED: the ElementHandle query API is inert
 # without Slint debug info compiled into the generated code.
 #
-# --features chatter-core/dev-trust-root is REQUIRED: integration tests link
-# WITHOUT `cfg(test)` set on chatter-core, so its `cfg!(test)` dev-key fallback
-# (crates/chatter-core/src/config.rs) does not apply and the TRUST_ROOT_PUBLIC_KEY
-# LazyLock panics the moment any test calls ChatterClient::build().
+# --features chatter-core/insecure-test-anchors is REQUIRED: integration tests
+# link WITHOUT `cfg(test)` set on chatter-core, so its `cfg!(test)` dev-key
+# fallback (crates/chatter-core/src/config.rs) does not apply — the four pinned
+# trust anchors are then unconfigured and the build stops. That feature is the
+# named, dev-profile-only carve-out for exactly this; chatter-core's build.rs
+# refuses it in a release profile, so it cannot reach a shippable artifact.
+# (dev-trust-root alone is not enough: it covers the three key anchors, never
+# the TLS CA, which has no dev/prod split.)
 #
 # Usage:  ./scripts/test-ui.sh            (from the linux-client submodule root)
 # Exit non-zero if any layer fails.
@@ -26,6 +30,17 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."   # linux-client/
 
+echo "=================================================================="
+echo " VALIDATED-UI  ·  LAYER 0 — dev-credential gate"
+echo "=================================================================="
+# Cheapest layer, so it runs first: the dev auto-register path (fixed password
+# and PIN, both public in this repo) must be behind a compile-time cargo
+# feature, not a runtime `cfg!(target_os = "android")` test that is true for
+# release APKs too. See scripts/dev-gate-lint.py.
+python3 scripts/dev-gate-lint.py
+DEVGATE_RC=$?
+
+echo
 echo "=================================================================="
 echo " VALIDATED-UI  ·  LAYER 2 — static wiring lint"
 echo "=================================================================="
@@ -38,7 +53,7 @@ echo " VALIDATED-UI  ·  LAYER 1 — headless slint::testing suite"
 echo "=================================================================="
 # The debug-info flag changes codegen, so the first run rebuilds; subsequent
 # runs are incremental. Filter the benign per-query debug-info notice.
-FEATURES=chatter-core/dev-trust-root
+FEATURES=chatter-core/dev-trust-root,chatter-core/insecure-test-anchors
 
 SLINT_EMIT_DEBUG_INFO=1 cargo test -p chatter-ui --features $FEATURES --test ui_wiring 2>&1 \
     | grep -v 'requires the presence of debug info'
@@ -69,6 +84,7 @@ echo
 echo "=================================================================="
 echo " RESULT"
 echo "=================================================================="
+echo "  dev-credential gate: $([ $DEVGATE_RC -eq 0 ] && echo PASS || echo 'FAIL (dev creds would ship)')"
 echo "  static wiring lint : $([ $LINT_RC -eq 0 ] && echo PASS || echo 'FAIL (stub/dead wire)')"
 echo "  headless UI suite  : $([ $TEST_RC -eq 0 ] && echo PASS || echo FAIL)"
 echo "  layout suite       : $([ $LAYOUT_RC -eq 0 ] && echo PASS || echo FAIL)"
@@ -78,4 +94,5 @@ echo "  render smoke       : $([ $RENDER_RC -eq 0 ] && echo PASS || echo FAIL)"
 # scripts/ui-wiring-lint.py — 3 code-preview no-ops, 1 never-rendered import,
 # 7 never-invoked callbacks. Those allowlists are the positive control: they are
 # real findings the gate CAN see, held green so a NEW one stands out.
-[ $TEST_RC -eq 0 ] && [ $LINT_RC -eq 0 ] && [ $LAYOUT_RC -eq 0 ] && [ $RENDER_RC -eq 0 ]
+[ $TEST_RC -eq 0 ] && [ $LINT_RC -eq 0 ] && [ $LAYOUT_RC -eq 0 ] && [ $RENDER_RC -eq 0 ] \
+    && [ $DEVGATE_RC -eq 0 ]
