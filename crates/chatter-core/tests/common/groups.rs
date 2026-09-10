@@ -21,8 +21,8 @@
 //!
 //! It deliberately talks to the same façade the shipping Slint client uses
 //! (`ChatterClient::list_pending_channel_invites` /
-//! `respond_to_channel_invite` / `sync`), so a regression in the real accept
-//! path shows up here rather than being papered over by a test-only shortcut.
+//! `respond_to_channel_invite`), so a regression in the real accept path shows
+//! up here rather than being papered over by a test-only shortcut.
 
 #![allow(dead_code)]
 
@@ -41,6 +41,11 @@ const GROUP_TIMEOUT: Duration = Duration::from_secs(90);
 /// Poll interval for the waits below. The probes are server RPCs, so this is
 /// deliberately not a tight loop.
 const GROUP_POLL: Duration = Duration::from_millis(500);
+
+/// Budget for the creator's sender key to reach an invitee. Two device-inbox
+/// polls plus the creator's reply; short enough that a stuck SKDM does not
+/// double every group proof's runtime.
+const SENDER_KEY_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// One invitee: the client that will accept, and the user id it registered as.
 pub type Invitee<'a> = (&'a Arc<ChatterClient>, &'a UserId);
@@ -81,15 +86,60 @@ pub async fn create_group_with_members(
 
     wait_for_server_membership(creator, &channel.id, &invited_ids).await;
 
+    // The creator's sender key has to be ON each invitee before the caller's
+    // first message, or that message loses the documented first-message SKDM
+    // race and the caller's own positive control fails for a reason that has
+    // nothing to do with what it is proving.
+    //
+    // Force-joining used to hide this: the invitees were members while
+    // `create_channel` was still running, so the creator's creation-time
+    // distribution reached them. An invitee who joins later has to pull
+    // instead — `request_skdms_from_channel_members` above asks every existing
+    // member for theirs — and that round trip trips through two device-inbox
+    // polls. Wait for the key itself rather than betting on the latency.
+    for (client, uid) in invitees {
+        wait_for_sender_key_from(client, uid, &channel.owner_id, &channel.id).await;
+    }
+
     channel
+}
+
+/// Wait until `invitee` holds `sender`'s sender key for `channel_id`.
+///
+/// Bounded and non-fatal: the SKDM also rides the sender's first message and
+/// the parked-message drain recovers from there, so a timeout costs the caller
+/// latency, not correctness — and turning it into a panic would convert a slow
+/// stack into a fixture failure that hides the caller's real assertion.
+async fn wait_for_sender_key_from(
+    invitee: &Arc<ChatterClient>,
+    invitee_id: &UserId,
+    sender: &UserId,
+    channel_id: &ChannelId,
+) {
+    let addr = format!("{sender}:1");
+    let dist = channel_id.to_string();
+    let deadline = Instant::now() + SENDER_KEY_TIMEOUT;
+    while Instant::now() < deadline {
+        if matches!(
+            invitee.signal().key_store().load_sender_key(&addr, &dist),
+            Ok(Some(_))
+        ) {
+            return;
+        }
+        tokio::time::sleep(GROUP_POLL).await;
+    }
+    eprintln!(
+        "  note: {invitee_id} still has no sender key from {sender} for {channel_id} after \
+         {SENDER_KEY_TIMEOUT:?}; the first message will race the SKDM"
+    );
 }
 
 /// Have one invitee discover and accept its invitation to `channel_id`, then
 /// bring its local state up to date the way a fresh login would.
 ///
-/// The three post-accept steps mirror `ChatterClient::join_channel` — the
-/// other way into a channel — because `respond_to_channel_invite` does none of
-/// them itself (see `docs/OPEN-ITEMS.md` §69).
+/// The post-accept steps mirror `ChatterClient::join_channel` — the other way
+/// into a channel — because `respond_to_channel_invite` does none of them
+/// itself (see `docs/OPEN-ITEMS.md` §69).
 pub async fn accept_channel_invite(
     invitee: &Arc<ChatterClient>,
     invitee_id: &UserId,
@@ -104,13 +154,28 @@ pub async fn accept_channel_invite(
             panic!("invitee {invitee_id} failed to accept the invite to {channel_id}: {e:?}")
         });
 
-    // (1) pull the channel row + its membership list into the local store,
-    // (2) make the live message stream cover the newly joined channel, and
-    // (3) ask the existing members for their sender keys, or the invitee
-    //     cannot decrypt anything they send next.
-    invitee.sync().await;
-    let _ = invitee.channels().sync_channel_members(channel_id).await;
+    // Wake the live message stream FIRST, before the slower steps below.
+    //
+    // A brand-new invitee was in no channels when their client started, and the
+    // server refuses a global stream to such a user — so the stream task is
+    // sitting in its 30s backoff with no subscription at all, and the
+    // membership change the server now publishes on accept (OPEN-ITEMS §68)
+    // reaches nobody. The nudge starts the reconnect here, so its durable
+    // catch-up runs while this fixture is still doing the work below instead of
+    // inside the window a caller waits for delivery in — and a caller's own
+    // `resubscribe_channel_messages()` a few seconds later then lands inside
+    // the catch-up rate-limit window and reconnects immediately.
     invitee.resubscribe_channel_messages();
+
+    // Pull the channel row + its membership list into the local store, and ask
+    // the existing members for their sender keys — otherwise the invitee cannot
+    // decrypt anything those members send next. `respond_to_channel_invite`
+    // does none of this (OPEN-ITEMS §69), so the fixture does what a fresh
+    // login would. Two targeted calls rather than `sync()`, which would also
+    // list every channel and prefetch ten anonymous credentials per invitee —
+    // load this shared stack does not need.
+    let _ = invitee.channels().get_channel(channel_id).await;
+    let _ = invitee.channels().sync_channel_members(channel_id).await;
     if let Err(e) = invitee
         .messages()
         .request_skdms_from_channel_members(channel_id)
