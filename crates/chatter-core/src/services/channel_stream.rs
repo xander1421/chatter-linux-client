@@ -63,6 +63,20 @@ const MIN_CATCHUP_INTERVAL: Duration = Duration::from_secs(15);
 
 /// True when the server refused the stream because this user is in no
 /// channels — the one "error" that is really just an empty account.
+/// How long to wait after the server answers "you are in no channels".
+///
+/// Only sleep out the full backoff when nobody asked us to be here. A nudge means
+/// someone just joined or accepted a channel, and the server's answer can still be
+/// "no channels" for a moment — the membership write that prompted the nudge is
+/// not necessarily visible yet to the read this stream does. Jumping to
+/// MAX_BACKOFF on that answer cost the accept path up to 30 seconds of silence,
+/// because the nudge is single-shot: nothing arrives to cut the wait short a
+/// second time. That is what `v55` caught whenever the machine was loaded enough
+/// to lose the race (OPEN-ITEMS §103).
+fn backoff_after_no_channels(current: Duration, nudged: bool) -> Duration {
+    if nudged { current } else { MAX_BACKOFF }
+}
+
 fn is_no_channels(e: &crate::error::NetworkError) -> bool {
     matches!(e, crate::error::NetworkError::InvalidRequest(msg)
         if msg.contains("no channels") || msg.contains("channel_ids must be provided"))
@@ -121,11 +135,15 @@ impl ChannelStreamService {
     pub fn start_channel_message_stream(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut backoff = INITIAL_BACKOFF;
+            // Set when a resubscribe nudge woke us, cleared once a stream has
+            // actually run. See the `is_no_channels` arm for why it matters.
+            let mut nudged = false;
             loop {
                 match self.run_once().await {
                     Ok(()) => {
                         tracing::info!("Channel message stream ended; reconnecting");
                         backoff = INITIAL_BACKOFF;
+                        nudged = false;
                     }
                     Err(e) if is_no_channels(&e) => {
                         // The server refuses a global stream for a user who is
@@ -133,8 +151,23 @@ impl ChannelStreamService {
                         // account, not an error to shout about every second —
                         // wait out the full backoff quietly and try again
                         // (joining a channel nudges us awake immediately).
-                        tracing::debug!("No channels to stream yet; will retry");
-                        backoff = MAX_BACKOFF;
+                        // Only sleep out the full backoff when nobody asked us
+                        // to be here. A nudge means someone just joined or
+                        // accepted a channel, and the server's answer can still
+                        // be "no channels" for a moment — the membership write
+                        // that prompted the nudge is not necessarily visible to
+                        // the read this stream does. Jumping to MAX_BACKOFF on
+                        // that answer made the accept path cost up to 30 seconds
+                        // of silence, which is what `v55` was catching whenever
+                        // the machine was loaded enough to lose that race
+                        // (OPEN-ITEMS §103). The nudge is single-shot: nothing
+                        // arrives to cut the wait short a second time.
+                        backoff = backoff_after_no_channels(backoff, nudged);
+                        tracing::debug!(
+                            nudged,
+                            backoff_secs = backoff.as_secs(),
+                            "Server reports no channels; will retry"
+                        );
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -151,6 +184,7 @@ impl ChannelStreamService {
                     _ = tokio::time::sleep(backoff) => {}
                     _ = self.resubscribe.notified() => {
                         backoff = INITIAL_BACKOFF;
+                        nudged = true;
                     }
                 }
                 backoff = (backoff * 2).min(MAX_BACKOFF);
@@ -335,5 +369,47 @@ impl ChannelStreamService {
             channel_id: Some(channel_id),
             target_sent_timestamp: existing.sent_at,
         });
+    }
+}
+
+#[cfg(test)]
+mod backoff_tests {
+    use super::*;
+
+    #[test]
+    fn an_unprompted_no_channels_answer_waits_the_full_backoff() {
+        // A fresh account that has joined nothing should ask again rarely.
+        assert_eq!(
+            backoff_after_no_channels(INITIAL_BACKOFF, false),
+            MAX_BACKOFF
+        );
+        assert_eq!(backoff_after_no_channels(MAX_BACKOFF, false), MAX_BACKOFF);
+    }
+
+    #[test]
+    fn a_nudged_no_channels_answer_stays_on_the_short_ladder() {
+        // §103: accepting an invitation nudges this loop, and the server can
+        // still answer "no channels" if the membership write is not visible to
+        // that read yet. Sleeping 30s there is the user watching an empty
+        // channel after accepting.
+        assert_eq!(
+            backoff_after_no_channels(INITIAL_BACKOFF, true),
+            INITIAL_BACKOFF
+        );
+        assert_eq!(
+            backoff_after_no_channels(Duration::from_secs(2), true),
+            Duration::from_secs(2)
+        );
+    }
+
+    #[test]
+    fn the_nudged_ladder_still_converges_on_the_ceiling() {
+        // It must not retry at 1s forever if the accept really did fail.
+        let mut backoff = INITIAL_BACKOFF;
+        for _ in 0..10 {
+            backoff = backoff_after_no_channels(backoff, true);
+            backoff = (backoff * 2).min(MAX_BACKOFF);
+        }
+        assert_eq!(backoff, MAX_BACKOFF);
     }
 }
