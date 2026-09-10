@@ -1,0 +1,29 @@
+// Server-side AI integration feature flags — runtime globals.
+//
+// Slint cannot `cfg`-gate, so these mirror Cargo features from Rust at startup,
+// the same way `JarvisGlobal.enabled` and `MeshGlobal.enabled` do
+// (`crates/chatter-ui/src/lib.rs`).
+
+export global AiIntegrationGlobal {
+    // The create-channel "AI assistant" template.
+    //
+    // FEAT-5: OFF by default, and deliberately so. The template is not
+    // implemented end to end — there is nowhere in this UI, in
+    // `ChatterClient::create_ai_integration`, or in
+    // `IntegrationClient::create_integration` (which hardcodes
+    // `secrets: Default::default()`) to supply the provider API key. The
+    // server requires one unconditionally
+    // (`internal/services/ai/providers/factory.go:85`) and validates BEFORE it
+    // writes anything (`internal/services/integration/service/service.go:89`
+    // runs `handler.Initialize` ahead of `CreateIntegration` at `:96`), so the
+    // integration is never created. Ticking the box therefore always produced
+    // a channel with no bot in it, and the failure was swallowed by a
+    // `tracing::error!`.
+    //
+    // The pre-alpha bar is "anything unimplemented is explicitly unimplemented
+    // — never silently faked", so the control is not offered until an API-key
+    // input exists on this path. Turn it on with the `ai-channel-template`
+    // Cargo feature once it does. The failure is also surfaced as an error
+    // toast now, rather than logged, for whoever does turn it on.
+    in-out property <bool> channel-template-enabled: false;
+}

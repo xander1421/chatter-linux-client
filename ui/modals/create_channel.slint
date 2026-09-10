@@ -13,6 +13,7 @@ import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 import { Avatar } from "../components/avatar.slint";
 import { SearchResultChannel, SearchResultItem } from "join_channel.slint";
+import { AiIntegrationGlobal } from "../ai/ai_global.slint";
 
 // Friend data for private group selection (matches FriendData)
 export struct PrivateGroupFriend {
@@ -768,8 +769,15 @@ export component CreateChannelModal inherits Rectangle {
                         }
                     }
 
-                    // AI assistant
-                    VerticalLayout {
+                    // AI assistant.
+                    //
+                    // FEAT-5: gated OFF by default on AiIntegrationGlobal,
+                    // which mirrors the `ai-channel-template` Cargo feature.
+                    // Nothing on this path can supply the provider API key the
+                    // server requires, so ticking this box always produced a
+                    // channel with no bot in it. Unimplemented is stated, not
+                    // faked — see ui/ai/ai_global.slint.
+                    if AiIntegrationGlobal.channel-template-enabled: VerticalLayout {
                         spacing: Spacing.xs;
 
                         HorizontalLayout {

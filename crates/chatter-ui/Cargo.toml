@@ -158,6 +158,13 @@ desktop-media-no-livekit = [
 ]
 local-ai = ["chatter-core/local-ai"]
 jarvis = ["chatter-core/jarvis"]
+# The create-channel "AI assistant" template. OFF by default: nothing on that
+# path can supply the provider API key the server requires unconditionally
+# (internal/services/ai/providers/factory.go:85), so the integration is never
+# created and the channel comes up with no bot in it. Mirrored into
+# `AiIntegrationGlobal.channel-template-enabled` (lib.rs) so the control is not
+# rendered at all. See docs/OPEN-ITEMS.md §58 (FEAT-5).
+ai-channel-template = []
 # Build against the local dev Vault's sealed-sender trust root. Insecure by
 # construction (its private key is in this repo) — see chatter-core/config.rs.
 dev-trust-root = ["chatter-core/dev-trust-root"]

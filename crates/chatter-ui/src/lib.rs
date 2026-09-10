@@ -290,6 +290,18 @@ pub async fn app_init() -> AppState {
         window.global::<JarvisGlobal>().set_enabled(true);
     }
 
+    // FEAT-5: the create-channel "AI assistant" template. Same mirror pattern,
+    // but off by default — the path cannot supply the provider API key the
+    // server requires, so the template always produced an empty channel. The
+    // Slint block is compiled and renders as nothing until the
+    // `ai-channel-template` Cargo feature is built. See ui/ai/ai_global.slint.
+    {
+        use slint::ComponentHandle;
+        window
+            .global::<AiIntegrationGlobal>()
+            .set_channel_template_enabled(cfg!(feature = "ai-channel-template"));
+    }
+
     // Anon Mode: enforce default-off on every fresh window. The core flag
     // is already false (in-memory AtomicBool), this keeps the Slint global
     // in sync defensively. Auto-revert on restart is the privacy property
@@ -297,6 +309,17 @@ pub async fn app_init() -> AppState {
     {
         use slint::ComponentHandle;
         window.global::<AnonMode>().set_enabled(false);
+
+        // STUB-1: mirror the `onion` Cargo feature, exactly as the `jarvis`
+        // block above mirrors its own. Without `onion` there is no Tor
+        // transport to switch to, so every anon surface (`if
+        // AnonMode.onion-built : ...` in ui/sidebar/sidebar.slint) renders as
+        // nothing. Offering the shield in a build that cannot honour it is
+        // worse than not offering it: the user passes a PIN gate, the shield
+        // glows, and the traffic goes direct.
+        window
+            .global::<AnonMode>()
+            .set_onion_built(cfg!(feature = "onion"));
     }
 
     // Touch feedback. One binding site for the whole app — see the module docs.

@@ -140,6 +140,22 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                         chat_state.set_active_channel(channel_id);
 
+                        // FEAT-5: this branch is unreachable in a default build
+                        // — the "AI assistant" template is gated off on
+                        // `AiIntegrationGlobal.channel-template-enabled`, which
+                        // mirrors the off-by-default `ai-channel-template` Cargo
+                        // feature. It is kept, and correct, for the build that
+                        // turns it on.
+                        //
+                        // The failure used to be swallowed by `tracing::error!`,
+                        // so the channel was created, the modal closed, and the
+                        // user was told nothing. It always failed: the server
+                        // requires `secrets["api_key"]`
+                        // (internal/services/ai/providers/factory.go:85) and
+                        // nothing on this path can supply one. The channel is
+                        // real by this point, so the honest report is a visible
+                        // error saying the bot was not added — not silence, and
+                        // not an aborted channel.
                         if template == "ai-assistant" && !ai_provider.is_empty() && !ai_model.is_empty() {
                             if let Err(e) = ui_ctx.create_ai_integration(
                                 &format!("{} Assistant", name),
@@ -148,6 +164,20 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 &channel_id.to_string(),
                             ).await {
                                 tracing::error!(error = %e, "Failed to create AI integration");
+                                let detail = e.to_string();
+                                let weak_toast = weak.clone();
+                                let _ = slint::invoke_from_event_loop(move || {
+                                    if let Some(w) = weak_toast.upgrade() {
+                                        w.set_toast_message(
+                                            format!(
+                                                "Channel created, but the AI assistant was not added: {detail}"
+                                            )
+                                            .into(),
+                                        );
+                                        w.set_toast_variant("error".into());
+                                        w.set_toast_visible(true);
+                                    }
+                                });
                             }
                         }
 
