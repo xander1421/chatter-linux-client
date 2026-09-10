@@ -194,9 +194,10 @@ impl ChannelStreamService {
 
     /// One connect → consume → disconnect cycle.
     async fn run_once(&self) -> Result<(), crate::error::NetworkError> {
-        // Durable catch-up first: whatever was missed while we were down is
-        // fetched from the server's message store, not from a live stream
-        // that by definition was not running.
+        // Opportunistic durable sync while we are not connected: if the stream
+        // is broken for a while, this is what keeps messages arriving at all.
+        // It is rate-limited and is NOT what closes the gap below — see the
+        // forced catch-up after the subscription is live.
         self.catch_up().await;
 
         let cursor = self.cursor();
@@ -213,6 +214,31 @@ impl ChannelStreamService {
             resume_from = cursor.as_deref().unwrap_or("<none>"),
             "Channel message stream connected"
         );
+
+        // SUBSCRIBE FIRST, THEN BACKFILL. This ordering is the whole fix for
+        // OPEN-ITEMS §103, and the reverse of what this function used to do.
+        //
+        // A cursorless global stream is positioned by the server at each
+        // channel's CURRENT TAIL (`newEventLogReader` -> `eventLogTail`), so it
+        // delivers only what is appended after this call returns. Backfilling
+        // before subscribing therefore leaves a window — everything published
+        // between the sync and the subscribe is delivered by neither half:
+        // too late for the backfill, too early for the stream. Nothing retries,
+        // because a healthy stream never reconnects.
+        //
+        // That window is exactly what `v55` was catching. A brand-new invitee
+        // has no stream at all (the server refuses a global stream for a user
+        // in no channels), so accepting an invitation means bootstrapping one;
+        // under load the sender's first message lands inside the window and is
+        // never delivered. It looked load-sensitive because the window is
+        // normally sub-millisecond.
+        //
+        // Forced, not rate-limited: MIN_CATCHUP_INTERVAL is 15s and a
+        // reconnecting client has usually synced within that, so the throttled
+        // call above would skip precisely the one sync that closes the window.
+        // Duplicates are free — the message store inserts with
+        // INSERT OR IGNORE on the message id.
+        self.catch_up_now().await;
 
         tokio::pin!(stream);
         loop {
@@ -242,6 +268,17 @@ impl ChannelStreamService {
             }
             *last = Some(Instant::now());
         }
+
+        self.catch_up_now().await;
+    }
+
+    /// A durable sync that always runs, whatever the rate limiter thinks.
+    ///
+    /// Used once per successful subscribe (§103). The throttle exists to stop a
+    /// flapping stream hammering the server; it must not be able to skip the
+    /// sync that closes the subscribe window.
+    async fn catch_up_now(&self) {
+        *self.last_catchup.lock() = Some(Instant::now());
 
         let result = self.sync_service.trigger_sync().await;
         tracing::info!(
@@ -411,5 +448,64 @@ mod backoff_tests {
             backoff = (backoff * 2).min(MAX_BACKOFF);
         }
         assert_eq!(backoff, MAX_BACKOFF);
+    }
+}
+
+/// §103 — the subscribe/backfill ORDER is the fix, and order is invisible to the
+/// type system.
+///
+/// A cursorless global stream is positioned by the server at each channel's
+/// current tail, so it carries only what is appended after the subscribe call
+/// returns. Backfilling first therefore leaves a window that neither half
+/// covers, and nothing retries it, because a healthy stream never reconnects.
+/// `v55` spent three full-suite runs failing on exactly that window.
+///
+/// This reads the source rather than the behaviour, which is a weak test in
+/// general and the right one here: the property is "these two calls are in this
+/// order inside one function", there is no seam to inject a fake gRPC stream
+/// into, and a refactor that swaps them would compile, pass every other test,
+/// and quietly restore the bug.
+#[cfg(test)]
+mod subscribe_before_backfill {
+    #[test]
+    fn the_forced_catch_up_runs_after_the_subscribe() {
+        let src = include_str!("channel_stream.rs");
+        let body = src
+            .split_once("async fn run_once")
+            .expect("run_once still exists")
+            .1;
+        let body = body.split_once("\n    fn cursor(").map(|(b, _)| b).unwrap_or(body);
+
+        let subscribe = body
+            .find(".stream_global_events(")
+            .expect("run_once must still open the global stream");
+        let backfill = body
+            .find("self.catch_up_now().await")
+            .expect("run_once must still force a durable catch-up");
+
+        assert!(
+            subscribe < backfill,
+            "the forced catch-up must come AFTER stream_global_events. Backfilling first \
+             leaves every event published in between undelivered by both paths — the server \
+             positions a cursorless reader at the channel tail, so the stream will not carry \
+             them, and the backfill already ran. See OPEN-ITEMS §103."
+        );
+    }
+
+    #[test]
+    fn the_window_closing_catch_up_is_not_rate_limited() {
+        let src = include_str!("channel_stream.rs");
+        let forced = src
+            .split_once("async fn catch_up_now")
+            .expect("catch_up_now still exists")
+            .1;
+        let forced = forced.split_once("\n    fn ").map(|(b, _)| b).unwrap_or(forced);
+
+        assert!(
+            !forced.contains("MIN_CATCHUP_INTERVAL"),
+            "catch_up_now must ignore the rate limiter: a reconnecting client has usually \
+             synced within MIN_CATCHUP_INTERVAL, so throttling it would skip precisely the \
+             sync that closes the subscribe window (§103)."
+        );
     }
 }
