@@ -58,6 +58,22 @@ pub struct CombinedSearchResults {
     pub local_count: usize,
     /// Count of server results.
     pub server_count: usize,
+    /// The server half of the search failed, and this is why.
+    ///
+    /// INFRA-3: this used to not exist. `search_combined` discarded every
+    /// `SearchError::Network(_)` into an empty `server_results`, so a server
+    /// that answered "your request is invalid" and a server that answered
+    /// "nothing matched" produced byte-identical results and the caller had no
+    /// way to tell them apart. `None` means the server half actually ran (or
+    /// was legitimately skipped because the user is not logged in — see
+    /// `server_skipped_not_logged_in`); `Some` means it failed and the results
+    /// below are local-only.
+    pub server_error: Option<String>,
+    /// The server half was skipped because no one is logged in.
+    ///
+    /// Distinct from `server_error`: not a failure, just not applicable. Local
+    /// search does not require auth, so this is the ordinary offline case.
+    pub server_skipped_not_logged_in: bool,
 }
 
 impl CombinedSearchResults {
@@ -68,6 +84,8 @@ impl CombinedSearchResults {
             server_results: Vec::new(),
             local_count: 0,
             server_count: 0,
+            server_error: None,
+            server_skipped_not_logged_in: false,
         }
     }
 
@@ -79,7 +97,16 @@ impl CombinedSearchResults {
             server_results: Vec::new(),
             local_count,
             server_count: 0,
+            server_error: None,
+            server_skipped_not_logged_in: true,
         }
+    }
+
+    /// True when the results are complete: the server half ran and succeeded,
+    /// or was legitimately skipped. False means the caller is looking at a
+    /// partial answer and must say so rather than render it as "no results".
+    pub fn is_complete(&self) -> bool {
+        self.server_error.is_none()
     }
 }
 
@@ -269,15 +296,46 @@ impl SearchService {
             Err(_) => Vec::new(), // Storage errors - return empty local results
         };
 
-        // Try server search if authenticated
+        // Try server search if authenticated.
+        //
+        // INFRA-3: every `SearchError::Network(_)` used to be flattened into an
+        // empty Vec, so "the server rejected this request" was reported to the
+        // caller as "the server found nothing". Two cases are now separated:
+        //
+        //   * The server said the request itself is wrong (InvalidArgument ->
+        //     NetworkError::InvalidRequest, the exact code the tightened
+        //     server-side search rule returns). That is a bug in the caller,
+        //     never a transient condition, and retrying cannot help — it
+        //     propagates.
+        //   * The server could not be reached (transport, timeout,
+        //     unavailable, rate limit, ...). Local results are still worth
+        //     returning, but the caller MUST be able to tell it is looking at a
+        //     partial answer, so the reason travels with them.
+        //
+        // Not being logged in is neither: local search needs no auth, so it is
+        // recorded as a skip.
+        let mut server_error: Option<String> = None;
+        let mut server_skipped_not_logged_in = false;
         let server_results = match self
             .search_server(client, channel_id, trimmed_query, limit, 0, None, None)
             .await
         {
             Ok(results) => results,
-            Err(SearchError::NotLoggedIn) => Vec::new(), // Not authenticated - skip server
-            Err(SearchError::Network(_)) => Vec::new(),  // Network error - skip server
-            Err(e) => return Err(e),                     // Other errors propagate
+            Err(e) => match classify_server_half_error(e) {
+                ServerHalfOutcome::Skipped => {
+                    server_skipped_not_logged_in = true;
+                    Vec::new()
+                }
+                ServerHalfOutcome::Degraded(reason) => {
+                    tracing::warn!(
+                        error = %reason,
+                        "search: server half failed; returning local results only"
+                    );
+                    server_error = Some(reason);
+                    Vec::new()
+                }
+                ServerHalfOutcome::Fatal(e) => return Err(e),
+            },
         };
 
         let local_count = local_results.len();
@@ -288,6 +346,8 @@ impl SearchService {
             server_results,
             local_count,
             server_count,
+            server_error,
+            server_skipped_not_logged_in,
         })
     }
 }
@@ -508,6 +568,8 @@ mod tests {
             server_results,
             local_count,
             server_count,
+            server_error: None,
+            server_skipped_not_logged_in: false,
         };
 
         assert_eq!(combined.local_count, combined.local_results.len());
@@ -577,5 +639,109 @@ mod tests {
         let search_err: SearchError = storage_err.into();
         assert!(matches!(search_err, SearchError::Storage(_)));
         assert!(search_err.to_string().contains("storage error"));
+    }
+}
+
+/// What the server half of a combined search did when it did not return
+/// results. Split out of `search_combined` so it can be tested without a live
+/// `MessageClient` — the original bug was entirely in this decision.
+#[derive(Debug)]
+pub(crate) enum ServerHalfOutcome {
+    /// Not applicable: nobody is logged in. Local search needs no auth, so this
+    /// is the ordinary offline case, not a failure.
+    Skipped,
+    /// The server half failed but local results are still worth returning. The
+    /// caller MUST be able to say so — this reason travels with the results.
+    Degraded(String),
+    /// Not recoverable and not partial: the caller asked for something invalid,
+    /// or something went wrong that is not a network condition at all.
+    Fatal(SearchError),
+}
+
+/// Decide what a failed server search means (INFRA-3).
+///
+/// `search_combined` used to flatten EVERY `SearchError::Network(_)` into an
+/// empty `server_results`, so "the server rejected your request" and "the
+/// server found nothing" were byte-identical to the caller.
+///
+/// `NetworkError::InvalidRequest` is the mapping of gRPC `InvalidArgument`
+/// (`error/network_error.rs`), which is exactly what the tightened server-side
+/// search rule returns. That is a caller bug, never transient, and retrying
+/// cannot help — it must not be silently swallowed.
+pub(crate) fn classify_server_half_error(err: SearchError) -> ServerHalfOutcome {
+    match err {
+        SearchError::NotLoggedIn => ServerHalfOutcome::Skipped,
+        // The transport-level shape of the same "not logged in".
+        SearchError::Network(NetworkError::Unauthenticated) => ServerHalfOutcome::Skipped,
+        e @ SearchError::Network(NetworkError::InvalidRequest(_)) => ServerHalfOutcome::Fatal(e),
+        SearchError::Network(e) => ServerHalfOutcome::Degraded(e.to_string()),
+        e => ServerHalfOutcome::Fatal(e),
+    }
+}
+
+#[cfg(test)]
+mod combined_search_error_tests {
+    use super::*;
+
+    /// INFRA-3 regression. Before the fix every one of these mapped to
+    /// "skip the server half, return an empty Vec", so the caller could not
+    /// tell a rejected request from an empty result set.
+    #[test]
+    fn an_invalid_request_from_the_server_is_not_swallowed() {
+        let outcome = classify_server_half_error(SearchError::Network(
+            NetworkError::InvalidRequest("query is not valid".to_string()),
+        ));
+        assert!(
+            matches!(outcome, ServerHalfOutcome::Fatal(_)),
+            "InvalidArgument from the server must propagate, not become an \
+             empty result set — got {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn an_unreachable_server_degrades_with_a_reason() {
+        for e in [
+            NetworkError::Unavailable,
+            NetworkError::Timeout,
+            NetworkError::ConnectionFailed("dial".to_string()),
+            NetworkError::RateLimited,
+            NetworkError::ServerError("boom".to_string()),
+        ] {
+            let expected = e.to_string();
+            match classify_server_half_error(SearchError::Network(e)) {
+                ServerHalfOutcome::Degraded(reason) => assert_eq!(reason, expected),
+                other => panic!(
+                    "a transient network failure must degrade WITH a reason, so the \
+                     caller can say the answer is partial — got {other:?}"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn not_logged_in_is_a_skip_not_a_failure() {
+        assert!(matches!(
+            classify_server_half_error(SearchError::NotLoggedIn),
+            ServerHalfOutcome::Skipped
+        ));
+        assert!(matches!(
+            classify_server_half_error(SearchError::Network(NetworkError::Unauthenticated)),
+            ServerHalfOutcome::Skipped
+        ));
+    }
+
+    /// `is_complete()` is the one call a caller needs to know whether it may
+    /// render the results as "no results".
+    #[test]
+    fn is_complete_distinguishes_partial_answers() {
+        let mut r = CombinedSearchResults::empty();
+        assert!(r.is_complete(), "an empty-but-successful search is complete");
+
+        r.server_error = Some("server unavailable".to_string());
+        assert!(
+            !r.is_complete(),
+            "results carrying a server_error are a PARTIAL answer and must not \
+             be rendered as 'no results'"
+        );
     }
 }
