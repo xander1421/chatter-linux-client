@@ -32,8 +32,17 @@ async fn test_appcontext_three_tier_initialization() {
 
     let ctx = chatter_core::app::AppContext::with_config(Some("https://localhost:50051".to_string()), Some(data_dir));
 
+    // A hang detector, not a performance budget. This was `< 30s` and failed at
+    // 44s inside `make test-rust`, where the whole workspace runs in parallel —
+    // 18s standalone on the same machine. A wall-clock bound tight enough to
+    // measure the code measures the load instead, and a gate that fails on a
+    // busy machine trains people to re-run it (OPEN-ITEMS §95). Wide enough that
+    // only a real hang trips it.
     let elapsed = start.elapsed();
-    assert!(elapsed < Duration::from_secs(30), "AppContext init took too long: {:?}", elapsed);
+    assert!(
+        elapsed < Duration::from_secs(180),
+        "AppContext init did not finish: {elapsed:?}"
+    );
 
     match ctx {
         Ok(_ctx) => {
