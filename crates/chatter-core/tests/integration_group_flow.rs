@@ -397,27 +397,124 @@ async fn test_update_group_settings() {
         ..Default::default()
     };
 
-    let update_result = channel_client
-        .update_channel(&channel_id, updated_channel, None)
-        .await;
+    // INFRA-30: update_mask is REQUIRED and authoritative. This call used to
+    // pass `None`, which the server now rejects with InvalidArgument
+    // ("update_mask must name at least one field to update",
+    // internal/services/channel/service/channels.go:547-548) — and the match
+    // below used to print the failure to stderr and pass anyway, so the
+    // regression was invisible on top of being behind `skip_if_no_server!()`.
+    let mask = prost_types::FieldMask {
+        paths: vec!["name".to_string(), "description".to_string()],
+    };
 
-    match update_result {
+    let stream = channel_client
+        .update_channel(&channel_id, updated_channel, Some(mask))
+        .await
+        .expect("update_channel with a populated update_mask must be accepted");
+
+    tokio::pin!(stream);
+    let mut saw_update = false;
+    while let Some(result) = stream.next().await {
+        let event = result.expect("Stream error");
+        if let Some(payload) = event.event {
+            use chatter_core::proto::chat_v1::channel_event::Event;
+            match payload {
+                Event::ChannelUpdated(ch) => {
+                    assert_eq!(ch.name, new_name);
+                    assert_eq!(ch.description, "Updated description");
+                    saw_update = true;
+                }
+                Event::OperationFailed(e) => {
+                    let msg = e.error.map(|err| err.message).unwrap_or_default();
+                    panic!("Channel update failed: {msg}");
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(
+        saw_update,
+        "the update stream closed without a ChannelUpdated event — the rename \
+         never happened and the old test would have passed anyway"
+    );
+}
+
+/// INFRA-30 regression: a nil `update_mask` must be REJECTED, not silently
+/// treated as "update everything".
+///
+/// The mask decides which fields change. Before it was enforced, a client that
+/// sent a whole ChannelProto with an empty mask overwrote every field it
+/// happened to leave at its default — clearing a description, resetting
+/// security-relevant config, during an unrelated rename. The server now returns
+/// InvalidArgument (channels.go:547). This pins that from the client side, so
+/// the client cannot quietly go back to sending `None`.
+#[tokio::test]
+async fn test_update_group_settings_rejects_empty_update_mask() {
+    skip_if_no_server!();
+
+    let pool = assert_ok(create_test_pool().await);
+    let _user = assert_ok(setup_authenticated_test(&pool).await);
+
+    let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
+    let name = format!("mask_test_{}", unique_username());
+
+    let stream = channel_client
+        .create_channel(
+            &name,
+            ChannelType::ChannelPrivate,
+            None,
+            vec![],
+            None,
+            Some("Original description"),
+            None,
+        )
+        .await
+        .expect("Failed to create group");
+    let channel_id = consume_create_stream_get_id(stream).await;
+
+    let updated_channel = ChannelProto {
+        id: channel_id.clone(),
+        name: format!("renamed_{}", unique_username()),
+        r#type: ChannelType::ChannelPrivate as i32,
+        ..Default::default()
+    };
+
+    // No mask. The failure may surface either at the RPC call or as an
+    // OperationFailed event on the stream; both are a rejection, and neither
+    // may be a success.
+    let mut rejected = false;
+    match channel_client
+        .update_channel(&channel_id, updated_channel, None)
+        .await
+    {
+        Err(_) => rejected = true,
         Ok(stream) => {
             tokio::pin!(stream);
             while let Some(result) = stream.next().await {
-                let event = result.expect("Stream error");
-                if let Some(payload) = event.event {
-                    use chatter_core::proto::chat_v1::channel_event::Event;
-                    if let Event::ChannelUpdated(ch) = payload {
-                        assert_eq!(ch.name, new_name);
+                match result {
+                    Err(_) => rejected = true,
+                    Ok(event) => {
+                        if let Some(payload) = event.event {
+                            use chatter_core::proto::chat_v1::channel_event::Event;
+                            match payload {
+                                Event::OperationFailed(_) => rejected = true,
+                                Event::ChannelUpdated(_) => panic!(
+                                    "the server applied an update with NO update_mask — \
+                                     an unrelated rename can now clear every other field"
+                                ),
+                                _ => {}
+                            }
+                        }
                     }
                 }
             }
         }
-        Err(e) => {
-            eprintln!("Update channel result: {:?}", e);
-        }
     }
+
+    assert!(
+        rejected,
+        "a nil update_mask must be rejected (InvalidArgument), not accepted"
+    );
 }
 
 // ============================================================================
