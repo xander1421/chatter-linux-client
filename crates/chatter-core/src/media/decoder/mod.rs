@@ -1,7 +1,12 @@
 //! Platform-abstracted video decoder.
 //!
-//! Uses GStreamer for cross-platform video decoding with hardware acceleration.
-//! Works on Desktop (Linux/Windows/macOS) and Mobile (Android/iOS).
+//! GStreamer, with hardware acceleration, on Linux, Windows and macOS.
+//!
+//! ANDROID HAS NO VIDEO DECODER. The cfg below selects `mediacodec` there, whose
+//! constructor always fails — the MediaCodec binding was never written
+//! (FEAT-11, OPEN-ITEMS §91). This doc comment used to say GStreamer "works on
+//! Desktop and Mobile (Android/iOS)", which the cfg immediately below it
+//! contradicts.
 
 use std::path::Path;
 

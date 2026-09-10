@@ -419,7 +419,24 @@ impl HttpLocalAIService {
         }
         if let Ok(Some(provider)) = repo.get_string("local_ai.active_provider") {
             if let Some(kind) = crate::local_ai::providers::ProviderKind::parse(&provider) {
-                settings.active_provider = kind;
+                // A stored MistralRs selection outlives the build that could
+                // honour it: settings persist, the `local-ai` feature does not
+                // (STUB-7, OPEN-ITEMS §90). Restoring it here pointed the user's
+                // assistant at an in-process engine this binary does not
+                // contain, which used to answer with "[Stub response - enable
+                // local-ai feature...]" as if the model had said it. Keep the
+                // default provider instead.
+                if kind == crate::local_ai::providers::ProviderKind::MistralRs
+                    && !crate::local_ai::providers::mistralrs_available()
+                {
+                    tracing::warn!(
+                        "stored local-AI provider is the in-process engine, which this build \
+                         does not include; falling back to {:?}",
+                        settings.active_provider
+                    );
+                } else {
+                    settings.active_provider = kind;
+                }
             }
         }
         if let Ok(Some(model)) = repo.get_string("local_ai.chat_model") {

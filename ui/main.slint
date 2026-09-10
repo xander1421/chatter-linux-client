@@ -93,12 +93,10 @@ export component MainWindow inherits Window {
     in property <image> register-avatar-source <=> app.register-avatar-source;
     in property <bool> register-has-avatar <=> app.register-has-avatar;
     in-out property <int> register-selected-default-idx <=> app.register-selected-default-idx;
-    in property <string> register-username-status <=> app.register-username-status;
     in property <int> register-password-strength <=> app.register-password-strength;
     in property <int> register-pin-strength <=> app.register-pin-strength;
     callback register-select-avatar <=> app.register-select-avatar;
     callback register-select-default-avatar <=> app.register-select-default-avatar;
-    callback register-check-username <=> app.register-check-username;
     callback register-password-changed <=> app.register-password-changed;
     callback register-pin-changed <=> app.register-pin-changed;
 

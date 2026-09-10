@@ -25,7 +25,6 @@ export component RegisterPage inherits Rectangle {
     in property <int> selected-default-idx: -1;
     
     // Task 1: Username availability
-    in property <string> username-status: "none"; // "none", "checking", "available", "taken"
     
     // Internal navigation state (Task 2)
     // Steps: 1: Profile, 2: Password, 3: PIN, 4: Server/Review
@@ -45,7 +44,6 @@ export component RegisterPage inherits Rectangle {
     property <bool> show-advanced: false;
 
     callback register(string, string, string, string, string);
-    callback check-username(string);
     callback password-changed(string);
     callback pin-changed(string);
     callback select-avatar();
@@ -251,45 +249,20 @@ export component RegisterPage inherits Rectangle {
                                 disabled: root.loading;
                             }
 
-                            // Username with availability check (Task 1)
-                            VerticalLayout {
-                                spacing: Spacing.xs;
-                                
-                                Input {
-                                    placeholder: "Username";
-                                    text <=> root.username;
-                                    disabled: root.loading;
-                                    edited(text) => { root.check-username(text); }
-                                }
-                                
-                                if username != "": HorizontalLayout {
-                                    spacing: 4px;
-                                    alignment: start;
-                                    
-                                    if username-status == "checking": Text {
-                                        text: "Checking availability...";
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xxs;
-                                    }
-                                    if username-status == "available": Text {
-                                        text: "\u{2713} Available";
-                                        color: Colors.success;
-                                        font-size: Typography.xxs;
-                                        font-weight: 600;
-                                    }
-                                    if username-status == "taken": Text {
-                                        text: "\u{00D7} Already taken";
-                                        color: Colors.error;
-                                        font-size: Typography.xxs;
-                                        font-weight: 600;
-                                    }
-                                }
+                            // No availability check: the server exposes no
+                            // username-lookup RPC, so the field is a plain
+                            // input and registration reports a clash
+                            // (OPEN-ITEMS §82).
+                            Input {
+                                placeholder: "Username";
+                                text <=> root.username;
+                                disabled: root.loading;
                             }
 
                             Button {
                                 text: "Continue";
                                 variant: "primary";
-                                disabled: display-name == "" || username == "" || username-status == "taken";
+                                disabled: display-name == "" || username == "";
                                 clicked => { current-step = 2; }
                             }
                         }
