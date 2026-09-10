@@ -3356,8 +3356,6 @@ pub mod message_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        /** Pin/Unpin Messages
-*/
         pub async fn pin_message(
             &mut self,
             request: impl tonic::IntoRequest<super::MessageUpdate>,
