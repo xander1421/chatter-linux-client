@@ -159,6 +159,16 @@ pub fn random_uak() -> [u8; 16] {
 
 /// Create a connected GrpcClientPool for testing.
 pub async fn create_test_pool() -> Result<Arc<GrpcClientPool>, NetworkError> {
+    // The pool-based proofs never went through the ChatterClient builder, which
+    // is where validated.rs installs its subscriber — so `RUST_LOG` did nothing
+    // for exactly the tests whose failures were hardest to read (OPEN-ITEMS
+    // §73). No-op unless RUST_LOG is set; try_init tolerates repeats.
+    if std::env::var("RUST_LOG").is_ok() {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .try_init();
+    }
+
     let pool = GrpcClientPool::new(&super::server_url())?;
     pool.connect().await?;
     Ok(Arc::new(pool))
@@ -283,12 +293,26 @@ pub async fn register_test_user(pool: &GrpcClientPool) -> Result<TestUser, Netwo
     let username_lookup = chatter_core::crypto::auth_crypto::hash_username_lookup(&full_username)
         .map_err(|e| NetworkError::Unknown(format!("hash_username_lookup failed: {e}")))?;
 
+    // The SVR public key is an X25519 key derived from the account PIN — 32 raw
+    // bytes, no type prefix (`crypto/svr.rs:394`). This fixture used to pass
+    // `identity_public_key.as_ref()` here: the Signal IDENTITY key, 33 bytes of
+    // `0x05 || u`, in the argument named svr_public_key. Every test user was
+    // registered with its identity key stored in `users.svr_public_key` — a
+    // column with a UNIQUE constraint, used for account recovery. It went
+    // unnoticed because the server's validation only checked a length RANGE
+    // (>= 32, <= 128); tightening it to a real X25519 check (CRYPTO-8,
+    // OPEN-ITEMS §84) is what surfaced it.
+    let mut svr_secret = [0u8; 32];
+    rand::rng().fill_bytes(&mut svr_secret);
+    let svr_public_key =
+        chatter_core::crypto::svr::SvrKeypair::from_secret(&svr_secret).public_key_bytes();
+
     let result = auth_client
         .register_and_wait(
             &username_hash_hex,        // PRIVACY: Send hash, matches SDK (server stores hash, not plaintext)
             &password_hash,
             &encrypted_display_name,
-            identity_public_key.as_ref(),
+            &svr_public_key,
             "integration-test-device",
             &device_auth_token,
             &uak,

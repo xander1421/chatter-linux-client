@@ -197,8 +197,10 @@ pub struct TestHarnessBuilder {
 impl TestHarnessBuilder {
     /// Use real network with specified server URL.
     pub fn with_real_network(mut self) -> Self {
+        // https, not http: the server refuses plaintext h2c since TLS became
+        // mandatory (see tests/common/config.rs and OPEN-ITEMS §73).
         let url = std::env::var("SERVER_URL")
-            .unwrap_or_else(|_| "http://localhost:50051".to_string());
+            .unwrap_or_else(|_| "https://localhost:50051".to_string());
         self.config.network_mode = NetworkMode::Real(url);
         self
     }

@@ -108,7 +108,22 @@ impl NetworkError {
             Code::OutOfRange => NetworkError::InvalidRequest(format!("out of range: {}", message)),
             Code::Unimplemented => NetworkError::ServerError(format!("unimplemented: {}", message)),
             Code::Internal => NetworkError::ServerError(message),
-            Code::Unavailable => NetworkError::Unavailable,
+            Code::Unavailable => {
+                // NetworkError::Unavailable is a unit variant, so everything the
+                // transport had to say is dropped here. That is why OPEN-ITEMS
+                // §73 could only report "Unavailable in 0.00s, server logs
+                // nothing" after eliminating six hypotheses: the answer was in
+                // this `message` and in `status`'s source chain, and neither ever
+                // reached a log. Say it before discarding it.
+                tracing::warn!(
+                    message = %message,
+                    source = ?StdError::source(status),
+                    metadata = ?status.metadata(),
+                    "gRPC UNAVAILABLE — the transport's own reason, which the \
+                     NetworkError variant cannot carry"
+                );
+                NetworkError::Unavailable
+            }
             Code::DataLoss => NetworkError::DataLoss(message),
             Code::Unauthenticated => NetworkError::Unauthenticated,
         }
