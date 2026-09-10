@@ -249,19 +249,36 @@ fn constant_time_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
     difference == 0
 }
 
-/// The rejection list from `NoiseProtocol.swift`.
-const LOW_ORDER_POINTS: [[u8; 32]; 8] = [
+/// The rejection list.
+///
+/// Started as a verbatim port of `NoiseProtocol.swift`. Checking that port by
+/// arithmetic rather than by citation found it wrong in both directions
+/// (OPEN-ITEMS §102):
+///
+///   * It **omitted** the canonical `p-1`, `p` and `p+1`, and the non-canonical
+///     `2p-1`. Each drives the X25519 shared secret to all zeros, so each was a
+///     real hole; they are added here.
+///   * It **contained two points that are not degenerate at all**:
+///     `[0u8; 31] ++ [0x01]`, commented "u = 2^248" and almost certainly `u = 1`
+///     written big-endian by mistake, and `[0xff; 32]`, which reduces to 18 mod
+///     p — an ordinary point. Neither produces a zero shared secret. Rejecting a
+///     valid key can only turn away an honest peer, so both are gone.
+///
+/// What remains is exactly libsodium's `has_small_order` set: the twelve
+/// encodings of the points of order 1, 2, 4 and 8, canonical and not. Seven are
+/// degenerate to this build directly; the five with bit 255 set are non-canonical
+/// encodings that RFC 7748 masking defuses here but that an implementation
+/// skipping the mask would honour, and no honest peer sends one.
+///
+/// `every_listed_point_is_degenerate_or_a_non_canonical_encoding` is what found
+/// them, on its first run.
+const LOW_ORDER_POINTS: [[u8; 32]; 12] = [
     // Point at infinity / all-zero key.
     [0x00; 32],
     // u = 1, order 4.
     [
         0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0,
-    ],
-    // u = 2^248.
-    [
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0x01,
     ],
     // Order 8.
     [
@@ -275,11 +292,45 @@ const LOW_ORDER_POINTS: [[u8; 32]; 8] = [
         0x5b, 0x04, 0x44, 0x5c, 0xc4, 0x58, 0x1c, 0x8e, 0x86, 0xd8, 0x22, 0x4e, 0xdd, 0xd0, 0x9f,
         0x11, 0x57,
     ],
-    // All ones.
-    [0xff; 32],
     // Non-canonical encoding congruent to 0 mod p.
     [
         0xda, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff,
+    ],
+    // The order-8 point above, plus p: the same point, non-canonically encoded.
+    [
+        0xcd, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, 0x16, 0x56, 0xe3, 0xfa, 0xf1, 0x9f, 0xc4,
+        0x6a, 0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd, 0x86, 0x62, 0x05, 0x16, 0x5f, 0x49,
+        0xb8, 0xff,
+    ],
+    // The other order-8 point plus p.
+    [
+        0x4c, 0x9c, 0x95, 0xbc, 0xa3, 0x50, 0x8c, 0x24, 0xb1, 0xd0, 0xb1, 0x55, 0x9c, 0x83, 0xef,
+        0x5b, 0x04, 0x44, 0x5c, 0xc4, 0x58, 0x1c, 0x8e, 0x86, 0xd8, 0x22, 0x4e, 0xdd, 0xd0, 0x9f,
+        0x11, 0xd7,
+    ],
+    // p - 1: the order-2 point. Canonical, and absent from the Swift list.
+    [
+        0xec, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ],
+    // p: reduces to zero. Canonical, and absent from the Swift list.
+    [
+        0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ],
+    // p + 1: reduces to one. Canonical, and absent from the Swift list.
+    [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ],
+    // 2p - 1, the non-canonical sibling of p - 1.
+    [
+        0xd9, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff,
     ],
@@ -542,6 +593,73 @@ mod tests {
         }
     }
 
+    /// §102 — the list is justified by arithmetic, not by citation.
+    ///
+    /// An entry earns its place one of two ways, and this test insists on one of
+    /// them:
+    ///
+    ///   1. **It is degenerate as this implementation sees it.** X25519 masks bit
+    ///      255 of the u-coordinate before doing anything (RFC 7748 §5), so the
+    ///      test simply computes the shared secret: a point of order 1, 2, 4 or 8
+    ///      drives it to all zeros whatever the scalar.
+    ///   2. **It has bit 255 set.** Then it is a non-canonical encoding, harmless
+    ///      *here* because the masking makes it something else — but not harmless
+    ///      everywhere, since an implementation that skips the mask sees the small
+    ///      order point it encodes. No honest peer ever sends one: a real
+    ///      u-coordinate is less than p, so its top bit is clear. Rejecting these
+    ///      costs nothing and covers the peer who is not running dalek.
+    ///
+    /// The first clause is what caught the two entries the Swift port had wrong:
+    /// `[0u8; 31] ++ [0x01]` ("u = 2^248", almost certainly `u = 1` written
+    /// big-endian) and `[0xff; 32]` (reduces to 18) are both perfectly ordinary
+    /// points with bit 255 clear, and rejecting a valid key can only turn away an
+    /// honest peer.
+    #[test]
+    fn every_listed_point_is_degenerate_or_a_non_canonical_encoding() {
+        use x25519_dalek::{PublicKey, StaticSecret};
+
+        for (index, point) in LOW_ORDER_POINTS.iter().enumerate() {
+            let non_canonical = point[31] & 0x80 != 0;
+
+            // Any scalar will do — the point of a degenerate point is that the
+            // output does not depend on it.
+            let degenerate = [1u8, 42, 200].iter().all(|seed| {
+                let secret = StaticSecret::from([*seed; 32]);
+                secret.diffie_hellman(&PublicKey::from(*point)).as_bytes() == &[0u8; 32]
+            });
+
+            assert!(
+                degenerate || non_canonical,
+                "LOW_ORDER_POINTS[{index}] is rejected but is neither degenerate nor a \
+                 non-canonical encoding: it is an ordinary point, and refusing it turns \
+                 away an honest peer"
+            );
+        }
+    }
+
+    /// The canonical half of the list must be degenerate outright — no appeal to
+    /// other implementations. These are the ones that matter to this build.
+    #[test]
+    fn every_canonical_listed_point_zeroes_the_shared_secret() {
+        use x25519_dalek::{PublicKey, StaticSecret};
+
+        let secret = StaticSecret::from([9u8; 32]);
+        let mut canonical = 0;
+        for point in LOW_ORDER_POINTS.iter().filter(|p| p[31] & 0x80 == 0) {
+            canonical += 1;
+            assert_eq!(
+                secret.diffie_hellman(&PublicKey::from(*point)).as_bytes(),
+                &[0u8; 32]
+            );
+        }
+        assert_eq!(
+            canonical, 7,
+            "the canonical small-order points are 0, 1, the two of order 8, p-1, p and p+1"
+        );
+    }
+
+    /// The other direction: an honest key must survive. A rejection list that
+    /// over-reaches is a denial of service against real peers.
     #[test]
     fn honest_keys_pass_validation() {
         assert!(validate_public_key(&sender().static_public()).is_ok());
