@@ -455,23 +455,32 @@ impl OutboxStore {
         }
     }
 
-    /// A delivery or read ack: stop retaining the message.
+    /// A delivery or read ack from `from`: stop retaining that peer's copy.
     ///
     /// Both kinds clear it. The ack is remembered either way, so that a cold-load
     /// merge cannot resurrect it and a later delivery ack cannot downgrade a read
     /// ack — see [`AckOutcome::strongest`].
-    pub fn mark_acked(&mut self, message_id: &str, kind: AckKind) -> AckOutcome {
+    ///
+    /// `from` is load-bearing. This used to `retain` across EVERY peer's queue,
+    /// so an ack cleared any message with that ID no matter who it was addressed
+    /// to. Acks arrive Noise-decrypted, so a peer can only ack as itself — but it
+    /// could still cancel a message queued for somebody else, and the sender was
+    /// told "delivered" for mail that was never sent. Only the acking peer's own
+    /// queue may be touched. OPEN-ITEMS §100.
+    pub fn mark_acked(&mut self, from: &PeerId, message_id: &str, kind: AckKind) -> AckOutcome {
         let strongest = self.acks.record(message_id, kind);
 
         let mut cleared = false;
-        self.outbox.retain(|_, queue| {
+        if let Some(queue) = self.outbox.get_mut(from) {
             let before = queue.len();
             queue.retain(|m| m.message_id != message_id);
             if queue.len() != before {
                 cleared = true;
             }
-            !queue.is_empty()
-        });
+            if queue.is_empty() {
+                self.outbox.remove(from);
+            }
+        }
         if cleared {
             self.dirty = true;
         }
@@ -1345,7 +1354,7 @@ mod tests {
         let p = peer("aa");
         assert!(store.enqueue(&p, message("m1", 100)).is_none());
 
-        let outcome = store.mark_acked("m1", AckKind::Delivered);
+        let outcome = store.mark_acked(&p, "m1", AckKind::Delivered);
         assert!(outcome.cleared);
         assert_eq!(outcome.strongest, AckKind::Delivered);
         assert!(store.is_empty(), "the peer entry goes when its queue empties");
@@ -1357,7 +1366,7 @@ mod tests {
         let p = peer("aa");
         assert!(store.enqueue(&p, message("m1", 100)).is_none());
 
-        let outcome = store.mark_acked("m1", AckKind::Read);
+        let outcome = store.mark_acked(&p, "m1", AckKind::Read);
         assert!(outcome.cleared);
         assert_eq!(outcome.strongest, AckKind::Read);
         assert!(store.queue(&p).is_empty());
@@ -1369,8 +1378,8 @@ mod tests {
         let p = peer("aa");
         assert!(store.enqueue(&p, message("m1", 100)).is_none());
 
-        assert_eq!(store.mark_acked("m1", AckKind::Read).strongest, AckKind::Read);
-        let late = store.mark_acked("m1", AckKind::Delivered);
+        assert_eq!(store.mark_acked(&p, "m1", AckKind::Read).strongest, AckKind::Read);
+        let late = store.mark_acked(&p, "m1", AckKind::Delivered);
         assert!(!late.cleared, "there was nothing left to clear");
         assert_eq!(
             late.strongest,
@@ -1386,10 +1395,10 @@ mod tests {
         assert!(store.enqueue(&peer("aa"), message("m1", 100)).is_none());
 
         assert_eq!(
-            store.mark_acked("m1", AckKind::Delivered).strongest,
+            store.mark_acked(&peer("aa"), "m1", AckKind::Delivered).strongest,
             AckKind::Delivered
         );
-        assert_eq!(store.mark_acked("m1", AckKind::Read).strongest, AckKind::Read);
+        assert_eq!(store.mark_acked(&peer("aa"), "m1", AckKind::Read).strongest, AckKind::Read);
     }
 
     #[test]
@@ -1397,27 +1406,54 @@ mod tests {
         // The ack can arrive while the durable queue is unreadable. Recording it
         // is what stops the recovery merge resurrecting the message.
         let (_storage, mut store) = new_store();
-        let outcome = store.mark_acked("ghost", AckKind::Delivered);
+        let outcome = store.mark_acked(&peer("aa"), "ghost", AckKind::Delivered);
         assert!(!outcome.cleared);
         assert_eq!(store.ack_state("ghost"), Some(AckKind::Delivered));
     }
 
     #[test]
-    fn an_ack_clears_the_message_whichever_peer_holds_it() {
+    fn an_ack_clears_only_the_acking_peers_copy() {
         let (_storage, mut store) = new_store();
         assert!(store.enqueue(&peer("aa"), message("m1", 100)).is_none());
         assert!(store.enqueue(&peer("bb"), message("m2", 100)).is_none());
 
-        assert!(store.mark_acked("m2", AckKind::Delivered).cleared);
+        assert!(store.mark_acked(&peer("bb"), "m2", AckKind::Delivered).cleared);
         assert_eq!(store.queue(&peer("aa")).len(), 1);
         assert!(store.queue(&peer("bb")).is_empty());
+    }
+
+    /// §100. This test was `an_ack_clears_the_message_whichever_peer_holds_it`,
+    /// and the implementation matched: mark_acked walked EVERY peer's queue and
+    /// dropped any message with that ID.
+    ///
+    /// Acks arrive Noise-decrypted, so a peer can only ack as itself — but it
+    /// could still cancel mail addressed to somebody else, and the sender was
+    /// told "delivered" for a message that was then never sent. The same ID
+    /// reaching two peers is not exotic either: a fan-out enqueues one message
+    /// id per recipient.
+    #[test]
+    fn one_peers_ack_cannot_cancel_another_peers_mail() {
+        let (_storage, mut store) = new_store();
+        let recipient = peer("aa");
+        let bystander = peer("bb");
+        assert!(store.enqueue(&recipient, message("m1", 100)).is_none());
+        assert!(store.enqueue(&bystander, message("m1", 100)).is_none());
+
+        let outcome = store.mark_acked(&bystander, "m1", AckKind::Delivered);
+        assert!(outcome.cleared, "the acking peer's own copy goes");
+        assert!(store.queue(&bystander).is_empty());
+        assert_eq!(
+            store.queue(&recipient).len(),
+            1,
+            "the recipient has not acknowledged anything and must still be owed the message"
+        );
     }
 
     #[test]
     fn ack_memory_stays_bounded() {
         let (_storage, mut store) = new_store();
         for i in 0..(ACK_MEMORY_LIMIT + 10) {
-            let _ = store.mark_acked(&format!("m{i}"), AckKind::Delivered);
+            let _ = store.mark_acked(&peer("aa"), &format!("m{i}"), AckKind::Delivered);
         }
         assert_eq!(store.ack_state("m0"), None, "the oldest acks are forgotten");
         assert_eq!(
@@ -1501,7 +1537,7 @@ mod tests {
         let (_storage, mut store) = new_store();
         let p = peer("aa");
         assert!(store.enqueue(&p, message("m1", 100)).is_none());
-        assert!(store.mark_acked("m1", AckKind::Delivered).cleared);
+        assert!(store.mark_acked(&peer("aa"), "m1", AckKind::Delivered).cleared);
 
         store.record_courier_deposit(&p, "m1", &[key(1)]);
         assert!(store.queued(&p, "m1").is_none());
@@ -1606,7 +1642,7 @@ mod tests {
         let (_storage, mut store) = new_store();
         let p = peer("aa");
         // The ack landed while the durable queue was still unreadable.
-        let outcome = store.mark_acked("m1", AckKind::Read);
+        let outcome = store.mark_acked(&peer("aa"), "m1", AckKind::Read);
         assert!(!outcome.cleared);
 
         let mut durable = Snapshot::new();
@@ -1699,7 +1735,7 @@ mod tests {
         store.persist().expect("persist");
         assert!(storage.load(StorageKey::Outbox).expect("load").is_some());
 
-        assert!(store.mark_acked("m1", AckKind::Delivered).cleared);
+        assert!(store.mark_acked(&peer("aa"), "m1", AckKind::Delivered).cleared);
         store.persist().expect("persist");
         assert_eq!(
             storage.load(StorageKey::Outbox).expect("load"),
@@ -1855,7 +1891,7 @@ mod tests {
         let (storage, mut store) = new_store();
         assert!(store.enqueue(&peer("aa"), message("m1", 100)).is_none());
         store.persist().expect("persist");
-        assert!(store.mark_acked("m1", AckKind::Read).cleared);
+        assert!(store.mark_acked(&peer("aa"), "m1", AckKind::Read).cleared);
         assert!(store.enqueue(&peer("aa"), message("m2", 100)).is_none());
 
         store.wipe().expect("wipe");

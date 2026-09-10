@@ -746,19 +746,19 @@ impl BleRuntime {
         // are not forgeable; the recorded Noise key is what a key substitution
         // would be trying to overwrite, which is why the policy wants it before
         // it looks at the signature.
-        let (presence, link_bound_elsewhere, existing_noise_key) = self.state.with(|state| {
-            (
-                state.links.presence(claimed),
-                state
-                    .links
-                    .peer_for(link)
-                    .is_some_and(|bound| bound != claimed),
-                state
-                    .peers
-                    .info(claimed)
-                    .and_then(|record| record.noise_public_key.clone()),
-            )
-        });
+        let (presence, link_bound_elsewhere, existing_noise_key, existing_signing_key) =
+            self.state.with(|state| {
+                let record = state.peers.info(claimed);
+                (
+                    state.links.presence(claimed),
+                    state
+                        .links
+                        .peer_for(link)
+                        .is_some_and(|bound| bound != claimed),
+                    record.and_then(|r| r.noise_public_key.clone()),
+                    record.and_then(|r| r.signing_public_key.clone()),
+                )
+            });
 
         // The whole inbound announce policy, in one call: decode, derive the peer
         // ID from the announced Noise key and refuse a sender that does not match
@@ -778,6 +778,11 @@ impl BleRuntime {
             has_central_link: presence.as_central,
             link_bound_to_other_peer: link_bound_elsewhere,
             existing_noise_public_key: existing_noise_key.as_deref(),
+            // §98: the signing key is pinned the same way. The registry has
+            // recorded it since the first announce; nothing compared it, so
+            // "Verified" meant only "signed by the key this packet carries",
+            // which every attacker in radio range also holds.
+            existing_signing_public_key: existing_signing_key.as_deref(),
         };
         let accepted = match evaluate_announce(
             packet,
@@ -3521,6 +3526,108 @@ mod tests {
         assert!(
             !state.with(|inner| inner.peers.info(&distant).expect("known").connected),
             "but not one we can reach on a link of its own"
+        );
+    }
+
+    /// §98 — the other half of the same attack, once the derivation check closed
+    /// the first half.
+    ///
+    /// A peer's Noise public key travels in the clear in every announce it sends,
+    /// and the peer ID derives from it, so an attacker who has simply HEARD a
+    /// victim announce can replay that Noise key and the derived ID will match.
+    /// Everything then hinges on the signing key — which was pinned by nothing.
+    /// The attacker signs with their own key, the signature verifies against the
+    /// key the packet supplies, and the victim's identity is taken over in our
+    /// registry.
+    ///
+    /// The registry had recorded the victim's signing key since first contact.
+    /// Nothing compared it.
+    #[tokio::test]
+    async fn a_replayed_noise_key_under_a_new_signing_key_cannot_take_over_a_known_peer() {
+        let (mut runtime, _radio, state) = runtime();
+
+        let victim_identity = MeshIdentity::generate(&mut OsRng);
+        let victim = victim_identity.peer_id();
+
+        // First contact: the victim announces itself, honestly.
+        let honest = AnnouncementPacket::new(
+            "victim".to_string(),
+            victim_identity.static_public().to_vec(),
+            victim_identity.signing_public().to_vec(),
+            None,
+            None,
+            None,
+        );
+        let mut honest_packet = BitchatPacket::new(
+            MessageType::Announce,
+            victim.to_routing_bytes().expect("routing bytes"),
+            None,
+            now_millis(),
+            honest.encode().expect("encodes"),
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        honest_packet.signature = Some(sign_packet(&victim_identity, &honest_packet).expect("signs"));
+
+        let victim_link = LinkId::new("/mock/victim");
+        state.with(|inner| {
+            inner.links.link_up(victim_link.clone(), LinkRole::Central);
+            inner.links.set_writable(&victim_link, true);
+            inner.max_write.insert(victim_link.clone(), 512);
+        });
+        assert!(
+            runtime.on_announce(&victim_link, &honest_packet, &victim).await,
+            "the honest announce establishes the pin"
+        );
+        let pinned_signing_key = state
+            .with(|inner| inner.peers.info(&victim).and_then(|r| r.signing_public_key.clone()))
+            .expect("the registry records the signing key on first contact");
+
+        // The attacker replays the victim's Noise key — so the peer ID still
+        // derives correctly — under its own signing key, and self-signs.
+        let attacker = MeshIdentity::generate(&mut OsRng);
+        let forged = AnnouncementPacket::new(
+            "victim".to_string(),
+            victim_identity.static_public().to_vec(), // heard off the air
+            attacker.signing_public().to_vec(),       // the attacker's own
+            None,
+            None,
+            None,
+        );
+        let mut forged_packet = BitchatPacket::new(
+            MessageType::Announce,
+            victim.to_routing_bytes().expect("routing bytes"),
+            None,
+            now_millis(),
+            forged.encode().expect("encodes"),
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        forged_packet.signature = Some(sign_packet(&attacker, &forged_packet).expect("signs"));
+
+        let attacker_signing_key =
+            <[u8; 32]>::try_from(attacker.signing_public().as_slice()).expect("32 bytes");
+        assert!(
+            verify_packet(&forged_packet, &attacker_signing_key),
+            "the fixture must be a self-signature that really verifies — that is the attack"
+        );
+
+        let attacker_link = LinkId::new("/mock/attacker");
+        state.with(|inner| {
+            inner.links.link_up(attacker_link.clone(), LinkRole::Central);
+            inner.links.set_writable(&attacker_link, true);
+            inner.max_write.insert(attacker_link.clone(), 512);
+        });
+
+        let accepted = runtime.on_announce(&attacker_link, &forged_packet, &victim).await;
+
+        assert!(!accepted, "the forged announce must be refused");
+        assert_eq!(
+            state.with(|inner| inner.peers.info(&victim).and_then(|r| r.signing_public_key.clone())),
+            Some(pinned_signing_key),
+            "the victim's pinned signing key must survive the attempt"
+        );
+        assert!(
+            state.with(|inner| inner.links.peer_for(&attacker_link).is_none()),
+            "and the attacker's link must not be bound to the victim's identity"
         );
     }
 

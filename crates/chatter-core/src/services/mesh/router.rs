@@ -524,7 +524,7 @@ impl Actor {
                 peer,
                 kind,
             } => {
-                let (outcome, events) = self.router.mark_acked(&message_id, kind);
+                let (outcome, events) = self.router.mark_acked(&peer, &message_id, kind);
                 self.publish(events);
                 let state = match outcome.strongest {
                     AckKind::Delivered => MeshDelivery::Delivered,

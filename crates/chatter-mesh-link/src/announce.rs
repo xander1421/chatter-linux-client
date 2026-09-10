@@ -494,6 +494,22 @@ pub enum AnnounceDistrust {
     /// peer ID. Checked *before* the signature, because a valid signature over a
     /// swapped key is exactly what a key-substitution attempt looks like.
     KeyMismatch,
+    /// The announced SIGNING key differs from the one we already recorded, even
+    /// though the Noise key matches.
+    ///
+    /// Without this check `Verified` meant only "signed by the key this very
+    /// packet carries" — which every attacker holds. The peer ID is
+    /// `SHA256(noise key)[..8]`, so the Noise key is bound to the ID and cannot
+    /// be swapped; the signing key was bound to nothing. Anyone in radio range
+    /// who had heard a peer's announce (the Noise key is broadcast in clear)
+    /// could re-announce that identity under their own signing key and be
+    /// recorded as Verified.
+    ///
+    /// Never legitimate: `MeshIdentity` holds both secrets and is persisted as
+    /// one unit (`chatter-mesh-noise/src/identity.rs:22`), so the two keys only
+    /// ever change together — and a changed Noise key is a different peer ID.
+    /// OPEN-ITEMS §98.
+    SigningKeyMismatch,
 }
 
 /// Whether an announce may be acted on.
@@ -516,20 +532,40 @@ impl AnnounceTrust {
     }
 }
 
+/// What we have already pinned for a peer ID, if anything.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PinnedKeys<'a> {
+    /// The Noise static key recorded for this peer ID.
+    pub noise: Option<&'a [u8]>,
+    /// The signing key recorded for this peer ID (§98).
+    pub signing: Option<&'a [u8]>,
+}
+
 /// The trust decision, given a signature result and what we already knew.
 ///
 /// Ported from `BLEAnnounceTrustPolicy.evaluate`, order preserved. `signature_valid`
 /// is only consulted when `has_signature` is true, matching Swift, so a caller that
 /// skips verification for an unsigned packet still gets the right answer.
+///
+/// Both pinned keys are checked BEFORE the signature, for the same reason: a
+/// valid signature over a substituted key is what an impersonation attempt looks
+/// like, not evidence against one.
 pub fn evaluate_announce_trust(
     has_signature: bool,
     signature_valid: bool,
-    existing_noise_public_key: Option<&[u8]>,
+    pinned: PinnedKeys<'_>,
     announced_noise_public_key: &[u8],
+    announced_signing_public_key: &[u8],
 ) -> AnnounceTrust {
-    if let Some(existing) = existing_noise_public_key {
+    if let Some(existing) = pinned.noise {
         if existing != announced_noise_public_key {
             return AnnounceTrust::Unverified(AnnounceDistrust::KeyMismatch);
+        }
+    }
+
+    if let Some(existing) = pinned.signing {
+        if existing != announced_signing_public_key {
+            return AnnounceTrust::Unverified(AnnounceDistrust::SigningKeyMismatch);
         }
     }
 
@@ -562,6 +598,8 @@ pub struct AnnounceLinkContext<'a> {
     pub link_bound_to_other_peer: bool,
     /// The Noise key already recorded for this peer ID, if any.
     pub existing_noise_public_key: Option<&'a [u8]>,
+    /// The signing key already recorded for this peer ID, if any (§98).
+    pub existing_signing_public_key: Option<&'a [u8]>,
 }
 
 impl Default for AnnounceLinkContext<'_> {
@@ -572,6 +610,7 @@ impl Default for AnnounceLinkContext<'_> {
             has_central_link: false,
             link_bound_to_other_peer: false,
             existing_noise_public_key: None,
+            existing_signing_public_key: None,
         }
     }
 }
@@ -704,8 +743,12 @@ pub fn evaluate_announce(
     let trust = evaluate_announce_trust(
         has_signature,
         signature_valid,
-        link.existing_noise_public_key,
+        PinnedKeys {
+            noise: link.existing_noise_public_key,
+            signing: link.existing_signing_public_key,
+        },
         &preflight.announcement.noise_public_key,
+        &preflight.announcement.signing_public_key,
     );
 
     let direct_hint = packet.msg_type == MessageType::Announce.as_u8()
@@ -787,6 +830,7 @@ mod tests {
     const NOISE_KEY: &[u8] = b"noise-static-public-key-of-a-peer";
     const OTHER_NOISE_KEY: &[u8] = b"a-completely-different-noise-key!";
     const SIGNING_KEY: &[u8] = b"ed25519-signing-public-key------";
+    const OTHER_SIGNING_KEY: &[u8] = b"an-attackers-own-signing-key----";
 
     fn no_jitter(_low: i64, _high: i64) -> i64 {
         0
@@ -1153,15 +1197,15 @@ mod tests {
     #[test]
     fn trust_requires_a_signature_that_actually_verifies() {
         assert_eq!(
-            evaluate_announce_trust(true, true, None, NOISE_KEY),
+            evaluate_announce_trust(true, true, PinnedKeys::default(), NOISE_KEY, SIGNING_KEY),
             AnnounceTrust::Verified
         );
         assert_eq!(
-            evaluate_announce_trust(false, false, None, NOISE_KEY),
+            evaluate_announce_trust(false, false, PinnedKeys::default(), NOISE_KEY, SIGNING_KEY),
             AnnounceTrust::Unverified(AnnounceDistrust::MissingSignature)
         );
         assert_eq!(
-            evaluate_announce_trust(true, false, None, NOISE_KEY),
+            evaluate_announce_trust(true, false, PinnedKeys::default(), NOISE_KEY, SIGNING_KEY),
             AnnounceTrust::Unverified(AnnounceDistrust::InvalidSignature)
         );
     }
@@ -1172,13 +1216,63 @@ mod tests {
         // carrying a swapped Noise key is reported as substitution rather than
         // silently accepted.
         assert_eq!(
-            evaluate_announce_trust(true, true, Some(OTHER_NOISE_KEY), NOISE_KEY),
+            evaluate_announce_trust(
+                true,
+                true,
+                PinnedKeys { noise: Some(OTHER_NOISE_KEY), signing: Some(SIGNING_KEY) },
+                NOISE_KEY,
+                SIGNING_KEY
+            ),
             AnnounceTrust::Unverified(AnnounceDistrust::KeyMismatch)
         );
         // The same key we already had is no obstacle.
         assert_eq!(
-            evaluate_announce_trust(true, true, Some(NOISE_KEY), NOISE_KEY),
+            evaluate_announce_trust(
+                true,
+                true,
+                PinnedKeys { noise: Some(NOISE_KEY), signing: Some(SIGNING_KEY) },
+                NOISE_KEY,
+                SIGNING_KEY
+            ),
             AnnounceTrust::Verified
+        );
+    }
+
+    /// §98 — the impersonation this check exists for.
+    ///
+    /// A peer's Noise public key is broadcast in the clear in every announce, and
+    /// the peer ID is `SHA256(noise key)[..8]`, so it cannot be swapped without
+    /// changing the ID. The signing key was bound to nothing: an attacker in
+    /// radio range could replay a victim's Noise key under their OWN signing key,
+    /// self-sign the announce, and the signature verified — against the
+    /// attacker's key, which the packet itself supplied. The result was recorded
+    /// as `Verified`.
+    #[test]
+    fn a_stolen_noise_key_under_a_new_signing_key_is_not_verified() {
+        let attacker = evaluate_announce_trust(
+            true,
+            true, // the attacker's self-signature verifies: they hold that key
+            PinnedKeys { noise: Some(NOISE_KEY), signing: Some(SIGNING_KEY) },
+            NOISE_KEY,         // the victim's key, heard off the air
+            OTHER_SIGNING_KEY, // the attacker's own
+        );
+        assert_eq!(
+            attacker,
+            AnnounceTrust::Unverified(AnnounceDistrust::SigningKeyMismatch),
+            "a valid self-signature over a substituted signing key is the attack, not the defence"
+        );
+
+        // Before the peer is known, first contact still establishes the pin.
+        assert_eq!(
+            evaluate_announce_trust(
+                true,
+                true,
+                PinnedKeys::default(),
+                NOISE_KEY,
+                OTHER_SIGNING_KEY
+            ),
+            AnnounceTrust::Verified,
+            "trust on first use: with nothing pinned there is nothing to contradict"
         );
     }
 

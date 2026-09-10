@@ -532,10 +532,11 @@ impl MessageRouter {
     /// arriving afterwards — see [`AckOutcome::strongest`].
     pub fn mark_acked(
         &mut self,
+        from: &PeerId,
         message_id: &str,
         kind: AckKind,
     ) -> (AckOutcome, Vec<RouterEvent>) {
-        let outcome = self.outbox.mark_acked(message_id, kind);
+        let outcome = self.outbox.mark_acked(from, message_id, kind);
         let mut events = Vec::new();
         self.persist_into(&mut events);
         (outcome, events)
@@ -1506,14 +1507,14 @@ mod tests {
 
         router.send_private("hi", &recipient, "bob", "m1", 1_000);
 
-        let (outcome, events) = router.mark_acked("m1", AckKind::Read);
+        let (outcome, events) = router.mark_acked(&recipient, "m1", AckKind::Read);
         assert!(outcome.cleared);
         assert_eq!(outcome.strongest, AckKind::Read);
         no_storage_failures(&events);
         assert!(router.outbox().queue(&recipient).is_empty());
 
         // A delivery ack landing afterwards must not downgrade the read.
-        let (late, _) = router.mark_acked("m1", AckKind::Delivered);
+        let (late, _) = router.mark_acked(&recipient, "m1", AckKind::Delivered);
         assert!(!late.cleared);
         assert_eq!(late.strongest, AckKind::Read);
     }
