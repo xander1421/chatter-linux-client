@@ -21,9 +21,11 @@ compile_error!(
 pub mod assertions;
 pub mod config;
 pub mod fixtures;
+pub mod groups;
 
 // Re-export commonly used items
 pub use assertions::*;
 pub use config::*;
 pub use fixtures::*;
+pub use groups::*;
 
