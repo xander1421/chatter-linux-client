@@ -5581,18 +5581,15 @@ async fn v21_group_sender_key_fanout_and_plaintext_default() {
         "v21-public-{}",
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
     );
-    let group_pub = client_a
-        .create_channel(
-            &name_pub,
-            ChannelType::Public,
-            None, // public channels are world-readable by design → plaintext is intended
-            Some("V21 public (legitimately plaintext) channel"),
-            None,
-            None,
-            vec![uid_b.clone(), uid_c.clone()],
-        )
-        .await
-        .expect("create public channel failed");
+    let group_pub = common::create_group_with_members(
+        &client_a,
+        &name_pub,
+        ChannelType::Public,
+        None, // public channels are world-readable by design → plaintext is intended
+        Some("V21 public (legitimately plaintext) channel"),
+        &[(&client_b, &uid_b), (&client_c, &uid_c)],
+    )
+    .await;
     println!("\n  [PART 0] A created a PUBLIC channel: {} ({})", group_pub.name, group_pub.id);
 
     let marker_pub = unique_marker();
@@ -5645,18 +5642,15 @@ async fn v21_group_sender_key_fanout_and_plaintext_default() {
         "v21-default-{}",
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
     );
-    let group_e = client_a
-        .create_channel(
-            &name_e,
-            ChannelType::Private,
-            None, // <-- exactly what T6 / the codebase do; MUST end up encrypted now
-            Some("V21 default (now-encrypted) private group"),
-            None,
-            None,
-            vec![uid_b.clone(), uid_c.clone()],
-        )
-        .await
-        .expect("create default private group failed");
+    let group_e = common::create_group_with_members(
+        &client_a,
+        &name_e,
+        ChannelType::Private,
+        None, // <-- exactly what T6 / the codebase do; MUST end up encrypted now
+        Some("V21 default (now-encrypted) private group"),
+        &[(&client_b, &uid_b), (&client_c, &uid_c)],
+    )
+    .await;
     println!("\n  [PART 1] A created a DEFAULT Private group (config=None): {} ({})", group_e.name, group_e.id);
 
     // THE F14a FIX, asserted: a default-created private group is encrypted.
@@ -6717,18 +6711,15 @@ async fn v26_first_group_message_self_heals_across_skdm_race() {
         "v26-group-{}",
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
     );
-    let group = client_a
-        .create_channel(
-            &name_e,
-            ChannelType::Private,
-            None,
-            Some("V26 first-message race group"),
-            None,
-            None,
-            vec![uid_b.clone(), uid_c.clone()],
-        )
-        .await
-        .expect("create default private group failed");
+    let group = common::create_group_with_members(
+        &client_a,
+        &name_e,
+        ChannelType::Private,
+        None,
+        Some("V26 first-message race group"),
+        &[(&client_b, &uid_b), (&client_c, &uid_c)],
+    )
+    .await;
     println!("\n  [V26] A created a DEFAULT Private (encrypted) group: {} ({})", group.name, group.id);
 
     // POSITIVE CONTROL (membership): the server records A, B, C as members —
@@ -7292,18 +7283,15 @@ async fn v29_disappearing_messages_arm_the_ttl() {
         "v29-disappearing-{}",
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
     );
-    let group = client_a
-        .create_channel(
-            &name,
-            ChannelType::Private,
-            None,
-            Some("V29 disappearing-messages channel"),
-            None,
-            None,
-            vec![uid_b.clone()],
-        )
-        .await
-        .expect("create channel failed");
+    let group = common::create_group_with_members(
+        &client_a,
+        &name,
+        ChannelType::Private,
+        None,
+        Some("V29 disappearing-messages channel"),
+        &[(&client_b, &uid_b)],
+    )
+    .await;
     println!("\n  A created a Private channel: {} ({})", group.name, group.id);
 
     // Poll the server `messages` row for `id` until it appears; return
@@ -7469,18 +7457,15 @@ async fn v30_group_management_changes_propagate() {
         "v30-orig-{}",
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
     );
-    let group = client_a
-        .create_channel(
-            &name0,
-            ChannelType::Private,
-            None,
-            Some("V30 group-management propagation"),
-            None,
-            None,
-            vec![uid_b.clone(), uid_c.clone()],
-        )
-        .await
-        .expect("create channel failed");
+    let group = common::create_group_with_members(
+        &client_a,
+        &name0,
+        ChannelType::Private,
+        None,
+        Some("V30 group-management propagation"),
+        &[(&client_b, &uid_b), (&client_c, &uid_c)],
+    )
+    .await;
     println!("\n  A created group {} ({})", group.name, group.id);
 
     // POSITIVE CONTROL: A, B, C are all SERVER-SIDE members of this channel.
@@ -8056,18 +8041,15 @@ async fn v35_blocking_stops_group_message_delivery() {
         "v35-group-{}",
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
     );
-    let group_e = client_a
-        .create_channel(
-            &name_e,
-            ChannelType::Private,
-            None, // default -> encrypted (F14a), exactly what T6 / the codebase do
-            Some("V35 blocking-on-group-messages"),
-            None,
-            None,
-            vec![uid_b.clone(), uid_c.clone(), uid_d.clone()],
-        )
-        .await
-        .expect("create private group failed");
+    let group_e = common::create_group_with_members(
+        &client_a,
+        &name_e,
+        ChannelType::Private,
+        None, // default -> encrypted (F14a), exactly what T6 / the codebase do
+        Some("V35 blocking-on-group-messages"),
+        &[(&client_b, &uid_b), (&client_c, &uid_c), (&client_d, &uid_d)],
+    )
+    .await;
     println!("\n  A created encrypted group {} ({})", group_e.name, group_e.id);
 
     // POSITIVE CONTROL (membership): the server records A, B, C, D as members.
@@ -9115,18 +9097,15 @@ async fn v41_group_reply_carries_quote_to_recipient() {
         "v41-chan-{}",
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
     );
-    let chan = client_a
-        .create_channel(
-            &name,
-            ChannelType::Private,
-            None, // default -> encrypted Sender-Key channel
-            Some("V41 group reply carries quote"),
-            None,
-            None,
-            vec![uid_b.clone()],
-        )
-        .await
-        .expect("create private channel failed");
+    let chan = common::create_group_with_members(
+        &client_a,
+        &name,
+        ChannelType::Private,
+        None, // default -> encrypted Sender-Key channel
+        Some("V41 group reply carries quote"),
+        &[(&client_b, &uid_b)],
+    )
+    .await;
     println!("\n  A created encrypted channel {} ({})", chan.name, chan.id);
 
     // POSITIVE CONTROL (membership): server records A and B.
@@ -9512,10 +9491,15 @@ async fn v44_thread_reply_groups_under_root_on_both_sides() {
         "v44-chan-{}",
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
     );
-    let chan = client_a
-        .create_channel(&name, ChannelType::Private, None, Some("V44 threads"), None, None, vec![uid_b.clone()])
-        .await
-        .expect("create channel failed");
+    let chan = common::create_group_with_members(
+        &client_a,
+        &name,
+        ChannelType::Private,
+        None,
+        Some("V44 threads"),
+        &[(&client_b, &uid_b)],
+    )
+    .await;
 
     // membership
     let mut members = std::collections::HashSet::new();
@@ -9660,10 +9644,15 @@ async fn v45_reactions_edits_pins_roundtrip_in_channel() {
         "v45-chan-{}",
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
     );
-    let chan = client_a
-        .create_channel(&name, ChannelType::Private, None, Some("V45"), None, None, vec![uid_b.clone()])
-        .await
-        .expect("create channel failed");
+    let chan = common::create_group_with_members(
+        &client_a,
+        &name,
+        ChannelType::Private,
+        None,
+        Some("V45"),
+        &[(&client_b, &uid_b)],
+    )
+    .await;
 
     let mut members = std::collections::HashSet::new();
     for _ in 0..15 {
@@ -10872,18 +10861,15 @@ async fn v54_channel_messages_survive_a_client_restart() {
             .as_millis()
             % 1_000_000
     );
-    let channel = client_a
-        .create_channel(
-            &name,
-            chatter_core::domain::channel::ChannelType::Public,
-            None,
-            Some("V54 restart-delivery channel"),
-            None,
-            None,
-            vec![uid_b.clone()],
-        )
-        .await
-        .expect("create channel failed");
+    let channel = common::create_group_with_members(
+        &client_a,
+        &name,
+        chatter_core::domain::channel::ChannelType::Public,
+        None,
+        Some("V54 restart-delivery channel"),
+        &[(&client_b, &uid_b)],
+    )
+    .await;
     println!("\n  [V54] A created channel {} ({})", channel.name, channel.id);
 
     // POSITIVE CONTROL: the SERVER records both as members, or every "B got
