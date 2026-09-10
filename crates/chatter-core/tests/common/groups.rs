@@ -134,12 +134,15 @@ async fn wait_for_sender_key_from(
     );
 }
 
-/// Have one invitee discover and accept its invitation to `channel_id`, then
-/// bring its local state up to date the way a fresh login would.
+/// Have one invitee discover and accept its invitation to `channel_id`.
 ///
-/// The post-accept steps mirror `ChatterClient::join_channel` — the other way
-/// into a channel — because `respond_to_channel_invite` does none of them
-/// itself (see `docs/OPEN-ITEMS.md` §69).
+/// Nothing compensates for the accept path here on purpose. Accepting used to
+/// update no local state at all (OPEN-ITEMS §69), so this fixture had to call
+/// `resubscribe_channel_messages`, `get_channel`, `sync_channel_members` and
+/// `request_skdms_from_channel_members` itself — i.e. it was doing the
+/// product's job, which is exactly how the bug stayed invisible to 54 proofs.
+/// `respond_to_channel_invite` does all four now, so the fixture drives only
+/// the two RPCs a human drives: discover the invite, accept it.
 pub async fn accept_channel_invite(
     invitee: &Arc<ChatterClient>,
     invitee_id: &UserId,
@@ -152,39 +155,11 @@ pub async fn accept_channel_invite(
         .await
         .unwrap_or_else(|e| {
             panic!("invitee {invitee_id} failed to accept the invite to {channel_id}: {e:?}")
+        })
+        .unwrap_or_else(|| {
+            panic!("invitee {invitee_id} accepted the invite to {channel_id} but the server \
+                    reported the response as not accepted")
         });
-
-    // Wake the live message stream FIRST, before the slower steps below.
-    //
-    // A brand-new invitee was in no channels when their client started, and the
-    // server refuses a global stream to such a user — so the stream task is
-    // sitting in its 30s backoff with no subscription at all, and the
-    // membership change the server now publishes on accept (OPEN-ITEMS §68)
-    // reaches nobody. The nudge starts the reconnect here, so its durable
-    // catch-up runs while this fixture is still doing the work below instead of
-    // inside the window a caller waits for delivery in — and a caller's own
-    // `resubscribe_channel_messages()` a few seconds later then lands inside
-    // the catch-up rate-limit window and reconnects immediately.
-    invitee.resubscribe_channel_messages();
-
-    // Pull the channel row + its membership list into the local store, and ask
-    // the existing members for their sender keys — otherwise the invitee cannot
-    // decrypt anything those members send next. `respond_to_channel_invite`
-    // does none of this (OPEN-ITEMS §69), so the fixture does what a fresh
-    // login would. Two targeted calls rather than `sync()`, which would also
-    // list every channel and prefetch ten anonymous credentials per invitee —
-    // load this shared stack does not need.
-    let _ = invitee.channels().get_channel(channel_id).await;
-    let _ = invitee.channels().sync_channel_members(channel_id).await;
-    if let Err(e) = invitee
-        .messages()
-        .request_skdms_from_channel_members(channel_id)
-        .await
-    {
-        // Not fatal: the SKDM also rides the first message. A failure here
-        // costs latency, not correctness, and the tests warm up anyway.
-        eprintln!("  request_skdms_from_channel_members({channel_id}) failed: {e:?}");
-    }
 }
 
 /// Wait until `channel_id` shows up in the invitee's own pending-invite list.

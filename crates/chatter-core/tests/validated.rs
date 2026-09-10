@@ -10991,3 +10991,195 @@ async fn v54_channel_messages_survive_a_client_restart() {
     client_a.shutdown().await;
     client_b2.shutdown().await;
 }
+
+/// v55 — ACCEPTING AN INVITATION IS ENOUGH.
+///
+/// The claim: a user who accepts a channel invitation has the channel — in
+/// their own store, so the sidebar can draw it, and on the live message
+/// stream, so the next message in it arrives without waiting for a sync.
+///
+/// This proof calls `respond_to_channel_invite` and NOTHING ELSE on the
+/// invitee. No `get_channel`, no `sync_channel_members`, no
+/// `request_skdms_from_channel_members`, no `resubscribe_channel_messages` —
+/// those four are exactly what the accept path was missing (OPEN-ITEMS §69)
+/// and exactly what `tests/common/groups.rs` used to do on the product's
+/// behalf, which is why 54 proofs stayed green over a broken accept.
+///
+/// MUTATION CHECK — each of these makes it fail:
+///   * drop the `get_channel_internal` + `insert_membership` tail of
+///     `ChannelService::respond_to_invite` → the local assertions fail; the
+///     user is a member on the server with an empty sidebar.
+///   * drop `self.resubscribe_channel_messages()` from
+///     `ChatterClient::respond_to_channel_invite` → a brand-new invitee's
+///     stream stays in its no-subscription backoff and the live assertion
+///     times out.
+///   * drop `sync_channel_members` → A is not in B's local member list and
+///     the SKDM request below has nobody to ask.
+///   * restore the `MemberAdded` wait the service used to have (§70) → the
+///     accept call itself returns `no response event received`.
+#[tokio::test]
+async fn v55_accepting_an_invite_is_enough_to_get_the_channel() {
+    skip_if_no_server!();
+    no_keyring_prompts();
+
+    let dir_a = tempfile::tempdir().unwrap();
+    let client_a = build_client(dir_a.path());
+    let uid_a = register_and_start(&client_a, &unique_user("v55a"), "V55 Alice").await;
+
+    let dir_b = tempfile::tempdir().unwrap();
+    let client_b = build_client(dir_b.path());
+    let uid_b = register_and_start(&client_b, &unique_user("v55b"), "V55 Bob").await;
+
+    // A creates a channel naming B. Since AUTHZ-CREATE-1 that does NOT make B
+    // a member — it creates a PENDING invitation, which is the flow under test.
+    let name = format!(
+        "v55-invite-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 1_000_000
+    );
+    let channel = client_a
+        .create_channel(
+            &name,
+            chatter_core::domain::channel::ChannelType::Private,
+            None,
+            Some("V55 invite-accept channel"),
+            None,
+            None,
+            vec![uid_b.clone()],
+        )
+        .await
+        .expect("A failed to create the channel");
+    println!("\n  [V55] A created channel {} ({})", channel.name, channel.id);
+
+    // PRECONDITION: B knows nothing about this channel yet, so every local
+    // assertion after the accept is about the accept and not about setup.
+    assert!(
+        client_b.get_channel_local(&channel.id).is_none(),
+        "PRECONDITION FAILED: B already has {} locally before accepting — the assertions \
+         below would not be about the accept path.",
+        channel.id
+    );
+
+    // B discovers the invitation, exactly as the invites modal does.
+    let wanted = channel.id.to_string();
+    let deadline = Instant::now() + CONDITION_TIMEOUT;
+    loop {
+        if client_b
+            .list_pending_channel_invites()
+            .await
+            .iter()
+            .any(|i| i.channel_id == wanted)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "SETUP FAILED: B never saw a pending invitation to {} within {CONDITION_TIMEOUT:?} \
+             — CreateChannel is supposed to create one for every named member.",
+            channel.id
+        );
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+    println!("  B can see the pending invitation");
+
+    // Subscribe BEFORE accepting: the live message below must not be able to
+    // slip past between the accept and the subscribe.
+    let mut events_b = client_b.subscribe_events();
+
+    // ---- THE ONE CALL UNDER TEST -----------------------------------------
+    let joined = client_b
+        .respond_to_channel_invite(&channel.id, true)
+        .await
+        .expect("B failed to accept the invitation");
+    assert!(
+        joined.is_some(),
+        "B's accept returned None — the server did not report the invitation as accepted."
+    );
+    println!("  B accepted (and did nothing else)");
+
+    // ---- PART 1: the channel is in B's own store -------------------------
+    let local = client_b.get_channel_local(&channel.id);
+    assert!(
+        local.is_some(),
+        "§69 REGRESSION: after accepting, B has no local row for {} — the sidebar is built \
+         from local channels, so the user who just accepted sees no channel.",
+        channel.id
+    );
+    assert_eq!(
+        local.unwrap().name,
+        channel.name,
+        "B's local channel row is not the channel they accepted."
+    );
+
+    let members = client_b.list_channel_members_local(&channel.id);
+    assert!(
+        members.iter().any(|m| m.user_id == uid_b),
+        "§69 REGRESSION: after accepting, B has no local membership row for {} (local members: \
+         {}).",
+        channel.id,
+        members.len()
+    );
+    assert!(
+        members.iter().any(|m| m.user_id == uid_a),
+        "§69 REGRESSION: after accepting, B's local member list does not contain the channel \
+         owner {uid_a}. SKDM distribution reads this list, so B could not send a message the \
+         existing members can decrypt."
+    );
+    println!("  B has the channel + both memberships locally");
+
+    // POSITIVE CONTROL: the SERVER agrees B is a member, or "B received the
+    // message" below would be proving something about a channel B is not in.
+    let mut server_members: std::collections::HashSet<UserId> = Default::default();
+    let member_deadline = Instant::now() + CONDITION_TIMEOUT;
+    while Instant::now() < member_deadline {
+        server_members = client_a
+            .get_channel_members(&channel.id, 100, 0)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|m| m.user_id)
+            .collect();
+        if server_members.contains(&uid_a) && server_members.contains(&uid_b) {
+            break;
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+    assert!(
+        server_members.contains(&uid_b),
+        "POSITIVE CONTROL FAILED: the server does not list B ({uid_b}) as a member of {} after \
+         B accepted — the delivery assertion below would be vacuous.",
+        channel.id
+    );
+    println!("  positive control: the server has A and B as members");
+
+    // ---- PART 2: a live message arrives, with no nudge from this test ----
+    let marker = unique_marker();
+    client_a
+        .send_text(ActiveConversation::Channel(channel.id.clone()), &marker)
+        .await
+        .expect("A failed to send into the channel");
+
+    let cid = channel.id.clone();
+    let m = marker.clone();
+    // Generous on purpose: B's stream is reconnecting and A's sender key is in
+    // flight, so this budget is latency, not correctness. What it must NOT
+    // require is another call on B.
+    let got = wait_for_event(&mut events_b, Duration::from_secs(60), move |e| {
+        matches!(e, DomainEvent::MessageReceived { message }
+            if message.conversation_id == cid && message.as_text() == Some(m.as_str()))
+    })
+    .await;
+    assert!(
+        got.is_some(),
+        "§69 REGRESSION: B accepted the invitation and then received no live message ({marker}) \
+         in the channel. Accepting has to nudge the message stream and pull the existing \
+         members' sender keys — a user who accepts must not have to restart the app."
+    );
+    println!("  [V55] B received a live message in the channel it just accepted");
+
+    client_a.shutdown().await;
+    client_b.shutdown().await;
+}
