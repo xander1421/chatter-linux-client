@@ -105,10 +105,16 @@ impl SessionService {
                 device_id: s.device_id,
                 device_info: s.device_info,
                 ip_address: s.ip_address,
-                created_at: DateTime::from_timestamp_millis(s.created_at as i64)
-                    .unwrap_or(DateTime::UNIX_EPOCH),
-                last_used: DateTime::from_timestamp_millis(s.last_used as i64)
-                    .unwrap_or(DateTime::UNIX_EPOCH),
+                // NANOSECONDS, not millis. auth.proto:371-372 says so
+                // ("Unix timestamp in nanoseconds") and the server sends
+                // UnixNano() (active_sessions.go:51-52). Parsing nanos as millis
+                // puts the value far outside chrono's range, so
+                // from_timestamp_millis returned None and the unwrap_or below
+                // turned every session's times into 1970-01-01 — a plausible
+                // date, which is why it read as "no timestamps" rather than as a
+                // parse failure (OPEN-ITEMS §112d).
+                created_at: DateTime::from_timestamp_nanos(s.created_at as i64),
+                last_used: DateTime::from_timestamp_nanos(s.last_used as i64),
                 is_current: s.is_current_session,
             })
             .collect();

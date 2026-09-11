@@ -58,7 +58,36 @@ export component MessageComposer inherits Rectangle {
     in property <image> reply-thumbnail;
 
     // Computed properties
-    property <bool> can-send: text != "" || pending-attachments.length > 0;
+    // Text the IME is still composing counts as text. Without the preedit term a
+    // single word that the keyboard has not committed yet leaves can-send false,
+    // so the send button is disabled and the word cannot be sent at all
+    // (OPEN-ITEMS §112c).
+    property <bool> can-send: text != "" || text-input.preedit-text != "" || pending-attachments.length > 0;
+
+    // What actually gets sent. `TextInput.text` EXCLUDES the preedit -- the text
+    // the input method is still composing -- so sending `text` silently drops
+    // whatever the keyboard had in flight and leaves it behind in the box.
+    // Measured on a Galaxy S9: typing "hello-ui-test" and pressing send
+    // delivered "hello-ui-" and left "test" in the composer.
+    //
+    // The preedit sits at the cursor, and Slint exposes no way to splice at a
+    // byte offset from .slint, so this appends. That is exact for composing at
+    // the end of the line, which is what typing a message is; composing in the
+    // middle of an already-typed line would place those characters at the end
+    // instead. Strictly better than the alternative, which is losing them.
+    property <string> outgoing-text: root.text + text-input.preedit-text;
+
+    // Clearing `text` alone does NOT clear the preedit: the composition belongs
+    // to the input method, and Slint keeps rendering it. After a send that means
+    // the composing word stays in the box and would be prepended to the NEXT
+    // message. Dropping focus is the only handle Slint gives us to make the IME
+    // finish composing; re-focusing immediately keeps the keyboard up so a user
+    // can send several messages in a row.
+    function reset-after-send() {
+        root.text = "";
+        text-input.clear-focus();
+        text-input.focus();
+    }
     property <bool> has-attachments: pending-attachments.length > 0;
 
     // Line height and sizing constants
@@ -775,11 +804,11 @@ export component MessageComposer inherits Rectangle {
                         if (event.text == "\n" && !event.modifiers.shift) {
                             if (root.can-send) {
                                 if (root.is-editing) {
-                                    root.send-edit(root.edit-message-id, root.text);
+                                    root.send-edit(root.edit-message-id, root.outgoing-text);
                                 } else {
-                                    root.send(root.text);
+                                    root.send(root.outgoing-text);
                                 }
-                                root.text = "";
+                                root.reset-after-send();
                             }
                             return accept;
                         }
@@ -925,11 +954,11 @@ export component MessageComposer inherits Rectangle {
                     mouse-cursor: pointer;
                     clicked => {
                         if (root.is-editing) {
-                            root.send-edit(root.edit-message-id, root.text);
+                            root.send-edit(root.edit-message-id, root.outgoing-text);
                         } else {
-                            root.send(root.text);
+                            root.send(root.outgoing-text);
                         }
-                        root.text = "";
+                        root.reset-after-send();
                     }
                 }
             }

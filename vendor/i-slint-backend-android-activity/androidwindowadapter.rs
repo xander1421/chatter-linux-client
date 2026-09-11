@@ -1,25 +1,25 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
+// cSpell:ignore Eisu Endcall Hankaku Headsethook Henkan Muhenkan Numpad Pictsymbols Sysrq teriary Thumbl Thumbr Zenkaku
+
 use super::*;
 use crate::javahelper::{JavaHelper, print_jni_error};
 use android_activity::input::{
     ButtonState, InputEvent, KeyAction, Keycode, MotionAction, MotionEvent,
 };
 use android_activity::{InputStatus, MainEvent, PollEvent};
+use i_slint_core::SharedString;
 use i_slint_core::api::{
     LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, PlatformError, Window,
 };
-use i_slint_core::graphics::Color;
 use i_slint_core::input::{InternalKeyEvent, KeyEvent, KeyEventResult, KeyEventType, TouchPhase};
-use i_slint_core::items::ColorScheme;
 use i_slint_core::lengths::PhysicalEdges;
 use i_slint_core::platform::{
     Key, PointerEventButton, WindowAdapter, WindowEvent, WindowProperties,
 };
 use i_slint_core::timers::{Timer, TimerMode};
 use i_slint_core::window::{InputMethodRequest, WindowInner};
-use i_slint_core::{Property, SharedString};
 use i_slint_renderer_skia::{SkiaRenderer, SkiaSharedContext};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -38,7 +38,6 @@ pub struct AndroidWindowAdapter {
     pub(crate) event_queue: EventQueue,
     pub(crate) pending_redraw: Cell<bool>,
     pub(super) java_helper: JavaHelper,
-    pub(crate) color_scheme: core::pin::Pin<Box<Property<ColorScheme>>>,
     pub(crate) fullscreen: Cell<bool>,
     /// The offset at which the Slint view is drawn in the native window (account for status bar)
     pub offset: Cell<PhysicalPosition>,
@@ -50,12 +49,24 @@ pub struct AndroidWindowAdapter {
     long_press: RefCell<Option<LongPressDetection>>,
     last_pressed_state: Cell<ButtonState>,
 
-    /// Chatter patch: last text state pushed to GameTextInput, to dedupe echoes.
+    /// Chatter patch: states already pushed to GameTextInput during the current
+    /// committed-text epoch, to dedupe echoes.
+    ///
     /// GameTextInput's set_text_input_state calls restartInput; without this,
     /// Slint echoes the IME's own keystroke back, the restart fires, Slint sees
-    /// it as a change and echoes again — a feedback loop that drops keystrokes
-    /// (slint-ui/slint #9240). Skipping unchanged states breaks the loop.
-    last_ime_state: RefCell<Option<(String, usize, usize, Option<(usize, usize)>)>>,
+    /// it as a change and echoes again (slint-ui/slint #9240).
+    ///
+    /// Slint 1.16 echoed the SAME state, so one remembered state sufficed.
+    /// Slint 1.17 alternates between TWO splits of the same visible text
+    /// (committed "s" + preedit "a" at offset 1, then committed "" + preedit
+    /// "sa" at offset 0), so consecutive states always differ and a single-slot
+    /// compare never fires — measured at ~200 restarts per keystroke on a
+    /// Galaxy S9. Remember every state pushed while the COMMITTED text is
+    /// unchanged: that bounds the set to one keystroke's worth and breaks
+    /// cycles of any length. Cleared when the committed text changes, so a
+    /// legitimately repeated state after a real edit is still pushed.
+    last_ime_epoch: RefCell<Option<String>>,
+    ime_states_seen: RefCell<Vec<(String, usize, usize, Option<(usize, usize)>)>>,
 }
 
 impl WindowAdapter for AndroidWindowAdapter {
@@ -146,13 +157,15 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
             InputMethodRequest::Enable(props) => {
                 self.app.show_soft_input(true);
                 // New field focused — force the next state push.
-                *self.last_ime_state.borrow_mut() = None;
+                *self.last_ime_epoch.borrow_mut() = None;
+                self.ime_states_seen.borrow_mut().clear();
                 props
             }
             InputMethodRequest::Update(props) => props,
             InputMethodRequest::Disable => {
                 self.app.hide_soft_input(true);
-                *self.last_ime_state.borrow_mut() = None;
+                *self.last_ime_epoch.borrow_mut() = None;
+                self.ime_states_seen.borrow_mut().clear();
                 return;
             }
             _ => return,
@@ -170,25 +183,24 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
         // Echoing the IME's own change triggers restartInput, which Slint then
         // sees as a change and echoes again — a feedback loop that restarts the
         // input connection thousands of times and drops keystrokes (#9240).
+        // A new committed text means a real edit landed: start a fresh epoch.
+        let committed = props.text.to_string();
+        if self.last_ime_epoch.borrow().as_deref() != Some(committed.as_str()) {
+            *self.last_ime_epoch.borrow_mut() = Some(committed);
+            self.ime_states_seen.borrow_mut().clear();
+        }
+
         let key = (text.clone(), sel_start, sel_end, compose);
-        if self.last_ime_state.borrow().as_ref() == Some(&key) {
+        if self.ime_states_seen.borrow().contains(&key) {
             return;
         }
-        *self.last_ime_state.borrow_mut() = Some(key);
+        self.ime_states_seen.borrow_mut().push(key);
 
         self.app.set_text_input_state(TextInputState {
             text,
             selection: TextSpan { start: sel_start, end: sel_end },
             compose_region: compose.map(|(start, end)| TextSpan { start, end }),
         });
-    }
-
-    fn color_scheme(&self) -> ColorScheme {
-        self.color_scheme.as_ref().get()
-    }
-
-    fn accent_color(&self) -> Color {
-        self.java_helper.accent_color().unwrap_or_else(|e| print_jni_error(&self.app, e))
     }
 
     fn safe_area_inset(&self) -> PhysicalEdges {
@@ -203,34 +215,26 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
 impl AndroidWindowAdapter {
     pub fn new(app: AndroidApp) -> Rc<Self> {
         let java_helper = JavaHelper::new(&app).unwrap_or_else(|e| print_jni_error(&app, e));
-        let color_scheme = Box::pin(Property::new(
-            match java_helper.color_scheme().unwrap_or_else(|e| print_jni_error(&app, e)) {
-                0x10 => ColorScheme::Light,  // UI_MODE_NIGHT_NO(0x10)
-                0x20 => ColorScheme::Dark,   // UI_MODE_NIGHT_YES(0x20)
-                0x0 => ColorScheme::Unknown, // UI_MODE_NIGHT_UNDEFINED
-                _ => ColorScheme::Unknown,
-            },
-        ));
         Rc::<Self>::new_cyclic(|w| Self {
             app,
             window: Window::new(w.clone()),
-            #[cfg(not(any(feature = "unstable-wgpu-27", feature = "unstable-wgpu-28")))]
+            #[cfg(not(any(feature = "unstable-wgpu-28", feature = "unstable-wgpu-29")))]
             renderer: SkiaRenderer::default(&SkiaSharedContext::default()),
-            #[cfg(feature = "unstable-wgpu-28")]
+            #[cfg(all(feature = "unstable-wgpu-28", not(feature = "unstable-wgpu-29")))]
             renderer: SkiaRenderer::default_wgpu_28(&SkiaSharedContext::default()),
-            #[cfg(all(feature = "unstable-wgpu-27", not(feature = "unstable-wgpu-28")))]
-            renderer: SkiaRenderer::default_wgpu_27(&SkiaSharedContext::default()),
+            #[cfg(feature = "unstable-wgpu-29")]
+            renderer: SkiaRenderer::default_wgpu_29(&SkiaSharedContext::default()),
             requested_graphics_api: RefCell::new(None),
             event_queue: Default::default(),
             pending_redraw: Default::default(),
-            color_scheme,
             java_helper,
             fullscreen: Cell::new(false),
             offset: Default::default(),
             show_cursor_handles: Cell::new(false),
             long_press: RefCell::default(),
             last_pressed_state: Cell::new(ButtonState(0)),
-            last_ime_state: RefCell::default(),
+            last_ime_epoch: RefCell::default(),
+            ime_states_seen: RefCell::default(),
         })
     }
 
@@ -283,7 +287,7 @@ impl AndroidWindowAdapter {
                 self.window.try_dispatch_event(WindowEvent::WindowActiveChanged(true))?;
             }
             PollEvent::Main(MainEvent::LostFocus) => {
-                self.window.try_dispatch_event(WindowEvent::WindowActiveChanged(true))?;
+                self.window.try_dispatch_event(WindowEvent::WindowActiveChanged(false))?;
             }
             PollEvent::Main(MainEvent::ConfigChanged { .. }) => {
                 let scale_factor =
@@ -405,7 +409,7 @@ impl AndroidWindowAdapter {
                             self.long_press.replace(Some(LongPressDetection { position, _timer }));
                             if let Some(p) = motion_event.pointers().next() {
                                 WindowInner::from_pub(&self.window).process_touch_input(
-                                    p.pointer_id() as u64,
+                                    p.pointer_id(),
                                     touch_pos(&p),
                                     TouchPhase::Started,
                                 );
@@ -416,7 +420,7 @@ impl AndroidWindowAdapter {
                             self.long_press.take();
                             if let Some(p) = motion_event.pointers().next() {
                                 WindowInner::from_pub(&self.window).process_touch_input(
-                                    p.pointer_id() as u64,
+                                    p.pointer_id(),
                                     touch_pos(&p),
                                     TouchPhase::Ended,
                                 );
@@ -439,7 +443,7 @@ impl AndroidWindowAdapter {
                             let runtime_window = WindowInner::from_pub(&self.window);
                             for p in motion_event.pointers() {
                                 runtime_window.process_touch_input(
-                                    p.pointer_id() as u64,
+                                    p.pointer_id(),
                                     touch_pos(&p),
                                     TouchPhase::Moved,
                                 );
@@ -452,7 +456,7 @@ impl AndroidWindowAdapter {
                             let idx = motion_event.pointer_index();
                             if let Some(p) = motion_event.pointers().nth(idx) {
                                 WindowInner::from_pub(&self.window).process_touch_input(
-                                    p.pointer_id() as u64,
+                                    p.pointer_id(),
                                     touch_pos(&p),
                                     TouchPhase::Started,
                                 );
@@ -463,7 +467,7 @@ impl AndroidWindowAdapter {
                             let idx = motion_event.pointer_index();
                             if let Some(p) = motion_event.pointers().nth(idx) {
                                 WindowInner::from_pub(&self.window).process_touch_input(
-                                    p.pointer_id() as u64,
+                                    p.pointer_id(),
                                     touch_pos(&p),
                                     TouchPhase::Ended,
                                 );
@@ -481,7 +485,7 @@ impl AndroidWindowAdapter {
                             let runtime_window = WindowInner::from_pub(&self.window);
                             for p in motion_event.pointers() {
                                 runtime_window.process_touch_input(
-                                    p.pointer_id() as u64,
+                                    p.pointer_id(),
                                     touch_pos(&p),
                                     TouchPhase::Cancelled,
                                 );
@@ -564,7 +568,7 @@ impl AndroidWindowAdapter {
     pub fn do_render(&self) -> Result<(), PlatformError> {
         if let Some(win) = self.app.native_window() {
             let o = self.offset.get();
-            self.renderer.render_transformed_with_post_callback(
+            let _ = self.renderer.render_transformed_with_post_callback(
                 0.,
                 (o.x as f32, o.y as f32),
                 PhysicalSize { width: win.width() as _, height: win.height() as _ },

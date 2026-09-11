@@ -11,9 +11,9 @@
 
 [package]
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.92"
 name = "i-slint-backend-android-activity"
-version = "1.16.1"
+version = "1.17.1"
 authors = ["Slint Developers <info@slint.dev>"]
 build = "build.rs"
 autolib = false
@@ -57,8 +57,8 @@ native-activity = [
     "android-activity-06?/native-activity",
     "android-activity-05?/native-activity",
 ]
-unstable-wgpu-27 = ["i-slint-renderer-skia/unstable-wgpu-27"]
 unstable-wgpu-28 = ["i-slint-renderer-skia/unstable-wgpu-28"]
+unstable-wgpu-29 = ["i-slint-renderer-skia/unstable-wgpu-29"]
 
 [lib]
 name = "i_slint_backend_android_activity"
@@ -77,13 +77,17 @@ version = "0.6"
 optional = true
 package = "android-activity"
 
+[target.'cfg(target_os = "android")'.dependencies.i-slint-common]
+version = "=1.17.1"
+default-features = false
+
 [target.'cfg(target_os = "android")'.dependencies.i-slint-core]
-version = "=1.16.1"
+version = "=1.17.1"
 features = ["std"]
 default-features = false
 
 [target.'cfg(target_os = "android")'.dependencies.i-slint-renderer-skia]
-version = "=1.16.1"
+version = "=1.17.1"
 default-features = false
 
 [target.'cfg(target_os = "android")'.dependencies.jni]
