@@ -29,6 +29,32 @@ debug = 0              # No debug symbols (faster linking)
 incremental = true     # Incremental compilation
 codegen-units = 256    # More parallelism
 
+# chatter-core is opted OUT of the workspace-member opt-level = 0 above.
+#
+# Why (OPEN-ITEMS §109): attachment crypto is `cbc::Decryptor<aes::Aes256>` --
+# a generic, so the AES round function is monomorphised into chatter-core and
+# compiled at CHATTER-CORE's opt-level, not the `aes` crate's. At opt-level = 0
+# that instantiation runs at ~64 MB/s; at 2 it runs at ~217 MB/s. Nothing about
+# the `aes` crate changes -- the same type in a test crate measures ~1600 MB/s
+# either way.
+#
+# It only looked fine before because of a coincidence. With `-Z share-generics=y`
+# chatter-core could reuse an instantiation already compiled inside an
+# opt-level = 2 dependency, and `signal-crypto` was a second user of cbc 0.1.2
+# that provided one. libsignal v0.102.2 moves to aes 0.9 / cbc 0.2, leaving
+# chatter-core the sole user of cbc 0.1.2 -- so it emits its own, at opt-level 0,
+# and dev-build attachment crypto fell 5x.
+#
+# Note that `-Z share-generics=y` is NOT set by this repository. It came from the
+# developer's ~/.cargo/config.toml, which means dev-build crypto speed here was a
+# property of one machine's global cargo config. This line removes that
+# dependency: chatter-core is now fast because of this file.
+#
+# Dev profile only; release is unaffected and measured (§109). Costs ~30s on a
+# clean chatter-core build.
+[profile.dev.package.chatter-core]
+opt-level = 2
+
 # Optimize dependencies but not your code
 [profile.dev.package."*"]
 opt-level = 2          # Dependencies are optimized (they don't change often)

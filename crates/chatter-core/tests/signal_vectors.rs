@@ -155,9 +155,14 @@ async fn pqxdh_session_roundtrip_seeded() {
         InMemSignalProtocolStore::new(alice_identity, alice_registration_id).unwrap();
 
     let bob_address = ProtocolAddress::new("bob-uuid".to_string(), DeviceId::new(1).unwrap());
+    // Hoisted: libsignal >= 0.99 needs the local address on the encrypt and
+    // process-bundle calls above, not just on the decrypt below.
+    let alice_address =
+        ProtocolAddress::new("alice-uuid".to_string(), DeviceId::new(1).unwrap());
 
     process_prekey_bundle(
         &bob_address,
+        &alice_address,
         &mut alice_store.session_store,
         &mut alice_store.identity_store,
         &bob_bundle,
@@ -173,6 +178,7 @@ async fn pqxdh_session_roundtrip_seeded() {
     let alice_ctext = message_encrypt(
         PLAINTEXT,
         &bob_address,
+        &alice_address,        // local side: Alice is encrypting
         &mut alice_store.session_store,
         &mut alice_store.identity_store,
         SystemTime::now(),
@@ -191,13 +197,12 @@ async fn pqxdh_session_roundtrip_seeded() {
     };
 
     // Bob parses + decrypts.
-    let alice_address =
-        ProtocolAddress::new("alice-uuid".to_string(), DeviceId::new(1).unwrap());
     let prekey_msg =
         PreKeySignalMessage::try_from(prekey_msg_bytes.as_slice()).expect("parse prekey msg");
     let recovered = message_decrypt(
         &CiphertextMessage::PreKeySignalMessage(prekey_msg),
         &alice_address,
+        &bob_address,          // local side: Bob is decrypting
         &mut bob_store.session_store,
         &mut bob_store.identity_store,
         &mut bob_store.pre_key_store,

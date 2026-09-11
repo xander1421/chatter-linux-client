@@ -16,6 +16,16 @@ use libsignal_protocol::{
     PreKeyRecord, PreKeyStore, ProtocolAddress, SessionStore, SignedPreKeyId, SignedPreKeyRecord,
     SignedPreKeyStore, Timestamp,
 };
+
+/// Alice is the local party in these fixtures; libsignal >= 0.99 wants her
+/// address alongside the peer's on every session call.
+fn alice_addr() -> libsignal_protocol::ProtocolAddress {
+    libsignal_protocol::ProtocolAddress::new(
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_string(),
+        DeviceId::new(1).unwrap(),
+    )
+}
+
 use rand::{rngs::StdRng, SeedableRng};
 use std::time::SystemTime;
 
@@ -108,6 +118,7 @@ async fn usable_session_bytes(peer: &ProtocolAddress) -> Vec<u8> {
     let mut alice_store = InMemSignalProtocolStore::new(alice_identity, 0xAAAA).expect("alice store");
     process_prekey_bundle(
         peer,
+        &alice_addr(),
         &mut alice_store.session_store,
         &mut alice_store.identity_store,
         &bundle,
@@ -406,6 +417,7 @@ async fn prekey_message_from(sender_identity: IdentityKeyPair, seed: u64) -> Vec
     let mut sender_store = InMemSignalProtocolStore::new(sender_identity, 0xAAAA).unwrap();
     process_prekey_bundle(
         &recipient,
+        &alice_addr(),
         &mut sender_store.session_store,
         &mut sender_store.identity_store,
         &bundle,
@@ -418,6 +430,7 @@ async fn prekey_message_from(sender_identity: IdentityKeyPair, seed: u64) -> Vec
     let msg = libsignal_protocol::message_encrypt(
         b"hello from the other side",
         &recipient,
+        &alice_addr(),
         &mut sender_store.session_store,
         &mut sender_store.identity_store,
         SystemTime::now(),

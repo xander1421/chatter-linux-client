@@ -572,6 +572,15 @@ async fn wait_for_stored_text(
     }
 }
 
+/// Alice's own address: libsignal >= 0.99 wants the local side of the session
+/// alongside the peer's.
+fn v14_alice_addr() -> libsignal_protocol::ProtocolAddress {
+    libsignal_protocol::ProtocolAddress::new(
+        "11111111-1111-4111-8111-111111111111".to_string(),
+        libsignal_protocol::DeviceId::new(1).expect("device id"),
+    )
+}
+
 async fn register_and_start(client: &Arc<ChatterClient>, username: &str, display: &str) -> UserId {
     client.connect().await.expect("connect failed");
 
@@ -4146,7 +4155,7 @@ async fn v14_forged_identity_key_is_rejected_via_key_transparency() {
         let mut alice_sess = make_store(&mut rng);
         let mut alice_id = alice_sess.clone();
         let r = SessionManager::establish_session(
-            &bob_addr, &mut alice_sess, &mut alice_id, &honest, &mut rng,
+            &bob_addr, &v14_alice_addr(), &mut alice_sess, &mut alice_id, &honest, &mut rng,
         )
         .await;
         assert!(
@@ -4190,7 +4199,7 @@ async fn v14_forged_identity_key_is_rejected_via_key_transparency() {
         kt_verify_bundle_key(&mut auth_client, &bob.user_id, &forged).await?;
         // Unreachable on a correct client: only runs if KT passed.
         SessionManager::establish_session(
-            &bob_addr, &mut alice_sess, &mut alice_id, &forged, &mut rng,
+            &bob_addr, &v14_alice_addr(), &mut alice_sess, &mut alice_id, &forged, &mut rng,
         )
         .await
         .map_err(|e| format!("{e:?}"))

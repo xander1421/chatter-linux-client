@@ -196,8 +196,47 @@ pub enum SignalCommand {
     },
 }
 
+/// Our own `ProtocolAddress`, read from the authenticated session.
+///
+/// libsignal >= 0.99 takes the LOCAL address alongside the remote one on every
+/// encrypt/decrypt/process-bundle call: a session is keyed by both ends, so the
+/// caller has to say which identity of ours is involved. Guessing is not an
+/// option here — a wrong local address silently addresses a different session —
+/// so this fails loudly when the device is not logged in.
+fn local_protocol_address(
+    settings: &SettingsRepository,
+) -> Result<ProtocolAddress, ServiceError> {
+    let uuid = settings
+        .get_string(crate::storage::settings_keys::CURRENT_USER_ID)
+        .map_err(ServiceError::Storage)?
+        .ok_or_else(|| {
+            ServiceError::Crypto(CryptoError::Protocol(
+                "no local user id: cannot build the local ProtocolAddress libsignal now requires"
+                    .into(),
+            ))
+        })?;
+    // Stored as an INTEGER, not a string: `get_string` on this key fails with
+    // "invalid type: integer `1`, expected a string". libsignal >= 0.99 narrowed
+    // DeviceId to u8, so the value is range-checked on the way in.
+    let device_id: u32 = settings
+        .get(crate::storage::settings_keys::CURRENT_DEVICE_ID)
+        .map_err(ServiceError::Storage)?
+        .ok_or_else(|| {
+            ServiceError::Crypto(CryptoError::Protocol("no local device id".into()))
+        })?;
+    let device_id = u8::try_from(device_id).map_err(|_| {
+        ServiceError::Crypto(CryptoError::Protocol(format!(
+            "local device id {device_id} does not fit libsignal's u8 DeviceId"
+        )))
+    })?;
+    let device_id = DeviceId::new(device_id)
+        .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?;
+    Ok(ProtocolAddress::new(uuid, device_id))
+}
+
 /// Handle to the Signal Actor.
 #[derive(Clone)]
+
 pub struct SignalActorHandle {
     sender: mpsc::Sender<SignalCommand>,
 }
@@ -307,9 +346,13 @@ impl SignalActorHandle {
                         }
 
                         SignalCommand::EstablishSession { address, bundle, response } => {
+                            let local_address = match local_protocol_address(&settings_repo) {
+                                Ok(a) => a,
+                                Err(e) => { let _ = response.send(Err(e)); continue; }
+                            };
                             let mut rng = rand::rngs::OsRng.unwrap_err();
                             let mut store2 = store.clone();
-                            let res = SessionManager::establish_session(&address, &mut store, &mut store2, &bundle, &mut rng)
+                            let res = SessionManager::establish_session(&address, &local_address, &mut store, &mut store2, &bundle, &mut rng)
                                 .await
                                 .map_err(ServiceError::Crypto);
                             let _ = response.send(res);
@@ -324,9 +367,13 @@ impl SignalActorHandle {
                         }
 
                         SignalCommand::EncryptIdentified { plaintext, recipient_address, response } => {
+                            let local_address = match local_protocol_address(&settings_repo) {
+                                Ok(a) => a,
+                                Err(e) => { let _ = response.send(Err(e)); continue; }
+                            };
                             let mut rng = rand::rngs::OsRng.unwrap_err();
                             let mut store2 = store.clone();
-                            let res = match libsignal_protocol::message_encrypt(&plaintext, &recipient_address, &mut store, &mut store2, std::time::SystemTime::now(), &mut rng).await {
+                            let res = match libsignal_protocol::message_encrypt(&plaintext, &recipient_address, &local_address, &mut store, &mut store2, std::time::SystemTime::now(), &mut rng).await {
                                 Ok(ciphertext) => {
                                     let msg_type = match ciphertext.message_type() {
                                         CiphertextMessageType::PreKey => 2u8,
@@ -363,6 +410,10 @@ impl SignalActorHandle {
                         }
 
                         SignalCommand::DecryptIdentified { ciphertext, sender_address, response } => {
+                            let local_address = match local_protocol_address(&settings_repo) {
+                                Ok(a) => a,
+                                Err(e) => { let _ = response.send(Err(e)); continue; }
+                            };
                             let mut rng = rand::rngs::OsRng.unwrap_err();
                             let mut store2 = store.clone();
                             let mut store3 = store.clone();
@@ -371,10 +422,10 @@ impl SignalActorHandle {
                             
                             let res = if let Ok(prekey_msg) = libsignal_protocol::PreKeySignalMessage::try_from(ciphertext.as_slice()) {
                                 let new_key = prekey_msg.identity_key().serialize().to_vec();
-                                libsignal_protocol::message_decrypt_prekey(&prekey_msg, &sender_address, &mut store, &mut store2, &mut store3, &store6, &mut store4, &mut rng).await
+                                libsignal_protocol::message_decrypt_prekey(&prekey_msg, &sender_address, &local_address, &mut store, &mut store2, &mut store3, &store6, &mut store4, &mut rng).await
                                     .map_err(|e| map_identified_decrypt_err(e, Some(new_key)))
                             } else if let Ok(signal_msg) = libsignal_protocol::SignalMessage::try_from(ciphertext.as_slice()) {
-                                libsignal_protocol::message_decrypt_signal(&signal_msg, &sender_address, &mut store, &mut store2, &mut rng).await
+                                libsignal_protocol::message_decrypt_signal(&signal_msg, &sender_address, &local_address, &mut store, &mut store2, &mut rng).await
                                     .map_err(|e| map_identified_decrypt_err(e, None))
                             } else {
                                 Err(ServiceError::Crypto(CryptoError::Protocol("Unknown ciphertext format".into())))
@@ -383,6 +434,10 @@ impl SignalActorHandle {
                         }
 
                         SignalCommand::DecryptWithConvergence { envelope, sender_id, sender_device_id, sessions, response } => {
+                            let local_address = match local_protocol_address(&settings_repo) {
+                                Ok(a) => a,
+                                Err(e) => { let _ = response.send(Err(e)); continue; }
+                            };
                             let device_id_struct = match DeviceId::try_from(sender_device_id).map_err(|e| ServiceError::Validation(e.to_string())) {
                                 Ok(id) => id,
                                 Err(e) => { let _ = response.send(Err(e)); continue; }
@@ -430,7 +485,7 @@ impl SignalActorHandle {
                                     if store2.key_store().store_session(&session_key, &serialized).is_ok() {
                                         if let Ok(prekey_msg) = libsignal_protocol::PreKeySignalMessage::try_from(envelope.as_slice()) {
                                             let new_key = prekey_msg.identity_key().serialize().to_vec();
-                                            match libsignal_protocol::message_decrypt_prekey(&prekey_msg, &sender_address, &mut store, &mut store2, &mut store3, &store6, &mut store4, &mut rng).await {
+                                            match libsignal_protocol::message_decrypt_prekey(&prekey_msg, &sender_address, &local_address, &mut store, &mut store2, &mut store3, &store6, &mut store4, &mut rng).await {
                                                 Ok(plaintext) => {
                                                     final_res = Ok(ConvergenceResult::ActiveSession { plaintext, session_id });
                                                     committed = true;
@@ -439,7 +494,7 @@ impl SignalActorHandle {
                                                 Err(e) => note_convergence_failure(e, Some(new_key), &mut identity_change, &mut errors),
                                             }
                                         } else if let Ok(signal_msg) = libsignal_protocol::SignalMessage::try_from(envelope.as_slice()) {
-                                            match libsignal_protocol::message_decrypt_signal(&signal_msg, &sender_address, &mut store, &mut store2, &mut rng).await {
+                                            match libsignal_protocol::message_decrypt_signal(&signal_msg, &sender_address, &local_address, &mut store, &mut store2, &mut rng).await {
                                                 Ok(plaintext) => {
                                                     final_res = Ok(ConvergenceResult::ActiveSession { plaintext, session_id });
                                                     committed = true;

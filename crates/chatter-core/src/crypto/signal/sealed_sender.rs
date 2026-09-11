@@ -286,6 +286,11 @@ impl SealedSenderManager {
         }
 
         let remote_address = ProtocolAddress::new(sender_uuid.clone(), sender_device_id);
+        // libsignal >= 0.99 takes the LOCAL address too: sessions are keyed by
+        // both ends now, so the decrypt side has to say which identity of ours
+        // the message was sent to. These are the same values the self-send check
+        // above uses.
+        let local_address = ProtocolAddress::new(local_uuid.clone(), local_device_id);
         let msg_type = usmc.msg_type().map_err(map_envelope_err)?;
         let contents = usmc.contents().map_err(map_envelope_err)?;
 
@@ -303,6 +308,7 @@ impl SealedSenderManager {
                 message_decrypt_signal(
                     &ctext,
                     &remote_address,
+                    &local_address,
                     session_store,
                     identity_store,
                     &mut rng,
@@ -315,6 +321,7 @@ impl SealedSenderManager {
                 message_decrypt_prekey(
                     &ctext,
                     &remote_address,
+                    &local_address,
                     session_store,
                     identity_store,
                     pre_key_store,
@@ -334,7 +341,8 @@ impl SealedSenderManager {
             other => {
                 return Err(map_envelope_err(SignalProtocolError::InvalidMessage(
                     other,
-                    "unexpected message type for sealed sender decrypt",
+                    // libsignal >= 0.99 takes an owned String here.
+                    "unexpected message type for sealed sender decrypt".to_string(),
                 )));
             }
         };
@@ -850,7 +858,7 @@ mod tests {
         // A genuine wedge still reports, or the 1:1 self-heal stops working. The
         // ciphertext has to survive into the error — the report is built from it.
         let wedged = classify_inner_failure(
-            SignalProtocolError::InvalidMessage(CiphertextMessageType::Whisper, "bad mac"),
+            SignalProtocolError::InvalidMessage(CiphertextMessageType::Whisper, "bad mac".to_string()),
             "caa49e97-690f-407d-ab9a-74bf772dbd3d",
             device,
             CiphertextMessageType::Whisper,

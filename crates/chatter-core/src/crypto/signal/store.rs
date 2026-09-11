@@ -309,7 +309,7 @@ impl KyberPreKeyStore for SignalStore {
                 if let StorageError::InvalidData(_) = e {
                     SignalProtocolError::InvalidMessage(
                         CiphertextMessageType::PreKey,
-                        "reused base key",
+                        "reused base key".to_string(),
                     )
                 } else {
                     storage_to_signal_error(e)

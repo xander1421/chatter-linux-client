@@ -54,9 +54,9 @@ tower = "0.5"
 # ============================================================================
 # Crypto - Signal Protocol (Official libsignal)
 # ============================================================================
-libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "c5edd3fa38bf5f13bc70a88c146cfbdd61865fe3" }
-libsignal-core = { git = "https://github.com/signalapp/libsignal", rev = "c5edd3fa38bf5f13bc70a88c146cfbdd61865fe3" }
-signal-media = { git = "https://github.com/signalapp/libsignal", rev = "c5edd3fa38bf5f13bc70a88c146cfbdd61865fe3" }
+libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "8fc2113bda042fc972a166a24b974b0d34155c6c" }
+libsignal-core = { git = "https://github.com/signalapp/libsignal", rev = "8fc2113bda042fc972a166a24b974b0d34155c6c" }
+signal-media = { git = "https://github.com/signalapp/libsignal", rev = "8fc2113bda042fc972a166a24b974b0d34155c6c" }
 # Same versions signal-media pins; used directly for the sync (file-streaming)
 # sanitize path, which signal-media's async-only wrapper doesn't expose.
 mp4san = "0.5.3"
@@ -64,7 +64,7 @@ webpsan = { version = "0.5.3", default-features = false }
 # Signal usernames crate (Ristretto255 + ZK proof of ownership for the
 # discovery hash). NOTE: licensed AGPL-3.0; combining with the rest of
 # chatter (GPL-3.0) means the combined work is effectively AGPL.
-usernames = { git = "https://github.com/signalapp/libsignal", rev = "c5edd3fa38bf5f13bc70a88c146cfbdd61865fe3" }
+usernames = { git = "https://github.com/signalapp/libsignal", rev = "8fc2113bda042fc972a166a24b974b0d34155c6c" }
 rand = { version = "0.9", features = ["os_rng"] }
 rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }
 blind-rsa-signatures = "0.14"
@@ -75,7 +75,11 @@ rayon = "1.10"
 hkdf = "0.12"
 aes-gcm = "0.10"
 aes = "0.8"
-cbc = "0.1"
+# `alloc` gives cipher's encrypt_padded_vec_mut / decrypt_padded_vec_mut, which
+# crypto/provisioning.rs uses. It used to arrive transitively; a dependency
+# update stopped some other crate from enabling it, so it is named here rather
+# than left to feature unification.
+cbc = { version = "0.1", features = ["alloc"] }
 block-padding = "0.3"
 chacha20poly1305 = "0.10"
 hpke = "0.12"
@@ -279,7 +283,7 @@ proptest = "1"
 # directly, mirroring the crate's own pinned libsignal + rand. Same source/rev
 # and version so Cargo unifies with the normal deps (no duplicate build).
 rand = { version = "0.9", features = ["os_rng"] }
-libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "c5edd3fa38bf5f13bc70a88c146cfbdd61865fe3" }
+libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "8fc2113bda042fc972a166a24b974b0d34155c6c" }
 # Needed by tests/validated.rs V50/V51 to open the SQLCipher stores directly
 # and compare backup-restored rows byte-for-byte. Same version as the normal
 # dep so Cargo unifies the build.

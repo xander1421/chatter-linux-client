@@ -579,9 +579,14 @@ impl MessageProcessor {
             })?;
 
         let mut rng = { use rand::TryRngCore as _; rand::rngs::OsRng.unwrap_err() };
+        // libsignal >= 0.99 needs our own address too; the processor
+        // already carries it for the self-send check.
+        let local_address =
+            ProtocolAddress::new(self.local_uuid.clone(), self.local_device_id);
         let plaintext = libsignal_protocol::message_decrypt_prekey(
             &prekey_msg,
             &sender_address,
+            &local_address,
             session_store,
             identity_store,
             pre_key_store,
@@ -634,9 +639,14 @@ impl MessageProcessor {
             })?;
 
         let mut rng = { use rand::TryRngCore as _; rand::rngs::OsRng.unwrap_err() };
+        // libsignal >= 0.99 needs our own address too; the processor
+        // already carries it for the self-send check.
+        let local_address =
+            ProtocolAddress::new(self.local_uuid.clone(), self.local_device_id);
         let plaintext = libsignal_protocol::message_decrypt_signal(
             &signal_msg,
             &sender_address,
+            &local_address,
             session_store,
             identity_store,
             &mut rng,

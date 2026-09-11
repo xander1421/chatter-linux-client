@@ -39,6 +39,9 @@ impl SessionManager {
     /// * `rng` - Cryptographically secure random number generator
     pub async fn establish_session<R, S, I>(
         remote_address: &ProtocolAddress,
+        // libsignal >= 0.99 keys a session by both ends, so processing a bundle
+        // needs our own address as well as theirs.
+        local_address: &ProtocolAddress,
         session_store: &mut S,
         identity_store: &mut I,
         bundle: &PreKeyBundle,
@@ -110,6 +113,7 @@ impl SessionManager {
 
         process_prekey_bundle(
             remote_address,
+            local_address,
             session_store,
             identity_store,
             bundle,
@@ -297,6 +301,11 @@ mod tests {
     use rand::rngs::StdRng;
 
     /// Build a fresh `InMemSignalProtocolStore` for one side of a session.
+    /// Alice's own address — the local side of the session under test.
+    fn alice_addr() -> ProtocolAddress {
+        ProtocolAddress::new("alice".to_string(), DeviceId::new(1).unwrap())
+    }
+
     fn make_store(rng: &mut StdRng) -> InMemSignalProtocolStore {
         let identity = IdentityKeyPair::generate(rng);
         // Valid registration IDs fit in 14 bits.
@@ -357,6 +366,7 @@ mod tests {
         let mut alice_store2 = alice_store.clone();
         let res = SessionManager::establish_session(
             &bob_addr,
+            &alice_addr(),
             &mut alice_store,
             &mut alice_store2,
             &bundle,
@@ -395,6 +405,7 @@ mod tests {
         let mut alice_store2 = alice_store.clone();
         let res = SessionManager::establish_session(
             &bob_addr,
+            &alice_addr(),
             &mut alice_store,
             &mut alice_store2,
             &tampered,
