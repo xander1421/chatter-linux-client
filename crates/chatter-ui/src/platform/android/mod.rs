@@ -8,6 +8,7 @@
 pub mod activity;
 pub mod call_actions;
 pub mod camera;
+pub mod clipboard;
 pub mod file_picker;
 pub mod haptics;
 pub mod notifications;

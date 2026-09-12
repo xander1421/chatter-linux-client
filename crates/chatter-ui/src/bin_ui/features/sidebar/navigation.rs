@@ -124,10 +124,26 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                         .into(),
                 );
 
-                // Load privacy settings from state
-                let privacy = privacy_state.get();
-                w.set_settings_read_receipts(privacy.global_read_receipts);
-                w.set_settings_typing_indicators(privacy.global_typing_indicators);
+                // Read these from the SAME place the toggles write
+                // (settings_keys::SEND_READ_RECEIPTS / SHOW_TYPING_INDICATORS,
+                // via ChatterClient), not from PrivacyState.
+                //
+                // PrivacyState::set_global_read_receipts and its typing twin have
+                // ZERO production callers, so privacy_state.global_* never moves
+                // off its `true` default. Reading them here meant the Privacy
+                // panel showed both toggles ON at every startup no matter what
+                // the user had chosen, while the behaviour correctly followed the
+                // persisted setting (conversation.rs:573 gates on
+                // read_receipts_enabled()). The control was therefore off by one
+                // after any restart and the real state was never visible
+                // (OPEN-ITEMS §112e).
+                let _ = &privacy_state;
+                w.set_settings_read_receipts(
+                    ui_ctx_settings.read_receipts_enabled().unwrap_or(true),
+                );
+                w.set_settings_typing_indicators(
+                    ui_ctx_settings.typing_indicators_enabled().unwrap_or(true),
+                );
 
                 // Cloud AI: reflect what is actually saved, so the panel never
                 // shows a preference the core would not honour.

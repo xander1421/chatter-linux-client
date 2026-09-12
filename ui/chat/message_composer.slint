@@ -85,6 +85,12 @@ export component MessageComposer inherits Rectangle {
     // can send several messages in a row.
     function reset-after-send() {
         root.text = "";
+        root.reset-composition();
+    }
+
+    // Make the input method finish composing. Dropping focus is the only handle
+    // Slint gives us for that; re-focusing immediately keeps the keyboard up.
+    function reset-composition() {
         text-input.clear-focus();
         text-input.focus();
     }
@@ -279,6 +285,14 @@ export component MessageComposer inherits Rectangle {
                     cancel-touch := TouchArea {
                         mouse-cursor: pointer;
                         clicked => {
+                            // Drop the IME composition too. The Rust handler
+                            // clears `composer_text`, but that only clears the
+                            // COMMITTED text -- anything the keyboard was still
+                            // composing survives and is re-rendered, so
+                            // cancelling an edit left that text in the box with
+                            // Send active, ready to post as a NEW message
+                            // (OPEN-ITEMS §112g).
+                            root.reset-composition();
                             root.cancel-edit();
                         }
                     }

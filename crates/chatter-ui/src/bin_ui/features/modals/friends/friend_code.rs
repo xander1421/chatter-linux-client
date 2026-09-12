@@ -227,9 +227,29 @@ fn wire_copy_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
                     }
                 });
                 }
-                #[cfg(any(target_os = "android", target_os = "ios"))]
-                tracing::warn!("Clipboard not supported on mobile");
+                #[cfg(target_os = "android")]
+                match crate::platform::android::clipboard::set_text("Friend code", &code) {
+                    Ok(()) => {
+                        tracing::info!("Copied friend code to clipboard: {}", code);
+                        w.set_friends_code_status("Copied to clipboard!".into());
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to copy friend code to clipboard: {}", e);
+                        w.set_friends_code_status("Couldn't copy — use Show QR".into());
+                    }
+                }
+                #[cfg(target_os = "ios")]
+                {
+                    tracing::warn!("Clipboard not implemented on iOS");
+                    w.set_friends_code_status("Copy unavailable — use Show QR".into());
+                }
 
+                // Desktop reports success unconditionally because the copy runs
+                // on a detached thread above. Mobile sets its own status in the
+                // match arms, so this must NOT also claim success — that is how
+                // the button came to say "Copied to clipboard!" on Android while
+                // doing nothing at all (OPEN-ITEMS §112f).
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 w.set_friends_code_status("Copied to clipboard!".into());
             } else {
                 tracing::warn!("No friend code to copy");
