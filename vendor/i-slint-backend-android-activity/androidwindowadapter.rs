@@ -76,6 +76,9 @@ pub struct AndroidWindowAdapter {
     last_pushed_text: RefCell<Option<String>>,
     /// Cursor offset of the last state pushed, for the same reason.
     last_pushed_cursor: Cell<usize>,
+    /// Full text of the last state the INPUT METHOD reported to us. Used to
+    /// avoid echoing a stale Slint state back over a newer IME state.
+    last_ime_text: RefCell<Option<String>>,
 }
 
 impl WindowAdapter for AndroidWindowAdapter {
@@ -214,8 +217,27 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
         if !props.preedit_text.is_empty() {
             text.insert_str(props.preedit_offset, props.preedit_text.as_str());
         }
-        let sel_start = props.anchor_position.unwrap_or(props.cursor_position);
-        let sel_end = props.cursor_position;
+        // Chatter patch: convert the cursor into MERGED-text coordinates.
+        //
+        // Slint documents `InputMethodProperties::text` as excluding the
+        // pre-edit, and `cursor_position` as "the position of the cursor in
+        // bytes within the `text`" — i.e. committed-text coordinates. We hand
+        // GameTextInput the MERGED string (committed with the pre-edit spliced
+        // in), so the offset has to be shifted past the pre-edit, which
+        // upstream never does.
+        //
+        // Committed "a" + pre-edit "s" at offset 1 merges to "as", where the
+        // caret belongs at 2 — upstream pushes 1, putting the caret BEFORE the
+        // composing region. The IME then cannot extend the composition past two
+        // characters and backspace deletes nothing, which is exactly the
+        // reported "typing goes up 2 letters and clearing does nothing"
+        // (OPEN-ITEMS §112n).
+        let preedit_len = props.preedit_text.len();
+        let to_merged = |pos: usize| {
+            if preedit_len > 0 && pos >= props.preedit_offset { pos + preedit_len } else { pos }
+        };
+        let sel_start = to_merged(props.anchor_position.unwrap_or(props.cursor_position));
+        let sel_end = to_merged(props.cursor_position);
         let compose = (!props.preedit_text.is_empty())
             .then_some((props.preedit_offset, props.preedit_offset + props.preedit_text.len()));
 
@@ -274,6 +296,23 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
             return;
         }
 
+        // Chatter patch: never echo the IME's own text back at it.
+        //
+        // Pressing SPACE makes the input method commit the composing word AND
+        // insert the space, so GameTextInput's text becomes "as ". Slint then
+        // reports committed="as" (without the space yet) and we pushed that
+        // back — overwriting "as " with "as" and destroying the space. The user
+        // saw this as space working sometimes and not others; instrumented, it
+        // was every space in the run.
+        //
+        // The existing tuple dedupe cannot catch it, because the tuple differs
+        // (compose region None vs Some) even though the TEXT is identical. If
+        // the text matches what the IME last told us, the IME is already in
+        // that state or ahead of it, and there is nothing to send (§112n).
+        if self.last_ime_text.borrow().as_deref() == Some(text.as_str()) {
+            return;
+        }
+
         let key = (text.clone(), sel_start, sel_end, compose);
         if self.ime_states_seen.borrow().contains(&key) {
             return;
@@ -325,6 +364,7 @@ impl AndroidWindowAdapter {
             had_compose: Cell::new(false),
             last_pushed_text: RefCell::default(),
             last_pushed_cursor: Cell::new(0),
+            last_ime_text: RefCell::default(),
         })
     }
 
@@ -591,6 +631,9 @@ impl AndroidWindowAdapter {
                 }
                 InputEvent::TextEvent(state) => {
                     self.show_cursor_handles.set(false);
+                    // Remember what the IME believes, so the outbound path can
+                    // tell an app-initiated change from an echo of this (§112n).
+                    *self.last_ime_text.borrow_mut() = Some(state.text.clone());
                     let runtime_window = WindowInner::from_pub(&self.window);
                     // remove the pre_edit
                     let event = if let Some(r) = state.compose_region {
@@ -606,6 +649,14 @@ impl AndroidWindowAdapter {
                         InternalKeyEvent {
                             event_type: KeyEventType::UpdateComposition,
                             preedit_text: state.text[r.start..r.end].into(),
+// Upstream's value, deliberately kept. Setting this to
+                            // None does NOT remove the highlight on composing
+                            // text — i-slint-core paints the whole preedit
+                            // range with the selection styling regardless
+                            // (textlayout/sharedparley.rs:1417 prefers
+                            // preedit_range over selection_range) — and it also
+                            // makes core return cursor_position: None, which
+                            // removes the caret while composing. See §112n.
                             preedit_selection: Some(0..(r.end - r.start) as i32),
                             replacement_range: Some(i32::MIN..i32::MAX),
                             cursor_position: Some(adjust(state.selection.end)),
