@@ -71,6 +71,11 @@ pub struct AndroidWindowAdapter {
     /// the input method may still be composing. Gates the stale-composition
     /// reset below so it only fires when there is something to clear.
     had_compose: Cell<bool>,
+    /// Merged (committed + preedit) text of the last state pushed. Used to tell
+    /// a real edit from the cursor-only churn the seen-set is meant to absorb.
+    last_pushed_text: RefCell<Option<String>>,
+    /// Cursor offset of the last state pushed, for the same reason.
+    last_pushed_cursor: Cell<usize>,
 }
 
 impl WindowAdapter for AndroidWindowAdapter {
@@ -225,12 +230,58 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
             self.ime_states_seen.borrow_mut().clear();
         }
 
+        // ...but NEVER dedupe a change to the visible text. The seen-set exists
+        // to absorb the 1.17 oscillation, which churns cursor/compose while the
+        // merged text stays identical. A real edit changes the merged text — and
+        // BACKSPACE walks it back to a state already in the set, so deduping on
+        // the full tuple silently swallowed every delete: typing "as" and
+        // pressing backspace twice left "as" untouched on a Galaxy S9. That was
+        // a regression introduced by this very patch (OPEN-ITEMS §112n).
+        if self.last_pushed_text.borrow().as_deref() != Some(text.as_str()) {
+            self.ime_states_seen.borrow_mut().clear();
+        }
+
+        // Chatter patch: reject the degenerate cursor-0 echo.
+        //
+        // Slint 1.17 reports each keystroke twice with two different splits of
+        // the SAME visible text: once correctly (committed "a", preedit "s",
+        // cursor 2) and once degenerate — committed empty, the whole string as
+        // preedit at offset 0, cursor 0. The degenerate one arrives last, so
+        // GameTextInput ends up with its cursor at 0 and the entire text inside
+        // the compose region. Two user-visible consequences, both reported:
+        //
+        //   * the text renders as one highlighted block, and
+        //   * BACKSPACE DOES NOTHING — logcat shows
+        //     `gti.InputConnection: processKeyEvent(key=67) text=as`, i.e. the
+        //     IME received KEYCODE_DEL and deleted nothing, because deleting
+        //     backwards from offset 0 is a no-op.
+        //
+        // Skipping it is safe: the merged text is identical, so no character
+        // can be lost — only the cursor regression is dropped (§112n).
+        //
+        // HONESTLY: this does NOT fix the reported symptoms. Instrumenting the
+        // real sequence showed the degenerate split is SLINT'S OWN internal
+        // state, not just what we forward — after a backspace Slint reports
+        // `committed="" pre="as" off=0 cur=0`, so it renders the whole string
+        // as one highlighted compose region and its editing logic never removes
+        // a character. Suppressing the push keeps a bogus cursor out of the IME,
+        // which is worth doing on its own, but the backend cannot repair what
+        // Slint believes it holds. §112n stays open.
+        if self.last_pushed_text.borrow().as_deref() == Some(text.as_str())
+            && sel_end == 0
+            && self.last_pushed_cursor.get() > 0
+        {
+            return;
+        }
+
         let key = (text.clone(), sel_start, sel_end, compose);
         if self.ime_states_seen.borrow().contains(&key) {
             return;
         }
         self.ime_states_seen.borrow_mut().push(key);
         self.had_compose.set(compose.is_some());
+        *self.last_pushed_text.borrow_mut() = Some(text.clone());
+        self.last_pushed_cursor.set(sel_end);
 
         self.app.set_text_input_state(TextInputState {
             text,
@@ -272,6 +323,8 @@ impl AndroidWindowAdapter {
             last_ime_epoch: RefCell::default(),
             ime_states_seen: RefCell::default(),
             had_compose: Cell::new(false),
+            last_pushed_text: RefCell::default(),
+            last_pushed_cursor: Cell::new(0),
         })
     }
 

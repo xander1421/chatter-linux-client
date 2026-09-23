@@ -783,8 +783,15 @@ export component MessageComposer inherits Rectangle {
                 accessible-role: AccessibleRole.text-input;
                 accessible-label: "Message input";
 
-                // Placeholder text (shown when empty, fades on focus)
-                if root.text == "": Text {
+                // Placeholder text (shown when empty, fades on focus).
+                //
+                // `root.text` EXCLUDES the preedit, so while the input method is
+                // composing a word — which on Android is the whole time you are
+                // typing one — text is still "" and the placeholder stayed drawn
+                // UNDERNEATH the composing characters: "as" overlapping
+                // "ype a message...". That overlap is what reads as the text
+                // flashing (OPEN-ITEMS §112n).
+                if root.text == "" && text-input.preedit-text == "": Text {
                     x: Spacing.md;
                     y: (parent.height - self.preferred-height) / 2;
                     width: parent.width - Spacing.md * 2;

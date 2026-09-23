@@ -55,7 +55,11 @@ export component Input inherits Rectangle {
             opacity: disabled ? 0.5 : 1.0;
 
             // Placeholder text (shown when empty, fades on focus)
-            if root.text == "": Text {
+            // `root.text` excludes the input method's preedit, so while a word
+            // is being composed — which on Android is the whole time you type
+            // one — the placeholder stayed drawn underneath the composing
+            // characters (OPEN-ITEMS §112n).
+            if root.text == "" && input.preedit-text == "": Text {
                 x: Spacing.md;
                 width: parent.width - Spacing.md * 2 - (root.password ? 32px : 0px);
                 height: 100%;
