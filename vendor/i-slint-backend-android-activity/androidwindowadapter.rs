@@ -79,6 +79,21 @@ pub struct AndroidWindowAdapter {
     /// Full text of the last state the INPUT METHOD reported to us. Used to
     /// avoid echoing a stale Slint state back over a newer IME state.
     last_ime_text: RefCell<Option<String>>,
+    /// Selection of the last state the INPUT METHOD reported. Paired with
+    /// `last_ime_text` so a caret-only move is not mistaken for an echo (§112o).
+    last_ime_selection: Cell<(usize, usize)>,
+    /// State pushed by `finish_composing`, waiting for GameTextInput to echo it
+    /// back. `set_text_input_state` calls `restartInput`, and the IME answers
+    /// with the state it now holds — including the OLD cursor, which lands
+    /// after Slint has already moved its caret for the tap and drags it back
+    /// (§112o). Swallow exactly that one echo.
+    pending_self_echo: RefCell<Option<(String, usize)>>,
+    /// Caret that `finish_composing` handed Slint. Slint notifies its own state
+    /// change a frame LATER — after the tap has already moved the caret and the
+    /// IME has been told about it — so that late push carries the pre-tap
+    /// cursor and would drag the caret back (§112o). Armed here, disarmed by
+    /// the first push that matches it.
+    stale_commit_cursor: Cell<Option<usize>>,
 }
 
 impl WindowAdapter for AndroidWindowAdapter {
@@ -309,10 +324,31 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
         // (compose region None vs Some) even though the TEXT is identical. If
         // the text matches what the IME last told us, the IME is already in
         // that state or ahead of it, and there is nothing to send (§112n).
-        if self.last_ime_text.borrow().as_deref() == Some(text.as_str()) {
+        // ...but a caret move is NOT an echo. Tapping into existing text leaves
+        // the merged string identical while the cursor changes, and returning
+        // here left GameTextInput's cursor where it was: every later keystroke
+        // landed at the old offset, so tapping mid-text and typing appended at
+        // the end instead (§112o). Only suppress when the selection matches
+        // too — and keep suppressing unconditionally while a composition is
+        // live, which is where the space clobber above lives.
+        if self.last_ime_text.borrow().as_deref() == Some(text.as_str())
+            && (compose.is_some() || self.last_ime_selection.get() == (sel_start, sel_end))
+        {
             return;
         }
 
+        // Slint's delayed notification of the caret `finish_composing` set,
+        // arriving after the tap already moved it. Never push a caret the IME
+        // has already moved past (§112o).
+        if compose.is_none()
+            && self.stale_commit_cursor.get() == Some(sel_end)
+            && sel_start == sel_end
+            && self.last_ime_text.borrow().as_deref() == Some(text.as_str())
+            && self.last_ime_selection.get() != (sel_end, sel_end)
+        {
+            self.stale_commit_cursor.set(None);
+            return;
+        }
         let key = (text.clone(), sel_start, sel_end, compose);
         if self.ime_states_seen.borrow().contains(&key) {
             return;
@@ -359,6 +395,9 @@ impl AndroidWindowAdapter {
             show_cursor_handles: Cell::new(false),
             long_press: RefCell::default(),
             last_pressed_state: Cell::new(ButtonState(0)),
+            last_ime_selection: Cell::new((0, 0)),
+            pending_self_echo: RefCell::default(),
+            stale_commit_cursor: Cell::new(None),
             last_ime_epoch: RefCell::default(),
             ime_states_seen: RefCell::default(),
             had_compose: Cell::new(false),
@@ -444,6 +483,56 @@ impl AndroidWindowAdapter {
         Ok(ControlFlow::Continue(()))
     }
 
+    /// Chatter patch: fold a live composition into the committed text.
+    ///
+    /// Slint splices the pre-edit into the text at `preedit_offset`, and it
+    /// keeps that offset pinned to the caret. So moving the caret while the
+    /// input method is composing RE-ORDERS the merged string we hand
+    /// GameTextInput: on a Galaxy S9, "abc def" (with "def" composing) tapped
+    /// just after the "a" became "adefbc" — characters moved, the space lost.
+    /// Android's own contract is that a cursor move finishes composing
+    /// (`finishComposingText`), so do that before the touch reaches Slint.
+    /// See docs/OPEN-ITEMS.md §112o.
+    fn finish_composing(&self) {
+        use android_activity::input::{TextInputState, TextSpan};
+        // Use the last state the INPUT METHOD reported, not `last_pushed_text`:
+        // every dedupe guard in the outbound path can return before updating
+        // that, so it goes stale exactly when a composition is live.
+        //
+        // NOT `self.app.text_input_state()`, tempting as it is — that takes the
+        // android_app lock, and this runs inside the input-iteration callback
+        // which already holds it. Doing so aborted the process (SIGABRT in
+        // `android_main`) on the first touch after a keystroke.
+        let Some(text) = self.last_ime_text.borrow().clone() else { return };
+        let cursor = self.last_ime_selection.get().1.min(text.len());
+        let mut key_event = KeyEvent::default();
+        key_event.text = text.as_str().into();
+        WindowInner::from_pub(&self.window).process_key_input(InternalKeyEvent {
+            event_type: KeyEventType::CommitComposition,
+            replacement_range: Some(i32::MIN..i32::MAX),
+            // Deliberately no cursor: the tap that triggered this commit is
+            // about to set the caret, and handing Slint the pre-tap offset here
+            // made it reassert that offset a frame later, dragging the caret
+            // back to the end of the text (§112o).
+            cursor_position: None,
+            anchor_position: None,
+            key_event,
+            ..Default::default()
+        });
+        self.had_compose.set(false);
+        *self.pending_self_echo.borrow_mut() = Some((text.clone(), cursor));
+        self.stale_commit_cursor.set(Some(cursor));
+        *self.last_ime_text.borrow_mut() = Some(text.clone());
+        self.last_ime_selection.set((cursor, cursor));
+        *self.last_pushed_text.borrow_mut() = Some(text.clone());
+        self.ime_states_seen.borrow_mut().clear();
+        self.app.set_text_input_state(TextInputState {
+            text,
+            selection: TextSpan { start: cursor, end: cursor },
+            compose_region: None,
+        });
+    }
+
     fn try_dispatch_key_event(&self, ev: WindowEvent) -> KeyEventResult {
         #[cfg_attr(slint_nightly_test, allow(non_exhaustive_omitted_patterns))]
         match ev {
@@ -526,6 +615,12 @@ impl AndroidWindowAdapter {
                         }
                         MotionAction::Down => {
                             let position = position_for_event(motion_event, offset, scale);
+
+                            // Chatter patch: a tap must not drag the composing
+                            // region along with the caret (§112o).
+                            if self.had_compose.get() {
+                                self.finish_composing();
+                            }
 
                             self.show_cursor_handles.set(true);
                             let _timer = Timer::default();
@@ -631,14 +726,87 @@ impl AndroidWindowAdapter {
                 }
                 InputEvent::TextEvent(state) => {
                     self.show_cursor_handles.set(false);
+                    // Drop GameTextInput's echo of our own finish_composing
+                    // push. It carries the pre-tap cursor and would undo the
+                    // caret move the tap just made (§112o).
+                    let self_echo = self
+                        .pending_self_echo
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|(t, c)| {
+                            t == &state.text
+                                && state.selection.start == *c
+                                && state.selection.end == *c
+                                && state.compose_region.is_none()
+                        });
+                    if self_echo {
+                        *self.pending_self_echo.borrow_mut() = None;
+                        return InputStatus::Handled;
+                    }
                     // Remember what the IME believes, so the outbound path can
                     // tell an app-initiated change from an echo of this (§112n).
                     *self.last_ime_text.borrow_mut() = Some(state.text.clone());
+                    self.last_ime_selection
+                        .set((state.selection.start, state.selection.end));
+                    // The IME's own report is authoritative about whether a
+                    // composition is live; the outbound flag goes stale because
+                    // the dedupe guards return before setting it (§112o).
+                    self.had_compose.set(state.compose_region.is_some());
                     let runtime_window = WindowInner::from_pub(&self.window);
+                    // Chatter patch: a composition that is not at the END of
+                    // the text cannot be represented.
+                    //
+                    // Slint takes a pre-edit plus an OFFSET, and it pins that
+                    // offset to the end of the committed text — so a compose
+                    // region in the middle comes back merged in the wrong
+                    // place. Tapping after the "a" of "abc def" makes Samsung
+                    // recompose "abc" at (0,3); the field then read " defabc".
+                    // There is no arrangement of the values Slint accepts that
+                    // says "the pre-edit is at offset 0 and the committed tail
+                    // follows it" (§112o).
+                    //
+                    // So when the IME composes anywhere but the end, take the
+                    // text as plain committed text and tell the IME to stop
+                    // composing. Mid-word predictive suggestions are lost for
+                    // that edit; the text stays correct, which matters more.
+                    let compose_region = state.compose_region.filter(|r| {
+                        let at_end = r.end == state.text.len();
+                        if !at_end {
+                            self.app.set_text_input_state(
+                                android_activity::input::TextInputState {
+                                    text: state.text.clone(),
+                                    selection: state.selection,
+                                    compose_region: None,
+                                },
+                            );
+                        }
+                        at_end
+                    });
                     // remove the pre_edit
-                    let event = if let Some(r) = state.compose_region {
-                        let adjust =
-                            |pos| if pos > r.start { pos - r.start + r.end } else { pos } as i32;
+                    let event = if let Some(r) = compose_region {
+                        // Map an offset in the IME's MERGED text to the
+                        // committed text Slint is about to receive (the merged
+                        // string with the compose region cut out).
+                        //
+                        // Upstream computed `pos - r.start + r.end`, which is
+                        // wrong in both directions: an offset INSIDE the region
+                        // lands past the end of the committed text (cursor 1 in
+                        // "abc def" composing (0,3) mapped to 4, so Slint put
+                        // the pre-edit after " def" and the field read
+                        // " defabc"), and an offset after the region is pushed
+                        // further right rather than left. It only ever looked
+                        // right because Slint clamps. Offsets inside the region
+                        // belong at its start; offsets past it shift left by
+                        // the region's length (§112o).
+                        let adjust = |pos: usize| -> i32 {
+                            if pos <= r.start {
+                                pos as i32
+                            } else if pos <= r.end {
+                                r.start as i32
+                            } else {
+                                (pos - (r.end - r.start)) as i32
+                            }
+                        };
                         let mut key_event = KeyEvent::default();
                         key_event.text = i_slint_core::format!(
                             "{}{}",
