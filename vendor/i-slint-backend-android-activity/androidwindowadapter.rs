@@ -67,6 +67,10 @@ pub struct AndroidWindowAdapter {
     /// legitimately repeated state after a real edit is still pushed.
     last_ime_epoch: RefCell<Option<String>>,
     ime_states_seen: RefCell<Vec<(String, usize, usize, Option<(usize, usize)>)>>,
+    /// Whether the last state we pushed carried a compose region, i.e. whether
+    /// the input method may still be composing. Gates the stale-composition
+    /// reset below so it only fires when there is something to clear.
+    had_compose: Cell<bool>,
 }
 
 impl WindowAdapter for AndroidWindowAdapter {
@@ -155,6 +159,16 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
 
         let props = match request {
             InputMethodRequest::Enable(props) => {
+                // NO composition reset here. Slint 1.17 fires Enable
+                // repeatedly (§112c), and set_text_input_state calls
+                // restartInput, so resetting on Enable — even conditionally on
+                // "a composition is outstanding" — lands an empty state between
+                // keystrokes and wipes them. Measured twice: the keyboard
+                // opened, the field focused, and not one character ever
+                // arrived. The stale-composition clear lives on Disable only
+                // (§112m); anything Disable does not cover has to be handled
+                // app-side, the way message_composer.slint's
+                // reset-composition() does it.
                 self.app.show_soft_input(true);
                 // New field focused — force the next state push.
                 *self.last_ime_epoch.borrow_mut() = None;
@@ -163,6 +177,27 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
             }
             InputMethodRequest::Update(props) => props,
             InputMethodRequest::Disable => {
+                // Clear a composition on the way out, so a field that loses
+                // focus cannot leave one behind for the next field (§112m).
+                // Conditional, for the restart-storm reason described on the
+                // Enable arm above.
+                //
+                // HONESTLY: this did NOT fix §112m in testing. Dismissing a
+                // dialog mid-composition still leaked text into the next field
+                // focused, which means Slint does not send Disable for a field
+                // that disappears with its modal — the reset never runs for the
+                // case that matters. Kept because it is correct for the case it
+                // does cover (focus moving between live fields) and costs one
+                // comparison, but §112m remains OPEN and needs an app-side
+                // reset at every modal dismissal, the way
+                // message_composer.slint's reset-composition() does it.
+                if self.had_compose.replace(false) {
+                    self.app.set_text_input_state(TextInputState {
+                        text: String::new(),
+                        selection: TextSpan { start: 0, end: 0 },
+                        compose_region: None,
+                    });
+                }
                 self.app.hide_soft_input(true);
                 *self.last_ime_epoch.borrow_mut() = None;
                 self.ime_states_seen.borrow_mut().clear();
@@ -195,6 +230,7 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
             return;
         }
         self.ime_states_seen.borrow_mut().push(key);
+        self.had_compose.set(compose.is_some());
 
         self.app.set_text_input_state(TextInputState {
             text,
@@ -235,6 +271,7 @@ impl AndroidWindowAdapter {
             last_pressed_state: Cell::new(ButtonState(0)),
             last_ime_epoch: RefCell::default(),
             ime_states_seen: RefCell::default(),
+            had_compose: Cell::new(false),
         })
     }
 

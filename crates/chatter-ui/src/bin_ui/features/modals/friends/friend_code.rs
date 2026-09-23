@@ -100,6 +100,24 @@ fn wire_paste_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
                     {
                         None::<String>
                     }
+                })
+                .or_else(|| {
+                    // Android has none of the tools above; read the framework
+                    // clipboard directly (OPEN-ITEMS §112f).
+                    #[cfg(target_os = "android")]
+                    {
+                        match crate::platform::android::clipboard::get_text() {
+                            Ok(t) => t,
+                            Err(e) => {
+                                tracing::error!("Paste: clipboard read failed: {}", e);
+                                None
+                            }
+                        }
+                    }
+                    #[cfg(not(target_os = "android"))]
+                    {
+                        None::<String>
+                    }
                 });
 
             let Some(text) = text else {

@@ -78,14 +78,19 @@ pub fn open_user_profile(
         w.set_profile_avatar_source(w.get_user_avatar_source());
         w.set_profile_presence(w.get_user_presence_status());
 
-        if let Some(profile) = user_state.get_profile(user_id) {
-            if let Some(msg) = profile.status_message {
-                w.set_profile_bio(msg.text.into());
-            } else {
-                w.set_profile_bio("".into());
-            }
-        } else {
-            w.set_profile_bio("".into());
+        // Fall back to local storage. UserState is populated by profile SYNC,
+        // which covers friends — nobody broadcasts your own profile back to
+        // you, so for `is_self` the in-memory entry is normally absent and the
+        // bio silently read as empty after every restart, even though
+        // `update_user_profile` had persisted it via `user_repo.upsert_profile`
+        // (OPEN-ITEMS §112h). The display name never showed the bug because it
+        // comes from auth_state instead.
+        let own_profile = user_state
+            .get_profile(user_id)
+            .or_else(|| ui_ctx.and_then(|c| c.get_profile_local(user_id)));
+        match own_profile.and_then(|p| p.status_message) {
+            Some(msg) => w.set_profile_bio(msg.text.into()),
+            None => w.set_profile_bio("".into()),
         }
 
         w.set_profile_is_self(true);
