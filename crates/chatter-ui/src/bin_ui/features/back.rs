@@ -8,20 +8,24 @@
 //!
 //!   1. Message multi-select exits. Selection mode is the shallowest, most
 //!      recently entered state, so it pops first.
-//!   2. An open modal closes. A Back press must never leave or background the
+//!   2. The unified search palette closes. It is an overlay of its own rather
+//!      than an `active-modal` value, so it needs its own branch.
+//!   3. An open modal closes. A Back press must never leave or background the
 //!      app while a modal is up — the Settings screen's only other exit is a
 //!      glyph that renders as a tofu box, so "Back does nothing" strands the
 //!      user there.
-//!   3. The mobile conversation pane returns to the conversation list. On a
+//!   4. An open thread panel closes, returning to its conversation. On a
+//!      phone the thread covers the chat pane, so it is a layer above it.
+//!   5. The mobile conversation pane returns to the conversation list. On a
 //!      phone the two are separate screens, so Back out of a chat means "up to
 //!      the list" — going straight to backgrounding the app there is the single
 //!      most jarring thing Back can do in a messenger.
-//!   4. Otherwise the task is backgrounded, which is Android's normal
+//!   6. Otherwise the task is backgrounded, which is Android's normal
 //!      back-out-of-app. `moveTaskToBack(true)`, NOT `finish()`: finishing
 //!      destroys the Activity and with it the whole in-memory session, which is
 //!      wrong for a messaging app the user expects to come back to.
 //!
-//! On desktop steps 3 and 4 are no-ops: `mobile-show-chat` is never set there
+//! On desktop steps 5 and 6 are no-ops: `mobile-show-chat` is never set there
 //! (both panes are on screen at once), and — popping in-app layers is the only meaningful
 //! part, and nothing should try to "background" a desktop window.
 
@@ -55,8 +59,27 @@ pub fn handle_back(window: &MainWindow) -> bool {
         return true;
     }
 
+    // The unified search palette is its own overlay, not an `active-modal`
+    // value, so Back fell straight through it and backgrounded the app with
+    // the palette still on screen (§112u).
+    if window.get_unified_search_open() {
+        window.set_unified_search_open(false);
+        return true;
+    }
+
     if window.get_active_modal().as_str() != "none" {
         window.set_active_modal("none".into());
+        return true;
+    }
+
+    // The thread panel is a full screen on a phone (it hides the chat pane,
+    // app.slint:1480), so Back there means "up to the conversation" — not
+    // "out of the conversation to the list", which is what the next branch
+    // did: opening a thread and pressing Back landed on the chat list, two
+    // levels up (§112s). Fire the same callback the panel's own close button
+    // does, so the thread state is cleared in core as well.
+    if window.get_thread_panel_visible() {
+        window.invoke_close_thread_clicked();
         return true;
     }
 

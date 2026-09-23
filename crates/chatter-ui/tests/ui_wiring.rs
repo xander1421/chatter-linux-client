@@ -1838,6 +1838,49 @@ fn back_press_pops_the_mobile_conversation_pane() {
     );
 }
 
+/// The unified search palette is an overlay, not an `active-modal` value, so
+/// Back fell through it and backgrounded the app with the palette still up
+/// (§112u).
+#[test]
+fn back_press_closes_the_unified_search_palette() {
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+
+    w.set_unified_search_open(true);
+    assert!(
+        chatter_ui::bin_ui::features::back::handle_back(&w),
+        "back with the search palette open must be consumed in-app"
+    );
+    assert!(!w.get_unified_search_open(), "back did NOT close the palette");
+}
+
+/// Back inside a thread returns to the conversation, not to the chat list.
+/// The thread panel covers the chat pane on a phone, so skipping this layer
+/// jumped two levels up (§112s).
+#[test]
+fn back_press_pops_the_thread_panel_before_the_conversation() {
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+
+    let closed = std::rc::Rc::new(std::cell::Cell::new(false));
+    let flag = closed.clone();
+    w.on_close_thread_clicked(move || flag.set(true));
+
+    w.set_mobile_show_chat(true);
+    w.set_thread_panel_visible(true);
+
+    assert!(
+        chatter_ui::bin_ui::features::back::handle_back(&w),
+        "back inside a thread must be consumed in-app"
+    );
+    assert!(closed.get(), "back did NOT close the thread panel");
+    assert!(
+        w.get_mobile_show_chat(),
+        "closing a thread must not also pop the conversation underneath it"
+    );
+}
+
+
 /// LAYER 2: the KEY EVENT actually reaches that decision.
 ///
 /// This is the half the bug report was about — the backend already maps

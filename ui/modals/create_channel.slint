@@ -1041,6 +1041,12 @@ export component CreateChannelModal inherits Rectangle {
                 Rectangle {
                     vertical-stretch: 1;
                     max-height: 320px;
+                    // The children below are free-positioned at height: 100%,
+                    // so on a phone-height dialog this box shrinks and its
+                    // centred text spilled straight over the Cancel/Join
+                    // footer (§112r). Floor the height and clip the overflow.
+                    min-height: 104px;
+                    clip: true;
 
                     // Loading state
                     if root.join-searching: Rectangle {
@@ -1095,6 +1101,8 @@ export component CreateChannelModal inherits Rectangle {
                                 color: Colors.text-muted;
                                 font-size: Typography.xs;
                                 horizontal-alignment: center;
+                                width: 100%;
+                                wrap: word-wrap;
                             }
                         }
                     }
@@ -1120,6 +1128,8 @@ export component CreateChannelModal inherits Rectangle {
                                 color: Colors.text-muted;
                                 font-size: Typography.xs;
                                 horizontal-alignment: center;
+                                width: 100%;
+                                wrap: word-wrap;
                             }
                         }
                     }

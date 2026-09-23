@@ -3,6 +3,7 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
 import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
@@ -209,8 +210,16 @@ export component ChannelSettingsModal inherits Rectangle {
                                 padding-right: Spacing.sm;
                                 alignment: start;
 
+                                // U+1F465 is a tofu box on the Galaxy S9 (§112u).
+                                Image {
+                                    source: Icons.users;
+                                    width: 14px;
+                                    height: 14px;
+                                    colorize: root.active-section == "members" ? Colors.text-primary : Colors.text-secondary;
+                                }
+                                Rectangle { width: Spacing.sm; }
                                 Text {
-                                    text: "\u{1F465}  Members";
+                                    text: "Members";
                                     color: root.active-section == "members" ? Colors.text-primary : Colors.text-secondary;
                                     font-size: Typography.sm;
                                     vertical-alignment: center;

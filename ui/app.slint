@@ -271,7 +271,16 @@ export component App inherits Rectangle {
           root.active-modal == "friends" ? "contacts"
         : root.active-modal == "settings" ? "settings"
         : root.active-modal == "calls" ? "calls"
+        : root.active-modal == "user-profile" ? "profile"
         : root.mobile-show-chat ? "chats"
+        // Contacts, Settings, Calls and Profile exist ONLY as modals. Once the
+        // modal is gone — closed with Back, say — the user is on the chat list,
+        // but `mobile-nav-tab` still named the modal and the highlight stayed
+        // on a tab whose screen was no longer up (§112u). Fall back to the
+        // screen that is actually showing.
+        : (root.mobile-nav-tab == "contacts" || root.mobile-nav-tab == "settings"
+           || root.mobile-nav-tab == "calls" || root.mobile-nav-tab == "profile")
+            ? "chats"
         : root.mobile-nav-tab;
     // Single-pane routing on mobile: false = conversation list, true = the
     // conversation itself. The two are mutually exclusive and each takes the
@@ -3010,6 +3019,16 @@ export component App inherits Rectangle {
         contacts-badge: root.friends-received-requests.length;
         safe-area-bottom: root.safe-area-bottom;
         tab-selected(tab) => {
+            // Shield is a MODE, not a destination (see mobile_bottom_nav.slint):
+            // it toggles anon mode and leaves you where you are. It had no
+            // branch at all here, so pressing it set `mobile-nav-tab` to a
+            // value no screen answers to and nothing happened — the dead tab of
+            // §112a. It must not touch `mobile-nav-tab` either, or the
+            // highlight moves off the screen you are actually on.
+            if (tab == "shield") {
+                root.toggle-anon-mode();
+                return;
+            }
             root.mobile-nav-tab = tab;
             if (tab == "chats") {
                 // Back to the list from wherever you are — this tab is

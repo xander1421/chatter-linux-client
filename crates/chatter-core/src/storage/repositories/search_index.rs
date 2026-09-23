@@ -131,7 +131,11 @@ fn escape_fts5_query(query: &str) -> String {
     // Quote the entire query to treat as literal phrase
     // Double any existing quotes to escape them
     let escaped = trimmed.replace('"', "\"\"");
-    format!("\"{}\"", escaped)
+    // Trailing `*` makes the LAST token a prefix match. FTS5 is whole-token by
+    // default, so searching "fix" found nothing in a conversation full of
+    // "fixcheck-alpha" — which reads as search being broken. Prefix matching is
+    // what every messenger's search does as you type.
+    format!("\"{}\"*", escaped)
 }
 
 /// Collect search results from a Rows iterator.
@@ -233,6 +237,11 @@ mod tests {
         // Search for something that doesn't exist
         let results = index.search("nomatch", None, 10).unwrap();
         assert_eq!(results.len(), 0);
+
+        // Prefix match: typing the start of a word finds it (§112q).
+        let results = index.search("wor", None, 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].message_id, msg1.id);
     }
 
     #[test]
