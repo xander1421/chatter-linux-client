@@ -59,6 +59,18 @@ pub fn handle_back(window: &MainWindow) -> bool {
         return true;
     }
 
+    // The composer's emoji and GIF pickers are overlays too, and since the
+    // emoji picker now stays open across insertions (§112u) Back is the
+    // natural way to dismiss it.
+    if window.get_composer_emoji_picker_visible() {
+        window.set_composer_emoji_picker_visible(false);
+        return true;
+    }
+    if window.get_composer_gif_picker_visible() {
+        window.set_composer_gif_picker_visible(false);
+        return true;
+    }
+
     // The unified search palette is its own overlay, not an `active-modal`
     // value, so Back fell straight through it and backgrounded the app with
     // the palette still on screen (§112u).

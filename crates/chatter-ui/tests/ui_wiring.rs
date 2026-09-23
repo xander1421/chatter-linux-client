@@ -1856,6 +1856,26 @@ fn back_press_pops_the_mobile_conversation_pane() {
     );
 }
 
+/// The composer emoji picker stays open across insertions, so Back has to be
+/// able to dismiss it — otherwise Back with the picker up backgrounds the app
+/// (§112u).
+#[test]
+fn back_press_closes_the_composer_emoji_picker() {
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+
+    w.set_composer_emoji_picker_visible(true);
+    assert!(
+        chatter_ui::bin_ui::features::back::handle_back(&w),
+        "back with the emoji picker open must be consumed in-app"
+    );
+    assert!(!w.get_composer_emoji_picker_visible(), "back did NOT close the emoji picker");
+
+    w.set_composer_gif_picker_visible(true);
+    assert!(chatter_ui::bin_ui::features::back::handle_back(&w));
+    assert!(!w.get_composer_gif_picker_visible(), "back did NOT close the GIF picker");
+}
+
 /// The unified search palette is an overlay, not an `active-modal` value, so
 /// Back fell through it and backgrounded the app with the palette still up
 /// (§112u).

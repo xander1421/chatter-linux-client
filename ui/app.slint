@@ -2906,7 +2906,10 @@ export component App inherits Rectangle {
         y: root.height - self.height - 80px - root.safe-area-bottom;
 
         emoji-selected(emoji) => {
-            root.composer-emoji-picker-visible = false;
+            // Stays open: the composer picker is for composing, and closing
+            // after every single emoji made "😀😀😀" four taps each (§112u).
+            // The REACTION picker still closes — one reaction is the whole
+            // interaction there.
             root.composer-emoji-selected(emoji);
         }
         category-changed(cat) => {

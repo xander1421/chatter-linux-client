@@ -843,14 +843,30 @@ export component MainWindow inherits Window {
     // because unhandled key events bubble UP the focus chain to this ancestor.
     forward-focus: back-scope;
 
+    // Once a TextInput has had focus, popping the screen it lived on leaves
+    // NOTHING focused — and `WindowInner::process_key_input` delivers only to
+    // the focus item and its ancestors, so Back is dropped on the floor. The
+    // symptom was reproduced from a clean launch every time: open a
+    // conversation, type ONE character, Back out to the list, and from then on
+    // Back does nothing anywhere — it neither pops a layer nor backgrounds the
+    // app, and only a force-stop recovers it (§112y). Re-take focus whenever
+    // the conversation pane or a modal closes, which is when the focused text
+    // field goes away.
+    changed mobile-show-chat => {
+        if (!root.mobile-show-chat) { back-scope.focus(); }
+    }
+    changed active-modal => {
+        if (root.active-modal == "none") { back-scope.focus(); }
+    }
+
     // Catches Android's hardware/gesture Back. It wraps `app` so it is an
     // ANCESTOR of every focusable item — that is the only position from which
     // it can see keys a focused TextInput chose not to consume.
     //
     // focus-on-click / focus-on-tab-navigation are both off on purpose: this
     // scope must never take focus AWAY from the composer or a text field. It
-    // only ever receives focus once, from `forward-focus` above, and after that
-    // it works purely by event bubbling.
+    // receives focus from `forward-focus` above and from the two `changed`
+    // handlers, and otherwise works purely by event bubbling.
     back-scope := FocusScope {
         width: root.width;
         height: root.height;

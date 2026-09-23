@@ -143,7 +143,10 @@ pub fn wire_emoji_loader(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let current_text = w.get_composer_text().to_string();
                 let new_text = format!("{current_text}{emoji_str}");
                 w.set_composer_text(new_text.into());
-                w.set_composer_emoji_picker_visible(false);
+                // Deliberately left OPEN. Picking an emoji for the composer is
+                // usually not the last thing you do — closing after each one
+                // made "😀😀😀" four taps (§112u). Back, or the emoji button,
+                // closes it. The REACTION picker still closes on pick.
             }
         }
     });
