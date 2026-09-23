@@ -439,23 +439,41 @@ fn channel_settings_mute_toggle_reaches_core() {
 }
 
 // ============================================================================
-// AVATAR CHANGE (RESOLVED for desktop): the picker now persists the picked bytes.
+// AVATAR CHANGE (RESOLVED): the picked bytes reach `set_avatar_bytes`, and they
+// do it on SAVE rather than on PICK.
 //
 // The avatar picker is behind a native file dialog, so it can't be driven
-// headlessly. L2 (STATIC): `on_edit_profile_change_avatar` calls
-// `set_avatar_bytes` on the picked data, so Save (`update_user_profile`) uploads
-// THOSE bytes as `encrypted_avatar`. The full upload+server-store+decrypt
-// round-trip is proven by validated.rs::v32.
+// headlessly. L2 (STATIC): the picker stashes the bytes in
+// `PENDING_AVATAR_BYTES`, and `on_edit_profile_save` persists them with
+// `set_avatar_bytes` before `update_user_profile` re-reads `keys::AVATAR` to
+// build the upload. Persisting at PICK time meant Cancel kept the new avatar —
+// observed on a Galaxy S9, the bottom-nav avatar had already changed (§112v).
+// The full upload+server-store+decrypt round-trip is proven by validated.rs::v32.
 // ============================================================================
 #[test]
-fn edit_profile_avatar_change_persists_picked_bytes() {
+fn edit_profile_avatar_change_persists_picked_bytes_on_save() {
     let src = include_str!("../src/bin_ui/features/modals/profile.rs");
-    let idx = src.find("on_edit_profile_change_avatar").expect("avatar handler present");
-    let after = &src[idx..];
+
+    let pick = src.find("on_edit_profile_change_avatar").expect("avatar handler present");
+    let pick_body = &src[pick..src[pick..].find("on_profile_view_safety_number").unwrap() + pick];
     assert!(
-        after.contains(".set_avatar_bytes(&data)") || after.contains(".set_avatar_bytes("),
-        "the avatar picker must persist the picked bytes via set_avatar_bytes \
-         (previously only wrote a write-never-read PENDING_AVATAR_PATH + preview)"
+        pick_body.contains("PENDING_AVATAR_BYTES"),
+        "the picker must stash the picked bytes for Save"
+    );
+    assert!(
+        !pick_body.contains(".set_avatar_bytes("),
+        "the picker must NOT persist the avatar — Cancel would keep it"
+    );
+
+    let save = src.find("on_edit_profile_save").expect("save handler present");
+    let save_end = src[save..]
+        .find("on_edit_profile_change_avatar")
+        .map(|i| i + save)
+        .expect("the avatar picker handler follows Save in this file");
+    let save_body = &src[save..save_end];
+    assert!(
+        save_body.contains("PENDING_AVATAR_BYTES") && save_body.contains(".set_avatar_bytes("),
+        "Save must persist the stashed bytes before update_user_profile uploads them"
     );
 }
 

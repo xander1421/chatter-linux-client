@@ -1485,10 +1485,15 @@ export component FriendsModal inherits Rectangle {
                         alignment: center;
                         spacing: Spacing.sm;
 
-                        Text {
-                                text: "\u{1F6AB}\u{FE0F}";
-                                font-size: Typography.huge;
-                                horizontal-alignment: center;
+                        // U+1F6AB is another tofu box on the S9 (§112u).
+                        HorizontalLayout {
+                                alignment: center;
+                                Image {
+                                    source: Icons.slash;
+                                    width: 40px;
+                                    height: 40px;
+                                    colorize: Colors.text-muted;
+                                }
                             }
 
                             Text {

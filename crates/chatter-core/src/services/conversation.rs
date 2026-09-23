@@ -175,9 +175,21 @@ impl ConversationHandle {
                 self.dispatch_content(content).await?;
                 // Best-effort local persist: no-op if the target message
                 // isn't in our DB (receiver may have scrolled past it).
-                let _ = self.client.messages().update_reaction_by_sender(
-                    target_author, target_sent_timestamp, emoji, !remove,
-                );
+                //
+                // MUST go through `record_reaction`, which writes
+                // `unified_reactions` and rebuilds BOTH blobs on the message
+                // row. The old path (`update_reaction_by_sender`) only bumped
+                // the aggregate `reaction_counts`, leaving
+                // `current_user_reactions_blob` empty — so `user_has_reacted`
+                // always said no, `toggle_reaction` could only ever ADD, and
+                // tapping your own reaction in a DM or channel incremented the
+                // count instead of removing it. Observed on device: 1 → 2
+                // (§112w).
+                if let Some(user_id) = self.client.auth_state().get().current_user_id {
+                    let _ = self.client.messages().record_reaction(
+                        target_author, target_sent_timestamp, &user_id, emoji, remove,
+                    );
+                }
                 Ok(())
             }
         }

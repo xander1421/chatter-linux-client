@@ -14,6 +14,18 @@ use chatter_core::domain::ids::UserId;
 use crate::bin_ui::converters::{get_initials, DMListItemExt, DMListItemSendData};
 use crate::{DMListItemData, MainWindow, SharedContentItem, SharedTab};
 
+/// Bytes of an avatar picked in the Edit Profile modal, held until Save.
+///
+/// NOT a `thread_local!`: the picker runs on a tokio worker and Save runs on
+/// another, so a thread-local would race-lose the value (the same reason
+/// `create_channel.rs` stashes its icon path on a Slint property).
+///
+/// The picker used to call `set_avatar_bytes` directly, which wrote
+/// `keys::AVATAR` immediately — so Cancel left the new avatar in place and the
+/// next profile update uploaded it. Verified on device: pick, Cancel, and the
+/// bottom-nav avatar had already changed (§112v).
+static PENDING_AVATAR_BYTES: std::sync::Mutex<Option<Vec<u8>>> = std::sync::Mutex::new(None);
+
 thread_local! {
     static PENDING_AVATAR_PATH: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
     /// Paging cursor for the profile's shared-content drawer. UI-thread only —
@@ -967,6 +979,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 
                 // Clear any pending avatar
                 PENDING_AVATAR_PATH.with(|p| *p.borrow_mut() = None);
+                *PENDING_AVATAR_BYTES.lock().unwrap() = None;
                 
                 w.set_active_modal("edit-profile".into());
             }
@@ -1003,6 +1016,15 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 "Updating user profile - display_name: {}, bio: {:?}",
                 display_name, status_msg.as_ref().map(|m| &m.text)
             );
+
+            // Persist the picked avatar HERE, not at pick time: Save is what
+            // commits the edit, and `update_user_profile` re-reads
+            // `keys::AVATAR` to build the upload (§112v).
+            if let Some(bytes) = PENDING_AVATAR_BYTES.lock().unwrap().take() {
+                if let Err(e) = ui_ctx.set_avatar_bytes(&bytes) {
+                    tracing::error!(error = %e, "Failed to persist picked avatar bytes");
+                }
+            }
 
             match ui_ctx
                 .update_user_profile(Some(display_name.clone()), status_msg.clone())
@@ -1052,10 +1074,8 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     // Change avatar with file picker
     let weak_window = window.as_weak();
-    let ui_ctx_avatar = ui_ctx.clone();
     window.on_edit_profile_change_avatar(move || {
         let weak = weak_window.clone();
-        let ui_ctx = ui_ctx_avatar.clone();
 
         tokio::spawn(async move {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1090,9 +1110,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     // Save encrypts + uploads THESE bytes as `encrypted_avatar`
                     // (and broadcasts to anon DMs), so the change actually
                     // persists server-side and reaches friends.
-                    if let Err(e) = ui_ctx.set_avatar_bytes(&data) {
-                        tracing::error!(error = %e, "Failed to persist picked avatar bytes");
-                    }
+                    *PENDING_AVATAR_BYTES.lock().unwrap() = Some(data.clone());
                     // Store the path for later use
                     PENDING_AVATAR_PATH.with(|p| *p.borrow_mut() = Some(path.clone()));
 

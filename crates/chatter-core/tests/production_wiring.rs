@@ -101,6 +101,19 @@ const TABLE: &[Entry] = &[
               different trees — so a fork, a rollback and a per-user split view all become \
               undetectable again. Dead until 2026-08-03; that is why this file exists.",
     },
+    // ---- Reactions -------------------------------------------------------
+    Entry {
+        symbol: "record_reaction",
+        defined_in: "chatter-core/src/services/message/mod.rs",
+        expect: Expect::Wired,
+        why: "It is the only writer of `unified_reactions` and the per-user \
+              `current_user_reactions_blob` for DMs and channels. The send path used to \
+              call `update_reaction_by_sender`, which bumped the aggregate count only, so \
+              `user_has_reacted` always returned false, `toggle_reaction` could never \
+              REMOVE, and tapping your own reaction incremented it (observed 1 -> 2 on a \
+              Galaxy S9). Lose this caller and un-reacting silently breaks again while \
+              every reaction unit test stays green.",
+    },
     // ---- Signal: identity change ----------------------------------------
     Entry {
         symbol: "note_identity_change",

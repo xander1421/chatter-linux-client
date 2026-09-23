@@ -1587,6 +1587,11 @@ export component App inherits Rectangle {
                         root.reaction-picker-visible = true;
                         root.react-clicked(sender-id, timestamp-ns, x, y);
                     }
+                    // Tapping an existing reaction toggles it, the way every
+                    // messenger does; the picker stays on long-press (§112w).
+                    reaction-toggled(sender-id, timestamp-ns, emoji) => {
+                        root.reaction-selected(sender-id, timestamp-ns, "", emoji);
+                    }
                     thread-clicked(id) => { root.thread-clicked(id); }
                     more-clicked(sender-id, timestamp-ns, x, y) => { root.more-clicked(sender-id, timestamp-ns, x, y); }
                     quote-clicked(id) => { root.quote-clicked(id); }
@@ -1660,6 +1665,9 @@ export component App inherits Rectangle {
                         root.reaction-picker-anchor-y = y;
                         root.reaction-picker-visible = true;
                         root.react-clicked(sender-id, timestamp-ns, x, y);
+                    }
+                    reaction-toggled(sender-id, timestamp-ns, emoji) => {
+                        root.reaction-selected(sender-id, timestamp-ns, "", emoji);
                     }
                 }
 

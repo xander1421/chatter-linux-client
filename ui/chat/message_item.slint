@@ -127,6 +127,10 @@ export component MessageItem inherits Rectangle {
     // Callbacks
     callback reply-clicked(string, string);
     callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
+    // Tapping an existing reaction toggles YOUR reaction of that emoji. Before
+    // this the whole pill only opened the picker, so there was no way to take a
+    // reaction back except adding it again from the picker (§112w).
+    callback reaction-toggled(string, string, string);  // (sender_id, timestamp_ns, emoji)
     callback thread-clicked(string);
     callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback selection-toggled(string);
@@ -1355,32 +1359,39 @@ export component MessageItem inherits Rectangle {
                         spacing: 6px;
                         alignment: center;
 
-                        for reaction in root.reactions: HorizontalLayout {
-                            spacing: 2px;
-                            alignment: center;
+                        for reaction in root.reactions: Rectangle {
+                            width: entry.preferred-width;
 
-                            Text {
-                                text: reaction.emoji;
-                                font-family: Typography.font-family-emoji;
-                                font-size: Typography.xs;
-                                vertical-alignment: center;
+                            entry := HorizontalLayout {
+                                spacing: 2px;
+                                alignment: center;
+
+                                Text {
+                                    text: reaction.emoji;
+                                    font-family: Typography.font-family-emoji;
+                                    font-size: Typography.xs;
+                                    vertical-alignment: center;
+                                }
+
+                                if reaction.count > 1: Text {
+                                    text: reaction.count;
+                                    color: Colors.text-secondary;
+                                    font-size: Typography.xs;
+                                    vertical-alignment: center;
+                                }
                             }
 
-                            if reaction.count > 1: Text {
-                                text: reaction.count;
-                                color: Colors.text-secondary;
-                                font-size: Typography.xs;
-                                vertical-alignment: center;
+                            // Per-emoji, replacing a pill-wide TouchArea that
+                            // only opened the picker. The picker is still on
+                            // long-press → More reactions and on the hover
+                            // "Add reaction" button.
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.reaction-toggled(root.sender-id, root.timestamp-ns,
+                                        reaction.emoji);
+                                }
                             }
-                        }
-                    }
-
-                    TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.react-clicked(root.sender-id, root.timestamp-ns,
-                                reactions-pill.absolute-position.x,
-                                reactions-pill.absolute-position.y + reactions-pill.height);
                         }
                     }
                 }

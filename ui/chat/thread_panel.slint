@@ -40,6 +40,7 @@ export component ThreadPanel inherits Rectangle {
     callback load-more-replies;
     callback message-clicked(string);
     callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
+    callback reaction-toggled(string, string, string);  // (sender_id, timestamp_ns, emoji)
 
     // Panel sizing — adjustable width with drag handle
     in-out property <length> panel-width: Spacing.thread-panel-width;
@@ -310,6 +311,10 @@ export component ThreadPanel inherits Rectangle {
 
                         react-clicked(sender-id, timestamp-ns, x, y) => {
                             root.react-clicked(sender-id, timestamp-ns, x, y);
+                        }
+
+                        reaction-toggled(sender-id, timestamp-ns, emoji) => {
+                            root.reaction-toggled(sender-id, timestamp-ns, emoji);
                         }
                     }
                 }

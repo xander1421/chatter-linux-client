@@ -97,6 +97,7 @@ export component MessageList inherits Rectangle {
     callback message-clicked(string);
     callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
     callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
+    callback reaction-toggled(string, string, string);  // (sender_id, timestamp_ns, emoji)
     callback thread-clicked(string);
     callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback quote-clicked(string);  // (reply-to-message-id) — jump to quoted original
@@ -489,6 +490,10 @@ export component MessageList inherits Rectangle {
 
                 react-clicked(sender-id, timestamp-ns, x, y) => {
                     root.react-clicked(sender-id, timestamp-ns, x, y);
+                }
+
+                reaction-toggled(sender-id, timestamp-ns, emoji) => {
+                    root.reaction-toggled(sender-id, timestamp-ns, emoji);
                 }
 
                 thread-clicked(id) => {
