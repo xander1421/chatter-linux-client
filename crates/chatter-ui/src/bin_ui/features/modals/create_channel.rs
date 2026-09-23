@@ -23,48 +23,58 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_pick = weak_window.clone();
     window.on_create_channel_pick_icon(move || {
         tracing::info!("[CHANNEL_ICON] pick-channel-icon callback fired");
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        {
-            let weak = weak_pick.clone();
-            tokio::spawn(async move {
+        let weak = weak_pick.clone();
+        tokio::spawn(async move {
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            let picked = {
                 let config = chatter_core::media::FilePickerConfig::new()
                     .with_title("Select Channel Icon")
                     .with_filter(chatter_core::media::FileFilter::images());
+                chatter_core::media::FilePicker::pick_file(config).await
+            };
+            // Android has no `rfd` backend; go through the SAF bridge (§112p).
+            #[cfg(target_os = "android")]
+            let picked = crate::platform::android::file_picker::pick_files(&["image/*"])
+                .await
+                .into_iter()
+                .next();
+            #[cfg(target_os = "ios")]
+            let picked: Option<std::path::PathBuf> = {
+                tracing::warn!("File picker not supported on iOS");
+                None
+            };
 
-                match chatter_core::media::FilePicker::pick_file(config).await {
-                    Some(path) => {
-                        tracing::info!(path = %path.display(), "[CHANNEL_ICON] file picked");
-                        match std::fs::read(&path) {
-                            Ok(data) => {
-                                let path_string = path.to_string_lossy().to_string();
-                                let _ = slint::invoke_from_event_loop(move || {
-                                    // Stash picked path on the modal's icon-url property so
-                                    // on_create can read it (thread_local! is tokio-worker-local,
-                                    // which race-lost the value between pick and create).
-                                    if let Some(w) = weak.upgrade() {
-                                        w.set_create_channel_icon_url(path_string.into());
-                                    }
-                                    match crate::bin_ui::slint_conversions::memory_to_slint_image(&data) {
-                                        Ok(slint_img) => {
-                                            if let Some(w) = weak.upgrade() {
-                                                w.set_create_channel_icon_preview(slint_img);
-                                                w.set_create_channel_has_icon_preview(true);
-                                                tracing::info!("[CHANNEL_ICON] preview set on modal");
-                                            }
+            match picked {
+                Some(path) => {
+                    tracing::info!(path = %path.display(), "[CHANNEL_ICON] file picked");
+                    match std::fs::read(&path) {
+                        Ok(data) => {
+                            let path_string = path.to_string_lossy().to_string();
+                            let _ = slint::invoke_from_event_loop(move || {
+                                // Stash picked path on the modal's icon-url property so
+                                // on_create can read it (thread_local! is tokio-worker-local,
+                                // which race-lost the value between pick and create).
+                                if let Some(w) = weak.upgrade() {
+                                    w.set_create_channel_icon_url(path_string.into());
+                                }
+                                match crate::bin_ui::slint_conversions::memory_to_slint_image(&data) {
+                                    Ok(slint_img) => {
+                                        if let Some(w) = weak.upgrade() {
+                                            w.set_create_channel_icon_preview(slint_img);
+                                            w.set_create_channel_has_icon_preview(true);
+                                            tracing::info!("[CHANNEL_ICON] preview set on modal");
                                         }
-                                        Err(e) => tracing::error!("[CHANNEL_ICON] Failed to decode preview: {}", e),
                                     }
-                                });
-                            }
-                            Err(e) => tracing::error!("[CHANNEL_ICON] Failed to read picked file: {}", e),
+                                    Err(e) => tracing::error!("[CHANNEL_ICON] Failed to decode preview: {}", e),
+                                }
+                            });
                         }
+                        Err(e) => tracing::error!("[CHANNEL_ICON] Failed to read picked file: {}", e),
                     }
-                    None => tracing::info!("[CHANNEL_ICON] file pick cancelled"),
                 }
-            });
-        }
-        #[cfg(any(target_os = "android", target_os = "ios"))]
-        tracing::warn!("File picker not supported on mobile");
+                None => tracing::info!("[CHANNEL_ICON] file pick cancelled"),
+            }
+        });
     });
 
     window.on_create_channel(

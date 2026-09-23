@@ -219,8 +219,17 @@ pub fn wire_copy_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     tracing::error!(error = %e, "Failed to access clipboard");
                 }
             }
-            #[cfg(any(target_os = "android", target_os = "ios"))]
-            tracing::warn!("Clipboard not yet supported on mobile");
+            #[cfg(target_os = "android")]
+            match crate::platform::android::clipboard::set_text("Message", &text) {
+                Ok(()) => tracing::debug!(
+                    sender_id = %sender_id_str,
+                    timestamp = %timestamp_ns_str,
+                    "Copied message text to clipboard"
+                ),
+                Err(e) => tracing::error!(error = %e, "Failed to copy to clipboard"),
+            }
+            #[cfg(target_os = "ios")]
+            tracing::warn!("Clipboard not yet supported on iOS");
         });
     });
 }

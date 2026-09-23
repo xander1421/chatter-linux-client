@@ -68,20 +68,34 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.on_register_select_avatar({
         let weak = weak_window.clone();
         move || {
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
                 let weak = weak.clone();
                 crate::rt_handle().spawn(async move {
-                    let config = FilePickerConfig {
-                        title: Some("Select Avatar".to_string()),
-                        filters: vec![FileFilter {
-                            name: "Images".to_string(),
-                            extensions: vec!["jpg".to_string(), "jpeg".to_string(), "png".to_string(), "webp".to_string()],
-                        }],
-                        ..Default::default()
+                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                    let picked = {
+                        let config = FilePickerConfig {
+                            title: Some("Select Avatar".to_string()),
+                            filters: vec![FileFilter {
+                                name: "Images".to_string(),
+                                extensions: vec!["jpg".to_string(), "jpeg".to_string(), "png".to_string(), "webp".to_string()],
+                            }],
+                            ..Default::default()
+                        };
+                        FilePicker::pick_file(config).await
+                    };
+                    // Android has no `rfd` backend; go through the SAF bridge (§112p).
+                    #[cfg(target_os = "android")]
+                    let picked = crate::platform::android::file_picker::pick_files(&["image/*"])
+                        .await
+                        .into_iter()
+                        .next();
+                    #[cfg(target_os = "ios")]
+                    let picked: Option<std::path::PathBuf> = {
+                        tracing::warn!("File picker not supported on iOS");
+                        None
                     };
 
-                    if let Some(path) = FilePicker::pick_file(config).await {
+                    if let Some(path) = picked {
                         match std::fs::read(&path) {
                             Ok(bytes) => {
                                 // Store bytes for registration
@@ -120,8 +134,6 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                 });
             }
-            #[cfg(any(target_os = "android", target_os = "ios"))]
-            tracing::warn!("File picker not supported on mobile");
         }
     });
 

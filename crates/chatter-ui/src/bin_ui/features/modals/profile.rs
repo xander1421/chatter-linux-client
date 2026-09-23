@@ -1054,54 +1054,64 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx_avatar = ui_ctx.clone();
     window.on_edit_profile_change_avatar(move || {
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        {
-            let weak = weak_window.clone();
-            let ui_ctx = ui_ctx_avatar.clone();
+        let weak = weak_window.clone();
+        let ui_ctx = ui_ctx_avatar.clone();
 
-            tokio::spawn(async move {
+        tokio::spawn(async move {
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            let picked = {
                 let config = chatter_core::media::FilePickerConfig::new()
                     .with_title("Select Profile Picture")
                     .with_filter(chatter_core::media::FileFilter::images());
+                chatter_core::media::FilePicker::pick_file(config).await
+            };
+            // Android has no `rfd` backend; go through the SAF bridge instead,
+            // otherwise "Change Avatar" is a dead button on the phone.
+            #[cfg(target_os = "android")]
+            let picked = crate::platform::android::file_picker::pick_files(&["image/*"])
+                .await
+                .into_iter()
+                .next();
+            #[cfg(target_os = "ios")]
+            let picked: Option<std::path::PathBuf> = {
+                tracing::warn!("File picker not supported on iOS");
+                None
+            };
 
-                if let Some(path) = chatter_core::media::FilePicker::pick_file(config).await {
-                    match std::fs::read(&path) {
-                        Ok(data) => {
-                            // PERSIST the picked avatar into the local `keys::AVATAR`
-                            // store NOW (the F-UI / MISSING-FEATURES #3 fix). Before,
-                            // the picked file went ONLY into the write-never-read
-                            // PENDING_AVATAR_PATH + a Slint preview, so Save's
-                            // `update_user_profile` re-read the STALE avatar and the
-                            // change never uploaded. Writing keys::AVATAR here means
-                            // Save encrypts + uploads THESE bytes as `encrypted_avatar`
-                            // (and broadcasts to anon DMs), so the change actually
-                            // persists server-side and reaches friends.
-                            if let Err(e) = ui_ctx.set_avatar_bytes(&data) {
-                                tracing::error!(error = %e, "Failed to persist picked avatar bytes");
-                            }
-                            // Store the path for later use
-                            PENDING_AVATAR_PATH.with(|p| *p.borrow_mut() = Some(path.clone()));
-
-                            // Create the image on the UI thread
-                            let _ = slint::invoke_from_event_loop(move || {
-                                // Process image on UI thread where it's safe
-                                match crate::bin_ui::slint_conversions::memory_to_slint_image(&data) {
-                                    Ok(slint_img) => {
-                                        if let Some(w) = weak.upgrade() {
-                                            w.set_edit_profile_avatar(slint_img);
-                                        }
-                                    }
-                                    Err(e) => tracing::error!("Failed to decode avatar image: {}", e),
-                                }
-                            });
-                        }
-                        Err(e) => tracing::error!("Failed to read avatar file: {}", e),
+            let Some(path) = picked else { return };
+            match std::fs::read(&path) {
+                Ok(data) => {
+                    // PERSIST the picked avatar into the local `keys::AVATAR`
+                    // store NOW (the F-UI / MISSING-FEATURES #3 fix). Before,
+                    // the picked file went ONLY into the write-never-read
+                    // PENDING_AVATAR_PATH + a Slint preview, so Save's
+                    // `update_user_profile` re-read the STALE avatar and the
+                    // change never uploaded. Writing keys::AVATAR here means
+                    // Save encrypts + uploads THESE bytes as `encrypted_avatar`
+                    // (and broadcasts to anon DMs), so the change actually
+                    // persists server-side and reaches friends.
+                    if let Err(e) = ui_ctx.set_avatar_bytes(&data) {
+                        tracing::error!(error = %e, "Failed to persist picked avatar bytes");
                     }
+                    // Store the path for later use
+                    PENDING_AVATAR_PATH.with(|p| *p.borrow_mut() = Some(path.clone()));
+
+                    // Create the image on the UI thread
+                    let _ = slint::invoke_from_event_loop(move || {
+                        // Process image on UI thread where it's safe
+                        match crate::bin_ui::slint_conversions::memory_to_slint_image(&data) {
+                            Ok(slint_img) => {
+                                if let Some(w) = weak.upgrade() {
+                                    w.set_edit_profile_avatar(slint_img);
+                                }
+                            }
+                            Err(e) => tracing::error!("Failed to decode avatar image: {}", e),
+                        }
+                    });
                 }
-            });
-        }
-        #[cfg(any(target_os = "android", target_os = "ios"))]
-        tracing::warn!("File picker not supported on mobile");
+                Err(e) => tracing::error!("Failed to read avatar file: {}", e),
+            }
+        });
     });
 
     // View safety number — generates and displays the 60-digit fingerprint
