@@ -1825,7 +1825,7 @@ impl ChatterClient {
 
     /// Resolve the current active conversation's `ConversationType`,
     /// looking up the channel row when the active conversation is a
-    /// `Channel(id)` (its type depends on `require_encryption`). UI
+    /// `Channel(id)` (the vault and DMs share that variant). UI
     /// callers use this rather than
     /// `ActiveConversation::conversation_type(...)` directly so they
     /// don't need channel_repo access.
@@ -3156,8 +3156,7 @@ impl ChatterClient {
             _ => trimmed.to_string(),
         };
         let username = self
-            .get_user_local(&user_id)
-            .map(|u| u.username)
+            .known_username(&user_id)
             .unwrap_or_else(|| trimmed.to_string());
 
         // is_friend: the peer id appears in any of our friendship rows.
@@ -3189,11 +3188,8 @@ impl ChatterClient {
     ) -> Result<Vec<Message>, crate::services::message::MessageError> {
         match conversation {
             ActiveConversation::Channel(id) => {
-                // Resolve from the channel row — `Channel::conversation_type()`
-                // returns `AnonGroup` for encrypted channels and `Channel` for
-                // plain ones. Send-path stores under the same value, so a
-                // hardcoded `AnonGroup` here misses every public/unencrypted
-                // channel's locally-stored messages and the chat reads empty.
+                // Resolve from the channel row (`Channel`, `ServerDm` or
+                // `SavedMessages`); the send path stores under the same value.
                 let conv_type = crate::services::message::conversion::conversation_type_for_channel(
                     &self.services.channel_repo,
                     id,

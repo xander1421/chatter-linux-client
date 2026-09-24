@@ -78,7 +78,9 @@ pub fn open_channel_settings(
                     let mut data = Vec::new();
                     for m in memberships {
                         let display = ui_ctx.display_name(&m.user_id);
-                        let uname = ui_ctx.get_user_local(&m.user_id).map(|u| u.username).unwrap_or_else(|| "unknown".to_string());
+                        // A peer's handle is often not known locally; show none rather
+                        // than the user id dressed up as one.
+                        let uname = ui_ctx.known_username(&m.user_id).unwrap_or_default();
                         let role = m.role.as_str();
                         data.push(ChannelMemberData {
                             user_id: m.user_id.to_string().into(),
@@ -840,8 +842,7 @@ fn wire_invite_member_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             match ui_ctx.get_user_profile(&user_id).await {
                                 Ok(profile) => {
                                     let username = ui_ctx
-                                        .get_user_local(&user_id)
-                                        .map(|u| u.username)
+                                        .known_username(&user_id)
                                         .unwrap_or_else(|| trimmed.to_string());
                                     cands.push(InviteCandidate {
                                         user_id,

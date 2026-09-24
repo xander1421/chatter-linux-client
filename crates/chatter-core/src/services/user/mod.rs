@@ -1010,7 +1010,10 @@ impl UserService {
                 } else {
                     f.requester_id
                 };
+                // A peer's local username can be a placeholder user id; never
+                // hand that to Jarvis as a handle.
                 self.user_repo.get(&other).ok().flatten().map(|u| u.username)
+                    .filter(|u| !u.is_empty() && u.parse::<uuid::Uuid>().is_err())
             })
             .take(20)
             .collect()

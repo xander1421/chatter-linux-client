@@ -293,6 +293,9 @@ export component ChannelSettingsModal inherits Rectangle {
                 background: transparent;
 
                 ScrollView {
+                    // Pin the viewport to the visible width: content wider than
+                    // the card elides instead of scrolling sideways off-screen.
+                    viewport-width: self.width;
                     viewport-height: content-area.preferred-height;
 
                     content-area := VerticalLayout {
@@ -654,6 +657,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     font-size: Typography.lg;
                                     font-weight: Typography.semibold;
                                     horizontal-stretch: 1;
+                                    overflow: elide;
                                 }
 
                                 Text {
@@ -728,6 +732,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     // Name and role
                                     VerticalLayout {
                                         horizontal-stretch: 1;
+                                        min-width: 0px;
 
                                         HorizontalLayout {
                                             spacing: Spacing.xs;
@@ -736,6 +741,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                                 text: member.display-name;
                                                 color: Colors.text-primary;
                                                 font-size: Typography.sm;
+                                                overflow: elide;
                                             }
 
                                             if member.role != "member": Rectangle {
@@ -756,10 +762,12 @@ export component ChannelSettingsModal inherits Rectangle {
                                             }
                                         }
 
-                                        Text {
+                                        // Empty when the peer's handle is not known locally.
+                                        if member.username != "": Text {
                                             text: "@" + member.username;
                                             color: Colors.text-muted;
                                             font-size: Typography.xs;
+                                            overflow: elide;
                                         }
                                     }
 
