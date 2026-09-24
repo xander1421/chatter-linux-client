@@ -221,22 +221,16 @@ impl MessageService {
         proto_msg: crate::proto::chat_v1::Message,
     ) {
         // Bound the buffer so an SKDM that never arrives (kicked sender, lost
-        // device, malicious peer) can't leak memory. Messages older than TTL
-        // are dropped, and the whole map is capped at MAX_PENDING entries —
-        // oldest-first eviction. The recipient loses only messages whose key
-        // genuinely never came; anything whose SKDM lands within the window
-        // still self-heals.
-        const TTL: std::time::Duration = std::time::Duration::from_secs(300);
+        // device, malicious peer) can't leak memory. Each message waits
+        // PENDING_GROUP_DECRYPT_TTL for its SKDM, then is handed to
+        // `expire_pending_group_decrypt` (which asks the sender to resend it);
+        // the whole map is capped at MAX_PENDING entries — oldest-first
+        // eviction.
         const MAX_PENDING: usize = 512;
         let now = std::time::Instant::now();
+        let message_id = proto_msg.id.clone();
 
         let mut guard = self.pending_group_decrypts.lock();
-
-        // Expire stale entries first.
-        for msgs in guard.values_mut() {
-            msgs.retain(|(parked_at, _)| now.duration_since(*parked_at) < TTL);
-        }
-        guard.retain(|_, msgs| !msgs.is_empty());
 
         // A history sync can hand us the same message more than once. Park it
         // once: a second copy would decrypt as libsignal's DuplicatedMessage
@@ -267,6 +261,52 @@ impl MessageService {
             }
         }
         guard.retain(|_, msgs| !msgs.is_empty());
+        drop(guard);
+
+        let svc = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(PENDING_GROUP_DECRYPT_TTL).await;
+            svc.expire_pending_group_decrypt(channel_id, sender_id, device_id, &message_id).await;
+        });
+    }
+
+    /// A parked message whose SKDM did not arrive within
+    /// [`PENDING_GROUP_DECRYPT_TTL`]: stop waiting and ask its sender to resend
+    /// it pairwise, as for a message the SKDM could not open. Dropping it here
+    /// silently lost it for good when the SKDM came late. A no-op when the
+    /// SKDM already drained it (`retry_pending_group_decrypts`).
+    pub(crate) async fn expire_pending_group_decrypt(
+        &self,
+        channel_id: ChannelId,
+        sender_id: UserId,
+        device_id: u32,
+        message_id: &str,
+    ) {
+        use crate::proto::chat_v1::message::content::Type;
+        use crate::proto::content_v1::GroupEncrypted;
+        use prost::Message as _;
+
+        let expired = {
+            let mut guard = self.pending_group_decrypts.lock();
+            let key = (channel_id, sender_id, device_id);
+            let Some(parked) = guard.get_mut(&key) else { return };
+            let (expired, kept): (Vec<_>, Vec<_>) =
+                std::mem::take(parked).into_iter().partition(|(_, m)| m.id == message_id);
+            *parked = kept;
+            if parked.is_empty() {
+                guard.remove(&key);
+            }
+            expired
+        };
+        let Some((_, proto_msg)) = expired.into_iter().next() else { return };
+        let Some(Type::Encrypted(enc)) = proto_msg.content.as_ref().and_then(|c| c.r#type.as_ref()) else {
+            return;
+        };
+        let Ok(group_encrypted) = GroupEncrypted::decode(enc.ciphertext.as_slice()) else { return };
+        tracing::info!(%channel_id, %sender_id, device_id, %message_id,
+            "Sender key never arrived for a parked message; requesting a resend");
+        self.request_group_resend(channel_id, sender_id, device_id, &proto_msg, &group_encrypted.ciphertext)
+            .await;
     }
 
     /// Drain deferred group messages for `(channel, sender, device)` and
@@ -643,8 +683,8 @@ impl MessageService {
             return;
         }
         // Already held — decrypted before (then "old counter" is a genuine
-        // duplicate), or recovered by an earlier resend, which is stored under
-        // the same (sender, sent_at) but its own id.
+        // duplicate), or recovered by an earlier resend (stored under the
+        // server id it carries, and the same (sender, sent_at)).
         let held = proto_msg
             .id
             .parse::<crate::domain::ids::MessageId>()
@@ -827,6 +867,9 @@ impl MessageService {
             targets_ai_bot: message.targets_ai_bot,
             ephemeral: ttl.is_some(),
             ephemeral_ttl_seconds: ttl.unwrap_or(0),
+            // Our row's id is the server's (`send_message` stores the
+            // server response), i.e. the id every other member holds.
+            message_id: message.id.to_string(),
             ..Default::default()
         };
         let mut content = Content {
@@ -920,6 +963,10 @@ impl MessageService {
     }
 }
 
+/// How long a group message parked for a missing sender key waits for its
+/// SKDM before we ask the sender to resend it instead.
+const PENDING_GROUP_DECRYPT_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+
 /// Backoff state per `(channel, sender, device)`: when the next request may go
 /// out, and how many have gone out without an answer.
 pub(crate) type SenderKeyRequestGate =
@@ -972,19 +1019,20 @@ mod tests {
         assert!(sender_key_request_due(&mut gate, key, t0 + Duration::from_secs(91)));
     }
 
-    /// Signal's sender-key retry, end to end between two real clients short of
-    /// the network hop: Bob cannot read Alice's message sent before her SKDM,
-    /// asks with a DecryptionErrorMessage, and Alice's pairwise resend lands in
-    /// Bob's channel under the message's (sender, sent_at).
-    #[tokio::test]
-    async fn pre_skdm_group_message_is_recovered_by_dem_and_resend() {
+    /// Alice and Bob, each a client with its own store, both members of one
+    /// channel. The TempDirs must outlive the clients.
+    struct TwoMembers {
+        alice: std::sync::Arc<crate::client::ChatterClient>,
+        bob: std::sync::Arc<crate::client::ChatterClient>,
+        alice_id: UserId,
+        bob_id: UserId,
+        channel_id: ChannelId,
+        _dirs: (tempfile::TempDir, tempfile::TempDir),
+    }
+
+    fn two_members() -> TwoMembers {
         use crate::client::ChatterClient;
         use crate::domain::channel::{Channel, ChannelType, MemberRole, Membership, NotificationPreference};
-        use crate::domain::ids::MessageId;
-        use crate::domain::message::{ConversationType, Message, MessageContent};
-        use crate::proto::{chat_v1, content_v1};
-        use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
-        use prost::Message as _;
 
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
@@ -1023,6 +1071,50 @@ mod tests {
             }
         }
 
+        TwoMembers { alice, bob, alice_id, bob_id, channel_id, _dirs: (da, db) }
+    }
+
+    /// Alice's group message as the server hands it to Bob.
+    fn server_copy(
+        t: &TwoMembers,
+        id: &crate::domain::ids::MessageId,
+        ts: u64,
+        ge: &crate::proto::content_v1::GroupEncrypted,
+    ) -> crate::proto::chat_v1::Message {
+        use crate::proto::chat_v1;
+        use prost::Message as _;
+        chat_v1::Message {
+            id: id.to_string(),
+            channel_id: t.channel_id.to_string(),
+            author_id: t.alice_id.to_string(),
+            author_device_id: 1,
+            timestamp: ts,
+            content: Some(chat_v1::message::Content {
+                r#type: Some(chat_v1::message::content::Type::Encrypted(chat_v1::EncryptedData {
+                    ciphertext: ge.encode_to_vec(),
+                    ..Default::default()
+                })),
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// Signal's sender-key retry, end to end between two real clients short of
+    /// the network hop: Bob cannot read Alice's message sent before her SKDM,
+    /// asks with a DecryptionErrorMessage, and Alice's pairwise resend lands in
+    /// Bob's channel under the message's server id and (sender, sent_at).
+    #[tokio::test]
+    async fn pre_skdm_group_message_is_recovered_by_dem_and_resend() {
+        use crate::domain::ids::MessageId;
+        use crate::domain::message::{ConversationType, Message, MessageContent};
+        use crate::proto::content_v1;
+        use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
+        use prost::Message as _;
+
+        let t = two_members();
+        let (alice, bob) = (&t.alice, &t.bob);
+        let (alice_id, bob_id, channel_id) = (t.alice_id, t.bob_id, t.channel_id);
+
         // Alice sends before Bob holds her key; the server stamps it T.
         let plaintext = content_v1::Content {
             content: Some(content_v1::content::Content::DataMessage(content_v1::DataMessage {
@@ -1054,20 +1146,7 @@ mod tests {
         // Bob gets Alice's SKDM only now: it starts past the message.
         let skdm = alice.signal().create_sender_key(&channel_id).await.unwrap();
         bob.signal().process_sender_key(&alice_id, 1, &skdm).await.unwrap();
-        let server_copy = chat_v1::Message {
-            id: message_id.to_string(),
-            channel_id: channel_id.to_string(),
-            author_id: alice_id.to_string(),
-            author_device_id: 1,
-            timestamp: server_ts,
-            content: Some(chat_v1::message::Content {
-                r#type: Some(chat_v1::message::content::Type::Encrypted(chat_v1::EncryptedData {
-                    ciphertext: ge.encode_to_vec(),
-                    ..Default::default()
-                })),
-            }),
-            ..Default::default()
-        };
+        let server_copy = server_copy(&t, &message_id, server_ts, &ge);
         let inbound = ChannelInbound::new(bob.messages().clone(), bob.attachments().clone());
         assert_eq!(inbound.ingest(&server_copy, channel_id, false).await, Ingested::Dropped,
             "positive control: the pre-SKDM message is unreadable on its own");
@@ -1106,12 +1185,41 @@ mod tests {
             .unwrap()
             .expect("the recovered message is filed under the server timestamp");
         assert_eq!(stored.content, MessageContent::Text("sent before the SKDM".into()));
+        assert_eq!(stored.id, message_id,
+            "the recovered message keeps the server id the other members hold");
 
         // A later re-fetch of the server copy neither duplicates it nor asks
         // again (the first ingest above already recorded its one request).
         assert_eq!(inbound.ingest(&server_copy, channel_id, false).await, Ingested::Dropped);
         m.group_retry_requests.lock().clear();
         m.request_group_resend(channel_id, alice_id, 1, &server_copy, &ge.ciphertext).await;
+        assert!(m.group_retry_requests.lock().is_empty());
+    }
+
+    /// A message parked for a sender key that never comes is not dropped
+    /// silently when its wait runs out: Bob asks Alice to resend it, once.
+    #[tokio::test]
+    async fn parked_group_message_requests_resend_when_its_sender_key_never_arrives() {
+        use crate::domain::ids::MessageId;
+        use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
+
+        let t = two_members();
+        let (ge, _) = t.alice.signal().encrypt_for_group(&t.channel_id, b"lost key").await.unwrap();
+        let message_id = MessageId::new();
+        let copy = server_copy(&t, &message_id, TimestampNanos::now().as_u64(), &ge);
+        let m = t.bob.messages();
+        let inbound = ChannelInbound::new(m.clone(), t.bob.attachments().clone());
+        assert_eq!(inbound.ingest(&copy, t.channel_id, false).await, Ingested::DeferredPendingSenderKey);
+        assert!(m.group_retry_requests.lock().is_empty(), "no resend request while the SKDM may still come");
+
+        m.expire_pending_group_decrypt(t.channel_id, t.alice_id, 1, &copy.id).await;
+        assert!(m.pending_group_decrypts.lock().is_empty());
+        assert!(m.group_retry_requests.lock().contains(&(copy.id.clone(), 1)),
+            "the expired message is handed to request_group_resend");
+
+        // Nothing left parked: a later expiry asks nothing.
+        m.group_retry_requests.lock().clear();
+        m.expire_pending_group_decrypt(t.channel_id, t.alice_id, 1, &copy.id).await;
         assert!(m.group_retry_requests.lock().is_empty());
     }
 }

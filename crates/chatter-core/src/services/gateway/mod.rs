@@ -229,8 +229,16 @@ impl MessageGateway {
                 (cid, conversation_type)
             };
 
-        // Generate message ID from timestamp (Signal's approach: timestamp + author = unique)
-        let message_id = MessageId::new();
+        // A sender-key resend (`rebuild_group_content`) carries the server id
+        // the other members hold, so thread replies and later references by
+        // id reach the recovered message. Everything else gets a local id.
+        // A claimed id already in use fails the insert below rather than
+        // replacing that row.
+        let message_id = match conversation_type {
+            ConversationType::ServerDm => None,
+            _ => data_message.message_id.parse().ok(),
+        }
+        .unwrap_or_else(MessageId::new);
 
         // Convert timestamp to datetime (nanoseconds since epoch)
         let created_at = if data_message.timestamp > 0 {
