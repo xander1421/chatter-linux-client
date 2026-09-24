@@ -373,8 +373,9 @@ export component UnifiedSearch inherits Rectangle {
                 VerticalLayout {
                     spacing: Spacing.xxs;
 
-                    // Jump to (conversations)
-                    if root.conversations.length > 0: Text {
+                    // Jump to (conversations). An empty query is already titled
+                    // "Recent conversations" above; two headers stacked there.
+                    if root.query != "" && root.conversations.length > 0: Text {
                         text: "Jump to";
                         color: Colors.text-muted;
                         font-size: Typography.xs;

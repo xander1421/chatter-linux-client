@@ -440,10 +440,12 @@ export component ChatHeader inherits Rectangle {
         // in it. An unconditional centre claimed width in the middle of the row
         // and then drew nothing, which is the gap the name beside it was eliding
         // to make room for.
-        if root.topic != "" || root.typing-indicator != "" || (JarvisGlobal.enabled && root.jarvis-thinking): Rectangle {
+        // A phone has no width for the topic beside the name: it elided to a lone
+        // muted "…". Typing and Jarvis still show there.
+        if (root.topic != "" && !root.mobile) || root.typing-indicator != "" || (JarvisGlobal.enabled && root.jarvis-thinking): Rectangle {
             horizontal-stretch: 1;
             // Topic text
-            if root.topic != "" && root.typing-indicator == "" && !(JarvisGlobal.enabled && root.jarvis-thinking): Text {
+            if root.topic != "" && !root.mobile && root.typing-indicator == "" && !(JarvisGlobal.enabled && root.jarvis-thinking): Text {
                 width: 100%;
                 text: root.topic;
                 color: Colors.text-muted;
