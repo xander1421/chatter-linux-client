@@ -1040,7 +1040,13 @@ async fn process_identified_sender_message(
             body,
             timestamp,
             attachments,
+            profile_key_changed,
         }) => {
+            if profile_key_changed {
+                // Same refresh the pure handshake gets: fetch + decrypt the
+                // sender's profile with the key this message just delivered.
+                let _ = event_tx.send(InboxEvent::ProfileKeyReceived { sender_id: msg_sender });
+            }
             tracing::info!(
                 message_id = %msg.message_guid,
                 sender_id = %msg_sender,
@@ -1624,7 +1630,13 @@ async fn process_sealed_sender_message(
             body,
             timestamp,
             attachments,
+            profile_key_changed,
         }) => {
+            if profile_key_changed {
+                // Same refresh the pure handshake gets: fetch + decrypt the
+                // sender's profile with the key this message just delivered.
+                let _ = event_tx.send(InboxEvent::ProfileKeyReceived { sender_id: msg_sender });
+            }
             tracing::info!(
                 message_id = %msg.message_guid,
                 sender_id = %msg_sender,
@@ -1860,6 +1872,7 @@ pub fn dispatch_control_content(
                 let _ = event_tx.send(InboxEvent::DmTyping {
                     peer_id: *sender_id,
                     action: typing.action,
+                    timestamp: typing.timestamp,
                 });
             } else if let Ok(channel_id) = typing.channel_id.parse::<ChannelId>() {
                 tracing::info!(
@@ -1872,6 +1885,7 @@ pub fn dispatch_control_content(
                     channel_id,
                     sender_id: *sender_id,
                     action: typing.action,
+                    timestamp: typing.timestamp,
                 });
             } else {
                 tracing::warn!(

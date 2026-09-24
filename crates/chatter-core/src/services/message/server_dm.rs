@@ -460,7 +460,12 @@ impl MessageService {
     /// delivered in the DEGRADED identified-sender mode — see [`DepositOutcome`].
     /// Every per-device failure is logged — dropped devices are never silently
     /// capped or swallowed.
-    async fn deposit_sealed_to_all_devices(
+    ///
+    /// Shared by 1:1 DMs and by channel-member traffic (SKDMs, sender-key
+    /// requests, control fanout — see `group.rs` / `core.rs`): both go to
+    /// recipients who already know who we are, so they spend no anonymous
+    /// mailbox token (OPEN-ITEMS §120).
+    pub(super) async fn deposit_sealed_to_all_devices(
         &self,
         auth_client: &mut AuthClient,
         message_client: &mut MessageClient,
@@ -556,6 +561,30 @@ impl MessageService {
                         outcome.degraded += 1;
                     }
                 }
+                // The server no longer knows this device (retired by Log Out /
+                // unlink). Signal's 410 handling: archive the session so we
+                // stop encrypting to it, and treat it as gone rather than as a
+                // delivery failure.
+                Err(e) if e.is_unknown_destination_device() => {
+                    tracing::info!(
+                        recipient = recipient_id,
+                        device_id,
+                        "Sealed send: device retired on server — archiving its session"
+                    );
+                    if let Err(e) = self
+                        .signal_service
+                        .actor
+                        .archive_session_for_resend(recipient_id.to_string(), device_id, None)
+                        .await
+                    {
+                        tracing::warn!(
+                            recipient = recipient_id,
+                            device_id,
+                            error = %e,
+                            "Failed to archive session for retired device"
+                        );
+                    }
+                }
                 Err(e) => {
                     tracing::warn!(
                         recipient = recipient_id,
@@ -577,9 +606,9 @@ impl MessageService {
 /// "it worked" without also being able to see that the sender was exposed to the
 /// server on some of those deliveries.
 #[derive(Debug, Default, Clone, Copy)]
-struct DepositOutcome {
+pub(super) struct DepositOutcome {
     /// Devices the message actually reached.
-    delivered: usize,
+    pub(super) delivered: usize,
     /// Zero devices because the SERVER refused to serve the prekey bundle, not
     /// because our session state was stale. The retry below must not fire on
     /// this: a prekey fetch is rate limited per (caller, target) pair, so an
@@ -587,8 +616,8 @@ struct DepositOutcome {
     /// bucket that is refusing us. One send was burning ~5 tokens against a
     /// 20-token bucket that refills at 6/min, which turned a brief throttle
     /// into a self-sustaining one.
-    rate_limited: bool,
+    pub(super) rate_limited: bool,
     /// Of those, how many were sent identified (Basic auth) because no UAK was
     /// available — i.e. sealed sender did NOT engage and the server recorded us.
-    degraded: usize,
+    pub(super) degraded: usize,
 }

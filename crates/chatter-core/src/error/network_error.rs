@@ -168,6 +168,13 @@ impl NetworkError {
             NetworkError::Unauthenticated | NetworkError::PermissionDenied
         )
     }
+
+    /// The server refused a sealed send because the destination device is
+    /// retired (FailedPrecondition "unknown destination device"). The sender
+    /// should stop encrypting to that device, not fail the whole send.
+    pub fn is_unknown_destination_device(&self) -> bool {
+        matches!(self, NetworkError::InvalidRequest(m) if m.contains("unknown destination device"))
+    }
 }
 
 #[cfg(test)]
@@ -287,5 +294,15 @@ mod tests {
 
         let err = NetworkError::NotFound("channel-123".to_string());
         assert_eq!(err.to_string(), "resource not found: channel-123");
+    }
+
+    #[test]
+    fn test_unknown_destination_device() {
+        let err = NetworkError::from_status(&Status::failed_precondition("unknown destination device"));
+        assert!(err.is_unknown_destination_device());
+        let err = NetworkError::from_status(&Status::failed_precondition("something else"));
+        assert!(!err.is_unknown_destination_device());
+        let err = NetworkError::from_status(&Status::not_found("unknown destination device"));
+        assert!(!err.is_unknown_destination_device());
     }
 }

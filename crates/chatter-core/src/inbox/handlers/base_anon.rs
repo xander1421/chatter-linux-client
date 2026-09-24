@@ -377,6 +377,7 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
                     events.push(DomainEvent::TypingStopped {
                         channel_id,
                         user_id: *sender_id,
+                        timestamp: sent_at,
                     });
                 }
                 Err(e) => {
@@ -393,10 +394,11 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
 
         Some(ContentKind::Typing(typing)) => {
             let started = typing.action == typing_message::Action::Started as i32;
+            let (user_id, timestamp) = (*sender_id, typing.timestamp);
             let event = if started {
-                DomainEvent::TypingStarted { channel_id, user_id: *sender_id }
+                DomainEvent::TypingStarted { channel_id, user_id, timestamp }
             } else {
-                DomainEvent::TypingStopped { channel_id, user_id: *sender_id }
+                DomainEvent::TypingStopped { channel_id, user_id, timestamp }
             };
             events.push(event);
             CommonDispatchOutcome::Handled(events)

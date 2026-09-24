@@ -7,8 +7,10 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
+use parking_lot::Mutex;
 use tokio::sync::broadcast;
 
 use crate::domain::anon_dm::AnonDmId;
@@ -70,6 +72,21 @@ impl ActiveConversation {
             Self::AnonDm(id) => Some((*id).into()),
             Self::AnonGroup(id) => Some((*id).into()),
             Self::None => None,
+        }
+    }
+
+    /// Whether an event keyed by `channel_id` belongs to this conversation.
+    ///
+    /// Like `channel_id() == Some(id)`, except that a mailbox DM also answers
+    /// to its peer's DM key: DM control content (typing, receipts) is keyed
+    /// `ChannelId::from(peer)` on receipt, while the mailbox DM's own id is
+    /// its mailbox channel, so the plain comparison never matched it.
+    pub fn is_for_channel(&self, id: ChannelId) -> bool {
+        match self {
+            Self::MailboxDm { channel_id, peer_id } => {
+                *channel_id == id || ChannelId::from(*peer_id) == id
+            }
+            _ => self.channel_id() == Some(id),
         }
     }
 
@@ -424,6 +441,10 @@ pub struct ChatStateData {
 #[derive(Clone)]
 pub struct ChatState {
     store: Store<ChatStateData>,
+    /// Latest sender timestamp that ended each sender's typing in each
+    /// conversation (a STOPPED, or a message). Kept out of `store` so
+    /// recording one does not wake every state subscriber.
+    typing_ended_at: Arc<Mutex<HashMap<(ChannelId, UserId), u64>>>,
 }
 
 impl ChatState {
@@ -432,6 +453,7 @@ impl ChatState {
     pub fn new() -> Self {
         Self {
             store: Store::new(ChatStateData::default()),
+            typing_ended_at: Arc::default(),
         }
     }
 
@@ -865,6 +887,38 @@ impl ChatState {
             state.streaming.typing_by_channel.remove(channel_id);
             state.streaming.last_typing_update = Some(Instant::now());
         });
+    }
+
+    /// Order an incoming typing indicator against what already ended it.
+    ///
+    /// Typing indicators are separate sealed messages and can arrive out of
+    /// order, so a STARTED sent before a STOPPED (or before the message it
+    /// announced) may land after it and show "typing" for a sender who has
+    /// stopped. `timestamp` is the SENDER's clock (TypingMessage.timestamp,
+    /// or a message's sent_at), so the comparison is within one clock.
+    ///
+    /// A STOPPED / message records its timestamp and is always accepted.
+    /// A STARTED is accepted unless it is no newer than the last recorded end
+    /// for the same sender in the same conversation. `timestamp == 0` means
+    /// the sender gave none: accepted, never recorded.
+    pub fn accept_typing(
+        &self,
+        channel_id: ChannelId,
+        user_id: UserId,
+        timestamp: u64,
+        started: bool,
+    ) -> bool {
+        if timestamp == 0 {
+            return true;
+        }
+        let mut ended = self.typing_ended_at.lock();
+        let last = ended.entry((channel_id, user_id)).or_insert(0);
+        if started {
+            timestamp > *last
+        } else {
+            *last = (*last).max(timestamp);
+            true
+        }
     }
 
     /// Get the last typing update time.
@@ -1542,6 +1596,37 @@ mod tests {
 
         fn make_message_id() -> MessageId {
             MessageId(Uuid::new_v4())
+        }
+
+        #[test]
+        fn test_typing_started_older_than_stop_is_rejected() {
+            let state = ChatState::new();
+            let (c, u) = (make_channel_id(), make_user_id());
+            assert!(state.accept_typing(c, u, 100, true));
+            assert!(state.accept_typing(c, u, 200, false));
+            // A STARTED sent before that STOPPED, arriving after it.
+            assert!(!state.accept_typing(c, u, 150, true));
+            assert!(!state.accept_typing(c, u, 200, true));
+            // A late older STOPPED does not move the mark back.
+            assert!(state.accept_typing(c, u, 120, false));
+            assert!(!state.accept_typing(c, u, 180, true));
+            assert!(state.accept_typing(c, u, 201, true));
+            // Scoped per sender and per conversation; 0 = no timestamp.
+            assert!(state.accept_typing(make_channel_id(), u, 150, true));
+            assert!(state.accept_typing(c, make_user_id(), 150, true));
+            assert!(state.accept_typing(c, u, 0, true));
+        }
+
+        #[test]
+        fn test_mailbox_dm_matches_peer_dm_key() {
+            let (mailbox, peer) = (make_channel_id(), make_user_id());
+            let conv = ActiveConversation::MailboxDm { channel_id: mailbox, peer_id: peer };
+            assert!(conv.is_for_channel(mailbox));
+            assert!(conv.is_for_channel(ChannelId::from(peer)));
+            assert!(!conv.is_for_channel(make_channel_id()));
+            let ch = make_channel_id();
+            assert!(ActiveConversation::Channel(ch).is_for_channel(ch));
+            assert!(!ActiveConversation::None.is_for_channel(ch));
         }
 
         // ==================== Typing Tests ====================

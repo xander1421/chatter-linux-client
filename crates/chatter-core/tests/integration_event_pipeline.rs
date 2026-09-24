@@ -15,7 +15,7 @@ fn test_event_bus_domain_publish_subscribe() {
     let user_id = UserId::new();
     let channel_id = ChannelId::new();
 
-    let sent = bus.emit_domain(DomainEvent::TypingStarted { user_id, channel_id });
+    let sent = bus.emit_domain(DomainEvent::TypingStarted { user_id, channel_id, timestamp: 0 });
     assert!(sent > 0, "Should have at least one subscriber");
 
     let event = rx.try_recv().expect("Should receive the domain event");
@@ -23,6 +23,7 @@ fn test_event_bus_domain_publish_subscribe() {
         DomainEvent::TypingStarted {
             user_id: recv_uid,
             channel_id: recv_cid,
+            ..
         } => {
             assert_eq!(recv_uid, user_id);
             assert_eq!(recv_cid, channel_id);
@@ -41,6 +42,7 @@ fn test_event_bus_multiple_subscribers() {
     let sent = bus.emit_domain(DomainEvent::TypingStopped {
         user_id: UserId::new(),
         channel_id: ChannelId::new(),
+        timestamp: 0,
     });
     assert_eq!(sent, 3, "Should deliver to 3 subscribers");
 
@@ -58,6 +60,7 @@ fn test_event_bus_ui_channel_separate() {
     bus.emit_domain(DomainEvent::TypingStarted {
         user_id: UserId::new(),
         channel_id: ChannelId::new(),
+        timestamp: 0,
     });
 
     assert!(domain_rx.try_recv().is_ok(), "Domain channel should receive");
@@ -73,6 +76,7 @@ fn test_event_bus_broadcast_capacity() {
         bus.emit_domain(DomainEvent::TypingStarted {
             user_id: UserId::new(),
             channel_id: ChannelId::new(),
+            timestamp: 0,
         });
     }
 
@@ -89,7 +93,7 @@ fn test_domain_event_key_variants() {
     let channel_id = ChannelId::new();
     let message_id = MessageId::new();
 
-    let typing = DomainEvent::TypingStarted { user_id, channel_id };
+    let typing = DomainEvent::TypingStarted { user_id, channel_id, timestamp: 0 };
     let _ = typing.clone();
     let _ = format!("{:?}", typing);
 

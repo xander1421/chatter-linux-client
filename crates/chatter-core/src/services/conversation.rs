@@ -89,6 +89,11 @@ impl ConversationHandle {
         }
     }
 
+    /// A handle for another conversation on the same client.
+    pub fn for_conversation(&self, conversation: ActiveConversation) -> Self {
+        Self { conversation, client: self.client.clone() }
+    }
+
     /// Get the underlying conversation variant.
     pub fn conversation(&self) -> &ActiveConversation {
         &self.conversation

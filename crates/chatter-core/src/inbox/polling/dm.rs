@@ -388,11 +388,20 @@ fn dispatch_dm_content(
                     if let Some(current_user) = current_user_id {
                         let key_array: [u8; 32] = key.as_slice().try_into().unwrap();
                         match user_repo.set_friend_profile_key(current_user, sender_id, &key_array) {
-                            Ok(()) => {
+                            Ok(changed) => {
                                 tracing::info!(
                                     sender_id = %sender_id,
+                                    changed,
                                     "Stored sender's profile key for display_name decryption"
                                 );
+                                // New or rotated key: refresh their profile now,
+                                // as the handshake path does, instead of leaving
+                                // the fallback name up until a restart.
+                                if changed {
+                                    let _ = event_tx.send(InboxEvent::ProfileKeyReceived {
+                                        sender_id: *sender_id,
+                                    });
+                                }
                             }
                             Err(e) => {
                                 tracing::debug!(
@@ -558,7 +567,7 @@ fn dispatch_dm_content(
             });
         }
 
-        DmContent::Typing { action, .. } => {
+        DmContent::Typing { action, timestamp } => {
             // Emit typing event - the UI layer handles stale indicators with 15s auto-clear timers
             // (Signal-style: each STARTED resets a 15s timer, timer expiry clears indicator)
             tracing::info!(
@@ -567,7 +576,7 @@ fn dispatch_dm_content(
                 action_name = if action == 1 { "STARTED" } else { "STOPPED" },
                 "DM_MAILBOX: Emitting DmTyping event"
             );
-            let _ = event_tx.send(InboxEvent::DmTyping { peer_id, action });
+            let _ = event_tx.send(InboxEvent::DmTyping { peer_id, action, timestamp });
         }
 
         DmContent::Receipt {

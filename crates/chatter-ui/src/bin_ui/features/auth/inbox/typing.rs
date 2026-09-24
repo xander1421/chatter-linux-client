@@ -6,6 +6,8 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
+use chatter_core::domain::ids::ChannelId;
+use chatter_core::state::ChatState;
 use slint::{ComponentHandle, Timer, TimerMode};
 
 use crate::MainWindow;
@@ -37,138 +39,61 @@ pub const TYPING_TIMEOUT_MS: u64 = 15_000;
 /// 1. Show typing indicator ("is typing ..." since header shows peer name)
 /// 2. Update sidebar typing state
 /// 3. Start/restart 15-second timer to auto-clear both header and sidebar
-pub fn set_typing_with_timer(window: &MainWindow, peer_id: &str) {
-    // Show typing indicator (peer name already shown in header for DMs)
-    let indicator_text = "is typing ...";
-    let current = window.get_typing_indicator().to_string();
-    tracing::info!(
-        peer_id = %peer_id,
-        current_value = %current,
-        new_value = %indicator_text,
-        "TYPING_SET: ===> Setting typing indicator on window <==="
-    );
-    window.set_typing_indicator(indicator_text.into());
-
-    // Also update sidebar typing state
-    update_sidebar_typing(window, peer_id, true);
-
-    let after = window.get_typing_indicator().to_string();
-    tracing::info!(
-        peer_id = %peer_id,
-        after_value = %after,
-        "TYPING_SET: Typing indicator set, verifying value"
-    );
-
-    // Check if we have an existing timer for this peer - if so, restart it
-    // This avoids stop+create which causes calloop orphaned event warnings
-    let needs_new_timer = DM_TYPING_TIMERS.with(|timers| {
-        let map = timers.borrow();
-        !map.contains_key(peer_id)
-    });
+///
+/// `key` is the conversation's typing key and `channel_id` the conversation
+/// itself: when the timer fires it clears the header only if that
+/// conversation is still the open one, so a timer left over from the
+/// conversation the user switched away from cannot blank the new one's.
+pub fn set_typing_with_timer(
+    window: &MainWindow,
+    key: &str,
+    chat_state: &ChatState,
+    channel_id: ChannelId,
+) {
+    tracing::info!(key = %key, "TYPING_SET: Setting typing indicator");
+    window.set_typing_indicator("is typing ...".into());
+    update_sidebar_typing(window, key, true);
 
     // Clear from cancelled set if it was there (we're starting fresh)
     CANCELLED_TIMERS.with(|cancelled| {
-        cancelled.borrow_mut().remove(peer_id);
+        cancelled.borrow_mut().remove(key);
     });
 
-    if needs_new_timer {
-        // Create new timer only if one doesn't exist
-        let timer = Timer::default();
-        let weak_window = window.as_weak();
-        let peer_id_owned = peer_id.to_string();
-        let peer_id_for_cleanup = peer_id.to_string();
+    let weak_window = window.as_weak();
+    let key_owned = key.to_string();
+    let chat_state = chat_state.clone();
+    let on_fire = move || {
+        let was_cancelled = CANCELLED_TIMERS.with(|cancelled| {
+            cancelled.borrow_mut().remove(&key_owned)
+        });
+        if was_cancelled {
+            tracing::debug!(key = %key_owned, "TYPING_TIMER: fired but was cancelled - skipping clear");
+        } else if let Some(w) = weak_window.upgrade() {
+            tracing::debug!(key = %key_owned, "TYPING_TIMER: 15s timeout FIRED - clearing indicator");
+            if chat_state.active_conversation().is_for_channel(channel_id) {
+                w.set_typing_indicator("".into());
+            }
+            update_sidebar_typing(&w, &key_owned, false);
+        }
+        // Always remove from map when timer fires
+        DM_TYPING_TIMERS.with(|timers| {
+            timers.borrow_mut().remove(&key_owned);
+        });
+    };
 
-        tracing::debug!(
-            peer_id = %peer_id,
-            timeout_ms = TYPING_TIMEOUT_MS,
-            "TYPING_TIMER: Creating new 15s timer"
-        );
-
-        timer.start(
+    // Restart an existing timer rather than stop+create, which causes calloop
+    // orphaned event warnings.
+    DM_TYPING_TIMERS.with(|timers| {
+        let mut map = timers.borrow_mut();
+        let entry = map
+            .entry(key.to_string())
+            .or_insert_with(|| TypingTimerEntry { timer: Timer::default() });
+        entry.timer.start(
             TimerMode::SingleShot,
             std::time::Duration::from_millis(TYPING_TIMEOUT_MS),
-            move || {
-                // Check if this timer was cancelled
-                let was_cancelled = CANCELLED_TIMERS.with(|cancelled| {
-                    cancelled.borrow_mut().remove(&peer_id_owned)
-                });
-
-                if was_cancelled {
-                    tracing::debug!(
-                        peer_id = %peer_id_owned,
-                        "TYPING_TIMER: Timer fired but was cancelled - skipping clear"
-                    );
-                } else {
-                    tracing::debug!(
-                        peer_id = %peer_id_owned,
-                        "TYPING_TIMER: 15s timeout FIRED - clearing indicator"
-                    );
-                    // Clear typing indicator (header and sidebar)
-                    if let Some(w) = weak_window.upgrade() {
-                        w.set_typing_indicator("".into());
-                        update_sidebar_typing(&w, &peer_id_owned, false);
-                    }
-                }
-
-                // Always remove from map when timer fires
-                DM_TYPING_TIMERS.with(|timers| {
-                    timers.borrow_mut().remove(&peer_id_owned);
-                });
-            },
+            on_fire,
         );
-
-        // Store timer
-        DM_TYPING_TIMERS.with(|timers| {
-            timers.borrow_mut().insert(peer_id_for_cleanup, TypingTimerEntry { timer });
-        });
-    } else {
-        // Restart existing timer (just call start again - Slint handles this)
-        DM_TYPING_TIMERS.with(|timers| {
-            let map = timers.borrow();
-            if let Some(entry) = map.get(peer_id) {
-                let weak_window = window.as_weak();
-                let peer_id_owned = peer_id.to_string();
-
-                tracing::debug!(
-                    peer_id = %peer_id,
-                    timeout_ms = TYPING_TIMEOUT_MS,
-                    "TYPING_TIMER: Restarting existing timer"
-                );
-
-                entry.timer.start(
-                    TimerMode::SingleShot,
-                    std::time::Duration::from_millis(TYPING_TIMEOUT_MS),
-                    move || {
-                        // Check if this timer was cancelled
-                        let was_cancelled = CANCELLED_TIMERS.with(|cancelled| {
-                            cancelled.borrow_mut().remove(&peer_id_owned)
-                        });
-
-                        if was_cancelled {
-                            tracing::debug!(
-                                peer_id = %peer_id_owned,
-                                "TYPING_TIMER: Timer fired but was cancelled - skipping clear"
-                            );
-                        } else {
-                            tracing::debug!(
-                                peer_id = %peer_id_owned,
-                                "TYPING_TIMER: 15s timeout FIRED - clearing indicator"
-                            );
-                            // Clear typing indicator (header and sidebar)
-                            if let Some(w) = weak_window.upgrade() {
-                                w.set_typing_indicator("".into());
-                                update_sidebar_typing(&w, &peer_id_owned, false);
-                            }
-                        }
-
-                        DM_TYPING_TIMERS.with(|timers| {
-                            timers.borrow_mut().remove(&peer_id_owned);
-                        });
-                    },
-                );
-            }
-        });
-    }
+    });
 }
 
 /// Cancel typing timer for a peer.
@@ -194,17 +119,20 @@ pub fn clear_typing_timer(peer_id: &str) {
     }
 }
 
-/// Clear typing indicator for a peer (called when message received or STOPPED).
-/// Clears both header and sidebar typing state.
-pub fn clear_typing_for_peer(window: &MainWindow, peer_id: &str) {
-    let current = window.get_typing_indicator().to_string();
+/// Clear typing state for a conversation key (called when a message arrives or
+/// on STOPPED). Always clears the sidebar row and the timer; clears the header
+/// only when `is_active` — the header belongs to the open conversation, and a
+/// STOPPED from some other conversation must not hide typing shown there.
+pub fn clear_typing_for_peer(window: &MainWindow, peer_id: &str, is_active: bool) {
     tracing::info!(
         peer_id = %peer_id,
-        current_value = %current,
-        "TYPING_UI: Clearing typing indicator (header + sidebar)"
+        is_active,
+        "TYPING_UI: Clearing typing indicator"
     );
     clear_typing_timer(peer_id);
-    window.set_typing_indicator("".into());
+    if is_active {
+        window.set_typing_indicator("".into());
+    }
     // Also clear sidebar typing state
     update_sidebar_typing(window, peer_id, false);
 }

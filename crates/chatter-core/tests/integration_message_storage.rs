@@ -474,6 +474,38 @@ fn test_message_update() {
     }
 }
 
+/// §112l: a server-proto upsert (channel backfill after restart) rebuilds the
+/// message without reply context; `update` must not wipe the stored quote.
+#[test]
+fn test_update_preserves_reply_context() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+    let sender = UserId::new();
+    let quoted_author = UserId::new();
+    let parent = MessageId::new();
+
+    let mut reply = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "reply".to_string(), next_timestamp_ns());
+    reply.reply_to = Some(parent);
+    reply.reply_to_author_id = Some(quoted_author);
+    reply.reply_to_text = Some("original".to_string());
+    message_repo.insert(&reply).unwrap();
+
+    // Same message as the server hands it back: no reply fields.
+    let mut from_server = reply.clone();
+    from_server.reply_to = None;
+    from_server.reply_to_author_id = None;
+    from_server.reply_to_text = None;
+    message_repo.update(&from_server).unwrap();
+
+    let loaded = message_repo.get(&reply.id).unwrap().unwrap();
+    assert_eq!(loaded.reply_to, Some(parent));
+    assert_eq!(loaded.reply_to_author_id, Some(quoted_author));
+    assert_eq!(loaded.reply_to_text.as_deref(), Some("original"));
+}
+
 #[test]
 fn test_message_soft_delete() {
     let (_temp_dir, db) = setup_test_db();

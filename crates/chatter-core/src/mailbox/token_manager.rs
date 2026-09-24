@@ -6,11 +6,11 @@
 //! - Blinding keys for server signing
 //! - Unblinding signatures to create usable tokens
 //! - Storing tokens securely in SQLCipher
-//! - Tracking daily quota
 //!
-//! Supports two token types:
-//! - **Mailbox tokens**: For creating ephemeral mailboxes (10/day quota)
-//! - **Call room tokens**: For joining anonymous call rooms (5/day quota)
+//! Supports two token types, both drawn from ONE server-owned daily budget
+//! (the server is the only quota authority; see `grant_error`):
+//! - **Mailbox tokens**: For creating ephemeral mailboxes / anonymous sends
+//! - **Call room tokens**: For joining anonymous call rooms
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -55,15 +55,6 @@ pub struct MailboxToken {
     pub randomizer: Option<Vec<u8>>,
 }
 
-/// Quota status for token requests.
-#[derive(Debug, Clone)]
-pub struct QuotaStatus {
-    /// Remaining tokens that can be requested today.
-    pub remaining: u32,
-    /// When the quota resets (Unix timestamp milliseconds).
-    pub resets_at: u64,
-}
-
 /// A ready-to-use call room token.
 ///
 /// Contains the ephemeral Ed25519 keypair and its blind signature.
@@ -82,13 +73,23 @@ pub struct CallRoomToken {
     pub randomizer: Option<Vec<u8>>,
 }
 
-/// Quota status for call room token requests.
-#[derive(Debug, Clone)]
-pub struct CallRoomQuotaStatus {
-    /// Remaining tokens that can be requested today.
-    pub remaining: u32,
-    /// When the quota resets (Unix timestamp nanoseconds).
-    pub resets_at: u64,
+/// Map a GetMailboxTokens failure. The server is the only authority on the
+/// daily token budget (mailbox and call-room tokens draw from the same one);
+/// it answers ResourceExhausted once that budget is spent. The client used to
+/// keep its own counter with a hard-coded ceiling of 10 (5 for call rooms)
+/// against a server budget of 48 + 2/conversation, so the two disagreed
+/// (OPEN-ITEMS §120).
+fn grant_error(e: crate::error::NetworkError) -> MailboxError {
+    match e {
+        crate::error::NetworkError::RateLimited => {
+            tracing::warn!("TokenManager: server reports daily token quota exhausted");
+            MailboxError::QuotaExhausted
+        }
+        e => {
+            tracing::error!("TokenManager: get_mailbox_tokens failed: {}", e);
+            MailboxError::Network(e.to_string())
+        }
+    }
 }
 
 /// Token manager for blind-signed mailbox tokens.
@@ -242,18 +243,10 @@ impl TokenManager {
     ) -> Result<u32, MailboxError> {
         tracing::info!("TokenManager: request_tokens called, count={}", count);
 
-        // Check quota
-        tracing::info!("TokenManager: resetting quota if needed...");
-        self.reset_quota_if_needed()?;
-        tracing::info!("TokenManager: getting quota status...");
-        let quota = self.get_quota_status()?;
-        tracing::info!("TokenManager: quota remaining={}", quota.remaining);
-        if quota.remaining == 0 {
-            tracing::warn!("TokenManager: quota exhausted!");
-            return Err(MailboxError::QuotaExhausted);
-        }
-
-        let request_count = count.min(quota.remaining);
+        // No local quota gate: the server owns the daily budget (it clamps the
+        // count to what is left and answers ResourceExhausted at zero). A local
+        // mirror disagreed with it — see `grant_error`.
+        let request_count = count;
         tracing::info!("TokenManager: will request {} tokens", request_count);
 
         // Get/refresh server key
@@ -308,14 +301,12 @@ impl TokenManager {
         let response = client
             .get_mailbox_tokens(request_count as i32, blinded_keys)
             .await
-            .map_err(|e| {
-                tracing::error!("TokenManager: get_mailbox_tokens failed: {}", e);
-                MailboxError::Network(e.to_string())
-            })?;
-        tracing::info!("TokenManager: got {} signatures from server", response.blinded_signatures.len());
-
-        // Update quota from response
-        self.update_quota(response.remaining_quota as u32, response.quota_resets_at)?;
+            .map_err(grant_error)?;
+        tracing::info!(
+            "TokenManager: got {} signatures from server, server quota remaining={}",
+            response.blinded_signatures.len(),
+            response.remaining_quota
+        );
 
         // Process each signature
         let mut success_count = 0;
@@ -346,6 +337,12 @@ impl TokenManager {
                     }
                 }
             }
+        }
+
+        // The server clamps the grant to the remaining budget; blinds past the
+        // returned signatures will never be signed.
+        for (id, ..) in pending_ops.iter().skip(response.blinded_signatures.len()) {
+            let _ = self.delete_pending_blind(id);
         }
 
         tracing::info!("TokenManager: request_tokens complete, got {} tokens", success_count);
@@ -555,140 +552,14 @@ impl TokenManager {
         Ok(count as u32)
     }
 
-    /// Get current quota status.
-    pub fn get_quota_status(&self) -> Result<QuotaStatus, MailboxError> {
-        tracing::info!("TokenManager: get_quota_status - acquiring connection...");
-        let result: Option<(i64, i64)> = {
-            let conn = self.db.connection().map_err(|e| {
-                tracing::error!("TokenManager: get_quota_status - failed to get connection: {}", e);
-                MailboxError::Storage(e.to_string())
-            })?;
-            tracing::info!("TokenManager: get_quota_status - connection acquired, querying...");
-
-            conn.query_row(
-                "SELECT tokens_used_today, quota_resets_at FROM mailbox_quota WHERE id = 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .ok()
-            // conn is dropped here, releasing the lock
-        };
-        tracing::info!("TokenManager: get_quota_status - query complete, result={:?}", result.is_some());
-
-        match result {
-            Some((used_today, resets_at)) => {
-                // Default quota: 10 tokens per day (typical server limit)
-                let max_quota = 10u32;
-                let remaining = max_quota.saturating_sub(used_today as u32);
-                Ok(QuotaStatus {
-                    remaining,
-                    resets_at: resets_at as u64,
-                })
-            }
-            None => {
-                // No quota record yet - initialize with full quota (nanoseconds)
-                let tomorrow_midnight = self.next_midnight_nanos();
-                tracing::info!("TokenManager: initializing quota...");
-                self.initialize_quota(tomorrow_midnight)?;
-                tracing::info!("TokenManager: quota initialized");
-                Ok(QuotaStatus {
-                    remaining: 10,
-                    resets_at: tomorrow_midnight,
-                })
-            }
-        }
-    }
-
-    /// Reset quota if the reset time has passed.
-    pub fn reset_quota_if_needed(&self) -> Result<(), MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        // quota_resets_at is stored in nanoseconds (per proto spec)
-        let now_nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as i64)
-            .unwrap_or(0);
-
-        let result: Option<i64> = conn
-            .query_row(
-                "SELECT quota_resets_at FROM mailbox_quota WHERE id = 1",
-                [],
-                |row| row.get(0),
-            )
-            .ok();
-
-        if let Some(resets_at) = result {
-            if now_nanos >= resets_at {
-                let tomorrow_midnight = self.next_midnight_nanos();
-                let now = Utc::now().to_rfc3339();
-
-                conn.execute(
-                    "UPDATE mailbox_quota SET tokens_used_today = 0, quota_resets_at = ?1, last_updated = ?2 WHERE id = 1",
-                    rusqlite::params![tomorrow_midnight as i64, now],
-                )
-                .map_err(|e| MailboxError::Storage(e.to_string()))?;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Initialize quota tracking table.
-    fn initialize_quota(&self, resets_at: u64) -> Result<(), MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
-        let now = Utc::now().to_rfc3339();
-
-        conn.execute(
-            "INSERT OR IGNORE INTO mailbox_quota (id, tokens_used_today, quota_resets_at, last_updated)
-             VALUES (1, 0, ?1, ?2)",
-            rusqlite::params![resets_at as i64, now],
-        )
-        .map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        Ok(())
-    }
-
-    /// Update quota from server response.
-    fn update_quota(&self, remaining: u32, resets_at: u64) -> Result<(), MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
-        let now = Utc::now().to_rfc3339();
-
-        // Server returns remaining, we need to store used (10 - remaining for max quota 10)
-        let max_quota = 10u32;
-        let used = max_quota.saturating_sub(remaining);
-
-        conn.execute(
-            "INSERT OR REPLACE INTO mailbox_quota (id, tokens_used_today, quota_resets_at, last_updated)
-             VALUES (1, ?1, ?2, ?3)",
-            rusqlite::params![used as i64, resets_at as i64, now],
-        )
-        .map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        Ok(())
-    }
-
-    /// Calculate next midnight UTC in nanoseconds (consistent with proto spec).
-    fn next_midnight_nanos(&self) -> u64 {
-        use chrono::{Duration, Timelike};
-        let now = Utc::now();
-        let tomorrow = now + Duration::days(1);
-        let midnight = tomorrow
-            .with_hour(0)
-            .and_then(|t| t.with_minute(0))
-            .and_then(|t| t.with_second(0))
-            .and_then(|t| t.with_nanosecond(0))
-            .unwrap_or(tomorrow);
-        midnight.timestamp_nanos_opt().unwrap_or(0) as u64
-    }
-
     // ========================================================================
     // Call Room Token Methods
     // ========================================================================
 
     /// Request new call room tokens from the server.
     ///
-    /// Uses the same blind signature infrastructure as mailbox tokens,
-    /// but with separate storage tables and quota tracking.
+    /// Uses the same blind signature infrastructure and server budget as
+    /// mailbox tokens, with separate storage tables.
     ///
     /// # Arguments
     ///
@@ -705,15 +576,8 @@ impl TokenManager {
     ) -> Result<u32, MailboxError> {
         tracing::info!("TokenManager: request_call_room_tokens called, count={}", count);
 
-        // Check quota
-        self.reset_call_room_quota_if_needed()?;
-        let quota = self.get_call_room_quota_status()?;
-        if quota.remaining == 0 {
-            tracing::warn!("TokenManager: call room quota exhausted!");
-            return Err(MailboxError::QuotaExhausted);
-        }
-
-        let request_count = count.min(quota.remaining);
+        // Same server-owned budget as mailbox tokens; no local gate.
+        let request_count = count;
         tracing::info!("TokenManager: will request {} call room tokens", request_count);
 
         // Get/refresh server key (shared with mailbox tokens)
@@ -760,13 +624,12 @@ impl TokenManager {
         let response = client
             .get_mailbox_tokens(request_count as i32, blinded_keys)
             .await
-            .map_err(|e| {
-                tracing::error!("TokenManager: get_mailbox_tokens (call room) failed: {}", e);
-                MailboxError::Network(e.to_string())
-            })?;
-
-        // Update call room quota
-        self.update_call_room_quota(response.remaining_quota as u32, response.quota_resets_at)?;
+            .map_err(grant_error)?;
+        tracing::info!(
+            "TokenManager: got {} call room signatures, server quota remaining={}",
+            response.blinded_signatures.len(),
+            response.remaining_quota
+        );
 
         // Process each signature
         let mut success_count = 0;
@@ -794,6 +657,10 @@ impl TokenManager {
                     }
                 }
             }
+        }
+
+        for (id, ..) in pending_ops.iter().skip(response.blinded_signatures.len()) {
+            let _ = self.delete_call_room_pending_blind(id);
         }
 
         tracing::info!("TokenManager: request_call_room_tokens complete, got {} tokens", success_count);
@@ -940,106 +807,6 @@ impl TokenManager {
         Ok(count as u32)
     }
 
-    /// Get current call room quota status.
-    pub fn get_call_room_quota_status(&self) -> Result<CallRoomQuotaStatus, MailboxError> {
-        let result: Option<(i64, i64)> = {
-            let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-            conn.query_row(
-                "SELECT tokens_used_today, quota_resets_at FROM call_room_quota WHERE id = 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .ok()
-        };
-
-        match result {
-            Some((used_today, resets_at)) => {
-                // Call room quota: 5 tokens per day
-                let max_quota = 5u32;
-                let remaining = max_quota.saturating_sub(used_today as u32);
-                Ok(CallRoomQuotaStatus {
-                    remaining,
-                    resets_at: resets_at as u64,
-                })
-            }
-            None => {
-                let tomorrow_midnight = self.next_midnight_nanos();
-                self.initialize_call_room_quota(tomorrow_midnight)?;
-                Ok(CallRoomQuotaStatus {
-                    remaining: 5,
-                    resets_at: tomorrow_midnight,
-                })
-            }
-        }
-    }
-
-    /// Reset call room quota if the reset time has passed.
-    pub fn reset_call_room_quota_if_needed(&self) -> Result<(), MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        let now_nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as i64)
-            .unwrap_or(0);
-
-        let result: Option<i64> = conn
-            .query_row(
-                "SELECT quota_resets_at FROM call_room_quota WHERE id = 1",
-                [],
-                |row| row.get(0),
-            )
-            .ok();
-
-        if let Some(resets_at) = result {
-            if now_nanos >= resets_at {
-                let tomorrow_midnight = self.next_midnight_nanos();
-                let now = Utc::now().to_rfc3339();
-
-                conn.execute(
-                    "UPDATE call_room_quota SET tokens_used_today = 0, quota_resets_at = ?1, last_updated = ?2 WHERE id = 1",
-                    rusqlite::params![tomorrow_midnight as i64, now],
-                )
-                .map_err(|e| MailboxError::Storage(e.to_string()))?;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Initialize call room quota tracking.
-    fn initialize_call_room_quota(&self, resets_at: u64) -> Result<(), MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
-        let now = Utc::now().to_rfc3339();
-
-        conn.execute(
-            "INSERT OR IGNORE INTO call_room_quota (id, tokens_used_today, quota_resets_at, last_updated)
-             VALUES (1, 0, ?1, ?2)",
-            rusqlite::params![resets_at as i64, now],
-        )
-        .map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        Ok(())
-    }
-
-    /// Update call room quota from server response.
-    fn update_call_room_quota(&self, remaining: u32, resets_at: u64) -> Result<(), MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
-        let now = Utc::now().to_rfc3339();
-
-        let max_quota = 5u32;
-        let used = max_quota.saturating_sub(remaining);
-
-        conn.execute(
-            "INSERT OR REPLACE INTO call_room_quota (id, tokens_used_today, quota_resets_at, last_updated)
-             VALUES (1, ?1, ?2, ?3)",
-            rusqlite::params![used as i64, resets_at as i64, now],
-        )
-        .map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        Ok(())
-    }
-
     /// Ensure we have enough call room tokens available.
     ///
     /// Requests more tokens if below the minimum threshold.
@@ -1063,13 +830,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_quota_status_structure() {
-        let quota = QuotaStatus {
-            remaining: 5,
-            resets_at: 1234567890000,
-        };
-        assert_eq!(quota.remaining, 5);
-        assert_eq!(quota.resets_at, 1234567890000);
+    fn test_grant_error_maps_exhaustion() {
+        assert!(matches!(
+            grant_error(crate::error::NetworkError::RateLimited),
+            MailboxError::QuotaExhausted
+        ));
+        assert!(matches!(
+            grant_error(crate::error::NetworkError::Unavailable),
+            MailboxError::Network(_)
+        ));
     }
 
     #[test]

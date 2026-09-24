@@ -256,8 +256,12 @@ impl MessageService {
     /// recipient's primary device only. This helper delivers the same
     /// plaintext (sealed-sender encrypted per device) to:
     ///
-    /// * recipient's non-primary devices
+    /// * every recipient device, primary included
     /// * our own linked devices other than this one
+    ///
+    /// Through `deposit_sealed_to_all_devices`, the path 1:1 DMs and channel
+    /// control fanout share, so a device the server has retired gets its
+    /// session archived instead of being encrypted to on every send.
     ///
     /// Failures here do not abort the outer send — the primary device already
     /// got the message via the channel path; sync is best-effort.
@@ -268,7 +272,6 @@ impl MessageService {
         channel_id: &ChannelId,
         plaintext: &[u8],
     ) -> Result<(), MessageError> {
-        use crate::proto::chat_v1::SealedSenderMessage;
         use crate::storage::repositories::settings_repo::keys;
 
         let our_user_id = self.settings_repo
@@ -287,83 +290,25 @@ impl MessageService {
             .find(|m| m.user_id.to_string() != our_user_id)
             .map(|m| m.user_id.to_string());
 
-        let timestamp = crate::util::time::TimestampNanos::now().as_u64();
-        let server_key_id = self.signal_service.get_server_key_id();
-
         // Recipient fanout: EVERY device, including primary. The channel
         // SendMessage stores the sealed copy server-side (history) but delivers
         // it only over the ServerDm stream, which can't decrypt sealed sender —
         // so live delivery for the recipient's primary device must go through
         // the device-inbox path here (the gateway decrypts + stores locally).
         if let Some(rid) = recipient_id {
-            match self.signal_service
-                .encrypt_message_all_devices(auth_client, &rid, plaintext)
-                .await
-            {
-                Ok(ciphertexts) => {
-                    for (device_id, sealed_bytes) in ciphertexts {
-                        let sealed_message = SealedSenderMessage {
-                            sealed_body: sealed_bytes,
-                            server_key_id,
-                            timestamp,
-                        };
-                        if let Err(e) = message_client
-                            .send_sealed_message(&rid, device_id, sealed_message)
-                            .await
-                        {
-                            tracing::warn!(
-                                recipient = %rid,
-                                device_id,
-                                error = %e,
-                                "DM sync: failed to deliver to recipient device"
-                            );
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        recipient = %rid,
-                        error = %e,
-                        "DM sync: failed to encrypt for recipient's other devices"
-                    );
-                }
-            }
+            self.deposit_sealed_to_all_devices(auth_client, message_client, &rid, plaintext, None)
+                .await;
         }
 
         // Self fanout: every own device EXCEPT this one.
-        match self.signal_service
-            .encrypt_message_all_devices(auth_client, &our_user_id, plaintext)
-            .await
-        {
-            Ok(ciphertexts) => {
-                for (device_id, sealed_bytes) in ciphertexts {
-                    if device_id == our_device_id {
-                        continue;
-                    }
-                    let sealed_message = SealedSenderMessage {
-                        sealed_body: sealed_bytes,
-                        server_key_id,
-                        timestamp,
-                    };
-                    if let Err(e) = message_client
-                        .send_sealed_message(&our_user_id, device_id, sealed_message)
-                        .await
-                    {
-                        tracing::warn!(
-                            device_id,
-                            error = %e,
-                            "DM sync: failed to deliver to own other device"
-                        );
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "DM sync: failed to encrypt for our own other devices"
-                );
-            }
-        }
+        self.deposit_sealed_to_all_devices(
+            auth_client,
+            message_client,
+            &our_user_id,
+            plaintext,
+            Some(our_device_id),
+        )
+        .await;
 
         Ok(())
     }
@@ -561,7 +506,9 @@ impl MessageService {
     }
 
     /// Encrypt pre-serialized control content per (member, device) and ship
-    /// each ciphertext through the device inbox with an anonymous credential.
+    /// each ciphertext through the device inbox, UAK-authorized like a 1:1 DM.
+    /// Channel members already know each other, so this spends no anonymous
+    /// mailbox token (OPEN-ITEMS §120).
     ///
     /// Skips our own current device (we already applied the change locally)
     /// but fans to our own linked devices for Signal-style multi-device sync.
@@ -571,7 +518,6 @@ impl MessageService {
         channel_id: &ChannelId,
         plaintext: &[u8],
     ) -> Result<(), MessageError> {
-        use crate::proto::chat_v1::SealedSenderMessage;
         use crate::storage::repositories::settings_repo::keys;
 
         let our_user_id = self.settings_repo
@@ -602,77 +548,26 @@ impl MessageService {
             return Ok(());
         }
 
-        let timestamp = crate::util::time::TimestampNanos::now().as_u64();
-        let server_key_id = self.signal_service.get_server_key_id();
-        let token_manager = self.token_manager.clone();
-        let mut anon_client = self.grpc_pool.anonymous_message_client();
-
-        let mut success = 0u32;
+        let mut message_client = self.message_client();
+        let mut success = 0usize;
         let mut errors = 0u32;
 
         for member_uid in &members {
             let member_id = member_uid.to_string();
             let is_self = member_id == our_user_id;
 
-            let ciphertexts = match self.signal_service
-                .encrypt_message_all_devices(auth_client, &member_id, plaintext)
-                .await
-            {
-                Ok(cts) => cts,
-                Err(e) => {
-                    errors += 1;
-                    tracing::warn!(
-                        channel_id = %channel_id,
-                        member_id = %member_id,
-                        error = %e,
-                        "Failed to encrypt control content for member"
-                    );
-                    continue;
-                }
-            };
-
-            for (device_id, sealed_bytes) in ciphertexts {
-                if is_self && device_id == our_device_id {
-                    continue;
-                }
-
-                let token = match self.get_or_request_token_for_skdm(&token_manager, &member_id).await {
-                    Some(t) => t,
-                    None => {
-                        errors += 1;
-                        continue;
-                    }
-                };
-
-                let sealed_message = SealedSenderMessage {
-                    sealed_body: sealed_bytes,
-                    server_key_id,
-                    timestamp,
-                };
-
-                match anon_client
-                    .send_with_anonymous_credential(
-                        &member_id,
-                        device_id,
-                        sealed_message,
-                        &token.public_key,
-                        &token.signature,
-                        token.randomizer.as_deref(),
-                    )
-                    .await
-                {
-                    Ok(_) => success += 1,
-                    Err(e) => {
-                        errors += 1;
-                        tracing::warn!(
-                            channel_id = %channel_id,
-                            member_id = %member_id,
-                            device_id,
-                            error = %e,
-                            "Failed to deliver control content to device"
-                        );
-                    }
-                }
+            let outcome = self
+                .deposit_sealed_to_all_devices(
+                    auth_client,
+                    &mut message_client,
+                    &member_id,
+                    plaintext,
+                    is_self.then_some(our_device_id),
+                )
+                .await;
+            success += outcome.delivered;
+            if outcome.delivered == 0 && !is_self {
+                errors += 1;
             }
         }
 

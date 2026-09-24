@@ -342,6 +342,10 @@ pub enum SealedSenderResult {
         body: String,
         timestamp: u64,
         attachments: Vec<AttachmentPointer>,
+        /// The message carried a profile key that is new or changed for this
+        /// sender (now stored). Caller emits `InboxEvent::ProfileKeyReceived`
+        /// so the sender's profile is re-fetched, as for the pure handshake.
+        profile_key_changed: bool,
     },
     /// Pure profile-key handshake received: an empty-body, no-attachment
     /// DataMessage sent at friend-accept time (see

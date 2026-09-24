@@ -3,10 +3,8 @@
 //! Sender key distribution, group mailbox announcements, and N-way fanout delivery.
 
 use crate::domain::ids::{ChannelId, UserId};
-use crate::mailbox::TokenManager;
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::message_client::MessageClient;
-use crate::proto::chat_v1::SealedSenderMessage;
 use crate::storage::repositories::settings_repo::keys;
 use crate::util::time::TimestampNanos;
 
@@ -18,11 +16,13 @@ impl MessageService {
     /// Implements NDSS '21 pairwise distribution:
     /// - Each member receives SKDM + our mailbox announcement
     /// - Encrypted pairwise via Double Ratchet (Sealed Sender envelope)
-    /// - Sent to member's device inbox with anonymous credential (server cannot see sender)
+    /// - Deposited in the member's device inboxes UAK-authorized, like a 1:1 DM.
+    ///   Channel members already know each other, so this spends no anonymous
+    ///   mailbox token (OPEN-ITEMS §120).
     pub async fn distribute_sender_key(
         &self,
         auth_client: &mut AuthClient,
-        _message_client: &mut MessageClient,
+        message_client: &mut MessageClient,
         channel_id: &ChannelId,
         skdm: &crate::proto::content_v1::SenderKeyDistribution,
     ) -> Result<(), MessageError> {
@@ -80,99 +80,27 @@ impl MessageService {
 
         let plaintext = skdm_content.encode_to_vec();
 
-        // Use shared token manager for anonymous credential sending
-        let token_manager = self.token_manager.clone();
-
-        // Distribute to each member pairwise via Sealed Sender with anonymous credential
+        // Distribute to each member's devices pairwise via Sealed Sender.
         let mut success_count = 0;
         let mut error_count = 0;
 
         for member_id in &fanout_user_ids {
             let is_self = member_id == &our_user_id;
 
-            // Encrypt sealed-sender SKDM for every device this user has.
-            // Sender keys are per (user, device) so each device needs its own
-            // ciphertext — a single "device=0 broadcast" ciphertext is only
-            // decryptable by the device it was encrypted for.
-            let ciphertexts = match self.signal_service
-                .encrypt_message_all_devices(auth_client, member_id, &plaintext)
-                .await
-            {
-                Ok(map) => map,
-                Err(e) => {
-                    error_count += 1;
-                    tracing::warn!(
-                        channel_id = %channel_id,
-                        member_id = %member_id,
-                        error = %e,
-                        "Failed to encrypt SKDM for member"
-                    );
-                    continue;
-                }
-            };
-
-            for (device_id, sealed_bytes) in ciphertexts {
-                // Skip our own current device — it already holds the sender key.
-                if is_self && device_id == our_device_id {
-                    continue;
-                }
-
-                let token = self.get_or_request_token_for_skdm(&token_manager, member_id).await;
-                let token = match token {
-                    Some(t) => t,
-                    None => {
-                        error_count += 1;
-                        tracing::warn!(
-                            channel_id = %channel_id,
-                            member_id = %member_id,
-                            device_id,
-                            "No anonymous tokens available for SKDM distribution"
-                        );
-                        continue;
-                    }
-                };
-
-                let sealed_message = SealedSenderMessage {
-                    sealed_body: sealed_bytes,
-                    server_key_id: self.signal_service.get_server_key_id(),
-                    timestamp,
-                };
-
-                // Anonymous client avoids multi-auth rejection (GRA-434).
-                let mut anon_client = self.grpc_pool.anonymous_message_client();
-
-                match anon_client
-                    .send_with_anonymous_credential(
-                        member_id,
-                        device_id,
-                        sealed_message,
-                        &token.public_key,
-                        &token.signature,
-                        token.randomizer.as_deref(),
-                    )
-                    .await
-                {
-                    Ok(_) => {
-                        success_count += 1;
-                        tracing::debug!(
-                            channel_id = %channel_id,
-                            member_id = %member_id,
-                            device_id,
-                            is_self,
-                            "Distributed SKDM to device via sealed sender"
-                        );
-                    }
-                    Err(e) => {
-                        error_count += 1;
-                        tracing::warn!(
-                            channel_id = %channel_id,
-                            member_id = %member_id,
-                            device_id,
-                            error = %e,
-                            "Failed to send SKDM to device"
-                        );
-                    }
-                }
+            // Sender keys are per (user, device), so every device gets its own
+            // ciphertext. Our own current device already holds the sender key.
+            let outcome = self
+                .deposit_sealed_to_all_devices(
+                    auth_client,
+                    message_client,
+                    member_id,
+                    &plaintext,
+                    is_self.then_some(our_device_id),
+                )
+                .await;
+            success_count += outcome.delivered;
+            if outcome.delivered == 0 && !is_self {
+                error_count += 1;
             }
         }
 
@@ -480,71 +408,14 @@ impl MessageService {
         let plaintext = skdm_content.encode_to_vec();
         let member_id_str = member_id.to_string();
 
-        // Encrypt per-device for the new member. Sender keys are keyed by
-        // (user, device); a single ciphertext only decrypts on the device it
-        // was encrypted for.
-        let ciphertexts = self.signal_service
-            .encrypt_message_all_devices(&mut auth_client, &member_id_str, &plaintext)
-            .await
-            .map_err(|e| MessageError::EncryptionFailed(format!("Failed to encrypt SKDM: {}", e)))?;
+        // Per-device sealed deposit, UAK-authorized: sender keys are keyed by
+        // (user, device), so each device needs its own ciphertext.
+        let mut message_client = self.message_client();
+        let outcome = self
+            .deposit_sealed_to_all_devices(&mut auth_client, &mut message_client, &member_id_str, &plaintext, None)
+            .await;
 
-        let database = self.settings_repo.database().clone();
-        let token_manager = TokenManager::new(database);
-        let server_key_id = self.signal_service.get_server_key_id();
-        let mut anon_client = self.grpc_pool.anonymous_message_client();
-
-        let mut any_sent = false;
-        for (device_id, sealed_bytes) in ciphertexts {
-            let token = match self.get_or_request_token_for_skdm(&token_manager, &member_id_str).await {
-                Some(t) => t,
-                None => {
-                    tracing::warn!(
-                        channel_id = %channel_id,
-                        member_id = %member_id,
-                        device_id,
-                        "No anonymous tokens available for SKDM to device"
-                    );
-                    continue;
-                }
-            };
-
-            let sealed_message = SealedSenderMessage {
-                sealed_body: sealed_bytes,
-                server_key_id,
-                timestamp,
-            };
-
-            match anon_client
-                .send_with_anonymous_credential(
-                    &member_id_str,
-                    device_id,
-                    sealed_message,
-                    &token.public_key,
-                    &token.signature,
-                    token.randomizer.as_deref(),
-                )
-                .await
-            {
-                Ok(_) => {
-                    any_sent = true;
-                    tracing::debug!(
-                        channel_id = %channel_id,
-                        member_id = %member_id,
-                        device_id,
-                        "Sent SKDM to new member device"
-                    );
-                }
-                Err(e) => tracing::warn!(
-                    channel_id = %channel_id,
-                    member_id = %member_id,
-                    device_id,
-                    error = %e,
-                    "Failed to send SKDM to new member device"
-                ),
-            }
-        }
-
-        if !any_sent {
+        if outcome.delivered == 0 {
             return Err(MessageError::EncryptionFailed(
                 "SKDM delivery to new member failed on every device".into()
             ));
@@ -553,7 +424,7 @@ impl MessageService {
         tracing::info!(
             channel_id = %channel_id,
             member_id = %member_id,
-            "Sent SKDM to new channel member via sealed sender with credential"
+            "Sent SKDM to new channel member via sealed sender"
         );
 
         Ok(())
@@ -610,70 +481,14 @@ impl MessageService {
         let plaintext = content.encode_to_vec();
         let target_id_str = target_user_id.to_string();
 
-        // Encrypt sealed-sender per device (pairwise sender keys are per
+        // Sealed per device, UAK-authorized (pairwise sender keys are per
         // (user, device); we need a distinct envelope for each).
-        let ciphertexts = self.signal_service
-            .encrypt_message_all_devices(&mut auth_client, &target_id_str, &plaintext)
-            .await
-            .map_err(|e| MessageError::EncryptionFailed(format!("Failed to encrypt sender key request: {}", e)))?;
+        let mut message_client = self.message_client();
+        let outcome = self
+            .deposit_sealed_to_all_devices(&mut auth_client, &mut message_client, &target_id_str, &plaintext, None)
+            .await;
 
-        let database = self.settings_repo.database().clone();
-        let token_manager = TokenManager::new(database);
-        let server_key_id = self.signal_service.get_server_key_id();
-        let mut anon_client = self.grpc_pool.anonymous_message_client();
-
-        let mut any_sent = false;
-        for (device_id, sealed_bytes) in ciphertexts {
-            let token = match self.get_or_request_token_for_skdm(&token_manager, &target_id_str).await {
-                Some(t) => t,
-                None => {
-                    tracing::warn!(
-                        channel_id = %channel_id,
-                        target_user_id = %target_user_id,
-                        device_id,
-                        "No anonymous tokens available for sender key request"
-                    );
-                    continue;
-                }
-            };
-
-            let sealed_message = SealedSenderMessage {
-                sealed_body: sealed_bytes,
-                server_key_id,
-                timestamp,
-            };
-
-            match anon_client
-                .send_with_anonymous_credential(
-                    &target_id_str,
-                    device_id,
-                    sealed_message,
-                    &token.public_key,
-                    &token.signature,
-                    token.randomizer.as_deref(),
-                )
-                .await
-            {
-                Ok(_) => {
-                    any_sent = true;
-                    tracing::debug!(
-                        channel_id = %channel_id,
-                        target_user_id = %target_user_id,
-                        device_id,
-                        "Sent SenderKeyRequest to device"
-                    );
-                }
-                Err(e) => tracing::warn!(
-                    channel_id = %channel_id,
-                    target_user_id = %target_user_id,
-                    device_id,
-                    error = %e,
-                    "Failed to send SenderKeyRequest to device"
-                ),
-            }
-        }
-
-        if !any_sent {
+        if outcome.delivered == 0 {
             return Err(MessageError::EncryptionFailed(
                 "SenderKeyRequest failed to reach any target device".into()
             ));
@@ -720,49 +535,6 @@ impl MessageService {
         // If we undershot by 1 due to varint boundary, add back
         while content.encoded_len() < target {
             content.padding.push(0);
-        }
-    }
-
-    /// Atomically claim an anonymous token for an SKDM/sender-key send, or
-    /// request new tokens from the server if the local cache is empty.
-    ///
-    /// Uses `claim_available_token` so the token is marked used in the same
-    /// SQL statement — two concurrent sends can never present the same
-    /// public key to the server (which rejects repeats with
-    /// `permission_denied: credential already used`).
-    pub(super) async fn get_or_request_token_for_skdm(
-        &self,
-        token_manager: &TokenManager,
-        recipient_id: &str,
-    ) -> Option<crate::mailbox::MailboxToken> {
-        match token_manager.claim_available_token() {
-            Ok(Some(t)) => Some(t),
-            Ok(None) => {
-                tracing::info!(
-                    recipient_id = %recipient_id,
-                    "No tokens for SKDM send, requesting from server"
-                );
-                let mut mailbox_client = self.grpc_pool.mailbox_client();
-                match token_manager.request_tokens(&mut mailbox_client, 5).await {
-                    Ok(_) => token_manager.claim_available_token().ok().flatten(),
-                    Err(e) => {
-                        tracing::warn!(
-                            recipient_id = %recipient_id,
-                            error = %e,
-                            "Failed to request anonymous tokens for SKDM"
-                        );
-                        None
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    recipient_id = %recipient_id,
-                    error = %e,
-                    "Failed to claim token for SKDM"
-                );
-                None
-            }
         }
     }
 }

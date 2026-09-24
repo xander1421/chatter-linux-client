@@ -62,7 +62,7 @@ const UI_CHANNEL_CAPACITY: usize = 32;
 /// let mut ui_rx = bus.subscribe_ui();
 ///
 /// // Emit events
-/// bus.emit_domain(DomainEvent::TypingStarted { user_id, channel_id });
+/// bus.emit_domain(DomainEvent::TypingStarted { user_id, channel_id, timestamp: 0 });
 /// bus.emit_ui(UiEvent::ChannelSelected { channel_id });
 ///
 /// // Or get the sender for use in other components
@@ -214,6 +214,7 @@ mod tests {
         let count = bus.emit_domain(DomainEvent::TypingStarted {
             user_id,
             channel_id,
+            timestamp: 0,
         });
         assert_eq!(count, 1);
 
@@ -221,6 +222,7 @@ mod tests {
         if let DomainEvent::TypingStarted {
             user_id: u,
             channel_id: c,
+            ..
         } = event
         {
             assert_eq!(u, user_id);
@@ -262,6 +264,7 @@ mod tests {
         bus.emit_domain(DomainEvent::TypingStarted {
             user_id,
             channel_id,
+            timestamp: 0,
         });
 
         // Both subscribers receive the event
@@ -281,6 +284,7 @@ mod tests {
         let count = bus.emit_domain(DomainEvent::TypingStarted {
             user_id,
             channel_id,
+            timestamp: 0,
         });
         assert_eq!(count, 0);
     }
@@ -298,6 +302,7 @@ mod tests {
         let _ = tx.send(DomainEvent::TypingStarted {
             user_id,
             channel_id,
+            timestamp: 0,
         });
 
         let event = rx.recv().await.unwrap();
@@ -405,6 +410,7 @@ mod tests {
         let receivers = tx.send(DomainEvent::TypingStarted {
             user_id,
             channel_id,
+            timestamp: 0,
         }).expect("send should succeed");
 
         assert_eq!(receivers, 1, "Should have one receiver");

@@ -133,6 +133,7 @@ async fn test_handler_survives_broadcast_lag_and_receives_next_event() {
         let _ = tx.send(DomainEvent::TypingStarted {
             user_id: UserId::new(),
             channel_id: ChannelId::new(),
+            timestamp: 0,
         });
     }
 
@@ -186,6 +187,7 @@ async fn test_while_let_ok_pattern_exits_on_lag() {
         let _ = tx.send(DomainEvent::TypingStarted {
             user_id: UserId::new(),
             channel_id: ChannelId::new(),
+            timestamp: 0,
         });
     }
 

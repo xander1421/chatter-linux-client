@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::Mutex;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
@@ -43,15 +44,59 @@ impl Drop for State {
     }
 }
 
+/// FIFO of typing sends. Every STARTED/STOPPED goes through one sender task,
+/// so they leave in the order the state machine decided them. Separate
+/// `tokio::spawn`s per send raced: a STOPPED could reach the peer before the
+/// STARTED it ends and leave them showing "typing" until their 15s timeout.
+///
+/// Enqueue happens under the state lock (see callers), so queue order is
+/// state order even when the refresh / pause timers race each other.
+///
+/// ponytail: one queue for all conversations, so a slow send delays the next
+/// conversation's too. Typing runs in one conversation at a time; go
+/// per-conversation if that stops being true.
+#[derive(Clone)]
+struct SendQueue {
+    tx: mpsc::UnboundedSender<(ConversationHandle, bool)>,
+    /// Taken by the first send, which starts the worker — `new()` may run
+    /// outside a tokio runtime, `send` never does (callers already spawn).
+    rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<(ConversationHandle, bool)>>>>,
+}
+
+impl SendQueue {
+    fn new() -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
+        Self { tx, rx: Arc::new(Mutex::new(Some(rx))) }
+    }
+
+    fn send(&self, handle: ConversationHandle, started: bool) {
+        if let Some(mut rx) = self.rx.lock().take() {
+            tokio::spawn(async move {
+                while let Some((handle, started)) = rx.recv().await {
+                    let _ = handle.send_typing(started).await;
+                }
+            });
+        }
+        let _ = self.tx.send((handle, started));
+    }
+}
+
 /// Per-client outgoing typing state manager. Clone is cheap (inner Arc).
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct OutgoingTypingManager {
     state: Arc<Mutex<Option<State>>>,
+    queue: SendQueue,
+}
+
+impl Default for OutgoingTypingManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl OutgoingTypingManager {
     pub fn new() -> Self {
-        Self { state: Arc::new(Mutex::new(None)) }
+        Self { state: Arc::new(Mutex::new(None)), queue: SendQueue::new() }
     }
 
     /// Keystroke arrived — ensure we're typing in `handle.conversation()`.
@@ -73,22 +118,18 @@ impl OutgoingTypingManager {
                 // Conversation switched — send STOPPED for the old one.
                 let old_conversation = old.conversation.clone();
                 drop(old); // aborts old tasks
-                let handle_stop = handle_for_conversation(&handle, &old_conversation);
-                tokio::spawn(async move {
-                    if let Some(h) = handle_stop {
-                        let _ = h.send_typing(false).await;
-                    }
-                });
+                self.queue.send(handle.for_conversation(old_conversation), false);
             }
 
             // Send initial STARTED.
-            let handle_start = handle.clone();
-            tokio::spawn(async move {
-                let _ = handle_start.send_typing(true).await;
-            });
+            self.queue.send(handle.clone(), true);
 
-            let refresh_task = spawn_refresh(handle.clone());
-            let pause_task = spawn_pause(handle.clone(), self.state.clone(), conversation.clone());
+            let refresh_task = spawn_refresh(
+                handle.clone(), self.state.clone(), conversation.clone(), self.queue.clone(),
+            );
+            let pause_task = spawn_pause(
+                handle.clone(), self.state.clone(), conversation.clone(), self.queue.clone(),
+            );
             *guard = Some(State {
                 conversation,
                 refresh_task,
@@ -104,34 +145,45 @@ impl OutgoingTypingManager {
             }
             state.last_bump = now;
             state.pause_task.abort();
-            state.pause_task =
-                spawn_pause(handle.clone(), self.state.clone(), state.conversation.clone());
+            state.pause_task = spawn_pause(
+                handle.clone(), self.state.clone(), state.conversation.clone(), self.queue.clone(),
+            );
         }
     }
 
     /// User explicitly stopped typing (e.g. compose cleared, message sent).
     /// Aborts timers and sends STOPPED. No-op if already idle.
     pub fn clear(&self, handle_resolver: impl FnOnce(&ActiveConversation) -> Option<ConversationHandle>) {
-        let taken = self.state.lock().take();
-        let Some(state) = taken else { return };
+        let mut guard = self.state.lock();
+        let Some(state) = guard.take() else { return };
         let conversation = state.conversation.clone();
         drop(state); // aborts tasks
         if let Some(handle) = handle_resolver(&conversation) {
-            tokio::spawn(async move {
-                let _ = handle.send_typing(false).await;
-            });
+            self.queue.send(handle, false);
         }
     }
 }
 
-fn spawn_refresh(handle: ConversationHandle) -> JoinHandle<()> {
+fn spawn_refresh(
+    handle: ConversationHandle,
+    state: Arc<Mutex<Option<State>>>,
+    conversation: ActiveConversation,
+    queue: SendQueue,
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(TYPING_REFRESH_MS));
         // First tick fires immediately — skip, the bump() path already sent STARTED.
         interval.tick().await;
         loop {
             interval.tick().await;
-            let _ = handle.send_typing(true).await;
+            // Re-check under the lock: abort only lands at an await, so a
+            // refresh racing the pause timer's STOPPED must not enqueue a
+            // STARTED after it.
+            let guard = state.lock();
+            match &*guard {
+                Some(s) if s.conversation == conversation => queue.send(handle.clone(), true),
+                _ => return,
+            }
         }
     })
 }
@@ -140,35 +192,18 @@ fn spawn_pause(
     handle: ConversationHandle,
     state: Arc<Mutex<Option<State>>>,
     conversation: ActiveConversation,
+    queue: SendQueue,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(TYPING_PAUSE_MS)).await;
         // Only clear + send STOPPED if our conversation still owns the slot.
-        let taken = {
-            let mut guard = state.lock();
-            match &*guard {
-                Some(s) if s.conversation == conversation => guard.take(),
-                _ => None,
-            }
-        };
-        if taken.is_some() {
-            let _ = handle.send_typing(false).await;
+        let mut guard = state.lock();
+        let owns = matches!(&*guard, Some(s) if s.conversation == conversation);
+        if owns {
+            let taken = guard.take();
+            queue.send(handle, false);
+            drop(guard);
+            drop(taken); // aborts the timers — may include this task; already done
         }
     })
-}
-
-/// Rebuild a `ConversationHandle` for a (possibly stale) active conversation.
-/// Returns `None` if the source handle is for a different conversation and
-/// we can't reconstruct one — caller will skip the STOPPED send.
-fn handle_for_conversation(
-    current: &ConversationHandle,
-    target: &ActiveConversation,
-) -> Option<ConversationHandle> {
-    if current.conversation() == target {
-        Some(current.clone())
-    } else {
-        // We don't have access to ChatterClient here to rebuild; caller in
-        // ChatterClient::typing_clear will pass a resolver for precisely this.
-        None
-    }
 }

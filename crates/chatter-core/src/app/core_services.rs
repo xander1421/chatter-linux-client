@@ -284,68 +284,24 @@ impl CoreServices {
         }
     }
 
-    /// Fetch trending GIFs using an anonymous token if available.
+    /// Fetch trending GIFs.
     ///
-    /// Handles the full token lifecycle: acquire → set anonymous auth → request → mark used → restore.
+    /// Plain Basic-auth RPC: GifService has no anonymous-credential path on the
+    /// server, so a mailbox token here bought nothing and burned the daily
+    /// budget (OPEN-ITEMS §120).
     pub async fn trending_gifs(&self, limit: u32) -> Vec<crate::proto::chat_v1::GifResult> {
-        let mut client = match self.gif_client() {
-            Some(c) => c,
-            None => return Vec::new(),
-        };
-
-        let token = self.token_manager.claim_available_token().ok().flatten();
-        let unblinded = token.as_ref().map(|t| crate::mailbox::blind_signature::UnblindedToken {
-            public_key: t.public_key.clone(),
-            signature: t.signature.clone(),
-            created_at: 0,
-        });
-
-        let interceptor = self.grpc_pool.auth_clone();
-        let old_mode = interceptor.current_mode();
-        if let Some(ref t) = unblinded {
-            interceptor.set_anonymous(t.clone());
+        match self.gif_client() {
+            Some(mut client) => client.trending(limit as i32).await.unwrap_or_default(),
+            None => Vec::new(),
         }
-
-        let result = match client.trending(limit as i32, unblinded).await {
-            Ok(results) => results,
-            Err(_) => Vec::new(),
-        };
-        let _ = token;
-
-        interceptor.set_mode(old_mode);
-        result
     }
 
-    /// Search GIFs using an anonymous token if available.
-    ///
-    /// Handles the full token lifecycle: acquire → set anonymous auth → request → mark used → restore.
+    /// Search GIFs. Basic-auth, no mailbox token — see [`Self::trending_gifs`].
     pub async fn search_gifs(&self, query: &str, limit: u32) -> Vec<crate::proto::chat_v1::GifResult> {
-        let mut client = match self.gif_client() {
-            Some(c) => c,
-            None => return Vec::new(),
-        };
-
-        let token = self.token_manager.claim_available_token().ok().flatten();
-        let unblinded = token.as_ref().map(|t| crate::mailbox::blind_signature::UnblindedToken {
-            public_key: t.public_key.clone(),
-            signature: t.signature.clone(),
-            created_at: 0,
-        });
-
-        let interceptor = self.grpc_pool.auth_clone();
-        let old_mode = interceptor.current_mode();
-        if let Some(ref t) = unblinded {
-            interceptor.set_anonymous(t.clone());
+        match self.gif_client() {
+            Some(mut client) => client.search(query, limit as i32).await.unwrap_or_default(),
+            None => Vec::new(),
         }
-
-        let result = match client.search(query, limit as i32, unblinded).await {
-            Ok(results) => results,
-            Err(_) => Vec::new(),
-        };
-        let _ = token;
-
-        interceptor.set_mode(old_mode);
-        result
     }
 
     /// Pre-fetch anonymous tokens for sealed sender messaging.

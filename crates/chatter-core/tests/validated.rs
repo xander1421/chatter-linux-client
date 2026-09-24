@@ -5738,8 +5738,8 @@ async fn v21_group_sender_key_fanout_and_plaintext_default() {
          {CONDITION_TIMEOUT:?}. \
          Without the sender key, B and C can never decrypt A's group messages. \
          Diagnosis: message/group.rs `distribute_sender_key` fans the SKDM to every member \
-         via `encrypt_message_all_devices` + `send_with_anonymous_credential`; a failure \
-         here is a bundle-fetch or anonymous-credential problem, NOT the SENDERKEY_MESSAGE \
+         via `deposit_sealed_to_all_devices` (sealed, UAK-authorized); a failure \
+         here is a bundle-fetch or UAK-deposit problem, NOT the SENDERKEY_MESSAGE \
          path itself."
     );
     println!("  warm-up: B and C have INSTALLED A's sender key (SKDM delivered AND processed)");

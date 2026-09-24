@@ -240,16 +240,23 @@ impl EventHandlers {
             DomainEvent::TypingStarted {
                 user_id,
                 channel_id,
+                timestamp,
             } => {
-                trace!(?channel_id, ?user_id, "Adding typing user to state");
-                self.add_typing_user(channel_id, user_id);
+                if self.chat_state.accept_typing(channel_id, user_id, timestamp, true) {
+                    trace!(?channel_id, ?user_id, "Adding typing user to state");
+                    self.add_typing_user(channel_id, user_id);
+                } else {
+                    trace!(?channel_id, ?user_id, "Ignoring STARTED older than its STOPPED");
+                }
             }
 
             DomainEvent::TypingStopped {
                 user_id,
                 channel_id,
+                timestamp,
             } => {
                 trace!(?channel_id, ?user_id, "Removing typing user from state");
+                self.chat_state.accept_typing(channel_id, user_id, timestamp, false);
                 self.remove_typing_user(channel_id, user_id);
             }
 
@@ -1133,6 +1140,7 @@ mod tests {
         handlers.handle_domain_event(DomainEvent::TypingStarted {
             user_id,
             channel_id,
+            timestamp: 0,
         });
 
         let typers = handlers.chat_state.get_typing_users(&channel_id);
@@ -1150,6 +1158,7 @@ mod tests {
         handlers.handle_domain_event(DomainEvent::TypingStarted {
             user_id,
             channel_id,
+            timestamp: 0,
         });
         assert_eq!(
             handlers.chat_state.get_typing_users(&channel_id).len(),
@@ -1160,6 +1169,7 @@ mod tests {
         handlers.handle_domain_event(DomainEvent::TypingStopped {
             user_id,
             channel_id,
+            timestamp: 0,
         });
         assert!(handlers
             .chat_state
@@ -1177,10 +1187,12 @@ mod tests {
         handlers.handle_domain_event(DomainEvent::TypingStarted {
             user_id: user1,
             channel_id,
+            timestamp: 0,
         });
         handlers.handle_domain_event(DomainEvent::TypingStarted {
             user_id: user2,
             channel_id,
+            timestamp: 0,
         });
 
         let typers = handlers.chat_state.get_typing_users(&channel_id);
@@ -1192,6 +1204,7 @@ mod tests {
         handlers.handle_domain_event(DomainEvent::TypingStopped {
             user_id: user1,
             channel_id,
+            timestamp: 0,
         });
 
         let typers = handlers.chat_state.get_typing_users(&channel_id);
@@ -1210,10 +1223,12 @@ mod tests {
         handlers.handle_domain_event(DomainEvent::TypingStarted {
             user_id,
             channel_id,
+            timestamp: 0,
         });
         handlers.handle_domain_event(DomainEvent::TypingStarted {
             user_id,
             channel_id,
+            timestamp: 0,
         });
 
         let typers = handlers.chat_state.get_typing_users(&channel_id);

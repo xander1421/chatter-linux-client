@@ -491,6 +491,12 @@ impl ChatterClient {
 
         let username = self.svr_salt_username()?;
         let username = username.as_str();
+        // The handle the re-encrypted backup carries, so a restore after this
+        // PIN change still recovers it (§117).
+        let full_username = self
+            .svr_backup()
+            .local_full_username()
+            .map_err(|e| ClientError::Validation(e.to_string()))?;
 
         // 2. Get identity keypair from signal store (private 32 bytes + public 33 bytes)
         let mut private_bytes = self.signal().actor.get_identity_private_key().await
@@ -566,6 +572,7 @@ impl ChatterClient {
                 &new_svr_secret,
                 &identity_keypair,
                 &profile_key,
+                &full_username,
                 &new_reg_lock,
                 &new_svr_public_key,
             )
@@ -584,7 +591,7 @@ impl ChatterClient {
                     Ok(false) => {
                         tracing::info!("No existing SVR backup found, creating new backup with new PIN");
                         self.svr_backup()
-                            .create_and_upload_backup(&new_svr_secret, &identity_keypair, &profile_key)
+                            .create_and_upload_backup(&new_svr_secret, &identity_keypair, &profile_key, &full_username)
                             .await
                             .map(|_| ())
                     }
@@ -784,7 +791,18 @@ impl ChatterClient {
             return;
         }
 
-        // 6. Zeroize sensitive intermediates
+        // 6. Hydrate the account handle. It was written only at registration,
+        //    so a reinstall had none and showed no username (§117). Keys are
+        //    already restored, so a failure here does not undo them.
+        if let Err(e) = self
+            .signal()
+            .settings_repo
+            .set_string(keys::FULL_USERNAME, &restore_result.full_username)
+        {
+            tracing::warn!("SVR restore: failed to store username: {}", e);
+        }
+
+        // 7. Zeroize sensitive intermediates
         restored_keypair.zeroize();
         restored_profile_key.zeroize();
 

@@ -106,6 +106,8 @@ pub enum InboxEvent {
         peer_id: UserId,
         /// Typing action: 1=Started, 2=Stopped.
         action: i32,
+        /// Sender's TypingMessage.timestamp (ns).
+        timestamp: u64,
     },
     /// Read/delivery receipt received.
     DmReceipt {
@@ -202,6 +204,8 @@ pub enum InboxEvent {
         sender_id: UserId,
         /// Typing action: 1=Started, 2=Stopped.
         action: i32,
+        /// Sender's TypingMessage.timestamp (ns).
+        timestamp: u64,
     },
     /// Reaction received from channel member.
     ChannelReaction {

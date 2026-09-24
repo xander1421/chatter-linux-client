@@ -171,6 +171,11 @@ impl MessageGateway {
         // receiver's local conversation_id matches "the other party", same
         // as the sender's own outgoing row (keyed by the recipient peer_id).
         // A non-empty channel_id is a group/sender-key message.
+        // Set when this message brought a profile key we did not have (or a
+        // rotated one): the caller then refreshes the sender's profile, as the
+        // pure handshake below does, so their real name replaces the fallback
+        // without a restart.
+        let mut profile_key_changed = false;
         let (channel_id, conversation_type): (ChannelId, ConversationType) =
             if data_message.channel_id.is_empty() {
                 let sid = sender_id.ok_or_else(|| {
@@ -186,10 +191,11 @@ impl MessageGateway {
                     if key.len() == 32 {
                         if let Ok(current_user) = self.settings_repo.current_user_id() {
                             let key_array: [u8; 32] = key.as_slice().try_into().expect("len checked == 32");
-                            if let Err(e) =
-                                self.user_repo.set_friend_profile_key(&current_user, &sid, &key_array)
-                            {
-                                tracing::debug!(sender_id = %sid, error = %e, "DM: failed to store sender profile key");
+                            match self.user_repo.set_friend_profile_key(&current_user, &sid, &key_array) {
+                                Ok(changed) => profile_key_changed = changed,
+                                Err(e) => {
+                                    tracing::debug!(sender_id = %sid, error = %e, "DM: failed to store sender profile key");
+                                }
                             }
                         }
                     }
@@ -335,6 +341,7 @@ impl MessageGateway {
             body: data_message.body,
             timestamp: data_message.timestamp,
             attachments: data_message.attachments,
+            profile_key_changed,
         })
     }
 
@@ -466,6 +473,7 @@ impl MessageGateway {
             body: data_message.body,
             timestamp: data_message.timestamp,
             attachments: data_message.attachments,
+            profile_key_changed: false,
         })
     }
 

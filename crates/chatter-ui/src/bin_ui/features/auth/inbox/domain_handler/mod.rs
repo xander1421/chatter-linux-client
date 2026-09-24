@@ -123,20 +123,24 @@ pub async fn handle_domain_event(
         // =========================================================================
         // Typing Indicators (pass-through / no-op)
         // =========================================================================
-        DomainEvent::TypingStarted { user_id: _, channel_id } => {
+        DomainEvent::TypingStarted { user_id, channel_id, timestamp } => {
             super::unified_actions::handle_typing(
                 window,
                 ui_ctx.chat_state(),
                 super::unified_actions::EventSource::Channel(channel_id),
+                user_id,
+                timestamp,
                 true,
             );
         }
 
-        DomainEvent::TypingStopped { user_id: _, channel_id } => {
+        DomainEvent::TypingStopped { user_id, channel_id, timestamp } => {
             super::unified_actions::handle_typing(
                 window,
                 ui_ctx.chat_state(),
                 super::unified_actions::EventSource::Channel(channel_id),
+                user_id,
+                timestamp,
                 false,
             );
         }

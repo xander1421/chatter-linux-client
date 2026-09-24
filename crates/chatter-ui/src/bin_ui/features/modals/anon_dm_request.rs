@@ -443,11 +443,11 @@ fn spawn_action_stream(
                 // =============================================================
                 // Anonymous DM Action Events (typing, reactions, pins, etc.)
                 // =============================================================
-                chatter_core::inbox::DomainEvent::TypingStarted { channel_id, user_id: _ } => {
-                    unified_actions::handle_typing(&weak_window, &chat_state, EventSource::Channel(channel_id), true);
+                chatter_core::inbox::DomainEvent::TypingStarted { channel_id, user_id, timestamp } => {
+                    unified_actions::handle_typing(&weak_window, &chat_state, EventSource::Channel(channel_id), user_id, timestamp, true);
                 }
-                chatter_core::inbox::DomainEvent::TypingStopped { channel_id, user_id: _ } => {
-                    unified_actions::handle_typing(&weak_window, &chat_state, EventSource::Channel(channel_id), false);
+                chatter_core::inbox::DomainEvent::TypingStopped { channel_id, user_id, timestamp } => {
+                    unified_actions::handle_typing(&weak_window, &chat_state, EventSource::Channel(channel_id), user_id, timestamp, false);
                 }
                 // ReactionAdded/ReactionRemoved are handled by domain_handler::handle_reaction_update
                 // (which handles all conversation types). Handling them here too caused double-counting.

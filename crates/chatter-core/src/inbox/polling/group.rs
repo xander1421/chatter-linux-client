@@ -293,6 +293,7 @@ async fn process_sealed_sender_group_message(
             body,
             timestamp,
             attachments,
+            ..
         } => {
             // Increment unread count
             if let Ok(new_count) = channel_repo.increment_unread_count(&channel_id) {

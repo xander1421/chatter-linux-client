@@ -106,6 +106,12 @@ pub(super) fn handle_message_received(
         });
     }
 
+    // The message ends its sender's typing: record it so a STARTED sent before
+    // it but delivered after it is dropped rather than shown.
+    if let Some(sid) = sender_id {
+        ui_ctx.chat_state().accept_typing(conversation_id, sid, timestamp, false);
+    }
+
     let weak = window.clone();
     let ui_ctx_ui = ui_ctx.clone();
     let peer_id_opt = sender_id;
@@ -122,10 +128,10 @@ pub(super) fn handle_message_received(
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
 
-        // Clear typing indicator for sender
-        if let Some(sid) = peer_id_opt {
-            super::super::typing::clear_typing_for_peer(&w, &sid.to_string());
-        }
+        // A message ends its sender's typing. Keyed by conversation, like the
+        // typing state itself: the sender's id matched only for DMs, so in a
+        // channel the indicator outlived the message it announced.
+        super::super::typing::clear_typing_for_peer(&w, &conversation_id.to_string(), is_active);
 
         if let Some(root_id) = thread_root {
             if is_active {

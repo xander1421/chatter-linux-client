@@ -44,6 +44,10 @@ pub enum AuthError {
     #[error("registration failed: {0}")]
     RegistrationFailed(String),
 
+    /// Login failed for a reason other than bad credentials or the network.
+    #[error("login failed: {0}")]
+    LoginFailed(String),
+
     /// Network operation failed.
     #[error("network error: {0}")]
     Network(#[from] NetworkError),
@@ -361,14 +365,14 @@ impl AuthService {
             // split exists to prevent (§10). A weak legacy PIN's cost is
             // already paid; refusing the login only denies the owner.
             crate::crypto::svr::validate_pin_shape(p).map_err(|e| {
-                AuthError::RegistrationFailed(format!("invalid PIN: {e}"))
+                AuthError::LoginFailed(format!("invalid PIN: {e}"))
             })?;
             let secret = crate::crypto::svr::derive_svr_secret_async(p, username).await?;
             let keypair = crate::crypto::svr::SvrKeypair::from_secret(&secret);
             svr_secret = secret;
             keypair.public_key_bytes().to_vec()
         } else {
-            return Err(AuthError::RegistrationFailed("PIN is required for account recovery".to_string()));
+            return Err(AuthError::LoginFailed("PIN is required for account recovery".to_string()));
         };
 
         // Load the local identity key pair — and DO NOT create one if it is
@@ -430,14 +434,14 @@ impl AuthService {
 
         // Extract session and user profile
         let session = response.session.ok_or_else(|| {
-            AuthError::RegistrationFailed("no session returned".to_string())
+            AuthError::LoginFailed("no session returned".to_string())
         })?;
         let user_profile = response.user_profile.ok_or_else(|| {
-            AuthError::RegistrationFailed("no user_profile returned".to_string())
+            AuthError::LoginFailed("no user_profile returned".to_string())
         })?;
 
         let user_id: UserId = user_profile.user_id.parse().map_err(|_| {
-            AuthError::RegistrationFailed("invalid user_id format".to_string())
+            AuthError::LoginFailed("invalid user_id format".to_string())
         })?;
         let device_id = session.device_id;
 
@@ -464,13 +468,23 @@ impl AuthService {
         // restore plus a follow-up profile fetch will populate display_name.
         let display_name = match (&stored_profile_key, user_profile.display_name.is_empty()) {
             (_, true) => String::new(),
-            (Some(pk), false) => {
-                let encrypted_bytes = base64::engine::general_purpose::STANDARD
-                    .decode(&user_profile.display_name)
-                    .map_err(|e| AuthError::RegistrationFailed(format!("invalid display_name encoding: {}", e)))?;
-                crate::crypto::profile_crypto::decrypt_display_name(pk, &encrypted_bytes)
-                    .map_err(|e| AuthError::RegistrationFailed(format!("failed to decrypt display_name: {}", e)))?
-            }
+            // Login does not need the name, so an undecryptable one must not
+            // fail it: keep whatever name this device already had.
+            (Some(pk), false) => base64::engine::general_purpose::STANDARD
+                .decode(&user_profile.display_name)
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| {
+                    crate::crypto::profile_crypto::decrypt_display_name(pk, &bytes)
+                        .map_err(|e| e.to_string())
+                })
+                .unwrap_or_else(|e| {
+                    tracing::warn!("login: display_name undecryptable, keeping local name: {e}");
+                    self.settings_repo
+                        .get_string(keys::DISPLAY_NAME)
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default()
+                }),
             (None, false) => String::new(),
         };
 

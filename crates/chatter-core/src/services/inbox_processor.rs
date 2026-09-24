@@ -1000,21 +1000,23 @@ impl InboxEventProcessor {
             // action: 1 = Started, else Stopped. DM typing is keyed by the
             // peer's derived channel_id (matches the stored ServerDm rows).
             // =================================================================
-            InboxEvent::DmTyping { peer_id, action } => {
+            InboxEvent::DmTyping { peer_id, action, timestamp } => {
                 let channel_id = crate::domain::ids::ChannelId::from(*peer_id);
+                let (user_id, timestamp) = (*peer_id, *timestamp);
                 self.event_bus.emit_domain(if *action == 1 {
-                    DomainEvent::TypingStarted { user_id: *peer_id, channel_id }
+                    DomainEvent::TypingStarted { user_id, channel_id, timestamp }
                 } else {
-                    DomainEvent::TypingStopped { user_id: *peer_id, channel_id }
+                    DomainEvent::TypingStopped { user_id, channel_id, timestamp }
                 });
                 false
             }
 
-            InboxEvent::ChannelTyping { channel_id, sender_id, action } => {
+            InboxEvent::ChannelTyping { channel_id, sender_id, action, timestamp } => {
+                let (user_id, channel_id, timestamp) = (*sender_id, *channel_id, *timestamp);
                 self.event_bus.emit_domain(if *action == 1 {
-                    DomainEvent::TypingStarted { user_id: *sender_id, channel_id: *channel_id }
+                    DomainEvent::TypingStarted { user_id, channel_id, timestamp }
                 } else {
-                    DomainEvent::TypingStopped { user_id: *sender_id, channel_id: *channel_id }
+                    DomainEvent::TypingStopped { user_id, channel_id, timestamp }
                 });
                 false
             }

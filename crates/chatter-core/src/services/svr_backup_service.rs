@@ -67,6 +67,8 @@ pub struct RestoreResult {
     pub identity_keypair: [u8; 64],
     /// The recovered 32-byte profile encryption key.
     pub profile_key: [u8; 32],
+    /// The recovered `nickname.discriminator` handle (`keys::FULL_USERNAME`).
+    pub full_username: String,
     /// How many fetch attempts remain before server-side lockout.
     pub remaining_attempts: i32,
 }
@@ -114,6 +116,20 @@ impl SvrBackupService {
             settings,
             signal_service,
         }
+    }
+
+    /// The account handle every backup carries (`keys::FULL_USERNAME`).
+    ///
+    /// Required: a backup without it restores an account with no handle
+    /// (§117), and every later backup would carry that loss forward.
+    pub fn local_full_username(&self) -> Result<String, SvrBackupError> {
+        use crate::storage::repositories::settings_repo::keys;
+        self.signal_service
+            .settings_repo
+            .get_string(keys::FULL_USERNAME)
+            .map_err(|e| SvrBackupError::Generic(format!("failed to read username: {e}")))?
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| SvrBackupError::Generic("no local username to back up".into()))
     }
 
     /// Run the full post-registration backup flow from raw credentials.
@@ -178,9 +194,13 @@ impl SvrBackupService {
             }
         };
 
-        let result = self
-            .create_and_upload_backup(&svr_secret, &identity_keypair, &profile_key)
-            .await;
+        let result = match self.local_full_username() {
+            Ok(full_username) => {
+                self.create_and_upload_backup(&svr_secret, &identity_keypair, &profile_key, &full_username)
+                    .await
+            }
+            Err(e) => Err(e),
+        };
 
         svr_secret.zeroize();
         identity_keypair.zeroize();
@@ -243,9 +263,13 @@ impl SvrBackupService {
             SvrBackupError::Crypto(e)
         })?;
 
-        let result = self
-            .create_and_upload_backup(&svr_secret, &identity_keypair, &profile_key)
-            .await;
+        let result = match self.local_full_username() {
+            Ok(full_username) => {
+                self.create_and_upload_backup(&svr_secret, &identity_keypair, &profile_key, &full_username)
+                    .await
+            }
+            Err(e) => Err(e),
+        };
 
         svr_secret.zeroize();
         identity_keypair.zeroize();
@@ -265,6 +289,7 @@ impl SvrBackupService {
     /// * `svr_secret` - 32-byte secret derived from user's PIN (never stored)
     /// * `identity_keypair` - 64-byte Signal identity keypair (private || public)
     /// * `profile_key` - 32-byte profile encryption key
+    /// * `full_username` - the account handle (see [`Self::local_full_username`])
     ///
     /// # Returns
     ///
@@ -274,11 +299,13 @@ impl SvrBackupService {
         svr_secret: &[u8; 32],
         identity_keypair: &[u8; 64],
         profile_key: &[u8; 32],
+        full_username: &str,
     ) -> Result<u32, SvrBackupError> {
         // 1. Build and encrypt the payload
         let payload = KeyBackupPayload {
             identity_keypair: *identity_keypair,
             profile_key: *profile_key,
+            full_username: full_username.to_owned(),
         };
         let encrypted = encrypt_backup(&payload, svr_secret)?;
 
@@ -386,6 +413,7 @@ impl SvrBackupService {
         Ok(RestoreResult {
             identity_keypair: payload.identity_keypair,
             profile_key: payload.profile_key,
+            full_username: payload.full_username.clone(),
             remaining_attempts: result.remaining_attempts,
         })
     }
@@ -402,6 +430,7 @@ impl SvrBackupService {
     /// * `new_svr_secret` - 32-byte secret derived from new PIN
     /// * `identity_keypair` - 64-byte Signal identity keypair (private || public)
     /// * `profile_key` - 32-byte profile encryption key
+    /// * `full_username` - the account handle (see [`Self::local_full_username`])
     /// * `new_registration_lock` - 32-byte registration lock from new PIN
     /// * `new_svr_public_key` - 32-byte SVR public key from new PIN
     pub async fn change_pin_backup(
@@ -410,6 +439,7 @@ impl SvrBackupService {
         new_svr_secret: &[u8; 32],
         identity_keypair: &[u8; 64],
         profile_key: &[u8; 32],
+        full_username: &str,
         new_registration_lock: &[u8; 32],
         new_svr_public_key: &[u8; 32],
     ) -> Result<(), SvrBackupError> {
@@ -420,6 +450,7 @@ impl SvrBackupService {
         let mut payload = KeyBackupPayload {
             identity_keypair: *identity_keypair,
             profile_key: *profile_key,
+            full_username: full_username.to_owned(),
         };
         let encrypted = encrypt_backup(&payload, new_svr_secret)?;
 

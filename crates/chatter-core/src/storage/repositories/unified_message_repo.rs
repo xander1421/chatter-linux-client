@@ -290,6 +290,12 @@ impl UnifiedMessageRepository {
     }
 
     /// Update an existing message (full replace of mutable fields).
+    ///
+    /// Reply context (`reply_to*`) is the exception: it is fixed when the
+    /// message is written and only ever filled in, never cleared. Server-proto
+    /// upserts (channel backfill, thread/pin/saved fetches) rebuild the
+    /// message without it, and replacing it here wiped the quote from a
+    /// stored reply after restart (OPEN-ITEMS §112l).
     pub fn update(&self, message: &Message) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         let content_json = serde_json::to_string(&message.content)
@@ -302,14 +308,16 @@ impl UnifiedMessageRepository {
         let rows = conn.execute(
             "UPDATE messages SET
                 content_type = ?1, content_json = ?2, encrypted_content = ?3,
-                thread_id = ?4, reply_to = ?5, attachments_blob = ?6,
+                thread_id = ?4, reply_to = COALESCE(?5, reply_to), attachments_blob = ?6,
                 is_pinned = ?7, is_edited = ?8, is_deleted = ?9, is_read = ?10,
                 updated_at = ?11, edited_at = ?12,
                 reaction_counts_blob = ?13, current_user_reactions_blob = ?14,
                 mentioned_integrations_blob = ?15, targets_ai_bot = ?16,
                 delivery_status = ?17,
-                reply_to_author_id = ?18, reply_to_text = ?19,
-                reply_to_thumbnail = ?20, reply_to_thumbnail_mime = ?21
+                reply_to_author_id = COALESCE(?18, reply_to_author_id),
+                reply_to_text = COALESCE(?19, reply_to_text),
+                reply_to_thumbnail = COALESCE(?20, reply_to_thumbnail),
+                reply_to_thumbnail_mime = COALESCE(?21, reply_to_thumbnail_mime)
              WHERE id = ?22",
             params![
                 content_type_discriminant(&message.content),

@@ -7,8 +7,8 @@
 
 use slint::{Model, VecModel};
 
-use chatter_core::domain::ids::ChannelId;
-use chatter_core::state::{ActiveConversation, ChatState};
+use chatter_core::domain::ids::{ChannelId, UserId};
+use chatter_core::state::ChatState;
 
 use crate::bin_ui::features::auth::inbox::typing::{clear_typing_for_peer, set_typing_with_timer};
 use crate::{MainWindow, MessageItemData};
@@ -24,23 +24,18 @@ pub enum EventSource {
 fn is_active(chat_state: &ChatState, source: &EventSource) -> bool {
     let active = chat_state.active_conversation();
     match source {
-        EventSource::Channel(channel_id) => {
-            active.channel_id().map(|id| id == *channel_id).unwrap_or(false)
-        }
+        EventSource::Channel(channel_id) => active.is_for_channel(*channel_id),
     }
 }
 
-/// Get a display key for typing indicators.
-fn typing_key(chat_state: &ChatState, source: &EventSource) -> String {
-    let active = chat_state.active_conversation();
-    match active {
-        ActiveConversation::MailboxDm { peer_id, .. } | ActiveConversation::ServerDm { peer_id, .. } => peer_id.to_string(),
-        ActiveConversation::AnonDm(id) => id.to_string(),
-        ActiveConversation::AnonGroup(id) => id.to_string(),
-        ActiveConversation::Channel(id) => id.to_string(),
-        ActiveConversation::None => match source {
-            EventSource::Channel(id) => id.to_string(),
-        },
+/// The typing-state key for an event: its own conversation, as the sidebar
+/// keys it. Never the ACTIVE conversation's — that keyed a STOPPED arriving
+/// for another conversation to the open one, leaving the real sender's row
+/// and timer uncleared. `ChannelId::from(UserId)` keeps the UUID, so a server
+/// DM's key is the peer id the DM row is keyed by.
+fn typing_key(source: &EventSource) -> String {
+    match source {
+        EventSource::Channel(id) => id.to_string(),
     }
 }
 
@@ -49,30 +44,38 @@ fn typing_key(chat_state: &ChatState, source: &EventSource) -> String {
 // ============================================================================
 
 /// Handle typing indicator for any conversation type.
+///
+/// `user_id` / `timestamp` are the sender and the sender's clock: a STARTED
+/// no newer than that sender's last STOPPED (or message) in this conversation
+/// arrived out of order and is dropped (`ChatState::accept_typing`).
 pub fn handle_typing(
     weak_window: &slint::Weak<MainWindow>,
     chat_state: &ChatState,
     source: EventSource,
+    user_id: UserId,
+    timestamp: u64,
     is_started: bool,
 ) {
-    let key = typing_key(chat_state, &source);
+    let EventSource::Channel(channel_id) = &source;
+    let channel_id = *channel_id;
+    if !chat_state.accept_typing(channel_id, user_id, timestamp, is_started) {
+        tracing::debug!(%channel_id, %user_id, timestamp, "TYPING_UI: dropping STARTED older than its STOPPED");
+        return;
+    }
+    let key = typing_key(&source);
     let chat_state = chat_state.clone();
     let weak = weak_window.clone();
 
     let _ = slint::invoke_from_event_loop(move || {
         let Some(window) = weak.upgrade() else { return };
-
-        if !is_active(&chat_state, &source) {
-            if !is_started {
-                clear_typing_for_peer(&window, &key);
-            }
-            return;
-        }
+        let active = is_active(&chat_state, &source);
 
         if is_started {
-            set_typing_with_timer(&window, &key);
+            if active {
+                set_typing_with_timer(&window, &key, &chat_state, channel_id);
+            }
         } else {
-            clear_typing_for_peer(&window, &key);
+            clear_typing_for_peer(&window, &key, active);
         }
     });
 }

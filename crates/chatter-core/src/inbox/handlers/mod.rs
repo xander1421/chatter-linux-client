@@ -71,11 +71,16 @@ pub enum DomainEvent {
     TypingStarted {
         user_id: UserId,
         channel_id: ChannelId,
+        /// Sender's clock (TypingMessage.timestamp, ns); 0 = none. Orders
+        /// this against a later-sent STOPPED — see `ChatState::accept_typing`.
+        timestamp: u64,
     },
-    /// Typing indicator stopped.
+    /// Typing indicator stopped (a STOPPED, or a message from the sender).
     TypingStopped {
         user_id: UserId,
         channel_id: ChannelId,
+        /// Sender's clock (TypingMessage.timestamp or message sent_at, ns).
+        timestamp: u64,
     },
     /// Read receipt received.
     MessagesRead {
@@ -787,7 +792,7 @@ mod tests {
         let channel_id = ChannelId::new();
         let user_id = UserId::new();
 
-        let typing = DomainEvent::TypingStarted { user_id, channel_id };
+        let typing = DomainEvent::TypingStarted { user_id, channel_id, timestamp: 0 };
         assert!(typing.is_transient());
 
         let msg = DomainEvent::MessageReceived {

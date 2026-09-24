@@ -561,26 +561,38 @@ impl UserRepository {
 
     /// Store a friend's profile key received from an E2E message.
     ///
-    /// This key allows us to decrypt their encrypted display_name.
+    /// This key allows us to decrypt their encrypted display_name. Returns
+    /// whether the stored key CHANGED (none before, or a different one) —
+    /// the caller's cue to re-fetch the friend's profile, which it could not
+    /// decrypt (or decrypted with a stale key) until now.
     pub fn set_friend_profile_key(
         &self,
         user_id: &UserId,
         friend_id: &UserId,
         key: &[u8; 32],
-    ) -> Result<(), StorageError> {
+    ) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
-        let rows = conn.execute(
-            "UPDATE friendships SET friend_profile_key = ?1 WHERE user_id = ?2 AND friend_id = ?3",
+        let changed = conn.execute(
+            "UPDATE friendships SET friend_profile_key = ?1 \
+             WHERE user_id = ?2 AND friend_id = ?3 AND friend_profile_key IS NOT ?1",
             params![key.as_slice(), user_id.to_string(), friend_id.to_string()],
         )?;
+        if changed > 0 {
+            return Ok(true);
+        }
 
-        if rows == 0 {
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM friendships WHERE user_id = ?1 AND friend_id = ?2)",
+            params![user_id.to_string(), friend_id.to_string()],
+            |row| row.get(0),
+        )?;
+        if !exists {
             return Err(StorageError::NotFound(format!(
                 "Friendship {} -> {}",
                 user_id, friend_id
             )));
         }
-        Ok(())
+        Ok(false)
     }
 
     /// Check if profile sharing is enabled for a friendship.
@@ -702,6 +714,28 @@ mod tests {
             status,
             created_at: Utc::now(),
         }
+    }
+
+    /// `set_friend_profile_key` reports a change only when the stored key
+    /// actually changed — the trigger for re-fetching the friend's profile.
+    #[test]
+    fn set_friend_profile_key_reports_only_real_changes() {
+        let (_d, repo) = setup();
+        let me = UserId::new();
+        let them = UserId::new();
+        repo.ensure_user_exists(&me).unwrap();
+        repo.ensure_user_exists(&them).unwrap();
+        repo.insert_friendship(&friendship(me, them, FriendshipStatus::Accepted))
+            .unwrap();
+
+        assert!(repo.set_friend_profile_key(&me, &them, &[1; 32]).unwrap(), "first key");
+        assert!(!repo.set_friend_profile_key(&me, &them, &[1; 32]).unwrap(), "same key");
+        assert!(repo.set_friend_profile_key(&me, &them, &[2; 32]).unwrap(), "rotated key");
+        assert_eq!(repo.get_friend_profile_key(&me, &them).unwrap(), Some([2; 32]));
+        assert!(matches!(
+            repo.set_friend_profile_key(&me, &UserId::new(), &[1; 32]),
+            Err(StorageError::NotFound(_))
+        ));
     }
 
     /// The durable read that client-side block enforcement stands on.

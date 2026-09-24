@@ -525,6 +525,12 @@ impl UserService {
             created_at: Utc::now(),
         };
 
+        // The pending row is where the accepter's profile-key handshake lands
+        // (`set_friend_profile_key` only UPDATEs). A peer known only by friend
+        // code has no users row yet, so without this the insert FK-failed
+        // silently and a handshake that beat `FriendAccepted` was dropped,
+        // leaving the friend as "User <id>" until some later profile fetch.
+        self.user_repo.ensure_user_exists(friend_id).ok();
         let _ = self.user_repo.insert_friendship(&friendship);
 
         Ok(friendship)
@@ -657,6 +663,7 @@ impl UserService {
 
         self.user_repo
             .set_friend_profile_key(&current_user, sender, profile_key)
+            .map(|_| ())
             .map_err(UserError::Storage)
     }
 
