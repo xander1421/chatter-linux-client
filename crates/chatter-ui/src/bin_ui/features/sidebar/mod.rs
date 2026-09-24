@@ -24,6 +24,18 @@ pub use private_group::add_private_group_to_sidebar;
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     channel::wire_channel_selected(window, ui_ctx);
     dm::wire_dm_selected(window, ui_ctx);
+
+    // On a phone, leaving the chat pane left its conversation "active": the
+    // next message there was marked read (and receipted) unseen, and its row
+    // got no unread badge. Clear it the moment the pane closes.
+    let (weak, ctx) = (slint::ComponentHandle::as_weak(window), ui_ctx.clone());
+    window.on_chat_pane_closed(move || {
+        ctx.chat_state()
+            .set_active_conversation(chatter_core::state::ActiveConversation::None);
+        if let Some(w) = weak.upgrade() {
+            refresh_selection(&w, &ctx);
+        }
+    });
     private_group::wire_private_group_selected(window, ui_ctx);
     navigation::wire_saved_messages(window, ui_ctx);
     navigation::wire_settings_clicked(window, ui_ctx);

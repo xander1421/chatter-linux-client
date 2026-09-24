@@ -474,8 +474,21 @@ pub async fn handle_domain_event(
         | DomainEvent::JarvisStats { .. }
         | DomainEvent::JarvisCleared { .. } => {}
 
-        // Sync events — UI can subscribe for progress display
-        DomainEvent::SyncComplete { .. } => {}
+        // The catch-up sync stores channel messages without a MessageReceived
+        // each (a backfill must not fire a toast per message), so a message
+        // missed while the stream was down — app backgrounded — reached the
+        // conversation but never its row. Rebuild the rows from storage, the
+        // way every DM receive already does (`refresh_dm_list`).
+        DomainEvent::SyncComplete { messages_synced, .. } => {
+            if messages_synced > 0 {
+                crate::bin_ui::features::sidebar::sections::refresh_conversation_lists(window, ui_ctx);
+                let ui_ctx = ui_ctx.clone();
+                crate::run_ui!(window, |w| {
+                    crate::bin_ui::features::sidebar::refresh_section_badges(&w, &ui_ctx);
+                    helpers::recompute_total_unread(&w, &ui_ctx);
+                });
+            }
+        }
 
         // Multi-device lifecycle: a sibling device just joined this account.
         // Log it (OS toast already fired from core via NotificationService)
@@ -596,6 +609,7 @@ pub async fn handle_domain_event(
         }
 
         DomainEvent::ChannelInviteReceived { .. } | DomainEvent::ChannelInviteResponded { .. } => {
+            crate::bin_ui::features::modals::load_channel_invites(window.clone(), ui_ctx);
             crate::bin_ui::features::auth::load_initial_data(window.clone(), ui_ctx).await;
         }
 

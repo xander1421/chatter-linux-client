@@ -423,7 +423,7 @@ fn refresh_sections_ui(
 /// pinned rows first, so any change to folder membership or to a pin has to
 /// redraw them. Private groups were left out of this rebuild, so filing one
 /// into a folder left the loose row on screen next to its copy in the folder.
-fn refresh_conversation_lists(
+pub(crate) fn refresh_conversation_lists(
     weak: &slint::Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
 ) {

@@ -109,6 +109,9 @@ export component MainWindow inherits Window {
     callback recovery-codes-copy-all <=> app.recovery-codes-copy-all;
     // Android: FLAG_SECURE while the codes are on screen (lib.rs binds it).
     callback secure-screen(bool);
+    // The phone's chat pane closed (Back, header back, a bottom tab): nothing
+    // is on screen any more, so no conversation may stay "active".
+    callback chat-pane-closed();
 
     // ========== Sealed sender onboarding explainer ==========
     callback sealed-sender-intro-confirmed <=> app.sealed-sender-intro-confirmed;
@@ -867,6 +870,7 @@ export component MainWindow inherits Window {
             // they float over whatever screen comes next.
             root.composer-gif-picker-visible = false;
             root.composer-emoji-picker-visible = false;
+            root.chat-pane-closed();
         }
     }
     changed active-modal => {
