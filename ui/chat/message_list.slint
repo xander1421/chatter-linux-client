@@ -325,6 +325,15 @@ export component MessageList inherits Rectangle {
                 self.settle();
             }
 
+            // The Flickable is created fresh on every open (it lives under
+            // `!loading`), and a fresh element's `changed` handlers do not fire
+            // for their first values. Without this nothing settled a short
+            // conversation, `is-at-bottom` stayed false from the open, and the
+            // "1 new message" pill floated over the message it pointed at.
+            init => {
+                self.settle();
+            }
+
             // Jump-to-message (quote click, search result): move the viewport to
             // the target index. Item heights vary and we can't measure each one
             // here, so approximate proportionally — the target lands in view and
@@ -365,6 +374,14 @@ export component MessageList inherits Rectangle {
                 // Report where the unread boundary actually ended up, so the
                 // open scrolls to the real row instead of guessing from the
                 // index (an image bubble is ten times a text bubble tall).
+                // `changed` never fires for a row whose first laid-out y is
+                // already final (every row of a text-only open), so the row
+                // also reports once when it is created.
+                init => {
+                    if (idx == root.unread-index) {
+                        root.unread-divider-y = self.y;
+                    }
+                }
                 changed y => {
                     if (idx == root.unread-index) {
                         root.unread-divider-y = self.y;

@@ -121,11 +121,7 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
-                    w.set_composer_is_editing(false);
-                    w.set_composer_edit_message_id("".into());
-                    w.set_composer_text(w.get_composer_stash());
-                    w.set_composer_stash("".into());
-                    w.set_composer_stash_held(false);
+                    end_edit(&w);
                 }
             });
         });
@@ -140,13 +136,25 @@ pub fn wire_cancel_edit(window: &MainWindow) {
         let weak = weak_window.clone();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
-                w.set_composer_text(w.get_composer_stash());
-                w.set_composer_stash("".into());
-                w.set_composer_stash_held(false);
-                w.set_composer_edit_message_id("".into());
-                w.set_composer_is_editing(false);
+                end_edit(&w);
                 tracing::debug!("Cancelled edit mode");
             }
         });
     });
+}
+
+/// Leave edit mode and give the composer back the draft that editing borrowed
+/// it from. The one way out of an edit: sending it, cancelling it, and opening
+/// a conversation (even the same one again, e.g. Back then re-tap on a phone,
+/// which never changes the active conversation) all go through here. Clearing
+/// only the flags left the edit text in the box as a plain draft, and Send
+/// then posted it as a new message.
+pub(crate) fn end_edit(w: &MainWindow) {
+    if w.get_composer_stash_held() {
+        w.set_composer_text(w.get_composer_stash());
+        w.set_composer_stash_held(false);
+    }
+    w.set_composer_stash("".into());
+    w.set_composer_edit_message_id("".into());
+    w.set_composer_is_editing(false);
 }

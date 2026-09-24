@@ -131,6 +131,53 @@ pub fn apply_live_thread_reply(
     bump_root_reply_count(w, root_message_id);
 }
 
+/// Patch an edited message into the open thread panel (must run on the UI
+/// thread). The panel keeps its own model, so the main-list patch never reaches
+/// it; without this an edited reply kept its old text until the thread was
+/// reopened. Also refreshes the root preview when the root itself was edited.
+pub fn apply_thread_edit(
+    w: &MainWindow,
+    message_id: &str,
+    target_sent_timestamp: u64,
+    new_text: &str,
+) {
+    patch_edited_row(&w.get_thread_replies(), message_id, target_sent_timestamp, new_text);
+    if !message_id.is_empty() && w.get_thread_root_message_id().as_str() == message_id {
+        w.set_thread_root_content_preview(
+            chatter_core::domain::message::truncate_preview_text(new_text, 100).into(),
+        );
+    }
+}
+
+/// Find the edited row — by sent timestamp (Signal-style identity) first, by
+/// message id only when there is no timestamp — and apply the edit. Returns
+/// whether a row matched.
+fn patch_edited_row(
+    rows: &ModelRc<MessageItemData>,
+    message_id: &str,
+    target_sent_timestamp: u64,
+    new_text: &str,
+) -> bool {
+    let ts = target_sent_timestamp.to_string();
+    let hit = (0..rows.row_count()).find(|&i| {
+        rows.row_data(i).is_some_and(|m| {
+            if target_sent_timestamp > 0 {
+                m.timestamp_ns.as_str() == ts
+            } else {
+                m.message_id.as_str() == message_id
+            }
+        })
+    });
+    let (Some(i), Some(model)) = (hit, rows.as_any().downcast_ref::<VecModel<MessageItemData>>())
+    else {
+        return false;
+    };
+    let Some(mut row) = model.row_data(i) else { return false };
+    crate::bin_ui::converters::apply_edit(&mut row, new_text);
+    model.set_row_data(i, row);
+    true
+}
+
 /// Increment the "N replies" indicator on a thread root bubble in the main list.
 fn bump_root_reply_count(w: &MainWindow, root_message_id: &MessageId) {
     let root_id = root_message_id.to_string();
@@ -210,4 +257,33 @@ pub fn load_thread_data(
             }});
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(id: &str, ts: &str, text: &str) -> MessageItemData {
+        MessageItemData {
+            message_id: id.into(),
+            timestamp_ns: ts.into(),
+            content: text.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn edit_patches_the_matching_thread_reply_only() {
+        let rows: ModelRc<MessageItemData> =
+            ModelRc::new(VecModel::from(vec![row("a", "100", "one"), row("b", "200", "two")]));
+
+        assert!(patch_edited_row(&rows, "b", 200, "two edited"));
+        assert_eq!(rows.row_data(1).unwrap().content, "two edited");
+        assert!(rows.row_data(1).unwrap().is_edited);
+        assert_eq!(rows.row_data(0).unwrap().content, "one");
+
+        // Timestamp is the identity: a message-id match on another row is not enough.
+        assert!(!patch_edited_row(&rows, "a", 999, "wrong"));
+        assert_eq!(rows.row_data(0).unwrap().content, "one");
+    }
 }

@@ -7,7 +7,7 @@ mod actions;
 pub mod emoji_loader;
 mod context_menu;
 mod delete;
-mod edit;
+pub(crate) mod edit;
 mod helpers;
 pub mod identity_change;
 mod pin;

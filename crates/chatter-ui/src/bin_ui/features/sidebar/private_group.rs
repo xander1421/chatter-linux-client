@@ -107,8 +107,7 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
             w.set_composer_reply_preview("".into());
             w.set_composer_reply_has_thumbnail(false);
             w.set_composer_reply_thumbnail(slint::Image::default());
-            w.set_composer_is_editing(false);
-            w.set_composer_edit_message_id("".into());
+            crate::bin_ui::features::chat::edit::end_edit(&w);
 
             // Set chat header info for private group
             w.set_channel_name(group_name.into());

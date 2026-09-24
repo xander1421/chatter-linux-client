@@ -139,8 +139,7 @@ fn apply_header(window: &MainWindow, row: &MeshRow) {
     window.set_composer_reply_preview("".into());
     window.set_composer_reply_has_thumbnail(false);
     window.set_composer_reply_thumbnail(slint::Image::default());
-    window.set_composer_is_editing(false);
-    window.set_composer_edit_message_id("".into());
+    crate::bin_ui::features::chat::edit::end_edit(window);
     window.set_has_pinned_messages(false);
     window.set_pinned_message_preview("".into());
     window.set_pinned_total_count(0);

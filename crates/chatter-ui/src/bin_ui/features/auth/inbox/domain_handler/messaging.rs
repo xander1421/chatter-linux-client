@@ -394,6 +394,7 @@ pub(super) fn handle_message_edit(
 
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
+        crate::bin_ui::features::thread::apply_thread_edit(&w, &message_id, target_sent_timestamp, &new_text);
         let messages = w.get_messages();
 
         // Primary: match by timestamp_ns (Signal-style canonical identifier)

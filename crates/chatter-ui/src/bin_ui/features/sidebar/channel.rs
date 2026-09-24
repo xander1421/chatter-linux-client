@@ -74,8 +74,7 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             w.set_composer_reply_preview("".into());
             w.set_composer_reply_has_thumbnail(false);
             w.set_composer_reply_thumbnail(slint::Image::default());
-            w.set_composer_is_editing(false);
-            w.set_composer_edit_message_id("".into());
+            crate::bin_ui::features::chat::edit::end_edit(&w);
             
             // Clear pinned bar immediately while loading new channel's pins
             w.set_has_pinned_messages(false);

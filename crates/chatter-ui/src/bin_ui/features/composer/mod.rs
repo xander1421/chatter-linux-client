@@ -69,15 +69,10 @@ fn wire_per_conversation_drafts(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
             let weak = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
-                    // Left mid-edit: the draft is the one held aside, not the
-                    // edit text in the box.
-                    let text = if w.get_composer_stash_held() {
-                        w.set_composer_stash_held(false);
-                        w.get_composer_stash().to_string()
-                    } else {
-                        w.get_composer_text().to_string()
-                    };
-                    w.set_composer_stash("".into());
+                    // Left mid-edit: the edit is cancelled and the draft it
+                    // held aside is what gets parked, not the edit text.
+                    crate::bin_ui::features::chat::edit::end_edit(&w);
+                    let text = w.get_composer_text().to_string();
                     w.set_composer_text(ctx.swap_composer_draft(&leaving, text, &entering).into());
                 }
             });
