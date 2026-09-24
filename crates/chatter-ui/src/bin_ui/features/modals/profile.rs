@@ -1045,7 +1045,9 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_edit_profile_loading(false);
-                            w.set_active_modal("none".into());
+                            // Back to the profile page it was opened from (its
+                            // only entry point), like Cancel — not the chat list.
+                            w.set_active_modal("user-profile".into());
 
                             // Update UI with new profile info
                             w.set_profile_display_name(profile.display_name.clone().into());

@@ -1697,8 +1697,9 @@ fn forward_message_confirm_is_wired_to_core() {
         target_type: "dm".into(),
     }];
     w.set_forward_targets(ModelRc::new(VecModel::from(targets)));
-    w.set_forward_source_sender_id(peer.into());
-    w.set_forward_source_timestamp("123456789".into());
+    w.set_forward_sources(ModelRc::new(VecModel::from(vec![slint::SharedString::from(
+        format!("{peer}:123456789"),
+    )])));
     w.set_active_modal("forward-message".into());
     w.invoke_forward_message(peer.into());
     assert_eq!(

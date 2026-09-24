@@ -74,7 +74,7 @@ fn thread_panel_lands_inside_the_normal_desktop_layout() {
     w.set_thread_panel_visible(true);
     w.set_thread_root_sender_name("Test Sender".into());
     w.set_thread_root_content_preview("root message".into());
-    w.set_thread_channel_name("test-channel".into());
+    w.set_channel_name("test-channel".into());
     pump(&w);
 
     let panel = testing::ElementHandle::find_by_element_type_name(&w, "ThreadPanel")

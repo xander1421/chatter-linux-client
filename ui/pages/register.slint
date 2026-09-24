@@ -164,6 +164,7 @@ export component RegisterPage inherits Rectangle {
                             color: Colors.error;
                             font-size: Typography.sm;
                             wrap: word-wrap;
+                            min-height: self.preferred-height; // see the step-3 description
                         }
 
                         if root.server-unreachable: OfflineMeshNotice {
@@ -357,6 +358,11 @@ export component RegisterPage inherits Rectangle {
                                 font-size: Typography.sm;
                                 horizontal-alignment: center;
                                 wrap: word-wrap;
+                                // A wrapped Text inside an `if` under-reports its
+                                // height to the enclosing layout (Slint 1.17 sizes
+                                // it at the wrong width), so the card came out
+                                // ~2 lines short and Continue hung off its bottom.
+                                min-height: self.preferred-height;
                             }
 
                             Input {

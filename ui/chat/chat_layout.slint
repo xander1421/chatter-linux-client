@@ -35,6 +35,12 @@ export component ChatLayout inherits Rectangle {
     // When true, hide the chat header (e.g. during an active call where the
     // call dock already carries channel name/encryption/timer).
     in property <bool> hide-header: false;
+    // Window y where the conversation content starts (below the header). The
+    // message menu is a window-level overlay and clamps to this, so a tall
+    // menu opened near the bottom never covers the conversation title.
+    out property <length> content-top: root.absolute-position.y
+        + (root.hide-header ? 0px
+           : root.mobile ? Spacing.header-height-touch : Spacing.header-height);
 
     // Jarvis AI thinking state
     in-out property <bool> jarvis-thinking: false;

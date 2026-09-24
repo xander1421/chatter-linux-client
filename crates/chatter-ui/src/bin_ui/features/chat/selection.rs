@@ -125,6 +125,36 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         });
     }
 
+    // Bulk forward: the selected messages, in list (time) order, through the
+    // same picker and confirm path as a single forward.
+    {
+        let weak = window.as_weak();
+        let selected_ids = selected_ids.clone();
+        let ui_ctx = ui_ctx.clone();
+        window.on_selection_forward_clicked(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let sources: Vec<String> = {
+                let set = selected_ids.borrow();
+                let model = w.get_messages();
+                (0..model.row_count())
+                    .filter_map(|i| model.row_data(i))
+                    .filter(|row| set.contains(row.message_id.as_str()))
+                    .map(|row| format!("{}:{}", row.sender_id, row.timestamp_ns))
+                    .collect()
+            };
+            if sources.is_empty() {
+                return;
+            }
+            let preview = if sources.len() == 1 {
+                "1 message".to_string()
+            } else {
+                format!("{} messages", sources.len())
+            };
+            exit(&w, &selected_ids);
+            super::actions::open_forward_modal(&w, &ui_ctx, sources, preview);
+        });
+    }
+
     // Bulk delete-for-me. Reuses the existing single-message wire rather than
     // reimplementing the delete path, so permissions and the local/sync split
     // stay in exactly one place.

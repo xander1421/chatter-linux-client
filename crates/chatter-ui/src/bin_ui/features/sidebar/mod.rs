@@ -498,6 +498,8 @@ pub(crate) fn show_chat_pane(weak: &slint::Weak<MainWindow>) {
         if w.get_is_mobile_platform() {
             w.set_mobile_show_chat(true);
         }
+        // The header's typing line belongs to the conversation being left.
+        w.set_typing_indicator("".into());
     }
 }
 

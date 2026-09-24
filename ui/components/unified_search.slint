@@ -326,7 +326,10 @@ export component UnifiedSearch inherits Rectangle {
                 }
             }
 
-            if root.query == "": Text {
+            // `query` excludes IME preedit, so while a word is still being
+            // composed it reads "" over an emptied list; a header with nothing
+            // under it is noise.
+            if root.query == "" && root.conversations.length > 0: Text {
                 text: "Recent conversations";
                 color: Colors.text-muted;
                 font-size: Typography.xs;

@@ -353,14 +353,13 @@ export component FriendsModal inherits Rectangle {
                                             border-radius: Spacing.radius-sm;
                                             background: msg-touch.has-hover ? Colors.surface : transparent;
 
-                                            Text {
-                                                text: "\u{1F4AC}\u{FE0F}";  // Speech bubble (with emoji variant selector)
-                                                font-family: Typography.font-family-emoji;
-                                                font-size: Typography.lg;
-                                                horizontal-alignment: center;
-                                                vertical-alignment: center;
-                                                width: 100%;
-                                                height: 100%;
+                                            Image {
+                                                source: Icons.message-circle;
+                                                colorize: Colors.text-secondary;
+                                                width: 18px;
+                                                height: 18px;
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
                                             }
 
                                             msg-touch := TouchArea {
@@ -459,7 +458,7 @@ export component FriendsModal inherits Rectangle {
                                         padding-right: Spacing.sm;
 
                                         Text {
-                                            text: root.my-code != "" ? root.my-code : "Click Generate";
+                                            text: root.my-code != "" ? root.my-code : "No code yet — generate one";
                                             color: root.my-code != "" ? Colors.text-primary : Colors.text-muted;
                                             font-size: Typography.xs;
                                             font-family: Typography.font-family-mono;
@@ -645,7 +644,7 @@ export component FriendsModal inherits Rectangle {
                             if root.code-status != "": Text {
                                 text: root.code-status;
                                 color: (root.code-status == "Friend request sent!" || root.code-status == "Private conversation started!") ? Colors.success : 
-                                       root.code-status == "Copied to clipboard!" ? Colors.accent-purple : Colors.error;
+                                       (root.code-status == "Copied to clipboard!" || root.code-status == "Pasted from clipboard") ? Colors.accent-purple : Colors.error;
                                 font-size: Typography.xs;
                             }
                         }
@@ -1354,7 +1353,7 @@ export component FriendsModal inherits Rectangle {
                             }
 
                             Text {
-                                text: "Accept an invite to join the channel";
+                                text: "Channel invitations you receive will appear here";
                                 color: Colors.text-muted.with-alpha(0.7);
                                 font-size: Typography.sm;
                                 horizontal-alignment: center;
@@ -1402,32 +1401,20 @@ export component FriendsModal inherits Rectangle {
                                             alignment: center;
                                             spacing: 2px;
 
-                                            HorizontalLayout {
-                                                spacing: Spacing.xs;
+                                            Text {
+                                                text: invite.display-name;
+                                                color: Colors.text-primary;
+                                                font-size: Typography.sm;
+                                                font-weight: Typography.medium;
+                                                overflow: elide;
+                                            }
 
-                                                Text {
-                                                    text: invite.display-name;
-                                                    color: Colors.text-primary;
-                                                    font-size: Typography.sm;
-                                                    font-weight: Typography.medium;
-                                                    overflow: elide;
-                                                }
-
-                                                Rectangle {
-                                                    width: 16px;
-                                                    height: 16px;
-                                                    border-radius: 8px;
-                                                    background: Colors.primary.with-alpha(0.2);
-
-                                                    Text {
-                                                        text: "\u{0023}";
-                                                        font-size: Typography.xxs;
-                                                        horizontal-alignment: center;
-                                                        vertical-alignment: center;
-                                                        width: 100%;
-                                                        height: 100%;
-                                                    }
-                                                }
+                                            // "Invited by <name>" (channel_invites.rs puts it in username)
+                                            if invite.username != "": Text {
+                                                text: invite.username;
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                                overflow: elide;
                                             }
 
                                             // Invitation message (stored in note field)

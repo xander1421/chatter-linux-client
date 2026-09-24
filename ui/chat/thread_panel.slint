@@ -18,6 +18,9 @@ export component ThreadPanel inherits Rectangle {
     in property <string> root-content-preview;
     in property <int> reply-count: 0;
     in property <string> channel-name;
+    // Same vocabulary as ChatHeader's channel-type. Only channels get the "#":
+    // a thread in Saved Messages or a DM read "# Saved Messages".
+    in property <string> channel-type: "public";
 
     // Replies list (reuses MessageItemData pattern)
     in property <[MessageItemData]> replies: [];
@@ -137,7 +140,8 @@ export component ThreadPanel inherits Rectangle {
 
                     // Channel name (small, muted)
                     if root.channel-name != "": Text {
-                        text: "# " + root.channel-name;
+                        text: (root.channel-type == "public" || root.channel-type == "private" ? "# " : "")
+                            + root.channel-name;
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                     }

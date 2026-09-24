@@ -11,13 +11,14 @@ use std::sync::Arc;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::domain::ids::ChannelId;
+use chatter_core::domain::ids::{ChannelId, UserId};
 use crate::{FriendRequestData, MainWindow};
 
 /// Send-safe intermediate type for channel invite display data.
 struct ChannelInviteSendData {
     channel_id: String,
     channel_name: String,
+    invited_by: String,
     sent_at: String,
     note: String,
 }
@@ -48,11 +49,22 @@ pub fn load_channel_invites(weak: Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>)
                 let channel_name = if inv.channel_name.is_empty() {
                     "Channel invite".to_string()
                 } else {
-                    inv.channel_name
+                    format!("#{}", inv.channel_name)
                 };
+                // display_name falls back to the raw id for a user this device
+                // knows nothing about; a UUID is not a name, so say nothing.
+                let invited_by = inv
+                    .inviter_id
+                    .parse::<UserId>()
+                    .ok()
+                    .map(|uid| ui_ctx.display_name(&uid))
+                    .filter(|name| *name != inv.inviter_id)
+                    .map(|name| format!("Invited by {name}"))
+                    .unwrap_or_default();
                 ChannelInviteSendData {
                     channel_id: inv.channel_id,
                     channel_name,
+                    invited_by,
                     sent_at: format_created_at(inv.created_at),
                     note: inv.message,
                 }
@@ -68,7 +80,7 @@ pub fn load_channel_invites(weak: Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>)
                     .map(|d| FriendRequestData {
                         user_id: d.channel_id.into(),
                         display_name: d.channel_name.into(),
-                        username: "Channel invite".into(),
+                        username: d.invited_by.into(),
                         avatar_source: slint::Image::default(),
                         has_avatar: false,
                         sent_at: d.sent_at.into(),

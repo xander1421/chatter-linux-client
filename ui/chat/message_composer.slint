@@ -50,6 +50,17 @@ export component MessageComposer inherits Rectangle {
     in-out property <bool> is-editing: false;
     in-out property <string> edit-message-id: "";
 
+    // Entering edit (or retargeting it to another message) prefills `text`
+    // from Rust; left alone the caret stays wherever it was, usually
+    // mid-string (§112j). Put it at the end, where editing starts. The
+    // offset is clamped to the text length.
+    changed edit-message-id => {
+        if (root.edit-message-id != "") {
+            text-input.focus();
+            text-input.set-selection-offsets(2147483647, 2147483647);
+        }
+    }
+
     // Reply mode properties
     in property <bool> is-replying: false;
     in property <string> reply-to-sender: "";

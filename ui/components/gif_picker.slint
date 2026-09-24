@@ -79,11 +79,13 @@ export component GifPicker inherits Rectangle {
                 border-radius: Spacing.radius-sm;
                 background: emoji-tab-area.has-hover ? Colors.surface-hover : transparent;
 
-                Text {
-                    text: "😀";
-                    font-size: Typography.sm;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                Image {
+                    source: Icons.smile;
+                    colorize: Colors.text-secondary;
+                    width: 16px;
+                    height: 16px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
                 }
 
                 emoji-tab-area := TouchArea {
@@ -145,10 +147,12 @@ export component GifPicker inherits Rectangle {
                 spacing: Spacing.sm;
 
                 // Search icon
-                Text {
-                    text: "🔍";
-                    font-size: Typography.sm;
-                    vertical-alignment: center;
+                Image {
+                    source: Icons.search;
+                    colorize: Colors.text-muted;
+                    width: 16px;
+                    height: 16px;
+                    y: (parent.height - self.height) / 2;
                 }
 
                 // Search text input
@@ -215,10 +219,12 @@ export component GifPicker inherits Rectangle {
                         alignment: center;
                         spacing: Spacing.xs;
 
-                        Text {
-                            text: "🔥";
-                            font-size: Typography.sm;
-                            vertical-alignment: center;
+                        Image {
+                            source: Icons.sparkles;
+                            colorize: !show-search-results ? Colors.primary : Colors.text-secondary;
+                            width: 14px;
+                            height: 14px;
+                            y: (parent.height - self.height) / 2;
                         }
 
                         Text {
@@ -262,10 +268,12 @@ export component GifPicker inherits Rectangle {
                         alignment: center;
                         spacing: Spacing.xs;
 
-                        Text {
-                            text: "🔎";
-                            font-size: Typography.sm;
-                            vertical-alignment: center;
+                        Image {
+                            source: Icons.search;
+                            colorize: show-search-results ? Colors.primary : Colors.text-secondary;
+                            width: 14px;
+                            height: 14px;
+                            y: (parent.height - self.height) / 2;
                         }
 
                         Text {
@@ -333,14 +341,23 @@ export component GifPicker inherits Rectangle {
                     alignment: center;
                     spacing: Spacing.sm;
 
-                    Text {
-                        text: show-search-results ? "🔍" : "📭";
-                        font-size: 32px;
-                        horizontal-alignment: center;
+                    HorizontalLayout {
+                        alignment: center;
+                        Image {
+                            source: show-search-results ? Icons.search : Icons.image;
+                            colorize: Colors.text-muted;
+                            width: 32px;
+                            height: 32px;
+                        }
                     }
 
+                    // Trending is never legitimately empty; core hands back an
+                    // empty list for every failure (server without
+                    // KLIPY_API_KEY, offline, provider error), so empty
+                    // trending means the service is not reachable — say that
+                    // rather than implying there is nothing popular today.
                     Text {
-                        text: show-search-results ? "No GIFs found" : "No trending GIFs";
+                        text: show-search-results ? "No GIFs found" : "GIFs are unavailable";
                         color: Colors.text-secondary;
                         font-size: Typography.sm;
                         horizontal-alignment: center;

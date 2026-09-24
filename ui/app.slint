@@ -91,6 +91,12 @@ export component App inherits Rectangle {
         - (root.sidebar-is-rail ? Spacing.sidebar-width-collapsed : Spacing.sidebar-width));
     // Keyboard is considered open when bottom inset exceeds the nav bar threshold
     property <bool> keyboard-open: safe-area-bottom > 80px;
+    // Whether the mobile tab bar is on screen. The full-screen pages that leave
+    // a strip for it (bottom-inset) must use this same condition: they used to
+    // omit `mobile-show-chat`, so over an open chat the strip showed the chat
+    // composer through the page instead of the (hidden) tab bar.
+    property <bool> bottom-nav-visible: root.is-mobile-platform && root.current-view == "main"
+        && !root.keyboard-open && !root.mobile-show-chat;
 
     // ========== View routing ==========
     // Views: "loading", "login", "register", "recovery", "main"
@@ -271,7 +277,7 @@ export component App inherits Rectangle {
           root.active-modal == "friends" ? "contacts"
         : root.active-modal == "settings" ? "settings"
         : root.active-modal == "calls" ? "calls"
-        : root.active-modal == "user-profile" ? "profile"
+        : root.active-modal == "user-profile" || root.active-modal == "edit-profile" ? "profile"
         : root.mobile-show-chat ? "chats"
         // Contacts, Settings, Calls and Profile exist ONLY as modals. Once the
         // modal is gone — closed with Back, say — the user is on the chat list,
@@ -441,6 +447,7 @@ export component App inherits Rectangle {
     callback selection-cleared();
     callback selection-delete-clicked();
     callback selection-copy-clicked();
+    callback selection-forward-clicked();
 
     // ========== Message context menu state ==========
     in-out property <bool> context-menu-visible: false;
@@ -450,6 +457,8 @@ export component App inherits Rectangle {
     in-out property <string> context-menu-message-id: "";
     in-out property <length> context-menu-x: 0px;
     in-out property <length> context-menu-y: 0px;
+    // Where the open conversation's content starts; the menu stays below it.
+    in-out property <length> context-menu-content-top: 0px;
     in property <bool> context-menu-is-own-message: false;
     in property <bool> context-menu-can-delete-for-everyone: false;
     in property <bool> context-menu-is-pinned: false;
@@ -623,9 +632,10 @@ export component App inherits Rectangle {
 
     // Forward message modal properties
     in property <string> forward-message-preview: "";
-    // Source-message identity, stashed at modal-open, read by the confirm handler.
-    in-out property <string> forward-source-sender-id: "";
-    in-out property <string> forward-source-timestamp: "";
+    // Source messages, stashed at modal-open, read by the confirm handler:
+    // Messages being forwarded, as "sender_id:timestamp_ns" keys in send order
+    // (one from the message menu, several from the selection bar).
+    in-out property <[string]> forward-sources: [];
     in-out property <string> forward-search-text: "";
     in property <[ForwardTarget]> forward-targets: [];
     in property <bool> forward-loading: false;
@@ -1487,6 +1497,7 @@ export component App inherits Rectangle {
                         }
                         delete-clicked => { root.selection-delete-clicked(); }
                         copy-clicked => { root.selection-copy-clicked(); }
+                        forward-clicked => { root.selection-forward-clicked(); }
                     }
 
                     if !root.active-call-fullscreen
@@ -1597,7 +1608,10 @@ export component App inherits Rectangle {
                         root.reaction-selected(sender-id, timestamp-ns, "", emoji);
                     }
                     thread-clicked(id) => { root.thread-clicked(id); }
-                    more-clicked(sender-id, timestamp-ns, x, y) => { root.more-clicked(sender-id, timestamp-ns, x, y); }
+                    more-clicked(sender-id, timestamp-ns, x, y) => {
+                        root.context-menu-content-top = self.content-top;
+                        root.more-clicked(sender-id, timestamp-ns, x, y);
+                    }
                     quote-clicked(id) => { root.quote-clicked(id); }
                     view-attachment(id) => { root.view-attachment(id); }
                     audio-seek(id, pos) => { root.audio-seek(id, pos); }
@@ -1654,6 +1668,7 @@ export component App inherits Rectangle {
                     root-content-preview: root.thread-root-content-preview;
                     reply-count: root.thread-reply-count;
                     channel-name: root.channel-name;  // threads open on the active conversation
+                    channel-type: root.channel-type;
                     replies: root.thread-replies;
                     loading: root.thread-loading;
                     composer-text <=> root.thread-composer-text;
@@ -1810,8 +1825,10 @@ export component App inherits Rectangle {
         }
     }
 
-    // User Profile Modal
-    if root.active-modal == "user-profile": UserProfileModal {
+    // User Profile Modal. Stays mounted under Edit Profile — the only way into
+    // that modal is this page's Edit button — so its backdrop dims the profile
+    // it edits rather than the chat list (§112u).
+    if root.active-modal == "user-profile" || root.active-modal == "edit-profile": UserProfileModal {
         show-modal: true;
         user-id: root.profile-user-id;
         display-name: root.profile-display-name;
@@ -1842,7 +1859,7 @@ export component App inherits Rectangle {
         // Keep the tab bar visible under the profile page — unless the
         // keyboard has replaced it, in which case there is nothing to leave
         // room for. Same expression the Contacts screen uses.
-        bottom-inset: root.is-mobile-platform && !root.keyboard-open ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
+        bottom-inset: root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
 
         close => {
             root.active-modal = "none";
@@ -1913,7 +1930,7 @@ export component App inherits Rectangle {
         error-message: root.edit-profile-error;
 
         close => {
-            root.active-modal = "none";
+            root.active-modal = "user-profile";
         }
         save(display-name, bio) => {
             root.edit-profile-save(display-name, bio);
@@ -1975,7 +1992,7 @@ export component App inherits Rectangle {
     // reached from the tab bar, and the bar keeps its strip at the bottom.
     if root.active-modal == "calls": CallHistoryScreen {
         mobile-mode: root.is-mobile-platform;
-        bottom-inset: root.is-mobile-platform && !root.keyboard-open ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
+        bottom-inset: root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
         show-modal: true;
         rows: root.call-history-rows;
         loading: root.call-history-loading;
@@ -2010,7 +2027,7 @@ export component App inherits Rectangle {
         // Keep the tab bar visible under the Contacts screen — unless the
         // keyboard has replaced it, in which case there is nothing to leave
         // room for.
-        bottom-inset: root.is-mobile-platform && !root.keyboard-open ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
+        bottom-inset: root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
         show-modal: true;
         active-tab <=> root.friends-modal-tab;
         friends: root.friends-list;
@@ -2407,7 +2424,7 @@ export component App inherits Rectangle {
     // Settings screen (full screen overlay)
     if active-modal == "settings": SettingsScreen {
         mobile-platform: root.is-mobile-platform;
-        bottom-inset: root.is-mobile-platform && !root.keyboard-open ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
+        bottom-inset: root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
         display-name: root.settings-display-name;
         username: root.settings-username;
         session-count: root.settings-session-count;
@@ -2831,6 +2848,7 @@ export component App inherits Rectangle {
         position-y: root.context-menu-y;
         safe-area-top: root.safe-area-top;
         safe-area-bottom: root.safe-area-bottom;
+        content-top: root.context-menu-content-top;
         is-own-message: root.context-menu-is-own-message;
         can-delete-for-everyone: root.context-menu-can-delete-for-everyone;
         is-pinned: root.context-menu-is-pinned;
@@ -3028,7 +3046,7 @@ export component App inherits Rectangle {
     // covers — Telegram drops it on the same transition.
     // Only in the app proper: on login / register / recovery it offered
     // Chats, Settings and Profile to someone who is not signed in.
-    if root.is-mobile-platform && root.current-view == "main" && !root.keyboard-open && !root.mobile-show-chat: MobileBottomNav {
+    if root.bottom-nav-visible: MobileBottomNav {
         width: parent.width;
         y: parent.height - self.height;
         active-tab: root.mobile-nav-tab-effective;

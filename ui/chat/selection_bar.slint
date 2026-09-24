@@ -13,12 +13,8 @@
 // two would misalign them. The property is kept, defaulted to 0, so the element
 // still works if it is ever hoisted back to the root.
 //
-// Delete is the only bulk action for now, deliberately. Bulk copy would be a
-// no-op on the platform this was built for: the clipboard path in
-// features/chat/actions.rs is `#[cfg(not(target_os = "android"))]` and logs
-// "Clipboard not yet supported on Android". Bulk forward has no backing flow
-// either — the forward modal takes a single message. Neither ships as a dead
-// button.
+// Bulk actions: copy, forward (the forward modal takes the selected messages
+// as a list and sends them in list order), delete.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -63,6 +59,7 @@ export component SelectionBar inherits Rectangle {
     callback cleared();
     callback delete-clicked();
     callback copy-clicked();
+    callback forward-clicked();
 
     visible: root.show;
     height: Spacing.touch-target-min + Spacing.sm * 2 + root.safe-area-top;
@@ -102,6 +99,13 @@ export component SelectionBar inherits Rectangle {
             label: "Copy selected";
             enabled: root.count > 0;
             clicked => { root.copy-clicked(); }
+        }
+
+        BarButton {
+            icon: Icons.send;
+            label: "Forward selected";
+            enabled: root.count > 0;
+            clicked => { root.forward-clicked(); }
         }
 
         BarButton {

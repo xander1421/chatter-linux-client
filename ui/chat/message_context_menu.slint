@@ -92,6 +92,11 @@ export component MessageContextMenu inherits Rectangle {
     // gesture-nav strip on Android.
     in property <length> safe-area-top: 0px;
     in property <length> safe-area-bottom: 0px;
+    // Window y of the conversation content (below its header). The menu is a
+    // full-window overlay, but it belongs to the conversation: clamping only to
+    // the status bar let a tall menu opened near the bottom slide up over the
+    // header and hide the conversation title.
+    in property <length> content-top: 0px;
 
     // Message context (Signal-style identification: sender_id + timestamp_ns)
     in property <string> sender-id: "";
@@ -147,23 +152,31 @@ export component MessageContextMenu inherits Rectangle {
     //   * prefer just below the anchor, so the popup does not sit under the
     //     finger that opened it;
     //   * if that would overflow the bottom inset, flip to just above it;
-    //   * clamp into [safe-area-top, height - safe-area-bottom] regardless, so
-    //     a tall menu on a short screen is merely cropped at a sane edge rather
-    //     than rendered under the status bar or the gesture strip.
+    //   * clamp into [max(safe-area-top, content-top), height - safe-area-bottom]
+    //     regardless, so it never renders under the status bar, the
+    //     conversation header, or the gesture strip;
+    //   * a menu taller than that band is capped to it and its body scrolls.
+    //     `safe-area-bottom` already includes the soft keyboard (main.slint
+    //     passes insets.bottom + virtual-keyboard-size), so the band is what is
+    //     visible above the keyboard. Before the cap, a menu taller than the
+    //     band was pinned at top-limit and its lower rows ran under the
+    //     keyboard (§112i) — the own-message menu (~575px) cannot fit a ~610px
+    //     chat area on a Galaxy S9 once the keyboard is up.
     menu-container := Rectangle {
         property <length> menu-h: menu-layout.preferred-height + Spacing.sm * 2;
-        property <length> top-limit: root.safe-area-top + Spacing.sm;
+        property <length> top-limit: max(root.safe-area-top, root.content-top) + Spacing.sm;
         property <length> bottom-limit: parent.height - root.safe-area-bottom - Spacing.sm;
         // Does the preferred (below-the-anchor) placement fit?
-        property <bool> flip-up: root.position-y + Spacing.sm + self.menu-h > self.bottom-limit;
+        property <bool> flip-up: root.position-y + Spacing.sm + self.height > self.bottom-limit;
 
         x: max(Spacing.sm, min(root.position-x - Spacing.sm, parent.width - self.width - Spacing.md));
         y: max(self.top-limit,
-               min(self.flip-up ? root.position-y - Spacing.sm - self.menu-h
+               min(self.flip-up ? root.position-y - Spacing.sm - self.height
                                 : root.position-y + Spacing.sm,
-                   self.bottom-limit - self.menu-h));
+                   self.bottom-limit - self.height));
         width: 304px;
-        height: self.menu-h;
+        height: max(0px, min(self.menu-h, self.bottom-limit - self.top-limit));
+        clip: true;
         background: Colors.surface;
         border-radius: Spacing.radius-md;
         border-width: 1px;
@@ -175,141 +188,150 @@ export component MessageContextMenu inherits Rectangle {
         // Block backdrop clicks on menu
         TouchArea { }
 
-        menu-layout := VerticalLayout {
-            padding: Spacing.sm;
-            spacing: 2px;
+        Flickable {
+            width: 100%;
+            height: 100%;
+            viewport-height: menu-container.menu-h;
+            interactive: menu-container.menu-h > menu-container.height;
 
-            // Quick-reaction row. This is the whole point of opening on hold:
-            // reacting used to be reachable only from the hover action bar,
-            // which on a touch screen exists only while a finger is down — you
-            // had to guess where it would appear and hit it blind. The
-            // reactions pill below a bubble is `if has-reactions`, so it could
-            // not bootstrap the first reaction either.
-            HorizontalLayout {
-                spacing: 0px;
-                alignment: space-between;
-                padding-bottom: Spacing.xs;
+            menu-layout := VerticalLayout {
+                width: parent.width;
+                height: menu-container.menu-h;
+                padding: Spacing.sm;
+                spacing: 2px;
 
-                for emoji in root.quick-reactions: QuickReaction {
-                    emoji: emoji;
+                // Quick-reaction row. This is the whole point of opening on hold:
+                // reacting used to be reachable only from the hover action bar,
+                // which on a touch screen exists only while a finger is down — you
+                // had to guess where it would appear and hit it blind. The
+                // reactions pill below a bubble is `if has-reactions`, so it could
+                // not bootstrap the first reaction either.
+                HorizontalLayout {
+                    spacing: 0px;
+                    alignment: space-between;
+                    padding-bottom: Spacing.xs;
+
+                    for emoji in root.quick-reactions: QuickReaction {
+                        emoji: emoji;
+                        clicked => {
+                            root.quick-react(root.sender-id, root.timestamp-ns, emoji);
+                            root.close();
+                        }
+                    }
+                }
+
+                Rectangle {
+                    height: 1px;
+                    background: Colors.surface-hover;
+                }
+
+                MenuItem {
+                    icon: Icons.smile;
+                    label: "More reactions";
                     clicked => {
-                        root.quick-react(root.sender-id, root.timestamp-ns, emoji);
+                        root.more-reactions-clicked(root.sender-id, root.timestamp-ns);
                         root.close();
                     }
                 }
-            }
 
-            Rectangle {
-                height: 1px;
-                background: Colors.surface-hover;
-            }
-
-            MenuItem {
-                icon: Icons.smile;
-                label: "More reactions";
-                clicked => {
-                    root.more-reactions-clicked(root.sender-id, root.timestamp-ns);
-                    root.close();
+                MenuItem {
+                    icon: Icons.reply;
+                    label: "Reply";
+                    clicked => {
+                        root.reply-clicked(root.sender-id, root.timestamp-ns);
+                        root.close();
+                    }
                 }
-            }
 
-            MenuItem {
-                icon: Icons.reply;
-                label: "Reply";
-                clicked => {
-                    root.reply-clicked(root.sender-id, root.timestamp-ns);
-                    root.close();
+                MenuItem {
+                    icon: Icons.message-circle;
+                    label: "Reply in Thread";
+                    clicked => {
+                        root.thread-clicked(root.message-id);
+                        root.close();
+                    }
                 }
-            }
 
-            MenuItem {
-                icon: Icons.message-circle;
-                label: "Reply in Thread";
-                clicked => {
-                    root.thread-clicked(root.message-id);
-                    root.close();
+                // The discoverable route into multi-select, for anyone who never
+                // finds the longer hold.
+                MenuItem {
+                    icon: Icons.check;
+                    label: "Select";
+                    clicked => {
+                        root.select-clicked(root.message-id);
+                        root.close();
+                    }
                 }
-            }
 
-            // The discoverable route into multi-select, for anyone who never
-            // finds the longer hold.
-            MenuItem {
-                icon: Icons.check;
-                label: "Select";
-                clicked => {
-                    root.select-clicked(root.message-id);
-                    root.close();
+                if root.is-own-message: MenuItem {
+                    icon: Icons.edit;
+                    label: "Edit";
+                    clicked => {
+                        root.edit-clicked(root.sender-id, root.timestamp-ns);
+                        root.close();
+                    }
                 }
-            }
 
-            if root.is-own-message: MenuItem {
-                icon: Icons.edit;
-                label: "Edit";
-                clicked => {
-                    root.edit-clicked(root.sender-id, root.timestamp-ns);
-                    root.close();
+                MenuItem {
+                    icon: Icons.pin;
+                    label: root.is-pinned ? "Unpin" : "Pin";
+                    clicked => {
+                        root.pin-clicked(root.sender-id, root.timestamp-ns);
+                        root.close();
+                    }
                 }
-            }
 
-            MenuItem {
-                icon: Icons.pin;
-                label: root.is-pinned ? "Unpin" : "Pin";
-                clicked => {
-                    root.pin-clicked(root.sender-id, root.timestamp-ns);
-                    root.close();
+                MenuItem {
+                    icon: Icons.send;
+                    label: "Forward";
+                    clicked => {
+                        root.forward-clicked(root.sender-id, root.timestamp-ns);
+                        root.close();
+                    }
                 }
-            }
 
-            MenuItem {
-                icon: Icons.send;
-                label: "Forward";
-                clicked => {
-                    root.forward-clicked(root.sender-id, root.timestamp-ns);
-                    root.close();
+                MenuItem {
+                    icon: Icons.copy;
+                    label: "Copy";
+                    clicked => {
+                        root.copy-clicked(root.sender-id, root.timestamp-ns);
+                        root.close();
+                    }
                 }
-            }
 
-            MenuItem {
-                icon: Icons.copy;
-                label: "Copy";
-                clicked => {
-                    root.copy-clicked(root.sender-id, root.timestamp-ns);
-                    root.close();
+                if root.has-attachments: MenuItem {
+                    icon: Icons.download;
+                    label: "Download";
+                    clicked => {
+                        root.download-clicked(root.sender-id, root.timestamp-ns);
+                        root.close();
+                    }
                 }
-            }
 
-            if root.has-attachments: MenuItem {
-                icon: Icons.download;
-                label: "Download";
-                clicked => {
-                    root.download-clicked(root.sender-id, root.timestamp-ns);
-                    root.close();
+                // Separator before delete actions
+                Rectangle {
+                    height: 1px;
+                    background: Colors.surface-hover;
                 }
-            }
 
-            // Separator before delete actions
-            Rectangle {
-                height: 1px;
-                background: Colors.surface-hover;
-            }
-
-            if root.can-delete-for-everyone: MenuItem {
-                icon: Icons.trash;
-                label: "Delete for Everyone";
-                destructive: true;
-                clicked => {
-                    root.delete-everyone-clicked(root.sender-id, root.timestamp-ns);
-                    root.close();
+                if root.can-delete-for-everyone: MenuItem {
+                    icon: Icons.trash;
+                    label: "Delete for Everyone";
+                    destructive: true;
+                    clicked => {
+                        root.delete-everyone-clicked(root.sender-id, root.timestamp-ns);
+                        root.close();
+                    }
                 }
-            }
 
-            MenuItem {
-                icon: Icons.trash;
-                label: "Delete for Me";
-                destructive: true;
-                clicked => {
-                    root.delete-clicked(root.sender-id, root.timestamp-ns);
-                    root.close();
+                MenuItem {
+                    icon: Icons.trash;
+                    label: "Delete for Me";
+                    destructive: true;
+                    clicked => {
+                        root.delete-clicked(root.sender-id, root.timestamp-ns);
+                        root.close();
+                    }
                 }
             }
         }

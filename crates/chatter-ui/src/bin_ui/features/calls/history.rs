@@ -123,37 +123,40 @@ fn open_conversation(
     conversation_id: &str,
     conversation_type: &str,
 ) -> bool {
-    match ui_ctx.call_history_conversation(conversation_type, conversation_id) {
-        Some(ActiveConversation::Channel(id)) => {
-            window.invoke_channel_selected(id.to_string().into());
-            true
-        }
-        Some(ActiveConversation::ServerDm { peer_id }) => {
-            window.invoke_dm_selected(peer_id.to_string().into());
-            true
-        }
-        Some(ActiveConversation::AnonDm(id)) => {
-            window.invoke_dm_selected(id.to_string().into());
-            true
-        }
-        Some(ActiveConversation::AnonGroup(id)) => {
-            window.invoke_private_group_selected(id.to_string().into());
-            true
-        }
-        // `MailboxDm` and `None` never come back out of a history row —
-        // `from_routing_key` rejects both.
-        _ => {
-            tracing::warn!(
-                conversation_type,
-                conversation_id,
-                "Call history row no longer names a reachable conversation"
-            );
-            window.set_toast_message("That conversation is no longer available.".into());
-            window.set_toast_variant("error".into());
-            window.set_toast_visible(true);
-            false
-        }
+    // `MailboxDm` and `None` never come back out of a history row —
+    // `from_routing_key` rejects both.
+    let opened = ui_ctx
+        .call_history_conversation(conversation_type, conversation_id)
+        .is_some_and(|conv| select_conversation(window, conv));
+    if !opened {
+        tracing::warn!(
+            conversation_type,
+            conversation_id,
+            "Call history row no longer names a reachable conversation"
+        );
+        window.set_toast_message("That conversation is no longer available.".into());
+        window.set_toast_variant("error".into());
+        window.set_toast_visible(true);
     }
+    opened
+}
+
+/// Fire the sidebar-open callback for `conv` — the same entry point a row tap
+/// uses, so the message list is (re)loaded from storage. False for the
+/// variants no open callback exists for (`MailboxDm`, `None`).
+pub(crate) fn select_conversation(window: &MainWindow, conv: ActiveConversation) -> bool {
+    match conv {
+        ActiveConversation::Channel(id) => window.invoke_channel_selected(id.to_string().into()),
+        ActiveConversation::ServerDm { peer_id } => {
+            window.invoke_dm_selected(peer_id.to_string().into())
+        }
+        ActiveConversation::AnonDm(id) => window.invoke_dm_selected(id.to_string().into()),
+        ActiveConversation::AnonGroup(id) => {
+            window.invoke_private_group_selected(id.to_string().into())
+        }
+        ActiveConversation::MailboxDm { .. } | ActiveConversation::None => return false,
+    }
+    true
 }
 
 /// Re-read the list from core and repaint it, badge included.

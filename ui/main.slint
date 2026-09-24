@@ -10,6 +10,7 @@ import { MeshGlobal, MeshConversationData } from "mesh/mesh_global.slint";
 import { Typography } from "theme/typography.slint";
 import { Haptics } from "components/haptics.slint";
 import { AvatarText } from "components/avatar.slint";
+import { VirtualKeyboard } from "components/modal_container.slint";
 
 // Re-export all types for Rust binding
 export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem, SharedContentItem, SharedTab }
@@ -106,6 +107,8 @@ export component MainWindow inherits Window {
     in property <[string]> recovery-codes <=> app.recovery-codes;
     callback recovery-codes-confirmed <=> app.recovery-codes-confirmed;
     callback recovery-codes-copy-all <=> app.recovery-codes-copy-all;
+    // Android: FLAG_SECURE while the codes are on screen (lib.rs binds it).
+    callback secure-screen(bool);
 
     // ========== Sealed sender onboarding explainer ==========
     callback sealed-sender-intro-confirmed <=> app.sealed-sender-intro-confirmed;
@@ -300,6 +303,7 @@ export component MainWindow inherits Window {
     callback selection-cleared <=> app.selection-cleared;
     callback selection-delete-clicked <=> app.selection-delete-clicked;
     callback selection-copy-clicked <=> app.selection-copy-clicked;
+    callback selection-forward-clicked <=> app.selection-forward-clicked;
 
     // ========== Peer identity change (conversation wedged) ==========
     in property <bool> identity-change-visible <=> app.identity-change-visible;
@@ -445,8 +449,7 @@ export component MainWindow inherits Window {
 
     // Forward message modal properties
     in property <string> forward-message-preview <=> app.forward-message-preview;
-    in-out property <string> forward-source-sender-id <=> app.forward-source-sender-id;
-    in-out property <string> forward-source-timestamp <=> app.forward-source-timestamp;
+    in-out property <[string]> forward-sources <=> app.forward-sources;
     in-out property <string> forward-search-text <=> app.forward-search-text;
     in property <[ForwardTarget]> forward-targets <=> app.forward-targets;
     in property <bool> forward-loading <=> app.forward-loading;
@@ -867,7 +870,13 @@ export component MainWindow inherits Window {
         }
     }
     changed active-modal => {
+        root.secure-screen(root.active-modal == "recovery-codes");
         if (root.active-modal == "none") { back-scope.focus(); }
+    }
+    // Modals scroll their card clear of the keyboard only while it is up
+    // (modal_container.slint, §112i), and only the Window can see it.
+    changed virtual-keyboard-size => {
+        VirtualKeyboard.height = root.virtual-keyboard-size.height;
     }
 
     // Catches Android's hardware/gesture Back. It wraps `app` so it is an

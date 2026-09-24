@@ -244,11 +244,15 @@ export component MessageList inherits Rectangle {
 
             // Update is-at-bottom when scroll position changes
             changed viewport-y => {
+                self.update-at-bottom(self.viewport-y);
+            }
+
+            function update-at-bottom(y: length) {
                 // Calculate if we're at bottom (within 50px threshold)
                 // viewport-y is negative, so at bottom means:
                 // viewport-y >= -(viewport-height - self.height)
                 // Rearranged: viewport-height + viewport-y <= self.height + threshold
-                root.is-at-bottom = (self.viewport-height + self.viewport-y) <= (self.height + 50px);
+                root.is-at-bottom = (self.viewport-height + y) <= (self.height + 50px);
                 // Reaching the newest message is what "caught up" means; the
                 // pill must stop claiming N new messages after that, including
                 // when the user scrolls back up later in the same session.
@@ -276,10 +280,16 @@ export component MessageList inherits Rectangle {
                         // Telegram parity: the divider sits just under the top
                         // edge, so you read forward from where you stopped with
                         // a sliver of the last-read message still above it.
-                        self.viewport-y = min(0px,
+                        let target = min(0px,
                             max(self.height - self.viewport-height,
                                 -root.unread-divider-y + Spacing.xl));
+                        self.viewport-y = target;
                         root.anchor-consumed = true;
+                        // The open cleared is-at-bottom for the anchor. When the
+                        // unread tail fits on screen the target is the viewport's
+                        // current y, `changed viewport-y` never fires, and the
+                        // pill claimed "1 new message" over the message itself.
+                        self.update-at-bottom(target);
                     }
                 } else if (root.should-auto-scroll && root.is-at-bottom) {
                     self.viewport-y = min(0px, self.height - self.viewport-height);

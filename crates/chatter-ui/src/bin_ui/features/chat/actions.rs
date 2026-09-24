@@ -103,28 +103,36 @@ pub fn wire_forward_message_action(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                 .map(|t| ui_ctx.truncate_message_preview(&t))
                 .unwrap_or_else(|| "Message".to_string());
 
-            // The destination list is core's — which conversations exist, which
-            // the current mode may show, and Saved Messages. The UI renders it.
-            let targets = forward_targets(&ui_ctx, "");
-
             run_ui!(weak, |w| {
-                w.set_forward_message_preview(preview.into());
-                // Stash the source-message identity for the confirm handler
-                // (modal blocks conversation switches, but confirm runs later).
-                w.set_forward_source_sender_id(sender_id_str.clone().into());
-                w.set_forward_source_timestamp(timestamp_ns_str.clone().into());
-                w.set_forward_search_text("".into());
-                w.set_forward_targets(ModelRc::from(std::rc::Rc::new(VecModel::from(targets))));
-
-                w.set_active_modal("forward-message".into());
-                tracing::debug!(
-                    sender_id = %sender_id_str,
-                    timestamp = %timestamp_ns_str,
-                    "Forward modal opened (Signal-style lookup)"
+                open_forward_modal(
+                    &w,
+                    &ui_ctx,
+                    vec![format!("{sender_id_str}:{timestamp_ns_str}")],
+                    preview,
                 );
             });
         });
     });
+}
+
+/// Open the forward picker for `sources` ("sender_id:timestamp_ns" keys, in
+/// the order they are to arrive). Stashes the sources for the confirm handler
+/// (the modal blocks conversation switches, but confirm runs later).
+pub(super) fn open_forward_modal(
+    w: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    sources: Vec<String>,
+    preview: String,
+) {
+    // The destination list is core's — which conversations exist, which the
+    // current mode may show, and Saved Messages. The UI renders it.
+    let targets = forward_targets(ui_ctx, "");
+    let sources: Vec<SharedString> = sources.into_iter().map(Into::into).collect();
+    w.set_forward_message_preview(preview.into());
+    w.set_forward_sources(ModelRc::from(std::rc::Rc::new(VecModel::from(sources))));
+    w.set_forward_search_text("".into());
+    w.set_forward_targets(ModelRc::from(std::rc::Rc::new(VecModel::from(targets))));
+    w.set_active_modal("forward-message".into());
 }
 
 /// Wire the forward picker's search box. The filter itself is core's — this
