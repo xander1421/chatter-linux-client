@@ -348,7 +348,7 @@ pub(crate) fn refresh_blocked_users(
     weak_window: slint::Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
 ) {
-    let blocked_users = ui_ctx.get_anon_dm_blocked_users();
+    let blocked_users = ui_ctx.blocked_users();
     let blocked_data: Vec<crate::BlockedUserData> = blocked_users
         .into_iter()
         .map(|user_id| crate::BlockedUserData {

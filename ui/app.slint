@@ -1468,6 +1468,7 @@ export component App inherits Rectangle {
                             }
                             end-call => { root.call-end(); root.active-call-fullscreen = false; }
                             show-audio-settings => { root.show-audio-device-picker(); }
+                            show-audio-output-settings => { root.show-audio-output-picker(); }
                             peer-audio-mute-toggle(uid) => { root.call-peer-audio-mute-toggle(uid); }
                             peer-video-pause-toggle(uid) => { root.call-peer-video-pause-toggle(uid); }
                             fullscreen-toggle => {

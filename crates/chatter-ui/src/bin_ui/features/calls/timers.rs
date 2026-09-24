@@ -267,19 +267,26 @@ pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFr
                         }
                         // The last tile is the local "You" participant; its
                         // frame draws into `local-video-frame`, not a remote row.
+                        // Remote slots MIRROR the tiles (same order, looked up by
+                        // user_id, blank where a peer has no frame) — as the GL
+                        // path does — so a video-off peer can't shift everyone
+                        // else's frame onto the wrong tile.
                         let participants = w.get_active_call_data().participants;
-                        let local_id = participants
-                            .row_data(participants.row_count().saturating_sub(1))
-                            .map(|p| p.user_id.to_string());
-                        let mut local_img = slint::Image::default();
-                        let mut remote_images: Vec<slint::Image> = Vec::with_capacity(buffers.len());
-                        for (id, buf) in buffers {
-                            if Some(&id) == local_id.as_ref() {
-                                local_img = slint::Image::from_rgba8(buf);
-                            } else {
-                                remote_images.push(slint::Image::from_rgba8(buf));
-                            }
-                        }
+                        let tile_ids: Vec<String> = (0..participants.row_count())
+                            .filter_map(|i| participants.row_data(i))
+                            .map(|p| p.user_id.to_string())
+                            .collect();
+                        let mut frames: std::collections::HashMap<String, _> = buffers.into_iter().collect();
+                        let (remote_ids, local_id) = tile_ids.split_at(tile_ids.len().saturating_sub(1));
+                        let local_img = local_id
+                            .first()
+                            .and_then(|id| frames.remove(id))
+                            .map(slint::Image::from_rgba8)
+                            .unwrap_or_default();
+                        let remote_images: Vec<slint::Image> = remote_ids
+                            .iter()
+                            .map(|id| frames.remove(id).map(slint::Image::from_rgba8).unwrap_or_default())
+                            .collect();
                         w.set_call_local_video_frame(local_img);
                         apply_remote_video_frames(&w, remote_images);
                     }
@@ -299,7 +306,7 @@ pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFr
 /// Apply a new batch of remote video frames to the UI, reusing the persistent
 /// `VecModel` and updating rows in place.
 ///
-/// `images` is already in stable participant order (sorted off-thread). We
+/// `images` is one slot per remote tile, in tile order (blank = no frame). We
 /// `set_row_data` for existing rows, `push` for new participants and `remove`
 /// trailing rows when a participant leaves — never rebuilding the model. This
 /// keeps the `call_remote_video_frames` property bound to one `ModelRc` for

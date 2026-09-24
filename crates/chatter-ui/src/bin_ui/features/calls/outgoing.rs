@@ -249,7 +249,8 @@ fn render_calling_placeholder(
         is_video_call: setup.is_video,
         is_anonymous_call: setup.is_anonymous,
         is_encrypted: true,
-        is_identity_verified: setup.is_anonymous, // anon = no identity to verify
+        // Nothing is verified when the call starts; an anon peer never is.
+        is_identity_verified: false,
         identity_warning: "".into(),
         participant_count: 1,
         duration_seconds: 0,

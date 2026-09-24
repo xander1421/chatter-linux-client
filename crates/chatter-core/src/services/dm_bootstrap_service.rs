@@ -1,8 +1,6 @@
 //! DM Bootstrap service for managing DM channel establishment and session recovery.
 
 use std::sync::Arc;
-use std::collections::HashMap;
-use tokio::sync::Mutex;
 
 use crate::domain::channel::Channel;
 use crate::domain::ids::UserId;
@@ -41,8 +39,6 @@ pub struct DmBootstrapService {
     /// TODO: Refactor `spawn_dm_bootstrap_handler_from_bus` to take pre-built
     /// services (SignalService, KeyStore) instead of raw Database, then remove this.
     database: Arc<crate::storage::Database>,
-    /// Temporary storage for messages that need to be shown in UI during bootstrap
-    pending_ui_messages: Arc<Mutex<HashMap<UserId, Vec<String>>>>,
 }
 
 impl DmBootstrapService {
@@ -59,7 +55,6 @@ impl DmBootstrapService {
             grpc_pool,
             mailbox_manager,
             database,
-            pending_ui_messages: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -73,51 +68,6 @@ impl DmBootstrapService {
             self.grpc_pool.clone(),
             event_bus,
         )
-    }
-    
-    /// Store a message to be shown in UI during bootstrap
-    pub async fn store_pending_ui_message(&self, peer_id: &UserId, message: String) {
-        let mut pending = self.pending_ui_messages.lock().await;
-        pending.entry(*peer_id).or_insert_with(Vec::new).push(message);
-    }
-    
-    /// Take and clear pending UI messages for a peer
-    pub async fn take_pending_messages(&self, peer_id: &UserId) -> Vec<String> {
-        let mut pending = self.pending_ui_messages.lock().await;
-        pending.remove(peer_id).unwrap_or_default()
-    }
-
-    /// Flush pending UI messages for a peer by sending them as DMs.
-    ///
-    /// Called after DM bootstrap completes on the responder side.
-    /// Builds Content protos and sends via Double Ratchet.
-    pub async fn flush_pending_ui_messages(
-        &self,
-        peer_id: &UserId,
-    ) {
-        let pending = self.take_pending_messages(peer_id).await;
-        if pending.is_empty() {
-            return;
-        }
-
-        tracing::info!(
-            peer_id = %peer_id,
-            count = pending.len(),
-            "Flushing pending UI messages after bootstrap"
-        );
-
-        let msg_svc = self.message_service.clone();
-        let mailbox = self.mailbox_manager.clone();
-        let peer = *peer_id;
-        tokio::spawn(async move {
-            for text in pending {
-                let now = chrono::Utc::now().timestamp_millis() as u64;
-                let content = crate::services::gateway::build_text_content(&text, now);
-                if let Err(e) = msg_svc.send_dm(&peer, content, &*mailbox).await {
-                    tracing::warn!(peer_id = %peer, error = %e, "Failed to send pending message");
-                }
-            }
-        });
     }
 
     /// Handle session convergence failure by resetting and re-establishing sessions.
@@ -215,7 +165,12 @@ impl DmBootstrapService {
     }
 
     /// Handle DM bootstrap completion by sending any pending messages.
-    pub fn handle_bootstrap_completed(&self, peer_id: UserId) {
+    ///
+    /// The flush runs in the background, so its outcome is announced on the
+    /// bus: `DmBootstrapCompleted` once the queue went out (the UI clears
+    /// "Setting up secure channel…" and flips the queued bubbles to sent),
+    /// `MessageSendFailed` when it did not.
+    pub fn handle_bootstrap_completed(&self, peer_id: UserId, event_bus: crate::events::EventBus) {
         let message_service = self.message_service.clone();
         let mailbox_manager = self.mailbox_manager.clone();
         let grpc_pool = self.grpc_pool.clone();
@@ -259,6 +214,7 @@ impl DmBootstrapService {
                             "BOOTSTRAP[4/4] No pending messages to send (initiator side)"
                         );
                     }
+                    event_bus.emit_domain(crate::events::DomainEvent::DmBootstrapCompleted { peer_id });
                 }
                 Err(e) => {
                     tracing::error!(
@@ -266,6 +222,10 @@ impl DmBootstrapService {
                         error = %e,
                         "BOOTSTRAP[4/4] FAILED - Could not send pending messages"
                     );
+                    event_bus.emit_domain(crate::events::DomainEvent::MessageSendFailed {
+                        channel_id: crate::domain::ids::ChannelId::from(peer_id),
+                        error: e.to_string(),
+                    });
                 }
             }
         });

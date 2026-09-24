@@ -82,6 +82,8 @@ export component ChannelSettingsModal inherits Rectangle {
     // a DIFFERENT channel) already asking to leave or delete.
     property <bool> show-delete-confirm: false;
     property <bool> show-leave-confirm: false;
+    // user-id whose role picker is expanded in the member list ("" = none).
+    property <string> role-picker-user: "";
     changed show-modal => {
         self.show-delete-confirm = false;
         self.show-leave-confirm = false;
@@ -714,70 +716,104 @@ export component ChannelSettingsModal inherits Rectangle {
 
                             // Member list
                             for member in root.members: Rectangle {
-                                height: 52px;
+                                height: root.role-picker-user == member.user-id ? 96px : 52px;
                                 background: transparent;
 
-                                HorizontalLayout {
-                                    spacing: Spacing.sm;
-                                    padding: Spacing.xs;
+                                VerticalLayout {
+                                    HorizontalLayout {
+                                        height: 52px;
+                                        spacing: Spacing.sm;
+                                        padding: Spacing.xs;
 
-                                    // Initials in a clipped circle; the hand-rolled
-                                    // placeholder here drew the whole name, unclipped.
-                                    Avatar {
-                                        size: 36px;
-                                        name: member.display-name;
-                                        fallback-text: "?";
-                                    }
+                                        // Initials in a clipped circle; the hand-rolled
+                                        // placeholder here drew the whole name, unclipped.
+                                        Avatar {
+                                            size: 36px;
+                                            name: member.display-name;
+                                            fallback-text: "?";
+                                        }
 
-                                    // Name and role
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        min-width: 0px;
+                                        // Name and role
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            min-width: 0px;
 
-                                        HorizontalLayout {
-                                            spacing: Spacing.xs;
+                                            HorizontalLayout {
+                                                spacing: Spacing.xs;
 
-                                            Text {
-                                                text: member.display-name;
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                                overflow: elide;
-                                            }
+                                                Text {
+                                                    text: member.display-name;
+                                                    color: Colors.text-primary;
+                                                    font-size: Typography.sm;
+                                                    overflow: elide;
+                                                }
 
-                                            if member.role != "member": Rectangle {
-                                                width: role-text.width + Spacing.sm;
-                                                height: 18px;
-                                                background: root.role-color(member.role).with-alpha(0.15);
-                                                border-radius: Spacing.radius-sm;
+                                                if member.role != "member": Rectangle {
+                                                    width: role-text.width + Spacing.sm;
+                                                    height: 18px;
+                                                    background: root.role-color(member.role).with-alpha(0.15);
+                                                    border-radius: Spacing.radius-sm;
 
-                                                role-text := Text {
-                                                    x: Spacing.xs;
-                                                    text: member.role;
-                                                    color: root.role-color(member.role);
-                                                    font-size: Typography.xs;
-                                                    font-weight: Typography.medium;
-                                                    vertical-alignment: center;
-                                                    height: 100%;
+                                                    role-text := Text {
+                                                        x: Spacing.xs;
+                                                        text: member.role;
+                                                        color: root.role-color(member.role);
+                                                        font-size: Typography.xs;
+                                                        font-weight: Typography.medium;
+                                                        vertical-alignment: center;
+                                                        height: 100%;
+                                                    }
                                                 }
                                             }
+
+                                            // Empty when the peer's handle is not known locally.
+                                            if member.username != "": Text {
+                                                text: "@" + member.username;
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                                overflow: elide;
+                                            }
                                         }
 
-                                        // Empty when the peer's handle is not known locally.
-                                        if member.username != "": Text {
-                                            text: "@" + member.username;
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                            overflow: elide;
+                                        // Actions (only if can manage and not owner). Roles are a
+                                        // server-channel concept; anon groups have no role RPC.
+                                        if root.can-manage-members && !root.is-private-group && member.role != "owner": Button {
+                                            text: "Role";
+                                            variant: "ghost";
+
+                                            clicked => {
+                                                root.role-picker-user = root.role-picker-user == member.user-id ? "" : member.user-id;
+                                            }
+                                        }
+
+                                        if root.can-manage-members && member.role != "owner": Button {
+                                            text: "Remove";
+                                            variant: "ghost";
+
+                                            clicked => {
+                                                root.remove-member(member.user-id);
+                                            }
                                         }
                                     }
 
-                                    // Actions (only if can manage and not owner)
-                                    if root.can-manage-members && member.role != "owner": Button {
-                                        text: "Remove";
-                                        variant: "ghost";
+                                    // Ownership is not grantable (the server rejects OWNER), so
+                                    // the picker offers only the three assignable roles.
+                                    if root.role-picker-user == member.user-id: HorizontalLayout {
+                                        height: 44px;
+                                        spacing: Spacing.xs;
+                                        padding: Spacing.xs;
+                                        alignment: end;
 
-                                        clicked => {
-                                            root.remove-member(member.user-id);
+                                        for r in ["member", "moderator", "admin"]: Button {
+                                            text: r;
+                                            variant: r == member.role ? "primary" : "secondary";
+
+                                            clicked => {
+                                                root.role-picker-user = "";
+                                                if r != member.role {
+                                                    root.change-member-role(member.user-id, r);
+                                                }
+                                            }
                                         }
                                     }
                                 }

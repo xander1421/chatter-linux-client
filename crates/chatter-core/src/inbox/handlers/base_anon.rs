@@ -314,25 +314,31 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
         Some(ContentKind::DataMessage(data_msg)) => {
             // Delete-for-everyone wrapped inside DataMessage
             if let Some(delete) = &data_msg.delete {
+                // Announce only a delete that removed a row: the backend
+                // matches (sender, timestamp), so a member naming someone
+                // else's message deletes nothing and must not blank it on
+                // screen either.
                 match backend.delete_message(id, sender_id, delete.target_sent_timestamp) {
-                    Ok(true) => tracing::info!(
-                        timestamp = delete.target_sent_timestamp,
-                        sender_id = %sender_id,
-                        id = %id,
-                        "Deleted message (delete-for-everyone)"
-                    ),
+                    Ok(true) => {
+                        tracing::info!(
+                            timestamp = delete.target_sent_timestamp,
+                            sender_id = %sender_id,
+                            id = %id,
+                            "Deleted message (delete-for-everyone)"
+                        );
+                        events.push(DomainEvent::MessageDeleted {
+                            message_id: MessageId::from_timestamp(delete.target_sent_timestamp),
+                            author_id: *sender_id,
+                            channel_id: Some(channel_id),
+                            target_sent_timestamp: delete.target_sent_timestamp,
+                        });
+                    }
                     Ok(false) => tracing::debug!(
                         timestamp = delete.target_sent_timestamp,
                         "Delete target not found"
                     ),
                     Err(e) => tracing::warn!(error = %e, "Failed to delete message"),
                 }
-                events.push(DomainEvent::MessageDeleted {
-                    message_id: MessageId::from_timestamp(delete.target_sent_timestamp),
-                    author_id: *sender_id,
-                    channel_id: Some(channel_id),
-                    target_sent_timestamp: delete.target_sent_timestamp,
-                });
                 return CommonDispatchOutcome::Handled(events);
             }
 
@@ -513,6 +519,7 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
                         new_content: MessageContent::Text(new_text),
                         channel_id,
                         conversation_type: backend.conversation_type(),
+                        author_id: *sender_id,
                         target_sent_timestamp: target_timestamp,
                     });
                 }
@@ -527,5 +534,58 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
         }
 
         _ => CommonDispatchOutcome::NotHandled,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::anon_group::AnonGroupId;
+
+    /// Backend whose delete reports whether a row matched.
+    struct DeleteOnly {
+        row_matched: bool,
+    }
+
+    impl AnonInboxBackend for DeleteOnly {
+        type Id = AnonGroupId;
+        fn conversation_type(&self) -> ConversationType { ConversationType::AnonGroup }
+        fn label(&self) -> &'static str { "test" }
+        fn create_attachment_records(&self, _: &[AttachmentPointer]) -> Vec<AttachmentId> { vec![] }
+        fn store_data_message(
+            &self, _: &AnonGroupId, _: &UserId, _: &str, _: &[AttachmentId], _: u64, _: Option<QuoteContext>,
+        ) -> Result<String, String> { unreachable!() }
+        fn delete_message(&self, _: &AnonGroupId, _: &UserId, _: u64) -> Result<bool, String> {
+            Ok(self.row_matched)
+        }
+        fn update_message_text(&self, _: &AnonGroupId, _: &UserId, _: u64, _: &str) -> Result<bool, String> { unreachable!() }
+        fn add_reaction(&self, _: &AnonGroupId, _: &UserId, _: u64, _: &UserId, _: &str) -> Result<bool, String> { unreachable!() }
+        fn remove_reaction(&self, _: &AnonGroupId, _: &UserId, _: u64, _: &UserId, _: &str) -> Result<bool, String> { unreachable!() }
+        fn set_pinned(&self, _: &AnonGroupId, _: u64, _: bool) -> Result<(), String> { unreachable!() }
+        fn get_message_id_by_timestamp(&self, _: &AnonGroupId, _: u64) -> Option<MessageId> { None }
+    }
+
+    fn delete_events(row_matched: bool) -> usize {
+        let content = Content {
+            content: Some(content_v1::content::Content::DataMessage(content_v1::DataMessage {
+                delete: Some(content_v1::Delete { target_sent_timestamp: 42 }),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        match dispatch_common_content(&AnonGroupId::new(), &UserId::new(), &content, &DeleteOnly { row_matched }) {
+            CommonDispatchOutcome::Handled(events) => events
+                .iter()
+                .filter(|e| matches!(e, DomainEvent::MessageDeleted { .. }))
+                .count(),
+            _ => panic!("delete must be handled"),
+        }
+    }
+
+    #[test]
+    fn delete_is_announced_only_when_a_row_was_deleted() {
+        assert_eq!(delete_events(true), 1);
+        // A member naming someone else's timestamp deletes nothing.
+        assert_eq!(delete_events(false), 0);
     }
 }

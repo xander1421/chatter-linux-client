@@ -8,32 +8,17 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::services::quick_switcher::QuickSwitcherEntry;
-use chatter_core::services::search::filter_conversations;
 
 use crate::{MainWindow, QuickSwitcherItem, SearchResult};
 
 /// Wire all unified-search callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    wire_opened(window);
+    wire_opened(window, ui_ctx);
     wire_changed(window, ui_ctx);
     wire_conversation_selected(window);
     wire_message_selected(window, ui_ctx);
     wire_resolve(window, ui_ctx);
     wire_person_selected(window, ui_ctx);
-}
-
-/// True when `q` looks like a Signal `nickname.discriminator` handle — the only
-/// shape `lookup_by_username` accepts. Gates resolve-on-Enter so the field
-/// only probes the existence oracle for full discriminated handles (no
-/// enumeration / no partial-prefix probing).
-fn looks_like_handle(q: &str) -> bool {
-    match q.trim().rsplit_once('.') {
-        Some((nick, disc)) => {
-            !nick.is_empty() && !disc.is_empty() && disc.bytes().all(|b| b.is_ascii_digit())
-        }
-        None => false,
-    }
 }
 
 /// The person-lookup form of a query: trimmed, one leading `@` dropped.
@@ -47,15 +32,17 @@ fn person_query(q: &str) -> &str {
 /// True when `q` is resolvable to a person: a full handle OR a pasted
 /// `chatter://u/…` username link (shape check lives in core).
 fn resolvable_person_query(q: &str) -> bool {
-    looks_like_handle(q) || chatter_core::domain::UsernameLink::is_username_link(q)
+    chatter_core::services::user::is_lookup_handle(q)
+        || chatter_core::domain::UsernameLink::is_username_link(q)
 }
 
 /// On open: populate conversations (empty query → recent), clear messages.
-fn wire_opened(window: &MainWindow) {
+fn wire_opened(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
     window.on_unified_search_opened(move || {
         if let Some(w) = weak.upgrade() {
-            let convs = filter_to_items("", &w);
+            let convs = conversation_items(&ui_ctx, "");
             set_conversations(&w, convs);
             w.set_unified_search_messages(ModelRc::new(VecModel::default()));
         }
@@ -78,9 +65,9 @@ fn wire_changed(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             w.set_unified_search_person_status("".into());
         }
 
-        // Conversations: synchronous, core-ranked.
+        // Conversations: synchronous, core-built and core-ranked.
         if let Some(w) = weak.upgrade() {
-            let convs = filter_to_items(&query_str, &w);
+            let convs = conversation_items(&ui_ctx, &query_str);
             set_conversations(&w, convs);
         }
 
@@ -294,76 +281,11 @@ fn wire_message_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
 // ---- helpers ----
 
-/// Collect conversations from sidebar models, filter+arrange via core.
-fn filter_to_items(query: &str, window: &MainWindow) -> Vec<QuickSwitcherItem> {
-    let mut entries: Vec<QuickSwitcherEntry> = Vec::new();
-
-    // Saved Messages — always a jump target (opened via its dedicated callback,
-    // so the id is a sentinel, not a real channel id).
-    entries.push(QuickSwitcherEntry {
-        id: "saved-messages".into(),
-        name: "Saved Messages".into(),
-        conv_type: "saved_messages".into(),
-        presence_status: String::new(),
-        unread_count: 0,
-    });
-
-    let channels = window.get_channels();
-    for i in 0..channels.row_count() {
-        if let Some(ch) = channels.row_data(i) {
-            entries.push(QuickSwitcherEntry {
-                id: ch.channel_id.to_string(),
-                name: ch.name.to_string(),
-                conv_type: "channel".into(),
-                presence_status: String::new(),
-                unread_count: ch.unread_count,
-            });
-        }
-    }
-    let dms = window.get_dm_conversations();
-    for i in 0..dms.row_count() {
-        if let Some(dm) = dms.row_data(i) {
-            entries.push(QuickSwitcherEntry {
-                id: dm.channel_id.to_string(),
-                name: dm.display_name.to_string(),
-                conv_type: "dm".into(),
-                presence_status: dm.presence_status.to_string(),
-                unread_count: dm.unread_count,
-            });
-        }
-    }
-    let groups = window.get_private_groups();
-    for i in 0..groups.row_count() {
-        if let Some(g) = groups.row_data(i) {
-            entries.push(QuickSwitcherEntry {
-                id: g.group_id.to_string(),
-                name: g.name.to_string(),
-                conv_type: "private_group".into(),
-                presence_status: String::new(),
-                unread_count: g.unread_count,
-            });
-        }
-    }
-
-    // Mesh conversations are jump targets like any other. Collected from the
-    // same model the sidebar renders, and ranked by the same core filter.
-    #[cfg(feature = "mesh")]
-    {
-        let mesh = window.global::<crate::MeshGlobal>().get_conversations();
-        for i in 0..mesh.row_count() {
-            if let Some(row) = mesh.row_data(i) {
-                entries.push(QuickSwitcherEntry {
-                    id: row.id.to_string(),
-                    name: row.title.to_string(),
-                    conv_type: "mesh".into(),
-                    presence_status: String::new(),
-                    unread_count: row.unread_count,
-                });
-            }
-        }
-    }
-
-    filter_conversations(query, entries)
+/// Jump-to rows for `query`: core builds them from the mode-filtered sidebar
+/// sources (folders included) and ranks them; this only converts.
+fn conversation_items(ui_ctx: &ChatterClient, query: &str) -> Vec<QuickSwitcherItem> {
+    ui_ctx
+        .quick_switcher_entries(query)
         .into_iter()
         .map(|e| QuickSwitcherItem {
             id: e.id.into(),
@@ -379,22 +301,15 @@ fn set_conversations(window: &MainWindow, items: Vec<QuickSwitcherItem>) {
     window.set_unified_search_conversations(ModelRc::new(VecModel::from(items)));
 }
 
-/// Port of header.rs message-search shaping. Searches all conversations
-/// (unified palette has no per-channel scope toggle).
+/// Port of header.rs message-search shaping. Searches every conversation the
+/// current mode shows (core filters; the palette has no per-channel scope).
 fn search_messages(ui_ctx: &Arc<ChatterClient>, query: &str) -> Vec<SearchResult> {
-    let results = match ui_ctx.search_messages_local(query, None, 50) {
-        Ok(r) => r,
-        Err(e) => { tracing::error!("Search failed: {}", e); return Vec::new(); }
-    };
+    let results = ui_ctx.search_messages_visible(query, 50);
     let mut out: Vec<SearchResult> = Vec::with_capacity(results.len());
-    for result in &results {
-        let msg = match ui_ctx.get_message_local(&result.message_id) {
-            Some(m) => m,
-            None => continue,
-        };
+    for msg in &results {
         // Conversation name + sender name resolution both live in core.
         let channel_name = ui_ctx
-            .get_conversation_metadata(&result.conversation_id.to_string(), &msg.conversation_type)
+            .get_conversation_metadata(&msg.conversation_id.to_string(), &msg.conversation_type)
             .map(|c| c.name)
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| "Unknown".to_string());
@@ -412,8 +327,8 @@ fn search_messages(ui_ctx: &Arc<ChatterClient>, query: &str) -> Vec<SearchResult
             .map(|t| ui_ctx.truncate_message_preview(&t))
             .unwrap_or_else(|| "[Attachment]".to_string());
         out.push(SearchResult {
-            message_id: result.message_id.to_string().into(),
-            channel_id: result.conversation_id.to_string().into(),
+            message_id: msg.id.to_string().into(),
+            channel_id: msg.conversation_id.to_string().into(),
             channel_name: channel_name.into(),
             sender_name: sender_name.into(),
             content_preview: content_preview.into(),

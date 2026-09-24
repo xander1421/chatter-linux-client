@@ -1,38 +1,16 @@
 //! Handle @Jarvis mentions in messages.
 //!
-//! Detects @Jarvis mentions in message text and routes queries to the JarvisService.
+//! Core decides whether a message is an @Jarvis request
+//! (`ChatterClient::jarvis_mention`); this renders the turn and routes the
+//! query to the JarvisService.
 
 use std::sync::Arc;
 
 use chatter_core::client::ChatterClient;
-use chatter_core::domain::ids::ChannelId;
 use chatter_core::domain::jarvis::JarvisContext;
 use slint::Weak;
 
 use crate::MainWindow;
-
-/// Check if message contains @Jarvis mention.
-///
-/// Case-insensitive detection of @jarvis anywhere in the message.
-pub fn contains_jarvis_mention(text: &str) -> bool {
-    text.to_lowercase().contains("@jarvis")
-}
-
-/// Extract the query portion after @Jarvis.
-///
-/// Returns the trimmed text following @jarvis, or None if empty.
-pub fn extract_jarvis_query(text: &str) -> Option<String> {
-    let lower = text.to_lowercase();
-    if let Some(pos) = lower.find("@jarvis") {
-        // "@jarvis" is 7 characters
-        let after = &text[pos + 7..];
-        let query = after.trim();
-        if !query.is_empty() {
-            return Some(query.to_string());
-        }
-    }
-    None
-}
 
 /// Handle a @Jarvis mention asynchronously.
 ///
@@ -41,7 +19,7 @@ pub fn extract_jarvis_query(text: &str) -> Option<String> {
 pub async fn handle_jarvis_mention(
     ui_ctx: &Arc<ChatterClient>,
     query: &str,
-    channel_id: Option<&ChannelId>,
+    context: JarvisContext,
     weak_window: Weak<MainWindow>,
 ) {
     // Set thinking state
@@ -61,26 +39,13 @@ pub async fn handle_jarvis_mention(
         rx.recv().ok()
     };
 
-    // Build context - use channel context if available, otherwise use a DM-style context
-    // with a nil UUID (Jarvis conversations are stored separately anyway)
-    let context = match channel_id {
-        Some(id) => JarvisContext::channel(id.clone()),
-        None => {
-            // Create a placeholder channel context for Jarvis panel conversations
-            // Uses nil UUID - Jarvis stores conversations in its own tables anyway
-            let placeholder_id: ChannelId = uuid::Uuid::nil().into();
-            JarvisContext::dm(placeholder_id)
-        }
-    };
-
     // Get current user ID
     let author_id = ui_ctx.auth_state().get().current_user_id;
 
     // Add user message to Jarvis state
-    let channel_id_str = channel_id.map(|id| id.to_string());
     ui_ctx
         .jarvis_state()
-        .add_user_message(query, channel_id_str.as_deref());
+        .add_user_message(query, Some(&context.context_id));
 
     // Call Jarvis
     match ui_ctx.jarvis_ask(&context, query, author_id.as_ref()).await {
@@ -133,39 +98,5 @@ pub async fn handle_jarvis_mention(
                 }
             });
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_contains_jarvis_mention() {
-        assert!(contains_jarvis_mention("@Jarvis what time is it?"));
-        assert!(contains_jarvis_mention("Hey @jarvis help me"));
-        assert!(contains_jarvis_mention("@JARVIS"));
-        assert!(!contains_jarvis_mention("Hello world"));
-        assert!(!contains_jarvis_mention("jarvis"));
-        assert!(!contains_jarvis_mention("@jar"));
-    }
-
-    #[test]
-    fn test_extract_jarvis_query() {
-        assert_eq!(
-            extract_jarvis_query("@Jarvis what time is it?"),
-            Some("what time is it?".to_string())
-        );
-        assert_eq!(
-            extract_jarvis_query("Hey @jarvis help me"),
-            Some("help me".to_string())
-        );
-        assert_eq!(
-            extract_jarvis_query("  @JARVIS   summarize this  "),
-            Some("summarize this".to_string())
-        );
-        assert_eq!(extract_jarvis_query("@Jarvis"), None);
-        assert_eq!(extract_jarvis_query("@Jarvis   "), None);
-        assert_eq!(extract_jarvis_query("Hello world"), None);
     }
 }

@@ -50,6 +50,8 @@ pub struct AudioPlayback {
     /// Participants whose audio is locally muted — frames decoded but
     /// discarded before mixing so the wire still flows but nothing plays.
     muted_peers: Arc<RwLock<HashSet<String>>>,
+    /// Output device chosen by the user (CPAL device name); `None` = default.
+    output_device: RwLock<Option<String>>,
 }
 
 struct ActiveAudioStream {
@@ -74,7 +76,42 @@ impl AudioPlayback {
             is_active: Arc::new(AtomicBool::new(true)),
             volume: Arc::new(RwLock::new(1.0f32)),
             muted_peers: Arc::new(RwLock::new(HashSet::new())),
+            output_device: RwLock::new(None),
         })
+    }
+
+    /// The output device called `name`, or the host default for `None`.
+    fn find_output_device(name: Option<&str>) -> Result<Device, CallError> {
+        let host = cpal::default_host();
+        match name {
+            None => host.default_output_device().ok_or_else(|| {
+                CallError::DeviceError("No audio output device found".to_string())
+            }),
+            Some(name) => host
+                .output_devices()
+                .map_err(|e| CallError::DeviceError(format!("Failed to list output devices: {}", e)))?
+                .find(|d| d.name().is_ok_and(|n| n == name))
+                .ok_or_else(|| CallError::DeviceError(format!("Output device '{}' not found", name))),
+        }
+    }
+
+    /// Route remote audio to the output device called `name` (an id from
+    /// [`Self::list_devices`]).
+    ///
+    /// Before the first track this only records the choice. Mid-call the
+    /// stream is rebuilt on the new device at the CURRENT rate and channel
+    /// count, because every running track was opened resampling to those; if
+    /// the device refuses that format, the old stream is left playing and the
+    /// error is returned.
+    pub fn set_output_device(&self, name: &str) -> Result<(), CallError> {
+        let device = Self::find_output_device(Some(name))?;
+        if self.output_stream.read().is_some() {
+            let stream = self.build_stream(&device, *self.sample_rate.read(), *self.channels.read())?;
+            *self.output_stream.write() = Some(stream);
+        }
+        *self.output_device.write() = Some(name.to_string());
+        tracing::info!("Audio playback: output device set to '{}'", name);
+        Ok(())
     }
 
     /// Initialize the CPAL output stream (called lazily on first track).
@@ -87,10 +124,17 @@ impl AudioPlayback {
             }
         }
 
-        let host = cpal::default_host();
-        let output_device = host.default_output_device().ok_or_else(|| {
-            CallError::DeviceError("No audio output device found".to_string())
-        })?;
+        // A chosen device that has since disappeared falls back to the default
+        // rather than leaving the call silent.
+        let chosen = self.output_device.read().clone();
+        let output_device = match Self::find_output_device(chosen.as_deref()) {
+            Ok(device) => device,
+            Err(e) if chosen.is_some() => {
+                tracing::warn!("{}; using the default output", e);
+                Self::find_output_device(None)?
+            }
+            Err(e) => return Err(e),
+        };
 
         let supported_config = output_device
             .default_output_config()
@@ -103,9 +147,17 @@ impl AudioPlayback {
         *self.sample_rate.write() = sample_rate;
         *self.channels.write() = channels;
 
+        let output_stream = self.build_stream(&output_device, sample_rate, channels)?;
+        *self.output_stream.write() = Some(output_stream);
+        Ok(())
+    }
+
+    /// Build and start a CPAL output stream on `device` that drains the mix
+    /// buffer.
+    fn build_stream(&self, device: &Device, sample_rate: u32, channels: u16) -> Result<cpal::Stream, CallError> {
         tracing::info!(
             "Audio playback: using device '{}' at {}Hz, {} channels",
-            output_device.name().unwrap_or_else(|_| "unknown".to_string()),
+            device.name().unwrap_or_else(|_| "unknown".to_string()),
             sample_rate,
             channels
         );
@@ -121,7 +173,7 @@ impl AudioPlayback {
             buffer_size: cpal::BufferSize::Default,
         };
 
-        let output_stream = output_device
+        let output_stream = device
             .build_output_stream(
                 &config,
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
@@ -161,8 +213,7 @@ impl AudioPlayback {
 
         tracing::info!("Audio playback stream started");
 
-        *self.output_stream.write() = Some(output_stream);
-        Ok(())
+        Ok(output_stream)
     }
 
     /// Add a remote audio track for playback.

@@ -1,8 +1,8 @@
 //! Inbox event processor - handles protocol-level InboxEvent concerns.
 //!
-//! Processes InboxEvents that are purely protocol logic (no UI dependency),
-//! returning `true` if the event was fully handled or `false` if the UI
-//! should also process it.
+//! Handles the protocol side of every InboxEvent. Anything the UI must see
+//! leaves here as a `DomainEvent` on the event bus — nothing reads a return
+//! value, so "the UI will also process it" is not a thing this layer can say.
 
 use std::sync::Arc;
 
@@ -23,9 +23,6 @@ use crate::state::ActiveConversation;
 use crate::util::time::TimestampNanos;
 
 /// Processes inbox events and handles protocol-level concerns.
-///
-/// Returns `true` from `process()` if the event was fully handled (UI
-/// does not need to see it), `false` if UI should also process it.
 pub struct InboxEventProcessor {
     message_service: Arc<MessageService>,
     #[allow(dead_code)] // Kept on the constructor surface for future channel-side handlers
@@ -86,14 +83,12 @@ impl InboxEventProcessor {
         }
     }
 
-    /// Process an inbox event.
-    ///
-    /// Returns `true` if the event was fully handled (UI does not need it),
-    /// `false` if the UI should also process it.
-    pub async fn process(&self, event: &InboxEvent) -> bool {
+    /// Process an inbox event. The UI hears about it only through the
+    /// `DomainEvent`s emitted here.
+    pub async fn process(&self, event: &InboxEvent) {
         match event {
             // =================================================================
-            // Pure protocol events (fully handled here, return true)
+            // Pure protocol events
             // =================================================================
 
             InboxEvent::DmDecryptionFailed { peer_id, error, convergence_failed } => {
@@ -104,7 +99,6 @@ impl InboxEventProcessor {
                 if *convergence_failed {
                     self.dm_bootstrap_service.handle_convergence_failure(*peer_id);
                 }
-                true
             }
 
             InboxEvent::DmDecryptionErrorNeedsReport { peer_id, peer_device_id, dem_serialized } => {
@@ -130,7 +124,6 @@ impl InboxEventProcessor {
                         );
                     }
                 });
-                true
             }
 
             InboxEvent::GroupResendRequested { peer_id, peer_device_id, timestamp_ms } => {
@@ -141,7 +134,6 @@ impl InboxEventProcessor {
                         .resend_on_decryption_error(&peer_id, peer_device_id, timestamp_ms)
                         .await;
                 });
-                true
             }
 
             InboxEvent::DmMailboxExpired { peer_id } => {
@@ -150,46 +142,38 @@ impl InboxEventProcessor {
                     "HEALING: DmMailboxExpired event received, triggering re-bootstrap"
                 );
                 self.dm_bootstrap_service.handle_mailbox_expired(*peer_id);
-                true
             }
 
             InboxEvent::DmPollCompleted { total_messages } => {
                 if *total_messages > 0 {
                     tracing::debug!("DM poll completed: {} messages", total_messages);
                 }
-                true
             }
 
             InboxEvent::MessageReceived { message_id, .. } => {
                 tracing::trace!("Inbox message received: {}", message_id);
-                true
             }
 
             InboxEvent::MessageProcessed { message_id } => {
                 tracing::trace!("Inbox message processed: {}", message_id);
-                true
             }
 
             InboxEvent::MessageFailed { message_id, error } => {
                 tracing::warn!("Inbox message failed: {} - {}", message_id, error);
-                true
             }
 
             InboxEvent::PollCompleted { count, .. } => {
                 if *count > 0 {
                     tracing::trace!("Inbox poll completed: {} messages", count);
                 }
-                true
             }
 
             InboxEvent::PollFailed { error } => {
                 tracing::warn!("Inbox poll failed: {}", error);
-                true
             }
 
             InboxEvent::AcknowledgeFailed { message_ids, error } => {
                 tracing::warn!("Inbox ack failed for {:?}: {}", message_ids, error);
-                true
             }
 
             InboxEvent::GroupMailboxPollCompleted { total_groups, total_messages } => {
@@ -198,7 +182,6 @@ impl InboxEventProcessor {
                     total_messages,
                     "Group mailbox poll completed"
                 );
-                true
             }
 
             InboxEvent::GroupMailboxAnnouncement {
@@ -208,7 +191,6 @@ impl InboxEventProcessor {
                 timestamp: _,
             } => {
                 self.handle_group_mailbox_announcement(channel_id, member_id, mailbox_pk);
-                true
             }
 
             InboxEvent::CallKeyAnswerReceived {
@@ -227,7 +209,6 @@ impl InboxEventProcessor {
                     peer_id: *peer_id,
                     ephemeral_public_key: *ephemeral_public_key,
                 });
-                true
             }
 
             InboxEvent::CallKeyOfferReceived {
@@ -267,7 +248,6 @@ impl InboxEventProcessor {
                     caller_name,
                     timestamp: *timestamp,
                 });
-                true
             }
 
             InboxEvent::GroupCallKeyReceived {
@@ -293,14 +273,13 @@ impl InboxEventProcessor {
                     key_epoch: *key_epoch,
                     channel_id: *channel_id,
                 });
-                true
             }
 
             InboxEvent::SenderKeyNeeded { channel_id, sender_id } => {
                 // The inbox route does not carry the sender's device; gate it
                 // under device 0 so it shares one backoff per sender.
                 if !self.message_service.should_request_sender_key(*channel_id, *sender_id, 0) {
-                    return true;
+                    return;
                 }
                 tracing::info!(
                     channel_id = %channel_id,
@@ -326,7 +305,6 @@ impl InboxEventProcessor {
                         );
                     }
                 });
-                true
             }
 
             InboxEvent::RespondWithSkdm { channel_id, requester_id, skdm_bytes } => {
@@ -376,11 +354,10 @@ impl InboxEventProcessor {
                         }
                     }
                 });
-                true
             }
 
             // =================================================================
-            // Anonymous Group Events (fully handled, return true)
+            // Anonymous Group Events
             // =================================================================
 
             InboxEvent::AnonGroupInvite {
@@ -398,7 +375,6 @@ impl InboxEventProcessor {
                     profile_key, encrypted_display_name, encrypted_avatar,
                 );
                 // Return false - UI needs to add sidebar entry
-                false
             }
 
             InboxEvent::AnonGroupJoinAck {
@@ -414,7 +390,6 @@ impl InboxEventProcessor {
                     *peer_id, group_id, joiner_mailbox_pk,
                     profile_key, encrypted_display_name, encrypted_avatar,
                 );
-                true
             }
 
             InboxEvent::AnonGroupMemberList {
@@ -435,7 +410,7 @@ impl InboxEventProcessor {
                     Some(id) => id,
                     None => {
                         tracing::warn!("Invalid group_id length for AnonGroupMemberList");
-                        return true;
+                        return;
                     }
                 };
 
@@ -451,7 +426,6 @@ impl InboxEventProcessor {
                         );
                     }
                 });
-                true
             }
 
             InboxEvent::AnonGroupLeave {
@@ -470,7 +444,7 @@ impl InboxEventProcessor {
                     Some(id) => id,
                     None => {
                         tracing::warn!("Invalid group_id length for AnonGroupLeave");
-                        return true;
+                        return;
                     }
                 };
 
@@ -486,7 +460,6 @@ impl InboxEventProcessor {
                         );
                     }
                 });
-                true
             }
 
             InboxEvent::AnonGroupKick {
@@ -508,7 +481,7 @@ impl InboxEventProcessor {
                     Some(id) => id,
                     None => {
                         tracing::warn!("Invalid group_id length for AnonGroupKick");
-                        return true;
+                        return;
                     }
                 };
 
@@ -516,7 +489,7 @@ impl InboxEventProcessor {
                     Some(id) => id,
                     None => {
                         tracing::warn!("Invalid kicked_user_id for AnonGroupKick");
-                        return true;
+                        return;
                     }
                 };
 
@@ -539,7 +512,6 @@ impl InboxEventProcessor {
                         );
                     }
                 });
-                true
             }
 
             InboxEvent::AnonGroupUpdate {
@@ -552,7 +524,7 @@ impl InboxEventProcessor {
                     Some(id) => id,
                     None => {
                         tracing::warn!("Invalid group_id length for AnonGroupUpdate");
-                        return true;
+                        return;
                     }
                 };
 
@@ -575,7 +547,6 @@ impl InboxEventProcessor {
                         );
                     }
                 });
-                true
             }
 
             InboxEvent::AnonGroupMessage {
@@ -584,12 +555,10 @@ impl InboxEventProcessor {
                 inner_content,
             } => {
                 self.handle_anon_group_message(*peer_id, group_id, inner_content);
-                // Return false - UI needs to handle display parts (message list, sidebar, etc.)
-                false
             }
 
             // =================================================================
-            // Anonymous DM Events (protocol part handled, some return false for UI)
+            // Anonymous DM Events
             // =================================================================
 
             InboxEvent::AnonDmRequest {
@@ -607,7 +576,6 @@ impl InboxEventProcessor {
                     intro_message, profile_key, encrypted_display_name, encrypted_avatar,
                 );
                 // Return false - UI needs to add sidebar entry
-                false
             }
 
             InboxEvent::AnonDmAccept {
@@ -625,7 +593,6 @@ impl InboxEventProcessor {
                     profile_key, encrypted_display_name, encrypted_avatar,
                 );
                 // Return false - UI needs to update sidebar entry
-                false
             }
 
             InboxEvent::AnonDmMessage {
@@ -634,11 +601,10 @@ impl InboxEventProcessor {
                 inner_content,
             } => {
                 self.handle_anon_dm_message(*peer_id, conversation_id, inner_content);
-                true
             }
 
             // =================================================================
-            // Mixed events (protocol part handled here, return false for UI)
+            // Mixed events (protocol part here, DomainEvent for the UI)
             // =================================================================
 
             InboxEvent::DmReceived {
@@ -683,7 +649,6 @@ impl InboxEventProcessor {
                         self.event_bus.emit_domain(DomainEvent::MessageReceived { message });
                     }
                 }
-                true
             }
 
             InboxEvent::ChannelMessageReceived {
@@ -779,7 +744,6 @@ impl InboxEventProcessor {
                 if let Some(message) = stored {
                     self.event_bus.emit_domain(DomainEvent::MessageReceived { message });
                 }
-                true
             }
 
             InboxEvent::CallHangup {
@@ -799,8 +763,6 @@ impl InboxEventProcessor {
                     peer_id: *peer_id,
                     reason: reason.clone(),
                 });
-                // UI still needs to clean up call UI state
-                false
             }
 
             InboxEvent::DmBootstrapCompleted { peer_id } => {
@@ -808,9 +770,9 @@ impl InboxEventProcessor {
                     peer_id = %peer_id,
                     "BOOTSTRAP[4/4] DmBootstrapCompleted event received - will flush pending messages"
                 );
-                self.dm_bootstrap_service.handle_bootstrap_completed(*peer_id);
-                // UI still needs to update composer placeholder and message status
-                false
+                // The UI hears DmBootstrapCompleted (or MessageSendFailed)
+                // from the service once the queued messages have been sent.
+                self.dm_bootstrap_service.handle_bootstrap_completed(*peer_id, self.event_bus.clone());
             }
 
             // =================================================================
@@ -840,7 +802,6 @@ impl InboxEventProcessor {
                     }
                     Err(e) => tracing::warn!(error = %e, "Failed to persist DM reaction"),
                 }
-                false
             }
 
             InboxEvent::ChannelReaction { channel_id: _, sender_id, emoji, remove, target_sent_timestamp, target_author_aci, .. } => {
@@ -861,7 +822,6 @@ impl InboxEventProcessor {
                     }
                     Err(e) => tracing::warn!(error = %e, "Failed to persist channel reaction"),
                 }
-                false
             }
 
             InboxEvent::DmEdit { peer_id, target_sent_timestamp, new_body } => {
@@ -871,10 +831,10 @@ impl InboxEventProcessor {
                         new_content: crate::domain::message::MessageContent::Text(new_body.clone()),
                         channel_id: msg.conversation_id,
                         conversation_type: msg.conversation_type,
+                        author_id: *peer_id,
                         target_sent_timestamp: *target_sent_timestamp,
                     });
                 }
-                false
             }
 
             InboxEvent::ChannelEdit { channel_id, target_sent_timestamp, new_body, sender_id, .. } => {
@@ -884,10 +844,10 @@ impl InboxEventProcessor {
                         new_content: crate::domain::message::MessageContent::Text(new_body.clone()),
                         channel_id: *channel_id,
                         conversation_type: self.message_service.conversation_type(channel_id),
+                        author_id: *sender_id,
                         target_sent_timestamp: *target_sent_timestamp,
                     });
                 }
-                false
             }
 
             InboxEvent::DmDeleteForEveryone { peer_id, target_sent_timestamp } => {
@@ -899,7 +859,6 @@ impl InboxEventProcessor {
                         target_sent_timestamp: *target_sent_timestamp,
                     });
                 }
-                false
             }
 
             InboxEvent::ChannelDeleteForEveryone { channel_id, sender_id, target_sent_timestamp, .. } => {
@@ -911,7 +870,6 @@ impl InboxEventProcessor {
                         target_sent_timestamp: *target_sent_timestamp,
                     });
                 }
-                false
             }
 
             InboxEvent::DmPin { peer_id, target_sent_timestamp, unpin, target_author_aci, .. } => {
@@ -928,7 +886,6 @@ impl InboxEventProcessor {
                         });
                     }
                 }
-                false
             }
 
             InboxEvent::ChannelPin { channel_id, sender_id, target_sent_timestamp, unpin, target_author_aci, .. } => {
@@ -945,7 +902,6 @@ impl InboxEventProcessor {
                         });
                     }
                 }
-                false
             }
 
             InboxEvent::SavedMessageSync { message_id, text, sent_at, attachment_ids } => {
@@ -964,7 +920,6 @@ impl InboxEventProcessor {
                         );
                     }
                 }
-                false
             }
 
             InboxEvent::DmDeleteForMe { conversation_id, target_author_aci, target_sent_timestamp } => {
@@ -978,7 +933,6 @@ impl InboxEventProcessor {
                         });
                     }
                 }
-                false
             }
 
             InboxEvent::ChannelDeleteForMe { conversation_id, target_author_aci, target_sent_timestamp } => {
@@ -992,7 +946,6 @@ impl InboxEventProcessor {
                         });
                     }
                 }
-                false
             }
 
             InboxEvent::ChannelReceipt { channel_id, sender_id: _, receipt_type, timestamps, .. } => {
@@ -1008,7 +961,6 @@ impl InboxEventProcessor {
                         channel_id, &conversation_type, *ts, status,
                     );
                 }
-                false
             }
 
             // =================================================================
@@ -1025,7 +977,6 @@ impl InboxEventProcessor {
                 } else {
                     DomainEvent::TypingStopped { user_id, channel_id, timestamp }
                 });
-                false
             }
 
             InboxEvent::ChannelTyping { channel_id, sender_id, action, timestamp } => {
@@ -1035,7 +986,6 @@ impl InboxEventProcessor {
                 } else {
                     DomainEvent::TypingStopped { user_id, channel_id, timestamp }
                 });
-                false
             }
 
             // DM read/delivery receipt → update stored delivery_status, same as
@@ -1059,7 +1009,7 @@ impl InboxEventProcessor {
                             let _ = self.message_service.mark_read_by_timestamp(*ts);
                         }
                     }
-                    return false;
+                    return;
                 }
                 let status = match receipt_type {
                     1 => "delivered",
@@ -1094,7 +1044,6 @@ impl InboxEventProcessor {
                     }
                     _ => {}
                 }
-                false
             }
 
             // =================================================================
@@ -1109,7 +1058,6 @@ impl InboxEventProcessor {
                     received: received.clone(),
                     sent: sent.clone(),
                 });
-                false
             }
 
             InboxEvent::FriendAccepted { friend_user_id } => {
@@ -1168,7 +1116,6 @@ impl InboxEventProcessor {
                         );
                     }
                 }
-                false
             }
 
             // Pure profile-key handshake (see `store_data_message` /
@@ -1202,13 +1149,14 @@ impl InboxEventProcessor {
                         }
                     }
                 });
-                true
             }
 
             // =================================================================
-            // Events the UI handles entirely (no DB persistence needed)
+            // Everything else has no protocol work. Nothing but this loop
+            // reads InboxEvents, so an event that needs the UI must be given
+            // an arm above that emits a DomainEvent.
             // =================================================================
-            _ => false,
+            _ => {}
         }
     }
 

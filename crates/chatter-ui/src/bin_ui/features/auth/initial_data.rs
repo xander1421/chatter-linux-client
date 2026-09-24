@@ -11,53 +11,18 @@ use chatter_core::domain::ids::ChannelId;
 
 use crate::bin_ui::converters::{
     channel_to_slint, get_initials, messages_to_display_batch,
-    DMListItemExt, DMListItemSendData, FriendDataExt, FriendDataSendData,
+    DMListItemExt, DMListItemSendData, FriendDataExt,
     FriendRequestExt, FriendRequestSendData,
 };
 use crate::{ChannelListItemData, DMListItemData, FriendData, FriendRequestData, MainWindow};
 
-/// Rebuild the FriendsModal "Friends" tab list — accepted friendships
-/// plus Active anon-DM peers — and push it into the UI. Cheap enough to
+/// Rebuild the FriendsModal "Friends" tab list — core's mode-filtered rows
+/// (`friends_tab_entries`) — and push it into the UI. Cheap enough to
 /// run on every relevant event (friend accepted, anon-DM accepted,
 /// anon-DM profile updated); the modal pulls the model by reference.
 pub fn refresh_friends_list(window_weak: Weak<MainWindow>, ui_ctx: Arc<ChatterClient>) {
     tokio::spawn(async move {
-        let mut friends_data: Vec<FriendDataSendData> = Vec::new();
-        if let Ok(pairs) = ui_ctx.list_friends_with_profiles().await {
-            for (friendship, profile) in pairs {
-                friends_data.push(FriendDataSendData {
-                    user_id: friendship.addressee_id.to_string(),
-                    display_name: profile.display_name.clone(),
-                    username: String::new(),
-                    avatar_bytes: profile.avatar_bytes.clone(),
-                    avatar_decoded: None,
-                    presence_status: profile.presence.as_str().to_string(),
-                    custom_status: String::new(),
-                    is_anon: false,
-                });
-            }
-        }
-        if let Ok(anon_dms) = ui_ctx.list_anon_dms() {
-            for dm in anon_dms {
-                if !matches!(dm.status, chatter_core::domain::anon_dm::AnonDmStatus::Active) {
-                    continue;
-                }
-                let peer_name = dm
-                    .peer_display_name
-                    .clone()
-                    .unwrap_or_else(|| ui_ctx.fallback_display_name(&dm.peer_id));
-                friends_data.push(FriendDataSendData {
-                    user_id: dm.id.to_string(),
-                    display_name: peer_name,
-                    username: String::new(),
-                    avatar_bytes: dm.peer_avatar.clone(),
-                    avatar_decoded: None,
-                    presence_status: "online".to_string(),
-                    custom_status: String::new(),
-                    is_anon: true,
-                });
-            }
-        }
+        let mut friends_data = ui_ctx.friends_tab_entries().await;
         for f in &mut friends_data {
             f.pre_decode_avatar();
         }
@@ -205,7 +170,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     tracing::info!("Loaded {} private groups", private_groups.len());
 
     // Load blocked users for the Blocked tab
-    let users = ui_ctx.get_anon_dm_blocked_users();
+    let users = ui_ctx.blocked_users();
     tracing::info!("Loaded {} blocked users", users.len());
     let blocked_users_data: Vec<(String, String)> = users.into_iter()
         .map(|user_id| {
@@ -225,54 +190,8 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         req.pre_decode_avatar();
     }
 
-    // Build the Friends-tab list — unified over accepted server friendships
-    // and Active anon-DM peers. Both surface in the FriendsModal's "Friends"
-    // tab; the `is_anon` flag discriminates so anon rows route to the anon
-    // chat and render the peer-supplied avatar bytes.
-    let mut friends_data: Vec<FriendDataSendData> = Vec::new();
-    match ui_ctx.list_friends_with_profiles().await {
-        Ok(pairs) => {
-            for (friendship, profile) in pairs {
-                // Profile carries display_name; username is
-                // on the User entity. We don't need it here — the modal
-                // only shows display_name prominently.
-                friends_data.push(FriendDataSendData {
-                    user_id: friendship.addressee_id.to_string(),
-                    display_name: profile.display_name.clone(),
-                    username: String::new(),
-                    avatar_bytes: profile.avatar_bytes.clone(),
-                    avatar_decoded: None,
-                    presence_status: profile.presence.as_str().to_string(),
-                    custom_status: String::new(),
-                    is_anon: false,
-                });
-            }
-        }
-        Err(e) => {
-            tracing::warn!("Failed to load accepted friends: {}", e);
-        }
-    }
-    if let Ok(anon_dms) = ui_ctx.list_anon_dms() {
-        for dm in anon_dms {
-            if !matches!(dm.status, chatter_core::domain::anon_dm::AnonDmStatus::Active) {
-                continue;
-            }
-            let peer_name = dm
-                .peer_display_name
-                .clone()
-                .unwrap_or_else(|| ui_ctx.fallback_display_name(&dm.peer_id));
-            friends_data.push(FriendDataSendData {
-                user_id: dm.id.to_string(),
-                display_name: peer_name,
-                username: String::new(),
-                avatar_bytes: dm.peer_avatar.clone(),
-                avatar_decoded: None,
-                presence_status: "online".to_string(),
-                custom_status: String::new(),
-                is_anon: true,
-            });
-        }
-    }
+    // Friends-tab rows, already filtered to the current mode by core.
+    let mut friends_data = ui_ctx.friends_tab_entries().await;
     for f in &mut friends_data {
         f.pre_decode_avatar();
     }

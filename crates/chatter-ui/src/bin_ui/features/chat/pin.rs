@@ -14,7 +14,7 @@ use crate::{MainWindow, MessageItemData};
 fn generate_pinned_preview(message: &Message, attachments: &[Attachment]) -> String {
     if let Some(text) = message.as_text() {
         if !text.is_empty() {
-            return if text.len() > 80 { format!("{}...", &text[..77]) } else { text.to_string() };
+            return chatter_core::services::gateway::shared::truncate_preview(text);
         }
     }
     if !attachments.is_empty() {

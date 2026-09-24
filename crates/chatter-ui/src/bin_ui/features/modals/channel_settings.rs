@@ -113,6 +113,9 @@ pub fn open_channel_settings(
         // Read the stored per-channel AI switch so the toggle opens showing
         // what is actually persisted, not a default.
         let ai_enabled = ui_ctx.ai_enabled_for(&channel_id_str);
+        let muted = ui_ctx
+            .is_conversation_muted(chatter_core::state::ActiveConversation::Channel(channel_id))
+            .unwrap_or(false);
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak_window.upgrade() {
@@ -127,6 +130,7 @@ pub fn open_channel_settings(
                 w.set_channel_settings_icon_path("".into());
                 w.set_channel_settings_has_icon_preview(false);
                 w.set_channel_settings_ai_enabled(ai_enabled);
+                w.set_channel_settings_muted(muted);
                 w.set_channel_settings_type(channel_type_str.into());
                 w.set_channel_settings_archived(is_archived);
                 w.set_channel_settings_created_at(created_at.into());
@@ -277,8 +281,8 @@ fn wire_notification_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
         }
     });
 
-    // Mute DOES persist: `mute_conversation` flips the local membership's
-    // `is_muted` flag (channel-scoped) — the exact bug F-UI-1 documented (a
+    // Mute DOES persist: `mute_conversation` writes a per-channel settings key
+    // (not the moderator-mute column) — the exact bug F-UI-1 documented (a
     // toggle that only flipped a Slint bool). Build the ActiveConversation from
     // the open channel-settings id, mirroring `change_member_role`.
     let weak_window = window.as_weak();
@@ -332,14 +336,29 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Ok(id) => chatter_core::domain::ids::UserId::from(id),
                 Err(_) => return,
             };
-            let new_role = match role_str.as_str() {
-                "member" => chatter_core::domain::channel::MemberRole::Member,
-                "moderator" => chatter_core::domain::channel::MemberRole::Moderator,
-                "admin" => chatter_core::domain::channel::MemberRole::Admin,
-                "owner" => chatter_core::domain::channel::MemberRole::Owner,
-                _ => return,
-            };
-            let _ = ui_ctx.update_channel_member_role(&channel_uuid, &user_uuid, new_role).await;
+            let Some(new_role) = chatter_core::domain::channel::MemberRole::parse(&role_str) else { return };
+            let result = ui_ctx.update_channel_member_role(&channel_uuid, &user_uuid, new_role).await;
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(w) = weak.upgrade() else { return };
+                match result {
+                    Ok(m) => {
+                        w.set_channel_settings_error("".into());
+                        let members = w.get_channel_settings_members();
+                        for i in 0..members.row_count() {
+                            if let Some(mut row) = members.row_data(i) {
+                                if row.user_id == user_id_str.as_str() {
+                                    row.role = m.role.as_str().into();
+                                    members.set_row_data(i, row);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to change member role");
+                        w.set_channel_settings_error(format!("Couldn't change role: {e}").into());
+                    }
+                }
+            });
         });
     });
 
@@ -474,75 +493,17 @@ fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
-            // Get existing members to filter them out
-            let existing_members: HashSet<UserId> = ui_ctx
-                .get_anon_group_members(&group_id)
+            let friend_data: Vec<PrivateGroupFriend> = ui_ctx
+                .list_anon_group_invite_candidates(Some(&group_id))
                 .into_iter()
-                .map(|m| m.user_id)
-                .collect();
-
-            // Load available friends and anon DM peers
-            let mut friend_data: Vec<PrivateGroupFriend> = Vec::new();
-            let mut seen_user_ids: HashSet<UserId> = HashSet::new();
-
-            // Load friends
-            let friends = ui_ctx.list_friends(100, 0).await.unwrap_or_default();
-            for friendship in &friends {
-                // Skip existing members
-                if existing_members.contains(&friendship.addressee_id) {
-                    continue;
-                }
-                if seen_user_ids.contains(&friendship.addressee_id) {
-                    continue;
-                }
-
-                let profile = ui_ctx.get_profile_local(&friendship.addressee_id);
-                let display_name = profile
-                    .as_ref()
-                    .map(|p| p.display_name.clone())
-                    .unwrap_or_else(|| friendship.addressee_id.to_string());
-
-                seen_user_ids.insert(friendship.addressee_id);
-                friend_data.push(PrivateGroupFriend {
-                    user_id: friendship.addressee_id.to_string().into(),
-                    display_name: display_name.into(),
-                    username: "".into(),
+                .map(|c| PrivateGroupFriend {
+                    user_id: c.user_id.to_string().into(),
+                    display_name: c.display_name.into(),
+                    username: if c.is_anonymous { "(anonymous)".into() } else { "".into() },
                     selected: false,
                     role: "member".into(),
-                });
-            }
-
-            // Load anon DM peers (active conversations only)
-            {
-                let conversations = ui_ctx.list_anon_dm_conversations();
-                for dm in conversations {
-                    // Skip existing members
-                    if existing_members.contains(&dm.peer_id) {
-                        continue;
-                    }
-                    if seen_user_ids.contains(&dm.peer_id) {
-                        continue;
-                    }
-                    // Only include active conversations
-                    if !dm.is_ready() {
-                        continue;
-                    }
-
-                    let display_name = dm
-                        .peer_display_name
-                        .clone()
-                        .unwrap_or_else(|| dm.peer_id.to_string());
-
-                    seen_user_ids.insert(dm.peer_id);
-                    friend_data.push(PrivateGroupFriend {
-                        user_id: dm.peer_id.to_string().into(),
-                        display_name: display_name.into(),
-                        username: "".into(),
-                        selected: false,
-                        role: "member".into(),
-                    });
-                }
-            }
+                })
+                .collect();
 
             // Update UI - close settings modal and open invite modal
             let _ = slint::invoke_from_event_loop(move || {
@@ -799,10 +760,15 @@ fn wire_invite_member_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx_search = ui_ctx.clone();
 
+    // Keystroke sequence number: a lookup only fires once typing has paused
+    // on a complete handle, and a newer keystroke retires older searches.
+    static SEARCH_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
     window.on_invite_member_search_changed(move |query: slint::SharedString| {
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx_search.clone();
         let query = query.to_string();
+        let seq = SEARCH_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
 
         let channel_id_str = weak
             .upgrade()
@@ -834,8 +800,14 @@ fn wire_invite_member_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             // Signal-style exact-username lookup: display names are
             // profile-key-encrypted on the server, so only exact username
-            // matches can resolve to an account.
-            if !trimmed.is_empty() {
+            // matches can resolve to an account. Core refuses anything that is
+            // not a complete handle; the pause keeps `alice.47` → `alice.471`
+            // → `alice.4711` from probing every discriminator on the way.
+            if chatter_core::services::user::is_lookup_handle(trimmed) {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                if SEARCH_SEQ.load(std::sync::atomic::Ordering::SeqCst) != seq {
+                    return;
+                }
                 match ui_ctx.lookup_by_username(trimmed).await {
                     Ok(Some(user_id)) => {
                         if seen.insert(user_id) {

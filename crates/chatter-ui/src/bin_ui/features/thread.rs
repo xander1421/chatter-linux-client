@@ -76,23 +76,35 @@ fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<ChatterClient
         let weak = weak_window.clone();
         let chat_state = chat_state.clone();
         let ui_ctx = ui_ctx.clone();
+        // Cursor = the oldest reply on screen. Read on the UI thread: a Slint
+        // Weak never upgrades inside tokio::spawn.
+        let Some(w) = weak.upgrade() else { return };
+        let Some(oldest) = w.get_thread_replies().row_data(0)
+            .and_then(|row| row.message_id.parse::<MessageId>().ok()) else { return };
         tokio::spawn(async move {
             let thread = match chat_state.active_thread() { Some(t) => t, None => return };
-            if let Ok(replies) = ui_ctx.list_thread_replies(&thread.root_message_id, None, 50) {
-                let display = messages_to_display_batch(
-                    &replies,
-                    |m| ui_ctx.message_sender_display_name(m),
-                    |att_id| ui_ctx.get_attachment(att_id),
-                    |m| ui_ctx.reply_author_display_name(m),
-                    |m| ui_ctx.reply_parent_missing_for(m),
-                    |m| ui_ctx.reply_parent_media(m),
-                );
-                let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
-                let _ = slint::invoke_from_event_loop(move || { if let Some(w) = weak.upgrade() {
-                    let slint_messages: Vec<_> = display.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
-                    w.set_thread_replies(ModelRc::new(VecModel::from(slint_messages)));
-                }});
-            }
+            let root = thread.root_message_id;
+            let Ok(page) = ui_ctx.list_thread_replies(&root, Some(&oldest), 50) else { return };
+            if page.is_empty() { return; }
+            let display = messages_to_display_batch(
+                &page,
+                |m| ui_ctx.message_sender_display_name(m),
+                |att_id| ui_ctx.get_attachment(att_id),
+                |m| ui_ctx.reply_author_display_name(m),
+                |m| ui_ctx.reply_parent_missing_for(m),
+                |m| ui_ctx.reply_parent_media(m),
+            );
+            let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(w) = weak.upgrade() else { return };
+                // The user may have switched threads while this page loaded.
+                if w.get_thread_root_message_id() != root.to_string().as_str() { return; }
+                let current = w.get_thread_replies();
+                let mut rows: Vec<MessageItemData> =
+                    display.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
+                rows.extend((0..current.row_count()).filter_map(|i| current.row_data(i)));
+                w.set_thread_replies(ModelRc::new(VecModel::from(rows)));
+            });
         });
     });
 }
@@ -236,6 +248,9 @@ pub fn load_thread_data(
                 .map(|t| chatter_core::domain::message::truncate_preview_text(t, 100))
                 .unwrap_or_else(|| "[Attachment]".to_string());
             let replies = ui_ctx.list_thread_replies(&root_message_id, None, 50).unwrap_or_default();
+            // The true total, not the page size: the panel offers "earlier
+            // replies" while it shows fewer than this.
+            let total_replies = ui_ctx.thread_reply_count(&root_message_id);
             let display = messages_to_display_batch(
                 &replies,
                 |m| ui_ctx.message_sender_display_name(m),
@@ -250,7 +265,7 @@ pub fn load_thread_data(
                 w.set_thread_root_message_id(root_message_id.to_string().into());
                 w.set_thread_root_sender_name(sender_name.into());
                 w.set_thread_root_content_preview(content_preview.into());
-                w.set_thread_reply_count(replies.len() as i32);
+                w.set_thread_reply_count(total_replies as i32);
                 w.set_thread_loading(false);
                 let slint_replies: Vec<_> = display.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
                 w.set_thread_replies(ModelRc::new(VecModel::from(slint_replies)));

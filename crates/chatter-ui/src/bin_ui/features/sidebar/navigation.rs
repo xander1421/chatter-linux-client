@@ -29,8 +29,9 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
         // Clear inline GIF animations to free memory
         crate::bin_ui::gif_state::clear_inline_gifs();
 
-        let channel_id_str = match auth_state.get().current_user_id {
-            Some(id) => id.to_string(),
+        // Saved Messages is the channel whose id is the user's own id.
+        let channel_id = match auth_state.get().current_user_id {
+            Some(id) => ChannelId::from(id),
             None => {
                 tracing::warn!("Cannot open saved messages: not logged in");
                 return;
@@ -39,12 +40,9 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
 
         // Commit active-conversation state SYNCHRONOUSLY on the UI thread
         // (same race fix as dm.rs — see comment there).
-        if let Ok(parsed) = channel_id_str.parse::<ChannelId>() {
-            chat_state.set_active_channel(parsed);
-            chat_state.set_active_conversation(chatter_core::state::ActiveConversation::Channel(parsed));
-        }
+        chat_state.set_active_channel(channel_id);
+        chat_state.set_active_conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
 
-        let _ = channel_id_str.clone();
         run_ui!(weak, |w| {
             w.set_loading_messages(true);
             // Clear composer reply/edit state to prevent stale context
@@ -63,14 +61,6 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
         });
 
         tokio::spawn(async move {
-            let channel_id: ChannelId = match channel_id_str.parse() {
-                Ok(id) => id,
-                Err(e) => {
-                    tracing::error!("Invalid user ID for saved messages: {}", e);
-                    return;
-                }
-            };
-
             // Active conversation already committed pre-spawn.
             let ui_ctx_for_sel = ui_ctx.clone();
             run_ui!(weak, |w| super::refresh_selection(&w, &ui_ctx_for_sel));

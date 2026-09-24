@@ -175,11 +175,11 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
                 let ids = pinned.iter().map(|m| m.id).collect();
                 let preview = pinned[0].as_text()
                     .filter(|t| !t.is_empty())
-                    .map(|t| if t.len() > 80 { format!("{}...", &t[..77]) } else { t.to_string() })
+                    .map(|t| ui_ctx.truncate_message_preview(&t))
                     .unwrap_or_else(|| "[Pinned message]".to_string());
                 (ids, preview)
             };
-            let channel_id = group_id.to_string().parse().unwrap_or_else(|_| ChannelId::new());
+            let channel_id = ChannelId::from_uuid(*group_id.as_uuid());
             super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), channel_id, msg_ids, preview);
 
             // Mark messages as read

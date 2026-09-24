@@ -9,11 +9,7 @@ pub fn generate_preview_from_ui_message(msg: &crate::MessageItemData) -> String 
 
     let text = msg.content.to_string();
     if !text.is_empty() {
-        return if text.len() > 80 {
-            format!("{}...", &text[..77])
-        } else {
-            text
-        };
+        return chatter_core::services::gateway::shared::truncate_preview(&text);
     }
 
     if msg.has_attachments {

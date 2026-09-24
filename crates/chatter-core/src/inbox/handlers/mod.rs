@@ -42,7 +42,10 @@ pub enum DomainEvent {
         channel_id: ChannelId,
         /// Type of conversation (Channel, AnonDm, AnonGroup, etc.).
         conversation_type: ConversationType,
-        /// Sender's original timestamp (fallback for UI matching when message_id doesn't match).
+        /// Author of the edited message (only an author can edit). With
+        /// `target_sent_timestamp` this is the Signal-style message key.
+        author_id: UserId,
+        /// The edited message's original sent timestamp.
         target_sent_timestamp: u64,
     },
     /// Message was deleted (delete for everyone).
@@ -478,16 +481,11 @@ pub enum DomainEvent {
         timestamp: u64,
     },
 
-    /// DM bootstrap completed — shared secret established with peer.
-    /// UI should enable composer and flush pending messages.
+    /// DM bootstrap completed and the messages queued behind it were sent
+    /// (`DmBootstrapService::handle_bootstrap_completed`). A failed flush
+    /// emits `MessageSendFailed` instead.
     DmBootstrapCompleted {
         peer_id: UserId,
-    },
-
-    UnreadCountUpdated {
-        channel_id: ChannelId,
-        peer_id: Option<UserId>,
-        unread_count: u32,
     },
 
     FriendRequestsUpdated {
@@ -512,14 +510,8 @@ pub enum DomainEvent {
     // Local Send Events
     // ========================================================================
 
-    MessageSent {
-        message_id: MessageId,
-        channel_id: ChannelId,
-        sender_id: UserId,
-        content: String,
-        sent_at: chrono::DateTime<chrono::Utc>,
-    },
-
+    /// A send that finished in the background (the post-bootstrap flush)
+    /// failed; the user has no other way to learn the message did not go.
     MessageSendFailed {
         channel_id: ChannelId,
         error: String,
@@ -732,11 +724,9 @@ impl DomainEvent {
             DomainEvent::AnonGroupCallHangupReceived { .. } => None,
             DomainEvent::CallKeyOfferReceived { .. } => None,
             DomainEvent::DmBootstrapCompleted { .. } => None,
-            DomainEvent::UnreadCountUpdated { channel_id, .. } => Some(*channel_id),
             DomainEvent::FriendRequestsUpdated { .. } => None,
             DomainEvent::FriendAccepted { .. } => None,
             DomainEvent::AnonGroupUpdated { .. } => None,
-            DomainEvent::MessageSent { channel_id, .. } => Some(*channel_id),
             DomainEvent::MessageSendFailed { channel_id, .. } => Some(*channel_id),
             DomainEvent::ChannelMemberJoined { channel_id, .. } => Some(*channel_id),
             DomainEvent::ChannelMemberLeft { channel_id, .. } => Some(*channel_id),

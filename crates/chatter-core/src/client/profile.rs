@@ -184,6 +184,11 @@ impl ChatterClient {
         code: &str,
         message: Option<&str>,
     ) -> Result<crate::domain::user::Friendship, crate::services::UserError> {
+        // A regular friend code ends in an identified friend request; shield
+        // mode redeems private codes (`start_anon_dm_conversation_private`).
+        if self.anon_mode_enabled() {
+            return Err(crate::services::UserError::ForbiddenInAnonMode);
+        }
         let result = self.users().connect_via_friend_code(code, message).await?;
         let client = Arc::clone(self);
         tokio::spawn(async move {
@@ -226,12 +231,38 @@ impl ChatterClient {
         ).await
     }
 
+    /// Update the current user's profile and push it to every peer who can't
+    /// fetch it from the server: each ready anon DM, and the anon groups this
+    /// user owns. The push runs in the background — a slow or failing peer
+    /// never holds up (or fails) the save itself.
     pub async fn update_user_profile(
-        &self,
+        self: &std::sync::Arc<Self>,
         display_name: Option<String>,
         status_message: Option<crate::domain::user::StatusMessage>,
     ) -> Result<crate::domain::user::Profile, crate::services::UserError> {
-        self.users().update_user_profile(display_name, status_message).await
+        let profile = self.users().update_user_profile(display_name, status_message).await?;
+
+        let display_name = Some(profile.display_name.clone());
+        let bio = profile.status_message.as_ref().map(|m| m.text.clone());
+        for conv in self.list_anon_dm_conversations().into_iter().filter(|c| c.is_ready()) {
+            let client = self.clone();
+            let (display_name, bio) = (display_name.clone(), bio.clone());
+            tokio::spawn(async move {
+                // The avatar rides inside the update as encrypted bytes; there
+                // is no plaintext avatar URL to send.
+                if let Err(e) = client.send_anon_dm_profile_update(&conv.id, display_name, None, bio).await {
+                    tracing::warn!(conversation = %conv.id, error = %e, "profile update to anon DM failed");
+                }
+            });
+        }
+        let client = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = client.broadcast_profile_to_owned_groups().await {
+                tracing::warn!(error = %e, "profile update to owned anon groups failed");
+            }
+        });
+
+        Ok(profile)
     }
 
     pub fn list_anon_dm_conversations(&self) -> Vec<crate::domain::anon_dm::AnonDm> {
@@ -272,8 +303,16 @@ impl ChatterClient {
         self.anon_dms().get_latest_message(conversation_id).ok().flatten()
     }
 
-    pub fn get_anon_dm_blocked_users(&self) -> Vec<crate::domain::ids::UserId> {
-        self.anon_dms().get_blocked_users().unwrap_or_default()
+    /// Everyone this user blocked: anon-DM peers and server-side blocks, in
+    /// one de-duplicated list. The Friends → Blocked tab renders exactly this.
+    pub fn blocked_users(&self) -> Vec<crate::domain::ids::UserId> {
+        let mut ids = self.anon_dms().get_blocked_users().unwrap_or_default();
+        for id in self.users().blocked_local() {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        ids
     }
 
     pub fn block_anon_dm_conversation(
@@ -442,7 +481,7 @@ impl ChatterClient {
     /// Check if a profile identifier is blocked (anon or server-side).
     pub fn is_profile_user_blocked(&self, id: &crate::domain::ids::UserId) -> bool {
         // Anon: check by peer ID
-        if self.get_anon_dm_blocked_users().contains(id) {
+        if self.anon_dms().is_user_blocked(id).unwrap_or(false) {
             return true;
         }
         // Anon: check by conversation ID
@@ -450,8 +489,9 @@ impl ChatterClient {
         if self.anon_dms().is_conversation_blocked(&conv_id).unwrap_or(false) {
             return true;
         }
-        // Server-side
-        self.services.user_state.is_blocked(id)
+        // Server-side: the durable table. `user_state`'s in-memory set is never
+        // populated, so it answered "not blocked" for every server block.
+        self.users().is_blocked_local(id)
     }
 
     pub async fn send_anon_dm_presence_update(

@@ -171,6 +171,28 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         });
     }
 
+    // Panic wipe, from the foot of the mesh section. The running service keeps
+    // its identity in memory, so the radio is switched off afterwards too:
+    // otherwise the device would go on announcing the key it just "destroyed".
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        global.on_panic_wipe(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let wiped = core_api::panic_wipe(&ui_ctx);
+            clear_active(&w);
+            refresh_rows(&w, &ui_ctx);
+            if let Err(error) = &wiped {
+                tracing::warn!(%error, "mesh: panic wipe incomplete");
+                w.global::<MeshGlobal>()
+                    .set_notice(format!("Mesh wipe incomplete: {error}").into());
+            } else {
+                w.global::<MeshGlobal>().set_notice("Mesh data wiped from this device.".into());
+            }
+            w.global::<MeshGlobal>().invoke_set_mesh_on(false);
+        });
+    }
+
     // The mesh switch, from the header of any mesh conversation.
     {
         let weak = window.as_weak();

@@ -110,23 +110,18 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             return;
         }
 
-        // Check for @Jarvis mention - intercept before sending to channel
+        // @Jarvis request? Core decides: a whole-word mention in a
+        // conversation where AI is on. Anything else is sent as written.
         #[cfg(feature = "jarvis")]
-        if crate::bin_ui::features::jarvis::contains_jarvis_mention(&text) {
-            if let Some(query) = crate::bin_ui::features::jarvis::extract_jarvis_query(&text) {
-                let ui_ctx = ui_ctx_jarvis.clone();
-                let channel_id = chat_state.get().active_channel_id;
-                let weak = weak_window.clone();
-                tokio::spawn(async move {
-                    crate::bin_ui::features::jarvis::handle_jarvis_mention(
-                        &ui_ctx,
-                        &query,
-                        channel_id.as_ref(),
-                        weak,
-                    ).await;
-                });
-                return;
-            }
+        if let Some((context, query)) =
+            ui_ctx_jarvis.jarvis_mention(&chat_state.active_conversation(), &text)
+        {
+            let ui_ctx = ui_ctx_jarvis.clone();
+            let weak = weak_window.clone();
+            tokio::spawn(async move {
+                crate::bin_ui::features::jarvis::handle_jarvis_mention(&ui_ctx, &query, context, weak).await;
+            });
+            return;
         }
 
         // Clear outgoing typing state (Signal: clearTypingTimers on message send)
@@ -337,7 +332,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
 
                     crate::bin_ui::features::sidebar::update_sidebar_preview(
-                        &w, &ui_ctx_for_sidebar, conversation, &sidebar_preview, &timestamp_str, false,
+                        &w, &ui_ctx_for_sidebar, conversation, &sidebar_preview, &timestamp_str,
                     );
 
                     crate::bin_ui::gif_state::auto_register_gifs_from_messages(

@@ -1729,6 +1729,17 @@ fn test_thread_replies_excluded_from_channel_list() {
     // The replies are still reachable through the thread query...
     let replies = message_repo.list_for_thread(&root.id, None, 100).unwrap();
     assert_eq!(replies.len(), 3);
+    // Oldest → newest, the order the thread panel draws and appends in.
+    let texts: Vec<_> = replies.iter().map(|m| m.as_text().unwrap_or_default().to_string()).collect();
+    assert_eq!(texts, ["reply 0", "reply 1", "reply 2"]);
+    // A page is the newest `limit` before the cursor, still oldest → newest.
+    let latest = message_repo.list_for_thread(&root.id, None, 2).unwrap();
+    assert_eq!(latest.iter().map(|m| m.id).collect::<Vec<_>>(), [replies[1].id, replies[2].id]);
+    let earlier = message_repo
+        .list_for_thread(&root.id, Some(latest[0].sent_at), 2)
+        .unwrap();
+    assert_eq!(earlier.iter().map(|m| m.id).collect::<Vec<_>>(), [replies[0].id]);
+    assert_eq!(message_repo.count_for_thread(&root.id).unwrap(), 3);
 
     // ...and counted for the root bubble's indicator.
     let counts = message_repo

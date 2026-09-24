@@ -157,6 +157,11 @@ pub enum UserError {
     #[error("requires anon (shield) mode")]
     RequiresAnonMode,
 
+    /// Operation reveals the account's identity (an identified friend request,
+    /// a username lookup) and is refused while anon (shield) mode is on.
+    #[error("not available in anon (shield) mode")]
+    ForbiddenInAnonMode,
+
     /// Input validation failed.
     #[error("invalid input: {0}")]
     InvalidInput(String),
@@ -192,6 +197,18 @@ pub struct ReceivedFriendRequestProfile {
     pub display_name: Option<String>,
     pub avatar_bytes: Option<Vec<u8>>,
     pub note: Option<String>,
+}
+
+/// True when `q` is a complete Signal `nickname.discriminator` handle — the only
+/// shape [`UserService::lookup_by_username`] sends to the server. Partial input
+/// (a bare nickname, a dangling `.`) never reaches the existence oracle.
+pub fn is_lookup_handle(q: &str) -> bool {
+    match q.trim().rsplit_once('.') {
+        Some((nick, disc)) => {
+            !nick.is_empty() && !disc.is_empty() && disc.bytes().all(|b| b.is_ascii_digit())
+        }
+        None => false,
+    }
 }
 
 /// User service for all user operations.
@@ -1140,6 +1157,19 @@ impl UserService {
         })
     }
 
+    /// Server-side blocks this user made, from the durable friendships table
+    /// (kept in step with the server by `UserSync::sync_blocked_users`).
+    pub fn blocked_local(&self) -> Vec<UserId> {
+        let Ok(me) = self.settings_repo.current_user_id() else { return Vec::new() };
+        self.user_repo.list_blocked_by(&me).unwrap_or_default()
+    }
+
+    /// Whether this user blocked `user_id` server-side (durable table).
+    pub fn is_blocked_local(&self, user_id: &UserId) -> bool {
+        let Ok(me) = self.settings_repo.current_user_id() else { return false };
+        self.user_repo.is_blocked(&me, user_id).unwrap_or(false)
+    }
+
     pub fn get_profile_local(&self, user_id: &UserId) -> Result<Option<Profile>, UserError> {
         self.user_repo.get_profile(user_id).map_err(UserError::Storage)
     }
@@ -1152,7 +1182,7 @@ impl UserService {
     /// 3. Anon DM peer (peer isn't in the user directory — stored on the
     ///    anon DM conversation row)
     /// 4. Anon group member (stored on the group's member row in any group)
-    /// 5. Raw UUID fallback
+    /// 5. The `User <id8>` placeholder every other screen shows
     pub fn get_display_name(&self, user_id: &UserId) -> String {
         if let Ok(Some(profile)) = self.user_repo.get_profile(user_id) {
             return profile.display_name;
@@ -1172,7 +1202,7 @@ impl UserService {
                 return name;
             }
         }
-        user_id.to_string()
+        friend_display_name_placeholder(user_id)
     }
 
     /// Get the current user's ID.
@@ -1194,6 +1224,12 @@ impl UserService {
         &self,
         username: &str,
     ) -> Result<Option<crate::domain::UserId>, UserError> {
+        // The lookup is an existence oracle. Only a complete handle may reach
+        // the server — a caller that fires per keystroke must not turn it into
+        // a prefix/enumeration probe.
+        if !is_lookup_handle(username) {
+            return Err(UserError::InvalidInput("not a nickname.discriminator handle".into()));
+        }
         let _ = self.settings_repo.current_user_id()?;
         let hash = crate::crypto::auth_crypto::hash_username_lookup(username)
             .map_err(|e| UserError::InvalidInput(format!("invalid username: {e}")))?;

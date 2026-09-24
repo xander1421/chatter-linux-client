@@ -283,6 +283,23 @@ export component ThreadPanel inherits Rectangle {
                     padding: Spacing.sm;
                     spacing: 2px;
 
+                    // Only the newest page loads on open; `reply-count` is the
+                    // thread's true total, so a shortfall means earlier replies.
+                    if root.replies.length < root.reply-count: Rectangle {
+                        height: 28px;
+                        Text {
+                            text: "Load earlier replies";
+                            color: more-touch.has-hover ? Colors.text-primary : Colors.primary;
+                            font-size: Typography.xs;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        more-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.load-more-replies(); }
+                        }
+                    }
+
                     for item in root.replies: MessageItem {
                         width: 100%;
                         message-id: item.message-id;

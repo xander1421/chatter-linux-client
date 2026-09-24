@@ -26,6 +26,7 @@ pub use jarvis::{is_jarvis_channel, jarvis_channel_id, JARVIS_CHANNEL_NAME};
 mod link_device;
 mod messaging;
 pub use messaging::{InviteCandidate, ReplyParentMedia};
+pub use anon_group::AnonGroupInviteCandidate;
 
 /// A user-search hit surfaced to the UI (friends modal search).
 ///
@@ -39,6 +40,15 @@ pub struct UserSearchResult {
     pub display_name: String,
     pub username: String,
     pub is_friend: bool,
+}
+
+/// Absolute unread badge values — see [`ChatterClient::unread_badges`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UnreadBadges {
+    /// Unread messages on one sidebar row.
+    pub row: u32,
+    /// Conversations with unread messages that the current mode shows.
+    pub total: u32,
 }
 mod notification;
 mod pin;
@@ -1482,11 +1492,6 @@ impl ChatterClient {
             .await
     }
 
-    /// Flush any pending UI messages for a peer after DM bootstrap completes.
-    pub async fn flush_pending_dm_messages(&self, peer_id: &crate::domain::ids::UserId) {
-        self.dm_bootstrap().flush_pending_ui_messages(peer_id).await;
-    }
-
     // ── Sidebar sections (custom grouping) façade ────────────────────────
 
     /// Custom folders with their rows, already ordered by each folder's sort
@@ -1500,24 +1505,29 @@ impl ChatterClient {
         &self,
     ) -> Result<Vec<crate::domain::section::CustomSection>, crate::services::section_service::SectionError>
     {
-        use crate::domain::message::ConversationType;
-
-        let anon = self.anon_mode_enabled();
         let mut sections = self.sections().list_sections_with_conversations()?;
         for section in sections.iter_mut() {
-            section.conversations.retain(|c| match c.conversation_type {
-                ConversationType::AnonDm => anon,
-                ConversationType::Channel
-                | ConversationType::ServerDm
-                | ConversationType::MailboxDm
-                | ConversationType::SavedMessages => !anon,
-                // Serverless and mode-agnostic, like the lists they come from.
-                ConversationType::AnonGroup | ConversationType::Mesh | ConversationType::MeshDm => true,
-            });
+            section.conversations.retain(|c| self.visible_in_mode(&c.conversation_type));
             // The aggregate badge counts what the folder actually shows.
             section.unread_count = section.conversations.iter().map(|c| c.unread_count).sum();
         }
         Ok(sections)
+    }
+
+    /// Whether a conversation of this kind may be shown (listed, searched,
+    /// opened) in the current mode. Shield on: anon DMs only; off: identified
+    /// conversations only. Anon groups and mesh are serverless and show in both.
+    pub fn visible_in_mode(&self, kind: &crate::domain::message::ConversationType) -> bool {
+        use crate::domain::message::ConversationType;
+        let anon = self.anon_mode_enabled();
+        match kind {
+            ConversationType::AnonDm => anon,
+            ConversationType::Channel
+            | ConversationType::ServerDm
+            | ConversationType::MailboxDm
+            | ConversationType::SavedMessages => !anon,
+            ConversationType::AnonGroup | ConversationType::Mesh | ConversationType::MeshDm => true,
+        }
     }
 
     pub fn create_section(
@@ -1912,6 +1922,30 @@ impl ChatterClient {
     // anon DMs and anon groups remain visible. Not persisted by design —
     // every fresh client starts with anon_mode = false so privacy
     // properties auto-revert on restart.
+
+    /// Platform lifecycle report: is the app on screen (window focused /
+    /// activity resumed)? While it is not, nothing is marked read or
+    /// receipted — an open chat behind a lock screen has not been read.
+    ///
+    /// Coming back into view catches up: the open conversation, now actually
+    /// on screen, is marked read (and receipted, subject to the user's
+    /// receipt setting). Call from within the tokio runtime.
+    pub fn set_app_visible(self: &Arc<Self>, visible: bool) {
+        let was_visible = self.chat_state().set_app_visible(visible);
+        if !visible || was_visible {
+            return;
+        }
+        let active = self.chat_state().active_conversation();
+        if !active.is_active() {
+            return;
+        }
+        let client = Arc::clone(self);
+        tokio::spawn(async move {
+            if let Err(e) = client.conversation(active).mark_as_read().await {
+                tracing::debug!(error = %e, "mark-read on return to foreground failed");
+            }
+        });
+    }
 
     /// Read the in-memory anon-mode flag.
     pub fn anon_mode_enabled(&self) -> bool {
@@ -2410,7 +2444,15 @@ impl ChatterClient {
         };
 
         // ── Presence ────────────────────────────────────────────────
-        self.set_presence(crate::domain::user::PresenceStatus::Online).await;
+        // Fire and forget: start() is on the app's startup path, and awaiting
+        // this RPC held the first screen back for as long as the server took
+        // (27 s once, on a Redis-starved server).
+        {
+            let client = self.clone();
+            tokio::spawn(async move {
+                client.set_presence(crate::domain::user::PresenceStatus::Online).await;
+            });
+        }
         self.touch_activity();
 
         // ── Store handles for shutdown ───────────────────────────────
@@ -2717,13 +2759,54 @@ impl ChatterClient {
     /// every channel-free server DM: two unread DMs and one unread channel
     /// read "1".
     ///
+    /// Only conversations the current mode shows count: with the shield on,
+    /// an unread identified DM has no row, so it must not light the badge.
+    ///
     /// Returns 0 on storage error: a missing badge beats a UI hard-fail.
     pub fn unread_conversation_count(&self) -> u32 {
-        self.services
-            .conversation_repo
-            .conversation_stats()
-            .map(|stats| stats.values().filter(|st| st.unread_count > 0).count() as u32)
-            .unwrap_or(0)
+        self.unread_badges(&crate::state::ActiveConversation::None).total
+    }
+
+    /// Absolute unread values for one sidebar row and the Chats total, from
+    /// one read of the messages table. The UI sets these; it never adds to
+    /// its own copy (the live `+1` and the rebuild counted differently).
+    ///
+    /// `row` sums every conversation that `conversation`'s view shows
+    /// ([`ActiveConversation::shows`]), so a mailbox DM lands on its peer's
+    /// row. Blocking storage read: call off the UI thread.
+    pub fn unread_badges(&self, conversation: &crate::state::ActiveConversation) -> UnreadBadges {
+        let Ok(stats) = self.services.conversation_repo.conversation_stats() else {
+            return UnreadBadges::default();
+        };
+        let me = self.session_current_user_id();
+        let mut badges = UnreadBadges::default();
+        for ((id, kind), st) in &stats {
+            if st.unread_count == 0 {
+                continue;
+            }
+            if self.visible_in_mode(kind) {
+                badges.total += 1;
+            }
+            if id.parse().is_ok_and(|cid| conversation.shows(cid, me.as_ref())) {
+                badges.row += st.unread_count;
+            }
+        }
+        badges
+    }
+
+    /// Whether `message` belongs in the conversation on screen — the one
+    /// predicate for "insert it into the open view", "mark it read", "don't
+    /// badge it" and "don't notify for it".
+    pub fn is_showing(&self, message: &crate::domain::message::Message) -> bool {
+        self.is_showing_conversation(message.conversation_id)
+    }
+
+    /// [`is_showing`](Self::is_showing) for events that carry only the
+    /// conversation id (edits, deletes).
+    pub fn is_showing_conversation(&self, conversation_id: crate::domain::ids::ChannelId) -> bool {
+        self.chat_state()
+            .active_conversation()
+            .shows(conversation_id, self.session_current_user_id().as_ref())
     }
 
     /// List channel members with profile information.
@@ -2752,6 +2835,11 @@ impl ChatterClient {
         user_id: &crate::domain::ids::UserId,
         note: Option<&str>,
     ) -> Result<crate::domain::user::Friendship, crate::services::user::UserError> {
+        // A friend request is an identified server call naming both accounts.
+        // Shield mode's anon path is a private friend code, never this.
+        if self.anon_mode_enabled() {
+            return Err(crate::services::user::UserError::ForbiddenInAnonMode);
+        }
         // The service encrypts the intro note (ECIES to the recipient's
         // identity key) — it holds the prekey-fetch client. See
         // `UserService::send_friend_request`.
@@ -3045,6 +3133,11 @@ impl ChatterClient {
         &self,
         username: &str,
     ) -> Result<Option<crate::domain::ids::UserId>, crate::services::user::UserError> {
+        // An authenticated lookup ties "who is this account looking for" to
+        // our identity — exactly what shield mode exists to hide.
+        if self.anon_mode_enabled() {
+            return Err(crate::services::user::UserError::ForbiddenInAnonMode);
+        }
         self.users().lookup_by_username(username).await
     }
 
@@ -3082,6 +3175,10 @@ impl ChatterClient {
         url: &str,
     ) -> Result<(String, Option<crate::domain::ids::UserId>), crate::services::user::UserError>
     {
+        // Ends in the same identified lookup as `lookup_by_username`.
+        if self.anon_mode_enabled() {
+            return Err(crate::services::user::UserError::ForbiddenInAnonMode);
+        }
         self.users().resolve_username_link(url).await
     }
 
@@ -3951,5 +4048,56 @@ mod transport_switch_tests {
         assert!(client.anon_mode_enabled());
         // Give the serialized rebuild tasks a chance to drain.
         tokio::task::yield_now().await;
+    }
+}
+
+#[cfg(test)]
+mod unread_badge_tests {
+    //! Badges are absolute counts from storage, filtered by the current mode.
+    use std::sync::atomic::Ordering;
+
+    use super::*;
+    use crate::domain::anon_dm::AnonDmId;
+    use crate::domain::ids::{ChannelId, UserId};
+    use crate::domain::message::{ConversationType, Message};
+    use crate::state::ActiveConversation;
+
+    fn build_test_client() -> Arc<ChatterClient> {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        ChatterClient::builder()
+            .server_url("http://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client")
+    }
+
+    fn receive(client: &ChatterClient, id: ChannelId, kind: ConversationType, sent_at: u64) {
+        let msg = Message::new_text(id, kind, Some(UserId::new()), "hi".into(), sent_at);
+        client.messages().store_message_local(&msg).expect("store");
+    }
+
+    #[tokio::test]
+    async fn badges_are_absolute_and_follow_the_mode() {
+        let client = build_test_client();
+        let peer = UserId::new();
+        let anon = AnonDmId::new();
+        receive(&client, ChannelId::from(peer), ConversationType::ServerDm, 1);
+        receive(&client, ChannelId::from(peer), ConversationType::ServerDm, 2);
+        receive(&client, anon.into(), ConversationType::AnonDm, 3);
+
+        let dm = ActiveConversation::ServerDm { peer_id: peer };
+        // Two unread on the DM row; the anon DM is hidden, so the total is 1.
+        assert_eq!(client.unread_badges(&dm), UnreadBadges { row: 2, total: 1 });
+
+        client.anon_mode.store(true, Ordering::Release);
+        assert_eq!(
+            client.unread_badges(&ActiveConversation::AnonDm(anon)),
+            UnreadBadges { row: 1, total: 1 },
+        );
+        assert_eq!(client.unread_conversation_count(), 1);
     }
 }

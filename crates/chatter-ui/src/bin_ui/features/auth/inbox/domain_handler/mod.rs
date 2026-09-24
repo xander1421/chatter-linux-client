@@ -38,17 +38,6 @@ pub async fn handle_domain_event(
 ) {
     match event {
         // =========================================================================
-        // Unread Count Updates
-        // =========================================================================
-        DomainEvent::UnreadCountUpdated {
-            channel_id,
-            peer_id,
-            unread_count,
-        } => {
-            messaging::handle_unread_count_updated(window, ui_ctx, channel_id, peer_id, unread_count);
-        }
-
-        // =========================================================================
         // DM Bootstrap Completed
         // =========================================================================
         DomainEvent::DmBootstrapCompleted { peer_id } => {
@@ -160,10 +149,13 @@ pub async fn handle_domain_event(
             // row re-renders (fallback "User <id>" → real name, initials →
             // avatar). ponytail: refreshes on every DM receive; fine for
             // low-volume friend DMs, revisit if it shows up in profiling.
+            // This runs on the runtime, where a Weak never upgrades — the
+            // refresh has to be scheduled onto the UI thread.
             if is_server_dm {
-                if let Some(w) = window.upgrade() {
-                    crate::bin_ui::features::auth::initial_data::refresh_dm_list(&w, ui_ctx);
-                }
+                let ui_ctx = ui_ctx.clone();
+                crate::run_ui!(window, |w| {
+                    crate::bin_ui::features::auth::initial_data::refresh_dm_list(&w, &ui_ctx);
+                });
             }
         }
 
@@ -188,7 +180,9 @@ pub async fn handle_domain_event(
         }
 
         // Edit UI update: replace message content in-place
-        DomainEvent::MessageEdited { message_id, new_content, target_sent_timestamp, .. } => {
+        DomainEvent::MessageEdited {
+            message_id, new_content, channel_id, author_id, target_sent_timestamp, ..
+        } => {
             use chatter_core::domain::message::MessageContent;
             let new_text = match &new_content {
                 MessageContent::Text(t) => t.clone(),
@@ -196,20 +190,36 @@ pub async fn handle_domain_event(
                 MessageContent::AI(ai) => ai.text.clone(),
                 _ => String::new(),
             };
-            // Timestamp-primary matching (Signal-style). UUID fallback for legacy.
             messaging::handle_message_edit(
-                window, &message_id.to_string(), target_sent_timestamp, &new_text,
+                window, ui_ctx, channel_id, &message_id.to_string(), author_id,
+                target_sent_timestamp, &new_text,
             );
         }
 
-        // Delete UI update: remove message from visible list (timestamp-primary matching)
-        DomainEvent::MessageDeleted { message_id, target_sent_timestamp, .. } => {
-            messaging::handle_message_delete(window, &message_id.to_string(), target_sent_timestamp);
+        // Delete for everyone: remove the (author, timestamp) bubble from the
+        // open view. A DM delete may name no channel; the DM is the author's.
+        DomainEvent::MessageDeleted { author_id, channel_id, target_sent_timestamp, .. } => {
+            messaging::handle_message_delete(
+                window,
+                ui_ctx,
+                channel_id.unwrap_or_else(|| author_id.into()),
+                messaging::DeleteTarget::AuthorTimestamp { author: author_id, sent_at: target_sent_timestamp },
+            );
         }
 
-        // State store handles these (no Slint model update needed)
-        DomainEvent::ViewedReceipt { .. }
-        | DomainEvent::DeleteForMeSync { .. } => {}
+        // A delete-for-me made on a sibling device. Core's state store drops
+        // it from storage; the open chat has to drop the bubble too.
+        DomainEvent::DeleteForMeSync { conversation_id, target_message_id, .. } => {
+            messaging::handle_message_delete(
+                window,
+                ui_ctx,
+                conversation_id,
+                messaging::DeleteTarget::Id(target_message_id),
+            );
+        }
+
+        // No Slint model update needed
+        DomainEvent::ViewedReceipt { .. } => {}
 
         DomainEvent::MessagePinned { channel_id, target_sent_timestamp, .. } => {
             helpers::handle_pin_ui_update(window, ui_ctx, channel_id, target_sent_timestamp, false);
@@ -388,10 +398,6 @@ pub async fn handle_domain_event(
         // =========================================================================
         // Message Send Events
         // =========================================================================
-        DomainEvent::MessageSent { .. } => {
-            messaging::handle_message_sent();
-        }
-
         DomainEvent::MessageSendFailed { channel_id, error } => {
             messaging::handle_message_send_failed(window, channel_id, error);
         }
@@ -466,8 +472,11 @@ pub async fn handle_domain_event(
             );
         }
 
-        // Handled by EventHandlers state store (appends to message_state)
-        DomainEvent::SavedMessageSynced { .. } => {}
+        // A note-to-self sent from a sibling device. Core stored it; show it
+        // like any received message (inserted only if Saved Messages is open).
+        DomainEvent::SavedMessageSynced { message } => {
+            messaging::handle_message_received(window, ui_ctx, message);
+        }
 
         // Jarvis AI events — UI can subscribe directly for display
         DomainEvent::JarvisResponse { .. }
@@ -539,10 +548,12 @@ pub async fn handle_domain_event(
             // (not just display_name/initials, which handle_user_profile_updated
             // already patches in-place) renders too — covers the profile-key
             // handshake path where this is the very first event either side
-            // sees about the other's real profile.
-            if let Some(w) = window.upgrade() {
-                crate::bin_ui::features::auth::initial_data::refresh_dm_list(&w, ui_ctx);
-            }
+            // sees about the other's real profile. On the UI thread: a Weak
+            // never upgrades on the runtime this handler runs on.
+            let ui_ctx = ui_ctx.clone();
+            crate::run_ui!(window, |w| {
+                crate::bin_ui::features::auth::initial_data::refresh_dm_list(&w, &ui_ctx);
+            });
         }
         // =========================================================================
         // Channel Lifecycle (INFRA-29)

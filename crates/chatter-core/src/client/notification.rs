@@ -24,7 +24,7 @@ impl ChatterClient {
     pub fn start_notification_listener(self: &Arc<Self>) {
         let handle = crate::services::notification_service::spawn_notification_listener(
             self.event_bus().clone(),
-            self.chat_state().clone(),
+            Arc::downgrade(self),
             self.users().clone(),
             self.notifications().clone(),
             self.signal().clone(),

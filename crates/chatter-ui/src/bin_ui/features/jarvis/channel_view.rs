@@ -34,14 +34,15 @@ pub async fn load_jarvis_channel_into_ui(weak: slint::Weak<MainWindow>, ui_ctx: 
         .get()
         .display_name
         .unwrap_or_else(|| "Me".to_string());
-    let engine_label = ui_ctx.jarvis_engine_description();
+    // Where these messages go (local vs cloud) is core's call.
+    let topic = ui_ctx.jarvis_channel_topic();
 
     run_ui!(weak, |w| {
         w.set_channel_name(chatter_core::client::JARVIS_CHANNEL_NAME.into());
         w.set_channel_type("private".into());
         w.set_is_dm(false);
         w.set_member_count(0);
-        w.set_topic(format!("Local AI · {} · never leaves this device", engine_label).into());
+        w.set_topic(topic.into());
         w.set_header_presence_status("offline".into());
         w.set_channel_avatar_source(slint::Image::default());
         w.set_channel_has_avatar(false);

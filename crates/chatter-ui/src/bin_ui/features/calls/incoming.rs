@@ -296,7 +296,9 @@ fn render_active_anon_call(
             is_video_call: is_video,
             is_anonymous_call: true,
             is_encrypted: true,
-            is_identity_verified: true,
+            // An anonymous peer has no identity to have verified; `true` here
+            // would be a false "verified" badge the moment one is drawn.
+            is_identity_verified: false,
             identity_warning: "".into(),
             participant_count: 2,
             duration_seconds: 0,

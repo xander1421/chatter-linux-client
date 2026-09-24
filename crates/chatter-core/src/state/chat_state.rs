@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -88,6 +89,26 @@ impl ActiveConversation {
             }
             _ => self.channel_id() == Some(id),
         }
+    }
+
+    /// Whether a message filed under `conversation_id` belongs in this
+    /// conversation's open view — the one "is this message showing" rule
+    /// (see `ChatterClient::is_showing`).
+    ///
+    /// A mailbox DM is attributed to its peer's DM row, so it shows in either
+    /// DM view of that peer. Its id is the pair-derived
+    /// `ChannelId::from_dm_participants`, which needs our own id (`me`) to
+    /// recompute; the old raw-id comparisons against `ServerDm`'s
+    /// `ChannelId::from(peer)` never matched it. The id alone is enough — the
+    /// ids of different conversation kinds are distinct UUIDs.
+    pub fn shows(&self, conversation_id: ChannelId, me: Option<&UserId>) -> bool {
+        let pair_matches = match self {
+            Self::ServerDm { peer_id } | Self::MailboxDm { peer_id, .. } => {
+                me.is_some_and(|me| ChannelId::from_dm_participants(me, peer_id) == conversation_id)
+            }
+            _ => false,
+        };
+        pair_matches || self.channel_id() == Some(conversation_id)
     }
 
     /// The id the SIDEBAR uses for this conversation — the same string the
@@ -443,6 +464,9 @@ pub struct ChatState {
     /// conversation (a STOPPED, or a message). Kept out of `store` so
     /// recording one does not wake every state subscriber.
     typing_ended_at: Arc<Mutex<HashMap<(ChannelId, UserId), u64>>>,
+    /// Whether the app is on screen (platform lifecycle). Outside `store` for
+    /// the same reason: a focus change is not a navigation change.
+    app_visible: Arc<AtomicBool>,
 }
 
 impl ChatState {
@@ -452,7 +476,24 @@ impl ChatState {
         Self {
             store: Store::new(ChatStateData::default()),
             typing_ended_at: Arc::default(),
+            app_visible: Arc::new(AtomicBool::new(true)),
         }
+    }
+
+    /// Record whether the app is on screen; returns the previous value.
+    pub fn set_app_visible(&self, visible: bool) -> bool {
+        self.app_visible.swap(visible, Ordering::AcqRel)
+    }
+
+    /// Whether the app is on screen. Starts `true`: a fresh launch is in view.
+    pub fn is_app_visible(&self) -> bool {
+        self.app_visible.load(Ordering::Acquire)
+    }
+
+    /// Whether the conversation keyed `id` is what the user is looking at
+    /// right now: it is the active one AND the app is on screen.
+    pub fn is_on_screen(&self, id: ChannelId) -> bool {
+        self.is_app_visible() && self.active_conversation().is_for_channel(id)
     }
 
     /// Get the current chat state.
@@ -1027,6 +1068,27 @@ impl std::fmt::Debug for ChatState {
 mod tests {
     use super::*;
 
+    #[test]
+    fn shows_matches_the_view_that_loads_the_message() {
+        let (me, peer, other) = (UserId::new(), UserId::new(), UserId::new());
+        let server_dm = ActiveConversation::ServerDm { peer_id: peer };
+        let mailbox = ChannelId::from_dm_participants(&me, &peer);
+
+        // A server DM shows its own messages, not another peer's.
+        assert!(server_dm.shows(ChannelId::from(peer), Some(&me)));
+        assert!(!server_dm.shows(ChannelId::from(other), Some(&me)));
+        // A mailbox DM with the open peer shows; with another peer it does not.
+        assert!(server_dm.shows(mailbox, Some(&me)));
+        assert!(!server_dm.shows(ChannelId::from_dm_participants(&me, &other), Some(&me)));
+        // Without our own id the pair channel cannot be recomputed.
+        assert!(!server_dm.shows(mailbox, None));
+
+        let channel = ChannelId::new();
+        assert!(ActiveConversation::Channel(channel).shows(channel, Some(&me)));
+        assert!(!ActiveConversation::Channel(channel).shows(ChannelId::new(), Some(&me)));
+        assert!(!ActiveConversation::None.shows(channel, Some(&me)));
+    }
+
     /// Call history stores `routing_key()` and redials through
     /// `from_routing_key()`. Every conversation that can host a call has to
     /// survive that round trip, or "call back" opens the wrong thing.
@@ -1043,6 +1105,21 @@ mod tests {
             assert_eq!(ActiveConversation::from_routing_key(&ct, &id), Some(conv));
         }
         assert!(ActiveConversation::None.routing_key().is_none());
+    }
+
+    /// An open chat only counts as seen while the app is on screen.
+    #[test]
+    fn on_screen_needs_active_and_visible() {
+        let state = ChatState::new();
+        let open = ChannelId::new();
+        state.set_active_conversation(ActiveConversation::Channel(open));
+
+        assert!(state.is_on_screen(open));
+        assert!(!state.is_on_screen(ChannelId::new()));
+        assert!(state.set_app_visible(false), "starts visible");
+        assert!(!state.is_on_screen(open));
+        assert!(!state.set_app_visible(true));
+        assert!(state.is_on_screen(open));
     }
 
     #[test]

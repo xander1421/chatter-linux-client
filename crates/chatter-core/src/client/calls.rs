@@ -645,6 +645,17 @@ impl ChatterClient {
         }
     }
 
+    /// Route call audio to the output device `device` (an id from
+    /// `AudioCapture::list_output_devices`). Applies mid-call, and to the
+    /// next call if none is running.
+    #[cfg(feature = "media")]
+    pub async fn call_set_audio_output(&self, device: &str) -> Result<(), String> {
+        match self.call_service().get().cloned() {
+            Some(worker) => worker.set_audio_output(device.to_string()).await,
+            None => Err("calls are not available".to_string()),
+        }
+    }
+
     /// Locally pause/resume a remote participant's video.
     #[cfg(feature = "media")]
     pub fn call_set_peer_video_paused(&self, participant_id: String, paused: bool) {

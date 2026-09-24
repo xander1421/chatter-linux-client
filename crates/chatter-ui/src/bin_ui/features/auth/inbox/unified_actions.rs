@@ -249,10 +249,8 @@ pub fn handle_pin(
                     let text = msg.content.to_string();
                     preview = if text.is_empty() {
                         "[Pinned message]".to_string()
-                    } else if text.len() > 80 {
-                        format!("{}...", &text[..77])
                     } else {
-                        text
+                        chatter_core::services::gateway::shared::truncate_preview(&text)
                     };
 
                     let mut updated_msg = msg.clone();

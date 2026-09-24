@@ -387,42 +387,17 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx_tpl.clone();
         tokio::spawn(async move {
-            let mut friend_data = Vec::new();
-            let mut seen_user_ids = std::collections::HashSet::new();
-
-            // Load friends
-            let friends = ui_ctx.list_friends(100, 0).await.unwrap_or_default();
-            for friendship in &friends {
-                let profile = ui_ctx.get_profile_local(&friendship.addressee_id);
-                let display_name = profile.as_ref().map(|p| p.display_name.clone()).unwrap_or_else(|| friendship.addressee_id.to_string());
-                seen_user_ids.insert(friendship.addressee_id);
-                friend_data.push(PrivateGroupFriend {
-                    user_id: friendship.addressee_id.to_string().into(),
-                    display_name: display_name.into(),
-                    username: "".into(),
+            let friend_data: Vec<PrivateGroupFriend> = ui_ctx
+                .list_anon_group_invite_candidates(None)
+                .into_iter()
+                .map(|c| PrivateGroupFriend {
+                    user_id: c.user_id.to_string().into(),
+                    display_name: c.display_name.into(),
+                    username: if c.is_anonymous { "(anonymous)".into() } else { "".into() },
                     selected: false,
                     role: "member".into(),
-                });
-            }
-
-            // Load anon DM peers (ready conversations only)
-            {
-                let conversations = ui_ctx.list_anon_dm_ready_conversations();
-                for dm in conversations {
-                    if seen_user_ids.contains(&dm.peer_id) {
-                        continue;
-                    }
-                    let display_name = dm.peer_display_name
-                        .unwrap_or_else(|| ui_ctx.fallback_display_name(&dm.peer_id));
-                    friend_data.push(PrivateGroupFriend {
-                        user_id: dm.peer_id.to_string().into(),
-                        display_name: display_name.into(),
-                        username: "(anonymous)".into(),
-                        selected: false,
-                        role: "member".into(),
-                    });
-                }
-            }
+                })
+                .collect();
 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() { w.set_create_channel_available_friends(ModelRc::new(VecModel::from(friend_data))); }

@@ -534,6 +534,10 @@ impl ChannelService {
         new_role: MemberRole,
     ) -> Result<Membership, ChannelError> {
         let _ = self.settings_repo.current_user_id()?;
+        // Ownership is not grantable; the server refuses it too (members.go).
+        if new_role == MemberRole::Owner {
+            return Err(ChannelError::InvalidInput("ownership cannot be granted".to_string()));
+        }
 
         let proto_role = domain_role_to_proto(new_role);
 

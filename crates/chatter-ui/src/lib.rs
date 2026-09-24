@@ -60,8 +60,27 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
         .unwrap_or_else(|| "/data/data/com.chatter.client/files".to_string());
     let _ = ANDROID_DATA_DIR.set(data_dir);
 
+    // Activity Resume/Pause is the app's visibility: core marks nothing read
+    // and sends no receipt while it is paused (backgrounded, screen locked).
+    // The client does not exist yet when the platform is installed, so the
+    // listener reads it from a cell filled once `app_init` returns.
+    let visibility_client: std::rc::Rc<
+        std::cell::OnceCell<std::sync::Arc<chatter_core::client::ChatterClient>>,
+    > = Default::default();
+    let listener_client = visibility_client.clone();
     slint::platform::set_platform(Box::new(
-        i_slint_backend_android_activity::AndroidPlatform::new(app),
+        i_slint_backend_android_activity::AndroidPlatform::new_with_event_listener(app, move |event| {
+            use i_slint_backend_android_activity::android_activity::{MainEvent, PollEvent};
+            let visible = match event {
+                PollEvent::Main(MainEvent::Resume { .. }) => true,
+                PollEvent::Main(MainEvent::Pause) => false,
+                _ => return,
+            };
+            if let Some(client) = listener_client.get() {
+                let _rt = rt_handle().enter();
+                client.set_app_visible(visible);
+            }
+        }),
     ))
     .expect("Failed to set Android platform");
 
@@ -73,6 +92,7 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
     let app_state = rt.block_on(app_init());
     let _guard = rt.enter();
+    let _ = visibility_client.set(app_state.ui_ctx.clone());
 
     // Safe-area insets (status bar, nav bar, IME) are now bound in `main.slint`
     // directly off the Window's built-in `safe-area-insets` and

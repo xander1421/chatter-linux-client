@@ -64,6 +64,7 @@ export component CallControls inherits Rectangle {
     callback toggle-screen-share();
     callback end-call();
     callback show-audio-settings();
+    callback show-audio-output-settings();
 
     height: 36px;
     background: Colors.surface;
@@ -89,6 +90,14 @@ export component CallControls inherits Rectangle {
             icon-active: Icons.settings;
             active: false;
             clicked => { show-audio-settings(); }
+        }
+
+        // Speaker / headphones picker (audio output device)
+        ControlButton {
+            icon: Icons.volume-2;
+            icon-active: Icons.volume-2;
+            active: false;
+            clicked => { show-audio-output-settings(); }
         }
 
         // Mute button

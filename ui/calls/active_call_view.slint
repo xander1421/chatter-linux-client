@@ -219,6 +219,7 @@ export component ActiveCallView inherits Rectangle {
     callback toggle-screen-share();
     callback end-call();
     callback show-audio-settings();
+    callback show-audio-output-settings();
     // Per-peer local controls — only the local viewer is affected.
     callback peer-audio-mute-toggle(string);
     callback peer-video-pause-toggle(string);
@@ -616,7 +617,7 @@ export component ActiveCallView inherits Rectangle {
             CallControls {
                 x: (parent.width - self.width) / 2;
                 y: parent.height - self.height - Spacing.md;
-                width: min(256px, parent.width - 2 * Spacing.md);
+                width: min(296px, parent.width - 2 * Spacing.md);
                 height: 40px;
                 is-muted: is-muted;
                 is-video-enabled: is-video-enabled;
@@ -628,6 +629,7 @@ export component ActiveCallView inherits Rectangle {
                 toggle-screen-share => { root.toggle-screen-share(); }
                 end-call => { root.end-call(); }
                 show-audio-settings => { root.show-audio-settings(); }
+                show-audio-output-settings => { root.show-audio-output-settings(); }
             }
         }
     }

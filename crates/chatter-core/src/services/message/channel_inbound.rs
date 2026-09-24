@@ -113,18 +113,23 @@ impl ChannelInbound {
         let conversation_type = message.conversation_type.clone();
         let message_id = message.id;
         let target_sent_timestamp = message.sent_at;
+        let author_id = message.sender_id;
 
         if !self.persist(&mut message, channel_id) {
             return Ingested::Dropped;
         }
 
-        let _ = self.event_bus().domain_sender().send(DomainEvent::MessageEdited {
-            message_id,
-            new_content,
-            channel_id,
-            conversation_type,
-            target_sent_timestamp,
-        });
+        // An edit with no known author cannot be matched to a bubble.
+        if let Some(author_id) = author_id {
+            let _ = self.event_bus().domain_sender().send(DomainEvent::MessageEdited {
+                message_id,
+                new_content,
+                channel_id,
+                conversation_type,
+                author_id,
+                target_sent_timestamp,
+            });
+        }
 
         Ingested::Stored
     }
@@ -205,6 +210,24 @@ impl ChannelInbound {
                     "Encrypted channel message missing author_device_id; dropping"
                 );
                 return Err(Ingested::Dropped);
+            }
+
+            // Our own message from THIS device: we never hold receive state for
+            // our own sender key, so it cannot decrypt — and the row is already
+            // stored from the send. Trying anyway asked ourselves for an SKDM.
+            if self.messages.settings_repo.current_user_id().ok() == Some(sid)
+                && self.messages.settings_repo.get::<u32>(crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID).ok().flatten()
+                    == Some(device_id)
+            {
+                return Err(Ingested::OwnMessage);
+            }
+            // Already held (a catch-up re-fetch): the first decrypt consumed the
+            // message key, so a second one fails as a duplicate — which is not a
+            // failure, and must not ask the sender for a resend.
+            if let Ok(id) = proto_msg.id.parse::<crate::domain::ids::MessageId>() {
+                if let Ok(Some(_)) = self.messages.get_message_local(&id) {
+                    return Err(Ingested::Dropped);
+                }
             }
 
             match self

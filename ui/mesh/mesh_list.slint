@@ -21,6 +21,7 @@ export component MeshList inherits Rectangle {
 
     property <bool> expanded: true;
     property <bool> joining: false;
+    property <bool> confirming-wipe: false;
 
     // Transparent on purpose: the sidebar tints its own surface (anon mode),
     // and a section that repainted over that would fight it.
@@ -248,6 +249,67 @@ export component MeshList inherits Rectangle {
                     color: Colors.text-muted;
                     font-size: Typography.xxs;
                     wrap: word-wrap;
+                }
+            }
+        }
+
+        // ── Panic wipe ── two taps, because it cannot be undone. Says exactly
+        // what goes and what stays: the chatter account is untouched.
+        if !root.collapsed && root.expanded && !root.confirming-wipe: Rectangle {
+            height: 22px;
+            HorizontalLayout {
+                padding-left: 10px;
+                alignment: start;
+                Text {
+                    text: "Wipe mesh data…";
+                    color: wipe-touch.has-hover ? Colors.error : Colors.text-muted;
+                    font-size: Typography.xxs;
+                    vertical-alignment: center;
+                    wipe-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.confirming-wipe = true; }
+                    }
+                }
+            }
+        }
+        if !root.collapsed && root.expanded && root.confirming-wipe: Rectangle {
+            height: confirm-layout.preferred-height;
+            confirm-layout := VerticalLayout {
+                padding-left: 10px;
+                padding-right: Spacing.sm;
+                padding-bottom: 6px;
+                spacing: 4px;
+                Text {
+                    text: "Erase the mesh identity, every mesh message, carried mail and favourites from this device? Your chatter account and its messages are not touched. This cannot be undone.";
+                    color: Colors.warning;
+                    font-size: Typography.xxs;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    spacing: Spacing.md;
+                    alignment: start;
+                    Text {
+                        text: "Wipe";
+                        color: Colors.error;
+                        font-size: Typography.xs;
+                        font-weight: 600;
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.confirming-wipe = false;
+                                MeshGlobal.panic-wipe();
+                            }
+                        }
+                    }
+                    Text {
+                        text: "Cancel";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.confirming-wipe = false; }
+                        }
+                    }
                 }
             }
         }

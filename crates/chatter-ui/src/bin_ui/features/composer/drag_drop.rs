@@ -4,26 +4,39 @@
 //! to attach them to messages.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use i_slint_backend_winit::{EventResult, WinitWindowAccessor};
 use slint::ComponentHandle;
 use winit::event::WindowEvent;
 
+use chatter_core::client::ChatterClient;
 use chatter_core::state::{ActiveConversation, ChatState};
 
 use super::attachments::process_and_add_file;
 use crate::MainWindow;
 
-/// Wire up drag and drop file handling.
+/// Wire up drag and drop file handling, and report window focus to core.
 ///
 /// Files dropped anywhere on the window will be added as pending attachments
 /// if there's an active conversation.
-pub(crate) fn wire_drag_drop(window: &MainWindow, chat_state: ChatState) {
+///
+/// Focus lives here because a window has exactly one winit event filter —
+/// registering a second one elsewhere would silently replace this one. A
+/// window without focus is "not visible" to core: nothing is marked read or
+/// receipted until the user is back (`ChatterClient::set_app_visible`).
+pub(crate) fn wire_drag_drop(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
-    let state = chat_state.clone();
+    let state = ui_ctx.chat_state().clone();
+    let ui_ctx = ui_ctx.clone();
 
     window.window().on_winit_window_event(move |_win, event| {
         match event {
+            WindowEvent::Focused(focused) => {
+                let _rt = crate::rt_handle().enter();
+                ui_ctx.set_app_visible(*focused);
+                EventResult::Propagate
+            }
             WindowEvent::DroppedFile(path) => {
                 handle_dropped_file(path.clone(), &state, &weak);
                 EventResult::PreventDefault

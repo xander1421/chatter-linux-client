@@ -34,6 +34,12 @@ pub(super) async fn handle_friend_requests_updated(
         avatar: Option<(u32, u32, Vec<u8>)>,
         note: String,
     }
+    // Core's `User <id8>` placeholder — never the server display_name, which
+    // is ciphertext without the peer's profile key.
+    let placeholder = |id: &str| {
+        id.parse::<UserId>().map(|u| ui_ctx.fallback_display_name(&u)).unwrap_or_default()
+    };
+    let sent_names: Vec<String> = sent.iter().map(|r| placeholder(&r.user_id)).collect();
     let mut prepped: Vec<Prepped> = Vec::with_capacity(received.len());
     for r in &received {
         let p = match r.user_id.parse::<UserId>() {
@@ -44,13 +50,13 @@ pub(super) async fn handle_friend_requests_updated(
                 Prepped {
                     display_name: profile
                         .display_name
-                        .unwrap_or_else(|| fallback_name(&r.user_id)),
+                        .unwrap_or_else(|| ui_ctx.fallback_display_name(&sender_id)),
                     avatar: profile.avatar_bytes.as_deref().and_then(decode_avatar_rgba),
                     note: profile.note.unwrap_or_default(),
                 }
             }
             Err(_) => Prepped {
-                display_name: fallback_name(&r.user_id),
+                display_name: placeholder(&r.user_id),
                 avatar: None,
                 note: String::new(),
             },
@@ -88,11 +94,11 @@ pub(super) async fn handle_friend_requests_updated(
 
             let sent_model: Vec<crate::FriendRequestData> = sent
                 .into_iter()
-                .map(|r| {
+                .zip(sent_names)
+                .map(|(r, display_name)| {
                     // We don't hold the recipient's profile key, so their
                     // server display_name is ciphertext — show a stable
                     // fallback rather than garbage.
-                    let display_name = fallback_name(&r.user_id);
                     crate::FriendRequestData {
                         user_id: r.user_id.into(),
                         display_name: display_name.into(),
@@ -115,12 +121,6 @@ pub(super) async fn handle_friend_requests_updated(
         sent = sent_count,
         "Updated friend requests in UI"
     );
-}
-
-/// Stable placeholder name when a peer's real (profile-key-encrypted) display
-/// name isn't decryptable — never show ciphertext.
-fn fallback_name(user_id: &str) -> String {
-    format!("User {}", &user_id[..8.min(user_id.len())])
 }
 
 /// Decode raw avatar image bytes → RGBA (width, height, pixels) for building a

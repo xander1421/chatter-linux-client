@@ -227,6 +227,11 @@ pub fn leave(ui_ctx: &Arc<ChatterClient>, cell: &str) -> Result<(), MeshError> {
     ui_ctx.mesh_leave_geohash(cell)
 }
 
+/// Panic wipe: every mesh secret and message on this device. Not the account.
+pub fn panic_wipe(ui_ctx: &Arc<ChatterClient>) -> Result<(), MeshError> {
+    ui_ctx.mesh_panic_wipe()
+}
+
 /// Mark a mesh conversation read on this device.
 ///
 /// Local only, and deliberately so: telling the peer costs airtime, and

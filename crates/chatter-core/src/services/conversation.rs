@@ -315,12 +315,14 @@ impl ConversationHandle {
             ActiveConversation::Channel(channel_id) => (*channel_id, CT::Channel),
             ActiveConversation::None => return,
         };
+        let Some(author_id) = self.client.auth_state().get().current_user_id else { return };
 
         self.client.event_bus().emit_domain(DomainEvent::MessageEdited {
             message_id: MessageId::new(),
             new_content: MessageContent::Text(new_text.to_string()),
             channel_id,
             conversation_type,
+            author_id,
             target_sent_timestamp,
         });
     }
@@ -583,6 +585,11 @@ impl ConversationHandle {
 
     pub async fn send_read_receipt(&self, timestamps: &[u64]) -> ConversationResult {
         if timestamps.is_empty() { return Ok(()); }
+        // Nothing is read while the app is off screen (backgrounded, locked,
+        // unfocused) — even with this chat open behind it.
+        if !self.client.chat_state().is_app_visible() {
+            return Ok(());
+        }
         // Privacy gate: honours the local "send read receipts" setting. When
         // disabled (`read_receipts_enabled() == false`) we do NOT tell the peer
         // we've read their message. Fail-safe default is ON (shipped default +
@@ -644,6 +651,11 @@ impl ConversationHandle {
     /// open the conversation where the user left off. Read-receipt failures do
     /// not swallow it — the anchor is the caller's only chance at the boundary.
     pub async fn mark_as_read(&self) -> Result<UnreadAnchor, ConversationError> {
+        // Off screen, nothing has been read. `ChatterClient::set_app_visible`
+        // re-runs this for the open conversation when the app comes back.
+        if !self.client.chat_state().is_app_visible() {
+            return Ok(UnreadAnchor::default());
+        }
         let (Some(conversation_id), Some(conversation_type)) = (
             self.conversation.channel_id(),
             self.client.conversation_type_of(&self.conversation),
@@ -700,9 +712,8 @@ impl ConversationHandle {
 
     /// Mute or unmute this conversation's notifications.
     ///
-    /// For channels and DMs, updates the local membership's `is_muted` flag.
-    /// For anon groups, uses the group status (Muted vs Active).
-    /// For anon DMs, stores in settings (no membership concept).
+    /// For anon groups, uses the group status (Muted vs Active). Everything
+    /// else stores a per-conversation settings key.
     pub fn mute_conversation(&self, muted: bool) -> ConversationResult {
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
@@ -729,10 +740,12 @@ impl ConversationHandle {
             }
             ActiveConversation::MailboxDm { channel_id, .. }
             | ActiveConversation::Channel(channel_id) => {
-                let user_id = self.client.auth_state().get().current_user_id
-                    .ok_or_else(|| ConversationError::Other("Not logged in".into()))?;
-                self.client.channels().channel_repo
-                    .set_membership_muted(channel_id, &user_id, muted)
+                // Not the membership's `is_muted`: that column is the
+                // moderator mute (server `ChannelMember.muted`, moderation
+                // events), and sharing it let either one overwrite the other.
+                let key = format!("conv.muted.channel.{}", channel_id);
+                self.client.channels().settings_repo
+                    .set(&key, &muted)
                     .map_err(|e| ConversationError::Other(e.to_string()))
             }
             ActiveConversation::None => Err(ConversationError::NoConversation),
@@ -741,9 +754,7 @@ impl ConversationHandle {
 
     /// Read this conversation's persisted mute state (the inverse of
     /// [`Self::mute_conversation`]). Reads exactly the same store the setter
-    /// wrote — the local membership `is_muted` flag for channels/DMs, the group
-    /// status for anon groups, or the per-peer settings key for channel-free
-    /// DMs. Defaults to `false` (unmuted) when nothing has been persisted.
+    /// wrote — the group status for anon groups, otherwise the settings key. Defaults to `false` (unmuted) when nothing has been persisted.
     pub fn is_muted(&self) -> Result<bool, ConversationError> {
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
@@ -769,12 +780,10 @@ impl ConversationHandle {
             }
             ActiveConversation::MailboxDm { channel_id, .. }
             | ActiveConversation::Channel(channel_id) => {
-                let user_id = self.client.auth_state().get().current_user_id
-                    .ok_or_else(|| ConversationError::Other("Not logged in".into()))?;
-                Ok(self.client.channels().channel_repo
-                    .get_membership(channel_id, &user_id)
+                let key = format!("conv.muted.channel.{}", channel_id);
+                Ok(self.client.channels().settings_repo
+                    .get_bool(&key)
                     .map_err(|e| ConversationError::Other(e.to_string()))?
-                    .map(|m| m.is_muted)
                     .unwrap_or(false))
             }
             ActiveConversation::None => Err(ConversationError::NoConversation),

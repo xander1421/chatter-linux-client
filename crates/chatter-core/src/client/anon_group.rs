@@ -187,6 +187,53 @@ impl ChatterClient {
         self.anon_groups().refresh_expiring_group_mailboxes().await
     }
 
+    /// Who can be invited to a private (anon) group: accepted friends and
+    /// peers of ready anon DMs, de-duplicated, never this user, and — for an
+    /// existing `group` — never someone already in it. Read from local state,
+    /// so there is no page cap on the friend list.
+    pub fn list_anon_group_invite_candidates(
+        &self,
+        group: Option<&crate::domain::anon_group::AnonGroupId>,
+    ) -> Vec<AnonGroupInviteCandidate> {
+        use crate::domain::ids::UserId;
+        use std::collections::HashSet;
+
+        let me = self.auth_state().get().current_user_id;
+        let mut seen: HashSet<UserId> = me.into_iter().collect();
+        if let Some(group) = group {
+            seen.extend(self.get_anon_group_members(group).into_iter().map(|m| m.user_id));
+        }
+
+        let mut out = Vec::new();
+        if let Some(me) = me {
+            for f in self.users().get_friends_local().unwrap_or_default() {
+                if f.status != crate::domain::user::FriendshipStatus::Accepted {
+                    continue;
+                }
+                let peer = if f.requester_id == me { f.addressee_id } else { f.requester_id };
+                if seen.insert(peer) {
+                    out.push(AnonGroupInviteCandidate {
+                        user_id: peer,
+                        display_name: self.display_name(&peer),
+                        is_anonymous: false,
+                    });
+                }
+            }
+        }
+        for dm in self.list_anon_dm_ready_conversations() {
+            if seen.insert(dm.peer_id) {
+                out.push(AnonGroupInviteCandidate {
+                    user_id: dm.peer_id,
+                    display_name: dm
+                        .peer_display_name
+                        .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id)),
+                    is_anonymous: true,
+                });
+            }
+        }
+        out
+    }
+
     pub async fn broadcast_profile_to_owned_groups(
         &self,
     ) -> Result<(), crate::services::anon_group::AnonGroupError> {
@@ -218,4 +265,14 @@ impl ChatterClient {
             )
             .await
     }
+}
+
+/// A row of the private-group invite picker; see
+/// [`ChatterClient::list_anon_group_invite_candidates`].
+#[derive(Debug, Clone)]
+pub struct AnonGroupInviteCandidate {
+    pub user_id: crate::domain::ids::UserId,
+    pub display_name: String,
+    /// Reached through an anon DM rather than a server friendship.
+    pub is_anonymous: bool,
 }

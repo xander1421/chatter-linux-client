@@ -566,6 +566,15 @@ impl RoomManager {
         }
     }
 
+    /// Route remote audio to the named output device (see
+    /// [`AudioPlayback::set_output_device`]).
+    pub fn set_audio_output(&self, device: &str) -> Result<(), CallError> {
+        match self.audio_playback.read().as_ref() {
+            Some(playback) => playback.set_output_device(device),
+            None => Err(CallError::DeviceError("Audio playback unavailable".to_string())),
+        }
+    }
+
     /// Get current playback volume.
     pub fn playback_volume(&self) -> f32 {
         self.audio_playback

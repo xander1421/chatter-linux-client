@@ -224,12 +224,11 @@ impl AnonGroup {
         self.owner_id == *user_id || self.my_role == AnonGroupRole::Owner
     }
 
-    /// Check if the given user has the admin role in this group.
-    ///
-    /// Note: this checks for the `Admin` role specifically (not owner). For
-    /// "admin or owner" semantics, combine with [`Self::is_current_user_owner`].
-    pub fn is_current_user_admin(&self, _user_id: &UserId) -> bool {
-        self.my_role == AnonGroupRole::Admin
+    /// Whether this user may manage members (kick) — the same predicate the
+    /// kick path enforces (`removal.rs`), so the settings UI never offers an
+    /// action core would refuse.
+    pub fn can_manage_members(&self) -> bool {
+        self.my_role.can_kick()
     }
 
     /// Check if the group is ready for messaging.

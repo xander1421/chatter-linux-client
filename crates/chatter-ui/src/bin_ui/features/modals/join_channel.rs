@@ -229,7 +229,12 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     tracing::info!("Joined channel: {}", channel_id);
                 }
                 Err(e) => {
-                    let error_msg = if e.to_string().contains("not found") {
+                    use chatter_core::error::NetworkError;
+                    use chatter_core::services::channel::ChannelError;
+                    let error_msg = if matches!(
+                        e,
+                        ChannelError::ChannelNotFound(_) | ChannelError::Network(NetworkError::NotFound(_))
+                    ) {
                         "Channel not found or is private".to_string()
                     } else {
                         format!("Failed to join: {}", e)

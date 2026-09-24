@@ -404,15 +404,20 @@ fn wire_section_conversation_selected(window: &MainWindow, _ui_ctx: &Arc<Chatter
     });
 }
 
-fn refresh_sections_ui(
+/// Rebuild the folder models. Queries run on the caller's (runtime) thread;
+/// only the model swap runs on the UI thread. The rebuild clears every row's
+/// selection flag, so the open conversation is re-marked after it.
+pub(crate) fn refresh_sections_ui(
     weak: &slint::Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
 ) {
     if let Ok(sections) = ui_ctx.list_sections_with_conversations() {
         let send_data = build_section_data(&sections, ui_ctx);
+        let ui_ctx = ui_ctx.clone();
         run_ui!(weak, |w| {
             let models: Vec<_> = send_data.into_iter().map(|s| s.to_slint()).collect();
             w.set_custom_sections(ModelRc::new(VecModel::from(models)));
+            super::refresh_section_selection(&w, &ui_ctx);
         });
     }
 }

@@ -11,8 +11,8 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
 
-use crate::bin_ui::converters::{get_initials, DMListItemExt, DMListItemSendData};
-use crate::{DMListItemData, MainWindow, SharedContentItem, SharedTab};
+use crate::bin_ui::converters::get_initials;
+use crate::{MainWindow, SharedContentItem, SharedTab};
 
 /// Bytes of an avatar picked in the Edit Profile modal, held until Save.
 ///
@@ -831,151 +831,24 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         });
     });
 
-    // Send message (open DM)
+    // Send message (open DM). Core picks the conversation: in shield mode the
+    // anon DM with this peer (or none at all — never the identified DM),
+    // otherwise the channel-free server DM. Opening goes through the same
+    // `dm-selected` path as every other DM entry point.
     let weak_window = window.as_weak();
     let ui_ctx_dm = ui_ctx.clone();
-
     window.on_profile_send_message(move || {
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx_dm.clone();
-
-        // Get profile user ID synchronously before spawning
-        let profile_user_id = weak
-            .upgrade()
-            .map(|w| w.get_profile_user_id().to_string())
-            .unwrap_or_default();
-
-        if profile_user_id.is_empty() {
-            tracing::error!("No profile user ID for DM");
+        let Some(w) = weak_window.upgrade() else { return };
+        let peer = w.get_profile_user_id().to_string();
+        let Some(dm_id) = ui_ctx_dm
+            .resolve_dm_conversation(&peer)
+            .and_then(|conversation| conversation.sidebar_key())
+        else {
+            tracing::warn!("profile: no conversation with this peer is available in the current mode");
             return;
-        }
-
-        tokio::spawn(async move {
-            // Show loading state and close modal
-            let weak_loading = weak.clone();
-            let profile_id_for_ui = profile_user_id.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_loading.upgrade() {
-                    w.set_active_modal("none".into());
-                    w.set_loading_messages(true);
-                }
-            });
-
-            // Parse user ID
-            let peer_id: UserId = match profile_user_id.parse() {
-                Ok(id) => id,
-                Err(e) => {
-                    tracing::error!("Invalid user ID for DM: {}", e);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_loading_messages(false);
-                        }
-                    });
-                    return;
-                }
-            };
-
-            // Use peer_id as conversation_id for 1:1 DMs
-            let conversation_id = peer_id.to_string();
-
-            // Ensure mailbox manager initialized and token pool populated.
-            if let Err(e) = ui_ctx.ensure_mailbox_ready(5).await {
-                tracing::error!("Failed to prepare mailbox: {}", e);
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        w.set_loading_messages(false);
-                    }
-                });
-                return;
-            }
-
-            // Get or create mailbox for this DM conversation (TTL: 7 days).
-            match ui_ctx.get_or_create_mailbox(&conversation_id, 604800).await {
-                Ok(mailbox) => {
-                    tracing::info!(
-                        "DM mailbox ready for conversation with {}: mailbox_id={}",
-                        peer_id,
-                        mailbox.mailbox_id
-                    );
-
-                    // Get peer display name via façade
-                    let peer_name = match ui_ctx.get_user_profile(&peer_id).await {
-                        Ok(profile) => {
-                            if profile.display_name.is_empty() {
-                                peer_id.to_string()
-                            } else {
-                                profile.display_name
-                            }
-                        }
-                        Err(_) => peer_id.to_string(),
-                    };
-
-                    // DMs are channel-free — the conversation key is the
-                    // peer's user_id.
-                    let channel_id_for_ui = profile_id_for_ui.clone();
-
-                    // Create Send-safe DM sidebar item data
-                    let initials = get_initials(&peer_name);
-                    let dm_send_data = DMListItemSendData {
-                        channel_id: channel_id_for_ui.clone(),
-                        user_id: profile_id_for_ui.clone(),
-                        display_name: peer_name.clone(),
-                        initials,
-                        avatar_bytes: None,
-                        avatar_decoded: None,
-                        presence_status: "offline".to_string(),
-                        last_message: String::new(),
-                        timestamp: String::new(),
-                        unread_count: 0,
-                        is_typing: false,
-                        is_anon: false,
-        is_pinned: false,
-                    };
-
-                    // Update UI to show the DM and add to sidebar
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            // Add to sidebar if not already present
-                            let current_dms = w.get_dm_conversations();
-                            let mut dms: Vec<DMListItemData> = (0..current_dms.row_count())
-                                .filter_map(|i| current_dms.row_data(i))
-                                .collect();
-
-                            let exists = dms.iter().any(|dm| dm.user_id.as_str() == profile_id_for_ui);
-                            if !exists {
-                                // Convert Send-safe data to Slint type inside event loop
-                                let dm_item = dm_send_data.to_slint();
-                                dms.push(dm_item);
-                                w.set_dm_conversations(ModelRc::new(VecModel::from(dms)));
-                                tracing::info!("Added DM to sidebar from profile modal");
-                            }
-
-                            w.set_loading_messages(false);
-                            // Trigger DM selection via the canonical handler so
-                            // chat_state + highlighting stay in sync.
-                            w.invoke_dm_selected(channel_id_for_ui.into());
-                            w.set_channel_name(peer_name.into());
-                            w.set_channel_type("dm".into());
-                            w.set_is_dm(true);
-                            w.set_header_presence_status(w.get_profile_presence());
-                            w.set_member_count(2);
-                            w.set_topic("".into());
-                            // Clear messages for new conversation
-                            let empty: Vec<crate::MessageItemData> = vec![];
-                            w.set_messages(ModelRc::new(VecModel::from(empty)));
-                        }
-                    });
-                }
-                Err(e) => {
-                    tracing::error!("Failed to create DM mailbox: {}", e);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_loading_messages(false);
-                        }
-                    });
-                }
-            }
-        });
+        };
+        w.set_active_modal("none".into());
+        w.invoke_dm_selected(dm_id.into());
     });
 
     // Edit profile actions
@@ -1046,9 +919,6 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         "Profile updated - display_name: {}, bio: {:?}",
                         profile.display_name, profile.status_message.as_ref().map(|m| &m.text)
                     );
-                    
-                    // Broadcast profile update to all anon DM conversations
-                    broadcast_profile_update(&ui_ctx, &profile).await;
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_edit_profile_loading(false);
@@ -1249,47 +1119,3 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 }
 
-/// Broadcast profile update to all anon DM conversations and anon groups
-async fn broadcast_profile_update(ui_ctx: &Arc<ChatterClient>, profile: &chatter_core::domain::user::Profile) {
-    let display_name = Some(profile.display_name.clone());
-    // The server profile no longer carries a plaintext avatar URL; the avatar
-    // travels as encrypted bytes inside send_anon_dm_profile_update itself.
-    let avatar_url: Option<String> = None;
-    let bio = profile.status_message.as_ref().map(|m| m.text.clone());
-
-    tracing::info!(
-        "Broadcasting profile update - display_name: {:?}, bio: {:?}",
-        display_name, bio
-    );
-    
-    // Broadcast to all anon DM conversations
-    let conversations = ui_ctx.list_anon_dm_conversations();
-
-    for conv in &conversations {
-        if !conv.is_ready() {
-            continue;
-        }
-
-        let conv_id = conv.id;
-        let ui_ctx_profile = ui_ctx.clone();
-        let display_name = display_name.clone();
-        let avatar_url = avatar_url.clone();
-        let bio = bio.clone();
-
-        tokio::spawn(async move {
-            if let Err(e) = ui_ctx_profile.send_anon_dm_profile_update(&conv_id, display_name, avatar_url, bio).await {
-                tracing::debug!("Failed to send profile update to anon DM: {}", e);
-            }
-        });
-    }
-    
-    // Broadcast to anon groups where user is owner
-    let ui_ctx_bcast = ui_ctx.clone();
-    tokio::spawn(async move {
-        if let Err(e) = ui_ctx_bcast.broadcast_profile_to_owned_groups().await {
-            tracing::warn!("Failed to broadcast profile to owned groups: {}", e);
-        }
-    });
-    
-    tracing::info!("Broadcasted profile update to {} anon DM conversations", conversations.len());
-}

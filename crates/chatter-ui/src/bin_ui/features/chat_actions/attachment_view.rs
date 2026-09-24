@@ -282,6 +282,7 @@ fn handle_local_attachment(
     };
 
     display_decrypted_content(
+        ui_ctx.runtime_handle(),
         weak,
         secure_buffer,
         &attachment_id.to_string(),
@@ -359,6 +360,7 @@ fn show_image_preview(
 
 /// Display decrypted content based on file type.
 fn display_decrypted_content(
+    handle: &tokio::runtime::Handle,
     weak: slint::Weak<MainWindow>,
     secure_buffer: chatter_core::prelude::SecureBuffer,
     attachment_id: &str,
@@ -383,8 +385,10 @@ fn display_decrypted_content(
     } else if is_pdf {
         display_pdf_from_buffer(weak, secure_buffer, filename);
     } else {
-        // For other files, show Save As dialog
-        save_file_from_buffer(secure_buffer, filename);
+        // For other files, show Save As dialog. Spawned, never blocked on:
+        // this runs both on a plain thread and inside a runtime task, and
+        // `block_on` in the latter panics.
+        handle.spawn(save_file_from_buffer(secure_buffer, filename.to_string()));
     }
 }
 
@@ -715,18 +719,13 @@ fn display_pdf_from_buffer(
 }
 
 /// Save file to user-selected location.
-///
-/// NOTE: This may be called from a background thread, so we use block_on
-/// for the async file picker.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn save_file_from_buffer(
+async fn save_file_from_buffer(
     secure_buffer: chatter_core::prelude::SecureBuffer,
-    filename: &str,
+    filename_for_save: String,
 ) {
     let data = secure_buffer.as_slice().to_vec();
-    let filename_for_save = filename.to_string();
 
-    // We're already in a background thread, so we can block
     let config = FilePickerConfig::new()
         .with_title("Save Attachment As")
         .with_default_path(
@@ -735,17 +734,7 @@ fn save_file_from_buffer(
                 .join(&filename_for_save),
         );
 
-    // Use block_on since FilePicker::save_file is async but we're in a sync context
-    let destination = tokio::runtime::Handle::try_current()
-        .map(|h| h.block_on(FilePicker::save_file(config.clone())))
-        .unwrap_or_else(|_| {
-            // No tokio runtime, create a minimal one for the file picker
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .ok()
-                .and_then(|rt| rt.block_on(FilePicker::save_file(config)))
-        });
+    let destination = FilePicker::save_file(config).await;
 
     if let Some(destination) = destination {
         match std::fs::write(&destination, &data) {
@@ -766,9 +755,9 @@ fn save_file_from_buffer(
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
-fn save_file_from_buffer(
+async fn save_file_from_buffer(
     _secure_buffer: chatter_core::prelude::SecureBuffer,
-    _filename: &str,
+    _filename: String,
 ) {
     tracing::warn!("Save file not supported on mobile");
 }
@@ -842,6 +831,7 @@ fn handle_download_attachment(
                 };
 
                 display_decrypted_content(
+                    ui_ctx_for_task.runtime_handle(),
                     weak,
                     secure_buffer,
                     &att_id_str,

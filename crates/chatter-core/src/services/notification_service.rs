@@ -203,9 +203,10 @@ impl Default for NotificationService {
 /// caller to track alongside other lifecycle tasks.
 pub fn spawn_notification_listener(
     event_bus: crate::events::EventBus,
-    // ponytail: unused since F11; drop it with the argument at the sole caller
-    // (client/notification.rs).
-    chat_state: crate::state::ChatState,
+    // Weak: the client owns this task, so a strong handle would keep the
+    // client alive forever. Used for the per-conversation rules — display
+    // name in context, mute, what is on screen.
+    client: std::sync::Weak<crate::client::ChatterClient>,
     user_service: std::sync::Arc<crate::services::user::UserService>,
     notification_service: std::sync::Arc<NotificationService>,
     signal_service: std::sync::Arc<crate::services::signal_service::SignalService>,
@@ -227,17 +228,20 @@ pub fn spawn_notification_listener(
             };
 
             let me = user_service.current_user_id().ok();
-            let chat_data = chat_state.get();
 
             match &event {
                 DomainEvent::MessageReceived { message } => {
-                    if !should_notify_message(message, me.as_ref(), chat_data.active_channel_id) {
+                    let Some(client) = client.upgrade() else { break };
+                    let (on_screen, muted) = conversation_attention(&client, message);
+                    if !should_notify_message(message, me.as_ref(), on_screen, muted) {
                         continue;
                     }
 
-                    let sender_name = message
-                        .sender_id
-                        .map(|id| user_service.get_display_name(&id));
+                    // In an anon group the per-group name, never the global
+                    // profile name of a contact who happens to be in it.
+                    let sender_name = message.sender_id.map(|id| {
+                        client.display_name_in(&message.conversation_type, &message.conversation_id, &id)
+                    });
                     let preview = message.as_text();
 
                     let _ = notification_service.show_message_notification(
@@ -247,8 +251,19 @@ pub fn spawn_notification_listener(
                         NotificationPriority::Normal,
                     );
                 }
-                DomainEvent::ReactionAdded { emoji, reactor_id, .. } => {
+                DomainEvent::ReactionAdded { sender_id, sent_at_ns, emoji, reactor_id, .. } => {
                     if me.is_none() || Some(*reactor_id) == me {
+                        continue;
+                    }
+                    let Some(client) = client.upgrade() else { break };
+                    // Same mute / on-screen rules as the message it reacts
+                    // to. A target we do not hold names no conversation to
+                    // check, so it stays silent.
+                    let Some(target) = client.get_message_by_sender_timestamp(sender_id, *sent_at_ns) else {
+                        continue;
+                    };
+                    let (on_screen, muted) = conversation_attention(&client, &target);
+                    if on_screen || muted {
                         continue;
                     }
                     let _ = notification_service.show_message_notification(
@@ -400,14 +415,32 @@ pub fn spawn_notification_listener(
 ///   stamps `sender_id` with our id.
 /// * Never when we cannot say who we are (`me == None`): the self-check would
 ///   be a no-op, and a toast for your own message is the worse failure.
-/// * Never for the conversation on screen.
+/// * Never for the conversation on screen (open AND the app visible — an open
+///   chat behind the lock screen still notifies).
+/// * Never for a muted conversation.
 fn should_notify_message(
     message: &crate::domain::message::Message,
     me: Option<&crate::domain::ids::UserId>,
-    active_channel_id: Option<crate::domain::ids::ChannelId>,
+    on_screen: bool,
+    muted: bool,
 ) -> bool {
     let Some(me) = me else { return false };
-    message.sender_id.as_ref() != Some(me) && active_channel_id != Some(message.conversation_id)
+    message.sender_id.as_ref() != Some(me) && !on_screen && !muted
+}
+
+/// `(on_screen, muted)` for the conversation `message` belongs to.
+fn conversation_attention(
+    client: &std::sync::Arc<crate::client::ChatterClient>,
+    message: &crate::domain::message::Message,
+) -> (bool, bool) {
+    let on_screen = client.chat_state().is_on_screen(message.conversation_id);
+    let conversation = client.classify_active_conversation(
+        &message.conversation_id,
+        &message.conversation_type,
+        message.sender_id,
+    );
+    let muted = client.is_conversation_muted(conversation).unwrap_or(false);
+    (on_screen, muted)
 }
 
 #[cfg(test)]
@@ -421,19 +454,18 @@ mod tests {
 
         let me = UserId::new();
         let peer = UserId::new();
-        let other_chat = ChannelId::new();
         let msg = |sender| Message::new_text(ChannelId::new(), ConversationType::ServerDm, Some(sender), "hi".into(), 1);
 
-        // Ours: silent whether or not some other chat is open.
-        assert!(!should_notify_message(&msg(me), Some(&me), None));
-        assert!(!should_notify_message(&msg(me), Some(&me), Some(other_chat)));
+        // Ours: silent whatever else holds.
+        assert!(!should_notify_message(&msg(me), Some(&me), false, false));
         // Identity unknown (e.g. AuthState never set): fail closed.
-        assert!(!should_notify_message(&msg(peer), None, None));
+        assert!(!should_notify_message(&msg(peer), None, false, false));
         // A peer's message in a background chat notifies…
         let m = msg(peer);
-        assert!(should_notify_message(&m, Some(&me), Some(other_chat)));
-        // …but not in the chat on screen.
-        assert!(!should_notify_message(&m, Some(&me), Some(m.conversation_id)));
+        assert!(should_notify_message(&m, Some(&me), false, false));
+        // …but not in the chat on screen, nor in a muted one.
+        assert!(!should_notify_message(&m, Some(&me), true, false));
+        assert!(!should_notify_message(&m, Some(&me), false, true));
     }
 
     #[test]

@@ -551,27 +551,6 @@ impl ChannelRepository {
         Ok(())
     }
 
-    /// Update the muted state for a user's membership in a channel.
-    pub fn set_membership_muted(
-        &self,
-        channel_id: &ChannelId,
-        user_id: &UserId,
-        muted: bool,
-    ) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        let rows = conn.execute(
-            "UPDATE memberships SET is_muted = ?1, muted_until = NULL WHERE channel_id = ?2 AND user_id = ?3",
-            params![muted as i32, channel_id.to_string(), user_id.to_string()],
-        )?;
-        if rows == 0 {
-            return Err(StorageError::NotFound(format!(
-                "Membership {} in channel {}",
-                user_id, channel_id
-            )));
-        }
-        Ok(())
-    }
-
     /// Update the default TTL (disappearing timer) for a channel.
     pub fn set_default_ttl(
         &self,
@@ -823,40 +802,6 @@ mod tests {
             muted_until: None,
             notification_preference: NotificationPreference::All,
         }
-    }
-
-    #[test]
-    fn test_set_membership_muted() {
-        let (repo, _dir) = create_test_repo();
-        let channel_id = ChannelId::new();
-        let user_id = UserId::new();
-        let channel = make_channel(channel_id);
-        let membership = make_membership(channel_id, user_id);
-
-        repo.insert(&channel).unwrap();
-        repo.insert_membership(&membership).unwrap();
-
-        // Initially not muted
-        let m = repo.get_membership(&channel_id, &user_id).unwrap().unwrap();
-        assert!(!m.is_muted);
-
-        // Mute
-        repo.set_membership_muted(&channel_id, &user_id, true).unwrap();
-        let m = repo.get_membership(&channel_id, &user_id).unwrap().unwrap();
-        assert!(m.is_muted);
-        assert!(m.muted_until.is_none()); // cleared by set_membership_muted
-
-        // Unmute
-        repo.set_membership_muted(&channel_id, &user_id, false).unwrap();
-        let m = repo.get_membership(&channel_id, &user_id).unwrap().unwrap();
-        assert!(!m.is_muted);
-    }
-
-    #[test]
-    fn test_set_membership_muted_not_found() {
-        let (repo, _dir) = create_test_repo();
-        let result = repo.set_membership_muted(&ChannelId::new(), &UserId::new(), true);
-        assert!(result.is_err());
     }
 
     #[test]

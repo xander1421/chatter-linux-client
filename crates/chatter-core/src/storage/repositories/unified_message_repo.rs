@@ -868,7 +868,7 @@ impl UnifiedMessageRepository {
         limit: u32,
     ) -> Result<Vec<Message>, StorageError> {
         let conn = self.db.read_connection()?;
-        if let Some(before) = before_sent_at {
+        let mut page = if let Some(before) = before_sent_at {
             let mut stmt = conn.prepare(&format!(
                 "SELECT {} FROM messages \
                  WHERE thread_id = ?1 AND sent_at < ?2 AND is_deleted = 0 \
@@ -876,7 +876,7 @@ impl UnifiedMessageRepository {
                 MSG_COLS
             ))?;
             let mut rows = stmt.query(params![thread_id.to_string(), before as i64, limit])?;
-            collect_messages(&mut rows)
+            collect_messages(&mut rows)?
         } else {
             let mut stmt = conn.prepare(&format!(
                 "SELECT {} FROM messages \
@@ -885,8 +885,23 @@ impl UnifiedMessageRepository {
                 MSG_COLS
             ))?;
             let mut rows = stmt.query(params![thread_id.to_string(), limit])?;
-            collect_messages(&mut rows)
-        }
+            collect_messages(&mut rows)?
+        };
+        // Newest `limit` selected, returned oldest → newest: the order the
+        // thread panel draws, and the order live replies are appended in.
+        page.reverse();
+        Ok(page)
+    }
+
+    /// Number of (non-deleted) replies in a thread — the total the thread
+    /// panel pages towards.
+    pub fn count_for_thread(&self, thread_id: &MessageId) -> Result<u32, StorageError> {
+        let conn = self.db.read_connection()?;
+        Ok(conn.query_row(
+            "SELECT COUNT(*) FROM messages WHERE thread_id = ?1 AND is_deleted = 0",
+            params![thread_id.to_string()],
+            |row| row.get(0),
+        )?)
     }
 
     /// Update delivery status by (conversation_id, sent_at).

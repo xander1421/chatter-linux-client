@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, Model, SharedString};
+use slint::{ComponentHandle, SharedString};
 
 use chatter_core::client::ChatterClient;
 
@@ -415,7 +415,6 @@ pub(crate) fn wire_connect_private(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                         let peer_id = dm.peer_id;
                         let peer_id_str = peer_id.to_string();
                         let dm_id = dm.id;
-                        let updated_at = dm.updated_at;
 
                         tracing::info!(
                             "Started NDSS'21-compliant private conversation {} with {} (no prekey fetch)",
@@ -423,51 +422,13 @@ pub(crate) fn wire_connect_private(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                             peer_id_str
                         );
 
-                        // Add conversation to sidebar so initiator can see it
+                        // Core's sidebar already lists outgoing requests; rebuild
+                        // from it rather than hand-editing the model (which also
+                        // dropped any existing DM with the same peer).
+                        let ui_ctx = ui_ctx.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
-                                // Create DM sidebar entry
-                                let dm_item = crate::DMListItemData {
-                                    channel_id: dm_id.to_string().into(),
-                                    user_id: peer_id.to_string().into(),
-                                    display_name: "Private (pending)".into(),
-                                    avatar_source: slint::Image::default(),
-                                    has_avatar: false,
-                                    initials: "?".into(), // Unknown until they accept
-                                    presence_status: "offline".into(),
-                                    last_message: "Waiting for response...".into(),
-                                    timestamp: updated_at
-                                        .with_timezone(&chrono::Local)
-                                        .format("%H:%M")
-                                        .to_string()
-                                        .into(),
-                                    unread_count: 0,
-                                    is_typing: false,
-                                    is_anon: true,
-        is_pinned: false,
-                                    is_selected: false,
-                                };
-
-                                // Add to DM list
-                                let current_dms = w.get_dm_conversations();
-                                let mut dm_vec: Vec<crate::DMListItemData> = Vec::new();
-
-                                // Copy existing DMs, excluding any with the same peer
-                                // (removes old pending conversations when retrying)
-                                let new_user_id = dm_item.user_id.as_str();
-                                for i in 0..current_dms.row_count() {
-                                    if let Some(existing_dm) = current_dms.row_data(i) {
-                                        if existing_dm.user_id.as_str() != new_user_id {
-                                            dm_vec.push(existing_dm);
-                                        }
-                                    }
-                                }
-
-                                // Add new DM at the start (most recent)
-                                dm_vec.insert(0, dm_item);
-
-                                // Update UI
-                                w.set_dm_conversations(slint::ModelRc::new(slint::VecModel::from(dm_vec)));
+                                crate::bin_ui::features::auth::initial_data::refresh_dm_list(&w, &ui_ctx);
 
                                 w.set_friends_loading(false);
                                 w.set_friends_code_input("".into());

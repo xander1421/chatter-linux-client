@@ -439,6 +439,11 @@ impl MessageService {
             .map_err(MessageError::from)
     }
 
+    /// Number of replies in a thread (local storage).
+    pub fn count_for_thread(&self, thread_root_id: &crate::domain::ids::MessageId) -> Result<u32, MessageError> {
+        self.message_repo.count_for_thread(thread_root_id).map_err(MessageError::from)
+    }
+
     /// Update a message in local storage.
     pub fn update_message(&self, message: &Message) -> Result<(), MessageError> {
         self.message_repo.update(message).map_err(MessageError::from)

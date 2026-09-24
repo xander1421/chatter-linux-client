@@ -160,18 +160,26 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     // Handle audio output device selection
     window.on_audio_output_selected({
+        let ui_ctx = ui_ctx.clone();
         let weak = weak.clone();
         move |device_id| {
             let device_id_str = device_id.to_string();
-            tracing::info!("Audio output device selected: {}", device_id_str);
-
-            // Note: Audio output device switching requires platform-specific handling
-            // LiveKit handles audio output internally via the room's audio system
-            // For now, we store the selection for reference
-            if let Some(w) = weak.upgrade() {
-                w.set_selected_audio_output_id(device_id_str.into());
-                tracing::info!("Audio output device set (system default used for playback)");
-            }
+            let ui_ctx = ui_ctx.clone();
+            let weak = weak.clone();
+            slint::spawn_local(async move {
+                let result = ui_ctx.call_set_audio_output(&device_id_str).await;
+                let Some(w) = weak.upgrade() else { return };
+                match result {
+                    Ok(()) => w.set_selected_audio_output_id(device_id_str.into()),
+                    Err(e) => {
+                        // Slint set the id optimistically; don't leave a tick
+                        // on a device the audio isn't actually going to.
+                        tracing::error!("Failed to switch audio output to {}: {}", device_id_str, e);
+                        w.set_selected_audio_output_id("".into());
+                    }
+                }
+            })
+            .unwrap();
         }
     });
 

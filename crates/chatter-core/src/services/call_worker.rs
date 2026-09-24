@@ -367,6 +367,11 @@ enum CallCommand {
     },
     /// Locally mute/unmute a specific remote participant's audio.
     SetPeerAudioMuted { participant_id: String, muted: bool },
+    /// Route remote audio to an output device (CPAL device name).
+    SetAudioOutput {
+        device: String,
+        response: oneshot::Sender<Result<(), String>>,
+    },
     /// Locally pause/resume a specific remote participant's video.
     SetPeerVideoPaused { participant_id: String, paused: bool },
     /// Publish screen share (desktop only).
@@ -976,6 +981,15 @@ impl CallWorkerHandle {
         let _ = self.cmd_tx.try_send(CallCommand::SetPeerAudioMuted { participant_id, muted });
     }
 
+    /// Route remote audio to the named output device.
+    pub async fn set_audio_output(&self, device: String) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .try_send(CallCommand::SetAudioOutput { device, response: tx })
+            .map_err(|_| "call worker is not running".to_string())?;
+        rx.await.map_err(|_| "call worker dropped the request".to_string())?
+    }
+
     /// Locally pause/resume a specific remote peer's video.
     pub fn set_peer_video_paused(&self, participant_id: String, paused: bool) {
         let _ = self.cmd_tx.try_send(CallCommand::SetPeerVideoPaused { participant_id, paused });
@@ -1409,6 +1423,10 @@ fn run_call_worker(
 
                 CallCommand::SetPeerAudioMuted { participant_id, muted } => {
                     room_manager.set_peer_audio_muted(&participant_id, muted);
+                }
+
+                CallCommand::SetAudioOutput { device, response } => {
+                    let _ = response.send(room_manager.set_audio_output(&device).map_err(|e| e.to_string()));
                 }
 
                 CallCommand::SetPeerVideoPaused { participant_id, paused } => {

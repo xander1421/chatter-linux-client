@@ -190,6 +190,18 @@ impl MemberRole {
             Self::Owner => "owner",
         }
     }
+
+    /// Inverse of [`Self::as_str`].
+    #[must_use]
+    pub fn parse(token: &str) -> Option<Self> {
+        match token {
+            "member" => Some(Self::Member),
+            "moderator" => Some(Self::Moderator),
+            "admin" => Some(Self::Admin),
+            "owner" => Some(Self::Owner),
+            _ => None,
+        }
+    }
 }
 
 /// Channel membership information.

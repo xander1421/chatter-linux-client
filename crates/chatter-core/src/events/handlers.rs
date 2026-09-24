@@ -754,11 +754,6 @@ impl EventHandlers {
                 trace!(?peer_id, "DmBootstrapCompleted: handled by UI thread");
             }
 
-            DomainEvent::UnreadCountUpdated { channel_id, unread_count, .. } => {
-                // Unread count update - handled by UI thread for sidebar badges.
-                trace!(?channel_id, unread_count, "UnreadCountUpdated: handled by UI thread");
-            }
-
             DomainEvent::FriendRequestsUpdated { ref received, ref sent } => {
                 // Friend requests update - handled by UI thread for friend list.
                 trace!(received_count = received.len(), sent_count = sent.len(), "FriendRequestsUpdated: handled by UI thread");
@@ -777,11 +772,6 @@ impl EventHandlers {
             // ================================================================
             // Local Send Events
             // ================================================================
-            DomainEvent::MessageSent { channel_id, message_id, .. } => {
-                // Message sent successfully - UI updates handled via message state
-                trace!(?channel_id, ?message_id, "Message sent successfully");
-            }
-
             DomainEvent::MessageSendFailed { channel_id, error } => {
                 // Message send failed - UI should show error
                 trace!(?channel_id, ?error, "Message send failed");
@@ -1095,6 +1085,7 @@ mod tests {
             new_content: new_content.clone(),
             channel_id,
             conversation_type: ConversationType::Channel,
+            author_id: UserId::new(),
             target_sent_timestamp: 0,
         });
 

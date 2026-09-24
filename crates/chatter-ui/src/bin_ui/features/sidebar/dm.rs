@@ -144,7 +144,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         .unwrap_or_else(|| "[Pinned message]".to_string());
                     (ids, preview)
                 };
-                let channel_id = anon_dm_id.to_string().parse().unwrap_or_else(|_| ChannelId::new());
+                let channel_id = ChannelId::from_uuid(*anon_dm_id.as_uuid());
                 super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), channel_id, msg_ids, preview);
 
                 // Load messages

@@ -106,4 +106,7 @@ export global MeshGlobal {
     callback conversation-selected(/* conversation id */ string);
     callback join-geohash(/* cell */ string);
     callback leave-geohash(/* cell */ string);
+    // Destroy everything this device holds about the mesh (identity, mail,
+    // history). Not the chatter account — see `ChatterClient::mesh_panic_wipe`.
+    callback panic-wipe();
 }

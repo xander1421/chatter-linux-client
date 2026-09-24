@@ -230,18 +230,17 @@ fn section_row_is_active(
 /// hook the message and read paths call.
 ///
 /// The row-count guard keeps the common case free — a user with no folders
-/// pays nothing. With folders it is one unified-conversation query plus one
-/// membership query per folder, not the `get_conversation`-per-membership N+1
-/// this used to be.
+/// pays nothing. With folders, the queries run on the runtime, not here on the
+/// UI thread: this is called for every received message, and a reconnect
+/// burst used to stall the UI on one rebuild per message.
 pub(crate) fn refresh_section_badges(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     use slint::Model;
     if window.get_custom_sections().row_count() == 0 {
         return;
     }
-    // Synchronous rebuild — we are already on the UI thread. The rebuild
-    // clears every row's selection flag, so re-mark the open one after it.
-    sections::load_sections(window, ui_ctx);
-    refresh_section_selection(window, ui_ctx);
+    let weak = slint::ComponentHandle::as_weak(window);
+    let ui_ctx = ui_ctx.clone();
+    tokio::spawn(async move { sections::refresh_sections_ui(&weak, &ui_ctx) });
 }
 
 /// Apply pinned message state to the UI.
@@ -275,39 +274,53 @@ pub(crate) fn apply_pinned_ui(
     }
 }
 
-/// Update a sidebar item's preview text and timestamp, moving it to the top (MRU).
+/// Update a sidebar item's preview text and timestamp, moving it to the top
+/// (MRU). Its unread badge is left alone — for a received message use
+/// [`apply_received_to_sidebar`].
 ///
 /// Works for all conversation types: DM, Channel, and Private Group.
-/// The item is identified by `ActiveConversation` and moved to position 0
-/// so the most recently active conversation is always at the top.
-///
-/// If `increment_unread` is true, bumps the unread count by 1 unless this
-/// conversation is currently being viewed (used for received messages).
-/// Pass `false` for sent messages.
 pub(crate) fn update_sidebar_preview(
     window: &MainWindow,
     ui_ctx: &Arc<ChatterClient>,
     conversation: chatter_core::state::ActiveConversation,
     preview: &str,
     timestamp: &str,
-    increment_unread: bool,
+) {
+    update_sidebar_row(window, ui_ctx, conversation, preview, timestamp, None);
+}
+
+/// [`update_sidebar_preview`] for a received message, also setting the row's
+/// unread badge and the total to the absolute values core computed
+/// (`ChatterClient::unread_badges`, read off the UI thread). The UI never
+/// counts: its old `+1` disagreed with every rebuild.
+pub(crate) fn apply_received_to_sidebar(
+    window: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    conversation: chatter_core::state::ActiveConversation,
+    preview: &str,
+    timestamp: &str,
+    badges: chatter_core::client::UnreadBadges,
+) {
+    update_sidebar_row(window, ui_ctx, conversation, preview, timestamp, Some(badges.row as i32));
+    window.set_total_unread_count(badges.total as i32);
+}
+
+/// Move the row for `conversation` to the top with a new preview line, and
+/// set its unread badge when `unread` is given.
+fn update_sidebar_row(
+    window: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    conversation: chatter_core::state::ActiveConversation,
+    preview: &str,
+    timestamp: &str,
+    unread: Option<i32>,
 ) {
     use chatter_core::state::ActiveConversation;
     use slint::Model;
 
-    // Determine if the conversation being updated is the one currently viewed
-    // by comparing against the typed `ActiveConversation` in chat_state.
-    // Avoids stringly-typed window-prop comparisons.
     // Every received and sent message funnels through here, so this is where
     // a foldered conversation's badge gets a chance to move.
     refresh_section_badges(window, ui_ctx);
-
-    let is_currently_viewed = if increment_unread {
-        conversation == ui_ctx.chat_state().active_conversation()
-    } else {
-        true // sent messages: never increment
-    };
-    let should_increment = increment_unread && !is_currently_viewed;
 
     match conversation {
         ActiveConversation::MailboxDm { peer_id, .. } | ActiveConversation::ServerDm { peer_id, .. } => {
@@ -322,7 +335,7 @@ pub(crate) fn update_sidebar_preview(
                         let mut u = item.clone();
                         u.last_message = preview.into();
                         u.timestamp = timestamp.into();
-                        if should_increment { u.unread_count += 1; }
+                        if let Some(n) = unread { u.unread_count = n; }
                         updated = Some(u);
                     } else {
                         others.push(item);
@@ -332,9 +345,6 @@ pub(crate) fn update_sidebar_preview(
             if let Some(item) = updated {
                 others.insert(0, item);
                 window.set_dm_conversations(slint::ModelRc::new(slint::VecModel::from(others)));
-                if should_increment {
-                    crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(window, ui_ctx);
-                }
             }
         }
         ActiveConversation::Channel(channel_id) => {
@@ -349,7 +359,7 @@ pub(crate) fn update_sidebar_preview(
                         let mut u = item.clone();
                         u.last_message = preview.into();
                         u.timestamp = timestamp.into();
-                        if should_increment { u.unread_count += 1; }
+                        if let Some(n) = unread { u.unread_count = n; }
                         updated = Some(u);
                     } else {
                         others.push(item);
@@ -359,9 +369,6 @@ pub(crate) fn update_sidebar_preview(
             if let Some(item) = updated {
                 others.insert(0, item);
                 window.set_channels(slint::ModelRc::new(slint::VecModel::from(others)));
-                if should_increment {
-                    crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(window, ui_ctx);
-                }
             }
         }
         ActiveConversation::AnonGroup(group_id) => {
@@ -376,7 +383,7 @@ pub(crate) fn update_sidebar_preview(
                         let mut u = item.clone();
                         u.last_message = preview.into();
                         u.timestamp = timestamp.into();
-                        if should_increment { u.unread_count += 1; }
+                        if let Some(n) = unread { u.unread_count = n; }
                         updated = Some(u);
                     } else {
                         others.push(item);
@@ -386,9 +393,6 @@ pub(crate) fn update_sidebar_preview(
             if let Some(item) = updated {
                 others.insert(0, item);
                 window.set_private_groups(slint::ModelRc::new(slint::VecModel::from(others)));
-                if should_increment {
-                    crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(window, ui_ctx);
-                }
             }
         }
         ActiveConversation::AnonDm(anon_dm_id) => {
@@ -403,7 +407,7 @@ pub(crate) fn update_sidebar_preview(
                         let mut u = item.clone();
                         u.last_message = preview.into();
                         u.timestamp = timestamp.into();
-                        if should_increment { u.unread_count += 1; }
+                        if let Some(n) = unread { u.unread_count = n; }
                         updated = Some(u);
                     } else {
                         others.push(item);
@@ -413,9 +417,6 @@ pub(crate) fn update_sidebar_preview(
             if let Some(item) = updated {
                 others.insert(0, item);
                 window.set_dm_conversations(slint::ModelRc::new(slint::VecModel::from(others)));
-                if should_increment {
-                    crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(window, ui_ctx);
-                }
             }
         }
         ActiveConversation::None => {
@@ -444,7 +445,7 @@ pub(crate) fn sidebar_has_dm(
 ///
 /// Used when receiving the first message from a new peer. Channel-free —
 /// the row is keyed by the peer's user_id. Inserted at position 0 (MRU)
-/// with unread_count = 1.
+/// with core's absolute unread count.
 pub(crate) fn create_dm_sidebar_entry(
     window: &MainWindow,
     ui_ctx: &std::sync::Arc<chatter_core::client::ChatterClient>,
@@ -452,6 +453,7 @@ pub(crate) fn create_dm_sidebar_entry(
     sender_name: &str,
     preview: &str,
     timestamp: &str,
+    badges: chatter_core::client::UnreadBadges,
 ) {
     use slint::Model;
 
@@ -478,7 +480,7 @@ pub(crate) fn create_dm_sidebar_entry(
         presence_status: "offline".into(),
         last_message: preview.into(),
         timestamp: timestamp.into(),
-        unread_count: 1,
+        unread_count: badges.row as i32,
         is_typing: false,
         is_anon: false,
         is_pinned: false,
@@ -491,7 +493,7 @@ pub(crate) fn create_dm_sidebar_entry(
         .collect();
     items.insert(0, new_dm);
     window.set_dm_conversations(slint::ModelRc::new(slint::VecModel::from(items)));
-    crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(window, ui_ctx);
+    window.set_total_unread_count(badges.total as i32);
 
     tracing::info!(
         peer_id = %peer_id_str,

@@ -52,12 +52,15 @@ pub(crate) fn update_unread_count(
 }
 
 /// Update the mobile bottom-nav badge from the authoritative total computed
-/// in `chatter-core` (sums unread across DMs, channels, anon DMs, anon groups
-/// from the unified conversation repo). The UI no longer walks per-bucket
-/// Slint models — that aggregation is business logic and lives in the service.
+/// in `chatter-core`. The count is a GROUP BY over every message, so it runs
+/// on the runtime and only the setter runs on the UI thread.
 pub(crate) fn recompute_total_unread(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let total = ui_ctx.unread_conversation_count();
-    window.set_total_unread_count(total as i32);
+    let weak = slint::ComponentHandle::as_weak(window);
+    let ui_ctx = ui_ctx.clone();
+    tokio::spawn(async move {
+        let total = ui_ctx.unread_conversation_count();
+        crate::run_ui!(weak, |w| w.set_total_unread_count(total as i32));
+    });
 }
 
 /// Handle pin/unpin domain events for UI update.
@@ -71,36 +74,16 @@ pub(super) fn handle_pin_ui_update(
     target_sent_timestamp: u64,
     unpin: bool,
 ) {
+    if !ui_ctx.is_showing_conversation(channel_id) {
+        return;
+    }
     let weak = window.clone();
     let chat_state = ui_ctx.chat_state().clone();
-    let ui_ctx_active = ui_ctx.clone();
     let channel_id_str = channel_id.to_string();
     let target_ts_str = target_sent_timestamp.to_string();
 
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
-
-        // Check if the pin is for the currently active conversation using the
-        // typed `matches_*` predicates in `chatter-core`.
-        let active = ui_ctx_active.active_conversation();
-        let is_dm_match = matches!(
-            active,
-            chatter_core::state::ActiveConversation::ServerDm { .. }
-                | chatter_core::state::ActiveConversation::MailboxDm { .. }
-        ) && active.channel_id() == Some(channel_id);
-        let is_active = active.matches_channel(&channel_id)
-            || is_dm_match
-            || channel_id_str
-                .parse()
-                .map(|id| active.matches_anon_dm(&id))
-                .unwrap_or(false)
-            || channel_id_str
-                .parse()
-                .map(|id| active.matches_anon_group(&id))
-                .unwrap_or(false);
-        if !is_active {
-            return;
-        }
 
         let messages = w.get_messages();
         let new_pinned = !unpin;

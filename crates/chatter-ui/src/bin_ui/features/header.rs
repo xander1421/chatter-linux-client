@@ -226,7 +226,7 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                     None => return,
                 };
                 let is_owner = group.is_current_user_owner(&current_user_id);
-                let is_admin = group.is_current_user_admin(&current_user_id);
+                let can_manage_members = group.can_manage_members();
 
                 // Convert members to Slint data
                 let mut slint_members = Vec::with_capacity(members.len());
@@ -256,7 +256,7 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                         w.set_channel_settings_type("private-group".into());
                         w.set_channel_settings_member_count(member_count);
                         w.set_channel_settings_is_owner(is_owner);
-                        w.set_channel_settings_can_manage_members(is_owner || is_admin);
+                        w.set_channel_settings_can_manage_members(can_manage_members);
                         w.set_channel_settings_members(ModelRc::new(VecModel::from(slint_members)));
                         w.set_active_modal("channel-settings".into());
                         tracing::debug!(

@@ -50,6 +50,35 @@ use crate::storage::settings_keys;
 use crate::system::Directories;
 use super::{ChatterClient, ClientError};
 
+/// A sidebar row's right-hand time, in local time: "14:03" today,
+/// "Sep 24, 14:03" before. The live update and the rebuild both go through
+/// here — the live path used the sender's clock and a different format, so a
+/// row's time changed shape on the next rebuild.
+fn sidebar_time_at(
+    at: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Local>,
+) -> String {
+    let local = at.with_timezone(&chrono::Local);
+    if local.date_naive() == now.date_naive() {
+        local.format("%H:%M").to_string()
+    } else {
+        local.format("%b %d, %H:%M").to_string()
+    }
+}
+
+#[cfg(test)]
+mod sidebar_time_tests {
+    #[test]
+    fn today_is_a_time_and_older_carries_the_date() {
+        let now = chrono::Local::now();
+        let today = super::sidebar_time_at(now.with_timezone(&chrono::Utc), now);
+        assert_eq!(today, now.format("%H:%M").to_string());
+        let old = now - chrono::Duration::days(3);
+        let older = super::sidebar_time_at(old.with_timezone(&chrono::Utc), now);
+        assert_eq!(older, old.format("%b %d, %H:%M").to_string());
+    }
+}
+
 impl ChatterClient {
     // ── Messages façade ──────────────────────────────────────────────────
 
@@ -91,6 +120,10 @@ impl ChatterClient {
         conversation_id: &crate::domain::ids::ChannelId,
         conversation_type: &crate::domain::message::ConversationType,
     ) -> Result<crate::domain::message::UnreadAnchor, crate::services::message::MessageError> {
+        // Off screen nothing is read; `set_app_visible(true)` catches up.
+        if !self.chat_state().is_app_visible() {
+            return Ok(Default::default());
+        }
         self.messages().mark_conversation_read(conversation_id, conversation_type)
     }
 
@@ -259,8 +292,7 @@ impl ChatterClient {
     /// Stable `User <id8>` placeholder for a user with no resolvable name.
     /// Single source of truth so the UI never hand-rolls the truncation.
     pub fn fallback_display_name(&self, user_id: &crate::domain::ids::UserId) -> String {
-        let id = user_id.to_string();
-        format!("User {}", &id[..8.min(id.len())])
+        crate::services::user::friend_display_name_placeholder(user_id)
     }
 
     pub fn get_channel_local(
@@ -358,15 +390,14 @@ impl ChatterClient {
         latest: Option<&crate::domain::message::Message>,
     ) -> (String, String) {
         match latest {
-            Some(msg) => (
-                self.message_sidebar_preview(msg),
-                msg.created_at
-                    .with_timezone(&chrono::Local)
-                    .format("%H:%M")
-                    .to_string(),
-            ),
+            Some(msg) => (self.message_sidebar_preview(msg), self.sidebar_time(msg.created_at)),
             None => (String::new(), String::new()),
         }
+    }
+
+    /// The one sidebar time formatter — see `sidebar_time_at`.
+    pub fn sidebar_time(&self, at: chrono::DateTime<chrono::Utc>) -> String {
+        sidebar_time_at(at, chrono::Local::now())
     }
 
     /// The storage bucket a channel's messages and pins are filed under.
@@ -536,7 +567,7 @@ impl ChatterClient {
             let display_name = dm
                 .peer_display_name
                 .clone()
-                .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
+                .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
             let (last_message, timestamp) = match self.get_latest_anon_dm_message(&dm.id) {
                 Some(msg) => {
                     let preview = msg
@@ -545,10 +576,7 @@ impl ChatterClient {
                         .unwrap_or_else(|| "[Attachment]".to_string());
                     (
                         preview,
-                        msg.created_at
-                            .with_timezone(&chrono::Local)
-                            .format("%H:%M")
-                            .to_string(),
+                        self.sidebar_time(msg.created_at),
                     )
                 }
                 None => (String::new(), String::new()),
@@ -579,7 +607,7 @@ impl ChatterClient {
             let peer_name = dm
                 .peer_display_name
                 .clone()
-                .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
+                .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
             let last_message = match self.get_latest_anon_dm_message(&dm.id) {
                 Some(msg) => msg.as_text().unwrap_or_default().to_string(),
                 None => "Message request".to_string(),
@@ -595,11 +623,7 @@ impl ChatterClient {
                 avatar_decoded: None,
                 presence_status: "pending".to_string(),
                 last_message,
-                timestamp: dm
-                    .created_at
-                    .with_timezone(&chrono::Local)
-                    .format("%H:%M")
-                    .to_string(),
+                timestamp: self.sidebar_time(dm.created_at),
                 unread_count: 1,
                 is_typing: false,
                 is_anon: true,
@@ -612,7 +636,7 @@ impl ChatterClient {
             let peer_name = dm
                 .peer_display_name
                 .clone()
-                .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
+                .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
             let (last_message, timestamp) = match self.get_latest_anon_dm_message(&dm.id) {
                 Some(msg) => {
                     let preview = msg
@@ -621,12 +645,12 @@ impl ChatterClient {
                         .unwrap_or_else(|| "Message request sent".to_string());
                     (
                         preview,
-                        msg.created_at.with_timezone(&chrono::Local).format("%H:%M").to_string(),
+                        self.sidebar_time(msg.created_at),
                     )
                 }
                 None => (
                     "Waiting for response...".to_string(),
-                    dm.created_at.with_timezone(&chrono::Local).format("%H:%M").to_string(),
+                    self.sidebar_time(dm.created_at),
                 ),
             };
             out.push(DMListItemSendData {
@@ -673,10 +697,14 @@ impl ChatterClient {
                 return Some(ActiveConversation::AnonDm(anon_id));
             }
         }
-        dm_id
-            .parse::<crate::domain::ids::UserId>()
-            .ok()
-            .map(|peer_id| ActiveConversation::ServerDm { peer_id })
+        let peer_id = dm_id.parse::<crate::domain::ids::UserId>().ok()?;
+        // Shield mode never opens an identified DM. A peer we also know
+        // anonymously opens that conversation instead; otherwise there is
+        // nothing to open.
+        if self.anon_mode_enabled() {
+            return self.find_anon_dm_by_peer(&peer_id).map(ActiveConversation::AnonDm);
+        }
+        Some(ActiveConversation::ServerDm { peer_id })
     }
 
     /// Every conversation a message can be forwarded to, filtered by a
@@ -746,6 +774,158 @@ impl ChatterClient {
         });
         out.sort_by_key(|d| d.name.to_lowercase());
         out
+    }
+
+    /// Rows for the Friends tab, mode-exclusive like the DM sidebar: shield on
+    /// lists only active anon-DM peers (and makes no identified server call);
+    /// off lists only accepted server friends. Anon rows carry the anon DM id
+    /// in `user_id` (see `FriendDataSendData`).
+    pub async fn friends_tab_entries(&self) -> Vec<crate::ui::sidebar_data::FriendDataSendData> {
+        use crate::domain::anon_dm::AnonDmStatus;
+        use crate::ui::sidebar_data::FriendDataSendData;
+
+        let mut out = Vec::new();
+        if self.anon_mode_enabled() {
+            for dm in self.list_anon_dm_conversations() {
+                if dm.status != AnonDmStatus::Active {
+                    continue;
+                }
+                out.push(FriendDataSendData {
+                    user_id: dm.id.to_string(),
+                    display_name: dm
+                        .peer_display_name
+                        .clone()
+                        .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id)),
+                    username: String::new(),
+                    avatar_bytes: dm.peer_avatar.clone(),
+                    avatar_decoded: None,
+                    presence_status: "online".to_string(),
+                    custom_status: String::new(),
+                    is_anon: true,
+                });
+            }
+            return out;
+        }
+        match self.list_friends_with_profiles().await {
+            Ok(pairs) => {
+                for (friendship, profile) in pairs {
+                    out.push(FriendDataSendData {
+                        user_id: friendship.addressee_id.to_string(),
+                        display_name: profile.display_name.clone(),
+                        username: String::new(),
+                        avatar_bytes: profile.avatar_bytes.clone(),
+                        avatar_decoded: None,
+                        presence_status: profile.presence.as_str().to_string(),
+                        custom_status: String::new(),
+                        is_anon: false,
+                    });
+                }
+            }
+            Err(e) => tracing::warn!("Failed to load accepted friends: {}", e),
+        }
+        out
+    }
+
+    /// Local message search, limited to conversations the current mode shows:
+    /// shield on never surfaces an identified conversation's messages, and
+    /// off never surfaces an anon DM's. Returns the matching messages, best
+    /// match first.
+    pub fn search_messages_visible(&self, query: &str, limit: u32) -> Vec<crate::domain::message::Message> {
+        let hits = match self.messages().search_local(query, None, limit) {
+            Ok(hits) => hits,
+            Err(e) => {
+                tracing::error!("Search failed: {}", e);
+                return Vec::new();
+            }
+        };
+        hits.iter()
+            .filter_map(|hit| self.get_message_local(&hit.message_id))
+            .filter(|msg| self.visible_in_mode(&msg.conversation_type))
+            .collect()
+    }
+
+    /// Jump-to / quick-switcher rows for `query`, ranked by the core rule
+    /// (`services::search::filter_conversations`). Built from the same
+    /// mode-filtered sources the sidebar renders — loose rows AND folder rows
+    /// (a foldered conversation is still a jump target) — so it can never
+    /// offer a conversation the current mode hides.
+    ///
+    /// `conv_type` uses the palette's vocabulary: "channel", "dm", "anon_dm",
+    /// "private_group", "saved_messages" (id is the sentinel
+    /// "saved-messages"), "mesh".
+    pub fn quick_switcher_entries(
+        &self,
+        query: &str,
+    ) -> Vec<crate::services::quick_switcher::QuickSwitcherEntry> {
+        use crate::domain::message::ConversationType as CT;
+        use crate::services::quick_switcher::QuickSwitcherEntry;
+
+        let stats = self.services.conversation_repo.conversation_stats().unwrap_or_default();
+        let unread = |id: &str, kind: CT| {
+            stats.get(&(id.to_string(), kind)).map_or(0, |s| s.unread_count)
+        };
+        let entry = |id: String, name: String, conv_type: &str, presence: String, unread_count: u32| {
+            QuickSwitcherEntry {
+                id,
+                name,
+                conv_type: conv_type.to_string(),
+                presence_status: presence,
+                unread_count: i32::try_from(unread_count).unwrap_or(i32::MAX),
+            }
+        };
+
+        let mut entries = Vec::new();
+        if !self.anon_mode_enabled() {
+            entries.push(entry(
+                "saved-messages".into(),
+                "Saved Messages".into(),
+                "saved_messages",
+                String::new(),
+                0,
+            ));
+        }
+        for dm in self.list_dm_sidebar() {
+            let kind = if dm.is_anon { "anon_dm" } else { "dm" };
+            entries.push(entry(dm.channel_id, dm.display_name, kind, dm.presence_status, dm.unread_count));
+        }
+        for channel in self.sidebar_channels() {
+            let id = channel.id.to_string();
+            let count = unread(&id, channel.conversation_type());
+            entries.push(entry(id, channel.name, "channel", String::new(), count));
+        }
+        for group in self.sidebar_private_groups() {
+            let id = group.id.to_string();
+            let count = unread(&id, CT::AnonGroup);
+            entries.push(entry(id, group.name, "private_group", String::new(), count));
+        }
+        for section in self.list_sections_with_conversations().unwrap_or_default() {
+            for conv in section.conversations {
+                let kind = match conv.conversation_type {
+                    CT::Channel => "channel",
+                    CT::ServerDm => "dm",
+                    CT::AnonDm => "anon_dm",
+                    CT::AnonGroup => "private_group",
+                    CT::Mesh | CT::MeshDm => "mesh",
+                    // Saved Messages has its own row; a mailbox DM is not
+                    // openable from a row id.
+                    CT::SavedMessages | CT::MailboxDm => continue,
+                };
+                entries.push(entry(conv.conversation_id, conv.display_name, kind, String::new(), conv.unread_count));
+            }
+        }
+        #[cfg(feature = "mesh")]
+        let sectioned = self.sections().all_sectioned_conversation_ids().unwrap_or_default();
+        #[cfg(feature = "mesh")]
+        for conv in self.mesh_conversations().unwrap_or_default() {
+            // Foldered rows came from the section loop; unresolvable ones
+            // would open nothing.
+            if sectioned.contains(&conv.id) || self.mesh_conversation_for(&conv.id).is_none() {
+                continue;
+            }
+            entries.push(entry(conv.id, conv.name, "mesh", String::new(), conv.unread_count));
+        }
+
+        crate::services::search::filter_conversations(query, entries)
     }
 
     /// Enriched mention suggestion — everything the composer autocomplete
@@ -1030,6 +1210,8 @@ impl ChatterClient {
             .unwrap_or_default()
     }
 
+    /// The newest `limit` replies before `before` (or overall), oldest →
+    /// newest. Page backwards by passing the first returned reply's id.
     pub fn list_thread_replies(
         &self,
         thread_root_id: &crate::domain::ids::MessageId,
@@ -1037,6 +1219,12 @@ impl ChatterClient {
         limit: u32,
     ) -> Result<Vec<crate::domain::message::Message>, crate::services::message::MessageError> {
         self.messages().list_for_thread(thread_root_id, before, limit)
+    }
+
+    /// Total replies in a thread, so the panel knows whether earlier ones
+    /// remain to be loaded.
+    pub fn thread_reply_count(&self, thread_root_id: &crate::domain::ids::MessageId) -> u32 {
+        self.messages().count_for_thread(thread_root_id).unwrap_or(0)
     }
 
     pub fn search_messages_local(
@@ -1217,5 +1405,74 @@ impl MentionSuggestionKind {
             Self::User => "user",
             Self::Broadcast => "broadcast",
         }
+    }
+}
+
+#[cfg(test)]
+mod shield_mode_tests {
+    //! Shield (anon) mode is enforced in core: identity-revealing calls refuse
+    //! or take the anon path themselves, whatever the UI offers.
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    use crate::client::ChatterClient;
+    use crate::domain::ids::UserId;
+    use crate::domain::message::ConversationType;
+    use crate::services::user::UserError;
+    use crate::state::ActiveConversation;
+
+    fn build_test_client() -> Arc<ChatterClient> {
+        // A real client stores its DB passphrase in the OS keyring; point
+        // keyring at the in-memory mock (see `transport_switch_tests`).
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        ChatterClient::builder()
+            .server_url("http://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client")
+    }
+
+    #[tokio::test]
+    async fn shield_mode_refuses_identified_calls() {
+        let client = build_test_client();
+        client.anon_mode.store(true, Ordering::Release);
+        let peer = UserId::new();
+
+        assert!(matches!(
+            client.send_friend_request(&peer, None).await,
+            Err(UserError::ForbiddenInAnonMode)
+        ));
+        assert!(matches!(
+            client.connect_via_friend_code("chatter://connect/x", None).await,
+            Err(UserError::ForbiddenInAnonMode)
+        ));
+        assert!(matches!(
+            client.lookup_by_username("alice.4711").await,
+            Err(UserError::ForbiddenInAnonMode)
+        ));
+        // No anon DM with this peer: shield mode has nothing to open, and
+        // never falls back to the identified DM.
+        assert_eq!(client.resolve_dm_conversation(&peer.to_string()), None);
+        // The Friends tab makes no identified call and lists no friend.
+        assert!(client.friends_tab_entries().await.is_empty());
+        // Search and jump-to hide identified conversations.
+        assert!(!client.visible_in_mode(&ConversationType::ServerDm));
+        assert!(!client.visible_in_mode(&ConversationType::SavedMessages));
+        assert!(client.visible_in_mode(&ConversationType::AnonDm));
+        assert!(client
+            .quick_switcher_entries("")
+            .iter()
+            .all(|e| e.conv_type != "saved_messages"));
+
+        client.anon_mode.store(false, Ordering::Release);
+        assert_eq!(
+            client.resolve_dm_conversation(&peer.to_string()),
+            Some(ActiveConversation::ServerDm { peer_id: peer })
+        );
+        assert!(!client.visible_in_mode(&ConversationType::AnonDm));
     }
 }

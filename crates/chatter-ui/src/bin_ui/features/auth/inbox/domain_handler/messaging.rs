@@ -59,16 +59,14 @@ pub(super) fn handle_message_received(
         .map(|id| id.to_string())
         .unwrap_or_else(|| ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default());
 
-    // Build sidebar preview via the shared core helper.
+    // Build sidebar preview + time via the shared core helpers.
     let preview = ui_ctx.message_sidebar_preview(&message);
-    let timestamp_str = super::super::utils::format_timestamp(timestamp);
+    let timestamp_str = ui_ctx.sidebar_time(message.created_at);
 
-    // Determine if this conversation is currently active
-    let active_id = ui_ctx.chat_state().get().active_channel_id;
-    let is_active = active_id.map(|id| id == conversation_id).unwrap_or(false);
+    // Core's one "is this message on screen" rule (mailbox DMs included).
+    let is_active = ui_ctx.is_showing(&message);
     tracing::info!(
         msg_conv = %conversation_id,
-        active_channel_id = ?active_id,
         is_active,
         ?conv_type,
         "[UI_RECV] handle_message_received"
@@ -85,6 +83,9 @@ pub(super) fn handle_message_received(
 
     // Classify into the typed ActiveConversation via the core helper.
     let sidebar_conversation = ui_ctx.classify_active_conversation(&conversation_id, &conv_type, sender_id);
+    // Absolute badge values, read here on the runtime (after the mark-read
+    // above), never counted up on the UI thread.
+    let badges = ui_ctx.unread_badges(&sidebar_conversation);
 
     // Trigger attachment auto-download in background (fetchable = has CDN url + key).
     let downloadable: Vec<_> = resolved_attachments.iter()
@@ -140,8 +141,8 @@ pub(super) fn handle_message_received(
                     &w, &root_id, reply, panel_shows_this_thread,
                 );
             }
-            crate::bin_ui::features::sidebar::update_sidebar_preview(
-                &w, &ui_ctx_ui, sidebar_conversation, &preview, &timestamp_str, true,
+            crate::bin_ui::features::sidebar::apply_received_to_sidebar(
+                &w, &ui_ctx_ui, sidebar_conversation, &preview, &timestamp_str, badges,
             );
             return;
         }
@@ -200,8 +201,8 @@ pub(super) fn handle_message_received(
         }
 
         // Always update sidebar preview
-        crate::bin_ui::features::sidebar::update_sidebar_preview(
-            &w, &ui_ctx_ui, sidebar_conversation, &preview, &timestamp_str, true,
+        crate::bin_ui::features::sidebar::apply_received_to_sidebar(
+            &w, &ui_ctx_ui, sidebar_conversation, &preview, &timestamp_str, badges,
         );
 
         // Create DM sidebar entry if new peer (non-anon only)
@@ -209,7 +210,7 @@ pub(super) fn handle_message_received(
             if let Some(peer_id) = peer_id_opt {
                 if !crate::bin_ui::features::sidebar::sidebar_has_dm(&w, &peer_id) {
                     crate::bin_ui::features::sidebar::create_dm_sidebar_entry(
-                        &w, &ui_ctx_ui, &peer_id, &sender_name, &preview, &timestamp_str,
+                        &w, &ui_ctx_ui, &peer_id, &sender_name, &preview, &timestamp_str, badges,
                     );
                 }
             }
@@ -217,58 +218,19 @@ pub(super) fn handle_message_received(
     });
 }
 
-/// Handle unread count updated event.
-pub(super) fn handle_unread_count_updated(
-    window: &Weak<MainWindow>,
-    ui_ctx: &Arc<ChatterClient>,
-    channel_id: ChannelId,
-    peer_id: Option<UserId>,
-    unread_count: u32,
-) {
-    let weak = window.clone();
-    let ui_ctx = ui_ctx.clone();
-    let channel_id_str = channel_id.to_string();
-    let _ = slint::invoke_from_event_loop(move || {
-        if let Some(w) = weak.upgrade() {
-            // Update sidebar unread badge
-            super::helpers::update_unread_count(&w, &ui_ctx, &channel_id_str, unread_count);
-        }
-    });
-    tracing::debug!(
-        channel_id = %channel_id,
-        ?peer_id,
-        unread_count,
-        "Updated unread count in UI"
-    );
-}
-
 /// Handle DM bootstrap completed event.
 ///
-/// Enables the composer and flips "sending" messages to "sent".
+/// Core emits it once the messages queued behind the key exchange were sent,
+/// so this only clears the composer placeholder and flips the queued bubbles
+/// ("sending") to "sent".
 pub(super) fn handle_dm_bootstrap_completed(
     window: &Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
     peer_id: UserId,
 ) {
-    let weak = window.clone();
-    let peer_id_str = peer_id.to_string();
-    let ui_ctx_active = ui_ctx.clone();
-
-    // Flush any pending messages for this peer
-    let ui_ctx_flush = ui_ctx.clone();
-    tokio::spawn(async move {
-        ui_ctx_flush.flush_pending_dm_messages(&peer_id).await;
-    });
-
-    // Update UI: enable composer + flip delivery status
-    let _ = slint::invoke_from_event_loop(move || {
-        let Some(w) = weak.upgrade() else { return };
-
+    let is_active = ui_ctx.active_conversation().matches_dm_peer(&peer_id);
+    crate::run_ui!(window, |w| {
         w.set_composer_placeholder("Type a message...".into());
-
-        // Check if this peer's DM is currently active via the typed predicate.
-        let is_active = ui_ctx_active.active_conversation().matches_dm_peer(&peer_id);
-        let _ = &peer_id_str;
 
         if is_active {
             let messages = w.get_messages();
@@ -285,14 +247,8 @@ pub(super) fn handle_dm_bootstrap_completed(
             }
         }
 
-        tracing::debug!(peer_id = %peer_id_str, "DM bootstrap complete - composer enabled");
+        tracing::debug!(peer_id = %peer_id, "DM bootstrap complete - composer enabled");
     });
-}
-
-/// Handle message sent event.
-pub(super) fn handle_message_sent() {
-    tracing::debug!("Message sent successfully");
-    // UI updates handled by message state
 }
 
 /// Update delivery status checkmarks (✓ → ✓✓) in the active message list.
@@ -370,53 +326,41 @@ pub(super) fn refresh_sidebar_for_reaction(
             return;
         }
         let preview = format!("Reacted {}", emoji);
-        let now = chrono::Local::now().format("%H:%M").to_string();
+        let now = ui_ctx_for_sidebar.sidebar_time(chrono::Utc::now());
         crate::bin_ui::features::sidebar::update_sidebar_preview(
-            &w, &ui_ctx_for_sidebar, conversation, &preview, &now, false,
+            &w, &ui_ctx_for_sidebar, conversation, &preview, &now,
         );
     });
 }
 
 /// Update a message's content after an edit.
 ///
-/// Matches by timestamp_ns (Signal-style) first. Falls back to message_id (UUID)
-/// only for legacy messages that may lack a timestamp.
+/// Only in the conversation on screen, and only the bubble whose Signal-style
+/// key (author, sent timestamp) matches — a timestamp alone let one member
+/// rewrite another member's bubble by reusing its timestamp.
 pub(super) fn handle_message_edit(
     window: &Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    conversation_id: ChannelId,
     message_id: &str,
+    author_id: UserId,
     target_sent_timestamp: u64,
     new_text: &str,
 ) {
-    let weak = window.clone();
+    if !ui_ctx.is_showing_conversation(conversation_id) {
+        return;
+    }
     let message_id = message_id.to_string();
+    let author = author_id.to_string();
     let ts_str = target_sent_timestamp.to_string();
     let new_text = new_text.to_string();
 
-    let _ = slint::invoke_from_event_loop(move || {
-        let Some(w) = weak.upgrade() else { return };
+    crate::run_ui!(window, |w| {
         crate::bin_ui::features::thread::apply_thread_edit(&w, &message_id, target_sent_timestamp, &new_text);
         let messages = w.get_messages();
-
-        // Primary: match by timestamp_ns (Signal-style canonical identifier)
-        if target_sent_timestamp > 0 {
-            for i in 0..messages.row_count() {
-                if let Some(msg) = messages.row_data(i) {
-                    if msg.timestamp_ns.as_str() == ts_str {
-                        let mut updated = msg.clone();
-                        crate::bin_ui::converters::apply_edit(&mut updated, &new_text);
-                        if let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() {
-                            model.set_row_data(i, updated);
-                        }
-                        return;
-                    }
-                }
-            }
-        }
-
-        // Fallback: match by message_id (UUID) for legacy messages
         for i in 0..messages.row_count() {
             if let Some(msg) = messages.row_data(i) {
-                if msg.message_id.as_str() == message_id {
+                if msg.sender_id.as_str() == author && msg.timestamp_ns.as_str() == ts_str {
                     let mut updated = msg.clone();
                     crate::bin_ui::converters::apply_edit(&mut updated, &new_text);
                     if let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() {
@@ -429,42 +373,49 @@ pub(super) fn handle_message_edit(
     });
 }
 
-/// Remove a message from the active message list (delete for everyone).
-///
-/// Matches by timestamp_ns (Signal-style) first. Falls back to message_id (UUID)
-/// for legacy messages.
+/// Remove a message from the open view: delete for everyone (keyed by author
+/// + sent timestamp) or a delete-for-me synced from a sibling device (keyed
+/// by the local message id core resolved). Core announces a delete only after
+/// it matched a stored row, so this never blanks a bubble storage still holds.
 pub(super) fn handle_message_delete(
     window: &Weak<MainWindow>,
-    message_id: &str,
-    target_sent_timestamp: u64,
+    ui_ctx: &Arc<ChatterClient>,
+    conversation_id: ChannelId,
+    target: DeleteTarget,
 ) {
-    let weak = window.clone();
-    let message_id = message_id.to_string();
-    let ts_str = target_sent_timestamp.to_string();
-
-    let _ = slint::invoke_from_event_loop(move || {
-        let Some(w) = weak.upgrade() else { return };
+    if !ui_ctx.is_showing_conversation(conversation_id) {
+        return;
+    }
+    crate::run_ui!(window, |w| {
         let messages = w.get_messages();
-
-        let mut new_messages = Vec::new();
-        for i in 0..messages.row_count() {
-            if let Some(msg) = messages.row_data(i) {
-                // Primary: match by timestamp_ns (Signal-style)
-                let is_target = if target_sent_timestamp > 0 {
-                    msg.timestamp_ns.as_str() == ts_str
-                } else {
-                    msg.message_id.as_str() == message_id
-                };
-                if !is_target {
-                    new_messages.push(msg);
-                }
-            }
-        }
-
-        if new_messages.len() < messages.row_count() {
-            w.set_messages(ModelRc::new(VecModel::from(new_messages)));
+        let kept: Vec<MessageItemData> = (0..messages.row_count())
+            .filter_map(|i| messages.row_data(i))
+            .filter(|msg| !target.matches(msg))
+            .collect();
+        if kept.len() < messages.row_count() {
+            w.set_messages(ModelRc::new(VecModel::from(kept)));
         }
     });
+}
+
+/// Which bubble a delete names.
+pub(super) enum DeleteTarget {
+    /// Delete for everyone: the Signal-style (author, sent timestamp) key.
+    AuthorTimestamp { author: UserId, sent_at: u64 },
+    /// Delete-for-me from a sibling device: the local message id.
+    Id(chatter_core::domain::ids::MessageId),
+}
+
+impl DeleteTarget {
+    fn matches(&self, msg: &MessageItemData) -> bool {
+        match self {
+            Self::AuthorTimestamp { author, sent_at } => {
+                msg.sender_id.as_str() == author.to_string()
+                    && msg.timestamp_ns.as_str() == sent_at.to_string()
+            }
+            Self::Id(id) => msg.message_id.as_str() == id.to_string(),
+        }
+    }
 }
 
 /// Handle message send failed event — show error toast in the UI.
@@ -482,6 +433,9 @@ pub(super) fn handle_message_send_failed(
     let weak = window.clone();
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
+        // The only background send is the post-bootstrap flush; its
+        // "Setting up secure channel…" placeholder ends here too.
+        w.set_composer_placeholder("Type a message...".into());
         w.set_toast_message("Failed to send message. Please try again.".into());
         w.set_toast_variant("error".into());
         w.set_toast_visible(true);

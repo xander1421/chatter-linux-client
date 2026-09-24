@@ -16,6 +16,18 @@ mod tests {
     };
     use super::super::{FriendRequestFilter, UserError, UserService};
 
+    #[test]
+    fn lookup_handle_shape() {
+        use super::super::is_lookup_handle;
+        assert!(is_lookup_handle("alice.4711"));
+        assert!(is_lookup_handle(" alice.47 "));
+        assert!(!is_lookup_handle("alice"));
+        assert!(!is_lookup_handle("alice."));
+        assert!(!is_lookup_handle(".4711"));
+        assert!(!is_lookup_handle("alice.47x"));
+        assert!(!is_lookup_handle(""));
+    }
+
     /// Mirrors Signal-Desktop's 5-minute `throttledGetProfiles`: never fetched
     /// or fetched a full interval ago → refetch; anything newer → skip.
     #[test]

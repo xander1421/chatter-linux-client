@@ -311,3 +311,19 @@ pub fn handle_send_error(error: &super::outgoing::SendError, context: &str) -> S
         _ => format!("Failed to send: {}", detail),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_preview_cuts_on_char_boundary() {
+        // 'é' is 2 bytes; 96 ASCII bytes put one straddling byte 97, where a
+        // byte slice `&text[..97]` panics.
+        let text = format!("{}é{}", "a".repeat(96), "b".repeat(10));
+        assert!(!text.is_char_boundary(97));
+        let preview = truncate_preview(&text);
+        assert_eq!(preview, format!("{}é...", "a".repeat(96)));
+        assert_eq!(truncate_preview("héllo"), "héllo");
+    }
+}

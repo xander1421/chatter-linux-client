@@ -66,6 +66,32 @@ pub fn is_jarvis_channel(id: &crate::domain::ids::ChannelId) -> bool {
     id.0.is_nil()
 }
 
+/// The query of an `@jarvis` mention, if `text` has one. The mention must be a
+/// whole word (start of text or after whitespace; end of text, whitespace or
+/// `,:;!?` after it) — `me@jarvis.io` is an address, not a mention. Leading
+/// punctuation and whitespace are trimmed off the query.
+pub fn parse_jarvis_mention(text: &str) -> Option<&str> {
+    const TAG: &str = "@jarvis";
+    for (at, _) in text.match_indices('@') {
+        let starts_word = text[..at].chars().next_back().map_or(true, char::is_whitespace);
+        let rest = &text[at..];
+        if !starts_word || !rest.get(..TAG.len()).is_some_and(|t| t.eq_ignore_ascii_case(TAG)) {
+            continue;
+        }
+        let after = &rest[TAG.len()..];
+        let ends_word = after
+            .chars()
+            .next()
+            .map_or(true, |c| c.is_whitespace() || ",:;!?".contains(c));
+        if !ends_word {
+            continue;
+        }
+        let query = after.trim_start_matches(|c: char| c.is_whitespace() || ",:;!?".contains(c)).trim_end();
+        return (!query.is_empty()).then_some(query);
+    }
+    None
+}
+
 impl ChatterClient {
     // ── Jarvis façade ────────────────────────────────────────────────────
 
@@ -86,8 +112,58 @@ impl ChatterClient {
             ChannelType::Private,
             crate::domain::ids::UserId::from_uuid(uuid::Uuid::nil()),
         );
-        channel.description = Some("Local AI assistant — never leaves this device".to_string());
+        channel.description = Some(self.jarvis_channel_topic());
         channel
+    }
+
+    /// Header line for the AI channel, stating where its messages actually
+    /// go. The channel follows the user's silo preference, so it is only
+    /// "never leaves this device" when it really runs locally.
+    pub fn jarvis_channel_topic(&self) -> String {
+        match self.jarvis_channel_silo() {
+            crate::ai_policy::policy::Silo::Local => format!(
+                "Local AI · {} · never leaves this device",
+                self.jarvis_engine_description()
+            ),
+            crate::ai_policy::policy::Silo::Cloud => {
+                "Cloud AI · messages are sent to your cloud AI provider".to_string()
+            }
+        }
+    }
+
+    /// Silo for the AI channel and the context-free global prompt: the
+    /// user's preference, cloud only when it is also configured.
+    fn jarvis_channel_silo(&self) -> crate::ai_policy::policy::Silo {
+        use crate::ai_policy::channel_ai::SiloPreference;
+        use crate::ai_policy::policy::Silo;
+        let prefers_cloud = self.ai_silo_preference() == SiloPreference::PreferCloud;
+        let available = self.http_local_ai().cloud_settings().is_available();
+        if prefers_cloud && available { Silo::Cloud } else { Silo::Local }
+    }
+
+    /// If `text` sent in `active` is an `@jarvis` request that Jarvis may
+    /// answer here, the context to ask in and the query. `None` means "not for
+    /// Jarvis — send it as a normal message": no word-boundary mention (so
+    /// `me@jarvis.io` is just text), no query after it, or AI is switched off
+    /// for this conversation (`resolve_ai_for`), which is the default in DMs.
+    pub fn jarvis_mention(
+        &self,
+        active: &crate::state::ActiveConversation,
+        text: &str,
+    ) -> Option<(crate::domain::jarvis::JarvisContext, String)> {
+        use crate::domain::jarvis::JarvisContext;
+        use crate::state::ActiveConversation as AC;
+
+        let query = parse_jarvis_mention(text)?;
+        let context = match active {
+            AC::Channel(id) => JarvisContext::channel(*id),
+            AC::ServerDm { .. } | AC::MailboxDm { .. } => JarvisContext::dm(active.channel_id()?),
+            AC::AnonDm(id) => JarvisContext::anon_dm(*id),
+            AC::AnonGroup(id) => JarvisContext::anon_group(*id),
+            AC::None => return None,
+        };
+        self.check_ai_allowed_in(&context).ok()?;
+        Some((context, query.to_string()))
     }
 
     /// Human-readable description of the active Jarvis engine ("ollama (qwen3:4b)").
@@ -268,7 +344,6 @@ impl ChatterClient {
         context: &crate::domain::jarvis::JarvisContext,
     ) -> Result<crate::ai_policy::policy::Silo, crate::services::jarvis::JarvisError> {
         use crate::ai_policy::channel_ai::Resolved;
-        use crate::ai_policy::policy::Silo;
 
         // The dedicated AI channel, and the context-free global prompt, always
         // work. They follow the user's silo preference, still clamped by
@@ -276,10 +351,7 @@ impl ChatterClient {
         if context.context_id.is_empty()
             || context.context_id == jarvis_channel_id().to_string()
         {
-            use crate::ai_policy::channel_ai::SiloPreference;
-            let prefers_cloud = self.ai_silo_preference() == SiloPreference::PreferCloud;
-            let available = self.http_local_ai().cloud_settings().is_available();
-            return Ok(if prefers_cloud && available { Silo::Cloud } else { Silo::Local });
+            return Ok(self.jarvis_channel_silo());
         }
 
         match self.resolve_ai_for(
@@ -383,4 +455,27 @@ impl ChatterClient {
             .await
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_jarvis_mention;
+
+    #[test]
+    fn jarvis_mention_is_a_whole_word() {
+        assert_eq!(parse_jarvis_mention("@Jarvis what time is it?"), Some("what time is it?"));
+        assert_eq!(parse_jarvis_mention("Hey @jarvis, help me"), Some("help me"));
+        assert_eq!(parse_jarvis_mention("  @JARVIS:  summarize this  "), Some("summarize this"));
+        // An address or a longer word is not a mention.
+        assert_eq!(parse_jarvis_mention("mail me@jarvis.io please"), None);
+        assert_eq!(parse_jarvis_mention("@jarvis.io is down"), None);
+        assert_eq!(parse_jarvis_mention("@jarvisbot do it"), None);
+        // No query: nothing to ask, so the text is sent as written.
+        assert_eq!(parse_jarvis_mention("@Jarvis"), None);
+        assert_eq!(parse_jarvis_mention("@Jarvis   "), None);
+        assert_eq!(parse_jarvis_mention("Hello world"), None);
+        // A later whole-word mention still counts; multibyte text is safe.
+        assert_eq!(parse_jarvis_mention("x@jarvis é @jarvis ok"), Some("ok"));
+        assert_eq!(parse_jarvis_mention("é@"), None);
+    }
 }

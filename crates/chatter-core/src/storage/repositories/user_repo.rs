@@ -454,6 +454,23 @@ impl UserRepository {
         Ok(status.map(friendship_status_from_i32) == Some(FriendshipStatus::Blocked))
     }
 
+    /// Everyone `user_id` has blocked, in the same orientation [`Self::is_blocked`]
+    /// reads (`user_id = us, friend_id = them`).
+    pub fn list_blocked_by(&self, user_id: &UserId) -> Result<Vec<UserId>, StorageError> {
+        let conn = self.db.connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT friend_id FROM friendships WHERE user_id = ?1 AND status = ?2 ORDER BY created_at",
+        )?;
+        let ids = stmt
+            .query_map(
+                params![user_id.to_string(), friendship_status_to_i32(FriendshipStatus::Blocked)],
+                |row| row.get::<_, String>(0),
+            )?
+            .filter_map(|r| r.ok()?.parse().ok())
+            .collect();
+        Ok(ids)
+    }
+
     /// Update a friendship status.
     pub fn update_friendship(&self, friendship: &Friendship) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
@@ -744,6 +761,22 @@ mod tests {
     /// see it, every incoming message from a blocked sender is delivered —
     /// which is the state the in-memory `blocked_users` set leaves the client
     /// in, and why `is_profile_user_blocked` reports false for server blocks.
+    /// The Blocked tab lists server blocks from this read: only our own
+    /// blocks, never theirs on us, never accepted friends.
+    #[test]
+    fn list_blocked_by_returns_only_our_blocks() {
+        let (_d, repo) = setup();
+        let (me, blocked, friend, blocker) = (UserId::new(), UserId::new(), UserId::new(), UserId::new());
+        for u in [me, blocked, friend, blocker] {
+            repo.ensure_user_exists(&u).unwrap();
+        }
+        repo.insert_friendship(&friendship(me, blocked, FriendshipStatus::Blocked)).unwrap();
+        repo.insert_friendship(&friendship(me, friend, FriendshipStatus::Accepted)).unwrap();
+        repo.insert_friendship(&friendship(blocker, me, FriendshipStatus::Blocked)).unwrap();
+
+        assert_eq!(repo.list_blocked_by(&me).unwrap(), vec![blocked]);
+    }
+
     #[test]
     fn a_block_written_to_friendships_is_visible_to_is_blocked() {
         let (_d, repo) = setup();
