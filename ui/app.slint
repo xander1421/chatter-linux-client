@@ -3020,7 +3020,9 @@ export component App inherits Rectangle {
     // belongs to the level you pushed FROM. Keeping it there costs a row of
     // the message view and offers navigation that the back arrow already
     // covers — Telegram drops it on the same transition.
-    if root.is-mobile-platform && !root.keyboard-open && !root.mobile-show-chat: MobileBottomNav {
+    // Only in the app proper: on login / register / recovery it offered
+    // Chats, Settings and Profile to someone who is not signed in.
+    if root.is-mobile-platform && root.current-view == "main" && !root.keyboard-open && !root.mobile-show-chat: MobileBottomNav {
         width: parent.width;
         y: parent.height - self.height;
         active-tab: root.mobile-nav-tab-effective;

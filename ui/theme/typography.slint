@@ -16,13 +16,17 @@ import "../../assets/fonts/Inter-SemiBoldItalic.ttf";
 import "../../assets/fonts/Inter-BoldItalic.ttf";
 
 export global Typography {
-    // Inter everywhere. Sans-serif fallback only kicks in for glyphs Inter lacks
-    // (CJK, exotic emoji) — the system picks a substitute then.
-    out property <string> font-family: "Inter, sans-serif";
+    // Inter everywhere; glyphs Inter lacks (CJK, emoji) fall back to the
+    // system fonts on their own. ONE family name, not a CSS list: Slint 1.17
+    // passes the string to parley as a single named family
+    // (sharedparley.rs FontFamilyName::named), so "Inter, sans-serif" matched
+    // nothing and the whole app rendered in the platform fallback — whose
+    // Samsung set has no U+25CF, so every password mask was tofu.
+    out property <string> font-family: "Inter";
 
     // Monospace alias points at Inter too — keep one family across the app.
     // Inline code / code blocks lose fixed-width alignment by design.
-    out property <string> font-family-mono: "Inter, sans-serif";
+    out property <string> font-family-mono: "Inter";
 
     // Emoji-only Text elements pin this so color glyphs win. Without it,
     // fontconfig fallback can pick a monochrome symbol font (e.g. Font Awesome
