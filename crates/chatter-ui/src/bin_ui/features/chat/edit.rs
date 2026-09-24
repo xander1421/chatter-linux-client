@@ -49,6 +49,12 @@ pub fn wire_edit_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
+                        // Editing borrows the composer; keep the unsent draft
+                        // (it used to be silently replaced and lost).
+                        if !w.get_composer_stash_held() {
+                            w.set_composer_stash(w.get_composer_text());
+                            w.set_composer_stash_held(true);
+                        }
                         w.set_composer_text(text.into());
                         w.set_composer_edit_message_id(composite_key.into());
                         w.set_composer_is_editing(true);
@@ -117,7 +123,9 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 if let Some(w) = weak.upgrade() {
                     w.set_composer_is_editing(false);
                     w.set_composer_edit_message_id("".into());
-                    w.set_composer_text("".into());
+                    w.set_composer_text(w.get_composer_stash());
+                    w.set_composer_stash("".into());
+                    w.set_composer_stash_held(false);
                 }
             });
         });
@@ -132,7 +140,9 @@ pub fn wire_cancel_edit(window: &MainWindow) {
         let weak = weak_window.clone();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
-                w.set_composer_text("".into());
+                w.set_composer_text(w.get_composer_stash());
+                w.set_composer_stash("".into());
+                w.set_composer_stash_held(false);
                 w.set_composer_edit_message_id("".into());
                 w.set_composer_is_editing(false);
                 tracing::debug!("Cancelled edit mode");

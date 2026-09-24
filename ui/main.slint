@@ -159,6 +159,8 @@ export component MainWindow inherits Window {
     in-out property <int> unread-count <=> app.unread-count;
     in property <bool> should-auto-scroll <=> app.should-auto-scroll;  // Enable auto-scroll
     in-out property <string> composer-text <=> app.composer-text;
+    in-out property <string> composer-stash <=> app.composer-stash;
+    in-out property <bool> composer-stash-held <=> app.composer-stash-held;
     in property <string> composer-placeholder <=> app.composer-placeholder;
     in property <string> composer-send-status <=> app.composer-send-status;
     in property <bool> composer-disabled <=> app.composer-disabled;
@@ -854,7 +856,14 @@ export component MainWindow inherits Window {
     // the conversation pane or a modal closes, which is when the focused text
     // field goes away.
     changed mobile-show-chat => {
-        if (!root.mobile-show-chat) { back-scope.focus(); }
+        if (!root.mobile-show-chat) {
+            back-scope.focus();
+            // The pickers belong to the conversation's composer; they are
+            // app-level overlays, so leaving the chat has to close them or
+            // they float over whatever screen comes next.
+            root.composer-gif-picker-visible = false;
+            root.composer-emoji-picker-visible = false;
+        }
     }
     changed active-modal => {
         if (root.active-modal == "none") { back-scope.focus(); }

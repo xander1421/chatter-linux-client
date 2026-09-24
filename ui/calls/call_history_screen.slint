@@ -119,12 +119,15 @@ export component CallHistoryScreen inherits Rectangle {
                 vertical-stretch: 1;
                 spacing: Spacing.sm;
 
-                Image {
-                    source: Icons.phone;
-                    colorize: Colors.text-muted;
-                    width: 32px;
-                    height: 32px;
-                    horizontal-alignment: center;
+                HorizontalLayout {
+                    alignment: center;
+
+                    Image {
+                        source: Icons.phone;
+                        colorize: Colors.text-muted;
+                        width: 32px;
+                        height: 32px;
+                    }
                 }
 
                 Text {
@@ -135,7 +138,7 @@ export component CallHistoryScreen inherits Rectangle {
                 }
 
                 Text {
-                    text: "Calls you make or receive show up here.";
+                    text: root.active-filter == "missed" ? "Calls you did not answer show up here." : "Start one from the phone icon in any conversation.";
                     color: Colors.text-muted;
                     font-size: Typography.sm;
                     horizontal-alignment: center;
