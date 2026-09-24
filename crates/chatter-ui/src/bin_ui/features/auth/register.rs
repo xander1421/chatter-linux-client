@@ -304,7 +304,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     Err(e) => {
                         tracing::error!("Registration failed: {}", e);
                         let _ = ui_ctx.cleanup_failed_registration().await;
-                        let error_msg = e.to_string();
+                        let error_msg = e.user_message();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
                                 w.set_register_loading(false);

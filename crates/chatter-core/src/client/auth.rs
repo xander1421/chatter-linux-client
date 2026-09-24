@@ -52,6 +52,18 @@ use crate::storage::settings_keys;
 use crate::system::Directories;
 use super::{ChatterClient, ClientError, RecoveryResult};
 
+impl ClientError {
+    /// Text for the login/register screen, without the `auth error:` /
+    /// `login failed:` chain `Display` produces for logs.
+    #[must_use]
+    pub fn user_message(&self) -> String {
+        match self {
+            Self::Auth(e) => e.user_message(),
+            other => other.to_string(),
+        }
+    }
+}
+
 impl ChatterClient {
     /// Ensure the gRPC pool is connected before running an auth RPC.
     ///
@@ -96,6 +108,10 @@ impl ChatterClient {
         // common UX hazard when the user fixes the server URL after
         // initial offline boot.
         self.ensure_connected_for_auth().await?;
+        // Every derivation below (login lookup hash, SVR salt, the stored
+        // SVR_SALT_USERNAME) must see the nickname registration used, not
+        // the `@nick.1234` handle the app displays.
+        let username = crate::crypto::auth_crypto::login_nickname(username);
         let mut result = self.auth().do_login(username, password, device_name, pin).await?;
         self.auth_state().set_logged_in(
             result.user_id,
@@ -367,6 +383,8 @@ impl ChatterClient {
     ) -> Result<RecoveryResult, ClientError> {
         let mut auth_client = self.auth().try_auth_client()
             .ok_or_else(|| ClientError::NotConnected)?;
+        // Same keying as `login`: the bare nickname, whatever form was typed.
+        let username = crate::crypto::auth_crypto::login_nickname(username);
         let remaining_codes = self
             .auth()
             .use_recovery_code(&mut auth_client, username, recovery_code, new_password, new_pin)

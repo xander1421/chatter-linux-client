@@ -35,6 +35,16 @@ export component LoginPage inherits Rectangle {
 
     property <bool> submitted: false;
 
+    // Shared by the Sign In button and the keyboard's Done key on the
+    // password and PIN fields.
+    function submit() {
+        if root.loading { return; }
+        submitted = true;
+        if username != "" && password != "" && server-url != "" {
+            root.login(root.username, root.password, root.server-url, root.pin);
+        }
+    }
+
     callback login(string, string, string, string);
     callback register();
     callback go-to-recovery();
@@ -94,21 +104,23 @@ export component LoginPage inherits Rectangle {
                         password: true;
                         text <=> root.password;
                         disabled: root.loading;
+                        accepted => { root.submit(); }
                     }
 
-                    // PIN (optional) with explanation
+                    // PIN with explanation
                     VerticalLayout {
                         spacing: 2px;
 
                         Input {
-                            placeholder: "PIN (optional)";
+                            placeholder: "PIN";
                             password: true;
                             text <=> root.pin;
                             disabled: root.loading;
+                            accepted => { root.submit(); }
                         }
 
                         Text {
-                            text: "Enter your PIN to restore encryption keys on this device";
+                            text: "Your account PIN. Needed on a new device to restore your encryption keys.";
                             color: Colors.text-muted;
                             font-size: Typography.xxs;
                             wrap: word-wrap;
@@ -200,12 +212,7 @@ export component LoginPage inherits Rectangle {
                         loading: root.loading;
                         disabled: root.loading;
 
-                        clicked => {
-                            submitted = true;
-                            if username != "" && password != "" && server-url != "" {
-                                root.login(root.username, root.password, root.server-url, root.pin);
-                            }
-                        }
+                        clicked => { root.submit(); }
                     }
 
                     // Register link

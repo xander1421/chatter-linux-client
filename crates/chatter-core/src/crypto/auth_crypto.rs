@@ -83,6 +83,25 @@ pub fn derive_login_auth_hash(password_hash: &[u8], username: &str) -> [u8; 32] 
     out
 }
 
+/// Reduce what a user types at login to the nickname registration keyed on.
+///
+/// Registration derives the login lookup hash and the SVR PIN salt from the
+/// bare nickname (`AuthService::register` hashes the typed `username`; the
+/// `.discriminator` is chosen afterwards by [`username_candidates`]). The app
+/// shows the full handle as `@nickname.discriminator`, so users type that
+/// too. Strips a leading `@` and a trailing `.digits` discriminator; nothing
+/// else. Safe because a nickname cannot contain `.` (libsignal's grammar is
+/// `[_0-9a-z]`), so no registered nickname is ever shortened by this.
+#[must_use]
+pub fn login_nickname(input: &str) -> &str {
+    let s = input.trim();
+    let s = s.strip_prefix('@').unwrap_or(s);
+    match s.rsplit_once('.') {
+        Some((nick, disc)) if !disc.is_empty() && disc.bytes().all(|b| b.is_ascii_digit()) => nick,
+        _ => s,
+    }
+}
+
 /// Derive a 12-byte (96-bit) delivery token from a profile key.
 ///
 /// Signal-style `HKDF-SHA256(profile_key, info = "DeliveryToken")`. Used in
@@ -161,6 +180,16 @@ mod tests {
         let k2 = generate_profile_key();
         assert_ne!(k1, k2, "two CSPRNG draws must differ with overwhelming probability");
         assert_ne!(k1, [0u8; 32], "must not be all zeros");
+    }
+
+    #[test]
+    fn login_nickname_accepts_every_shown_form() {
+        for typed in ["carolsweep", "carolsweep.76", "@carolsweep.76", "@carolsweep", "  carolsweep.76 "] {
+            assert_eq!(login_nickname(typed), "carolsweep", "{typed:?}");
+        }
+        // Not a discriminator: left alone so the server rejects it as typed.
+        assert_eq!(login_nickname("carol.sweep"), "carol.sweep");
+        assert_eq!(login_nickname("carolsweep."), "carolsweep.");
     }
 
     #[test]

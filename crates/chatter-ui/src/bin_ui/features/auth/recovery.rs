@@ -87,8 +87,8 @@ pub fn wire_recovery(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     });
                 }
                 Err(e) => {
-                    let error_msg = e.to_string();
-                    tracing::error!("Account recovery failed: {}", error_msg);
+                    tracing::error!("Account recovery failed: {}", e);
+                    let error_msg = e.user_message();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_recovery_loading(false);

@@ -38,7 +38,7 @@ fn wire_accept_new_identity(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let outcome = ui_ctx.accept_new_identity(need).await;
             let message = match &outcome {
                 Ok(()) => String::new(),
-                Err(e) => e.to_string(),
+                Err(e) => e.user_message(),
             };
             let ok = outcome.is_ok();
             let _ = slint::invoke_from_event_loop(move || {
@@ -179,7 +179,8 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         }
                         _ => false,
                     };
-                    let error_msg = e.to_string();
+                    tracing::warn!("Login failed: {}", e);
+                    let error_msg = e.user_message();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_login_loading(false);

@@ -73,6 +73,24 @@ pub enum AuthError {
     InvalidInput(String),
 }
 
+impl AuthError {
+    /// Text for the login/register screen: the `Display` chain
+    /// ("login failed: ...") is for logs, not for people.
+    #[must_use]
+    pub fn user_message(&self) -> String {
+        match self {
+            Self::InvalidCredentials => "Incorrect username or password.".to_string(),
+            Self::LoginFailed(m) | Self::RegistrationFailed(m) | Self::InvalidInput(m) => {
+                let mut c = m.chars();
+                c.next()
+                    .map(|f| f.to_uppercase().chain(c).collect())
+                    .unwrap_or_default()
+            }
+            other => other.to_string(),
+        }
+    }
+}
+
 /// Result of a successful login or registration.
 #[derive(Debug, Clone)]
 pub struct LoginResult {
