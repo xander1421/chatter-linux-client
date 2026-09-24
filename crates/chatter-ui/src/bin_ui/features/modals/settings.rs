@@ -214,10 +214,7 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                 }
             });
 
-            // Get username from auth state
-            let username = ui_ctx.auth_state().get().display_name.unwrap_or_default();
-
-            match ui_ctx.change_pin(&current_pin, &new_pin, &username).await {
+            match ui_ctx.change_pin(&current_pin, &new_pin).await {
                 Ok(()) => {
                     tracing::info!("PIN changed successfully");
                     let _ = slint::invoke_from_event_loop(move || {
@@ -245,11 +242,12 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
     });
 
     // Retry SVR backup
-    // Note: retry_svr_backup(pin, username, password) requires the plaintext password
-    // for key derivation. Since passwords are never stored, we inform the user.
     let weak_window = window.as_weak();
-    window.on_settings_retry_backup(move |_pin: SharedString| {
+    let ui_ctx_retry = ui_ctx.clone();
+    window.on_settings_retry_backup(move |pin: SharedString| {
         let weak = weak_window.clone();
+        let ui_ctx = ui_ctx_retry.clone();
+        let pin = pin.to_string();
 
         tokio::spawn(async move {
             let weak_loading = weak.clone();
@@ -260,14 +258,17 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                 }
             });
 
-            // retry_svr_backup(pin, username, password) requires the plaintext password
-            // for key derivation. Since passwords are never stored, show guidance.
-            let error_msg = "Retry backup requires your password for key derivation. Please log out and log in again to retry the backup automatically.".to_string();
-            tracing::warn!("SVR backup retry attempted but password not available");
+            let result = ui_ctx.retry_svr_backup(&pin).await;
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
                     w.set_settings_backup_retry_loading(false);
-                    w.set_settings_backup_retry_error(error_msg.into());
+                    match result {
+                        Ok(()) => {
+                            w.set_settings_backup_status("backed_up".into());
+                            w.set_settings_backup_retry_pin("".into());
+                        }
+                        Err(e) => w.set_settings_backup_retry_error(e.to_string().into()),
+                    }
                 }
             });
         });

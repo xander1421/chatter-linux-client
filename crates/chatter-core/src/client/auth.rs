@@ -400,18 +400,45 @@ impl ChatterClient {
         }
     }
 
-    /// Retry SVR backup creation if it failed during registration.
-    ///
-    /// Delegates to `SvrBackupService::retry_from_credentials` which reads
-    /// the locally-stored profile_key and uploads it under a PIN-derived
-    /// SVR secret. Caller must have already password-re-auth-gated the user.
-    pub async fn retry_svr_backup(
-        &self,
-        pin: &str,
-        username: &str,
-    ) -> Result<(), ClientError> {
+    /// The username every PIN derivation is salted with: exactly what was
+    /// typed at register/login (`keys::SVR_SALT_USERNAME`). Not the display
+    /// name and not the `.discriminator` handle — a different salt derives a
+    /// different secret, and a backup written under it cannot be restored.
+    fn svr_salt_username(&self) -> Result<String, ClientError> {
+        self.signal()
+            .settings_repo
+            .get_string(keys::SVR_SALT_USERNAME)
+            .map_err(|e| ClientError::Validation(format!("failed to read login username: {e}")))?
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                ClientError::Validation("no stored login username — log out and log in once, then retry".into())
+            })
+    }
+
+    /// Whether the server holds a key backup for this account.
+    pub async fn has_key_backup(&self) -> Result<bool, ClientError> {
         self.svr_backup()
-            .retry_from_credentials(pin, username)
+            .has_key_backup()
+            .await
+            .map_err(|e| ClientError::Validation(format!("backup status check failed: {e}")))
+    }
+
+    /// Create the SVR key backup if registration failed to upload it.
+    ///
+    /// Gated on the local PIN fingerprint, and refuses when a backup already
+    /// exists: the upload is an unconditional replace, so without both checks
+    /// anyone holding the unlocked device could re-key the backup to a PIN of
+    /// their choosing.
+    pub async fn retry_svr_backup(&self, pin: &str) -> Result<(), ClientError> {
+        if !self.link_device().verify_pin(pin).unwrap_or(false) {
+            return Err(ClientError::Validation("Incorrect PIN".into()));
+        }
+        if self.has_key_backup().await? {
+            return Ok(());
+        }
+        let username = self.svr_salt_username()?;
+        self.svr_backup()
+            .retry_from_credentials(pin, &username)
             .await
             .map_err(|e| ClientError::Validation(format!("SVR backup upload failed: {}", e)))?;
         tracing::info!("SVR backup retry succeeded");
@@ -431,12 +458,7 @@ impl ChatterClient {
     /// * `old_pin` - Current PIN.
     /// * `new_pin` - New PIN (must differ from `old_pin`).
     /// * `username` - Plaintext username (salt for Argon2id derivation).
-    pub async fn change_pin(
-        &self,
-        old_pin: &str,
-        new_pin: &str,
-        username: &str,
-    ) -> Result<(), ClientError> {
+    pub async fn change_pin(&self, old_pin: &str, new_pin: &str) -> Result<(), ClientError> {
         use crate::crypto::svr::{
             derive_registration_lock, derive_svr_secret, validate_pin, validate_pin_shape, SvrKeypair,
         };
@@ -452,6 +474,9 @@ impl ChatterClient {
                 "New PIN must be different from current PIN".into(),
             ));
         }
+
+        let username = self.svr_salt_username()?;
+        let username = username.as_str();
 
         // 2. Get identity keypair from signal store (private 32 bytes + public 33 bytes)
         let mut private_bytes = self.signal().actor.get_identity_private_key().await
@@ -537,12 +562,28 @@ impl ChatterClient {
             | Err(crate::services::svr_backup_service::SvrBackupError::Network(
                 crate::error::NetworkError::NotFound(_),
             )) => {
-                // No existing backup — create one with the new PIN instead
-                tracing::info!("No existing SVR backup found, creating new backup with new PIN");
-                self.svr_backup()
-                    .create_and_upload_backup(&new_svr_secret, &identity_keypair, &profile_key)
-                    .await
-                    .map(|_| ())
+                // The server answers a WRONG old PIN with the same NotFound it
+                // uses for "no backup" (svr repository ChangePinBackup). Only
+                // the second may fall back to creating one: doing it for the
+                // first replaced a live backup without the current PIN.
+                match self.svr_backup().has_key_backup().await {
+                    Ok(false) => {
+                        tracing::info!("No existing SVR backup found, creating new backup with new PIN");
+                        self.svr_backup()
+                            .create_and_upload_backup(&new_svr_secret, &identity_keypair, &profile_key)
+                            .await
+                            .map(|_| ())
+                    }
+                    Ok(true) => {
+                        old_svr_secret.zeroize();
+                        new_svr_secret.zeroize();
+                        identity_keypair.zeroize();
+                        profile_key.zeroize();
+                        new_reg_lock.zeroize();
+                        return Err(ClientError::Validation("Current PIN is incorrect".into()));
+                    }
+                    Err(e) => Err(e),
+                }
             }
             _ => result.map(|_| ()),
         };

@@ -208,7 +208,7 @@ pub enum ClientError {
     AlreadyStarted,
     #[error("auth error: {0}")]
     Auth(#[from] AuthError),
-    #[error("validation: {0}")]
+    #[error("{0}")]
     Validation(String),
     /// Login authenticated, but this device has no Signal identity key and one
     /// could not be recovered.
