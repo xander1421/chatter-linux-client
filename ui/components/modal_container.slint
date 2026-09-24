@@ -73,8 +73,8 @@ export component ModalContainer inherits Rectangle {
         }
     }
 
-    // The Android window does not shrink for the keyboard, so it covers the
-    // card's lower edge — Save/Cancel in Edit Profile were unreachable
+    // Where the Android window does not shrink for the keyboard (edge-to-edge,
+    // Android 15+ with targetSdk 35) it covers the card's lower edge — Save/Cancel in Edit Profile were unreachable
     // (OPEN-ITEMS §112i). The card therefore sits in a Flickable that is
     // exactly this container's size and NEVER resizes: Slint measures a
     // Flickable without the part the keyboard covers
@@ -109,7 +109,7 @@ export component ModalContainer inherits Rectangle {
             height: root.full-screen ? root.height - root.bottom-inset
                 : root.fill-height
                 ? min(root.max-modal-height, root.height - 48px)
-                : min(self.preferred-height, min(root.max-modal-height, root.height - 48px));
+                : min(content.preferred-height, min(root.max-modal-height, root.height - 48px));
 
             // Centering — round to nearest pixel to avoid sub-pixel text rendering
             x: root.full-screen ? 0 : Math.round((root.width - self.width) / 2 / 1px) * 1px;
@@ -135,8 +135,33 @@ export component ModalContainer inherits Rectangle {
                 height: 100%;
             }
 
-            // The actual content provided by users of ModalContainer
-            @children
+            // The height cap above can be smaller than the content: on Android
+            // 10 (API < 30) GameActivity's adjustResize shrinks the whole window
+            // to the keyboard's top edge, so `root.height` drops and the card is
+            // re-capped far below its content — Save in Edit Profile sat clipped
+            // inside the card and the outer Flickable saw no keyboard overlap to
+            // scroll (§112i). A content-sized card therefore scrolls its own
+            // body whenever it is capped; core reveals the focused field in
+            // every ancestor Flickable (`try_scroll_into_visible`), so the field
+            // being typed in stays in view. Fill-height and full-screen cards
+            // keep filling the card exactly as before: their content is laid
+            // out to the card and brings its own scrolling.
+            body := Flickable {
+                width: parent.width;
+                height: parent.height;
+                viewport-width: self.width;
+                viewport-height: content.height;
+                interactive: self.viewport-height > self.height;
+
+                content := Rectangle {
+                    width: body.width;
+                    height: root.full-screen || root.fill-height ? body.height
+                        : max(self.preferred-height, body.height);
+
+                    // The actual content provided by users of ModalContainer
+                    @children
+                }
+            }
         }
     }
 }
