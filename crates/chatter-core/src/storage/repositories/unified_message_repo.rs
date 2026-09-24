@@ -402,8 +402,13 @@ impl UnifiedMessageRepository {
         Ok(rows)
     }
 
+    /// Hard-delete one message and tombstone its id, so a server re-fetch of
+    /// the same message (channel catch-up sync) cannot store it again. The
+    /// tombstone is written even when the row is absent: a delete that races
+    /// ahead of the message itself must still win.
     pub fn delete(&self, id: &MessageId) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
+        conn.execute("INSERT OR IGNORE INTO deleted_messages (id) VALUES (?1)", params![id.to_string()])?;
         let rows = conn.execute("DELETE FROM messages WHERE id = ?1", params![id.to_string()])?;
         if rows == 0 {
             return Err(StorageError::NotFound(format!("Message {}", id)));
@@ -418,12 +423,16 @@ impl UnifiedMessageRepository {
     /// truly GONE from disk, not merely tombstoned (a soft delete leaves the
     /// plaintext `content_json` in the DB and `list_for_channel` still returns
     /// the row). This mirrors `delete_message_local` (the app's own local
-    /// delete), just batched. Returns the number of rows removed.
+    /// delete), just batched — including the tombstones. Returns the number
+    /// of rows removed.
     pub fn delete_batch(&self, ids: &[MessageId]) -> Result<usize, StorageError> {
         if ids.is_empty() {
             return Ok(0);
         }
         let conn = self.db.connection()?;
+        for id in ids {
+            conn.execute("INSERT OR IGNORE INTO deleted_messages (id) VALUES (?1)", params![id.to_string()])?;
+        }
         let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{}", i)).collect();
         let query = format!(
             "DELETE FROM messages WHERE id IN ({})",
@@ -435,6 +444,19 @@ impl UnifiedMessageRepository {
             rusqlite::params_from_iter(params_vec.iter()),
         )?;
         Ok(rows)
+    }
+
+    /// Whether this message id was deleted locally (see `delete`). Ingest
+    /// checks it so a re-fetched copy stays deleted.
+    // ponytail: tombstones are never pruned; one short row per deleted message.
+    pub fn is_tombstoned(&self, id: &MessageId) -> Result<bool, StorageError> {
+        let conn = self.db.read_connection()?;
+        let found = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM deleted_messages WHERE id = ?1)",
+            params![id.to_string()],
+            |row| row.get::<_, bool>(0),
+        )?;
+        Ok(found)
     }
 
     /// Soft-delete multiple messages by ID.

@@ -142,6 +142,20 @@ impl ChannelInbound {
         channel_id: ChannelId,
         skip_own: bool,
     ) -> Result<Message, Ingested> {
+        // The server keeps a message this user deleted for themselves (or a
+        // peer deleted for everyone); every catch-up re-fetch hands it back.
+        if let Ok(id) = proto_msg.id.parse::<crate::domain::ids::MessageId>() {
+            match self.messages.message_repo.is_tombstoned(&id) {
+                Ok(false) => {}
+                Ok(true) => return Err(Ingested::Dropped),
+                Err(e) => {
+                    tracing::warn!(%channel_id, message_id = %id, error = %e,
+                        "Failed to check delete tombstone; dropping");
+                    return Err(Ingested::Dropped);
+                }
+            }
+        }
+
         let sender_id: Option<UserId> = if proto_msg.author_id.is_empty() {
             None
         } else {
@@ -310,6 +324,12 @@ impl ChannelInbound {
                 if message.reaction_counts.is_empty() {
                     message.reaction_counts = existing.reaction_counts;
                 }
+                // Read state is local: the server copy always converts as
+                // unread, so every catch-up re-fetch of a message the user had
+                // already read flipped it back to unread.
+                message.is_read = existing.is_read;
+                // Likewise a local soft-delete: the server copy never says deleted.
+                message.is_deleted |= existing.is_deleted;
                 if let Err(e) = self.messages.update_message(message) {
                     tracing::warn!(%channel_id, message_id = %message.id, error = %e,
                         "Failed to update channel message");
@@ -330,5 +350,96 @@ impl ChannelInbound {
             }
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::ChatterClient;
+    use crate::domain::message::ConversationType;
+
+    /// The catch-up sync re-fetches every message newer than its last run,
+    /// including ones that already arrived live and were read. Re-ingesting
+    /// one must not flip it back to unread.
+    #[tokio::test]
+    async fn reingesting_a_read_message_keeps_it_read() {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("http://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        let inbound = ChannelInbound::new(client.messages().clone(), client.attachments().clone());
+
+        let channel_id = ChannelId::new();
+        let proto = chat_v1::Message {
+            id: crate::domain::ids::MessageId::new().to_string(),
+            channel_id: channel_id.to_string(),
+            author_id: UserId::new().to_string(),
+            timestamp: 1_000,
+            content: Some(chat_v1::message::Content {
+                r#type: Some(chat_v1::message::content::Type::Text("hi".into())),
+            }),
+            ..Default::default()
+        };
+        let unread = || {
+            client
+                .messages()
+                .message_repo
+                .get_unread_count(&channel_id, &ConversationType::Channel)
+                .unwrap()
+        };
+
+        assert_eq!(inbound.ingest(&proto, channel_id, false).await, Ingested::Stored);
+        assert_eq!(unread(), 1, "positive control: a received message starts unread");
+
+        client.mark_conversation_read(&channel_id, &ConversationType::Channel).unwrap();
+        assert_eq!(inbound.ingest(&proto, channel_id, false).await, Ingested::Stored);
+        assert_eq!(unread(), 0);
+    }
+
+    /// Delete-for-me (and a peer's delete-for-everyone) removes the local row,
+    /// but the server still holds the message, so the next catch-up re-fetch
+    /// hands it back. It must stay deleted.
+    #[tokio::test]
+    async fn reingesting_a_deleted_message_keeps_it_deleted() {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("http://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        let inbound = ChannelInbound::new(client.messages().clone(), client.attachments().clone());
+
+        let channel_id = ChannelId::new();
+        let message_id = crate::domain::ids::MessageId::new();
+        let proto = chat_v1::Message {
+            id: message_id.to_string(),
+            channel_id: channel_id.to_string(),
+            author_id: UserId::new().to_string(),
+            timestamp: 1_000,
+            content: Some(chat_v1::message::Content {
+                r#type: Some(chat_v1::message::content::Type::Text("hi".into())),
+            }),
+            ..Default::default()
+        };
+
+        assert_eq!(inbound.ingest(&proto, channel_id, false).await, Ingested::Stored);
+        assert!(client.messages().get_message_local(&message_id).unwrap().is_some(),
+            "positive control: the message was stored");
+
+        client.messages().delete_message_local(&message_id).unwrap();
+        inbound.ingest(&proto, channel_id, false).await;
+        assert!(client.messages().get_message_local(&message_id).unwrap().is_none(),
+            "a re-fetched copy resurrected a deleted message");
     }
 }
