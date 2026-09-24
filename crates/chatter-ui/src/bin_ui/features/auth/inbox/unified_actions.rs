@@ -155,8 +155,7 @@ pub fn handle_edit(
             if let Some(msg) = messages.row_data(i) {
                 if msg.timestamp_ns.as_str() == target_ts_ns {
                     let mut updated_msg = msg.clone();
-                    updated_msg.content = new_text.clone().into();
-                    updated_msg.is_edited = true;
+                    crate::bin_ui::converters::apply_edit(&mut updated_msg, &new_text);
 
                     if let Some(model) =
                         messages.as_any().downcast_ref::<VecModel<MessageItemData>>()

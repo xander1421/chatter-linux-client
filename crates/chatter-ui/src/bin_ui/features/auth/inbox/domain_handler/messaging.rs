@@ -402,8 +402,7 @@ pub(super) fn handle_message_edit(
                 if let Some(msg) = messages.row_data(i) {
                     if msg.timestamp_ns.as_str() == ts_str {
                         let mut updated = msg.clone();
-                        updated.content = new_text.into();
-                        updated.is_edited = true;
+                        crate::bin_ui::converters::apply_edit(&mut updated, &new_text);
                         if let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() {
                             model.set_row_data(i, updated);
                         }
@@ -418,8 +417,7 @@ pub(super) fn handle_message_edit(
             if let Some(msg) = messages.row_data(i) {
                 if msg.message_id.as_str() == message_id {
                     let mut updated = msg.clone();
-                    updated.content = new_text.clone().into();
-                    updated.is_edited = true;
+                    crate::bin_ui::converters::apply_edit(&mut updated, &new_text);
                     if let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() {
                         model.set_row_data(i, updated);
                     }

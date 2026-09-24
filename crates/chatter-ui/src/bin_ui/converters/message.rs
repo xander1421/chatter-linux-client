@@ -16,6 +16,37 @@ use super::utils::{
     insert_word_breaks, reaction_counts_to_entries,
 };
 
+/// A message body as a row renders it: `rich_content` is the markdown spans
+/// the bubble draws, `content` the stripped text used for empty checks and the
+/// plain fallback.
+fn body_fields(raw: &str) -> (slint::SharedString, ModelRc<RichTextSpan>) {
+    let trimmed = raw.trim();
+    let spans: Vec<RichTextSpan> = parse_markdown(trimmed)
+        .iter()
+        .map(|s| RichTextSpan {
+            text: s.text.clone().into(),
+            bold: s.bold,
+            italic: s.italic,
+            strikethrough: s.strikethrough,
+            code: s.code,
+            code_block: s.code_block,
+        })
+        .collect();
+    (
+        insert_word_breaks(&strip_markdown(trimmed)).into(),
+        ModelRc::new(VecModel::from(spans)),
+    )
+}
+
+/// Replace a displayed row's body with an edit. The bubble draws
+/// `rich_content` whenever it is non-empty, so an edit that patched only
+/// `content` kept showing the old text under an "edited" badge until the
+/// conversation was reopened.
+pub fn apply_edit(row: &mut MessageItemData, new_text: &str) {
+    (row.content, row.rich_content) = body_fields(new_text);
+    row.is_edited = true;
+}
+
 /// Data needed to create message UI (can be sent across threads).
 #[derive(Clone, Debug)]
 pub struct MessageDisplayData {
@@ -186,22 +217,7 @@ impl MessageDisplayData {
                 (slint::Image::default(), false, 0, 0)
             };
 
-    // Parse markdown for rich rendering
-    let trimmed_content = self.content.trim();
-    let md_spans = parse_markdown(trimmed_content);
-    let rich_content: Vec<RichTextSpan> = md_spans
-        .iter()
-        .map(|s| RichTextSpan {
-            text: s.text.clone().into(),
-            bold: s.bold,
-            italic: s.italic,
-            strikethrough: s.strikethrough,
-            code: s.code,
-            code_block: s.code_block,
-        })
-        .collect();
-    // Stripped content for empty checks and system message fallback
-    let clean_content = strip_markdown(trimmed_content);
+    let (content, rich_content) = body_fields(&self.content);
 
     MessageItemData {
         // Multi-select marking is applied by features::chat::selection after
@@ -213,8 +229,8 @@ impl MessageDisplayData {
         sender_initials: self.sender_initials.clone().into(),
         sender_avatar_source,
         has_avatar,
-        content: insert_word_breaks(&clean_content).into(),
-        rich_content: ModelRc::new(VecModel::from(rich_content)),
+        content,
+        rich_content,
         timestamp: self.timestamp.clone().into(),
         timestamp_ns: self.timestamp_ns.clone().into(),
         is_own,
@@ -598,3 +614,23 @@ pub fn messages_to_display_batch(
 }
 
 
+
+#[cfg(test)]
+mod tests {
+    use slint::Model;
+
+    use super::*;
+
+    #[test]
+    fn apply_edit_replaces_the_spans_the_bubble_draws() {
+        let mut row = MessageItemData::default();
+        (row.content, row.rich_content) = body_fields("hi again");
+
+        apply_edit(&mut row, "hi **againX**");
+
+        let drawn: String = row.rich_content.iter().map(|s| s.text.to_string()).collect();
+        assert_eq!(drawn, "hi againX");
+        assert_eq!(row.content, "hi againX");
+        assert!(row.is_edited);
+    }
+}
