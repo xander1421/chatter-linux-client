@@ -38,6 +38,7 @@ export component SettingsScreen inherits Rectangle {
     in property <string> username: "";
     // Room left for the mobile tab bar drawn over the bottom of the screen.
     in property <length> bottom-inset: 0px;
+    in property <bool> mobile-platform: false;
     in property <image> avatar;
     in property <int> session-count: 0;
 
@@ -112,6 +113,8 @@ export component SettingsScreen inherits Rectangle {
     property <bool> show-pin-form: false;
     property <bool> show-backup-retry: false;
     property <bool> show-delete-confirm: false;
+    // Log Out asks once: on a phone it sits one thumb-width from Delete Account.
+    property <bool> show-logout-confirm: false;
 
     // Callbacks
     callback edit-profile-clicked();
@@ -1009,18 +1012,38 @@ export component SettingsScreen inherits Rectangle {
                                             }
                                         }
 
-                                        if !root.compact-mode: Button {
+                                        if !show-logout-confirm && !root.compact-mode: Button {
                                             text: "Log Out";
                                             variant: "danger";
-                                            clicked => { root.logout-clicked(); }
+                                            clicked => { show-logout-confirm = true; }
                                         }
                                     }
 
                                     // Compact: full-width button stacked below
-                                    if root.compact-mode: Button {
+                                    if !show-logout-confirm && root.compact-mode: Button {
                                         text: "Log Out";
                                         variant: "danger";
-                                        clicked => { root.logout-clicked(); }
+                                        clicked => { show-logout-confirm = true; }
+                                    }
+
+                                    if show-logout-confirm: HorizontalLayout {
+                                        alignment: end;
+                                        spacing: Spacing.sm;
+
+                                        Button {
+                                            text: "Cancel";
+                                            variant: "secondary";
+                                            clicked => { show-logout-confirm = false; }
+                                        }
+
+                                        Button {
+                                            text: "Log Out of This Device";
+                                            variant: "danger";
+                                            clicked => {
+                                                show-logout-confirm = false;
+                                                root.logout-clicked();
+                                            }
+                                        }
                                     }
 
                                     Rectangle {
@@ -1235,8 +1258,9 @@ export component SettingsScreen inherits Rectangle {
                                 }
                             }
 
-                            // Search shortcut setting (3-way segmented selector)
-                            Rectangle {
+                            // Search shortcut setting (3-way segmented selector).
+                            // Keyboard shortcuts mean nothing on a phone.
+                            if !root.mobile-platform: Rectangle {
                                 background: Colors.surface;
                                 border-radius: Spacing.radius-lg;
                                 border-width: 1px;

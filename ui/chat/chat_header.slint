@@ -426,7 +426,7 @@ export component ChatHeader inherits Rectangle {
                     y: (parent.height - self.height) / 2;
                 }
                 Text {
-                    text: "\{root.member-count} members";
+                    text: root.member-count == 1 ? "1 member" : "\{root.member-count} members";
                     color: Colors.text-muted;
                     font-size: Typography.sm;
                     vertical-alignment: center;

@@ -324,7 +324,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     }
 
                                     Text {
-                                        text: root.member-count + " members • Created " + root.created-at;
+                                        text: root.member-count + (root.member-count == 1 ? " member" : " members") + " • Created " + root.created-at;
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
                                     }

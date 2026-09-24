@@ -113,6 +113,10 @@ export component ForwardMessageModal inherits Rectangle {
                             HorizontalLayout {
                                 padding-left: Spacing.sm;
                                 padding-right: Spacing.sm;
+                                // Row is 48px; 8px top/bottom leaves exactly the
+                                // 32px avatar, so it and the name are centred.
+                                padding-top: 8px;
+                                padding-bottom: 8px;
                                 spacing: Spacing.sm;
 
                                 // Avatar
@@ -135,21 +139,24 @@ export component ForwardMessageModal inherits Rectangle {
                                     }
                                 }
 
-                                // Type badge
-                                Rectangle {
-                                    width: type-text.width + Spacing.sm * 2;
-                                    height: 20px;
-                                    background: target.target-type == "channel" || target.target-type == "group" ? Colors.primary.with-alpha(0.2) : Colors.success.with-alpha(0.2);
-                                    border-radius: Spacing.radius-sm;
+                                // Type badge (none for Saved Messages: it is not a DM)
+                                if target.target-type != "saved_messages": VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: type-text.width + Spacing.sm * 2;
+                                        height: 20px;
+                                        background: target.target-type == "channel" || target.target-type == "group" ? Colors.primary.with-alpha(0.2) : Colors.success.with-alpha(0.2);
+                                        border-radius: Spacing.radius-sm;
 
-                                    type-text := Text {
-                                        x: Spacing.sm;
-                                        text: target.target-type == "channel" ? "#channel" : target.target-type == "group" ? "#group" : "DM";
-                                        color: target.target-type == "channel" || target.target-type == "group" ? Colors.primary : Colors.success;
-                                        font-size: Typography.xs;
-                                        font-weight: Typography.medium;
-                                        vertical-alignment: center;
-                                        height: 100%;
+                                        type-text := Text {
+                                            x: Spacing.sm;
+                                            text: target.target-type == "channel" ? "#channel" : target.target-type == "group" ? "#group" : "DM";
+                                            color: target.target-type == "channel" || target.target-type == "group" ? Colors.primary : Colors.success;
+                                            font-size: Typography.xs;
+                                            font-weight: Typography.medium;
+                                            vertical-alignment: center;
+                                            height: 100%;
+                                        }
                                     }
                                 }
 

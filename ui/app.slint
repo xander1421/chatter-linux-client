@@ -2401,6 +2401,7 @@ export component App inherits Rectangle {
 
     // Settings screen (full screen overlay)
     if active-modal == "settings": SettingsScreen {
+        mobile-platform: root.is-mobile-platform;
         bottom-inset: root.is-mobile-platform && !root.keyboard-open ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
         display-name: root.settings-display-name;
         username: root.settings-username;
