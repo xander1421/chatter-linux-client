@@ -30,6 +30,8 @@ const QUIC_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuicProbeState {
     Untried,
+    /// Probe running in the background; dials use TCP until it settles.
+    Probing,
     Working,
     Failed,
 }
@@ -359,61 +361,65 @@ impl GrpcClientPool {
     /// pool's life, matching today's behavior exactly when QUIC is off or
     /// unreachable.
     async fn dial(&self, endpoint: &Endpoint) -> Result<GrpcTransport, tonic::transport::Error> {
+        // QUIC target for this dial, when its probe is still in flight.
+        #[cfg(feature = "quic")]
+        let mut racing_quic: Option<http::Uri> = None;
+
         #[cfg(feature = "quic")]
         {
             let direct = *self.transport_mode.read() == TransportMode::Direct;
             let probe_state = *self.quic_probe.read();
-            if direct && probe_state != QuicProbeState::Failed {
-                let server_url = self.direct_url.read().clone();
-                if server_url.starts_with("https://") {
-                    if let Ok(uri) = server_url.parse::<http::Uri>() {
-                        // Already proven reachable — skip straight to building a
-                        // channel, no network I/O. Re-probing here on every
-                        // dial() (every connect()/reconnect-after-error) was a
-                        // real bug: each call did a fresh QUIC handshake attempt
-                        // even when one had already succeeded, which under any
-                        // reconnect churn (a background stream erroring and
-                        // retrying, several callers dialing around the same
-                        // time) turned into a sustained flood of real UDP/TLS
-                        // handshakes — exactly the kind of CPU/kevent storm a
-                        // hung-looking UI turned out to be.
-                        if probe_state == QuicProbeState::Working {
-                            match super::transport::build_quic(uri) {
-                                Ok(transport) => return Ok(transport),
-                                Err(e) => {
-                                    tracing::warn!(error = %e, "cached-working QUIC channel build failed — falling back to TCP");
-                                }
-                            }
-                        } else {
-                            let probe = tokio::time::timeout(
+            let server_url = self.direct_url.read().clone();
+            let uri = server_url
+                .starts_with("https://")
+                .then(|| server_url.parse::<http::Uri>().ok())
+                .flatten();
+            if let (true, Some(uri)) = (direct, uri) {
+                match probe_state {
+                    // Already proven reachable — build the channel, no probe.
+                    // Re-probing on every dial() was a real bug: under
+                    // reconnect churn it became a flood of UDP/TLS handshakes.
+                    QuicProbeState::Working => match super::transport::build_quic(uri) {
+                        Ok(transport) => return Ok(transport),
+                        Err(e) => {
+                            tracing::warn!(error = %e, "cached-working QUIC channel build failed — falling back to TCP");
+                        }
+                    },
+                    // Probe in the background while TCP dials. It used to be
+                    // awaited here, so a network that drops UDP (and the adb
+                    // TCP tunnel) cost QUIC_PROBE_TIMEOUT — 3s of black screen
+                    // — on every cold start before anything rendered.
+                    QuicProbeState::Untried => {
+                        *self.quic_probe.write() = QuicProbeState::Probing;
+                        let state = self.quic_probe.clone();
+                        let probe_uri = uri.clone();
+                        tokio::spawn(async move {
+                            let outcome = tokio::time::timeout(
                                 QUIC_PROBE_TIMEOUT,
-                                super::transport::probe_quic(&uri),
+                                super::transport::probe_quic(&probe_uri),
                             )
                             .await;
-                            match probe {
-                                Ok(Ok(())) => {
-                                    *self.quic_probe.write() = QuicProbeState::Working;
-                                    match super::transport::build_quic(uri) {
-                                        Ok(transport) => {
-                                            tracing::info!("transport: QUIC (probe succeeded)");
-                                            return Ok(transport);
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!(error = %e, "QUIC probe succeeded but channel build failed — falling back to TCP");
-                                        }
-                                    }
-                                }
+                            let verdict = match outcome {
+                                Ok(Ok(())) => QuicProbeState::Working,
                                 Ok(Err(e)) => {
-                                    tracing::info!(error = %e, "QUIC unreachable — falling back to TCP");
-                                    *self.quic_probe.write() = QuicProbeState::Failed;
+                                    tracing::info!(error = %e, "QUIC unreachable — staying on TCP");
+                                    QuicProbeState::Failed
                                 }
                                 Err(_) => {
-                                    tracing::info!("QUIC probe timed out — falling back to TCP");
-                                    *self.quic_probe.write() = QuicProbeState::Failed;
+                                    tracing::info!("QUIC probe timed out — staying on TCP");
+                                    QuicProbeState::Failed
                                 }
+                            };
+                            // A server-URL change resets to Untried meanwhile;
+                            // this verdict is about the old URL then, so drop it.
+                            let mut current = state.write();
+                            if *current == QuicProbeState::Probing {
+                                *current = verdict;
                             }
-                        }
+                        });
+                        racing_quic = Some(uri);
                     }
+                    QuicProbeState::Probing | QuicProbeState::Failed => {}
                 }
             }
         }
@@ -428,6 +434,17 @@ impl GrpcClientPool {
         };
         #[cfg(not(feature = "onion"))]
         let channel = endpoint.connect().await?;
+
+        // The probe won the race: prefer QUIC now rather than at the next dial.
+        #[cfg(feature = "quic")]
+        if let Some(uri) = racing_quic {
+            if *self.quic_probe.read() == QuicProbeState::Working {
+                if let Ok(transport) = super::transport::build_quic(uri) {
+                    tracing::info!("transport: QUIC (probe succeeded)");
+                    return Ok(transport);
+                }
+            }
+        }
 
         Ok(channel.into())
     }
