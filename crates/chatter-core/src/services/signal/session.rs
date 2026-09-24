@@ -481,20 +481,8 @@ impl SignalService {
         &self,
         auth_client: &mut AuthClient,
     ) -> Result<SenderCertificate, ServiceError> {
-        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
-
-        let cached_cert_b64: Option<String> = self.settings_repo.get_string(keys::SENDER_CERTIFICATE)?;
-        let cached_refresh_after: Option<u64> = self.settings_repo.get::<u64>(keys::SENDER_CERTIFICATE_REFRESH_AFTER)?;
-
-        if let (Some(cert_b64), Some(refresh_after)) = (&cached_cert_b64, cached_refresh_after) {
-            if now_ms < refresh_after {
-                use base64::Engine;
-                if let Ok(cert_bytes) = base64::engine::general_purpose::STANDARD.decode(cert_b64) {
-                    if let Ok(cert) = SenderCertificate::deserialize(&cert_bytes) {
-                        return Ok(cert);
-                    }
-                }
-            }
+        if let Some(cert) = self.get_cached_sender_certificate()? {
+            return Ok(cert);
         }
 
         let cert_response = auth_client.request_sender_certificate(None).await?;
@@ -980,13 +968,30 @@ impl SignalService {
                     base64::engine::general_purpose::STANDARD.decode(cert_b64)
                 {
                     if let Ok(cert) = SenderCertificate::deserialize(&cert_bytes) {
-                        return Ok(Some(cert));
+                        // The certificate names the sender's user AND device.
+                        // Every login is a new device id, so a cert cached
+                        // before a Log Out -> Log In names a device that no
+                        // longer exists: recipients looked up the wrong session
+                        // and every sealed message failed to decrypt. Only a
+                        // cert for the current user and device is reusable.
+                        if self.cert_is_for_this_device(&cert) {
+                            return Ok(Some(cert));
+                        }
                     }
                 }
             }
         }
 
         Ok(None)
+    }
+
+    fn cert_is_for_this_device(&self, cert: &SenderCertificate) -> bool {
+        let user = self.settings_repo.get_string(keys::CURRENT_USER_ID).ok().flatten();
+        let device: Option<u32> = self.settings_repo.get(keys::CURRENT_DEVICE_ID).ok().flatten();
+        match (user, device, cert.sender_uuid(), cert.sender_device_id()) {
+            (Some(u), Some(d), Ok(cu), Ok(cd)) => u == cu && u32::from(cd) == d,
+            _ => false,
+        }
     }
 
     /// Get the cached server key ID from the sender certificate.
