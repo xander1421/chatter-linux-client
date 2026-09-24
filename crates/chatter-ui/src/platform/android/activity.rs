@@ -76,3 +76,23 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeInitWebrtc(
         Err(e) => tracing::error!("webrtc init: get_java_vm failed: {e}"),
     }
 }
+
+/// Set or clear `FLAG_SECURE` on the Activity window (`MainActivity.setSecure`).
+///
+/// Bound to the Slint `secure-screen` callback, which `main.slint` fires from
+/// its `changed active-modal` handler. Change handlers run before the next
+/// frame is rendered, so the flag is requested before the secret is drawn.
+pub fn set_secure(secure: bool) {
+    let result = (|| -> Result<(), String> {
+        let act = activity()?;
+        let mut env = jni_env()?;
+        let res = env.call_method(act, "setSecure", "(Z)V", &[jni::objects::JValue::Bool(secure.into())]);
+        if res.is_err() {
+            clear_exception(&mut env);
+        }
+        res.map(|_| ()).map_err(|e| e.to_string())
+    })();
+    if let Err(e) = result {
+        tracing::error!("Android: setSecure({secure}) failed: {e}");
+    }
+}

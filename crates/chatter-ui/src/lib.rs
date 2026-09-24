@@ -282,6 +282,10 @@ pub async fn app_init() -> AppState {
     #[cfg(target_os = "android")]
     crate::platform::android::call_actions::register_main_window(window.as_weak());
 
+    // Screenshot/recording protection while the recovery codes are shown.
+    #[cfg(target_os = "android")]
+    window.on_secure_screen(crate::platform::android::activity::set_secure);
+
     // Jarvis feature gate: flip the Slint global so jarvis surfaces render.
     // Slint can't `cfg`-gate, so we use a runtime bool driven by the Cargo feature.
     #[cfg(feature = "jarvis")]
@@ -678,6 +682,20 @@ fn app_run(state: AppState) {
     let _ = rx.recv_timeout(std::time::Duration::from_secs(5));
 
     tracing::info!("Shutdown complete, exiting...");
+
+    // Android: `_exit`, never `exit`. `exit` runs atexit handlers and C++
+    // static destructors while the framework's own threads are still live —
+    // HWUI's hwuiTask workers then lock a destroyed mutex and abort (SIGABRT,
+    // SI_QUEUE, thread hwuiTask1). Nothing of ours needs a destructor here:
+    // shutdown above already flushed what matters.
+    #[cfg(target_os = "android")]
+    {
+        unsafe extern "C" {
+            fn _exit(status: std::ffi::c_int) -> !;
+        }
+        unsafe { _exit(0) }
+    }
+    #[cfg(not(target_os = "android"))]
     std::process::exit(0);
 }
 

@@ -6,6 +6,9 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.util.Log
+import android.view.View
+import android.view.ViewGroup
+import android.view.WindowManager
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -40,6 +43,52 @@ class MainActivity : GameActivity() {
         // FindClass for the bundled livekit.org.webrtc classes resolves via the
         // app classloader. Doing this from Rust's native thread fails.
         nativeInitWebrtc()
+    }
+
+    /**
+     * Opt every view out of Android's default focus highlight.
+     *
+     * GameActivity requests focus on its full-screen SurfaceView on every window
+     * focus gain (and Slint's helper adds a full-screen input View). If the
+     * window is not in touch mode at that moment (the device's last input was
+     * not a touch — our best explanation for why it was intermittent) View paints `selectableItemBackground`
+     * (the theme's translucent white ripple) over its whole bounds, into the
+     * window's HWUI layer, which sits ABOVE the SurfaceView Slint renders into:
+     * a uniform grey veil over the app. View only re-evaluates that highlight in
+     * onFocusChanged, and these views are focusable in touch mode so a tap never
+     * takes their focus away, so the veil stayed until the process died. No view
+     * here draws anything of its own; Slint draws focus itself.
+     *
+     * Runs for setContentView (GameActivity's surface) and addContentView
+     * (Slint's input view) alike — AppCompat forwards both here.
+     */
+    override fun onContentChanged() {
+        super.onContentChanged()
+        disableFocusHighlight(window.decorView)
+    }
+
+    private fun disableFocusHighlight(view: View) {
+        view.defaultFocusHighlightEnabled = false
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) disableFocusHighlight(view.getChildAt(i))
+        }
+    }
+
+    /**
+     * Called from Rust (JNI) while a secret is on screen (the recovery codes).
+     * FLAG_SECURE blanks the window — and the SurfaceView Slint draws into,
+     * which is its child layer — in screenshots, screen recordings, casting and
+     * the recents thumbnail. Signal does the same for its recovery material.
+     */
+    @Suppress("unused")
+    fun setSecure(secure: Boolean) {
+        runOnUiThread {
+            if (secure) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            } else {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            }
+        }
     }
 
     /** Implemented in Rust. Initializes libwebrtc with the app's JavaVM. */
