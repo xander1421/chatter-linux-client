@@ -261,15 +261,17 @@ impl ChannelInbound {
                             device_id,
                             proto_msg.clone(),
                         );
-                        let msg_svc = self.messages.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) = msg_svc.send_sender_key_request(&channel_id, &sid).await {
-                                tracing::warn!(
-                                    %channel_id, %sid, error = %e,
-                                    "Failed to send SenderKeyRequest"
-                                );
-                            }
-                        });
+                        if self.messages.should_request_sender_key(channel_id, sid, device_id) {
+                            let msg_svc = self.messages.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = msg_svc.send_sender_key_request(&channel_id, &sid).await {
+                                    tracing::warn!(
+                                        %channel_id, %sid, error = %e,
+                                        "Failed to send SenderKeyRequest"
+                                    );
+                                }
+                            });
+                        }
                         return Err(Ingested::DeferredPendingSenderKey);
                     }
                     tracing::warn!(%channel_id, %sid, error = %es, "Failed to decrypt channel message");

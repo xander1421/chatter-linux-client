@@ -102,6 +102,9 @@ impl MessageService {
             if outcome.delivered == 0 && !is_self {
                 error_count += 1;
             }
+            if outcome.delivered > 0 && !is_self {
+                self.record_sender_key_delivered(channel_id, member_id);
+            }
         }
 
         tracing::info!(
@@ -123,6 +126,85 @@ impl MessageService {
         }
 
         Ok(())
+    }
+
+    fn record_sender_key_delivered(&self, channel_id: &ChannelId, member_id: &str) {
+        if let Err(e) = self.signal_service.mark_sender_key_delivered(channel_id, member_id) {
+            tracing::warn!(%channel_id, member_id, error = %e, "Failed to record SKDM delivery");
+        }
+    }
+
+    /// Hand our CURRENT sender key to every channel member that does not hold
+    /// it yet. MUST run before the message is encrypted: the SKDM carries the
+    /// chain's current iteration, so one built after `group_encrypt` would
+    /// start one past the message it was meant to unlock (Signal-Desktop
+    /// `sendToGroup` sends to `newToMemberDevices` first for the same reason).
+    ///
+    /// A member we cannot reach is logged and left for the next send — failing
+    /// the whole send would let one unreachable member mute the channel. That
+    /// member reads this message only if its SKDM lands before the next one.
+    ///
+    /// ponytail: an unreachable member costs a prekey fetch per send; add a
+    /// per-member backoff if that shows up against the fetch limiter.
+    pub(crate) async fn distribute_sender_key_to_new_members(
+        &self,
+        channel_id: &ChannelId,
+    ) -> Result<(), MessageError> {
+        // No key yet: `encrypt_for_group` creates one and the caller fans it
+        // to everyone via `distribute_sender_key`. Mid-rotation: the old key
+        // must not go anywhere, and `encrypt_for_group` refuses the send.
+        let crypto = |e: crate::error::ServiceError| MessageError::EncryptionFailed(e.to_string());
+        if self.signal_service.is_channel_send_blocked(channel_id).map_err(crypto)?
+            || !self.signal_service.has_sender_key(channel_id).await.map_err(crypto)?
+        {
+            return Ok(());
+        }
+        let our_user_id = self.settings_repo
+            .get_string(keys::CURRENT_USER_ID)
+            .map_err(MessageError::Storage)?
+            .ok_or(MessageError::NotLoggedIn)?;
+        let holders = self.signal_service.sender_key_recipients(channel_id).map_err(crypto)?;
+        let missing: Vec<UserId> = self
+            .channel_repo
+            .list_members(channel_id)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|m| m.user_id)
+            .filter(|u| {
+                let u = u.to_string();
+                u != our_user_id && !holders.contains(&u)
+            })
+            .collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+
+        let skdm = self.create_sender_key_for_channel(channel_id).await?;
+        for member_id in &missing {
+            if let Err(e) = self.send_skdm_to_member(channel_id, member_id, &skdm).await {
+                tracing::warn!(
+                    %channel_id, %member_id, error = %e,
+                    "Could not hand our sender key to a member before sending; \
+                     they cannot read this message unless it lands first"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether to send a `SenderKeyRequest` for `(channel, sender, device)` now.
+    ///
+    /// One outstanding request per key, with exponential backoff: a history
+    /// sync that parks twenty of one sender's messages used to fire twenty
+    /// requests (and twenty prekey fetches, which tripped the server's per-target
+    /// fetch limiter), and the sender answered every one. The gate is lifted
+    /// when that key's SKDM arrives (`retry_pending_group_decrypts`).
+    pub fn should_request_sender_key(&self, channel_id: ChannelId, sender_id: UserId, device_id: u32) -> bool {
+        sender_key_request_due(
+            &mut self.sender_key_requests.lock(),
+            (channel_id, sender_id, device_id),
+            std::time::Instant::now(),
+        )
     }
 
     /// Queue a group-encrypted proto whose sender key isn't stored yet.
@@ -156,10 +238,14 @@ impl MessageService {
         }
         guard.retain(|_, msgs| !msgs.is_empty());
 
-        guard
-            .entry((channel_id, sender_id, device_id))
-            .or_default()
-            .push((now, proto_msg));
+        // A history sync can hand us the same message more than once. Park it
+        // once: a second copy would decrypt as libsignal's DuplicatedMessage
+        // after the first consumed the message key.
+        let parked = guard.entry((channel_id, sender_id, device_id)).or_default();
+        if parked.iter().any(|(_, m)| m.id == proto_msg.id && m.content == proto_msg.content) {
+            return;
+        }
+        parked.push((now, proto_msg));
 
         // Enforce the global cap by evicting the globally-oldest parked message
         // until back within budget.
@@ -196,6 +282,14 @@ impl MessageService {
         use crate::proto::chat_v1;
         use crate::proto::content_v1::GroupEncrypted;
         use crate::services::message::conversion::proto_to_domain_message_with_sender;
+
+        // The key we asked for arrived: the next miss may ask again at once.
+        // Device 0 is the inbox path's "device unknown" entry.
+        {
+            let mut gate = self.sender_key_requests.lock();
+            gate.remove(&(channel_id, sender_id, device_id));
+            gate.remove(&(channel_id, sender_id, 0));
+        }
 
         let pending: Vec<chat_v1::Message> = {
             let mut guard = self.pending_group_decrypts.lock();
@@ -315,6 +409,19 @@ impl MessageService {
                         Err(e) => tracing::warn!(error = %e, "Retry: conversion failed"),
                     }
                 }
+                // libsignal's DuplicatedMessage: the message's iteration is
+                // below the chain we hold. The SKDM we got starts at the
+                // sender's CURRENT iteration (libsignal
+                // `create_sender_key_distribution_message`), so a message they
+                // sent before distributing to us has no key on this device and
+                // never will — sender-key semantics, not a retry failure.
+                Err(e) if e.to_string().contains("old counter") => tracing::info!(
+                    sender_id = %sender_id,
+                    device_id,
+                    message_id = %proto_msg.id,
+                    error = %e,
+                    "Parked message predates the sender key we received; it is undecryptable here"
+                ),
                 Err(e) => tracing::warn!(
                     sender_id = %sender_id,
                     device_id,
@@ -420,6 +527,7 @@ impl MessageService {
                 "SKDM delivery to new member failed on every device".into()
             ));
         }
+        self.record_sender_key_delivered(channel_id, &member_id_str);
 
         tracing::info!(
             channel_id = %channel_id,
@@ -536,5 +644,58 @@ impl MessageService {
         while content.encoded_len() < target {
             content.padding.push(0);
         }
+    }
+}
+
+/// Backoff state per `(channel, sender, device)`: when the next request may go
+/// out, and how many have gone out without an answer.
+pub(crate) type SenderKeyRequestGate =
+    std::collections::HashMap<(ChannelId, UserId, u32), (std::time::Instant, u32)>;
+
+/// 30s, 60s, 120s ... capped at 15 min between unanswered requests.
+fn sender_key_request_due(
+    gate: &mut SenderKeyRequestGate,
+    key: (ChannelId, UserId, u32),
+    now: std::time::Instant,
+) -> bool {
+    const BASE: std::time::Duration = std::time::Duration::from_secs(30);
+    const MAX: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+    let entry = gate.entry(key).or_insert((now, 0));
+    if now < entry.0 {
+        return false;
+    }
+    let delay = BASE.saturating_mul(1u32 << entry.1.min(10)).min(MAX);
+    *entry = (now + delay, entry.1 + 1);
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn sender_key_request_is_sent_once_then_backs_off() {
+        let mut gate = SenderKeyRequestGate::new();
+        let key = (ChannelId::new(), UserId::new(), 6);
+        let t0 = Instant::now();
+
+        // A burst of misses from one history sync: one request.
+        assert!(sender_key_request_due(&mut gate, key, t0));
+        for _ in 0..20 {
+            assert!(!sender_key_request_due(&mut gate, key, t0));
+        }
+        assert!(!sender_key_request_due(&mut gate, key, t0 + Duration::from_secs(29)));
+        // Unanswered: ask again after 30s, then the wait doubles.
+        assert!(sender_key_request_due(&mut gate, key, t0 + Duration::from_secs(30)));
+        assert!(!sender_key_request_due(&mut gate, key, t0 + Duration::from_secs(89)));
+        assert!(sender_key_request_due(&mut gate, key, t0 + Duration::from_secs(90)));
+
+        // Another device of the same sender is gated on its own.
+        assert!(sender_key_request_due(&mut gate, (key.0, key.1, 1), t0));
+
+        // SKDM arrived (entry removed): the next miss asks immediately.
+        gate.remove(&key);
+        assert!(sender_key_request_due(&mut gate, key, t0 + Duration::from_secs(91)));
     }
 }

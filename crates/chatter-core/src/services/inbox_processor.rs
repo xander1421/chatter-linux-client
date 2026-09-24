@@ -286,6 +286,11 @@ impl InboxEventProcessor {
             }
 
             InboxEvent::SenderKeyNeeded { channel_id, sender_id } => {
+                // The inbox route does not carry the sender's device; gate it
+                // under device 0 so it shares one backoff per sender.
+                if !self.message_service.should_request_sender_key(*channel_id, *sender_id, 0) {
+                    return true;
+                }
                 tracing::info!(
                     channel_id = %channel_id,
                     sender_id = %sender_id,

@@ -243,6 +243,9 @@ pub struct MessageService {
             Vec<(std::time::Instant, crate::proto::chat_v1::Message)>,
         >,
     >>,
+    /// Backoff gate for outgoing `SenderKeyRequest`s — see
+    /// [`MessageService::should_request_sender_key`].
+    pub(crate) sender_key_requests: Arc<parking_lot::Mutex<group::SenderKeyRequestGate>>,
 }
 
 impl MessageService {
@@ -280,6 +283,7 @@ impl MessageService {
             event_bus,
             ephemeral_service,
             pending_group_decrypts: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
+            sender_key_requests: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
         }
     }
 

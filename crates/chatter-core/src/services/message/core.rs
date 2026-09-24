@@ -120,6 +120,12 @@ impl MessageService {
             wrap.encode_to_vec()
         };
 
+        // Sender-key channel: members who lack our current key get it BEFORE
+        // this message is encrypted, or they can never read it.
+        if require_encryption && !is_dm {
+            self.distribute_sender_key_to_new_members(channel_id).await?;
+        }
+
         let (content_to_send, skdm_opt) = self.prepare_encrypted_content(
             auth_client,
             channel_id,
