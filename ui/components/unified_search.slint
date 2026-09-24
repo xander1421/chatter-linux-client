@@ -359,10 +359,44 @@ export component UnifiedSearch inherits Rectangle {
                     color: Colors.text-muted;
                     font-size: Typography.sm;
                 }
-                if root.person-status == "": Text {
-                    text: "Press ↵ to find @" + root.query;
-                    color: Colors.text-secondary;
-                    font-size: Typography.sm;
+                // Tappable: a phone user has no ↵ to press, and the IME's
+                // action key is not guaranteed to reach `accepted`.
+                // `person-handle` is the query with a leading "@" dropped.
+                if root.person-status == "": Rectangle {
+                    height: Spacing.touch-target-min;
+                    border-radius: Spacing.radius-sm;
+                    background: find-touch.has-hover ? Colors.surface-hover : transparent;
+                    find-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.resolve(root.query); }
+                    }
+                    HorizontalLayout {
+                        padding-left: Spacing.md;
+                        padding-right: Spacing.md;
+                        spacing: Spacing.sm;
+                        Text {
+                            text: "👤";
+                            color: Colors.primary;
+                            font-size: Typography.sm;
+                            width: 20px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: "Find @" + root.person-handle;
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: "↵";
+                            color: Colors.text-muted;
+                            font-size: Typography.sm;
+                            vertical-alignment: center;
+                        }
+                    }
                 }
             }
 

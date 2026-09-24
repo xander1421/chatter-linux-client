@@ -36,6 +36,14 @@ fn looks_like_handle(q: &str) -> bool {
     }
 }
 
+/// The person-lookup form of a query: trimmed, one leading `@` dropped.
+/// People type handles the way the app shows them (`@nick.123`); the `@` is
+/// display decoration, not part of the handle the lookup hashes.
+fn person_query(q: &str) -> &str {
+    let q = q.trim();
+    q.strip_prefix('@').unwrap_or(q)
+}
+
 /// True when `q` is resolvable to a person: a full handle OR a pasted
 /// `chatter://u/…` username link (shape check lives in core).
 fn resolvable_person_query(q: &str) -> bool {
@@ -64,7 +72,9 @@ fn wire_changed(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         // People: flag handle-shaped queries (enables the resolve-on-Enter
         // prompt) and invalidate any prior resolution for the new query.
         if let Some(w) = weak.upgrade() {
-            w.set_unified_search_query_is_handle(resolvable_person_query(&query_str));
+            let person = person_query(&query_str);
+            w.set_unified_search_query_is_handle(resolvable_person_query(person));
+            w.set_unified_search_person_handle(person.into());
             w.set_unified_search_person_status("".into());
         }
 
@@ -108,7 +118,7 @@ fn wire_resolve(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
     window.on_unified_search_resolve(move |query: SharedString| {
-        let handle = query.to_string();
+        let handle = person_query(&query).to_string();
         if !resolvable_person_query(&handle) {
             return;
         }
@@ -413,4 +423,16 @@ fn search_messages(ui_ctx: &Arc<ChatterClient>, query: &str) -> Vec<SearchResult
         });
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn person_query_drops_one_leading_at() {
+        assert_eq!(person_query(" @dev13883.75 "), "dev13883.75");
+        assert_eq!(person_query("dev13883.75"), "dev13883.75");
+        assert!(resolvable_person_query(person_query("@dev13883.75")));
+    }
 }

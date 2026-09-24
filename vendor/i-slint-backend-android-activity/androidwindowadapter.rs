@@ -1033,6 +1033,17 @@ impl AndroidWindowAdapter {
                     }
                     InputStatus::Handled
                 }
+                // The IME's action key (Done/Go/Search on a single-line field)
+                // arrives from GameActivity as a TextAction, not a KeyEvent, so
+                // it was dropped: TextInput `accepted` never fired on Android
+                // (login, PIN, search-by-handle). It is the Return of a
+                // single-line field, so deliver it as one.
+                InputEvent::TextAction(_) => {
+                    let text: SharedString = Key::Return.into();
+                    self.try_dispatch_key_event(WindowEvent::KeyPressed { text: text.clone() });
+                    self.try_dispatch_key_event(WindowEvent::KeyReleased { text });
+                    InputStatus::Handled
+                }
                 _ => InputStatus::Unhandled,
             });
 
