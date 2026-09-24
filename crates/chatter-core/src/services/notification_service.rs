@@ -189,17 +189,22 @@ impl Default for NotificationService {
 /// Spawn a task that listens to the domain event bus and dispatches user-
 /// visible notifications via `NotificationService`.
 ///
-/// Filter policy lives here (not in the UI / client facade):
-/// * Suppress messages the current user sent.
-/// * Suppress messages for the currently active channel (user is looking
-///   at them; notification would be noise).
+/// Filter policy lives here (not in the UI / client facade) — see
+/// [`should_notify_message`].
 /// * Show reactions from other users as low-priority notifications.
+///
+/// "Who am I" comes from the settings-backed `UserService::current_user_id`,
+/// NOT `AuthState`: the device-link bring-up never calls
+/// `AuthState::set_logged_in`, so on a freshly linked device `AuthState` says
+/// nobody is logged in and every self-synced copy of our own send (SyncSent)
+/// used to raise a notification (F11).
 ///
 /// Task exits when the event bus closes; returns the `JoinHandle` for the
 /// caller to track alongside other lifecycle tasks.
 pub fn spawn_notification_listener(
     event_bus: crate::events::EventBus,
-    auth_state: crate::state::AuthState,
+    // ponytail: unused since F11; drop it with the argument at the sole caller
+    // (client/notification.rs).
     chat_state: crate::state::ChatState,
     user_service: std::sync::Arc<crate::services::user::UserService>,
     notification_service: std::sync::Arc<NotificationService>,
@@ -221,19 +226,12 @@ pub fn spawn_notification_listener(
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
 
-            let auth_data = auth_state.get();
+            let me = user_service.current_user_id().ok();
             let chat_data = chat_state.get();
 
             match &event {
                 DomainEvent::MessageReceived { message } => {
-                    if let (Some(sender), Some(current)) =
-                        (&message.sender_id, &auth_data.current_user_id)
-                    {
-                        if sender == current {
-                            continue;
-                        }
-                    }
-                    if chat_data.active_channel_id == Some(message.conversation_id) {
+                    if !should_notify_message(message, me.as_ref(), chat_data.active_channel_id) {
                         continue;
                     }
 
@@ -250,7 +248,7 @@ pub fn spawn_notification_listener(
                     );
                 }
                 DomainEvent::ReactionAdded { emoji, reactor_id, .. } => {
-                    if Some(*reactor_id) == auth_data.current_user_id {
+                    if me.is_none() || Some(*reactor_id) == me {
                         continue;
                     }
                     let _ = notification_service.show_message_notification(
@@ -395,9 +393,48 @@ pub fn spawn_notification_listener(
     })
 }
 
+/// Whether a `MessageReceived` should raise an OS notification.
+///
+/// * Never for our own message — every path that files one of ours (live
+///   channel echo, SyncSent from our other device, local call-history rows)
+///   stamps `sender_id` with our id.
+/// * Never when we cannot say who we are (`me == None`): the self-check would
+///   be a no-op, and a toast for your own message is the worse failure.
+/// * Never for the conversation on screen.
+fn should_notify_message(
+    message: &crate::domain::message::Message,
+    me: Option<&crate::domain::ids::UserId>,
+    active_channel_id: Option<crate::domain::ids::ChannelId>,
+) -> bool {
+    let Some(me) = me else { return false };
+    message.sender_id.as_ref() != Some(me) && active_channel_id != Some(message.conversation_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn own_message_never_notifies() {
+        use crate::domain::ids::{ChannelId, UserId};
+        use crate::domain::message::{ConversationType, Message};
+
+        let me = UserId::new();
+        let peer = UserId::new();
+        let other_chat = ChannelId::new();
+        let msg = |sender| Message::new_text(ChannelId::new(), ConversationType::ServerDm, Some(sender), "hi".into(), 1);
+
+        // Ours: silent whether or not some other chat is open.
+        assert!(!should_notify_message(&msg(me), Some(&me), None));
+        assert!(!should_notify_message(&msg(me), Some(&me), Some(other_chat)));
+        // Identity unknown (e.g. AuthState never set): fail closed.
+        assert!(!should_notify_message(&msg(peer), None, None));
+        // A peer's message in a background chat notifies…
+        let m = msg(peer);
+        assert!(should_notify_message(&m, Some(&me), Some(other_chat)));
+        // …but not in the chat on screen.
+        assert!(!should_notify_message(&m, Some(&me), Some(m.conversation_id)));
+    }
 
     #[test]
     fn test_default_detail_level_is_none() {

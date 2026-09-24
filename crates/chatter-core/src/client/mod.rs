@@ -2258,6 +2258,20 @@ impl ChatterClient {
             return Err(ClientError::AlreadyStarted);
         }
 
+        // Login and register set AuthState themselves; a device that was
+        // LINKED reaches here with it empty, and every reader of it (the
+        // own-message notification gate among them) went blind until an app
+        // restart. Fill it from the persisted identity.
+        if self.auth_state().get().current_user_id.is_none() {
+            let sessions = self.sessions();
+            if let (Some(user_id), Some(device_id)) =
+                (sessions.current_user_id(), sessions.current_device_id())
+            {
+                let name = self.display_name(&user_id);
+                self.auth_state().set_logged_in(user_id, device_id, name);
+            }
+        }
+
         // ── Infrastructure init ─────────────────────────────────────
         self.ctx.init_device_inbox_provider();
         self.ctx.init_group_fanout();
