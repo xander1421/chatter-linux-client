@@ -4,6 +4,12 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 
+// Height of the on-screen keyboard. Only the Window can read
+// `virtual-keyboard-size`, so `main.slint` mirrors it here.
+export global VirtualKeyboard {
+    in-out property <length> height: 0px;
+}
+
 export component ModalContainer inherits Rectangle {
     in property <bool> show: false;
     in property <length> modal-width: 480px;
@@ -67,47 +73,70 @@ export component ModalContainer inherits Rectangle {
         }
     }
 
-    // Modal card - centered and sized to content
-    Rectangle {
-        accessible-role: groupbox;
-        accessible-label: "Modal dialog";
-        
-        // Responsive width: cap at viewport width minus padding
-        width: root.full-screen ? parent.width : min(root.modal-width, parent.width - 32px);
+    // The Android window does not shrink for the keyboard, so it covers the
+    // card's lower edge — Save/Cancel in Edit Profile were unreachable
+    // (OPEN-ITEMS §112i). The card therefore sits in a Flickable that is
+    // exactly this container's size and NEVER resizes: Slint measures a
+    // Flickable without the part the keyboard covers
+    // (`geometry_without_virtual_keyboard`, i-slint-core flickable.rs), so that
+    // strip becomes scroll range, and core scrolls the focused item into view
+    // when the keyboard appears (`set_window_item_virtual_keyboard`). Nothing
+    // is resized or re-laid-out under the focused field — shrinking the card
+    // by the keyboard height instead broke text entry in every modal.
+    //
+    // Interactive only while the keyboard is up: an interactive Flickable
+    // delays every press and takes taps outside the card from the backdrop,
+    // neither of which is wanted when there is nothing to scroll. Full-screen
+    // pages keep their own scrolling and the automatic reveal.
+    Flickable {
+        width: root.width;
+        height: root.height;
+        viewport-width: self.width;
+        viewport-height: self.height;
+        interactive: !root.full-screen && VirtualKeyboard.height > 0;
 
-        // Height: by default sized to content (preferred-height of the children),
-        // capped at max-modal-height or viewport. When fill-height is set, expand
-        // straight to that cap so the body uses the available vertical space.
-        height: root.full-screen ? parent.height - root.bottom-inset
-            : root.fill-height
-            ? min(root.max-modal-height, parent.height - 48px)
-            : min(self.preferred-height, min(root.max-modal-height, parent.height - 48px));
+        // Modal card - centered and sized to content
+        Rectangle {
+            accessible-role: groupbox;
+            accessible-label: "Modal dialog";
+            
+            // Responsive width: cap at viewport width minus padding
+            width: root.full-screen ? root.width : min(root.modal-width, root.width - 32px);
 
-        // Centering — round to nearest pixel to avoid sub-pixel text rendering
-        x: root.full-screen ? 0 : Math.round((parent.width - self.width) / 2 / 1px) * 1px;
-        y: root.full-screen ? 0 : Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+            // Height: by default sized to content (preferred-height of the children),
+            // capped at max-modal-height or viewport. When fill-height is set, expand
+            // straight to that cap so the body uses the available vertical space.
+            height: root.full-screen ? root.height - root.bottom-inset
+                : root.fill-height
+                ? min(root.max-modal-height, root.height - 48px)
+                : min(self.preferred-height, min(root.max-modal-height, root.height - 48px));
 
-        // Full-screen is a PAGE, so it takes the page's colour. `Colors.surface`
-        // is the raised-card tone (#0A0A0B against a #000 background) — as a
-        // card it reads as elevation, but edge-to-edge it reads as a grey slab
-        // with a visible seam where it meets the black behind the floating dock.
-        background: root.full-screen ? Colors.background : Colors.surface;
-        border-radius: root.full-screen ? 0 : Spacing.radius-lg;
-        clip: true;
-        border-width: root.full-screen ? 0px : 1px;
-        border-color: Colors.neo-highlight-strong;
-        drop-shadow-blur: root.full-screen ? 0px : Spacing.neo-blur-lg;
-        drop-shadow-offset-x: root.full-screen ? 0px : Spacing.neo-offset-lg;
-        drop-shadow-offset-y: root.full-screen ? 0px : Spacing.neo-offset-lg;
-        drop-shadow-color: Colors.neo-shadow-strong;
+            // Centering — round to nearest pixel to avoid sub-pixel text rendering
+            x: root.full-screen ? 0 : Math.round((root.width - self.width) / 2 / 1px) * 1px;
+            y: root.full-screen ? 0 : Math.round((root.height - self.height) / 2 / 1px) * 1px;
 
-        // Block clicks on modal from closing
-        TouchArea {
-            width: 100%;
-            height: 100%;
+            // Full-screen is a PAGE, so it takes the page's colour. `Colors.surface`
+            // is the raised-card tone (#0A0A0B against a #000 background) — as a
+            // card it reads as elevation, but edge-to-edge it reads as a grey slab
+            // with a visible seam where it meets the black behind the floating dock.
+            background: root.full-screen ? Colors.background : Colors.surface;
+            border-radius: root.full-screen ? 0 : Spacing.radius-lg;
+            clip: true;
+            border-width: root.full-screen ? 0px : 1px;
+            border-color: Colors.neo-highlight-strong;
+            drop-shadow-blur: root.full-screen ? 0px : Spacing.neo-blur-lg;
+            drop-shadow-offset-x: root.full-screen ? 0px : Spacing.neo-offset-lg;
+            drop-shadow-offset-y: root.full-screen ? 0px : Spacing.neo-offset-lg;
+            drop-shadow-color: Colors.neo-shadow-strong;
+
+            // Block clicks on modal from closing
+            TouchArea {
+                width: 100%;
+                height: 100%;
+            }
+
+            // The actual content provided by users of ModalContainer
+            @children
         }
-
-        // The actual content provided by users of ModalContainer
-        @children
     }
 }

@@ -71,6 +71,17 @@ export component Input inherits Rectangle {
                 animate opacity { duration: 150ms; }
             }
 
+            // Full-area touch target so a tap in the side padding still focuses
+            // the input (except on the eye toggle). It sits BENEATH the
+            // TextInput: declared after it, it took every tap first, so the
+            // TextInput never saw a press and the caret could not be placed by
+            // tapping, nor text selected by dragging (OPEN-ITEMS §112o).
+            TouchArea {
+                width: parent.width - (root.password ? 36px : 0px);
+                enabled: !root.disabled;
+                clicked => { input.focus(); }
+            }
+
             // Actual text input (full width for reliable touch targeting)
             input := TextInput {
                 x: Spacing.md;
@@ -114,14 +125,6 @@ export component Input inherits Rectangle {
                         input.focus();
                     }
                 }
-            }
-
-            // Full-area touch target to ensure tapping anywhere focuses the input
-            // (Except on the eye toggle area)
-            TouchArea {
-                width: parent.width - (root.password ? 36px : 0px);
-                enabled: !root.disabled;
-                clicked => { input.focus(); }
             }
         }
 

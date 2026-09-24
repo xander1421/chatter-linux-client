@@ -98,6 +98,32 @@ pub struct AndroidWindowAdapter {
     /// cursor and would drag the caret back (§112o). Armed here, disarmed by
     /// the first push that matches it.
     stale_commit_cursor: Cell<Option<usize>>,
+    /// The TextInput the input method was last enabled for. Every field above
+    /// describes THIS item's editing session, not the input method's in
+    /// general, so it is all forgotten when the client changes.
+    ///
+    /// Held weakly on purpose: Slint sends no FocusOut — hence no Disable —
+    /// for a focused TextInput destroyed with its component (a modal behind
+    /// an `if`, the popped conversation pane). A weak that no longer upgrades
+    /// is the only sign that happened. Without it the dead field's text and
+    /// composition stayed in GameTextInput and in the fields above, and the
+    /// next tap's `finish_composing` replayed them into whatever field came
+    /// next — the uncleareable leak in docs/OPEN-ITEMS.md §112m.
+    ime_client: RefCell<Option<i_slint_core::item_tree::ItemWeak>>,
+    /// Set while an input-method TextEvent is being dispatched into Slint.
+    /// Updates Slint raises meanwhile are parked in `deferred_ime_update` and
+    /// only the last one is pushed, once the event is fully applied.
+    ///
+    /// Core applies an IME commit in two steps: `insert()` puts the caret at
+    /// the END of the inserted text and notifies (text.rs `insert` ->
+    /// `set_cursor_position` -> `update_ime`), and only then is the event's
+    /// own cursor applied and notified. Pushed as they came, the first moved
+    /// GameTextInput's caret to the end, and the second — the correct one —
+    /// matched what the IME had last reported and was dropped as an echo. So
+    /// a tap mid-text reverted to the end and typing appended there (§112o:
+    /// "push sel=(1,1)", "inbound sel=(1,1)", then "sel=(7,7)").
+    ime_dispatching: Cell<bool>,
+    deferred_ime_update: RefCell<Option<i_slint_core::window::InputMethodProperties>>,
 }
 
 impl WindowAdapter for AndroidWindowAdapter {
@@ -244,14 +270,36 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
                     self.app.set_ime_editor_info(input_type, action, options);
                     self.ime_input_type.set(Some((props.input_type, multi_line)));
                 }
+                // A different field, or the first one: nothing recorded about
+                // the previous client's session applies to this one (§112m).
+                // Keyed on item identity, so the repeated Enables Slint sends
+                // for the SAME field while typing never reach this — that is
+                // what separates it from the per-Enable reset that wiped
+                // keystrokes. The push below then hands GameTextInput this
+                // field's own state, unfiltered by the old field's guards.
+                let focus = WindowInner::from_pub(&self.window).focus_item.borrow().clone();
+                if self.ime_client.borrow().as_ref() != Some(&focus) {
+                    self.forget_ime_session();
+                    *self.ime_client.borrow_mut() = Some(focus);
+                }
+                // A parked Update belongs to the field that had focus.
+                self.deferred_ime_update.take();
                 self.app.show_soft_input(true);
                 // New field focused — force the next state push.
                 *self.last_ime_epoch.borrow_mut() = None;
                 self.ime_states_seen.borrow_mut().clear();
                 props
             }
-            InputMethodRequest::Update(props) => props,
+            InputMethodRequest::Update(props) => {
+                if self.ime_dispatching.get() {
+                    *self.deferred_ime_update.borrow_mut() = Some(props);
+                    return;
+                }
+                props
+            }
             InputMethodRequest::Disable => {
+                // A parked Update belongs to the field losing focus.
+                self.deferred_ime_update.take();
                 // Clear a composition on the way out, so a field that loses
                 // focus cannot leave one behind for the next field (§112m).
                 // Conditional, for the restart-storm reason described on the
@@ -417,6 +465,18 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
         });
     }
 
+    /// Modals and the conversation pane re-take focus when they close
+    /// (`ui/main.slint`, the `changed active-modal` / `changed
+    /// mobile-show-chat` handlers), which is exactly the moment a focused
+    /// field may have been destroyed without a FocusOut (§112m).
+    fn handle_focus_change(
+        &self,
+        _old: Option<i_slint_core::item_tree::ItemRc>,
+        _new: Option<i_slint_core::item_tree::ItemRc>,
+    ) {
+        self.release_vanished_ime_client(true);
+    }
+
     fn safe_area_inset(&self) -> PhysicalEdges {
         if self.fullscreen.get() {
             Default::default()
@@ -427,6 +487,54 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
 }
 
 impl AndroidWindowAdapter {
+    /// Drop everything recorded about the current client's editing session.
+    fn forget_ime_session(&self) {
+        self.had_compose.set(false);
+        *self.last_ime_text.borrow_mut() = None;
+        self.last_ime_selection.set((0, 0));
+        *self.pending_self_echo.borrow_mut() = None;
+        self.stale_commit_cursor.set(None);
+        *self.last_pushed_text.borrow_mut() = None;
+        self.last_pushed_cursor.set(0);
+        *self.last_ime_epoch.borrow_mut() = None;
+        self.ime_states_seen.borrow_mut().clear();
+    }
+
+    /// Whether the TextInput the input method belongs to was destroyed
+    /// without losing focus first (see `ime_client`).
+    fn ime_client_vanished(&self) -> bool {
+        self.ime_client.borrow().as_ref().is_some_and(|c| c.upgrade().is_none())
+    }
+
+    /// Forget a destroyed field's session, so nothing of it can be replayed
+    /// into the next one (§112m). With `disable`, also do what Disable does
+    /// for a live field, which Slint never sends for a destroyed one: empty
+    /// GameTextInput — unconditionally, as no live field owns that text — and
+    /// let `set_text_input_focused(false)` route through the Disable arm to
+    /// hide the keyboard and clear the window's text-input-focused flag,
+    /// which is otherwise left true.
+    ///
+    /// `disable` only from a completed focus change. From a touch or an
+    /// inbound event the same batch may go on to focus a new field, and the
+    /// IME's answer to an empty push could then land on it and wipe it.
+    fn release_vanished_ime_client(&self, disable: bool) {
+        use android_activity::input::{TextInputState, TextSpan};
+        if !self.ime_client_vanished() {
+            return;
+        }
+        *self.ime_client.borrow_mut() = None;
+        self.forget_ime_session();
+        if !disable {
+            return;
+        }
+        self.app.set_text_input_state(TextInputState {
+            text: String::new(),
+            selection: TextSpan { start: 0, end: 0 },
+            compose_region: None,
+        });
+        WindowInner::from_pub(&self.window).set_text_input_focused(false);
+    }
+
     pub fn new(app: AndroidApp) -> Rc<Self> {
         let java_helper = JavaHelper::new(&app).unwrap_or_else(|e| print_jni_error(&app, e));
         Rc::<Self>::new_cyclic(|w| Self {
@@ -457,6 +565,9 @@ impl AndroidWindowAdapter {
             last_pushed_text: RefCell::default(),
             last_pushed_cursor: Cell::new(0),
             last_ime_text: RefCell::default(),
+            ime_client: RefCell::default(),
+            ime_dispatching: Cell::new(false),
+            deferred_ime_update: RefCell::default(),
         })
     }
 
@@ -669,6 +780,11 @@ impl AndroidWindowAdapter {
                         MotionAction::Down => {
                             let position = position_for_event(motion_event, offset, scale);
 
+                            // A field destroyed since the last focus change
+                            // must be released first, or `finish_composing`
+                            // replays its text into the field being tapped
+                            // (§112m).
+                            self.release_vanished_ime_client(false);
                             // Chatter patch: a tap must not drag the composing
                             // region along with the caret (§112o).
                             if self.had_compose.get() {
@@ -779,6 +895,15 @@ impl AndroidWindowAdapter {
                 }
                 InputEvent::TextEvent(state) => {
                     self.show_cursor_handles.set(false);
+                    // No live field owns the input method: this is the IME
+                    // still reporting on a field that was destroyed (or a
+                    // late report after it was released). Delivering it would
+                    // hand the dead field's text to whatever is focused next
+                    // (§112m); recording it would poison the echo guards.
+                    if self.ime_client.borrow().is_none() || self.ime_client_vanished() {
+                        self.release_vanished_ime_client(false);
+                        return InputStatus::Handled;
+                    }
                     // Drop GameTextInput's echo of our own finish_composing
                     // push. It carries the pre-tap cursor and would undo the
                     // caret move the tap just made (§112o).
@@ -897,7 +1022,15 @@ impl AndroidWindowAdapter {
                             ..Default::default()
                         }
                     };
+                    self.ime_dispatching.set(true);
                     runtime_window.process_key_input(event);
+                    self.ime_dispatching.set(false);
+                    if let Some(props) = self.deferred_ime_update.take() {
+                        i_slint_core::window::WindowAdapterInternal::input_method_request(
+                            self,
+                            InputMethodRequest::Update(props),
+                        );
+                    }
                     InputStatus::Handled
                 }
                 _ => InputStatus::Unhandled,
