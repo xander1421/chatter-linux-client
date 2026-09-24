@@ -17,11 +17,10 @@ pub fn wire_logout(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = weak_window.clone();
 
         tokio::spawn(async move {
-            // Attempt logout (ignore errors - we logout locally regardless)
-            let _ = ui_ctx.do_logout().await;
-
-            // Update auth state
-            ui_ctx.auth_state().set_logged_out();
+            // Local sign-out and teardown happen even if the server call fails.
+            if let Err(e) = ui_ctx.logout().await {
+                tracing::warn!("logout: {e}");
+            }
 
             // Switch to login view
             let _ = slint::invoke_from_event_loop(move || {

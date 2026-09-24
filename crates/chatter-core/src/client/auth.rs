@@ -784,10 +784,14 @@ impl ChatterClient {
     }
 
     /// Log out and shut down all background services.
+    /// Sign out: tell the server, wipe local credentials, and stop every
+    /// background loop. The teardown runs even if the first step fails, so a
+    /// signed-out client never keeps syncing and a later login can `start()`.
     pub async fn logout(&self) -> Result<(), ClientError> {
-        self.auth().do_logout().await?;
+        let result = self.auth().do_logout().await;
         self.shutdown().await;
         self.auth_state().set_logged_out();
+        result?;
         Ok(())
     }
 

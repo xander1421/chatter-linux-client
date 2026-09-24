@@ -1818,10 +1818,6 @@ impl ChatterClient {
     }
 
     /// Local logout (best-effort server notify + clear local state).
-    pub async fn do_logout(&self) -> Result<(), crate::services::auth_service::AuthError> {
-        self.auth().do_logout().await
-    }
-
     // ── State stores ────────────────────────────────────────────────────
 
     pub fn auth_state(&self) -> &AuthState { &self.services.auth_state }
