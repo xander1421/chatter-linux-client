@@ -56,7 +56,7 @@ pub(crate) fn update_unread_count(
 /// from the unified conversation repo). The UI no longer walks per-bucket
 /// Slint models — that aggregation is business logic and lives in the service.
 pub(crate) fn recompute_total_unread(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let total = ui_ctx.total_unread_count();
+    let total = ui_ctx.unread_conversation_count();
     window.set_total_unread_count(total as i32);
 }
 

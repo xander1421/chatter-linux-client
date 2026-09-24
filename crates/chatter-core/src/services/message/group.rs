@@ -414,20 +414,25 @@ impl MessageService {
                 // sender's CURRENT iteration (libsignal
                 // `create_sender_key_distribution_message`), so a message they
                 // sent before distributing to us has no key on this device and
-                // never will — sender-key semantics, not a retry failure.
-                Err(e) if e.to_string().contains("old counter") => tracing::info!(
-                    sender_id = %sender_id,
-                    device_id,
-                    message_id = %proto_msg.id,
-                    error = %e,
-                    "Parked message predates the sender key we received; it is undecryptable here"
-                ),
-                Err(e) => tracing::warn!(
-                    sender_id = %sender_id,
-                    device_id,
-                    error = %e,
-                    "Retry decrypt still failed after SKDM"
-                ),
+                // never will: only the sender can give us the content again.
+                // Any other failure after the SKDM is equally terminal here.
+                Err(e) => {
+                    tracing::info!(
+                        sender_id = %sender_id,
+                        device_id,
+                        message_id = %proto_msg.id,
+                        error = %e,
+                        "Parked message still undecryptable after SKDM; requesting a resend"
+                    );
+                    self.request_group_resend(
+                        channel_id,
+                        sender_id,
+                        device_id,
+                        &proto_msg,
+                        &group_encrypted.ciphertext,
+                    )
+                    .await;
+                }
             }
         }
     }
@@ -611,6 +616,274 @@ impl MessageService {
         Ok(())
     }
 
+    /// RECEIVER half of Signal's sender-key retry: ask the device that sent a
+    /// group message we cannot decrypt to resend it pairwise.
+    ///
+    /// The SKDM a sender hands us starts at its chain's CURRENT iteration, so a
+    /// message it sent before we held the key ("old counter") is unreadable
+    /// here for good; only the sender can give us the content again
+    /// (Signal-Desktop `onRetryRequest`). One request per (message, device).
+    pub async fn request_group_resend(
+        &self,
+        channel_id: ChannelId,
+        sender_id: UserId,
+        device_id: u32,
+        proto_msg: &crate::proto::chat_v1::Message,
+        ciphertext: &[u8],
+    ) {
+        use crate::services::current_user::CurrentUserProvider;
+
+        // Our own sender-key ciphertext from this very device is undecryptable
+        // by design, not lost.
+        let us = (
+            self.settings_repo.current_user_id().ok(),
+            self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID).ok().flatten(),
+        );
+        if us == (Some(sender_id), Some(device_id)) {
+            return;
+        }
+        // Already held — decrypted before (then "old counter" is a genuine
+        // duplicate), or recovered by an earlier resend, which is stored under
+        // the same (sender, sent_at) but its own id.
+        let held = proto_msg
+            .id
+            .parse::<crate::domain::ids::MessageId>()
+            .ok()
+            .and_then(|id| self.message_repo.get(&id).ok().flatten())
+            .is_some()
+            || self
+                .message_repo
+                .get_by_conversation_sender_timestamp(&channel_id, &sender_id, proto_msg.timestamp)
+                .ok()
+                .flatten()
+                .is_some();
+        if held {
+            return;
+        }
+        {
+            let mut asked = self.group_retry_requests.lock();
+            // ponytail: cleared wholesale at 4096 entries; a forgotten entry
+            // costs at most one repeat request, which the sender answers again.
+            if asked.len() >= 4096 {
+                asked.clear();
+            }
+            if !asked.insert((proto_msg.id.clone(), device_id)) {
+                return;
+            }
+        }
+
+        let dem = match crate::services::signal::SignalService::group_decryption_error(
+            ciphertext,
+            proto_msg.timestamp,
+            device_id,
+        ) {
+            Ok(dem) => dem,
+            Err(e) => {
+                tracing::warn!(%channel_id, %sender_id, device_id, error = %e,
+                    "Could not build DecryptionErrorMessage for a group message");
+                return;
+            }
+        };
+        match self.send_decryption_error_report(&sender_id, device_id, dem).await {
+            Ok(()) => tracing::info!(
+                %channel_id, %sender_id, device_id, message_id = %proto_msg.id,
+                "Asked the sender to resend a group message we cannot decrypt"
+            ),
+            Err(e) => tracing::warn!(
+                %channel_id, %sender_id, device_id, message_id = %proto_msg.id, error = %e,
+                "Failed to send DecryptionErrorMessage for a group message"
+            ),
+        }
+    }
+
+    /// SENDER half of Signal's sender-key retry: `peer_id`'s device could not
+    /// decrypt the group message we sent at `timestamp_ms` (server time, epoch
+    /// millis). Resend its content pairwise to that one device, as a
+    /// `DataMessage` stamped with the message's server timestamp so the peer
+    /// files it under the same (sender, sent_at) as the copy it could not read.
+    ///
+    /// Bounded like Signal-Desktop's send log: only our own messages, only for
+    /// 24h, and only to a device of a CURRENT member of that channel — a
+    /// removed member must not get content back by asking for it.
+    pub async fn resend_on_decryption_error(
+        &self,
+        peer_id: &UserId,
+        peer_device_id: u32,
+        timestamp_ms: u64,
+    ) {
+        match self.resend_group_message(peer_id, peer_device_id, timestamp_ms).await {
+            Ok(true) => tracing::info!(%peer_id, peer_device_id, timestamp_ms,
+                "Resent a group message pairwise after the member's DecryptionErrorMessage"),
+            Ok(false) => tracing::info!(%peer_id, peer_device_id, timestamp_ms,
+                "Group resend request matched nothing we may resend"),
+            Err(e) => tracing::warn!(%peer_id, peer_device_id, timestamp_ms, error = %e,
+                "Failed to resend a group message"),
+        }
+    }
+
+    async fn resend_group_message(
+        &self,
+        peer_id: &UserId,
+        peer_device_id: u32,
+        timestamp_ms: u64,
+    ) -> Result<bool, MessageError> {
+        let Some(plaintext) = self.group_resend_content(peer_id, timestamp_ms)? else {
+            return Ok(false);
+        };
+        let sealed_body = self
+            .signal_service
+            .encrypt_message(&mut self.auth_client(), &peer_id.to_string(), peer_device_id, &plaintext)
+            .await
+            .map_err(|e| MessageError::EncryptionFailed(e.to_string()))?;
+        self.deposit_sealed_to_device(peer_id, peer_device_id, sealed_body).await?;
+        Ok(true)
+    }
+
+    /// The content `peer_id` may have back for our group message sent at
+    /// `timestamp_ms`, or `None` when the retention and membership bounds of
+    /// [`Self::resend_on_decryption_error`] say no.
+    fn group_resend_content(
+        &self,
+        peer_id: &UserId,
+        timestamp_ms: u64,
+    ) -> Result<Option<Vec<u8>>, MessageError> {
+        use crate::domain::message::ConversationType;
+        use crate::services::current_user::CurrentUserProvider;
+        const RETENTION_NS: u64 = 24 * 60 * 60 * 1_000_000_000;
+
+        let us = self.settings_repo.current_user_id()?;
+        // ponytail: scans our newest 1000 messages; add a (sender, sent_at
+        // range) repo query if one user sends more than that within 24h.
+        let Some(message) = self.message_repo.list_by_sender(&us, 1000)?.into_iter().find(|m| {
+            m.sent_at / 1_000_000 == timestamp_ms
+                && m.conversation_type == ConversationType::Channel
+                && !m.is_deleted
+        }) else {
+            return Ok(None);
+        };
+        if TimestampNanos::now().as_u64().saturating_sub(message.sent_at) > RETENTION_NS {
+            return Ok(None);
+        }
+        let is_member = self
+            .channel_repo
+            .list_members(&message.conversation_id)
+            .unwrap_or_default()
+            .iter()
+            .any(|m| m.user_id == *peer_id);
+        if !is_member {
+            return Ok(None);
+        }
+        Ok(self.rebuild_group_content(&message))
+    }
+
+    /// The pairwise `Content` for one of our stored channel messages: the
+    /// fields the original sender-key `DataMessage` carried (`core.rs`
+    /// `send_message`), rebuilt from the local row. `None` for content that
+    /// is not a user message.
+    fn rebuild_group_content(&self, message: &crate::domain::message::Message) -> Option<Vec<u8>> {
+        use crate::domain::message::MessageContent;
+        use crate::proto::content_v1::{content, Content, DataMessage};
+        use prost::Message as _;
+
+        let body = match &message.content {
+            MessageContent::Text(t) => t.clone(),
+            MessageContent::Mixed(m) => m.text.clone().unwrap_or_default(),
+            _ => return None,
+        };
+        let attachments = message
+            .attachments
+            .iter()
+            .filter_map(|id| self.attachment_repo.get(id).ok().flatten())
+            .filter_map(|a| a.to_pointer())
+            .collect();
+        let quote = message
+            .reply_to
+            .and_then(|id| self.message_repo.get(&id).ok().flatten())
+            .and_then(|orig| {
+                Some(crate::services::gateway::QuoteIntent {
+                    target_author_id: orig.sender_id?,
+                    target_timestamp: orig.sent_at,
+                    target_preview: message.reply_to_text.clone(),
+                })
+            });
+        let ttl = self
+            .ephemeral_service
+            .get_state(&message.id)
+            .ok()
+            .flatten()
+            .map(|e| e.ttl.as_secs() as u32);
+
+        let dm = DataMessage {
+            body,
+            attachments,
+            channel_id: message.conversation_id.to_string(),
+            // The SERVER timestamp, not the original client clock: it is the
+            // sent_at every member files this message (and its reactions,
+            // edits, deletes) under.
+            timestamp: message.sent_at,
+            quote: self.build_wire_quote(quote.as_ref()),
+            thread_id: message.thread_id.map(|id| id.to_string()).unwrap_or_default(),
+            mentioned_integrations: message.mentioned_integrations.iter().map(|id| id.to_string()).collect(),
+            targets_ai_bot: message.targets_ai_bot,
+            ephemeral: ttl.is_some(),
+            ephemeral_ttl_seconds: ttl.unwrap_or(0),
+            ..Default::default()
+        };
+        let mut content = Content {
+            timestamp: dm.timestamp,
+            content: Some(content::Content::DataMessage(dm)),
+            ..Default::default()
+        };
+        Self::pad_content_to_bucket(&mut content);
+        Some(content.encode_to_vec())
+    }
+
+    /// Deposit one sealed envelope in one device inbox, UAK-authorized when we
+    /// hold the peer's profile key (the same choice as
+    /// `send_decryption_error_report`).
+    async fn deposit_sealed_to_device(
+        &self,
+        peer_id: &UserId,
+        device_id: u32,
+        sealed_body: Vec<u8>,
+    ) -> Result<(), MessageError> {
+        use crate::services::current_user::CurrentUserProvider;
+
+        let sealed_message = crate::proto::chat_v1::SealedSenderMessage {
+            sealed_body,
+            server_key_id: self.signal_service.get_server_key_id(),
+            timestamp: TimestampNanos::now().as_u64(),
+        };
+        let us = self.settings_repo.current_user_id()?;
+        let uak = self
+            .user_repo
+            .get_friend_profile_key(&us, peer_id)
+            .ok()
+            .flatten()
+            .map(|pk| crate::crypto::derive_uak(&pk));
+        let peer = peer_id.to_string();
+        match uak {
+            Some(uak) => {
+                self.grpc_pool
+                    .anonymous_message_client()
+                    .send_sealed_message_with_uak(&peer, device_id, sealed_message, &uak)
+                    .await?;
+            }
+            None => {
+                tracing::warn!(
+                    %peer_id,
+                    reason = "no stored profile key to derive the peer's UAK",
+                    "SEALED SENDER DEGRADED: group resend delivered identified \
+                     (Basic auth) — the server WILL record us as the sender"
+                );
+                self.message_client()
+                    .send_sealed_message(&peer, device_id, sealed_message)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
     /// Pad a Content proto to the nearest standard bucket size for traffic analysis protection.
     ///
     /// The server validates that sealed sender ciphertexts match one of these plaintext bucket
@@ -697,5 +970,148 @@ mod tests {
         // SKDM arrived (entry removed): the next miss asks immediately.
         gate.remove(&key);
         assert!(sender_key_request_due(&mut gate, key, t0 + Duration::from_secs(91)));
+    }
+
+    /// Signal's sender-key retry, end to end between two real clients short of
+    /// the network hop: Bob cannot read Alice's message sent before her SKDM,
+    /// asks with a DecryptionErrorMessage, and Alice's pairwise resend lands in
+    /// Bob's channel under the message's (sender, sent_at).
+    #[tokio::test]
+    async fn pre_skdm_group_message_is_recovered_by_dem_and_resend() {
+        use crate::client::ChatterClient;
+        use crate::domain::channel::{Channel, ChannelType, MemberRole, Membership, NotificationPreference};
+        use crate::domain::ids::MessageId;
+        use crate::domain::message::{ConversationType, Message, MessageContent};
+        use crate::proto::{chat_v1, content_v1};
+        use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
+        use prost::Message as _;
+
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let client = |dir: &tempfile::TempDir, user: UserId| {
+            let c = ChatterClient::builder()
+                .server_url("http://localhost:1")
+                .data_dir(dir.path().to_str().unwrap())
+                .build()
+                .expect("build client");
+            let s = &c.messages().settings_repo;
+            s.set(keys::CURRENT_USER_ID, &user.to_string()).unwrap();
+            s.set(keys::CURRENT_DEVICE_ID, &1u32).unwrap();
+            c
+        };
+        let (alice_id, bob_id) = (UserId::new(), UserId::new());
+        let (da, db) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (alice, bob) = (client(&da, alice_id), client(&db, bob_id));
+        let channel_id = ChannelId::new();
+        for c in [&alice, &bob] {
+            let repo = &c.messages().channel_repo;
+            repo.insert(&Channel::new(channel_id, "g".into(), ChannelType::Private, alice_id)).unwrap();
+            for user_id in [alice_id, bob_id] {
+                repo.insert_membership(&Membership {
+                    channel_id,
+                    user_id,
+                    role: MemberRole::Member,
+                    joined_at: chrono::Utc::now(),
+                    last_read_message_id: None,
+                    is_muted: false,
+                    muted_until: None,
+                    notification_preference: NotificationPreference::default(),
+                })
+                .unwrap();
+            }
+        }
+
+        // Alice sends before Bob holds her key; the server stamps it T.
+        let plaintext = content_v1::Content {
+            content: Some(content_v1::content::Content::DataMessage(content_v1::DataMessage {
+                body: "sent before the SKDM".into(),
+                channel_id: channel_id.to_string(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+        .encode_to_vec();
+        let (ge, _) = alice.signal().encrypt_for_group(&channel_id, &plaintext).await.unwrap();
+        let server_ts = TimestampNanos::now().as_u64();
+        let message_id = MessageId::new();
+        alice
+            .messages()
+            .message_repo
+            .insert_outgoing(&Message {
+                id: message_id,
+                ..Message::new_text(
+                    channel_id,
+                    ConversationType::Channel,
+                    Some(alice_id),
+                    "sent before the SKDM".into(),
+                    server_ts,
+                )
+            })
+            .unwrap();
+
+        // Bob gets Alice's SKDM only now: it starts past the message.
+        let skdm = alice.signal().create_sender_key(&channel_id).await.unwrap();
+        bob.signal().process_sender_key(&alice_id, 1, &skdm).await.unwrap();
+        let server_copy = chat_v1::Message {
+            id: message_id.to_string(),
+            channel_id: channel_id.to_string(),
+            author_id: alice_id.to_string(),
+            author_device_id: 1,
+            timestamp: server_ts,
+            content: Some(chat_v1::message::Content {
+                r#type: Some(chat_v1::message::content::Type::Encrypted(chat_v1::EncryptedData {
+                    ciphertext: ge.encode_to_vec(),
+                    ..Default::default()
+                })),
+            }),
+            ..Default::default()
+        };
+        let inbound = ChannelInbound::new(bob.messages().clone(), bob.attachments().clone());
+        assert_eq!(inbound.ingest(&server_copy, channel_id, false).await, Ingested::Dropped,
+            "positive control: the pre-SKDM message is unreadable on its own");
+
+        // Bob's DEM names a sender-key message: no ratchet key, so Alice's
+        // gateway resends instead of archiving their 1:1 session.
+        let dem_bytes = crate::services::signal::SignalService::group_decryption_error(&ge.ciphertext, server_ts, 1).unwrap();
+        let dem = libsignal_protocol::DecryptionErrorMessage::try_from(dem_bytes.as_slice()).unwrap();
+        assert!(dem.ratchet_key().is_none());
+        assert_eq!(dem.device_id(), 1);
+        let ts_ms = dem.timestamp().epoch_millis();
+
+        // Alice's resend bounds: a non-member gets nothing back.
+        assert!(alice.messages().group_resend_content(&UserId::new(), ts_ms).unwrap().is_none());
+        let resent = alice.messages().group_resend_content(&bob_id, ts_ms).unwrap()
+            .expect("Alice finds the message she sent at that timestamp");
+
+        // Bob ingests it through the pairwise sealed DataMessage path.
+        let Some(content_v1::content::Content::DataMessage(dm)) =
+            content_v1::Content::decode(resent.as_slice()).unwrap().content
+        else {
+            panic!("resend is not a DataMessage");
+        };
+        let m = bob.messages();
+        let gateway = crate::services::gateway::MessageGateway::new(
+            (*m.signal_service).clone(),
+            m.message_repo.clone(),
+            m.channel_repo.clone(),
+            m.user_repo.clone(),
+            m.settings_repo.clone(),
+        );
+        gateway.store_data_message(dm, Some(alice_id)).await.unwrap();
+        let stored = m
+            .message_repo
+            .get_by_conversation_sender_timestamp(&channel_id, &alice_id, server_ts)
+            .unwrap()
+            .expect("the recovered message is filed under the server timestamp");
+        assert_eq!(stored.content, MessageContent::Text("sent before the SKDM".into()));
+
+        // A later re-fetch of the server copy neither duplicates it nor asks
+        // again (the first ingest above already recorded its one request).
+        assert_eq!(inbound.ingest(&server_copy, channel_id, false).await, Ingested::Dropped);
+        m.group_retry_requests.lock().clear();
+        m.request_group_resend(channel_id, alice_id, 1, &server_copy, &ge.ciphertext).await;
+        assert!(m.group_retry_requests.lock().is_empty());
     }
 }

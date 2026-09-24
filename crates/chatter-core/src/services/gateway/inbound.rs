@@ -429,6 +429,16 @@ pub enum SealedSenderResult {
         peer_device_id: u32,
         archived: bool,
     },
+    /// SENDER half of the sender-key retry: a peer's `DecryptionErrorMessage`
+    /// named a group message we sent (no ratchet key). The caller resends that
+    /// content pairwise to `(peer_id, peer_device_id)`
+    /// (`MessageService::resend_on_decryption_error`). `timestamp_ms` is the
+    /// failed message's server timestamp in epoch millis.
+    ResendRequested {
+        peer_id: UserId,
+        peer_device_id: u32,
+        timestamp_ms: u64,
+    },
     /// The sender is blocked. The envelope decrypted and the sender was
     /// authenticated — by the sealed sender certificate, or by holding the
     /// Double Ratchet session for the address it claimed — and the gateway

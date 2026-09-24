@@ -4,8 +4,10 @@
 //! and user sync operations. Runs as a background task with periodic
 //! sync cycles and immediate sync on reconnect.
 
+use std::future::Future;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
 
@@ -29,6 +31,50 @@ const SYNC_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// Short delay after reconnect before triggering sync.
 const RECONNECT_SYNC_DELAY: Duration = Duration::from_secs(2);
 
+/// The engine's own timer (initial and periodic) skips a cycle when some
+/// other trigger — usually the channel stream's per-connect catch-up —
+/// finished one this recently. That catch-up and the 2 s initial sync used to
+/// run back to back at every start.
+const TIMER_SKIP_IF_FRESH: Duration = Duration::from_secs(30);
+
+/// One sync cycle in flight at a time, and a burst of triggers that arrive
+/// while it runs costs at most ONE follow-up.
+///
+/// Every caller waits for a cycle that *started after it asked* — a trigger
+/// that arrives mid-cycle cannot be satisfied by that cycle (the channel
+/// stream's post-subscribe catch-up depends on this, OPEN-ITEMS §103), so the
+/// first waiter runs a follow-up and every other waiter rides on it.
+struct Coalescer {
+    /// Cycles started so far. Bumped under `last_done`'s lock, before the work.
+    started: AtomicU64,
+    /// Held for the whole cycle; holds when the last cycle finished.
+    last_done: tokio::sync::Mutex<Option<Instant>>,
+}
+
+impl Coalescer {
+    fn new() -> Self {
+        Self { started: AtomicU64::new(0), last_done: tokio::sync::Mutex::new(None) }
+    }
+
+    /// Run `cycle` unless a cycle that started after this call has finished by
+    /// the time the lock is ours, or one finished within `skip_if_fresh`
+    /// (`Duration::ZERO` = never skip on age). `None` when skipped.
+    async fn run<F: Future>(&self, skip_if_fresh: Duration, cycle: impl FnOnce() -> F) -> Option<F::Output> {
+        let seen = self.started.load(Ordering::SeqCst);
+        let mut last_done = self.last_done.lock().await;
+        if self.started.load(Ordering::SeqCst) != seen {
+            return None;
+        }
+        if last_done.is_some_and(|t| t.elapsed() < skip_if_fresh) {
+            return None;
+        }
+        self.started.fetch_add(1, Ordering::SeqCst);
+        let out = cycle().await;
+        *last_done = Some(Instant::now());
+        Some(out)
+    }
+}
+
 /// Sync engine orchestrating all sync operations.
 pub struct SyncEngine {
     channel_sync: ChannelSync,
@@ -37,6 +83,7 @@ pub struct SyncEngine {
     event_bus: EventBus,
     #[allow(dead_code)]
     settings_repo: Arc<SettingsRepository>,
+    coalescer: Coalescer,
 }
 
 /// Result of a full sync cycle.
@@ -78,13 +125,15 @@ impl SyncEngine {
             ),
             event_bus,
             settings_repo,
+            coalescer: Coalescer::new(),
         }
     }
 
     /// Run a full sync cycle: channels → messages → users.
     ///
     /// Channels are synced first so we know which channels to fetch messages for.
-    pub async fn sync_all(&self) -> SyncCycleResult {
+    /// Only ever called through `coalescer` — never run two of these at once.
+    async fn sync_all(&self) -> SyncCycleResult {
         let start = std::time::Instant::now();
         let mut result = SyncCycleResult::default();
 
@@ -155,7 +204,7 @@ impl SyncEngine {
         // Initial sync after a short delay (let connections stabilize)
         tokio::select! {
             _ = tokio::time::sleep(RECONNECT_SYNC_DELAY) => {
-                self.sync_all().await;
+                self.sync_if_stale(TIMER_SKIP_IF_FRESH).await;
             }
             _ = shutdown_rx.changed() => {
                 tracing::info!("Sync engine shutting down before initial sync");
@@ -170,7 +219,7 @@ impl SyncEngine {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    self.sync_all().await;
+                    self.sync_if_stale(TIMER_SKIP_IF_FRESH).await;
                 }
                 _ = shutdown_rx.changed() => {
                     tracing::info!("Sync engine shutting down");
@@ -180,14 +229,99 @@ impl SyncEngine {
         }
     }
 
-    /// Trigger an immediate sync (e.g., after reconnect).
-    pub async fn trigger_sync(&self) -> SyncCycleResult {
+    /// Trigger an immediate sync (e.g., after reconnect). Waits for a cycle
+    /// that started after this call; `None` when another trigger's cycle was
+    /// that one.
+    pub async fn trigger_sync(&self) -> Option<SyncCycleResult> {
         tracing::info!("Triggered immediate sync");
-        self.sync_all().await
+        self.sync_if_stale(Duration::ZERO).await
+    }
+
+    /// Like [`Self::trigger_sync`], but also skipped when a cycle finished
+    /// within `max_age`.
+    pub async fn sync_if_stale(&self, max_age: Duration) -> Option<SyncCycleResult> {
+        let result = self.coalescer.run(max_age, || self.sync_all()).await;
+        if result.is_none() {
+            tracing::debug!("Sync trigger coalesced into another cycle");
+        }
+        result
     }
 
     /// Check if this is the first sync (no channels synced yet).
     pub fn is_initial_sync(&self) -> bool {
         self.channel_sync.last_synced_at().is_none()
+    }
+}
+
+#[cfg(test)]
+mod coalescer_tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    /// A cycle that counts itself and blocks until `release` fires.
+    async fn gated_cycle(runs: &AtomicUsize, release: &tokio::sync::Notify) {
+        runs.fetch_add(1, Ordering::SeqCst);
+        release.notified().await;
+    }
+
+    #[tokio::test]
+    async fn a_burst_during_a_cycle_costs_exactly_one_follow_up() {
+        let c = Arc::new(Coalescer::new());
+        let runs = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(tokio::sync::Notify::new());
+
+        let spawn = |c: Arc<Coalescer>, runs: Arc<AtomicUsize>, release: Arc<tokio::sync::Notify>| {
+            tokio::spawn(async move {
+                c.run(Duration::ZERO, || gated_cycle(&runs, &release)).await.is_some()
+            })
+        };
+
+        let first = spawn(c.clone(), runs.clone(), release.clone());
+        while runs.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        // Five triggers land while the first cycle is in flight.
+        let burst: Vec<_> = (0..5).map(|_| spawn(c.clone(), runs.clone(), release.clone())).collect();
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(runs.load(Ordering::SeqCst), 1, "no second cycle while one is in flight");
+
+        release.notify_one(); // finish the first cycle
+        while runs.load(Ordering::SeqCst) < 2 {
+            tokio::task::yield_now().await;
+        }
+        release.notify_one(); // finish the follow-up
+
+        assert!(first.await.unwrap());
+        let mut ran = 0;
+        for h in burst {
+            ran += h.await.unwrap() as usize;
+        }
+        assert_eq!(ran, 1, "exactly one burst trigger runs the follow-up");
+        assert_eq!(runs.load(Ordering::SeqCst), 2, "the burst cost one follow-up, not five");
+    }
+
+    #[tokio::test]
+    async fn sequential_triggers_each_run() {
+        // A trigger after the previous cycle finished is not coalesced: that
+        // cycle started before it asked.
+        let c = Coalescer::new();
+        assert_eq!(c.run(Duration::ZERO, || async { 1 }).await, Some(1));
+        assert_eq!(c.run(Duration::ZERO, || async { 2 }).await, Some(2));
+    }
+
+    #[tokio::test]
+    async fn a_fresh_cycle_satisfies_a_timer_trigger_only() {
+        let c = Coalescer::new();
+        assert!(c.run(Duration::ZERO, || async {}).await.is_some());
+        assert!(
+            c.run(Duration::from_secs(30), || async {}).await.is_none(),
+            "the engine timer skips when a cycle just finished"
+        );
+        assert!(
+            c.run(Duration::ZERO, || async {}).await.is_some(),
+            "a forced trigger still runs"
+        );
     }
 }

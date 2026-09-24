@@ -32,9 +32,8 @@
 //! than was missed — which is exactly why every connect also syncs.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use parking_lot::Mutex;
 use tokio_stream::StreamExt;
 
 use crate::domain::ids::{ChannelId, MessageId};
@@ -90,7 +89,6 @@ pub struct ChannelStreamService {
     sync_service: Arc<SyncService>,
     messages: Arc<MessageService>,
     event_bus: EventBus,
-    last_catchup: Mutex<Option<Instant>>,
     /// Nudged when the set of channels this user is in changed locally
     /// (create/join), so the stream reconnects and the server re-runs its
     /// membership-based auto-subscribe. The server only publishes membership
@@ -115,7 +113,6 @@ impl ChannelStreamService {
             sync_service,
             messages,
             event_bus,
-            last_catchup: Mutex::new(None),
             resubscribe: tokio::sync::Notify::new(),
         }
     }
@@ -194,21 +191,27 @@ impl ChannelStreamService {
 
     /// One connect → consume → disconnect cycle.
     async fn run_once(&self) -> Result<(), crate::error::NetworkError> {
-        // Opportunistic durable sync while we are not connected: if the stream
-        // is broken for a while, this is what keeps messages arriving at all.
-        // It is rate-limited and is NOT what closes the gap below — see the
-        // forced catch-up after the subscription is live.
-        self.catch_up().await;
-
         let cursor = self.cursor();
         let mut client = self.grpc_pool.message_client();
         // Empty channel_ids => the server subscribes us to every non-archived
         // channel we are a member of, including ones joined in a previous
         // session. That is the property the old per-channel subscriptions
         // lacked.
-        let stream = client
+        let stream = match client
             .stream_global_events(Vec::new(), cursor.as_deref())
-            .await?;
+            .await
+        {
+            Ok(stream) => stream,
+            Err(e) => {
+                // Opportunistic durable sync while we cannot connect: if the
+                // stream is broken for a while, this is what keeps messages
+                // arriving at all. Only on failure — a successful connect runs
+                // the forced catch-up below, and running this first as well
+                // made every start sync twice back to back.
+                self.catch_up().await;
+                return Err(e);
+            }
+        };
 
         tracing::info!(
             resume_from = cursor.as_deref().unwrap_or("<none>"),
@@ -257,35 +260,26 @@ impl ChannelStreamService {
 
     /// Pull anything missed from the durable store (channel list, then
     /// messages per channel). Rate-limited so a flapping stream cannot spam
-    /// the server.
+    /// the server: skipped when any sync cycle finished recently.
     async fn catch_up(&self) {
-        {
-            let mut last = self.last_catchup.lock();
-            if let Some(at) = *last {
-                if at.elapsed() < MIN_CATCHUP_INTERVAL {
-                    return;
-                }
-            }
-            *last = Some(Instant::now());
-        }
-
-        self.catch_up_now().await;
+        self.sync_service.sync_if_stale(MIN_CATCHUP_INTERVAL).await;
     }
 
     /// A durable sync that always runs, whatever the rate limiter thinks.
     ///
     /// Used once per successful subscribe (§103). The throttle exists to stop a
     /// flapping stream hammering the server; it must not be able to skip the
-    /// sync that closes the subscribe window.
+    /// sync that closes the subscribe window. The engine coalesces it with a
+    /// cycle already in flight, but only into one that STARTED after this call,
+    /// so the window is still covered.
     async fn catch_up_now(&self) {
-        *self.last_catchup.lock() = Some(Instant::now());
-
-        let result = self.sync_service.trigger_sync().await;
-        tracing::info!(
-            channels = result.channels.synced,
-            messages = result.messages.total_inserted,
-            "Channel stream catch-up complete"
-        );
+        if let Some(result) = self.sync_service.trigger_sync().await {
+            tracing::info!(
+                channels = result.channels.synced,
+                messages = result.messages.total_inserted,
+                "Channel stream catch-up complete"
+            );
+        }
     }
 
     fn cursor(&self) -> Option<String> {

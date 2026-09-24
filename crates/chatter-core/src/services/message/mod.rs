@@ -246,6 +246,9 @@ pub struct MessageService {
     /// Backoff gate for outgoing `SenderKeyRequest`s — see
     /// [`MessageService::should_request_sender_key`].
     pub(crate) sender_key_requests: Arc<parking_lot::Mutex<group::SenderKeyRequestGate>>,
+    /// Group messages we already sent a `DecryptionErrorMessage` for, keyed
+    /// `(message id, sender device)`: one retry request per message per device.
+    pub(crate) group_retry_requests: Arc<parking_lot::Mutex<std::collections::HashSet<(String, u32)>>>,
 }
 
 impl MessageService {
@@ -284,6 +287,7 @@ impl MessageService {
             ephemeral_service,
             pending_group_decrypts: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             sender_key_requests: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
+            group_retry_requests: Arc::new(parking_lot::Mutex::new(std::collections::HashSet::new())),
         }
     }
 

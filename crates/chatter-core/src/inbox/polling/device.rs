@@ -1164,7 +1164,8 @@ async fn process_identified_sender_message(
         // authenticated by the sealed-sender certificate. The identified
         // path's sender is server-claimed, so no DEM is built for it.
         Ok(SealedSenderResult::DecryptionErrorNeedsReport { .. })
-        | Ok(SealedSenderResult::SessionHealed { .. }) => {
+        | Ok(SealedSenderResult::SessionHealed { .. })
+        | Ok(SealedSenderResult::ResendRequested { .. }) => {
             tracing::warn!(
                 message_id = %msg.message_guid,
                 "[INBOX] Session self-heal result on identified path (unexpected)"
@@ -1593,6 +1594,23 @@ async fn process_sealed_sender_message(
                     archived,
                 });
             }
+            let _ = event_tx.send(InboxEvent::MessageProcessed {
+                message_id: msg.message_guid.clone(),
+            });
+            stats.write().messages_processed += 1;
+        }
+        // SENDER half of the sender-key retry: a member could not decrypt a
+        // group message we sent. The InboxEventProcessor resends it pairwise.
+        Ok(SealedSenderResult::ResendRequested {
+            peer_id,
+            peer_device_id,
+            timestamp_ms,
+        }) => {
+            let _ = event_tx.send(InboxEvent::GroupResendRequested {
+                peer_id,
+                peer_device_id,
+                timestamp_ms,
+            });
             let _ = event_tx.send(InboxEvent::MessageProcessed {
                 message_id: msg.message_guid.clone(),
             });

@@ -805,7 +805,7 @@ impl MessageService {
     /// intent (canonical, works even if the parent isn't local); preview text
     /// and the thumbnail are best-effort from the locally-resolved parent.
     /// Returns `None` when there is no quote.
-    fn build_wire_quote(
+    pub(super) fn build_wire_quote(
         &self,
         quote: Option<&crate::services::gateway::QuoteIntent>,
     ) -> Option<crate::proto::content_v1::Quote> {

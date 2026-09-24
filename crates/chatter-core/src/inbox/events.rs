@@ -86,6 +86,17 @@ pub enum InboxEvent {
         /// Serialized libsignal `DecryptionErrorMessage`.
         dem_serialized: Vec<u8>,
     },
+    /// A member could not decrypt a sender-key message WE sent and asked for
+    /// it again (`DecryptionErrorMessage` without a ratchet key). Handled by
+    /// `InboxEventProcessor` → `MessageService::resend_on_decryption_error`.
+    GroupResendRequested {
+        /// Authenticated member that failed to decrypt.
+        peer_id: UserId,
+        /// Their device that failed.
+        peer_device_id: u32,
+        /// Server timestamp of the failed message, epoch millis.
+        timestamp_ms: u64,
+    },
     /// DM mailbox poll completed.
     DmPollCompleted {
         /// Total messages received across all mailboxes.

@@ -133,6 +133,17 @@ impl InboxEventProcessor {
                 true
             }
 
+            InboxEvent::GroupResendRequested { peer_id, peer_device_id, timestamp_ms } => {
+                let message_service = self.message_service.clone();
+                let (peer_id, peer_device_id, timestamp_ms) = (*peer_id, *peer_device_id, *timestamp_ms);
+                tokio::spawn(async move {
+                    message_service
+                        .resend_on_decryption_error(&peer_id, peer_device_id, timestamp_ms)
+                        .await;
+                });
+                true
+            }
+
             InboxEvent::DmMailboxExpired { peer_id } => {
                 tracing::info!(
                     peer_id = %peer_id,

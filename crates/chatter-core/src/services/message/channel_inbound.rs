@@ -288,7 +288,18 @@ impl ChannelInbound {
                         }
                         return Err(Ingested::DeferredPendingSenderKey);
                     }
-                    tracing::warn!(%channel_id, %sid, error = %es, "Failed to decrypt channel message");
+                    // We hold a key, but not one that opens this message
+                    // (typically "old counter": it predates the SKDM we got).
+                    // Only the sender can give it back.
+                    tracing::warn!(%channel_id, %sid, error = %es,
+                        "Failed to decrypt channel message; asking the sender to resend it");
+                    let msg_svc = self.messages.clone();
+                    let proto = proto_msg.clone();
+                    tokio::spawn(async move {
+                        msg_svc
+                            .request_group_resend(channel_id, sid, device_id, &proto, &group_encrypted.ciphertext)
+                            .await;
+                    });
                     return Err(Ingested::Dropped);
                 }
             }

@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.util.Log
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -15,6 +16,9 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import com.google.androidgamesdk.GameActivity
 import java.io.File
 import java.util.concurrent.Executors
@@ -121,6 +125,57 @@ class MainActivity : GameActivity() {
     private external fun nativeAcceptIncomingCall(callId: String)
 
     // --- Back key --------------------------------------------------------------
+    /**
+     * Back with the soft keyboard up closes the keyboard, decided here, BEFORE
+     * the key is offered to the IME.
+     *
+     * The IME's own Back handling is what normally does this, and on the S25
+     * (Android 16, Samsung Keyboard) it did not: logcat showed the IME's
+     * key-down step (`handleBack: mShowInputRequested=true, doIt=false`) —
+     * which CONSUMES the press — and nothing after it, so the keyboard stayed
+     * up and the app never saw Back either. The show flags are not the cause:
+     * the whole path already asks for an implicit show
+     * (androidwindowadapter.rs `show_soft_input(true)` → android-activity
+     * `ShowImeFlags_SHOW_IMPLICIT` → GameTextInput `setSoftKeyboardActive` →
+     * `imm.showSoftInput(view, SHOW_IMPLICIT)`), and `mShowInputRequested` is
+     * true for any shown keyboard.
+     *
+     * `onKeyPreIme` on the focused view runs before the IME stage (the
+     * pattern SearchView and AutoCompleteTextView use for the same job), so
+     * this no longer depends on the IME finishing its half. Both halves are
+     * consumed so Rust's `back-scope` (ui/main.slint) does not also pop a
+     * layer: the first Back hides the keyboard, the next one navigates — what
+     * the S9 already did. With no keyboard up, Back is untouched.
+     */
+    override fun createSurfaceView(): InputEnabledSurfaceView = BackHidesImeSurfaceView()
+
+    private inner class BackHidesImeSurfaceView : InputEnabledSurfaceView(this@MainActivity) {
+        /** The current Back press started while the keyboard was up. */
+        private var backHidesIme = false
+
+        override fun onKeyPreIme(keyCode: Int, event: KeyEvent): Boolean {
+            if (keyCode != KeyEvent.KEYCODE_BACK) return super.onKeyPreIme(keyCode, event)
+            when (event.action) {
+                KeyEvent.ACTION_DOWN -> {
+                    if (event.repeatCount == 0) {
+                        backHidesIme = ViewCompat.getRootWindowInsets(this)
+                            ?.isVisible(WindowInsetsCompat.Type.ime()) == true
+                    }
+                    if (backHidesIme) return true
+                }
+                KeyEvent.ACTION_UP -> if (backHidesIme) {
+                    backHidesIme = false
+                    if (!event.isCanceled) {
+                        WindowCompat.getInsetsController(window, this)
+                            .hide(WindowInsetsCompat.Type.ime())
+                    }
+                    return true
+                }
+            }
+            return super.onKeyPreIme(keyCode, event)
+        }
+    }
+
     /**
      * Called from Rust (JNI) when Back is pressed with nothing left to pop.
      *

@@ -2711,20 +2711,18 @@ impl ChatterClient {
         self.services.conversation_repo.list_all()
     }
 
-    /// Total unread count across all conversation types (channels, server/mailbox
-    /// DMs, anon DMs, anon groups). Used to drive sidebar/mobile badge totals.
+    /// Number of conversations with at least one unread message — the Chats
+    /// tab and tray badge. Counted from the messages table directly
+    /// (`conversation_stats`), because the channel-rooted `list_all()` left out
+    /// every channel-free server DM: two unread DMs and one unread channel
+    /// read "1".
     ///
-    /// Aggregation lives here (not in the UI) so the UI doesn't have to walk
-    /// per-bucket Slint models — it gets one authoritative number. Counts come
-    /// from `is_read = 0` rows in the unified messages table.
-    ///
-    /// Returns 0 on storage error rather than propagating, since a missing
-    /// badge count is preferable to a UI hard-fail on every recompute.
-    pub fn total_unread_count(&self) -> u32 {
+    /// Returns 0 on storage error: a missing badge beats a UI hard-fail.
+    pub fn unread_conversation_count(&self) -> u32 {
         self.services
             .conversation_repo
-            .list_all()
-            .map(|convs| convs.iter().map(|c| c.unread_count).sum())
+            .conversation_stats()
+            .map(|stats| stats.values().filter(|st| st.unread_count > 0).count() as u32)
             .unwrap_or(0)
     }
 

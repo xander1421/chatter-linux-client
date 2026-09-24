@@ -300,6 +300,18 @@ impl MessageGateway {
             &self.message_repo,
         );
 
+        // Already held (a sender-key resend answering a second DecryptionError,
+        // e.g. after a restart, or a re-delivery): the unique
+        // (conversation, sender, sent_at) row exists, so the insert would fail
+        // and surface as a delivery issue. Nothing new to show.
+        if let Some(sid) = sender_id {
+            if let Ok(Some(existing)) = self.message_repo.get_by_sender_timestamp(&sid, message.sent_at) {
+                if existing.conversation_id == message.conversation_id {
+                    return Ok(SealedSenderResult::MessageStored);
+                }
+            }
+        }
+
         // Store in repository
         self.message_repo.insert(&message)?;
 

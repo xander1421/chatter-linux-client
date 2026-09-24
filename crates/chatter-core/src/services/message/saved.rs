@@ -115,8 +115,12 @@ impl MessageService {
 
         // Encrypt with Signal Protocol for all our own devices (forward secrecy)
         let sender_id_str = sender_id.to_string();
-        let device_ciphertexts = self.signal_service
-            .encrypt_message_all_devices(&mut auth_client, &sender_id_str, &plaintext)
+        // This device is skipped before encryption: no ratchet step on a
+        // session with ourselves. Only device => empty list, nothing to sync.
+        let (device_ciphertexts, _uak) = self.signal_service
+            .encrypt_message_all_devices_with_uak(
+                &mut auth_client, &sender_id_str, &plaintext, Some(current_device_id),
+            )
             .await
             .map_err(|e| MessageError::EncryptionFailed(format!("SavedMessages sync encrypt: {}", e)))?;
 
@@ -125,10 +129,6 @@ impl MessageService {
         let now = TimestampNanos::now().as_u64();
 
         for (device_id, ciphertext) in &device_ciphertexts {
-            if *device_id == current_device_id {
-                continue; // Skip ourselves
-            }
-
             let sealed = SealedSenderMessage {
                 sealed_body: ciphertext.clone(),
                 server_key_id: self.signal_service.get_server_key_id(),

@@ -608,7 +608,13 @@ pub async fn handle_domain_event(
             }
         }
 
-        DomainEvent::ChannelInviteReceived { .. } | DomainEvent::ChannelInviteResponded { .. } => {
+        // A received invite only changes the invites list — on reconnect core
+        // re-announces every pending one, and a full reload per invite was N
+        // reloads. A response (a join) changes the channel list too.
+        DomainEvent::ChannelInviteReceived { .. } => {
+            crate::bin_ui::features::modals::load_channel_invites(window.clone(), ui_ctx);
+        }
+        DomainEvent::ChannelInviteResponded { .. } => {
             crate::bin_ui::features::modals::load_channel_invites(window.clone(), ui_ctx);
             crate::bin_ui::features::auth::load_initial_data(window.clone(), ui_ctx).await;
         }

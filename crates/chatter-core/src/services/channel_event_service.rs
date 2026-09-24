@@ -47,6 +47,20 @@ pub struct ChannelEventService {
     /// Needed to tell "this moderation action targets ME" from "it targets
     /// somebody else" — a ban on us has to drop our own membership.
     settings_repo: Arc<crate::storage::repositories::settings_repo::SettingsRepository>,
+    /// Pending invites the UI has already been told about, so a reconnect
+    /// refetch announces only the ones it missed.
+    announced_invites: parking_lot::Mutex<std::collections::HashSet<ChannelId>>,
+}
+
+/// Keep `announced` equal to the server's current pending set and return the
+/// entries not announced before. Pruning to the pending set means an invite
+/// that was answered or expired can be announced again if it is re-sent.
+fn unannounced_invites<T>(
+    announced: &mut std::collections::HashSet<ChannelId>,
+    pending: Vec<(ChannelId, T)>,
+) -> Vec<(ChannelId, T)> {
+    announced.retain(|id| pending.iter().any(|(p, _)| p == id));
+    pending.into_iter().filter(|(id, _)| announced.insert(*id)).collect()
 }
 
 impl ChannelEventService {
@@ -66,6 +80,7 @@ impl ChannelEventService {
             grpc_pool,
             event_bus,
             settings_repo,
+            announced_invites: Default::default(),
         }
     }
     
@@ -100,7 +115,13 @@ impl ChannelEventService {
             .await?;
         
         tracing::info!("Channel event stream started");
-        
+
+        // Invitations reach an invitee only as a live push on this stream, so
+        // one sent while it was down (app backgrounded, reconnecting) was
+        // invisible until the next start. Refetch after subscribing, so
+        // nothing falls between the fetch and the stream.
+        self.announce_missed_invites().await;
+
         while let Some(result) = stream.next().await {
             match result {
                 Ok(event) => {
@@ -122,6 +143,32 @@ impl ChannelEventService {
         Ok(())
     }
     
+    /// Emit `ChannelInviteReceived` for every pending invite not yet announced.
+    async fn announce_missed_invites(&self) {
+        let invites = match self.grpc_pool.channel_client().list_pending_invites().await {
+            Ok(resp) => resp.invites,
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to refetch pending channel invites");
+                return;
+            }
+        };
+        let pending: Vec<_> = invites
+            .into_iter()
+            .filter_map(|inv| Some((inv.channel_id.parse::<uuid::Uuid>().ok()?.into(), inv)))
+            .collect();
+        let missed = unannounced_invites(&mut self.announced_invites.lock(), pending);
+        for (channel_id, inv) in missed {
+            let Ok(inviter) = inv.inviter_id.parse::<uuid::Uuid>() else { continue };
+            let _ = self.event_bus.domain_sender().send(DomainEvent::ChannelInviteReceived {
+                channel_id,
+                inviter_id: UserId::from(inviter),
+                message: (!inv.message.is_empty()).then_some(inv.message),
+                expires_at: inv.expires_at,
+            });
+            tracing::info!(%channel_id, "Pending channel invitation announced on reconnect");
+        }
+    }
+
     /// Handle a channel event from the stream.
     async fn handle_stream_event(
         &self,
@@ -411,6 +458,7 @@ impl ChannelEventService {
                     return;
                 };
                 let message = (!invite.message.is_empty()).then(|| invite.message.clone());
+                self.announced_invites.lock().insert(channel_id);
                 let _ = self.event_bus.domain_sender().send(DomainEvent::ChannelInviteReceived {
                     channel_id,
                     inviter_id: UserId::from(inviter_uuid),
@@ -692,6 +740,19 @@ mod tests {
         ChannelError as ProtoChannelError, ChannelModeration, OperationFailed,
     };
     use crate::storage::Database;
+
+    #[test]
+    fn a_reconnect_refetch_announces_only_missed_invites() {
+        let (a, b) = (ChannelId::new(), ChannelId::new());
+        let mut announced = std::collections::HashSet::from([a]); // `a` came live
+        let missed = unannounced_invites(&mut announced, vec![(a, ()), (b, ())]);
+        assert_eq!(missed.iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![b]);
+        assert!(unannounced_invites(&mut announced, vec![(a, ()), (b, ())]).is_empty());
+
+        // `a` answered, then re-sent: announced again.
+        assert!(unannounced_invites(&mut announced, vec![(b, ())]).is_empty());
+        assert_eq!(unannounced_invites(&mut announced, vec![(a, ()), (b, ())]).len(), 1);
+    }
 
     fn setup() -> (Arc<ChannelEventService>, EventBus, Arc<ChannelRepository>) {
         // SQLCipher needs a real path (see call_repo tests).

@@ -4,6 +4,7 @@
 //! of friend request changes, profile updates, and presence changes.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use futures::StreamExt;
 use tokio::sync::broadcast;
@@ -16,6 +17,8 @@ use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::proto::chat_v1::{friend_requests_filter, user_event};
 use crate::proto::UserPresence;
 use crate::domain::ids::UserId;
+use crate::domain::user::{FriendshipStatus, Profile};
+use crate::services::user::PROFILE_REFRESH_INTERVAL;
 use crate::services::user::conversions::proto_to_domain_profile;
 use crate::storage::repositories::UserRepository;
 
@@ -48,6 +51,7 @@ pub async fn spawn_user_events_stream(
     // leaving a direct, IP-revealing socket alive in shield mode. Abort is
     // unconditional and immediate.
     tokio::spawn(async move {
+        let mut last_profile_refresh: Option<Instant> = None;
         loop {
             // Check for shutdown
             if *shutdown_rx.borrow() {
@@ -61,6 +65,25 @@ pub async fn spawn_user_events_stream(
             match user_client.stream_user_events(&user_id).await {
                 Ok(mut stream) => {
                     tracing::info!("Subscribed to user events stream");
+
+                    // Friend requests and profile edits arrive only as pushes
+                    // on this stream; refetch what a down stream missed. After
+                    // subscribing, so nothing falls between the two. Profiles
+                    // cost one RPC per friend, so they share
+                    // `refresh_profile_if_stale`'s interval.
+                    refresh_friend_requests(&grpc_pool, &event_tx).await;
+                    if let Some(me) = current_user_id {
+                        let due = last_profile_refresh
+                            .map_or(true, |t: Instant| t.elapsed() >= PROFILE_REFRESH_INTERVAL);
+                        if due {
+                            last_profile_refresh = Some(Instant::now());
+                            let (grpc_pool, user_repo, domain_tx) =
+                                (grpc_pool.clone(), user_repo.clone(), domain_tx.clone());
+                            tokio::spawn(async move {
+                                refresh_friend_profiles(&grpc_pool, &user_repo, &me, domain_tx.as_ref()).await;
+                            });
+                        }
+                    }
 
                     loop {
                         tokio::select! {
@@ -183,61 +206,7 @@ async fn handle_user_event(
                 user_id = %proto_profile.user_id,
                 "Profile updated event received"
             );
-
-            let mut profile = match proto_to_domain_profile(&proto_profile) {
-                Ok(p) => p,
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to convert proto profile");
-                    return;
-                }
-            };
-
-            // `proto_to_domain_profile` copies the raw server value, which is
-            // ciphertext (display names are stored encrypted). Resolve it to a
-            // safe name so we never persist/show ciphertext.
-            profile.display_name = resolve_stream_display_name(
-                user_repo,
-                current_user_id,
-                &profile.user_id,
-                &proto_profile.display_name,
-            );
-
-            // Status is E2E-encrypted too — decrypt with the friend's key, else
-            // drop it (never persist/emit ciphertext).
-            profile.status_message = current_user_id
-                .and_then(|cur| {
-                    crate::services::user::decrypt_friend_status(
-                        user_repo,
-                        cur,
-                        &profile.user_id,
-                        &proto_profile.status_message,
-                    )
-                })
-                .map(crate::domain::user::StatusMessage::new);
-
-            // Avatar too, or a peer's new photo pushed here never shows (the
-            // upsert keeps the old one when this is `None`).
-            profile.avatar_bytes = current_user_id
-                .filter(|_| !proto_profile.encrypted_avatar.is_empty())
-                .and_then(|cur| user_repo.get_friend_profile_key(cur, &profile.user_id).ok().flatten())
-                .and_then(|key| {
-                    crate::crypto::profile_crypto::decrypt_avatar(&key, &proto_profile.encrypted_avatar).ok()
-                });
-
-            if let Err(e) = user_repo.upsert_profile(&profile) {
-                tracing::warn!(error = %e, user_id = %profile.user_id, "Failed to upsert profile");
-                return;
-            }
-
-            if let Some(tx) = domain_tx {
-                let _ = tx.send(DomainEvent::UserProfileUpdated {
-                    user_id: profile.user_id,
-                    display_name: profile.display_name.clone(),
-                    status_message: profile.status_message.as_ref().map(|s| s.text.clone()),
-                    avatar_bytes: profile.avatar_bytes.clone(),
-                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                });
-            }
+            apply_profile(&proto_profile, user_repo, current_user_id, domain_tx, true);
         }
         Some(user_event::Event::PresenceChanged(presence)) => {
             tracing::trace!(
@@ -287,6 +256,114 @@ async fn handle_user_event(
         }
         None => {
             tracing::trace!("Received empty user event");
+        }
+    }
+}
+
+/// Decrypt a server profile, persist it, and emit `UserProfileUpdated` — for a
+/// live push always, for a refetch only when something visible changed.
+fn apply_profile(
+    proto: &crate::proto::chat_v1::UserProfile,
+    user_repo: &UserRepository,
+    current_user_id: Option<&UserId>,
+    domain_tx: Option<&broadcast::Sender<DomainEvent>>,
+    announce_unchanged: bool,
+) {
+    let mut profile = match proto_to_domain_profile(proto) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to convert proto profile");
+            return;
+        }
+    };
+
+    // `proto_to_domain_profile` copies the raw server value, which is
+    // ciphertext (display names are stored encrypted). Resolve it to a
+    // safe name so we never persist/show ciphertext.
+    profile.display_name = resolve_stream_display_name(
+        user_repo,
+        current_user_id,
+        &profile.user_id,
+        &proto.display_name,
+    );
+
+    // Status is E2E-encrypted too — decrypt with the friend's key, else
+    // drop it (never persist/emit ciphertext).
+    profile.status_message = current_user_id
+        .and_then(|cur| {
+            crate::services::user::decrypt_friend_status(
+                user_repo,
+                cur,
+                &profile.user_id,
+                &proto.status_message,
+            )
+        })
+        .map(crate::domain::user::StatusMessage::new);
+
+    // Avatar too, or a peer's new photo pushed here never shows (the
+    // upsert keeps the old one when this is `None`).
+    profile.avatar_bytes = current_user_id
+        .filter(|_| !proto.encrypted_avatar.is_empty())
+        .and_then(|cur| user_repo.get_friend_profile_key(cur, &profile.user_id).ok().flatten())
+        .and_then(|key| {
+            crate::crypto::profile_crypto::decrypt_avatar(&key, &proto.encrypted_avatar).ok()
+        });
+
+    let before = user_repo.get_profile(&profile.user_id).ok().flatten();
+
+    if let Err(e) = user_repo.upsert_profile(&profile) {
+        tracing::warn!(error = %e, user_id = %profile.user_id, "Failed to upsert profile");
+        return;
+    }
+
+    if !announce_unchanged && !profile_changed(before.as_ref(), &profile) {
+        return;
+    }
+
+    if let Some(tx) = domain_tx {
+        let _ = tx.send(DomainEvent::UserProfileUpdated {
+            user_id: profile.user_id,
+            display_name: profile.display_name.clone(),
+            status_message: profile.status_message.as_ref().map(|s| s.text.clone()),
+            avatar_bytes: profile.avatar_bytes.clone(),
+            timestamp: chrono::Utc::now().timestamp_millis() as u64,
+        });
+    }
+}
+
+/// Did name, status or avatar change? Presence has its own event. An avatar of
+/// `None` means "not decrypted", and the upsert keeps the stored one.
+fn profile_changed(before: Option<&Profile>, after: &Profile) -> bool {
+    let Some(before) = before else { return true };
+    before.display_name != after.display_name
+        || before.status_message.as_ref().map(|s| &s.text) != after.status_message.as_ref().map(|s| &s.text)
+        || (after.avatar_bytes.is_some() && before.avatar_bytes != after.avatar_bytes)
+}
+
+/// Refetch every accepted friend's profile and announce what changed.
+///
+/// Profile edits reach us only as a live push on this stream (the server's
+/// `publishProfileToFriends`), so an edit made while the stream was down was
+/// missed until something else happened to refetch that profile.
+async fn refresh_friend_profiles(
+    grpc_pool: &GrpcClientPool,
+    user_repo: &UserRepository,
+    current_user_id: &UserId,
+    domain_tx: Option<&broadcast::Sender<DomainEvent>>,
+) {
+    let friends = match user_repo.list_friends(current_user_id) {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to list friends for profile refresh");
+            return;
+        }
+    };
+    let mut client = grpc_pool.user_client();
+    for f in friends.iter().filter(|f| f.status == FriendshipStatus::Accepted) {
+        let peer = if f.requester_id == *current_user_id { f.addressee_id } else { f.requester_id };
+        match client.get_user_profile(&peer.to_string()).await {
+            Ok(proto) => apply_profile(&proto, user_repo, Some(current_user_id), domain_tx, false),
+            Err(e) => tracing::debug!(%peer, error = %e, "Friend profile refresh failed"),
         }
     }
 }

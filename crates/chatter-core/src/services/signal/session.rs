@@ -547,7 +547,7 @@ impl SignalService {
         recipient_id: &str,
     ) -> Result<Vec<u32>, ServiceError> {
         Ok(self
-            .ensure_sessions_and_uak_all_devices(auth_client, recipient_id)
+            .ensure_sessions_and_uak_all_devices(auth_client, recipient_id, None)
             .await?
             .0)
     }
@@ -564,10 +564,15 @@ impl SignalService {
     ///
     /// Returns `None` for the UAK only if the server omitted it, which callers
     /// must treat as a sealed-sender degradation rather than a normal outcome.
+    ///
+    /// `skip_device_id` is dropped before any session work (self-sync skips
+    /// the sending device). If it was the recipient's only device the result
+    /// is an empty list — nothing to send to, which is not a failure.
     pub async fn ensure_sessions_and_uak_all_devices(
         &self,
         auth_client: &mut AuthClient,
         recipient_id: &str,
+        skip_device_id: Option<u32>,
     ) -> Result<(Vec<u32>, Option<[u8; 16]>), ServiceError> {
         use crate::proto::chat_v1::get_pre_key_bundle_response;
 
@@ -609,7 +614,12 @@ impl SignalService {
                     .iter()
                     .find_map(|b| uak_from_bundle(&b.unidentified_access_key));
 
-                for proto_bundle in device_list.bundles {
+                let bundles = without_device(device_list.bundles, skip_device_id);
+                if bundles.is_empty() {
+                    return Ok((Vec::new(), recipient_uak));
+                }
+
+                for proto_bundle in bundles {
                     let device_id = proto_bundle.device_id;
                     let device_id_struct = match DeviceId::try_from(device_id) {
                         Ok(d) => d,
@@ -704,6 +714,9 @@ impl SignalService {
             get_pre_key_bundle_response::Result::Bundle(single_bundle) => {
                 let device_id = single_bundle.device_id;
                 let recipient_uak = uak_from_bundle(&single_bundle.unidentified_access_key);
+                if skip_device_id == Some(device_id) {
+                    return Ok((Vec::new(), recipient_uak));
+                }
                 self.ensure_session(auth_client, recipient_id, device_id).await?;
                 Ok((vec![device_id], recipient_uak))
             }
@@ -727,7 +740,7 @@ impl SignalService {
         plaintext: &[u8],
     ) -> Result<HashMap<u32, Vec<u8>>, ServiceError> {
         Ok(self
-            .encrypt_message_all_devices_with_uak(auth_client, recipient_id, plaintext)
+            .encrypt_message_all_devices_with_uak(auth_client, recipient_id, plaintext, None)
             .await?
             .0)
     }
@@ -739,16 +752,23 @@ impl SignalService {
     ///
     /// See [`Self::ensure_sessions_and_uak_all_devices`] for why the UAK is
     /// harvested from the bundle fetch rather than fetched separately.
+    ///
+    /// `skip_device_id` is excluded before session establishment and
+    /// encryption; if it was the only device, this is an `Ok` empty map.
     pub async fn encrypt_message_all_devices_with_uak(
         &self,
         auth_client: &mut AuthClient,
         recipient_id: &str,
         plaintext: &[u8],
+        skip_device_id: Option<u32>,
     ) -> Result<(HashMap<u32, Vec<u8>>, Option<[u8; 16]>), ServiceError> {
         // First ensure we have sessions with all devices
         let (device_ids, recipient_uak) = self
-            .ensure_sessions_and_uak_all_devices(auth_client, recipient_id)
+            .ensure_sessions_and_uak_all_devices(auth_client, recipient_id, skip_device_id)
             .await?;
+        if device_ids.is_empty() {
+            return Ok((HashMap::new(), recipient_uak));
+        }
 
         // Get sender certificate once (used for all encryptions). The
         // server picks the device id from the authenticated session.
@@ -1053,5 +1073,40 @@ impl SignalService {
         self.actor
             .encrypt_sealed(plaintext.to_vec(), sender_cert, address)
             .await
+    }
+}
+
+/// The fan-out targets minus `skip` (self-sync skips the sending device), so a
+/// skipped device never gets a session built or a ratchet step taken for it.
+fn without_device(
+    mut bundles: Vec<crate::proto::chat_v1::SignalPreKeyBundle>,
+    skip: Option<u32>,
+) -> Vec<crate::proto::chat_v1::SignalPreKeyBundle> {
+    bundles.retain(|b| Some(b.device_id) != skip);
+    bundles
+}
+
+#[cfg(test)]
+mod tests {
+    use super::without_device;
+    use crate::proto::chat_v1::SignalPreKeyBundle;
+
+    fn bundles(ids: &[u32]) -> Vec<SignalPreKeyBundle> {
+        ids.iter()
+            .map(|&device_id| SignalPreKeyBundle { device_id, ..Default::default() })
+            .collect()
+    }
+
+    #[test]
+    fn self_fanout_with_only_this_device_has_no_targets() {
+        assert!(without_device(bundles(&[1]), Some(1)).is_empty());
+    }
+
+    #[test]
+    fn skip_drops_only_the_named_device() {
+        let ids: Vec<u32> =
+            without_device(bundles(&[1, 2, 3]), Some(2)).iter().map(|b| b.device_id).collect();
+        assert_eq!(ids, [1, 3]);
+        assert_eq!(without_device(bundles(&[1, 2]), None).len(), 2);
     }
 }

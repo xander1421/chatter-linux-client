@@ -266,6 +266,14 @@ async fn process_sealed_sender_group_message(
                 ack_policy::FailureMarker::DeliveryIssue,
             );
         }
+        SealedSenderResult::ResendRequested { peer_id, .. } => {
+            tracing::warn!(
+                group_id = %group_id,
+                message_id = %message_id,
+                peer_id = %peer_id,
+                "Sender-key resend request on group mailbox path — not dispatched here"
+            );
+        }
         SealedSenderResult::SessionHealed { peer_id, archived, .. } => {
             tracing::info!(
                 group_id = %group_id,

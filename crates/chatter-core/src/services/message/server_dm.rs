@@ -454,7 +454,9 @@ impl MessageService {
 
     /// Encrypt `plaintext` for every device of `recipient_id` and deposit
     /// each ciphertext via `SendSealedMessage`, UAK-authorized. `skip_device_id`
-    /// excludes a single device (used for self-sync to skip the sending device).
+    /// excludes a single device (used for self-sync to skip the sending device)
+    /// before any session is built or message encrypted for it; if it was the
+    /// only device, the outcome is `delivered: 0` with no error.
     ///
     /// Returns how many devices were delivered to, and how many of those were
     /// delivered in the DEGRADED identified-sender mode — see [`DepositOutcome`].
@@ -475,7 +477,7 @@ impl MessageService {
     ) -> DepositOutcome {
         let (ciphertexts, recipient_uak) = match self
             .signal_service
-            .encrypt_message_all_devices_with_uak(auth_client, recipient_id, plaintext)
+            .encrypt_message_all_devices_with_uak(auth_client, recipient_id, plaintext, skip_device_id)
             .await
         {
             Ok(c) => c,
@@ -520,10 +522,6 @@ impl MessageService {
 
         let mut outcome = DepositOutcome::default();
         for (device_id, sealed_bytes) in ciphertexts {
-            if skip_device_id == Some(device_id) {
-                continue;
-            }
-
             let sealed_message = SealedSenderMessage {
                 sealed_body: sealed_bytes,
                 server_key_id,

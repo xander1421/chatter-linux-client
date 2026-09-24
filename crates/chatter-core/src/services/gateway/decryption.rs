@@ -221,11 +221,23 @@ impl MessageGateway {
             return Ok(SealedSenderResult::MessageStored);
         }
 
-        let dem_ratchet_key = dem.ratchet_key().map(|k| k.serialize().to_vec());
+        // No ratchet key = the failed message was sender-key (group) content.
+        // Our 1:1 session with the reporter is not what broke, so it must not
+        // be archived (Signal-Desktop `archiveSessionOnMatch` refuses without a
+        // ratchet key; `archive_session_for_resend(None)` would archive
+        // unconditionally). What the reporter needs is the content itself,
+        // resent pairwise (Signal-Desktop `onRetryRequest`).
+        let Some(dem_ratchet_key) = dem.ratchet_key().map(|k| k.serialize().to_vec()) else {
+            return Ok(SealedSenderResult::ResendRequested {
+                peer_id,
+                peer_device_id,
+                timestamp_ms: dem.timestamp().epoch_millis(),
+            });
+        };
         let archived = self
             .signal_service
             .actor
-            .archive_session_for_resend(peer_id.to_string(), peer_device_id, dem_ratchet_key)
+            .archive_session_for_resend(peer_id.to_string(), peer_device_id, Some(dem_ratchet_key))
             .await?;
 
         // Split by outcome, because the two branches mean opposite things and only

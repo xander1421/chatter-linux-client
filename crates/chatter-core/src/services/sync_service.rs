@@ -80,9 +80,15 @@ impl SyncService {
         let _ = self.shutdown_tx.send(true);
     }
 
-    /// Trigger an immediate sync cycle.
-    pub async fn trigger_sync(&self) -> SyncCycleResult {
+    /// Trigger an immediate sync cycle. `None` when it was coalesced into a
+    /// cycle another trigger ran (which still started after this call).
+    pub async fn trigger_sync(&self) -> Option<SyncCycleResult> {
         self.engine.trigger_sync().await
+    }
+
+    /// Sync unless a cycle finished within `max_age`.
+    pub async fn sync_if_stale(&self, max_age: std::time::Duration) -> Option<SyncCycleResult> {
+        self.engine.sync_if_stale(max_age).await
     }
 
     /// Check if this is the first sync (new device / fresh install).
