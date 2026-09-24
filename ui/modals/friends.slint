@@ -238,7 +238,7 @@ export component FriendsModal inherits Rectangle {
 
                     // Friends count header
                     Text {
-                        text: root.friends.length + " Friends";
+                        text: root.friends.length + (root.friends.length == 1 ? " Friend" : " Friends");
                         color: Colors.text-secondary;
                         font-size: Typography.xs;
                         font-weight: Typography.medium;
@@ -1461,7 +1461,7 @@ export component FriendsModal inherits Rectangle {
                     spacing: Spacing.sm;
 
                     Text {
-                        text: root.blocked-users.length + " Blocked Users";
+                        text: root.blocked-users.length + (root.blocked-users.length == 1 ? " Blocked User" : " Blocked Users");
                         color: Colors.text-secondary;
                         font-size: Typography.xs;
                         font-weight: Typography.medium;

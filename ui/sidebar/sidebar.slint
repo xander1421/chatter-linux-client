@@ -650,6 +650,48 @@ export component Sidebar inherits Rectangle {
                     collapsed: root.collapsed;
                 }
 
+                // A phone hides the Channels header, and with it the "+" that
+                // opens Create | Join channel — so once any conversation exists
+                // there was no way to make or join a channel. Same ghost row as
+                // "New Section" below.
+                if root.mobile-mode && !AnonMode.enabled: Rectangle {
+                    height: Spacing.touch-target-min;
+                    background: new-ch-touch.has-hover ? Colors.surface-hover : transparent;
+                    border-radius: Spacing.radius-sm;
+                    border-width: 1px;
+                    border-color: new-ch-touch.has-hover ? Colors.border : transparent;
+                    accessible-role: button;
+                    accessible-label: "New Channel";
+
+                    HorizontalLayout {
+                        padding-left: Spacing.sm;
+                        spacing: 6px;
+                        alignment: start;
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 0;
+                            Image {
+                                source: Icons.plus;
+                                width: 16px;
+                                height: 16px;
+                                colorize: new-ch-touch.has-hover ? Colors.primary : Colors.text-muted;
+                            }
+                        }
+                        Text {
+                            text: "New Channel";
+                            color: new-ch-touch.has-hover ? Colors.text-secondary : Colors.text-muted;
+                            font-size: Typography.sm2;
+                            font-weight: 500;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    new-ch-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.create-channel-clicked(); }
+                    }
+                }
+
                 // 4b. CUSTOM SECTIONS (user-created, between Messages and Channels)
                 CustomSectionList {
                     vertical-stretch: 0;
