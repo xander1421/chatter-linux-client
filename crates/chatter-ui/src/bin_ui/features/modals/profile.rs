@@ -145,10 +145,12 @@ pub fn open_user_profile(
             .map(|p| p.presence.as_str())
             .unwrap_or("offline");
 
-        let bio = profile
-            .as_ref()
-            .and_then(|p| p.status_message.as_ref())
-            .map(|m| m.text.clone())
+        // From core's local profile, like the avatar below: `user_state` is not
+        // populated for peers, so the bio never showed.
+        let bio = ui_ctx
+            .and_then(|ctx| ctx.get_profile_local(user_id))
+            .and_then(|p| p.status_message)
+            .map(|m| m.text)
             .unwrap_or_default();
 
         let user_data = user_state.get();

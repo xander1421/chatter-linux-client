@@ -444,8 +444,11 @@ pub(super) fn handle_user_profile_updated(
         // 3. Profile modal if currently showing this user.
         if w.get_profile_user_id() == user_id_str {
             w.set_profile_display_name(display_name_slint.clone());
-            if let Some(status) = status_message {
-                w.set_profile_status_text(status.into());
+            // `status_message` is the bio Edit Profile writes (profile.rs), so it
+            // belongs in the About row, not the custom-status line.
+            w.set_profile_bio(status_message.unwrap_or_default().into());
+            if let Some(img) = avatar_img {
+                w.set_profile_avatar_source(img);
             }
         }
     });
