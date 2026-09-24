@@ -59,6 +59,18 @@ pub fn handle_back(window: &MainWindow) -> bool {
         return true;
     }
 
+    // The message context menu and the reaction picker are overlays opened
+    // from a bubble. Back fell through them to the conversation pane, which
+    // left the menu floating over the conversation list.
+    if window.get_reaction_picker_visible() {
+        window.set_reaction_picker_visible(false);
+        return true;
+    }
+    if window.get_context_menu_visible() {
+        window.set_context_menu_visible(false);
+        return true;
+    }
+
     // The composer's emoji and GIF pickers are overlays too, and since the
     // emoji picker now stays open across insertions (§112u) Back is the
     // natural way to dismiss it.

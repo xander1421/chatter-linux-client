@@ -1820,6 +1820,21 @@ fn back_press_closes_the_open_modal() {
     assert_eq!(w.get_active_modal().as_str(), "none");
 }
 
+/// Back with the message context menu open closes the menu and stays in the
+/// conversation. It used to pop the conversation and leave the menu floating
+/// over the conversation list.
+#[test]
+fn back_press_closes_the_message_context_menu_first() {
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+
+    w.set_mobile_show_chat(true);
+    w.set_context_menu_visible(true);
+    assert!(chatter_ui::bin_ui::features::back::handle_back(&w));
+    assert!(!w.get_context_menu_visible(), "back did not close the context menu");
+    assert!(w.get_mobile_show_chat(), "back left the conversation instead of closing the menu");
+}
+
 /// Back inside a mobile conversation returns to the conversation list rather
 /// than leaving the app. On a phone the list and the chat are separate screens,
 /// and Back out of a chat backgrounding the whole app is the defect this pins.

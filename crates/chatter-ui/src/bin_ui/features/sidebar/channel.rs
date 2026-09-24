@@ -105,21 +105,6 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let ui_ctx_badges = ui_ctx.clone();
             run_ui!(weak, |w| super::refresh_section_badges(&w, &ui_ctx_badges));
 
-            // Load pinned messages for this channel from DB. The bucket is the
-            // channel's own conversation type — same reason the message list
-            // below uses `channel.conversation_type()`. Hardcoding
-            // `ConversationType::Channel` here found nothing for an encrypted
-            // channel, which is the default.
-            let (msg_ids, preview) = match ui_ctx.load_pinned_for_channel(&channel_id, &ui_ctx.channel_conversation_type(&channel_id)).await {
-                Ok(pinned) if !pinned.is_empty() => {
-                    let ids = pinned.iter().map(|p| p.message_id).collect();
-                    let preview = pinned[0].preview.clone();
-                    (ids, preview)
-                }
-                _ => (vec![], String::new()),
-            };
-            super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), channel_id, msg_ids, preview);
-
             load_channel_into_ui(
                 weak,
                 channel_id,
@@ -151,6 +136,23 @@ pub async fn load_channel_into_ui(
             return Vec::new();
         }
     };
+
+    // Pinned bar. Here, not in each caller: Saved Messages, join and
+    // create open through this function too and never loaded their pins.
+    // Load pinned messages for this channel from DB. The bucket is the
+    // channel's own conversation type — same reason the message list
+    // below uses `channel.conversation_type()`. Hardcoding
+    // `ConversationType::Channel` here found nothing for an encrypted
+    // channel, which is the default.
+    let (msg_ids, preview) = match ui_ctx.load_pinned_for_channel(&channel_id, &ui_ctx.channel_conversation_type(&channel_id)).await {
+        Ok(pinned) if !pinned.is_empty() => {
+            let ids = pinned.iter().map(|p| p.message_id).collect();
+            let preview = pinned[0].preview.clone();
+            (ids, preview)
+        }
+        _ => (vec![], String::new()),
+    };
+    super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), channel_id, msg_ids, preview);
 
     // 2. Load messages — use the channel's actual conversation type so
     // SavedMessages (stored as ConversationType::SavedMessages) round-trip correctly.
