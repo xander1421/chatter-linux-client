@@ -67,6 +67,10 @@ pub struct AndroidWindowAdapter {
     /// legitimately repeated state after a real edit is still pushed.
     last_ime_epoch: RefCell<Option<String>>,
     ime_states_seen: RefCell<Vec<(String, usize, usize, Option<(usize, usize)>)>>,
+    /// Last `InputType` handed to the IME via `set_ime_editor_info`, so the
+    /// repeated Enable requests do not re-push it (and restart the IME) on
+    /// every keystroke.
+    ime_input_type: Cell<Option<i_slint_core::items::InputType>>,
     /// Whether the last state we pushed carried a compose region, i.e. whether
     /// the input method may still be composing. Gates the stale-composition
     /// reset below so it only fires when there is something to clear.
@@ -192,6 +196,35 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
                 // (§112m); anything Disable does not cover has to be handled
                 // app-side, the way message_composer.slint's
                 // reset-composition() does it.
+                //
+                // Tell the IME what kind of field this is. Without it every
+                // field — passwords and PINs included — opened as plain text,
+                // so the keyboard offered suggestions for, and learned, secrets.
+                if self.ime_input_type.get() != Some(props.input_type) {
+                    use android_activity::input::{ImeOptions, InputType, TextInputAction};
+                    use i_slint_core::items::InputType as SlintInputType;
+                    let input_type = match props.input_type {
+                        SlintInputType::Password => {
+                            InputType::TYPE_CLASS_TEXT
+                                | InputType::TYPE_TEXT_VARIATION_PASSWORD
+                                | InputType::TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                        }
+                        SlintInputType::Number => InputType::TYPE_CLASS_NUMBER,
+                        SlintInputType::Decimal => {
+                            InputType::TYPE_CLASS_NUMBER | InputType::TYPE_NUMBER_FLAG_DECIMAL
+                        }
+                        _ => InputType::TYPE_CLASS_TEXT,
+                    };
+                    // GameActivity's own default imeOptions, 0x02000006: NO_FULLSCREEN
+                    // plus IME_ACTION_DONE in the action bits. Without the action
+                    // bits the keyboard's ✓ key turned into a newline key.
+                    let mut options = ImeOptions::from_bits_retain(0x0200_0006);
+                    if props.input_type == SlintInputType::Password {
+                        options |= ImeOptions::IME_FLAG_NO_PERSONALIZED_LEARNING;
+                    }
+                    self.app.set_ime_editor_info(input_type, TextInputAction::Done, options);
+                    self.ime_input_type.set(Some(props.input_type));
+                }
                 self.app.show_soft_input(true);
                 // New field focused — force the next state push.
                 *self.last_ime_epoch.borrow_mut() = None;
@@ -400,6 +433,7 @@ impl AndroidWindowAdapter {
             stale_commit_cursor: Cell::new(None),
             last_ime_epoch: RefCell::default(),
             ime_states_seen: RefCell::default(),
+            ime_input_type: Cell::new(None),
             had_compose: Cell::new(false),
             last_pushed_text: RefCell::default(),
             last_pushed_cursor: Cell::new(0),
