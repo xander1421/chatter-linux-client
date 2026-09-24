@@ -1092,6 +1092,47 @@ mod tests {
         assert_eq!(combined2, combined3);
     }
 
+    /// The sender's own cache check (`get_cached_sender_certificate`) relies on
+    /// this: a cert chaining to a root this build does not pin — cached under
+    /// an older server key — must be refused so it is refetched, because every
+    /// recipient would reject it and drop the message.
+    #[test]
+    fn validate_trust_root_refuses_a_foreign_root() {
+        use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+        use libsignal_protocol::{IdentityKeyPair, KeyPair, PrivateKey};
+
+        let mut rng = OsRng.unwrap_err();
+        let expiration = Timestamp::from_epoch_millis(
+            SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis() as u64
+                + 3_600_000,
+        );
+        let cert_under = |root: &PrivateKey, rng: &mut _| {
+            let server_keys = KeyPair::generate(rng);
+            let server_cert = ServerCertificate::new(1, server_keys.public_key, root, rng)
+                .expect("server certificate");
+            SenderCertificate::new(
+                "11111111-1111-4111-8111-111111111111".to_string(),
+                None,
+                *IdentityKeyPair::generate(rng).public_key(),
+                DeviceId::new(1).expect("device id"),
+                expiration,
+                server_cert,
+                &server_keys.private_key,
+                rng,
+            )
+            .expect("sender certificate")
+        };
+
+        let pinned = PrivateKey::deserialize(
+            &BASE64.decode("ELMk0o1RlhsHCk8vQ/bWbtRDeQvcC4PuN8+U1Xg90Ek=").expect("base64"),
+        )
+        .expect("dev trust root private key");
+        let foreign = KeyPair::generate(&mut rng).private_key;
+
+        assert!(validate_trust_root(&cert_under(&pinned, &mut rng)));
+        assert!(!validate_trust_root(&cert_under(&foreign, &mut rng)));
+    }
+
     #[test]
     fn test_cached_certificate_wrapper() {
         // We can't easily create a real SenderCertificate in tests,

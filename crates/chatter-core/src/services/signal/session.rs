@@ -974,7 +974,15 @@ impl SignalService {
                         // longer exists: recipients looked up the wrong session
                         // and every sealed message failed to decrypt. Only a
                         // cert for the current user and device is reusable.
-                        if self.cert_is_for_this_device(&cert) {
+                        //
+                        // It must also still chain to the trust root this build
+                        // pins: a cert cached under an older server signing key
+                        // (a key rotation, or a dev stack re-seeded) is rejected
+                        // by every recipient, who then drops the message
+                        // silently. Refetch instead of sending into that.
+                        if self.cert_is_for_this_device(&cert)
+                            && crate::crypto::signal::sealed_sender::validate_trust_root(&cert)
+                        {
                             return Ok(Some(cert));
                         }
                     }
