@@ -822,7 +822,10 @@ export component MessageComposer inherits Rectangle {
                     single-line: false;
 
                     key-pressed(event) => {
-                        if (event.text == "\n" && !event.modifiers.shift) {
+                        // Enter sends on desktop. On a phone it is a newline, like
+                        // Signal: the soft keyboard has no Shift+Enter, so sending on
+                        // it made multi-line messages impossible. Send is the button.
+                        if (event.text == "\n" && !event.modifiers.shift && !root.mobile) {
                             if (root.can-send) {
                                 if (root.is-editing) {
                                     root.send-edit(root.edit-message-id, root.outgoing-text);

@@ -299,6 +299,7 @@ export component MainWindow inherits Window {
     callback message-selection-toggled <=> app.message-selection-toggled;
     callback selection-cleared <=> app.selection-cleared;
     callback selection-delete-clicked <=> app.selection-delete-clicked;
+    callback selection-copy-clicked <=> app.selection-copy-clicked;
 
     // ========== Peer identity change (conversation wedged) ==========
     in property <bool> identity-change-visible <=> app.identity-change-visible;

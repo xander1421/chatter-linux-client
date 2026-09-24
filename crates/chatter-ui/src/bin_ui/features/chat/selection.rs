@@ -50,7 +50,7 @@ fn exit(w: &MainWindow, selected_ids: &Rc<RefCell<HashSet<String>>>) {
 }
 
 /// Wire the multi-select callbacks.
-pub fn wire_selection(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
+pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let selected_ids: Rc<RefCell<HashSet<String>>> = Rc::new(RefCell::new(HashSet::new()));
 
     // Toggle one message. Deselecting the last one leaves selection mode
@@ -86,6 +86,41 @@ pub fn wire_selection(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
         let selected_ids = selected_ids.clone();
         window.on_selection_cleared(move || {
             let Some(w) = weak.upgrade() else { return };
+            exit(&w, &selected_ids);
+        });
+    }
+
+    // Bulk copy: the selected messages' text, in list (time) order, one
+    // blank line apart. Media-only messages contribute nothing.
+    {
+        let weak = window.as_weak();
+        let selected_ids = selected_ids.clone();
+        let ui_ctx = ui_ctx.clone();
+        window.on_selection_copy_clicked(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let targets: Vec<(String, String)> = {
+                let set = selected_ids.borrow();
+                let model = w.get_messages();
+                (0..model.row_count())
+                    .filter_map(|i| model.row_data(i))
+                    .filter(|row| set.contains(row.message_id.as_str()))
+                    .map(|row| (row.sender_id.to_string(), row.timestamp_ns.to_string()))
+                    .collect()
+            };
+            let handle = ui_ctx.conversation(ui_ctx.chat_state().active_conversation());
+            std::thread::spawn(move || {
+                let texts: Vec<String> = targets
+                    .iter()
+                    .filter_map(|(sender, ts)| {
+                        let sender = sender.parse().ok()?;
+                        let ts: u64 = ts.parse().ok()?;
+                        handle.get_message_text(&sender, ts).ok().flatten()
+                    })
+                    .collect();
+                if !texts.is_empty() {
+                    crate::bin_ui::features::chat::actions::copy_text(&texts.join("\n\n"));
+                }
+            });
             exit(&w, &selected_ids);
         });
     }

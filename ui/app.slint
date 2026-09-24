@@ -440,6 +440,7 @@ export component App inherits Rectangle {
     callback message-selection-toggled(string);   // (message_id)
     callback selection-cleared();
     callback selection-delete-clicked();
+    callback selection-copy-clicked();
 
     // ========== Message context menu state ==========
     in-out property <bool> context-menu-visible: false;
@@ -1485,6 +1486,7 @@ export component App inherits Rectangle {
                             root.selection-cleared();
                         }
                         delete-clicked => { root.selection-delete-clicked(); }
+                        copy-clicked => { root.selection-copy-clicked(); }
                     }
 
                     if !root.active-call-fullscreen

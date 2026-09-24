@@ -70,7 +70,7 @@ pub struct AndroidWindowAdapter {
     /// Last `InputType` handed to the IME via `set_ime_editor_info`, so the
     /// repeated Enable requests do not re-push it (and restart the IME) on
     /// every keystroke.
-    ime_input_type: Cell<Option<i_slint_core::items::InputType>>,
+    ime_input_type: Cell<Option<(i_slint_core::items::InputType, bool)>>,
     /// Whether the last state we pushed carried a compose region, i.e. whether
     /// the input method may still be composing. Gates the stale-composition
     /// reset below so it only fires when there is something to clear.
@@ -200,10 +200,22 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
                 // Tell the IME what kind of field this is. Without it every
                 // field — passwords and PINs included — opened as plain text,
                 // so the keyboard offered suggestions for, and learned, secrets.
-                if self.ime_input_type.get() != Some(props.input_type) {
+                // Multi-line is a property of the focused TextInput, not of the
+                // request; without it the keyboard's Enter was a DONE key and a
+                // chat composer could not take a newline.
+                let multi_line = WindowInner::from_pub(&self.window)
+                    .focus_item
+                    .borrow()
+                    .upgrade()
+                    .and_then(|f| {
+                        f.downcast::<i_slint_core::items::TextInput>()
+                            .map(|t| !t.as_pin_ref().single_line())
+                    })
+                    .unwrap_or(false);
+                if self.ime_input_type.get() != Some((props.input_type, multi_line)) {
                     use android_activity::input::{ImeOptions, InputType, TextInputAction};
                     use i_slint_core::items::InputType as SlintInputType;
-                    let input_type = match props.input_type {
+                    let mut input_type = match props.input_type {
                         SlintInputType::Password => {
                             InputType::TYPE_CLASS_TEXT
                                 | InputType::TYPE_TEXT_VARIATION_PASSWORD
@@ -222,8 +234,15 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
                     if props.input_type == SlintInputType::Password {
                         options |= ImeOptions::IME_FLAG_NO_PERSONALIZED_LEARNING;
                     }
-                    self.app.set_ime_editor_info(input_type, TextInputAction::Done, options);
-                    self.ime_input_type.set(Some(props.input_type));
+                    let mut action = TextInputAction::Done;
+                    if multi_line && props.input_type == SlintInputType::Text {
+                        input_type |= InputType::TYPE_TEXT_FLAG_MULTI_LINE;
+                        options = ImeOptions::IME_FLAG_NO_FULLSCREEN
+                            | ImeOptions::IME_FLAG_NO_ENTER_ACTION;
+                        action = TextInputAction::None;
+                    }
+                    self.app.set_ime_editor_info(input_type, action, options);
+                    self.ime_input_type.set(Some((props.input_type, multi_line)));
                 }
                 self.app.show_soft_input(true);
                 // New field focused — force the next state push.

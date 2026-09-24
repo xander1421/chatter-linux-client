@@ -62,6 +62,7 @@ export component SelectionBar inherits Rectangle {
 
     callback cleared();
     callback delete-clicked();
+    callback copy-clicked();
 
     visible: root.show;
     height: Spacing.touch-target-min + Spacing.sm * 2 + root.safe-area-top;
@@ -78,7 +79,6 @@ export component SelectionBar inherits Rectangle {
         padding-left: Spacing.sm;
         padding-right: Spacing.sm;
         spacing: Spacing.xs;
-        alignment: start;
 
         // Exit selection mode. Mirrors what Android Back does.
         BarButton {
@@ -95,6 +95,13 @@ export component SelectionBar inherits Rectangle {
             vertical-alignment: center;
             horizontal-stretch: 1;
             overflow: elide;
+        }
+
+        BarButton {
+            icon: Icons.copy;
+            label: "Copy selected";
+            enabled: root.count > 0;
+            clicked => { root.copy-clicked(); }
         }
 
         BarButton {

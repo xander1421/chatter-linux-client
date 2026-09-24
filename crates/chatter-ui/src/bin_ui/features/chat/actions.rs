@@ -201,37 +201,29 @@ pub fn wire_copy_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
-            // Copy text to clipboard using arboard
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            match arboard::Clipboard::new() {
-                Ok(mut clipboard) => {
-                    if let Err(e) = clipboard.set_text(&text) {
-                        tracing::error!(error = %e, "Failed to copy to clipboard");
-                    } else {
-                        tracing::debug!(
-                            sender_id = %sender_id_str,
-                            timestamp = %timestamp_ns_str,
-                            "Copied message text to clipboard (Signal-style lookup)"
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "Failed to access clipboard");
-                }
-            }
-            #[cfg(target_os = "android")]
-            match crate::platform::android::clipboard::set_text("Message", &text) {
-                Ok(()) => tracing::debug!(
-                    sender_id = %sender_id_str,
-                    timestamp = %timestamp_ns_str,
-                    "Copied message text to clipboard"
-                ),
-                Err(e) => tracing::error!(error = %e, "Failed to copy to clipboard"),
-            }
-            #[cfg(target_os = "ios")]
-            tracing::warn!("Clipboard not yet supported on iOS");
+            copy_text(&text);
         });
     });
+}
+
+/// Put `text` on the system clipboard (Android via JNI, desktop via arboard).
+/// Blocking: call off the UI thread.
+pub fn copy_text(text: &str) {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    match arboard::Clipboard::new() {
+        Ok(mut clipboard) => {
+            if let Err(e) = clipboard.set_text(text) {
+                tracing::error!(error = %e, "Failed to copy to clipboard");
+            }
+        }
+        Err(e) => tracing::error!(error = %e, "Failed to access clipboard"),
+    }
+    #[cfg(target_os = "android")]
+    if let Err(e) = crate::platform::android::clipboard::set_text("Message", text) {
+        tracing::error!(error = %e, "Failed to copy to clipboard");
+    }
+    #[cfg(target_os = "ios")]
+    tracing::warn!("Clipboard not yet supported on iOS");
 }
 
 /// Wire download-message callback from context menu.
