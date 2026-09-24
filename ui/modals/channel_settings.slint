@@ -113,6 +113,10 @@ export component ChannelSettingsModal inherits Rectangle {
         }
     }
 
+    // Phone-width layout switch. No media queries in Slint; this is the one
+    // place the breakpoint is decided (§112z).
+    property <bool> narrow: root.width < 560px;
+
     Modal {
         show: root.show-modal;
         title: "Channel Settings";
@@ -129,9 +133,14 @@ export component ChannelSettingsModal inherits Rectangle {
         HorizontalLayout {
             spacing: 0;
 
-            // Left sidebar - section navigation — Neo inset panel
+            // Left sidebar - section navigation — Neo inset panel.
+            // On a phone the card is only ~450px wide, and a fixed 160px of it
+            // left the right pane too narrow: the name/description inputs and
+            // the Save Changes button were CLIPPED off the right edge, so
+            // channel settings could not be saved at all (§112z). Collapse to
+            // icons there.
             Rectangle {
-                width: 160px;
+                width: root.narrow ? 44px : 160px;
                 background: Colors.neo-inset-bg;
                 border-radius: Spacing.radius-md;
                 border-width: 1px;
@@ -158,8 +167,18 @@ export component ChannelSettingsModal inherits Rectangle {
                                 padding-right: Spacing.sm;
                                 alignment: start;
 
-                                Text {
-                                    text: "\u{2699}\u{FE0F}  General";
+                                // U+2699 and U+26A0 are tofu boxes on the
+                                // Galaxy S9; the whole nav uses the icon set
+                                // now (§112z).
+                                Image {
+                                    source: Icons.settings;
+                                    width: 14px;
+                                    height: 14px;
+                                    colorize: root.active-section == "general" ? Colors.text-primary : Colors.text-secondary;
+                                }
+                                Rectangle { width: Spacing.sm; }
+                                if !root.narrow: Text {
+                                    text: "General";
                                     color: root.active-section == "general" ? Colors.text-primary : Colors.text-secondary;
                                     font-size: Typography.sm;
                                     vertical-alignment: center;
@@ -184,8 +203,15 @@ export component ChannelSettingsModal inherits Rectangle {
                                 padding-right: Spacing.sm;
                                 alignment: start;
 
-                                Text {
-                                    text: "\u{1F514}  Notifications";
+                                Image {
+                                    source: Icons.bell;
+                                    width: 14px;
+                                    height: 14px;
+                                    colorize: root.active-section == "notifications" ? Colors.text-primary : Colors.text-secondary;
+                                }
+                                Rectangle { width: Spacing.sm; }
+                                if !root.narrow: Text {
+                                    text: "Notifications";
                                     color: root.active-section == "notifications" ? Colors.text-primary : Colors.text-secondary;
                                     font-size: Typography.sm;
                                     vertical-alignment: center;
@@ -218,7 +244,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     colorize: root.active-section == "members" ? Colors.text-primary : Colors.text-secondary;
                                 }
                                 Rectangle { width: Spacing.sm; }
-                                Text {
+                                if !root.narrow: Text {
                                     text: "Members";
                                     color: root.active-section == "members" ? Colors.text-primary : Colors.text-secondary;
                                     font-size: Typography.sm;
@@ -242,8 +268,15 @@ export component ChannelSettingsModal inherits Rectangle {
                                 padding-right: Spacing.sm;
                                 alignment: start;
 
-                                Text {
-                                    text: "\u{26A0}\u{FE0F}  Danger Zone";
+                                Image {
+                                    source: Icons.alert-triangle;
+                                    width: 14px;
+                                    height: 14px;
+                                    colorize: root.active-section == "danger" ? Colors.error : Colors.text-secondary;
+                                }
+                                Rectangle { width: Spacing.sm; }
+                                if !root.narrow: Text {
+                                    text: "Danger Zone";
                                     color: root.active-section == "danger" ? Colors.error : Colors.text-secondary;
                                     font-size: Typography.sm;
                                     vertical-alignment: center;
