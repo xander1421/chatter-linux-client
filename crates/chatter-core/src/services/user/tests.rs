@@ -16,6 +16,22 @@ mod tests {
     };
     use super::super::{FriendRequestFilter, UserError, UserService};
 
+    /// Mirrors Signal-Desktop's 5-minute `throttledGetProfiles`: never fetched
+    /// or fetched a full interval ago → refetch; anything newer → skip.
+    #[test]
+    fn profile_fetch_due_after_interval_only() {
+        use super::super::{profile_fetch_due, PROFILE_REFRESH_INTERVAL};
+        use std::time::{Duration, Instant};
+
+        let now = Instant::now() + PROFILE_REFRESH_INTERVAL * 2;
+        assert!(profile_fetch_due(None, now));
+        assert!(!profile_fetch_due(Some(now), now));
+        assert!(!profile_fetch_due(Some(now - PROFILE_REFRESH_INTERVAL + Duration::from_secs(1)), now));
+        assert!(profile_fetch_due(Some(now - PROFILE_REFRESH_INTERVAL), now));
+        // A clock that reads earlier than the stamp is not "stale".
+        assert!(!profile_fetch_due(Some(now + Duration::from_secs(1)), now));
+    }
+
     #[test]
     fn test_user_error_display() {
         let err = UserError::NotLoggedIn;

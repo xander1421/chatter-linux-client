@@ -3086,6 +3086,27 @@ impl ChatterClient {
         self.users().get_user_profile(user_id).await
     }
 
+    /// Refetch a peer's profile when it is stale and, if refetched, emit
+    /// `UserProfileUpdated` so every view patches name, bio and avatar. A
+    /// peer's profile edit does not rotate their profile key, so nothing else
+    /// tells us about it. Call on DM open and profile open (Signal-Desktop's
+    /// `throttledGetProfiles`); throttled in `UserService`, so cheap to call.
+    pub async fn refresh_profile_if_stale(&self, user_id: &crate::domain::ids::UserId) {
+        match self.users().refresh_profile_if_stale(user_id).await {
+            Ok(Some(profile)) => {
+                self.event_bus().emit_domain(DomainEvent::UserProfileUpdated {
+                    user_id: *user_id,
+                    display_name: profile.display_name,
+                    status_message: profile.status_message.map(|s| s.text),
+                    avatar_bytes: profile.avatar_bytes,
+                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                });
+            }
+            Ok(None) => {}
+            Err(e) => tracing::warn!(peer_id = %user_id, error = %e, "profile refresh failed"),
+        }
+    }
+
     /// Search for users by exact `nickname.discriminator` username.
     ///
     /// Backs the friends-modal user search (F-UI-3). Because display names are

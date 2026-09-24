@@ -192,6 +192,11 @@ pub fn open_user_profile(
 
     if !is_self {
         if let Some(ctx) = ui_ctx {
+            // A peer's name/bio/avatar edit is not pushed reliably; refetch on
+            // open (throttled in core) so the modal catches up via
+            // UserProfileUpdated.
+            let (refresh_ctx, peer) = (ctx.clone(), *user_id);
+            tokio::spawn(async move { refresh_ctx.refresh_profile_if_stale(&peer).await });
             // Loading from the first frame: an empty strip is also what "no
             // tabs" looks like, and flashing "Nothing shared yet" for the
             // length of one query reads as a bug.

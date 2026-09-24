@@ -155,6 +155,23 @@ impl ChatterClient {
                 .map_err(|e| ClientError::Validation(format!("failed to publish this device's keys: {e}")))?;
         }
 
+        // Our name, bio and avatar live on the server encrypted with our
+        // profile key. A new device has none of them locally — the avatar
+        // showed as initials while friends saw the photo — so restore them now
+        // that the profile key is in place. Best-effort: a failed fetch must
+        // not fail a login that otherwise worked.
+        match self.users().get_user_profile(&result.user_id).await {
+            Ok(profile) => {
+                result.display_name = profile.display_name;
+                self.auth_state().set_logged_in(
+                    result.user_id,
+                    result.device_id,
+                    result.display_name.clone(),
+                );
+            }
+            Err(e) => tracing::warn!(error = %e, "login: own profile restore failed"),
+        }
+
         self.start().await?;
         Ok(result)
     }

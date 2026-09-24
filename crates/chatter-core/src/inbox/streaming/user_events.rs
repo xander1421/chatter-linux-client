@@ -215,6 +215,15 @@ async fn handle_user_event(
                 })
                 .map(crate::domain::user::StatusMessage::new);
 
+            // Avatar too, or a peer's new photo pushed here never shows (the
+            // upsert keeps the old one when this is `None`).
+            profile.avatar_bytes = current_user_id
+                .filter(|_| !proto_profile.encrypted_avatar.is_empty())
+                .and_then(|cur| user_repo.get_friend_profile_key(cur, &profile.user_id).ok().flatten())
+                .and_then(|key| {
+                    crate::crypto::profile_crypto::decrypt_avatar(&key, &proto_profile.encrypted_avatar).ok()
+                });
+
             if let Err(e) = user_repo.upsert_profile(&profile) {
                 tracing::warn!(error = %e, user_id = %profile.user_id, "Failed to upsert profile");
                 return;

@@ -7,7 +7,9 @@
 //! - `conversions` - Proto <-> Domain conversion helpers
 //! - `tests` - Unit tests
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use tokio_stream::StreamExt;
 
@@ -206,6 +208,18 @@ pub struct UserService {
     /// `get_display_name` consults these to avoid raw-UUID fallback.
     anon_dm_repo: Arc<AnonDmRepository>,
     anon_group_repo: Arc<AnonGroupRepository>,
+    /// When each profile was last fetched from the server this session.
+    /// In memory on purpose: a restart should refetch.
+    profile_fetched_at: Arc<parking_lot::Mutex<HashMap<UserId, Instant>>>,
+}
+
+/// Signal-Desktop's `throttledGetProfiles` window: opening a conversation
+/// refetches the peer's profile at most once per this interval.
+pub const PROFILE_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+/// Whether a profile last fetched at `last` is due for a refetch at `now`.
+fn profile_fetch_due(last: Option<Instant>, now: Instant) -> bool {
+    last.map_or(true, |t| now.saturating_duration_since(t) >= PROFILE_REFRESH_INTERVAL)
 }
 
 impl UserService {
@@ -223,6 +237,7 @@ impl UserService {
             user_repo,
             anon_dm_repo,
             anon_group_repo,
+            profile_fetched_at: Arc::default(),
         }
     }
 
@@ -248,6 +263,14 @@ impl UserService {
             .await?;
 
         let mut profile = proto_to_domain_profile(&proto_profile)?;
+
+        if *user_id == current_user {
+            self.restore_own_profile(&mut profile, &proto_profile)?;
+            self.user_repo.ensure_user_exists(user_id)?;
+            self.user_repo.upsert_profile(&profile)?;
+            self.profile_fetched_at.lock().insert(*user_id, Instant::now());
+            return Ok(profile);
+        }
 
         // Decrypt with their profile key; no key → placeholder. The server
         // value is always ciphertext, so we never fall back to it.
@@ -277,8 +300,93 @@ impl UserService {
 
         self.user_repo.ensure_user_exists(user_id)?;
         self.user_repo.upsert_profile(&profile)?;
+        self.profile_fetched_at.lock().insert(*user_id, Instant::now());
 
         Ok(profile)
+    }
+
+    /// Fill our OWN fetched profile with plaintext and restore the local copies
+    /// the UI reads (`keys::DISPLAY_NAME`, `keys::AVATAR`).
+    ///
+    /// The server holds our name, status and avatar encrypted under OUR profile
+    /// key (`update_user_profile` encrypts with `keys::PROFILE_KEY`), not under
+    /// a friend key — so the friend path would find no key and render a
+    /// placeholder. A new device has none of these locally (it gets the profile
+    /// key from the SVR restore), which is why its own profile showed initials
+    /// while friends saw the photo. A field that is empty or fails to decrypt
+    /// keeps the local value rather than being cleared.
+    fn restore_own_profile(
+        &self,
+        profile: &mut Profile,
+        proto: &UserProfile,
+    ) -> Result<(), UserError> {
+        use base64::Engine;
+        use crate::crypto::profile_crypto;
+
+        let key: Option<[u8; 32]> = self
+            .settings_repo
+            .get_bytes(keys::PROFILE_KEY)?
+            .and_then(|b| b.try_into().ok());
+        let b64 = |s: &str| {
+            base64::engine::general_purpose::STANDARD.decode(s).ok().filter(|b| !b.is_empty())
+        };
+
+        let name = key.as_ref().and_then(|k| {
+            let bytes = b64(&proto.display_name)?;
+            profile_crypto::decrypt_display_name(k, &bytes).ok().filter(|n| !n.is_empty())
+        });
+        let status = key.as_ref().and_then(|k| {
+            let bytes = b64(&proto.status_message)?;
+            profile_crypto::decrypt_status(k, &bytes).ok().filter(|s| !s.is_empty())
+        });
+        let avatar = key.as_ref().and_then(|k| {
+            if proto.encrypted_avatar.is_empty() {
+                return None;
+            }
+            profile_crypto::decrypt_avatar(k, &proto.encrypted_avatar).ok()
+        });
+
+        if let Some(ref n) = name {
+            self.settings_repo.set_string(keys::DISPLAY_NAME, n)?;
+        }
+        if let Some(ref a) = avatar {
+            self.settings_repo.set_bytes(keys::AVATAR, a)?;
+        }
+
+        let existing = self.user_repo.get_profile(&profile.user_id)?;
+        profile.display_name = name
+            .or_else(|| {
+                self.settings_repo
+                    .get_string(keys::DISPLAY_NAME)
+                    .ok()
+                    .flatten()
+                    .filter(|n| !n.is_empty())
+            })
+            .unwrap_or_else(|| friend_display_name_placeholder(&profile.user_id));
+        profile.status_message = status
+            .map(StatusMessage::new)
+            .or_else(|| existing.as_ref().and_then(|p| p.status_message.clone()));
+        profile.avatar_bytes = avatar.or_else(|| self.settings_repo.get_bytes(keys::AVATAR).ok().flatten());
+        Ok(())
+    }
+
+    /// Refetch a user's profile if this device has not fetched it within
+    /// [`PROFILE_REFRESH_INTERVAL`]; `Ok(None)` when it is still fresh.
+    ///
+    /// A peer's name/bio/avatar edit does not change their profile key, so
+    /// nothing pushes it to us. Signal-Desktop covers this by calling
+    /// `throttledGetProfiles` (a 5-minute throttle) whenever a conversation is
+    /// opened (`ts/state/ducks/conversations.preload.ts`); this is the same
+    /// decision. Call it on DM open and profile open.
+    pub async fn refresh_profile_if_stale(
+        &self,
+        user_id: &UserId,
+    ) -> Result<Option<Profile>, UserError> {
+        let last = self.profile_fetched_at.lock().get(user_id).copied();
+        if !profile_fetch_due(last, Instant::now()) {
+            return Ok(None);
+        }
+        self.get_user_profile(user_id).await.map(Some)
     }
 
     /// Try to decrypt a friend's avatar using their profile key.

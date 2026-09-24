@@ -55,6 +55,12 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         // both read `active_channel_id`; if they fire before the async task
         // sets it, send_message.rs:86 early-returns and
         // handle_message_received drops the bubble (`is_active=false`).
+        // Catch up on the peer's profile edits (throttled in core).
+        if let Some(peer) = peer_id_for_dm {
+            let refresh_ctx = ui_ctx.clone();
+            tokio::spawn(async move { refresh_ctx.refresh_profile_if_stale(&peer).await });
+        }
+
         if let Some(active) = active_pre_spawn {
             tracing::info!(?active, dm_id = %dm_id_str, is_anon = is_anon_dm, "[UI_OPEN_DM] committing active conversation pre-spawn");
             ui_ctx.chat_state().set_active_conversation(active);
