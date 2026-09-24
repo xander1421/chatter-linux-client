@@ -139,6 +139,20 @@ impl ChatterClient {
         // holds the private half of.
         if result.keys_restored || self.key_republish_pending() {
             self.republish_identity_keys().await?;
+        } else {
+            // The server issued this login a device id it holds no bundle for
+            // (every login gets a new one). Without this, a Log Out -> Log In
+            // left peers encrypting to the previous, signed-out device and
+            // every incoming DM was delivered to nobody. Failing the login is
+            // better than reporting success for an unreachable device.
+            let mut auth_client = self
+                .auth()
+                .try_auth_client()
+                .ok_or(ClientError::NotConnected)?;
+            self.signal()
+                .publish_device_bundle(&mut auth_client)
+                .await
+                .map_err(|e| ClientError::Validation(format!("failed to publish this device's keys: {e}")))?;
         }
 
         self.start().await?;

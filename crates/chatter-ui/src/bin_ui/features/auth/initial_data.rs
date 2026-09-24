@@ -346,7 +346,11 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         }
     });
 
-    // If there's a channel, select it and load messages
+    // If there's a channel, select it and load messages — desktop only. On a
+    // phone the conversation list IS the home screen: selecting here opened
+    // the first channel over it at every launch and, via mark_as_read, cleared
+    // its unread badge before the user had seen it.
+    let first_channel_id = first_channel_id.filter(|_| !cfg!(any(target_os = "android", target_os = "ios")));
     if let Some(channel_id) = first_channel_id {
         let channel_id_str = channel_id.to_string();
 

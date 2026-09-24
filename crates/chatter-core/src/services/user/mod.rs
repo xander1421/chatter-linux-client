@@ -1009,6 +1009,19 @@ impl UserService {
     }
 
     /// Get a user's profile from local storage only.
+    /// Whether `user_id` is an accepted friend of the current user, from the
+    /// local friendships table (either direction of the original request).
+    pub fn is_friend_local(&self, user_id: &UserId) -> bool {
+        use crate::domain::user::FriendshipStatus;
+        let Ok(me) = self.settings_repo.current_user_id() else { return false };
+        [(me, *user_id), (*user_id, me)].iter().any(|(a, b)| {
+            matches!(
+                self.user_repo.get_friendship(a, b),
+                Ok(Some(f)) if f.status == FriendshipStatus::Accepted
+            )
+        })
+    }
+
     pub fn get_profile_local(&self, user_id: &UserId) -> Result<Option<Profile>, UserError> {
         self.user_repo.get_profile(user_id).map_err(UserError::Storage)
     }

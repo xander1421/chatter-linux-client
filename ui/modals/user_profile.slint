@@ -399,8 +399,9 @@ export component UserProfileModal inherits Rectangle {
                     // Value on top, label underneath. Phone number is
                     // deliberately absent: it exists in neither the proto, the
                     // domain model nor the schema, and a faked row is worse
-                    // than a missing one.
-                    HorizontalLayout {
+                    // than a missing one. Nothing to show (a peer with no
+                    // known handle and no bio) means no card, not an empty one.
+                    if root.username != "" || root.is-self || root.bio != "": HorizontalLayout {
                         padding-left: Spacing.md;
                         padding-right: Spacing.md;
 
@@ -417,7 +418,8 @@ export component UserProfileModal inherits Rectangle {
 
                                 // Username, with the QR behind a glyph on the row
                                 // rather than a permanently-open 150px image.
-                                HorizontalLayout {
+                                // No row for a peer whose handle is unknown here.
+                                if root.username != "" || root.is-self: HorizontalLayout {
                                     spacing: Spacing.sm;
 
                                     VerticalLayout {
@@ -425,7 +427,7 @@ export component UserProfileModal inherits Rectangle {
                                         spacing: 2px;
 
                                         Text {
-                                            text: root.username != "" ? "@" + root.username : root.user-id;
+                                            text: root.username != "" ? "@" + root.username : "Not stored on this device";
                                             color: Colors.text-primary;
                                             font-size: Typography.base;
                                             overflow: elide;

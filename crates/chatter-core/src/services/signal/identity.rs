@@ -109,41 +109,20 @@ impl SignalService {
         Ok(())
     }
 
-    /// Replace the account's ENTIRE server-side Signal key material with this
-    /// device's, in one atomic RPC.
-    ///
-    /// # Why this exists
-    ///
-    /// Two recovery situations leave the server holding key material nobody
-    /// can use, and neither had any way to fix itself:
-    ///
-    ///   - **PIN restore.** The identity key comes back from the SVR backup,
-    ///     but the private halves of every prekey the account ever published
-    ///     died with the old device. Peers keep fetching those prekeys and
-    ///     completing handshakes the new device cannot decrypt.
-    ///   - **Identity reset.** No backup existed, so a NEW identity key is the
-    ///     only way forward. `UploadPreKeyBundle` refuses a changed identity
-    ///     key outright (the cross-device consistency check), and neither
-    ///     `LoginRequest` nor `RefreshPreKeysRequest` carries one — so before
-    ///     this method there was literally no wire on which to publish it.
-    ///
-    /// # Why one call
-    ///
-    /// The identity key and the prekeys signed by it are published together or
-    /// not at all. Splitting them is precisely how accounts became permanently
-    /// unreachable: the replenisher rotated the signed prekey through
-    /// `RefreshPreKeys` while `identity_key` stayed at its old value, so the
-    /// server served a signed prekey whose signature could never verify
-    /// against the identity key it was served with. The server applies this in
-    /// a single transaction for the same reason.
-    ///
-    /// Not a routine rotation — it changes every contact's safety number.
-    /// Reached only from `ChatterClient::login`'s post-restore step and from
-    /// the explicit `accept_new_identity`.
-    pub async fn republish_identity_bundle(
+    /// This device's complete Signal key material, ready to publish: the
+    /// bundle (identity key, fresh signed + Kyber prekeys, UAK) and both
+    /// one-time pools. Shared by the whole-account republish and the
+    /// per-device publish so the two can never build different bundles.
+    async fn build_device_key_material(
         &self,
-        auth_client: &mut AuthClient,
-    ) -> Result<RepublishOutcome, ServiceError> {
+    ) -> Result<
+        (
+            crate::proto::chat_v1::SignalPreKeyBundle,
+            Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>,
+            Vec<crate::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord>,
+        ),
+        ServiceError,
+    > {
         use crate::proto::chat_v1::SignalPreKeyBundle;
         use crate::storage::repositories::settings_repo::keys;
 
@@ -196,6 +175,76 @@ impl SignalService {
             // credentials rather than unrestricted sealed sender.
             unrestricted_unidentified_access: Some(false),
         };
+
+        Ok((bundle, one_time_prekeys, kyber_one_time_prekeys))
+    }
+
+    /// Publish THIS device's bundle and one-time pools under its own device id,
+    /// leaving every other device of the account untouched.
+    ///
+    /// Every login is issued a new device id by the server. A login that
+    /// already holds the identity locally (Log Out, then Log In again) skips
+    /// the SVR restore and so never reached `republish_identity_bundle`: the
+    /// new device id had no bundle, peers kept encrypting to the previous
+    /// (signed-out) device, and every incoming DM was silently lost. The
+    /// identity key is unchanged here, so the per-device upload's
+    /// same-identity check accepts it.
+    pub async fn publish_device_bundle(
+        &self,
+        auth_client: &mut AuthClient,
+    ) -> Result<(), ServiceError> {
+        let (bundle, one_time_prekeys, kyber_one_time_prekeys) =
+            self.build_device_key_material().await?;
+        let device_id = bundle.device_id;
+        auth_client
+            .upload_pre_key_bundle(bundle)
+            .await
+            .map_err(ServiceError::Network)?;
+        auth_client
+            .refresh_pre_keys_with_kyber_otpk(one_time_prekeys, kyber_one_time_prekeys)
+            .await
+            .map_err(ServiceError::Network)?;
+        tracing::info!(device_id, "published this device's Signal bundle");
+        Ok(())
+    }
+
+    /// Replace the account's ENTIRE server-side Signal key material with this
+    /// device's, in one atomic RPC.
+    ///
+    /// # Why this exists
+    ///
+    /// Two recovery situations leave the server holding key material nobody
+    /// can use, and neither had any way to fix itself:
+    ///
+    ///   - **PIN restore.** The identity key comes back from the SVR backup,
+    ///     but the private halves of every prekey the account ever published
+    ///     died with the old device. Peers keep fetching those prekeys and
+    ///     completing handshakes the new device cannot decrypt.
+    ///   - **Identity reset.** No backup existed, so a NEW identity key is the
+    ///     only way forward. `UploadPreKeyBundle` refuses a changed identity
+    ///     key outright (the cross-device consistency check), and neither
+    ///     `LoginRequest` nor `RefreshPreKeysRequest` carries one — so before
+    ///     this method there was literally no wire on which to publish it.
+    ///
+    /// # Why one call
+    ///
+    /// The identity key and the prekeys signed by it are published together or
+    /// not at all. Splitting them is precisely how accounts became permanently
+    /// unreachable: the replenisher rotated the signed prekey through
+    /// `RefreshPreKeys` while `identity_key` stayed at its old value, so the
+    /// server served a signed prekey whose signature could never verify
+    /// against the identity key it was served with. The server applies this in
+    /// a single transaction for the same reason.
+    ///
+    /// Not a routine rotation — it changes every contact's safety number.
+    /// Reached only from `ChatterClient::login`'s post-restore step and from
+    /// the explicit `accept_new_identity`.
+    pub async fn republish_identity_bundle(
+        &self,
+        auth_client: &mut AuthClient,
+    ) -> Result<RepublishOutcome, ServiceError> {
+        let (bundle, one_time_prekeys, kyber_one_time_prekeys) =
+            self.build_device_key_material().await?;
 
         let response = auth_client
             .republish_identity_key(bundle, one_time_prekeys, kyber_one_time_prekeys)

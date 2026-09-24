@@ -424,6 +424,11 @@ impl ChatterClient {
             .map_err(|e| super::ClientError::Inbox(e.to_string()))
     }
 
+    /// Whether this user is an accepted friend (local friendships table).
+    pub fn is_friend(&self, id: &crate::domain::ids::UserId) -> bool {
+        self.users().is_friend_local(id)
+    }
+
     /// Check if a profile identifier is blocked (anon or server-side).
     pub fn is_profile_user_blocked(&self, id: &crate::domain::ids::UserId) -> bool {
         // Anon: check by peer ID

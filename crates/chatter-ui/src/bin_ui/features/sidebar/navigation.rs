@@ -18,6 +18,7 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
 
     window.on_saved_messages_clicked(move || {
         let weak = weak_window.clone();
+        super::show_chat_pane(&weak);
         let ui_ctx = ui_ctx_clone.clone();
         let auth_state = ui_ctx.auth_state().clone();
         let chat_state = ui_ctx.chat_state().clone();

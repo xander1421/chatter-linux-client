@@ -28,6 +28,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
         let ui_ctx = ui_ctx_clone.clone();
         let weak = weak_window.clone();
+        super::show_chat_pane(&weak);
         
         // Stop any playing audio
         stop_audio_playback();

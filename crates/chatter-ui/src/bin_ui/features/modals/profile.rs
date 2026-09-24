@@ -124,19 +124,25 @@ pub fn open_user_profile(
         let profile = user_state.get_profile(user_id);
         let user = user_state.get_user(user_id);
 
-        let display_name = profile
-            .as_ref()
-            .map(|p| &p.display_name)
-            .filter(|n| !n.is_empty())
-            .cloned()
-            .or_else(|| user.as_ref().map(|u| u.username.clone()).filter(|u| !u.is_empty()))
-            .unwrap_or_else(|| user_id.to_string()[..8.min(user_id.to_string().len())].to_string());
+        // Core resolves names from the local user directory. The in-memory
+        // UserState used here before is not populated for peers, so a friend's
+        // profile read "5ea4c7b3" while the Friends list showed their name.
+        let display_name = match ui_ctx {
+            Some(ctx) => ctx.display_name(user_id),
+            None => profile
+                .as_ref()
+                .map(|p| p.display_name.clone())
+                .filter(|n| !n.is_empty())
+                .unwrap_or_default(),
+        };
 
+        // A peer's handle is not known locally (the server stores only its
+        // lookup hash); show none rather than the user id dressed up as one.
         let username = user
             .as_ref()
             .map(|u| u.username.clone())
-            .filter(|u| !u.is_empty())
-            .unwrap_or_else(|| user_id.to_string());
+            .filter(|u| !u.is_empty() && u.parse::<uuid::Uuid>().is_err())
+            .unwrap_or_default();
 
         let initials = get_initials(&display_name);
 
@@ -151,7 +157,8 @@ pub fn open_user_profile(
             .unwrap_or_default();
 
         let user_data = user_state.get();
-        let is_friend = user_data.friends.contains(user_id);
+        let is_friend = user_data.friends.contains(user_id)
+            || ui_ctx.map(|ctx| ctx.is_friend(user_id)).unwrap_or(false);
         let is_blocked = ui_ctx.map(|ctx| ctx.is_profile_user_blocked(user_id)).unwrap_or(false);
 
         w.set_profile_display_name(display_name.into());
@@ -847,7 +854,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let profile_id_for_ui = profile_user_id.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak_loading.upgrade() {
-                    w.set_active_modal("".into());
+                    w.set_active_modal("none".into());
                     w.set_loading_messages(true);
                 }
             });

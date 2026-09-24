@@ -21,6 +21,7 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.on_channel_selected(move |channel_id: SharedString| {
         let channel_id_str = channel_id.to_string();
         let weak = weak_window.clone();
+        super::show_chat_pane(&weak);
         let ui_ctx = ui_ctx_clone.clone();
 
         // Stop any playing audio when switching channels

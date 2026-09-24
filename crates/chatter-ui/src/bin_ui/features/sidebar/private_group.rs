@@ -141,6 +141,7 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
     window.on_private_group_selected(move |group_id: SharedString| {
         let group_id_str = group_id.to_string();
         let weak = weak_window.clone();
+        super::show_chat_pane(&weak);
         let ui_ctx = ui_ctx.clone();
 
         // Stop any playing audio when switching

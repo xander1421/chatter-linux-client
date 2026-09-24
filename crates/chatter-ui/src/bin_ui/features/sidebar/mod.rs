@@ -488,6 +488,19 @@ pub(crate) fn create_dm_sidebar_entry(
 }
 
 /// Stop any currently playing audio and clear state.
+/// Opening a conversation shows it. On a phone the chat pane is a separate
+/// screen, and only the sidebar's own row taps used to raise it: every other
+/// opener (Friends and Profile "Message", search, call history, sections)
+/// selected the conversation behind the list and looked like it did nothing.
+/// Runs on the UI thread, from the selection callbacks.
+pub(crate) fn show_chat_pane(weak: &slint::Weak<MainWindow>) {
+    if let Some(w) = weak.upgrade() {
+        if w.get_is_mobile_platform() {
+            w.set_mobile_show_chat(true);
+        }
+    }
+}
+
 pub(crate) fn stop_audio_playback() {
     // Stop the audio player
     if let Ok(mut guard) = audio_state::get_audio_player().lock() {
