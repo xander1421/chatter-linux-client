@@ -13,7 +13,7 @@ use sha2::Digest;
 use tokio::sync::broadcast;
 
 use crate::domain::ids::{AttachmentId, ChannelId, MessageId};
-use crate::domain::message::{ConversationType, Message};
+use crate::domain::message::Message;
 use crate::domain::UserId;
 use crate::error::{CryptoError, ServiceError};
 use crate::inbox::events::InboxEvent;
@@ -150,10 +150,8 @@ fn channel_marker_target(
     peer_id: Option<UserId>,
     envelope_ts_ns: u64,
 ) -> crate::inbox::ack_policy::MarkerTarget {
-    let conversation_type = match channel_repo.get(&channel_id) {
-        Ok(Some(channel)) => channel.conversation_type(),
-        _ => ConversationType::AnonGroup,
-    };
+    let conversation_type =
+        crate::services::message::conversion::conversation_type_for_channel(channel_repo, &channel_id);
     crate::inbox::ack_policy::MarkerTarget {
         conversation_id: channel_id,
         conversation_type,
@@ -757,34 +755,11 @@ fn process_decrypted_data_message(
                 .parse::<MessageId>()
                 .unwrap_or_else(|_| MessageId::new());
 
-            // Derive ConversationType from the channel row rather than
-            // hardcoding AnonGroup. Sender-key sealed-sender delivery is
-            // used by BOTH identified groups (require_encryption=true on
-            // a normal channel) and anon groups — the channel row's
-            // channel_type + require_encryption config determines which.
-            // Fallback to AnonGroup when the channel row is missing (rare
-            // race between SKDM landing and channel sync); Channel::
-            // conversation_type() default for encrypted-but-unknown is
-            // AnonGroup so this preserves the prior behaviour for that
-            // edge case.
-            let conversation_type = match channel_repo.get(&channel_id) {
-                Ok(Some(channel)) => channel.conversation_type(),
-                Ok(None) => {
-                    tracing::warn!(
-                        channel_id = %channel_id,
-                        "channel row missing when assigning ConversationType — defaulting to AnonGroup"
-                    );
-                    ConversationType::AnonGroup
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        channel_id = %channel_id,
-                        error = %e,
-                        "failed to load channel for ConversationType derivation — defaulting to AnonGroup"
-                    );
-                    ConversationType::AnonGroup
-                }
-            };
+            // A sender-key envelope is a server channel message (anon groups
+            // ride the mailbox, never this path), so its bucket is the channel
+            // row's type — `Channel`, even when the row isn't synced yet.
+            let conversation_type =
+                crate::services::message::conversion::conversation_type_for_channel(channel_repo, &channel_id);
 
             // Create domain message with sender's timestamp for Signal-style dedup
             // created_at is derived from sent_at in Message::new_text()

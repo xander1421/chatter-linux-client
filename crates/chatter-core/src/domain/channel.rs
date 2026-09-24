@@ -115,16 +115,16 @@ impl Channel {
 
     /// Get the correct ConversationType for this channel.
     ///
-    /// Encrypted channels use the anonymous group mailbox system (NDSS '21),
-    /// so their messages are stored as AnonGroup. Non-encrypted channels
-    /// use the server-side Channel path.
+    /// Every row in the channels table is a server channel, encrypted or not:
+    /// `require_encryption` picks sender-key E2E on the wire, not a different
+    /// conversation. Anon groups live in their own `anon_groups` table and are
+    /// never a `Channel`, so `AnonGroup` is not reachable from here.
     #[must_use]
     pub fn conversation_type(&self) -> crate::domain::message::ConversationType {
         use crate::domain::message::ConversationType;
         match self.channel_type {
             ChannelType::DirectMessage => ConversationType::ServerDm,
             ChannelType::SavedMessages => ConversationType::SavedMessages,
-            _ if self.config.require_encryption => ConversationType::AnonGroup,
             _ => ConversationType::Channel,
         }
     }

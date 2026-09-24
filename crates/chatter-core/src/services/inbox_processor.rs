@@ -872,7 +872,7 @@ impl InboxEventProcessor {
                         message_id: msg.id,
                         new_content: crate::domain::message::MessageContent::Text(new_body.clone()),
                         channel_id: *channel_id,
-                        conversation_type: crate::domain::message::ConversationType::AnonGroup,
+                        conversation_type: self.message_service.conversation_type(channel_id),
                         target_sent_timestamp: *target_sent_timestamp,
                     });
                 }
@@ -991,9 +991,10 @@ impl InboxEventProcessor {
                     3 => "read", // viewed = read
                     _ => "sent",
                 };
+                let conversation_type = self.message_service.conversation_type(channel_id);
                 for ts in timestamps {
                     let _ = self.message_service.update_delivery_status_by_timestamp(
-                        channel_id, &crate::domain::message::ConversationType::AnonGroup, *ts, status,
+                        channel_id, &conversation_type, *ts, status,
                     );
                 }
                 false

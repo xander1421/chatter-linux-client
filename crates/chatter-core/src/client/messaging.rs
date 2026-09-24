@@ -385,15 +385,10 @@ impl ChatterClient {
 
     /// `sidebar_activity` for a channel row.
     ///
-    /// Takes the channel rather than an id + type because the type is the trap:
-    /// a channel's messages are filed under `Channel::conversation_type()`,
-    /// which is `AnonGroup` for an encrypted channel — and encryption is the
-    /// DEFAULT (`ChannelConfig::default().require_encryption`, domain/channel.rs)
-    /// — or `SavedMessages` for the vault. It is `ConversationType::Channel`
-    /// only for a plaintext channel. Hardcoding that variant is what left every
-    /// channel row in the sidebar with a name and nothing else, and it is the
-    /// same trap `features/sidebar/channel.rs` already documents on the
-    /// message-list side. Deriving it here means no caller can repeat it.
+    /// Takes the channel rather than an id + type: a channel row's messages are
+    /// filed under `Channel::conversation_type()` — `Channel`, or
+    /// `SavedMessages` for the vault, or `ServerDm` — so deriving it here means
+    /// no caller hardcodes the wrong bucket.
     pub fn channel_sidebar_activity(
         &self,
         channel: &crate::domain::channel::Channel,

@@ -220,7 +220,13 @@ impl MessageGateway {
                 let cid: ChannelId = data_message.channel_id.parse().map_err(|e| {
                     ServiceError::Validation(format!("Invalid channel_id: {}", e))
                 })?;
-                (cid, ConversationType::AnonGroup)
+                // A server channel (sender-key or not) is filed as Channel;
+                // anon groups never arrive on this path (they use the mailbox).
+                let conversation_type = crate::services::message::conversion::conversation_type_for_channel(
+                    &self.channel_repo,
+                    &cid,
+                );
+                (cid, conversation_type)
             };
 
         // Generate message ID from timestamp (Signal's approach: timestamp + author = unique)

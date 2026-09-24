@@ -169,11 +169,9 @@ impl ActiveConversation {
     /// Returns None for ActiveConversation::None.
     ///
     /// `channel_repo` is needed for the `Channel(id)` variant — its
-    /// ConversationType depends on the channel row's `require_encryption`
-    /// flag: `AnonGroup` when set, otherwise plain `Channel`. Previously
-    /// this hardcoded `AnonGroup` for every channel, which mismatched the
-    /// actual stored `ConversationType` once non-encrypted channels
-    /// existed (and caused load-more + unread queries to miss rows).
+    /// ConversationType comes from the channel row (`Channel`, `ServerDm`
+    /// or `SavedMessages`). Encryption does not change it: an encrypted
+    /// server channel is still `Channel`, never `AnonGroup`.
     pub fn conversation_type(
         &self,
         channel_repo: &crate::storage::ChannelRepository,

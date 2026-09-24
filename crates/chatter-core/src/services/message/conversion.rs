@@ -273,6 +273,41 @@ mod tests {
     use super::*;
     use crate::domain::ids::ChannelId;
 
+    /// F13: a server channel with `require_encryption` (the default) is still a
+    /// `Channel`. Filing its received messages under `AnonGroup` made them
+    /// invisible to the channel view, preview, and unread badge, all of which
+    /// read the `channel` bucket.
+    #[test]
+    fn an_encrypted_server_channels_received_message_is_filed_as_channel() {
+        use crate::domain::channel::{Channel, ChannelType};
+        use crate::domain::message::Message;
+        use crate::domain::UserId;
+        use crate::storage::{Database, MessageRepository};
+        use std::sync::Arc;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("test.db"), "test_passphrase").unwrap());
+        db.run_migrations().unwrap();
+        let channels = ChannelRepository::new(db.clone());
+        let messages = MessageRepository::new(db);
+
+        let channel = Channel::new(ChannelId::new(), "ux-sweep".into(), ChannelType::Private, UserId::new());
+        assert!(channel.config.require_encryption, "encryption is the default");
+        channels.insert(&channel).unwrap();
+
+        let conv_type = conversation_type_for_channel(&channels, &channel.id);
+        assert_eq!(conv_type, ConversationType::Channel);
+
+        let received = Message::new_text(channel.id, conv_type, Some(UserId::new()), "badge two".into(), 1_777_000_000_000_000_000);
+        messages.insert(&received).unwrap();
+
+        let listed = messages.list_for_conversation(&channel.id, &ConversationType::Channel, None, 50).unwrap();
+        assert_eq!(listed.len(), 1, "channel view lists the message");
+        let row = channels.get(&channel.id).unwrap().unwrap();
+        assert_eq!(row.unread_count, 1, "sidebar badge counts it");
+        assert!(row.last_message_at.is_some(), "sidebar sorts by it");
+    }
+
     #[test]
     fn test_message_error_display() {
         let err = MessageError::NotLoggedIn;

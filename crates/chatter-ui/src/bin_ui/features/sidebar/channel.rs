@@ -139,11 +139,8 @@ pub async fn load_channel_into_ui(
 
     // Pinned bar. Here, not in each caller: Saved Messages, join and
     // create open through this function too and never loaded their pins.
-    // Load pinned messages for this channel from DB. The bucket is the
-    // channel's own conversation type — same reason the message list
-    // below uses `channel.conversation_type()`. Hardcoding
-    // `ConversationType::Channel` here found nothing for an encrypted
-    // channel, which is the default.
+    // Load pinned messages for this channel from DB, in the channel's own
+    // conversation-type bucket (the vault is `SavedMessages`, not `Channel`).
     let (msg_ids, preview) = match ui_ctx.load_pinned_for_channel(&channel_id, &ui_ctx.channel_conversation_type(&channel_id)).await {
         Ok(pinned) if !pinned.is_empty() => {
             let ids = pinned.iter().map(|p| p.message_id).collect();

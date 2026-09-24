@@ -236,7 +236,7 @@ fn a_dead_sender_key_envelope_is_marked_in_the_channel_before_it_is_acked() {
 
     assert_eq!(decision, AckDecision::Ack);
     assert_eq!(
-        markers(&repo, &channel, ConversationType::AnonGroup),
+        markers(&repo, &channel, ConversationType::Channel),
         vec![SystemMessage::DeliveryIssue],
         "the group message is gone from the server; without an entry in the \
          channel the user sees an unexplained gap"
