@@ -1,5 +1,6 @@
 // InvitePrivateGroupModal - Modal for inviting members to an existing private group
 
+import { Avatar } from "../components/avatar.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -74,20 +75,10 @@ export component InvitePrivateGroupModal inherits Rectangle {
                                 padding-right: Spacing.sm;
                                 spacing: Spacing.sm;
 
-                                // Avatar placeholder
-                                Rectangle {
-                                    width: 36px;
-                                    height: 36px;
-                                    border-radius: 18px;
-                                    background: Colors.surface-hover;
-
-                                    Text {
-                                        text: friend.display-name != "" ? friend.display-name : "?";
-                                        color: Colors.text-secondary;
-                                        font-size: Typography.sm;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
+                                Avatar {
+                                    size: 36px;
+                                    name: friend.display-name;
+                                    fallback-text: "?";
                                 }
 
                                 // Name

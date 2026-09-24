@@ -1,5 +1,6 @@
 // ChannelSettingsModal - Modal for viewing and editing channel settings
 
+import { Avatar } from "../components/avatar.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -716,20 +717,12 @@ export component ChannelSettingsModal inherits Rectangle {
                                     spacing: Spacing.sm;
                                     padding: Spacing.xs;
 
-                                    // Avatar placeholder
-                                    Rectangle {
-                                        width: 36px;
-                                        height: 36px;
-                                        border-radius: 18px;
-                                        background: Colors.surface-hover;
-
-                                        Text {
-                                            text: member.display-name != "" ? member.display-name : "?";
-                                            color: Colors.text-secondary;
-                                            font-size: Typography.sm;
-                                            horizontal-alignment: center;
-                                            vertical-alignment: center;
-                                        }
+                                    // Initials in a clipped circle; the hand-rolled
+                                    // placeholder here drew the whole name, unclipped.
+                                    Avatar {
+                                        size: 36px;
+                                        name: member.display-name;
+                                        fallback-text: "?";
                                     }
 
                                     // Name and role

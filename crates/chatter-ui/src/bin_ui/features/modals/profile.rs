@@ -122,7 +122,6 @@ pub fn open_user_profile(
     } else {
         // Other-user path
         let profile = user_state.get_profile(user_id);
-        let user = user_state.get_user(user_id);
 
         // Core resolves names from the local user directory. The in-memory
         // UserState used here before is not populated for peers, so a friend's
@@ -138,11 +137,7 @@ pub fn open_user_profile(
 
         // A peer's handle is not known locally (the server stores only its
         // lookup hash); show none rather than the user id dressed up as one.
-        let username = user
-            .as_ref()
-            .map(|u| u.username.clone())
-            .filter(|u| !u.is_empty() && u.parse::<uuid::Uuid>().is_err())
-            .unwrap_or_default();
+        let username = ui_ctx.and_then(|ctx| ctx.known_username(user_id)).unwrap_or_default();
 
         let initials = get_initials(&display_name);
 

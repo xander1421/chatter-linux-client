@@ -959,7 +959,7 @@ impl ChatterClient {
             if !seen.insert(user_id) {
                 return;
             }
-            let username = self.get_user_local(&user_id).map(|u| u.username).unwrap_or_default();
+            let username = self.known_username(&user_id).unwrap_or_default();
             let avatar_bytes = self
                 .get_profile_local(&user_id)
                 .and_then(|p| p.avatar_bytes)

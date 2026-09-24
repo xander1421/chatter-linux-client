@@ -152,20 +152,21 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let name_str = name.to_string();
         let desc_str = description.to_string();
 
+        // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
+        let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
+        // The picked icon file (if any) so Save uploads it alongside the
+        // name/description. Empty path = icon unchanged.
+        let icon_path = weak
+            .upgrade()
+            .map(|w| w.get_channel_settings_icon_path().to_string())
+            .unwrap_or_default();
         tokio::spawn(async move {
-            let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
             if channel_id.is_empty() { return; }
             let channel_uuid = match channel_id.parse::<uuid::Uuid>() {
                 Ok(id) => ChannelId::from(id),
                 Err(_) => return,
             };
 
-            // Read the picked icon file (if any) so Save uploads it alongside
-            // the name/description. Empty path = icon unchanged.
-            let icon_path = weak
-                .upgrade()
-                .map(|w| w.get_channel_settings_icon_path().to_string())
-                .unwrap_or_default();
             let icon_bytes: Option<Vec<u8>> = if icon_path.is_empty() {
                 None
             } else {
@@ -288,8 +289,9 @@ fn wire_notification_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak_ui.upgrade() { w.set_channel_settings_muted(muted); }
         });
+        // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
+        let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
         tokio::spawn(async move {
-            let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
             if channel_id.is_empty() { return; }
             let channel_uuid = match channel_id.parse::<uuid::Uuid>() {
                 Ok(id) => ChannelId::from(id),
@@ -316,8 +318,9 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let user_id_str = user_id.to_string();
         let role_str = role.to_string();
 
+        // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
+        let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
         tokio::spawn(async move {
-            let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
             if channel_id.is_empty() { return; }
             let channel_uuid = match channel_id.parse::<uuid::Uuid>() {
                 Ok(id) => ChannelId::from(id),
@@ -344,8 +347,9 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let ui_ctx = ui_ctx.clone();
         let user_id_str = user_id.to_string();
 
+        // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
+        let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
         tokio::spawn(async move {
-            let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
             if channel_id.is_empty() { return; }
             let channel_uuid = match channel_id.parse::<uuid::Uuid>() {
                 Ok(id) => ChannelId::from(id),
@@ -370,14 +374,15 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.on_channel_settings_archive(move || {
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx_archive.clone();
+        let currently_archived = weak.upgrade().map(|w| w.get_channel_settings_archived()).unwrap_or(false);
+        // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
+        let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
         tokio::spawn(async move {
-            let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
             if channel_id.is_empty() { return; }
             let channel_uuid = match channel_id.parse::<uuid::Uuid>() {
                 Ok(id) => ChannelId::from(id),
                 Err(_) => return,
             };
-            let currently_archived = weak.upgrade().map(|w| w.get_channel_settings_archived()).unwrap_or(false);
             let result = ui_ctx.archive_channel(&channel_uuid, !currently_archived).await;
             if result.is_ok() {
                 let _ = slint::invoke_from_event_loop(move || {
@@ -392,8 +397,9 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.on_channel_settings_leave(move || {
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx_leave.clone();
+        // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
+        let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
         tokio::spawn(async move {
-            let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
             if channel_id.is_empty() { return; }
             let channel_uuid = match channel_id.parse::<uuid::Uuid>() {
                 Ok(id) => ChannelId::from(id),
@@ -417,8 +423,9 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.on_channel_settings_delete(move || {
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx_delete.clone();
+        // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
+        let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
         tokio::spawn(async move {
-            let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
             if channel_id.is_empty() { return; }
             let channel_uuid = match channel_id.parse::<uuid::Uuid>() {
                 Ok(id) => ChannelId::from(id),
@@ -445,12 +452,13 @@ fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx.clone();
 
+        // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
+        let group_id_str = weak
+            .upgrade()
+            .map(|w| w.get_channel_settings_id().to_string())
+            .unwrap_or_default();
+
         tokio::spawn(async move {
-            // Get the private group ID from channel settings
-            let group_id_str = weak
-                .upgrade()
-                .map(|w| w.get_channel_settings_id().to_string())
-                .unwrap_or_default();
 
             if group_id_str.is_empty() {
                 return;
@@ -658,19 +666,23 @@ fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx_invite.clone();
 
+        // Read the selection HERE, on the UI thread. It used to be read inside
+        // the spawned task, where a Slint Weak never upgrades (the window is
+        // thread-bound): the task returned before its first log line and
+        // "Invite" did nothing at all.
+        let (channel_id_str, selected_user_ids) = {
+            let Some(w) = weak.upgrade() else { return };
+            let channel_id = w.get_invite_member_channel_id().to_string();
+            let users = w.get_invite_member_users();
+            let selected_vec: Vec<String> = (0..users.row_count())
+                .filter_map(|i| users.row_data(i))
+                .filter(|u| u.selected && !u.already_member)
+                .map(|u| u.id.to_string())
+                .collect();
+            (channel_id, selected_vec)
+        };
+
         tokio::spawn(async move {
-            // Get channel ID and selected users
-            let (channel_id_str, selected_user_ids) = {
-                let Some(w) = weak.upgrade() else { return };
-                let channel_id = w.get_invite_member_channel_id().to_string();
-                let users = w.get_invite_member_users();
-                let selected_vec: Vec<String> = (0..users.row_count())
-                    .filter_map(|i| users.row_data(i))
-                    .filter(|u| u.selected && !u.already_member)
-                    .map(|u| u.id.to_string())
-                    .collect();
-                (channel_id, selected_vec)
-            };
 
             tracing::info!(
                 channel_id = %channel_id_str,
