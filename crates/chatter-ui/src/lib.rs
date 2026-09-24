@@ -302,6 +302,13 @@ pub async fn app_init() -> AppState {
             .set_channel_template_enabled(cfg!(feature = "ai-channel-template"));
     }
 
+    {
+        use slint::ComponentHandle;
+        window
+            .global::<AvatarText>()
+            .on_initials(|name| chatter_core::ui::initials_from_name(&name).into());
+    }
+
     // Anon Mode: enforce default-off on every fresh window. The core flag
     // is already false (in-memory AtomicBool), this keeps the Slint global
     // in sync defensively. Auto-revert on restart is the privacy property

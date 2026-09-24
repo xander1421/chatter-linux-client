@@ -286,6 +286,14 @@ export component MessageList inherits Rectangle {
                 }
             }
 
+            // The view itself shrinking (soft keyboard opening) must keep the
+            // newest message in sight too, not just content growing.
+            changed height => {
+                if (root.is-at-bottom) {
+                    self.viewport-y = min(0px, self.height - self.viewport-height);
+                }
+            }
+
             changed viewport-height => {
                 // Decide before writing viewport-y: the animation reads its
                 // duration at the moment the property changes.

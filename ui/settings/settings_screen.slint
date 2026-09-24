@@ -36,6 +36,8 @@ export component SettingsScreen inherits Rectangle {
     // User profile data
     in property <string> display-name: "";
     in property <string> username: "";
+    // Room left for the mobile tab bar drawn over the bottom of the screen.
+    in property <length> bottom-inset: 0px;
     in property <image> avatar;
     in property <int> session-count: 0;
 
@@ -330,15 +332,19 @@ export component SettingsScreen inherits Rectangle {
 
             Flickable {
                 viewport-width: self.width;
-                viewport-height: content-layout.preferred-height + root.content-padding * 2;
+                viewport-height: content-layout.preferred-height + root.content-padding * 2 + root.bottom-inset;
 
                 content-layout := VerticalLayout {
                     padding: root.content-padding;
                     spacing: root.compact-mode ? Spacing.md : Spacing.lg;
                     alignment: start;
 
-                    // Center content with max-width (wider in compact mode to use space)
-                    Rectangle {
+                    // Center content with max-width (wider in compact mode to use space).
+                    // A layout, not a Rectangle: a Rectangle does not pass its
+                    // `if` children's height up, so `content-layout` reported
+                    // ~0 and the page could not scroll to anything below the
+                    // fold (Key Backup was stranded under the tab bar).
+                    VerticalLayout {
                         max-width: root.compact-mode ? root.width : 600px;
 
                         // Account section
@@ -375,7 +381,7 @@ export component SettingsScreen inherits Rectangle {
                                         Avatar {
                                             size: 64px;
                                             source: root.avatar;
-                                            fallback-text: root.display-name;
+                                            name: root.display-name;
                                         }
 
                                         // Name and username
@@ -393,7 +399,7 @@ export component SettingsScreen inherits Rectangle {
                                             }
 
                                             Text {
-                                                text: "@" + root.username;
+                                                text: root.username != "" ? "@" + root.username : "";
                                                 color: Colors.text-secondary;
                                                 font-size: Typography.sm;
                                                 overflow: elide;
@@ -699,10 +705,17 @@ export component SettingsScreen inherits Rectangle {
                                                 placeholder: "Confirm new PIN";
                                                 password: true;
                                                 text <=> root.change-pin-confirm;
-                                                error: root.change-pin-error != "" || (root.change-pin-confirm != "" && root.change-pin-new != root.change-pin-confirm);
-                                                error-message: root.change-pin-error != "" ? root.change-pin-error : "PINs do not match";
+                                                error: root.change-pin-confirm != "" && root.change-pin-new != root.change-pin-confirm;
+                                                error-message: "PINs do not match";
                                                 horizontal-stretch: 1;
                                             }
+                                        }
+
+                                        if root.change-pin-error != "": Text {
+                                            text: root.change-pin-error;
+                                            color: Colors.error;
+                                            font-size: Typography.xs;
+                                            wrap: word-wrap;
                                         }
 
                                         if root.change-pin-success != "": Text {
@@ -791,7 +804,7 @@ export component SettingsScreen inherits Rectangle {
                                             }
                                         }
 
-                                        if !show-backup-retry && !root.compact-mode: Button {
+                                        if !show-backup-retry && root.backup-status != "backed_up" && !root.compact-mode: Button {
                                             text: "Retry";
                                             variant: "secondary";
                                             clicked => { show-backup-retry = true; }
@@ -799,14 +812,14 @@ export component SettingsScreen inherits Rectangle {
                                     }
 
                                     // Compact: full-width button stacked below
-                                    if !show-backup-retry && root.compact-mode: Button {
+                                    if !show-backup-retry && root.backup-status != "backed_up" && root.compact-mode: Button {
                                         text: "Retry";
                                         variant: "secondary";
                                         clicked => { show-backup-retry = true; }
                                     }
 
                                     // Inline retry form
-                                    if show-backup-retry: VerticalLayout {
+                                    if show-backup-retry && root.backup-status != "backed_up": VerticalLayout {
                                         spacing: Spacing.sm;
 
                                         Rectangle {
@@ -816,6 +829,7 @@ export component SettingsScreen inherits Rectangle {
 
                                         Input {
                                             placeholder: "Enter your PIN to retry backup";
+                                            password: true;
                                             text <=> root.backup-retry-pin;
                                         }
 
@@ -884,6 +898,7 @@ export component SettingsScreen inherits Rectangle {
 
                                     Input {
                                         placeholder: "Backup passphrase (for file backup)";
+                                        password: true;
                                         text <=> root.message-backup-passphrase;
                                     }
 
@@ -912,6 +927,7 @@ export component SettingsScreen inherits Rectangle {
 
                                     Input {
                                         placeholder: "PIN (for server backup)";
+                                        password: true;
                                         text <=> root.message-backup-pin;
                                     }
 

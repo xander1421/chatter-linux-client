@@ -5,7 +5,7 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::domain::ids::{ChannelId, MessageId};
+use chatter_core::domain::ids::MessageId;
 use chatter_core::domain::message::Message;
 use chatter_core::state::ChatState;
 
@@ -175,7 +175,6 @@ pub fn load_thread_data(
     window: slint::Weak<MainWindow>,
     _chat_state: ChatState,
     ui_ctx: Arc<ChatterClient>,
-    channel_id: ChannelId,
     root_message_id: MessageId,
 ) {
     tokio::spawn(async move {
@@ -190,10 +189,6 @@ pub fn load_thread_data(
                 .map(|t| chatter_core::domain::message::truncate_preview_text(t, 100))
                 .unwrap_or_else(|| "[Attachment]".to_string());
             let replies = ui_ctx.list_thread_replies(&root_message_id, None, 50).unwrap_or_default();
-            let channel_name = ui_ctx
-                .get_channel_local(&channel_id)
-                .map(|c| c.name)
-                .unwrap_or_else(|| "Unknown".to_string());
             let display = messages_to_display_batch(
                 &replies,
                 |m| ui_ctx.message_sender_display_name(m),
@@ -209,7 +204,6 @@ pub fn load_thread_data(
                 w.set_thread_root_sender_name(sender_name.into());
                 w.set_thread_root_content_preview(content_preview.into());
                 w.set_thread_reply_count(replies.len() as i32);
-                w.set_thread_channel_name(channel_name.into());
                 w.set_thread_loading(false);
                 let slint_replies: Vec<_> = display.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
                 w.set_thread_replies(ModelRc::new(VecModel::from(slint_replies)));

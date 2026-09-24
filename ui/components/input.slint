@@ -128,6 +128,7 @@ export component Input inherits Rectangle {
         // Error message
         if error && error-message != "": Text {
             text: root.error-message;
+            overflow: elide;
             color: Colors.error;
             font-size: Typography.xs;
         }

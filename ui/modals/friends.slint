@@ -922,7 +922,7 @@ export component FriendsModal inherits Rectangle {
                                         Avatar {
                                             size: 40px;
                                             source: request.avatar-source;
-                                            fallback-text: request.display-name;
+                                            name: request.display-name;
                                         }
 
                                         VerticalLayout {
@@ -1017,7 +1017,7 @@ export component FriendsModal inherits Rectangle {
 
                                         Avatar {
                                             size: 40px;
-                                            fallback-text: request.display-name;
+                                            name: request.display-name;
                                         }
 
                                         VerticalLayout {
@@ -1534,7 +1534,7 @@ export component FriendsModal inherits Rectangle {
 
                                     Avatar {
                                         size: 40px;
-                                        fallback-text: user.display-name;
+                                        name: user.display-name;
                                     }
 
                                     VerticalLayout {

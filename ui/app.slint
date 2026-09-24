@@ -484,7 +484,6 @@ export component App inherits Rectangle {
     in property <string> thread-root-sender-name: "";
     in property <string> thread-root-content-preview: "";
     in property <int> thread-reply-count: 0;
-    in property <string> thread-channel-name: "";
     in property <[MessageItemData]> thread-replies: [];
     in property <bool> thread-loading: false;
     in-out property <string> thread-composer-text: "";
@@ -662,8 +661,8 @@ export component App inherits Rectangle {
     // Settings properties
     in property <string> settings-display-name: "";
     in property <string> settings-username: "";
-    in property <image> settings-avatar;
     in property <int> settings-session-count: 0;
+    in property <image> settings-avatar;
     in-out property <string> settings-current-password: "";
     in-out property <string> settings-new-password: "";
     in-out property <string> settings-confirm-password: "";
@@ -1649,7 +1648,7 @@ export component App inherits Rectangle {
                     root-sender-name: root.thread-root-sender-name;
                     root-content-preview: root.thread-root-content-preview;
                     reply-count: root.thread-reply-count;
-                    channel-name: root.thread-channel-name;
+                    channel-name: root.channel-name;  // threads open on the active conversation
                     replies: root.thread-replies;
                     loading: root.thread-loading;
                     composer-text <=> root.thread-composer-text;
@@ -2402,10 +2401,11 @@ export component App inherits Rectangle {
 
     // Settings screen (full screen overlay)
     if active-modal == "settings": SettingsScreen {
+        bottom-inset: root.is-mobile-platform && !root.keyboard-open ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
         display-name: root.settings-display-name;
         username: root.settings-username;
-        avatar: root.settings-avatar;
         session-count: root.settings-session-count;
+        avatar: root.settings-avatar;
         current-password <=> root.settings-current-password;
         new-password <=> root.settings-new-password;
         confirm-password <=> root.settings-confirm-password;

@@ -345,7 +345,6 @@ pub fn wire_thread_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             weak,
             chat_state,
             ui_ctx,
-            channel_id,
             msg_id,
         );
     });

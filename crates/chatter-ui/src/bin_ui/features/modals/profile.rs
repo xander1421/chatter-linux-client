@@ -77,11 +77,13 @@ pub fn open_user_profile(
     if is_self {
         let state = auth_state.get();
         let display_name = state.display_name.clone().unwrap_or_default();
-        let username = user_state
-            .get_user(user_id)
-            .map(|u| u.username.clone())
+        // The handle chosen at registration. Never the user id: that is not
+        // something anyone can look you up by.
+        let username = ui_ctx
+            .and_then(|ctx| ctx.full_username())
+            .or_else(|| user_state.get_user(user_id).map(|u| u.username.clone()))
             .filter(|u| !u.is_empty())
-            .unwrap_or_else(|| user_id.to_string());
+            .unwrap_or_default();
         let initials = get_initials(&display_name);
 
         w.set_profile_display_name(display_name.into());

@@ -189,6 +189,7 @@ impl ClientBuilder {
             push_url: Mutex::new(None),
             transport_switch_lock: tokio::sync::Mutex::new(()),
             server_monitor_started: AtomicBool::new(false),
+            composer_drafts: Mutex::new(std::collections::HashMap::new()),
         }))
     }
 }
@@ -375,6 +376,11 @@ pub struct ChatterClient {
     /// Guards the server-reachability monitor so it spawns exactly once.
     /// See `start_server_monitor`.
     server_monitor_started: AtomicBool,
+    /// Unsent composer text per conversation id, so a draft stays with the
+    /// conversation it was typed in. See `swap_composer_draft`.
+    // ponytail: in-memory, lost on restart. DraftService persists but its
+    // table FKs `channels(id)`, which DM / saved / anon ids are not in.
+    composer_drafts: Mutex<std::collections::HashMap<String, String>>,
 }
 
 pub use crate::services::user::ReceivedFriendRequestProfile;
@@ -1623,10 +1629,17 @@ impl ChatterClient {
         conversation_id: &str,
         conversation_type: &crate::domain::message::ConversationType,
     ) -> Option<crate::domain::UnifiedConversation> {
-        self.sections()
+        let mut conv = self
+            .sections()
             .get_conversation_metadata(conversation_id, conversation_type)
             .ok()
-            .flatten()
+            .flatten()?;
+        // The stored name of the note-to-self channel is its internal
+        // `saved_messages_<uuid>` id, not something to show a person.
+        if *conversation_type == crate::domain::message::ConversationType::SavedMessages {
+            conv.name = "Saved Messages".to_string();
+        }
+        Some(conv)
     }
 
     /// Preview text for a pinned message, resolved per conversation flavor
@@ -2584,6 +2597,20 @@ impl ChatterClient {
     }
 
     // ── Drafts (façade) ─────────────────────────────────────────────
+
+    /// Conversation switch: park `text` under `leaving`, return the draft
+    /// parked under `entering` (empty if none). Empty text clears the slot.
+    pub fn swap_composer_draft(&self, leaving: &str, text: String, entering: &str) -> String {
+        let mut drafts = self.composer_drafts.lock();
+        if !leaving.is_empty() {
+            if text.is_empty() {
+                drafts.remove(leaving);
+            } else {
+                drafts.insert(leaving.to_owned(), text);
+            }
+        }
+        drafts.remove(entering).unwrap_or_default()
+    }
 
     /// Save or update a draft for a conversation root (no thread).
     pub fn save_draft(

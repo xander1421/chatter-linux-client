@@ -112,17 +112,37 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
         let ui_ctx_fp = ui_ctx_fp.clone();
         let ui_ctx_settings = ui_ctx_ai.clone();
 
+        // The Active Sessions badge; otherwise it reads 0 until "View All".
+        let ctx = ui_ctx_ai.clone();
+        let weak_count = weak.clone();
+        tokio::spawn(async move {
+            if let Ok(sessions) = ctx.list_sessions().await {
+                let n = sessions.len() as i32;
+                let weak_count = weak_count.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak_count.upgrade() {
+                        w.set_settings_session_count(n);
+                    }
+                });
+            }
+            // Key Backup card status; "unknown" only if the check itself fails.
+            let status = match ctx.has_key_backup().await {
+                Ok(true) => "backed_up",
+                Ok(false) => "not_backed_up",
+                Err(_) => "unknown",
+            };
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_count.upgrade() {
+                    w.set_settings_backup_status(status.into());
+                }
+            });
+        });
+
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 let state = auth_state.get();
                 w.set_settings_display_name(state.display_name.unwrap_or_default().into());
-                w.set_settings_username(
-                    state
-                        .current_user_id
-                        .map(|id| id.to_string())
-                        .unwrap_or_default()
-                        .into(),
-                );
+                w.set_settings_username(ui_ctx_settings.full_username().unwrap_or_default().into());
 
                 // Read these from the SAME place the toggles write
                 // (settings_keys::SEND_READ_RECEIPTS / SHOW_TYPING_INDICATORS,
