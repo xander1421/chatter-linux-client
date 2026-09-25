@@ -862,7 +862,6 @@ export component App inherits Rectangle {
     callback profile-add-friend();
     callback profile-remove-friend();
     callback profile-block-user();
-    callback profile-unblock-user();
     callback profile-edit-profile();
     callback profile-view-safety-number();
     callback profile-toggle-verified();
@@ -1897,8 +1896,11 @@ export component App inherits Rectangle {
         block-user => {
             root.profile-block-user();
         }
-        unblock-user => {
-            root.profile-unblock-user();
+        // Unblocking lives only in Friends › Blocked.
+        manage-blocked => {
+            root.friends-modal-tab = "blocked";
+            root.active-modal = "friends";
+            root.friends-modal-switch-tab("blocked");
         }
         edit-profile => {
             root.profile-edit-profile();

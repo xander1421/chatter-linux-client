@@ -110,7 +110,9 @@ export component UserProfileModal inherits Rectangle {
     callback add-friend();
     callback remove-friend();
     callback block-user();
-    callback unblock-user();
+    // A blocked profile only points at Friends › Blocked, the one place to
+    // unblock or remove someone.
+    callback manage-blocked();
     callback view-safety-number();
     callback toggle-verified();
     callback toggle-mute();
@@ -393,17 +395,22 @@ export component UserProfileModal inherits Rectangle {
                         }
                     }
 
-                    if root.is-blocked && !root.is-self: HorizontalLayout {
+                    if root.is-blocked && !root.is-self: VerticalLayout {
                         padding-left: Spacing.md;
                         padding-right: Spacing.md;
+                        spacing: Spacing.sm;
+
+                        Text {
+                            text: "You blocked this person. Manage in Friends › Blocked.";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            wrap: word-wrap;
+                        }
 
                         Button {
-                            text: root.loading ? "" : "Unblock User";
-                            variant: "danger";
-                            loading: root.loading;
-                            clicked => {
-                                if !root.loading { root.unblock-user(); }
-                            }
+                            text: "Open Blocked";
+                            variant: "secondary";
+                            clicked => { root.manage-blocked(); }
                         }
                     }
 

@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, Image, ModelRc, SharedString, VecModel, Weak, Model};
+use slint::{ComponentHandle, Image, ModelRc, VecModel, Weak, Model};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::ChannelId;
@@ -170,15 +170,8 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     tracing::info!("Loaded {} private groups", private_groups.len());
 
     // Load blocked users for the Blocked tab
-    let users = ui_ctx.blocked_users();
-    tracing::info!("Loaded {} blocked users", users.len());
-    let blocked_users_data: Vec<(String, String)> = users.into_iter()
-        .map(|user_id| {
-            // Name resolution (incl. the short-id fallback) belongs in core.
-            let display_name = ui_ctx.fallback_display_name(&user_id);
-            (user_id.to_string(), display_name)
-        })
-        .collect();
+    let blocked_users_slint = crate::bin_ui::features::modals::friends::blocked_user_rows(&ui_ctx);
+    tracing::info!("Loaded {} blocked users", blocked_users_slint.len());
 
     // Pre-decode avatars before entering UI thread to avoid blocking
     let mut dm_list = dm_list;
@@ -249,15 +242,6 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
             w.set_friends_list(ModelRc::new(VecModel::from(friends_slint)));
 
             // Set blocked users
-            let blocked_users_slint: Vec<crate::BlockedUserData> = blocked_users_data
-                .into_iter()
-                .map(|(user_id, display_name)| crate::BlockedUserData {
-                    user_id: user_id.into(),
-                    display_name: display_name.into(),
-                    username: "Private".into(),
-                    blocked_at: SharedString::default(),
-                })
-                .collect();
             w.set_friends_blocked_users(ModelRc::new(VecModel::from(blocked_users_slint)));
 
             // Set sidebar badge count for message requests

@@ -22,6 +22,8 @@ pub(super) async fn handle_friend_requests_updated(
     sent: Vec<chatter_core::inbox::events::FriendRequestInfo>,
 ) {
     let weak = window.clone();
+    // Requests from someone we blocked stay pending server-side, unseen here.
+    let received = ui_ctx.visible_friend_requests(received);
     let received_count = received.len();
     let sent_count = sent.len();
 

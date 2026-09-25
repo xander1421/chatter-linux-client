@@ -343,21 +343,28 @@ fn remove_dm_from_sidebar(window: &MainWindow, channel_id: &str) {
     window.set_dm_conversations(ModelRc::new(VecModel::from(dm_vec)));
 }
 
+/// Friends › Blocked rows, as core lists them (`blocked_users`).
+pub(crate) fn blocked_user_rows(ui_ctx: &Arc<ChatterClient>) -> Vec<crate::BlockedUserData> {
+    ui_ctx
+        .blocked_users()
+        .into_iter()
+        .map(|c| crate::BlockedUserData {
+            user_id: c.id.to_string().into(),
+            display_name: ui_ctx.display_name(&c.id).into(),
+            username: "Private".into(),
+            blocked_at: String::new().into(),
+            anon: c.anon,
+            anon_chat: c.anon_chat,
+        })
+        .collect()
+}
+
 /// Refresh the blocked users list in the UI.
 pub(crate) fn refresh_blocked_users(
     weak_window: slint::Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
 ) {
-    let blocked_users = ui_ctx.blocked_users();
-    let blocked_data: Vec<crate::BlockedUserData> = blocked_users
-        .into_iter()
-        .map(|user_id| crate::BlockedUserData {
-            user_id: user_id.to_string().into(),
-            display_name: ui_ctx.display_name(&user_id).into(),
-            username: "Private".into(),
-            blocked_at: String::new().into(),
-        })
-        .collect();
+    let blocked_data = blocked_user_rows(ui_ctx);
 
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak_window.upgrade() {

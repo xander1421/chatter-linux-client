@@ -50,6 +50,15 @@ use crate::storage::settings_keys;
 use crate::system::Directories;
 use super::{ChatterClient, ClientError};
 
+/// One Friends › Blocked row (`blocked_users`). `anon` marks an anon-DM peer
+/// block; `anon_chat` that its conversation is still stored locally, which is
+/// what the row's "Delete chat" removes (`remove_blocked_contact`).
+pub struct BlockedContact {
+    pub id: crate::domain::ids::UserId,
+    pub anon: bool,
+    pub anon_chat: bool,
+}
+
 impl ChatterClient {
     // ── Display / profile façade ─────────────────────────────────────────
 
@@ -305,14 +314,37 @@ impl ChatterClient {
 
     /// Everyone this user blocked: anon-DM peers and server-side blocks, in
     /// one de-duplicated list. The Friends → Blocked tab renders exactly this.
-    pub fn blocked_users(&self) -> Vec<crate::domain::ids::UserId> {
-        let mut ids = self.anon_dms().get_blocked_users().unwrap_or_default();
+    pub fn blocked_users(&self) -> Vec<BlockedContact> {
+        let mut out: Vec<BlockedContact> = self
+            .anon_dms()
+            .get_blocked_users()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|id| BlockedContact {
+                anon: true,
+                anon_chat: self.find_anon_dm_by_peer(&id).is_some(),
+                id,
+            })
+            .collect();
         for id in self.users().blocked_local() {
-            if !ids.contains(&id) {
-                ids.push(id);
+            if !out.iter().any(|c| c.id == id) {
+                out.push(BlockedContact { id, anon: false, anon_chat: false });
             }
         }
-        ids
+        out
+    }
+
+    /// Received friend requests minus the ones from people we blocked: the
+    /// server keeps them pending, the Requests tab never shows them (same rule
+    /// as `listed_friends`).
+    pub fn visible_friend_requests(
+        &self,
+        received: Vec<crate::inbox::events::FriendRequestInfo>,
+    ) -> Vec<crate::inbox::events::FriendRequestInfo> {
+        received
+            .into_iter()
+            .filter(|r| !r.user_id.parse().is_ok_and(|id| self.is_profile_user_blocked(&id)))
+            .collect()
     }
 
     pub fn block_anon_dm_conversation(
@@ -458,6 +490,13 @@ impl ChatterClient {
             }
         };
 
+        if conv_id.is_none() && self.anon_dms().is_user_blocked(id).unwrap_or(false) {
+            // An anon peer whose chat was deleted (Friends › Blocked › Delete
+            // chat): only the peer block is left to lift.
+            return self.anon_dms().unblock_user(id)
+                .map_err(|e| super::ClientError::Inbox(e.to_string()));
+        }
+
         if let Some(cid) = conv_id {
             self.anon_dms().unblock_conversation(&cid)
                 .map_err(|e| super::ClientError::Inbox(e.to_string()))?;
@@ -476,14 +515,21 @@ impl ChatterClient {
     /// Friends › Blocked › Remove: end the friendship, then lift the block, so
     /// they become a stranger. Friendship first, while still blocked, so there
     /// is no moment where they are an unblocked friend. Not being friends
-    /// (a stranger we blocked, or an anon-DM peer) is not an error.
+    /// (a stranger we blocked) is not an error.
+    ///
+    /// An anon-DM peer has no friendship to end. With a chat still stored the
+    /// row reads "Delete chat" and does what Signal's Delete on a blocked chat
+    /// does: the conversation and its history go, the block stays.
     pub async fn remove_blocked_contact(
         &self,
         id: &crate::domain::ids::UserId,
     ) -> Result<(), super::ClientError> {
         use crate::error::NetworkError;
         use crate::services::user::UserError;
-        if self.find_anon_dm_by_peer(id).is_none() {
+        if let Some(conv_id) = self.find_anon_dm_by_peer(id) {
+            return self.delete_anon_chat(&conv_id);
+        }
+        if !self.anon_dms().is_user_blocked(id).unwrap_or(false) {
             match self.users().remove_friend(id).await {
                 Ok(()) => {}
                 // RemoveFriend's only FailedPrecondition is ErrNotFriends.
@@ -493,6 +539,26 @@ impl ChatterClient {
             }
         }
         self.unblock_profile_user(id).await
+    }
+
+    /// Delete an anon-DM conversation and its history locally. The peer block
+    /// (`anon_dm_blocked_users`, keyed by peer id) is a separate row and stays;
+    /// the mailbox rows go with the conversation (FK cascade).
+    fn delete_anon_chat(
+        &self,
+        conv_id: &crate::domain::anon_dm::AnonDmId,
+    ) -> Result<(), super::ClientError> {
+        let err = |e: crate::error::StorageError| super::ClientError::Inbox(e.to_string());
+        let channel_id: crate::domain::ids::ChannelId = (*conv_id).into();
+        let repo = &self.anon_dms().message_repo;
+        let ids: Vec<crate::domain::ids::MessageId> = repo
+            .list(&channel_id, &crate::domain::message::ConversationType::AnonDm, None, u32::MAX)
+            .map_err(err)?
+            .into_iter()
+            .map(|m| m.id)
+            .collect();
+        repo.delete_batch(&ids).map_err(err)?;
+        self.anon_dms().anon_dm_repo().delete_conversation(conv_id).map_err(err)
     }
 
     /// Whether this user is an accepted friend (local friendships table).
@@ -717,5 +783,64 @@ impl ChatterClient {
         gif_id: &str,
     ) -> Result<crate::services::attachment::CdnUploadResult, crate::services::attachment::AttachmentError> {
         self.attachments().download_and_upload_gif(url, gif_id).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::anon_dm::AnonDm;
+    use crate::domain::ids::{ChannelId, UserId};
+
+    fn test_client() -> (Arc<ChatterClient>, tempfile::TempDir) {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("http://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        (client, dir)
+    }
+
+    /// Friends › Blocked › Delete chat on an anon peer: the conversation and
+    /// its history go, the block stays, and the peer's friend requests stay
+    /// hidden. Unblock afterwards lifts the peer block (no chat to go through).
+    #[tokio::test]
+    async fn delete_blocked_anon_chat_keeps_the_block() {
+        let (client, _dir) = test_client();
+        let peer = UserId::from_uuid(uuid::Uuid::from_u128(7));
+        let dm = AnonDm::new_initiated(peer);
+        client.anon_dms().anon_dm_repo().insert_conversation(&dm).unwrap();
+        let conv: ChannelId = dm.id.into();
+        let msg = Message::new_text(conv, ConversationType::AnonDm, Some(peer), "hi".into(), 1);
+        client.messages().message_repo.insert(&msg).unwrap();
+        client.block_profile_user(&peer).await.unwrap();
+
+        let row = |c: &ChatterClient| c.blocked_users().into_iter().find(|b| b.id == peer).unwrap();
+        assert!(row(&client).anon && row(&client).anon_chat);
+
+        client.remove_blocked_contact(&peer).await.unwrap();
+        assert!(client.find_anon_dm_by_peer(&peer).is_none());
+        assert!(client.messages().message_repo.get(&msg.id).unwrap().is_none());
+        assert!(client.is_profile_user_blocked(&peer));
+        assert!(row(&client).anon && !row(&client).anon_chat);
+
+        let req = |id: &UserId| crate::inbox::events::FriendRequestInfo {
+            user_id: id.to_string(),
+            display_name: String::new(),
+            username: String::new(),
+            encrypted_intro: Vec::new(),
+        };
+        let other = UserId::from_uuid(uuid::Uuid::from_u128(8));
+        let shown = client.visible_friend_requests(vec![req(&peer), req(&other)]);
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].user_id, other.to_string());
+
+        client.unblock_profile_user(&peer).await.unwrap();
+        assert!(!client.is_profile_user_blocked(&peer));
     }
 }

@@ -49,6 +49,8 @@ export struct BlockedUserData {
     display-name: string,
     username: string,
     blocked-at: string,
+    anon: bool,       // anon-DM peer block: no friendship to remove
+    anon-chat: bool,  // its anon conversation is still stored locally
 }
 
 export component FriendsModal inherits Rectangle {
@@ -132,7 +134,8 @@ export component FriendsModal inherits Rectangle {
 
     // Blocked actions. Unblock restores the friend and their DM with its
     // history (blocking never removed them); Remove, after a confirm, ends the
-    // friendship and lifts the block, leaving them a stranger.
+    // friendship and lifts the block, leaving them a stranger. On an anon-DM
+    // peer the same callback is "Delete chat": the chat goes, the block stays.
     callback unblock-user(string);    // user_id
     callback remove-blocked-user(string);  // user_id
     // Row whose Remove is awaiting confirmation ("" = none).
@@ -1537,7 +1540,7 @@ export component FriendsModal inherits Rectangle {
                                         }
 
                                         if root.confirm-remove-id == user.user-id: Text {
-                                            text: "Remove from friends and unblock?";
+                                            text: user.anon ? "Delete this chat? They stay blocked." : "Remove from friends and unblock?";
                                             color: Colors.text-secondary;
                                             font-size: Typography.xs;
                                             overflow: elide;
@@ -1563,8 +1566,11 @@ export component FriendsModal inherits Rectangle {
                                             }
                                         }
 
-                                        Button {
-                                            text: "Remove";
+                                        // An anon peer has no friendship; its second action
+                                        // deletes the stored chat (Signal: Delete on a
+                                        // blocked chat), and there is none once deleted.
+                                        if !user.anon || user.anon-chat: Button {
+                                            text: user.anon ? "Delete chat" : "Remove";
                                             variant: "ghost";
 
                                             clicked => {
@@ -1587,7 +1593,7 @@ export component FriendsModal inherits Rectangle {
                                         }
 
                                         Button {
-                                            text: "Remove";
+                                            text: user.anon ? "Delete" : "Remove";
                                             variant: "danger";
 
                                             clicked => {

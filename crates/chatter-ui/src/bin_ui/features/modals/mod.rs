@@ -9,7 +9,7 @@ mod channel_invites;
 mod channel_settings;
 mod create_channel;
 mod forward;
-mod friends;
+pub(crate) mod friends;
 mod join_channel;
 pub mod link_approve;
 // `pub` so the ui_wiring harness can wire ONLY the profile callbacks (incl.
