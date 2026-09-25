@@ -221,7 +221,7 @@ fn wire_message_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     use chatter_core::domain::message::ConversationType as CT;
                     match conv_type {
                         CT::Channel => w.invoke_channel_selected(id_slint),
-                        CT::ServerDm | CT::MailboxDm | CT::AnonDm => w.invoke_dm_selected(id_slint),
+                        CT::ServerDm | CT::AnonDm => w.invoke_dm_selected(id_slint),
                         CT::AnonGroup => w.invoke_private_group_selected(id_slint),
                         CT::SavedMessages => w.set_loading_messages(false),
                         // Mesh conversations open through their own global

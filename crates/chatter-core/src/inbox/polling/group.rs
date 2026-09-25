@@ -343,8 +343,7 @@ async fn process_sealed_sender_group_message(
         SealedSenderResult::KeyExchange {
             sender_id,
             conversation_id,
-            ephemeral_public_key: _,
-            timestamp: _,
+            ..
         } => {
             // KeyExchange in group context is unexpected but log it
             tracing::warn!(

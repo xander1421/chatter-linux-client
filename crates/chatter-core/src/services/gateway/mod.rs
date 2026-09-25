@@ -315,7 +315,7 @@ impl MessageGateway {
             delivery_status: String::new(),
         };
 
-        // Reply/quote context (shared with the MailboxDm inbound path).
+        // Reply/quote context (shared with the mailbox inbound path).
         crate::services::gateway::inbound::apply_inbound_quote(
             &mut message,
             data_message.quote.as_ref(),

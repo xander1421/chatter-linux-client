@@ -202,7 +202,7 @@ fn section_row_is_active(
             .parse()
             .map(|id| active.matches_channel(&id))
             .unwrap_or(false),
-        K::ServerDm | K::MailboxDm | K::AnonDm => {
+        K::ServerDm | K::AnonDm => {
             // Folder rows may carry an anon_dm_id, a channel_id, or a peer_id
             // in `conversation_id`. Match against all shapes.
             let anon = conv_id.parse().map(|id| active.matches_anon_dm(&id)).unwrap_or(false);
@@ -323,7 +323,7 @@ fn update_sidebar_row(
     refresh_section_badges(window, ui_ctx);
 
     match conversation {
-        ActiveConversation::MailboxDm { peer_id, .. } | ActiveConversation::ServerDm { peer_id, .. } => {
+        ActiveConversation::ServerDm { peer_id } => {
             let peer_id_str = peer_id.to_string();
             let model = window.get_dm_conversations();
             let mut others = Vec::new();
@@ -456,13 +456,6 @@ pub(crate) fn create_dm_sidebar_entry(
     badges: chatter_core::client::UnreadBadges,
 ) {
     use slint::Model;
-
-    // Anon Mode suppresses server-DM sidebar entries entirely. The DM is
-    // still persisted to local storage by core; it just doesn't surface in
-    // the sidebar until the user disables anon mode and a refresh runs.
-    if ui_ctx.anon_mode_enabled() {
-        return;
-    }
 
     let peer_id_str = peer_id.to_string();
     let avatar = ui_ctx

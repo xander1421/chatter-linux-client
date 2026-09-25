@@ -831,10 +831,10 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         });
     });
 
-    // Send message (open DM). Core picks the conversation: in shield mode the
-    // anon DM with this peer (or none at all — never the identified DM),
-    // otherwise the channel-free server DM. Opening goes through the same
-    // `dm-selected` path as every other DM entry point.
+    // Send message (open DM). Core picks the conversation: a friend's DM in
+    // either mode (Shield sends it over the mailbox); for anyone else in
+    // shield mode the anon DM with them, or none at all. Opening goes through
+    // the same `dm-selected` path as every other DM entry point.
     let weak_window = window.as_weak();
     let ui_ctx_dm = ui_ctx.clone();
     window.on_profile_send_message(move || {

@@ -159,6 +159,7 @@ impl ServiceContainer {
             infra.token_manager.clone(),
             infra.event_bus.clone(),
             ephemeral_service.clone(),
+            mailbox_manager.clone(),
         ));
 
         // 4. Message gateway with Sesame

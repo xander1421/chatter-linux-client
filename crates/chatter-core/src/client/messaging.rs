@@ -438,8 +438,8 @@ impl ChatterClient {
     /// Build the regular (non-anon) DM sidebar rows — one per accepted
     /// friend, keyed by the peer's `user_id` (channel-free, Signal-style).
     /// A friend with no messages yet still shows (empty preview), so a
-    /// freshly-accepted friend appears immediately. Returns empty in anon
-    /// mode (regular DMs carry a server identity link the sidebar hides).
+    /// freshly-accepted friend appears immediately. Shown in both modes: in
+    /// Shield the same conversation travels over the mailbox.
     ///
     /// This is the single source of truth for regular DM rows — both
     /// `list_dm_sidebar` and the initial-load sidebar builder use it, so
@@ -450,9 +450,6 @@ impl ChatterClient {
         use crate::ui::chat_data::initials_from_name;
         use crate::ui::sidebar_data::DMListItemSendData;
 
-        if self.anon_mode_enabled() {
-            return Vec::new();
-        }
         let Some(current_user_id) = self.auth_state().get().current_user_id else {
             return Vec::new();
         };
@@ -551,13 +548,12 @@ impl ChatterClient {
         use crate::ui::chat_data::initials_from_name;
         use crate::ui::sidebar_data::DMListItemSendData;
 
-        // Mode-exclusive: shield ON shows ONLY anon DMs; OFF shows ONLY regular
-        // (friend-keyed) DMs. An anon conversation must not surface — or be
-        // operable — in the identified UI, and identified friends must not show
-        // in anon mode. This is the reactive filter behind the sidebar refresh on
-        // toggle.
+        // Friend DMs show in both modes — one conversation per friend, whose
+        // transport follows the mode. Anon DMs show ONLY in Shield: an anon
+        // conversation must not surface — or be operable — in the identified
+        // UI. This is the reactive filter behind the sidebar refresh on toggle.
         if self.anon_mode_enabled() {
-            let mut out: Vec<DMListItemSendData> = Vec::new();
+            let mut out: Vec<DMListItemSendData> = self.list_regular_dm_sidebar();
 
         // Anon DMs — active conversations.
         for dm in self.list_anon_dm_conversations() {
@@ -673,7 +669,6 @@ impl ChatterClient {
 
             self.finish_dm_sidebar(out)
         } else {
-            // Non-anon mode: only identified, friend-keyed DMs.
             self.list_regular_dm_sidebar()
         }
     }
@@ -698,11 +693,16 @@ impl ChatterClient {
             }
         }
         let peer_id = dm_id.parse::<crate::domain::ids::UserId>().ok()?;
-        // Shield mode never opens an identified DM, and neither does a peer
-        // we know only from an anon group (an identified DM would tie their
-        // anonymous membership — and ours — to the real accounts). A peer we
-        // also know anonymously opens that conversation instead; otherwise
-        // there is nothing to open.
+        // A friend's DM is the same conversation in both modes; Shield only
+        // changes its transport (`send_friend_dm_content`). Anyone else gets
+        // no friend DM in Shield — bootstrapping a mailbox with a stranger
+        // takes identified calls — and neither does a peer we know only from
+        // an anon group (it would tie their anonymous membership, and ours,
+        // to the real accounts). A peer we also know anonymously opens that
+        // conversation instead; otherwise there is nothing to open.
+        if self.is_friend(&peer_id) {
+            return Some(ActiveConversation::ServerDm { peer_id });
+        }
         if self.anon_mode_enabled() || self.known_only_from_anon_group(&peer_id) {
             return self.find_anon_dm_by_peer(&peer_id).map(ActiveConversation::AnonDm);
         }
@@ -925,9 +925,8 @@ impl ChatterClient {
                     CT::AnonDm => "anon_dm",
                     CT::AnonGroup => "private_group",
                     CT::Mesh | CT::MeshDm => "mesh",
-                    // Saved Messages has its own row; a mailbox DM is not
-                    // openable from a row id.
-                    CT::SavedMessages | CT::MailboxDm => continue,
+                    // Saved Messages has its own row.
+                    CT::SavedMessages => continue,
                 };
                 entries.push(entry(conv.conversation_id, conv.display_name, kind, String::new(), conv.unread_count));
             }
@@ -1473,13 +1472,31 @@ mod shield_mode_tests {
             client.lookup_by_username("alice.4711").await,
             Err(UserError::ForbiddenInAnonMode)
         ));
-        // No anon DM with this peer: shield mode has nothing to open, and
-        // never falls back to the identified DM.
+        // Not a friend and no anon DM with this peer: shield mode has nothing
+        // to open, and never falls back to the identified DM.
         assert_eq!(client.resolve_dm_conversation(&peer.to_string()), None);
+        // A friend's DM opens in shield mode too — the same conversation,
+        // whose transport is the mailbox there.
+        let (me, friend) = (UserId::new(), UserId::new());
+        let users = &client.messages().user_repo;
+        client
+            .messages()
+            .settings_repo
+            .set_string(crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID, &me.to_string())
+            .unwrap();
+        users.ensure_user_exists(&me).unwrap();
+        users.ensure_user_exists(&friend).unwrap();
+        let mut friendship = crate::domain::user::Friendship::new_request(me, friend);
+        friendship.accept();
+        users.insert_friendship(&friendship).unwrap();
+        assert_eq!(
+            client.resolve_dm_conversation(&friend.to_string()),
+            Some(ActiveConversation::ServerDm { peer_id: friend })
+        );
         // The Friends tab makes no identified call and lists no friend.
         assert!(client.friends_tab_entries().await.is_empty());
-        // Search and jump-to hide identified conversations.
-        assert!(!client.visible_in_mode(&ConversationType::ServerDm));
+        // Search and jump-to hide channels; a friend DM shows in both modes.
+        assert!(client.visible_in_mode(&ConversationType::ServerDm));
         assert!(!client.visible_in_mode(&ConversationType::SavedMessages));
         assert!(client.visible_in_mode(&ConversationType::AnonDm));
         assert!(client

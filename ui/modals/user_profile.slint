@@ -320,9 +320,10 @@ export component UserProfileModal inherits Rectangle {
                         padding-right: Spacing.md;
                         spacing: Spacing.xs;
 
-                        // No "Message" in Anon Mode: it opens an identified
-                        // server DM, which core refuses there.
-                        for act in AnonMode.enabled ? [
+                        // "Message" in Anon Mode only for a friend: the friend
+                        // DM goes over the mailbox there; core has no DM to
+                        // open with anyone else (resolve_dm_conversation).
+                        for act in AnonMode.enabled && !root.is-friend ? [
                             { id: "mute", label: root.is-muted ? "Unmute" : "Mute", icon: Icons.mic-off },
                             { id: "call", label: "Call", icon: Icons.phone },
                             { id: "video", label: "Video", icon: Icons.video },

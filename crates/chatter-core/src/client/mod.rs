@@ -180,6 +180,7 @@ impl ClientBuilder {
         let ctx = AppContext::with_config_and_sink(self.server_url, self.data_dir, self.notification_sink)?;
         let services = ctx.core_services();
         let reconnect_config = self.reconnect_config.unwrap_or_default();
+        let anon_mode = services.message_service.shield_mode.clone();
         Ok(Arc::new(ChatterClient {
             ctx,
             services,
@@ -193,7 +194,7 @@ impl ClientBuilder {
             message_backup_service: std::sync::OnceLock::new(),
             outgoing_typing: crate::services::outgoing_typing::OutgoingTypingManager::new(),
             link_device_service: std::sync::OnceLock::new(),
-            anon_mode: AtomicBool::new(false),
+            anon_mode,
             authed_notif_started: AtomicBool::new(false),
             notif_stream_handle: Mutex::new(None),
             push_url: Mutex::new(None),
@@ -357,12 +358,13 @@ pub struct ChatterClient {
     /// Cached device-linking service (lazy because deps are read-only and only
     /// touched when the user opens the link-device flow).
     link_device_service: std::sync::OnceLock<Arc<crate::services::link_device_service::LinkDeviceService>>,
-    /// In-memory "Anon Mode" UI flag. When set, the UI hides server-friend
-    /// DMs + public channels and shows only anon DMs / anon groups. Pure
-    /// presentation toggle — no send-path or storage gating. Resets to
-    /// false on every client construction (not persisted by design — auto
-    /// revert on restart is the privacy property).
-    anon_mode: AtomicBool,
+    /// In-memory Shield ("anon mode") flag. When set, the UI hides public
+    /// channels, and a friend DM travels over the NDSS'21 mailbox instead of
+    /// sealed-sender streaming — the flag is the SAME `Arc` `MessageService`
+    /// routes friend DMs by (`send_friend_dm_content`). Resets to false on
+    /// every client construction (not persisted by design — auto revert on
+    /// restart is the privacy property).
+    anon_mode: Arc<AtomicBool>,
     /// Guards the auth-gated notification streams (gRPC message stream + call
     /// → notification bridge) so they spawn exactly once, after login. They
     /// can't start at boot like the consumer because there's no authenticated
@@ -1204,9 +1206,7 @@ impl ChatterClient {
     /// throttled. UI callers must NOT manage typing timers themselves.
     pub fn typing_bump(self: &Arc<Self>, conversation: crate::state::ActiveConversation) {
         // Skip typing-to-self (DM mirrors are irrelevant signal noise).
-        if let crate::state::ActiveConversation::MailboxDm { peer_id, .. }
-        | crate::state::ActiveConversation::ServerDm { peer_id, .. } = &conversation
-        {
+        if let crate::state::ActiveConversation::ServerDm { peer_id } = &conversation {
             if let Some(user_id) = self.services.auth_state.get().current_user_id {
                 if peer_id == &user_id {
                     return;
@@ -1515,18 +1515,20 @@ impl ChatterClient {
     }
 
     /// Whether a conversation of this kind may be shown (listed, searched,
-    /// opened) in the current mode. Shield on: anon DMs only; off: identified
-    /// conversations only. Anon groups and mesh are serverless and show in both.
+    /// opened) in the current mode. Shield on: anon DMs, never channels;
+    /// off: never anon DMs. Friend DMs show in both — one conversation whose
+    /// transport follows the mode (`send_friend_dm_content`). Anon groups and
+    /// mesh are serverless and show in both.
     pub fn visible_in_mode(&self, kind: &crate::domain::message::ConversationType) -> bool {
         use crate::domain::message::ConversationType;
         let anon = self.anon_mode_enabled();
         match kind {
             ConversationType::AnonDm => anon,
-            ConversationType::Channel
-            | ConversationType::ServerDm
-            | ConversationType::MailboxDm
-            | ConversationType::SavedMessages => !anon,
-            ConversationType::AnonGroup | ConversationType::Mesh | ConversationType::MeshDm => true,
+            ConversationType::Channel | ConversationType::SavedMessages => !anon,
+            ConversationType::ServerDm
+            | ConversationType::AnonGroup
+            | ConversationType::Mesh
+            | ConversationType::MeshDm => true,
         }
     }
 
@@ -2771,14 +2773,12 @@ impl ChatterClient {
     /// one read of the messages table. The UI sets these; it never adds to
     /// its own copy (the live `+1` and the rebuild counted differently).
     ///
-    /// `row` sums every conversation that `conversation`'s view shows
-    /// ([`ActiveConversation::shows`]), so a mailbox DM lands on its peer's
-    /// row. Blocking storage read: call off the UI thread.
+    /// `row` is `conversation`'s own count ([`ActiveConversation::is_for_channel`]).
+    /// Blocking storage read: call off the UI thread.
     pub fn unread_badges(&self, conversation: &crate::state::ActiveConversation) -> UnreadBadges {
         let Ok(stats) = self.services.conversation_repo.conversation_stats() else {
             return UnreadBadges::default();
         };
-        let me = self.session_current_user_id();
         let mut badges = UnreadBadges::default();
         for ((id, kind), st) in &stats {
             if st.unread_count == 0 {
@@ -2787,7 +2787,7 @@ impl ChatterClient {
             if self.visible_in_mode(kind) {
                 badges.total += 1;
             }
-            if id.parse().is_ok_and(|cid| conversation.shows(cid, me.as_ref())) {
+            if id.parse().is_ok_and(|cid| conversation.is_for_channel(cid)) {
                 badges.row += st.unread_count;
             }
         }
@@ -2806,7 +2806,7 @@ impl ChatterClient {
     pub fn is_showing_conversation(&self, conversation_id: crate::domain::ids::ChannelId) -> bool {
         self.chat_state()
             .active_conversation()
-            .shows(conversation_id, self.session_current_user_id().as_ref())
+            .is_for_channel(conversation_id)
     }
 
     /// List channel members with profile information.
@@ -3201,6 +3201,11 @@ impl ChatterClient {
     /// tells us about it. Call on DM open and profile open (Signal-Desktop's
     /// `throttledGetProfiles`); throttled in `UserService`, so cheap to call.
     pub async fn refresh_profile_if_stale(&self, user_id: &crate::domain::ids::UserId) {
+        // Shield: an identified fetch naming the friend the moment their DM
+        // opens is the link the mailbox hides. The cached profile stands.
+        if self.anon_mode_enabled() {
+            return;
+        }
         match self.users().refresh_profile_if_stale(user_id).await {
             Ok(Some(profile)) => {
                 self.event_bus().emit_domain(DomainEvent::UserProfileUpdated {
@@ -3294,9 +3299,6 @@ impl ChatterClient {
             ActiveConversation::ServerDm { peer_id } => {
                 let id: crate::domain::ids::ChannelId = (*peer_id).into();
                 self.messages().get_messages_local(&id, &ConversationType::ServerDm, None, limit)
-            }
-            ActiveConversation::MailboxDm { channel_id: id, .. } => {
-                self.messages().get_messages_local(id, &ConversationType::MailboxDm, None, limit)
             }
             ActiveConversation::AnonDm(id) => {
                 // Anon DM messages live in the anon_dm service's own store;
@@ -3843,10 +3845,6 @@ fn build_intent(
         }),
         ActiveConversation::AnonGroup(id) => Ok(OutgoingIntent::AnonGroup {
             group_id: id, text: text.to_string(), attachment_pointers, quote,
-        }),
-        ActiveConversation::MailboxDm { channel_id, peer_id } => Ok(OutgoingIntent::ChannelDm {
-            peer_id, dm_channel_id: channel_id, text: text.to_string(),
-            attachment_pointers, file_paths: vec![], quote,
         }),
         ActiveConversation::ServerDm { peer_id } => Ok(OutgoingIntent::ServerDm {
             peer_id, text: text.to_string(), attachment_pointers, quote,

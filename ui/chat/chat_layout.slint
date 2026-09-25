@@ -238,8 +238,7 @@ export component ChatLayout inherits Rectangle {
         // per DM open, and this keeps a stale one from ever surviving a switch
         // into a channel, group or mesh room.
         if root.identity-change-visible
-            && (root.conversation-kind == ConversationKind.server-dm
-                || root.conversation-kind == ConversationKind.mailbox-dm): IdentityChangeBar {
+            && root.conversation-kind == ConversationKind.server-dm: IdentityChangeBar {
             width: 100%;
             vertical-stretch: 0;
             title: root.identity-change-title;

@@ -19,10 +19,10 @@ use serde::{Deserialize, Serialize};
 pub enum ConversationType {
     /// Server-managed channel (public, private, or group).
     Channel,
-    /// Server-managed direct message (1:1 via server DM channel).
+    /// Friend DM (1:1, channel-free, keyed by the peer). One conversation
+    /// whichever transport carried a message — sealed-sender streaming or,
+    /// in Shield mode, the NDSS'21 mailbox.
     ServerDm,
-    /// Client-side mailbox-based DM (sealed sender).
-    MailboxDm,
     /// Anonymous DM (NDSS'21 style, client-managed).
     AnonDm,
     /// Anonymous group (NDSS'21 style, client-managed).
@@ -49,7 +49,6 @@ impl ConversationType {
         match self {
             Self::Channel => "channel",
             Self::ServerDm => "server_dm",
-            Self::MailboxDm => "mailbox_dm",
             Self::AnonDm => "anon_dm",
             Self::AnonGroup => "anon_group",
             Self::SavedMessages => "saved_messages",
@@ -68,9 +67,9 @@ impl ConversationType {
     }
 
     /// Whether an inbound message in this conversation should create a DM
-    /// sidebar entry for a new peer. Only the server-side DM flavors do.
+    /// sidebar entry for a new peer. Only the friend DM does.
     pub fn creates_dm_sidebar_entry(&self) -> bool {
-        matches!(self, Self::ServerDm | Self::MailboxDm)
+        matches!(self, Self::ServerDm)
     }
 
     /// Anonymous conversations (NDSS'21 style, client-managed). Replies here
@@ -90,7 +89,6 @@ impl ConversationType {
         match s {
             "channel" => Ok(Self::Channel),
             "server_dm" => Ok(Self::ServerDm),
-            "mailbox_dm" => Ok(Self::MailboxDm),
             "anon_dm" => Ok(Self::AnonDm),
             "anon_group" => Ok(Self::AnonGroup),
             "saved_messages" => Ok(Self::SavedMessages),

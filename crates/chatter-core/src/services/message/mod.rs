@@ -165,31 +165,9 @@ pub struct SendDmContentParams<'a> {
     pub channel_id: Option<ChannelId>,
 }
 
-/// Parameters for sending a DM message with attachments.
-pub struct SendDmMsgParams<'a> {
-    /// The peer's user ID.
-    pub peer_id: &'a UserId,
-    /// Message text.
-    pub text: &'a str,
-    /// Attachment pointers for the proto message.
-    pub attachment_pointers: Vec<crate::proto::content_v1::AttachmentPointer>,
-    /// Local attachment IDs to store with the message.
-    pub attachment_ids: Vec<AttachmentId>,
-    /// The DM channel ID for local storage.
-    pub dm_channel_id: &'a ChannelId,
-    /// For sending to the peer's mailbox.
-    pub mailbox_manager: &'a MailboxManager,
-    /// Timestamp in nanoseconds (caller generates this for consistent UI/storage).
-    pub sent_at: u64,
-    /// Reply quote, when this send is a reply. Carries the `Quote` on the wire
-    /// and stamps the local echo's reply fields (via `assemble_reply_parts`) so
-    /// the receiver's bubble survives — same contract as the ServerDm path.
-    pub quote: Option<&'a crate::services::gateway::outgoing::QuoteIntent>,
-}
-
-/// Result from sending a DM with file attachments.
+/// Result of a friend-DM send (`send_server_dm`).
 pub struct DmSendResult {
-    /// The stored message (None if bootstrap was initiated).
+    /// The stored message.
     pub message: Option<Message>,
     /// All uploaded attachment IDs.
     pub attachment_ids: Vec<AttachmentId>,
@@ -197,8 +175,8 @@ pub struct DmSendResult {
     pub gif_attachment_ids: Vec<AttachmentId>,
     /// Timestamp used for the message.
     pub sent_at: u64,
-    /// True if this was a first DM and bootstrap was initiated.
-    /// The message was queued and will be sent when bootstrap completes.
+    /// True if the Shield mailbox with this friend was not established yet:
+    /// the message was queued and goes out when the bootstrap completes.
     pub bootstrap_initiated: bool,
 }
 
@@ -231,6 +209,12 @@ pub struct MessageService {
     /// (`track_armed`) so the SENDER's own copy is reaped once the timer
     /// elapses — the recipient half is armed on receive in the gateway/inbox.
     pub(crate) ephemeral_service: Arc<EphemeralService>,
+    /// NDSS'21 ephemeral-mailbox transport — a friend DM's transport while
+    /// Shield mode is on (see `send_friend_dm_content`).
+    pub(crate) mailbox_manager: Arc<MailboxManager>,
+    /// Shield mode. The one bit that picks a friend DM's transport; shared
+    /// with `ChatterClient`, which is what flips it.
+    pub(crate) shield_mode: Arc<std::sync::atomic::AtomicBool>,
     /// Group messages queued waiting on a `SenderKeyDistribution`. Keyed by
     /// `(channel_id, sender_id, sender_device_id)`. Drained by
     /// `retry_pending_group_decrypts` when the matching SKDM lands. Each entry
@@ -292,6 +276,7 @@ impl MessageService {
         token_manager: Arc<TokenManager>,
         event_bus: crate::events::EventBus,
         ephemeral_service: Arc<EphemeralService>,
+        mailbox_manager: Arc<MailboxManager>,
     ) -> Self {
         Self {
             grpc_pool,
@@ -308,6 +293,8 @@ impl MessageService {
             token_manager,
             event_bus,
             ephemeral_service,
+            mailbox_manager,
+            shield_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             pending_group_decrypts: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             sender_key_requests: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             group_retry_requests: Arc::new(parking_lot::Mutex::new(std::collections::HashSet::new())),
@@ -666,7 +653,6 @@ impl MessageService {
     /// - AnonDm/AnonGroup `ConversationType`s map straight to their variants.
     /// - ServerDm → channel-free `ServerDm { peer_id }` (the peer is the
     ///   passed `peer_id`, or the `channel_id`'s UUID which equals it).
-    /// - MailboxDm + known peer → `MailboxDm` (still channel-scoped).
     /// - Otherwise → `Channel`.
     ///
     /// Lives here because UI callers used to inline this across multiple
@@ -706,10 +692,6 @@ impl MessageService {
                 });
                 ActiveConversation::ServerDm { peer_id: peer }
             }
-            ConversationType::MailboxDm => match peer_id {
-                Some(p) => ActiveConversation::MailboxDm { channel_id: *channel_id, peer_id: p },
-                None => ActiveConversation::Channel(*channel_id),
-            },
             _ => ActiveConversation::Channel(*channel_id),
         }
     }

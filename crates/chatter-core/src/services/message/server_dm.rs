@@ -1,25 +1,24 @@
-//! Server DM operations — sealed-sender, per-device, channel-free.
+//! Friend DMs — one conversation per friend, two transports.
 //!
 //! Chatter's DM model mirrors Signal's 1:1 messaging: there is no
-//! server-side DM channel. A message is Signal-Protocol-encrypted once per
-//! recipient device and deposited directly into that device's inbox via
-//! `SendSealedMessage`, authorized with the recipient's Unidentified Access
-//! Key (read off their prekey bundle) rather than our own credentials — so
-//! the server learns the recipient but never the sender. This is the same
-//! primitive `fanout_control_to_device_inboxes` uses for channel control
-//! messages, just without a channel to read
-//! membership from. The server never creates or reads a DM channel row;
-//! the local conversation is keyed by the peer's `UserId`
-//! (`ConversationHandle`/`ActiveConversation::ServerDm { peer_id }`, local
-//! storage key `ChannelId::from(peer_id)`).
+//! server-side DM channel. The local conversation is keyed by the peer's
+//! `UserId` (`ActiveConversation::ServerDm { peer_id }`, local storage key
+//! `ChannelId::from(peer_id)`, `ConversationType::ServerDm`) whichever
+//! transport carried a message, so switching modes never hides history.
 //!
-//! This intentionally does NOT reuse the `dm.rs` mailbox path: that path
-//! is the NDSS'21 ephemeral-mailbox transport (two encryption layers,
-//! rotating mailbox addresses, bootstrap handshake) used for
-//! `ConversationType::MailboxDm` — a stronger, slower-to-establish privacy
-//! model for peers without a server-visible friendship. `ServerDm` is for
-//! server-known friends: standard Signal 1:1 sealed sender, no bootstrap.
-
+//! The transport is picked per send by Shield mode, in exactly one place —
+//! [`MessageService::send_friend_dm_content`]:
+//!
+//! - **Normal**: sealed sender, streaming. A message is Signal-Protocol-
+//!   encrypted once per recipient device and deposited directly into that
+//!   device's inbox via `SendSealedMessage`, authorized with the recipient's
+//!   Unidentified Access Key rather than our own credentials — so the server
+//!   learns the recipient (and the timing) but never the sender. Instant.
+//! - **Shield**: the NDSS'21 ephemeral-mailbox transport (`dm.rs`: two
+//!   encryption layers, mailbox addresses, bootstrap handshake), over the
+//!   onion pool, received by polling. Recipient and timing are hidden too —
+//!   the statistical-disclosure signal sealed sender alone leaks (Martiny et
+//!   al., NDSS'21 §III-IV).
 
 use prost::Message as ProstMessage;
 
@@ -132,7 +131,14 @@ impl MessageService {
             }
         }
 
-        self.send_sealed_dm_content(peer_id, content).await?;
+        // Shield, mailbox not established with this friend yet: the content is
+        // queued and goes out when the bootstrap completes. Stored now like a
+        // sent message so it survives switching conversations.
+        let bootstrap_initiated = match self.send_friend_dm_content(peer_id, content).await {
+            Ok(()) => false,
+            Err(MessageError::BootstrapInitiated) => true,
+            Err(e) => return Err(e),
+        };
 
         let current_user_id = self.settings_repo.current_user_id()?;
         let conversation_id: ChannelId = (*peer_id).into();
@@ -188,7 +194,7 @@ impl MessageService {
             attachment_ids,
             gif_attachment_ids: vec![],
             sent_at,
-            bootstrap_initiated: false,
+            bootstrap_initiated,
         })
     }
 
@@ -214,7 +220,31 @@ impl MessageService {
         // `profile_key` on the DataMessage.
         let content = self.inject_profile_key_if_sharing(peer_id, content)?;
 
-        self.send_sealed_dm_content(peer_id, content).await
+        self.send_friend_dm_content(peer_id, content).await
+    }
+
+    /// Deliver `content` (text, receipt, typing, reaction, edit, delete, …) to
+    /// a friend over the transport the current mode allows. The ONLY place a
+    /// friend DM's transport is decided.
+    ///
+    /// Shield: the ephemeral mailbox over onion. A single receipt or typing
+    /// indicator over sealed-sender streaming re-creates the recipient+timing
+    /// signal the mailbox exists to remove (NDSS'21 §III-IV), so there is no
+    /// fallback — a mailbox failure is this send's failure.
+    /// `Err(BootstrapInitiated)` means the mailbox with this friend is not
+    /// established yet: the content was queued for the bootstrap flush.
+    ///
+    /// Normal: sealed sender, streaming, for instant delivery.
+    pub async fn send_friend_dm_content(
+        &self,
+        peer_id: &UserId,
+        content: crate::proto::content_v1::Content,
+    ) -> Result<(), MessageError> {
+        if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+            self.send_dm(peer_id, content, &self.mailbox_manager).await
+        } else {
+            self.send_sealed_dm_content(peer_id, content).await
+        }
     }
 
     /// Send an arbitrary `Content` proto (reactions, typing, pin, edit,
@@ -230,11 +260,18 @@ impl MessageService {
     ///
     /// Callers that need local storage (e.g. `send_server_dm`) do it
     /// themselves after this returns — this method only handles delivery.
-    pub async fn send_sealed_dm_content(
+    async fn send_sealed_dm_content(
         &self,
         peer_id: &UserId,
         content: crate::proto::content_v1::Content,
     ) -> Result<(), MessageError> {
+        // Backstop for `send_friend_dm_content`: this transport names the
+        // recipient to the server, which Shield mode must never do.
+        if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(MessageError::DmError(
+                "Shield mode: refusing the sealed-sender streaming transport for a DM".into(),
+            ));
+        }
         let plaintext = content.encode_to_vec();
 
         // Self-sync copy: for the TEXT DM path, the copy we ship to our OWN other

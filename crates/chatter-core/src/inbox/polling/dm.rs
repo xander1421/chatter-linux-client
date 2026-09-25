@@ -415,55 +415,20 @@ fn dispatch_dm_content(
                 }
             }
 
-            // Resolve the DM channel ID for this peer (needed for both DB storage and UI routing)
-            let dm_channel_id = if let Some(current_user) = current_user_id {
-                // Look up the DM channel by peer ID (server-assigned, NOT derived)
-                let dm_channel = channel_repo.get_dm_channel_by_peer(current_user, sender_id);
+            // Pure profile-key handshake carrier (`send_profile_key_handshake`
+            // goes over this mailbox in Shield mode): the key above was the
+            // whole point — no message row, no bubble. Mirrors the ServerDm
+            // inbound path (gateway `store_data_message`).
+            if body.is_empty() && attachments.is_empty() {
+                return;
+            }
 
-                if let Ok(Some(channel)) = dm_channel {
-                    channel.id
-                } else {
-                    // Channel doesn't exist locally - create it with derived ID
-                    // This can happen if we receive a DM before the channel is synced
-                    let derived_id = ChannelId::from_dm_participants(current_user, sender_id);
-
-                    tracing::info!(
-                        peer_id = %peer_id,
-                        sender_id = %sender_id,
-                        derived_channel_id = %derived_id,
-                        "Creating local DM channel for incoming message"
-                    );
-
-                    // Create a minimal DM channel entry
-                    let channel = crate::domain::channel::Channel::new(
-                        derived_id,
-                        format!("DM with {}", sender_id), // Placeholder name
-                        crate::domain::channel::ChannelType::DirectMessage,
-                        *current_user, // Owner is current user for local tracking
-                    );
-
-                    // Insert if doesn't exist, ignore if already present
-                    if let Err(e) = channel_repo.insert_or_ignore(&channel) {
-                        tracing::warn!(
-                            peer_id = %peer_id,
-                            error = %e,
-                            "Failed to ensure DM channel exists"
-                        );
-                    }
-
-                    derived_id
-                }
-            } else {
-                // No current user - derive channel ID from peer (best effort)
-                ChannelId::new()
-            };
-
-            // This is the mailbox (NDSS'21) DM transport — private-friend
-            // DMs, stored as `ConversationType::MailboxDm`. Regular friend
-            // DMs are channel-free ServerDm and arrive via the device-inbox
-            // sealed path (services/gateway/mod.rs store_data_message), a
-            // different transport, so there is no double-store to guard
-            // against here.
+            // A friend DM is ONE conversation whichever transport carried it:
+            // filed exactly where the sealed-sender path files it
+            // (`ChannelId::from(peer)`, `ServerDm`), so the chat list, badge,
+            // reload and history read it — a mailbox-only key was never read
+            // back, and these messages vanished on reload.
+            let dm_channel_id = ChannelId::from(*sender_id);
 
             // Store message in local database for persistence
             if current_user_id.is_some() {
@@ -481,7 +446,7 @@ fn dispatch_dm_content(
                     peer_id = %peer_id,
                     "dispatch_dm_content: timestamp selection"
                 );
-                let mut message = Message::new_text(dm_channel_id, ConversationType::MailboxDm, Some(*sender_id), body.clone(), sent_at);
+                let mut message = Message::new_text(dm_channel_id, ConversationType::ServerDm, Some(*sender_id), body.clone(), sent_at);
                 message.id = msg_id;
                 // Thread root rides on the wire (DataMessage.thread_id).
                 // Mirrors the ServerDm inbound path in gateway/mod.rs — see
@@ -507,13 +472,6 @@ fn dispatch_dm_content(
 
                 match message_repo.insert_or_ignore(&message) {
                     Ok(true) => {
-                        if let Ok(new_count) = channel_repo.increment_unread_count(&dm_channel_id) {
-                            let _ = event_tx.send(InboxEvent::DmUnreadCountUpdated {
-                                channel_id: dm_channel_id,
-                                peer_id,
-                                unread_count: new_count,
-                            });
-                        }
                         tracing::debug!(
                             peer_id = %peer_id,
                             channel_id = %dm_channel_id,
@@ -558,7 +516,6 @@ fn dispatch_dm_content(
 
             let _ = event_tx.send(InboxEvent::DmReceived {
                 peer_id,
-                channel_id: dm_channel_id,
                 text: body,
                 // Both timestamp and server_timestamp are in nanoseconds
                 timestamp: if timestamp > 0 { timestamp } else { server_timestamp },
@@ -676,6 +633,7 @@ fn dispatch_dm_content(
         }
 
         DmContent::KeyExchange {
+            sender_device_id,
             conversation_id,
             ephemeral_pk,
             timestamp,
@@ -704,6 +662,7 @@ fn dispatch_dm_content(
 
                 let _ = tx.send(DomainEvent::KeyExchangeReceived {
                     sender_id: *sender_id,
+                    sender_device_id,
                     conversation_id: conv_id,
                     ephemeral_public_key: ephemeral_pk,
                     timestamp,
@@ -1177,9 +1136,19 @@ async fn try_parse_bootstrap_response(
         "BOOTSTRAP[4/4] Layer 1 (envelope) decrypted, now decrypting Layer 2 (Signal)"
     );
 
-    // Step 3: Decrypt the Signal Protocol content
+    // Step 3: Decrypt the Signal Protocol content, against the responder's
+    // device — named by the frame, since the Signal layer needs it to open.
+    let frame = match <crate::proto::content_v1::BootstrapResponseFrame as prost::Message>::decode(
+        signal_ciphertext.as_slice(),
+    ) {
+        Ok(frame) => frame,
+        Err(e) => {
+            tracing::warn!(peer_id = %peer_id, error = %e, "Bootstrap response frame malformed");
+            return None;
+        }
+    };
     match message_gateway
-        .decrypt_identified_message(&signal_ciphertext, &peer_id, 1) // device_id = 1 (primary)
+        .decrypt_identified_message(&frame.signal_ciphertext, &peer_id, frame.sender_device_id)
         .await
     {
         Ok(result) => {
@@ -1394,5 +1363,65 @@ fn process_bootstrap_key_exchange(
             );
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A friend's DM that arrived over the Shield mailbox is the same
+    /// conversation as one that arrived over sealed sender: both come back
+    /// from the key the chat list, badge and history read. It used to be
+    /// filed under a mailbox-only key nothing read, and vanished on reload.
+    #[test]
+    fn mailbox_dm_joins_the_friends_one_conversation() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(crate::storage::Database::open(&dir.path().join("t.db"), "testpass").unwrap());
+        db.run_migrations().unwrap();
+        let message_repo = Arc::new(MessageRepository::new(db.clone()));
+        let (me, friend) = (UserId::new(), UserId::new());
+        let conversation = ChannelId::from(friend);
+
+        let streamed =
+            Message::new_text(conversation, ConversationType::ServerDm, Some(friend), "streamed".into(), 1);
+        message_repo.insert(&streamed).unwrap();
+
+        let (event_tx, _rx) = broadcast::channel(16);
+        let text = |body: &str, timestamp| DmContent::Text {
+            body: body.into(),
+            timestamp,
+            attachments: vec![],
+            profile_key: None,
+            quote: None,
+            thread_id: None,
+        };
+        for (content, id) in [(text("via mailbox", 2), "m-1"), (text("", 3), "m-2")] {
+            dispatch_dm_content(
+                content,
+                &friend,
+                friend,
+                id,
+                0,
+                &Some(me),
+                &event_tx,
+                &message_repo,
+                &Arc::new(ChannelRepository::new(db.clone())),
+                &Arc::new(AttachmentRepository::new(db.clone())),
+                &Arc::new(UserRepository::new(db.clone())),
+                &DmConversationManager::new(db.clone()),
+                None,
+            );
+        }
+
+        let mut thread: Vec<String> = message_repo
+            .list_for_channel(&conversation, &ConversationType::ServerDm, None, 10)
+            .unwrap()
+            .iter()
+            .filter_map(|m| m.as_text().map(str::to_string))
+            .collect();
+        thread.sort();
+        // The empty body is a profile-key handshake: no row.
+        assert_eq!(thread, ["streamed", "via mailbox"]);
     }
 }

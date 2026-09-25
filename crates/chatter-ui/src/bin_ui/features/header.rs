@@ -293,7 +293,7 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
 
         // Regular channel settings
         let channel_id = match conversation {
-            ActiveConversation::Channel(id) | ActiveConversation::MailboxDm { channel_id: id, .. } => id,
+            ActiveConversation::Channel(id) => id,
             _ => {
                 tracing::warn!("Cannot open channel settings: no active channel");
                 return;

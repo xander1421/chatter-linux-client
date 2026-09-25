@@ -71,7 +71,6 @@ component SectionConversationItem inherits Rectangle {
 
     // Three glyph families: channels (#), DMs (avatar), anon groups (shield).
     property <bool> is-dm: root.conversation-type == ConversationKind.server-dm
-                        || root.conversation-type == ConversationKind.mailbox-dm
                         || root.conversation-type == ConversationKind.anon-dm;
     property <bool> is-group: root.conversation-type == ConversationKind.anon-group;
     property <bool> is-channel: root.conversation-type == ConversationKind.channel

@@ -24,6 +24,7 @@ fn test_sealed_sender_result_key_exchange_variant() {
 
     let result = SealedSenderResult::KeyExchange {
         sender_id,
+        sender_device_id: 1,
         conversation_id: conversation_id.clone(),
         ephemeral_public_key: ephemeral_pk.clone(),
         timestamp: 1704067200000,
@@ -36,6 +37,7 @@ fn test_sealed_sender_result_key_exchange_variant() {
             conversation_id: c,
             ephemeral_public_key: k,
             timestamp: t,
+            ..
         } => {
             assert_eq!(s, sender_id);
             assert_eq!(c, conversation_id);
@@ -55,6 +57,7 @@ fn test_domain_event_key_exchange_received_32_bytes() {
 
     let event = DomainEvent::KeyExchangeReceived {
         sender_id,
+        sender_device_id: 1,
         conversation_id,
         ephemeral_public_key: ephemeral_pk.clone(),
         timestamp: 1704067200000,
@@ -79,6 +82,7 @@ fn test_domain_event_key_exchange_received_64_bytes() {
 
     let event = DomainEvent::KeyExchangeReceived {
         sender_id,
+        sender_device_id: 1,
         conversation_id,
         ephemeral_public_key: ephemeral_pk.clone(),
         timestamp: 1704067200000,
@@ -108,6 +112,7 @@ async fn test_event_bus_transmits_key_exchange_received() {
     // Emit event
     let sent_count = event_bus.emit_domain(DomainEvent::KeyExchangeReceived {
         sender_id,
+        sender_device_id: 1,
         conversation_id,
         ephemeral_public_key: ephemeral_pk.clone(),
         timestamp: 1704067200000,
@@ -123,6 +128,7 @@ async fn test_event_bus_transmits_key_exchange_received() {
 
     if let DomainEvent::KeyExchangeReceived {
         sender_id: s,
+        sender_device_id: 1,
         conversation_id: c,
         ephemeral_public_key: k,
         timestamp: t,
@@ -151,6 +157,7 @@ async fn test_event_bus_multiple_subscribers_key_exchange() {
     // Emit event
     let sent_count = event_bus.emit_domain(DomainEvent::KeyExchangeReceived {
         sender_id,
+        sender_device_id: 1,
         conversation_id,
         ephemeral_public_key: ephemeral_pk,
         timestamp: 1704067200000,
@@ -256,6 +263,7 @@ async fn test_key_exchange_to_domain_event_flow() {
     // Simulate what device polling does: emit DomainEvent::KeyExchangeReceived
     event_bus.emit_domain(DomainEvent::KeyExchangeReceived {
         sender_id,
+        sender_device_id: 1,
         conversation_id,
         ephemeral_public_key: bootstrap_key.clone(),
         timestamp: 1704067200000,
@@ -266,6 +274,7 @@ async fn test_key_exchange_to_domain_event_flow() {
 
     if let DomainEvent::KeyExchangeReceived {
         sender_id: s,
+        sender_device_id: 1,
         conversation_id: c,
         ephemeral_public_key: k,
         timestamp: t,
@@ -296,6 +305,7 @@ async fn test_bootstrap_handler_ignores_32_byte_keys() {
     let regular_key: Vec<u8> = (0..32).collect();
     event_bus.emit_domain(DomainEvent::KeyExchangeReceived {
         sender_id: UserId::new(),
+        sender_device_id: 1,
         conversation_id: ChannelId::new(),
         ephemeral_public_key: regular_key,
         timestamp: 1704067200000,
@@ -328,6 +338,7 @@ async fn test_bootstrap_handler_processes_64_byte_keys() {
     let bootstrap_key: Vec<u8> = (0..64).collect();
     event_bus.emit_domain(DomainEvent::KeyExchangeReceived {
         sender_id: UserId::new(),
+        sender_device_id: 1,
         conversation_id: ChannelId::new(),
         ephemeral_public_key: bootstrap_key,
         timestamp: 1704067200000,
@@ -361,6 +372,7 @@ async fn test_event_bus_doesnt_block_on_slow_receiver() {
     for i in 0..10 {
         event_bus.emit_domain(DomainEvent::KeyExchangeReceived {
             sender_id: UserId::new(),
+            sender_device_id: 1,
             conversation_id: ChannelId::new(),
             ephemeral_public_key: vec![i as u8; 64],
             timestamp: i as u64,
@@ -416,6 +428,7 @@ async fn test_full_key_exchange_event_flow() {
 
     event_bus.emit_domain(DomainEvent::KeyExchangeReceived {
         sender_id,
+        sender_device_id: 1,
         conversation_id,
         ephemeral_public_key: bootstrap_key,
         timestamp: 1704067200000,
@@ -467,6 +480,7 @@ async fn test_32_byte_key_does_not_trigger_bootstrap() {
     let regular_key: Vec<u8> = (0..32).collect();
     event_bus.emit_domain(DomainEvent::KeyExchangeReceived {
         sender_id: UserId::new(),
+        sender_device_id: 1,
         conversation_id: ChannelId::new(),
         ephemeral_public_key: regular_key,
         timestamp: 1704067200000,

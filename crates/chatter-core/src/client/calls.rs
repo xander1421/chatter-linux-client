@@ -250,20 +250,6 @@ impl ChatterClient {
                 })
             }
 
-            AC::MailboxDm { channel_id, peer_id } => {
-                let call_id = self
-                    .start_dm_call(&peer_id, channel_id, call_type, user_id)
-                    .await?;
-                Ok(OutgoingCallStart {
-                    call_id: call_id.to_string(),
-                    channel_id: channel_id.to_string(),
-                    is_video,
-                    is_anonymous: false,
-                    verification_emojis: None,
-                    title: "Calling...".into(),
-                })
-            }
-
             AC::Channel(channel_id) => {
                 // Channel could be a 1:1 DM or a group — resolve peer locally.
                 if let Some(peer_id) = self.get_dm_peer_local(&channel_id) {

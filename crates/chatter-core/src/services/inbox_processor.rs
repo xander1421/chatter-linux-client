@@ -609,7 +609,6 @@ impl InboxEventProcessor {
 
             InboxEvent::DmReceived {
                 peer_id,
-                channel_id,
                 timestamp,
                 message_id,
                 attachments,
@@ -632,8 +631,10 @@ impl InboxEventProcessor {
                     timestamp,
                     "DELIVERY_RECEIPT: Triggering delivery receipt for received DM"
                 );
+                // Same conversation as a sealed-sender DM; the receipt's
+                // transport is picked by mode in `send_friend_dm_content`.
                 let handle = ConversationHandle::new(
-                    ActiveConversation::MailboxDm { channel_id: *channel_id, peer_id: *peer_id },
+                    ActiveConversation::ServerDm { peer_id: *peer_id },
                     self.client.clone(),
                 );
                 let ts = *timestamp;

@@ -101,6 +101,7 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                 event = event_rx.recv() => match event {
                     Ok(DomainEvent::KeyExchangeReceived {
                         sender_id,
+                        sender_device_id,
                         conversation_id: _,
                         ephemeral_public_key,
                         timestamp: _,
@@ -145,6 +146,7 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                                 database.clone(),
                                 grpc_pool.clone(),
                                 sender_id,
+                                sender_device_id,
                                 &ephemeral_key,
                                 &event_bus,
                             )
@@ -238,6 +240,7 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                                     database,
                                     grpc_pool,
                                     sender_id,
+                                    sender_device_id,
                                 )
                                 .await
                                 {
@@ -301,6 +304,8 @@ async fn handle_bootstrap_request_async(
     database: Arc<Database>,
     grpc_pool: Arc<GrpcClientPool>,
     peer_id: UserId,
+    // The device that sent the REQUEST — the one waiting for our MESSAGE.
+    peer_device_id: u32,
 ) -> Result<(), String> {
     use crate::mailbox::dm::DmConversationManager;
     use crate::mailbox::TokenManager;
@@ -369,7 +374,6 @@ async fn handle_bootstrap_request_async(
 
     let mut auth_client = AuthClient::new(channel.clone(), auth_interceptor.clone());
     let peer_id_str = peer_id.to_string();
-    let peer_device_id = 1u32;
 
     let sealed_ciphertext = signal_service
         .encrypt_message(&mut auth_client, &peer_id_str, peer_device_id, &bootstrap_result.bootstrap_message)
@@ -452,6 +456,8 @@ async fn handle_bootstrap_async(
     database: Arc<Database>,
     grpc_pool: Arc<GrpcClientPool>,
     peer_id: UserId,
+    // The device that sent the bootstrap MESSAGE — the one our RESPONSE is for.
+    peer_device_id: u32,
     ephemeral_public_key: &[u8],
     event_bus: &EventBus,
 ) -> Result<(), String> {
@@ -512,8 +518,14 @@ async fn handle_bootstrap_async(
     let mut auth_client = AuthClient::new(channel.clone(), auth_interceptor.clone());
 
     // Send bootstrap response with two-layer encryption
+    let our_device_id = settings_repo
+        .get::<u32>(crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID)
+        .map_err(|e| format!("Failed to read our device id: {e}"))?
+        .ok_or("No current device id")?;
     send_bootstrap_response_with_envelope(
         response,
+        peer_device_id,
+        our_device_id,
         &signal_service,
         &mut auth_client,
         channel.clone(),
@@ -758,6 +770,8 @@ async fn send_pending_messages_after_bootstrap(
 /// stay in sync with pending message sending.
 async fn send_bootstrap_response_with_envelope(
     response: BootstrapResponse,
+    peer_device_id: u32,
+    our_device_id: u32,
     signal_service: &SignalService,
     auth_client: &mut AuthClient,
     channel: crate::network::grpc::transport::GrpcTransport,
@@ -771,10 +785,9 @@ async fn send_bootstrap_response_with_envelope(
 
     // Layer 1: Encrypt content with Signal Protocol (using shared signal_service)
     let peer_id_str = peer_id.to_string();
-    let device_id = 1u32;
 
     let (signal_ciphertext, msg_type) = signal_service
-        .encrypt_message_identified(auth_client, &peer_id_str, device_id, &response_message)
+        .encrypt_message_identified(auth_client, &peer_id_str, peer_device_id, &response_message)
         .await
         .map_err(|e| format!("Failed to encrypt with Signal: {}", e))?;
 
@@ -788,7 +801,15 @@ async fn send_bootstrap_response_with_envelope(
     // Layer 2: Wrap in an envelope encrypted with ECDH(fresh_ephemeral, peer_mailbox).
     // The envelope carries NO long-term key: its 32-byte prefix is a per-message
     // ephemeral public key, so the unauthenticated deposit below does not name us.
-    let envelope = encrypt_envelope(&signal_ciphertext, &response.peer_mailbox_public_key)
+    // The initiator can only decrypt the Signal layer against OUR device's
+    // address, so it rides in the frame, inside the envelope.
+    use prost::Message as _;
+    let frame = crate::proto::content_v1::BootstrapResponseFrame {
+        sender_device_id: our_device_id,
+        signal_ciphertext,
+    }
+    .encode_to_vec();
+    let envelope = encrypt_envelope(&frame, &response.peer_mailbox_public_key)
         .map_err(|e| format!("Failed to encrypt envelope: {}", e))?;
 
     tracing::debug!(

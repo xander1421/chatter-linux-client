@@ -123,7 +123,7 @@ pub use gateway::{
     // Call hangup
     build_call_hangup_content, CallHangupReason,
 };
-pub use message::{MessageService, MessageError, SendDmContentParams, SendDmMsgParams};
+pub use message::{MessageService, MessageError, SendDmContentParams};
 pub use message::core::{proto_to_domain_message, proto_to_domain_message_with_sender, proto_content_to_domain};
 pub use attachment::{AttachmentService, AttachmentError, CdnUploadResult};
 #[cfg(feature = "media")]

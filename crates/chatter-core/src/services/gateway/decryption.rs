@@ -327,6 +327,7 @@ impl MessageGateway {
                 );
                 return Ok(SealedSenderResult::KeyExchange {
                     sender_id,
+                    sender_device_id: u32::from(sender_address.device_id()),
                     conversation_id: key_exchange.conversation_id,
                     ephemeral_public_key: key_exchange.ephemeral_pk,
                     timestamp: key_exchange.timestamp,
@@ -660,7 +661,9 @@ impl MessageGateway {
         };
 
         // Process plaintext and ensure zeroization
-        let result = self.decrypt_identified_message_inner(sender_id, &plaintext).await;
+        let result = self
+            .decrypt_identified_message_inner(sender_id, sender_device_id, &plaintext)
+            .await;
 
         // Zeroize decrypted plaintext before returning (security: prevent heap residue)
         plaintext.zeroize();
@@ -673,6 +676,7 @@ impl MessageGateway {
     async fn decrypt_identified_message_inner(
         &self,
         sender_id: &UserId,
+        sender_device_id: u32,
         plaintext: &[u8],
     ) -> Result<SealedSenderResult, ServiceError> {
         // Same refusal as the sealed path, before anything is parsed. The
@@ -699,6 +703,7 @@ impl MessageGateway {
                 );
                 return Ok(SealedSenderResult::KeyExchange {
                     sender_id: *sender_id,
+                    sender_device_id,
                     conversation_id: key_exchange.conversation_id,
                     ephemeral_public_key: key_exchange.ephemeral_pk,
                     timestamp: key_exchange.timestamp,
@@ -793,7 +798,10 @@ impl MessageGateway {
                 "DM_DECRYPT: Parsed Content proto from peer"
             );
 
-            let dm_content = Self::parse_content(content_proto)?;
+            let mut dm_content = Self::parse_content(content_proto)?;
+            if let DmContent::KeyExchange { sender_device_id, .. } = &mut dm_content {
+                *sender_device_id = u32::from(sender_address.device_id());
+            }
             tracing::info!(sender_id = %sender_id, dm_content_type = ?std::mem::discriminant(&dm_content), "DM_DECRYPT: Content parsed to DmContent");
             // Zeroize plaintext before returning
             plaintext.zeroize();
@@ -945,6 +953,8 @@ impl MessageGateway {
             Some(content::Content::KeyExchange(kx)) => {
                 // Key exchange received in DM mailbox (bootstrap response from peer)
                 Ok(DmContent::KeyExchange {
+                    // Only the decrypting caller knows it; `process_dm_message` sets it.
+                    sender_device_id: 0,
                     conversation_id: kx.conversation_id,
                     ephemeral_pk: kx.ephemeral_pk,
                     timestamp: kx.timestamp,
@@ -1264,10 +1274,10 @@ impl MessageGateway {
 mod thread_id_tests {
     //! Regression test for a real bug: `DmContent::Text` (and, downstream,
     //! `dispatch_dm_content` in `inbox/polling/dm.rs`) silently dropped
-    //! `DataMessage.thread_id` on the MailboxDm (private-friend DM) receive
+    //! `DataMessage.thread_id` on the mailbox (Shield friend DM) receive
     //! path. The ServerDm/channel receive path (`gateway/mod.rs`) already
     //! carried this through -- see its `thread_id: data_message.thread_id
-    //! .parse().ok()` and comment. MailboxDm never got the same fix, so a
+    //! .parse().ok()` and comment. The mailbox path never got the same fix, so a
     //! thread reply received over that transport was filed into the main
     //! conversation instead of the open thread panel.
     use super::*;
@@ -1289,7 +1299,7 @@ mod thread_id_tests {
                 assert_eq!(
                     thread_id,
                     Some("11111111-1111-1111-1111-111111111111".to_string()),
-                    "thread_id must survive parse_content, or a MailboxDm reply \
+                    "thread_id must survive parse_content, or a mailbox-delivered reply \
                      is indistinguishable from a top-level message"
                 );
             }

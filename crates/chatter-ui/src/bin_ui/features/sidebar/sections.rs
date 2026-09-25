@@ -379,7 +379,7 @@ fn wire_section_conversation_selected(window: &MainWindow, _ui_ctx: &Arc<Chatter
         run_ui!(weak, |w| {
             match kind {
                 K::Channel | K::SavedMessages => w.invoke_channel_selected(conv_id_str.into()),
-                K::ServerDm | K::MailboxDm | K::AnonDm => w.invoke_dm_selected(conv_id_str.into()),
+                K::ServerDm | K::AnonDm => w.invoke_dm_selected(conv_id_str.into()),
                 K::AnonGroup => w.invoke_private_group_selected(conv_id_str.into()),
                 // Mesh conversations are never filed into folders.
                 K::Mesh | K::MeshDm => {}

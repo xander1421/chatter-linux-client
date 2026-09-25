@@ -17,7 +17,7 @@ use super::CallHangupReason;
 /// Populate a domain `Message`'s reply fields from an inbound DataMessage quote.
 ///
 /// Shared by the non-anon inbound paths (`store_data_message` for ServerDm,
-/// `dispatch_dm_content` for MailboxDm) so the quote is parsed in one place.
+/// `dispatch_dm_content` for the mailbox transport) so the quote is parsed in one place.
 /// Resolves the parent's real stored id by (author, sent_at) — so
 /// `reply_parent_missing` resolves correctly — and only falls back to a
 /// synthetic timestamp id when the parent isn't stored locally (then the UI
@@ -118,7 +118,7 @@ pub enum DmContent {
         /// bubble (author + preview + thumbnail). `None` for non-replies.
         quote: Option<Quote>,
         /// Thread root this message replies into (DataMessage.thread_id on
-        /// the wire), so a MailboxDm reply lands in the thread panel instead
+        /// the wire), so a mailbox-delivered reply lands in the thread panel instead
         /// of the main channel — mirrors the ServerDm inbound path in
         /// `gateway/mod.rs`, which already carries this through.
         thread_id: Option<String>,
@@ -163,6 +163,8 @@ pub enum DmContent {
     },
     /// Key exchange for DM bootstrap (response from peer).
     KeyExchange {
+        /// The sending device — the address a bootstrap reply is encrypted to.
+        sender_device_id: u32,
         conversation_id: String,
         ephemeral_pk: Vec<u8>,
         timestamp: u64,
@@ -359,6 +361,8 @@ pub enum SealedSenderResult {
     /// Key exchange message received — needs bootstrap handling.
     KeyExchange {
         sender_id: UserId,
+        /// The sending device — the address a bootstrap reply is encrypted to.
+        sender_device_id: u32,
         conversation_id: String,
         ephemeral_public_key: Vec<u8>,
         timestamp: u64,

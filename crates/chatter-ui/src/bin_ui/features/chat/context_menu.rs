@@ -73,7 +73,7 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             } else {
                 // DM/Channel: get pin state and attachments from service data
                 let msg = match handle.conversation() {
-                    ActiveConversation::MailboxDm { .. } | ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_) => {
+                    ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_) => {
                         match ui_ctx.get_message_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
                             Some(msg) => msg,
                             None => {

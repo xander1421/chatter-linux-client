@@ -81,7 +81,7 @@ fn test_dm_message_storage_roundtrip() {
 
     // Store a sent message (Alice -> Bob)
     let sent_at = next_timestamp_ns();
-    let sent_msg = Message::new_text(dm_channel.id, ConversationType::MailboxDm, Some(alice), "Hello Bob!".to_string(), sent_at);
+    let sent_msg = Message::new_text(dm_channel.id, ConversationType::ServerDm, Some(alice), "Hello Bob!".to_string(), sent_at);
     message_repo.insert(&sent_msg).unwrap();
 
     // Verify message is stored
@@ -111,7 +111,7 @@ fn test_dm_message_received_storage() {
 
     // Simulate receiving a message from Bob
     let sent_at = next_timestamp_ns();
-    let received_msg = Message::new_text(dm_channel.id, ConversationType::MailboxDm, Some(bob), "Hi Alice!".to_string(), sent_at);
+    let received_msg = Message::new_text(dm_channel.id, ConversationType::ServerDm, Some(bob), "Hi Alice!".to_string(), sent_at);
 
     // Use insert_or_ignore like the polling code does
     let inserted = message_repo.insert_or_ignore(&received_msg).unwrap();
@@ -122,7 +122,7 @@ fn test_dm_message_received_storage() {
     assert!(!duplicate_inserted, "Duplicate message should be ignored");
 
     // Verify only one message exists
-    let messages = message_repo.list_for_channel(&dm_channel.id, &ConversationType::MailboxDm, None, 100).unwrap();
+    let messages = message_repo.list_for_channel(&dm_channel.id, &ConversationType::ServerDm, None, 100).unwrap();
     assert_eq!(messages.len(), 1);
 }
 
@@ -153,20 +153,20 @@ fn test_dm_messages_list_by_channel() {
     let dm_ac = create_dm_channel(&channel_repo, &alice, &charlie);
 
     // Store messages in both channels
-    let msg1 = Message::new_text(dm_ab.id, ConversationType::MailboxDm, Some(alice), "Hi Bob".to_string(), next_timestamp_ns());
-    let msg2 = Message::new_text(dm_ab.id, ConversationType::MailboxDm, Some(bob), "Hi Alice".to_string(), next_timestamp_ns());
-    let msg3 = Message::new_text(dm_ac.id, ConversationType::MailboxDm, Some(alice), "Hi Charlie".to_string(), next_timestamp_ns());
+    let msg1 = Message::new_text(dm_ab.id, ConversationType::ServerDm, Some(alice), "Hi Bob".to_string(), next_timestamp_ns());
+    let msg2 = Message::new_text(dm_ab.id, ConversationType::ServerDm, Some(bob), "Hi Alice".to_string(), next_timestamp_ns());
+    let msg3 = Message::new_text(dm_ac.id, ConversationType::ServerDm, Some(alice), "Hi Charlie".to_string(), next_timestamp_ns());
 
     message_repo.insert(&msg1).unwrap();
     message_repo.insert(&msg2).unwrap();
     message_repo.insert(&msg3).unwrap();
 
     // List messages for Alice-Bob channel
-    let ab_messages = message_repo.list_for_channel(&dm_ab.id, &ConversationType::MailboxDm, None, 100).unwrap();
+    let ab_messages = message_repo.list_for_channel(&dm_ab.id, &ConversationType::ServerDm, None, 100).unwrap();
     assert_eq!(ab_messages.len(), 2);
 
     // List messages for Alice-Charlie channel
-    let ac_messages = message_repo.list_for_channel(&dm_ac.id, &ConversationType::MailboxDm, None, 100).unwrap();
+    let ac_messages = message_repo.list_for_channel(&dm_ac.id, &ConversationType::ServerDm, None, 100).unwrap();
     assert_eq!(ac_messages.len(), 1);
 }
 
@@ -1154,7 +1154,6 @@ fn test_type_isolation_on_list() {
     let all_types = [
         ConversationType::Channel,
         ConversationType::ServerDm,
-        ConversationType::MailboxDm,
         ConversationType::AnonDm,
         ConversationType::AnonGroup,
         ConversationType::SavedMessages,
@@ -1336,7 +1335,7 @@ fn test_update_delivery_status_by_timestamp_type_collision() {
 
     let msg_mailbox = Message::new_text(
         channel.id,
-        ConversationType::MailboxDm,
+        ConversationType::ServerDm,
         Some(sender),
         "mailbox msg".to_string(),
         shared_ts,
@@ -1351,18 +1350,18 @@ fn test_update_delivery_status_by_timestamp_type_collision() {
     message_repo.insert(&msg_mailbox).unwrap();
     message_repo.insert(&msg_saved).unwrap();
 
-    // Update delivery status for MailboxDm only
+    // Update delivery status for ServerDm only
     let updated = message_repo
         .update_delivery_status_by_timestamp(
             &channel.id,
-            &ConversationType::MailboxDm,
+            &ConversationType::ServerDm,
             shared_ts,
             "delivered",
         )
         .unwrap();
-    assert!(updated, "Should update MailboxDm row");
+    assert!(updated, "Should update ServerDm row");
 
-    // MailboxDm should be "delivered"
+    // ServerDm should be "delivered"
     let loaded_mailbox = message_repo.get(&msg_mailbox.id).unwrap().unwrap();
     assert_eq!(loaded_mailbox.delivery_status, "delivered");
 
@@ -1370,7 +1369,7 @@ fn test_update_delivery_status_by_timestamp_type_collision() {
     let loaded_saved = message_repo.get(&msg_saved.id).unwrap().unwrap();
     assert_eq!(
         loaded_saved.delivery_status, "",
-        "SavedMessages message must NOT be affected by MailboxDm delivery update"
+        "SavedMessages message must NOT be affected by ServerDm delivery update"
     );
 }
 
@@ -1397,11 +1396,11 @@ fn test_get_unread_count_per_type_isolation() {
         message_repo.insert(&msg).unwrap();
     }
 
-    // Insert 5 unread MailboxDm messages (same channel_id)
+    // Insert 5 unread ServerDm messages (same channel_id)
     for _ in 0..5 {
         let msg = Message::new_text(
             channel.id,
-            ConversationType::MailboxDm,
+            ConversationType::ServerDm,
             Some(sender),
             "mailbox unread".to_string(),
             next_timestamp_ns(),
@@ -1426,9 +1425,9 @@ fn test_get_unread_count_per_type_isolation() {
     assert_eq!(channel_count, 3, "Channel unread count should be 3");
 
     let mailbox_count = message_repo
-        .get_unread_count(&channel.id, &ConversationType::MailboxDm)
+        .get_unread_count(&channel.id, &ConversationType::ServerDm)
         .unwrap();
-    assert_eq!(mailbox_count, 5, "MailboxDm unread count should be 5");
+    assert_eq!(mailbox_count, 5, "ServerDm unread count should be 5");
 
     let anon_count = message_repo
         .get_unread_count(&channel.id, &ConversationType::AnonDm)
@@ -1436,10 +1435,10 @@ fn test_get_unread_count_per_type_isolation() {
     assert_eq!(anon_count, 1, "AnonDm unread count should be 1");
 
     // Types with no messages should return 0
-    let server_dm_count = message_repo
-        .get_unread_count(&channel.id, &ConversationType::ServerDm)
+    let saved_count = message_repo
+        .get_unread_count(&channel.id, &ConversationType::SavedMessages)
         .unwrap();
-    assert_eq!(server_dm_count, 0, "ServerDm unread count should be 0");
+    assert_eq!(saved_count, 0, "SavedMessages unread count should be 0");
 }
 
 /// Test 6: Insert unread messages in two types, mark one type as read,
@@ -1541,11 +1540,11 @@ fn test_reaction_counts_per_type_isolation() {
         .add_reaction(&sender, ts_channel, &reactor, &reactor, "fire")
         .unwrap();
 
-    // Insert a MailboxDm message and react to it with a different emoji
+    // Insert a ServerDm message and react to it with a different emoji
     let ts_dm = next_timestamp_ns();
     let msg_dm = Message::new_text(
         channel.id,
-        ConversationType::MailboxDm,
+        ConversationType::ServerDm,
         Some(sender),
         "dm msg".to_string(),
         ts_dm,
@@ -1566,7 +1565,7 @@ fn test_reaction_counts_per_type_isolation() {
     );
     assert!(
         !channel_reactions.contains_key(&ts_dm),
-        "Channel reactions must NOT contain MailboxDm timestamp key"
+        "Channel reactions must NOT contain ServerDm timestamp key"
     );
     let channel_emojis: Vec<&String> = channel_reactions[&ts_channel]
         .iter()
@@ -1575,17 +1574,17 @@ fn test_reaction_counts_per_type_isolation() {
     assert!(channel_emojis.contains(&&"fire".to_string()));
     assert!(!channel_emojis.contains(&&"heart".to_string()));
 
-    // get_reaction_counts_for_conversation for MailboxDm should only have "heart"
+    // get_reaction_counts_for_conversation for ServerDm should only have "heart"
     let dm_reactions = message_repo
-        .get_reaction_counts_for_conversation(&channel.id, &ConversationType::MailboxDm)
+        .get_reaction_counts_for_conversation(&channel.id, &ConversationType::ServerDm)
         .unwrap();
     assert!(
         dm_reactions.contains_key(&ts_dm),
-        "MailboxDm reactions should contain ts_dm key"
+        "ServerDm reactions should contain ts_dm key"
     );
     assert!(
         !dm_reactions.contains_key(&ts_channel),
-        "MailboxDm reactions must NOT contain Channel timestamp key"
+        "ServerDm reactions must NOT contain Channel timestamp key"
     );
     let dm_emojis: Vec<&String> = dm_reactions[&ts_dm]
         .iter()

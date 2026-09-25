@@ -157,7 +157,7 @@ impl ChatterClient {
         let query = parse_jarvis_mention(text)?;
         let context = match active {
             AC::Channel(id) => JarvisContext::channel(*id),
-            AC::ServerDm { .. } | AC::MailboxDm { .. } => JarvisContext::dm(active.channel_id()?),
+            AC::ServerDm { .. } => JarvisContext::dm(active.channel_id()?),
             AC::AnonDm(id) => JarvisContext::anon_dm(*id),
             AC::AnonGroup(id) => JarvisContext::anon_group(*id),
             AC::None => return None,

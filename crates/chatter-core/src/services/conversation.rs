@@ -310,7 +310,6 @@ impl ConversationHandle {
                 let cid: ChannelId = (*id).into();
                 (cid, CT::AnonGroup)
             }
-            ActiveConversation::MailboxDm { channel_id, .. } => (*channel_id, CT::MailboxDm),
             ActiveConversation::ServerDm { peer_id } => (ChannelId::from(*peer_id), CT::ServerDm),
             ActiveConversation::Channel(channel_id) => (*channel_id, CT::Channel),
             ActiveConversation::None => return,
@@ -452,7 +451,7 @@ impl ConversationHandle {
                     Err(e) => Err(ConversationError::Other(e.to_string())),
                 }
             }
-            ActiveConversation::MailboxDm { .. } | ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_) => {
+            ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_) => {
                 let msg = self.lookup_message(target_author, target_sent_timestamp)?;
                 Ok(msg.as_text().map(|s| s.to_string()))
             }
@@ -520,7 +519,7 @@ impl ConversationHandle {
                     Err(e) => Err(ConversationError::Other(e.to_string())),
                 }
             }
-            ActiveConversation::MailboxDm { .. } | ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_) => {
+            ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_) => {
                 let msg = self.lookup_message(target_author, target_sent_timestamp)?;
                 Ok(msg.attachments)
             }
@@ -552,7 +551,7 @@ impl ConversationHandle {
                     Err(e) => Err(ConversationError::Other(e.to_string())),
                 }
             }
-            ActiveConversation::MailboxDm { .. } | ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_) => {
+            ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_) => {
                 let msg = self.lookup_message(target_author, target_sent_timestamp)?;
                 Ok(msg.sender_id == current_user_id)
             }
@@ -573,7 +572,6 @@ impl ConversationHandle {
         use crate::domain::channel::Permissions;
         match &self.conversation {
             ActiveConversation::AnonDm(_)
-            | ActiveConversation::MailboxDm { .. }
             | ActiveConversation::ServerDm { .. } => Ok(Permissions::dm().can_delete_any_message),
             _ => self.is_own_message(target_author, target_sent_timestamp),
         }
@@ -738,8 +736,7 @@ impl ConversationHandle {
                     .set(&key, &muted)
                     .map_err(|e| ConversationError::Other(e.to_string()))
             }
-            ActiveConversation::MailboxDm { channel_id, .. }
-            | ActiveConversation::Channel(channel_id) => {
+            ActiveConversation::Channel(channel_id) => {
                 // Not the membership's `is_muted`: that column is the
                 // moderator mute (server `ChannelMember.muted`, moderation
                 // events), and sharing it let either one overwrite the other.
@@ -778,8 +775,7 @@ impl ConversationHandle {
                     .map_err(|e| ConversationError::Other(e.to_string()))?
                     .unwrap_or(false))
             }
-            ActiveConversation::MailboxDm { channel_id, .. }
-            | ActiveConversation::Channel(channel_id) => {
+            ActiveConversation::Channel(channel_id) => {
                 let key = format!("conv.muted.channel.{}", channel_id);
                 Ok(self.client.channels().settings_repo
                     .get_bool(&key)
@@ -818,8 +814,7 @@ impl ConversationHandle {
                 }
                 Ok(())
             }
-            ActiveConversation::MailboxDm { channel_id, .. }
-            | ActiveConversation::Channel(channel_id) => {
+            ActiveConversation::Channel(channel_id) => {
                 self.client.channels().channel_repo
                     .delete_channel_cascade(channel_id)
                     .map_err(|e| ConversationError::Other(e.to_string()))
@@ -830,7 +825,7 @@ impl ConversationHandle {
 
     /// Set the disappearing message timer for this conversation.
     ///
-    /// `seconds` of 0 disables the timer. For channels and mailbox DMs
+    /// `seconds` of 0 disables the timer. For channels
     /// this updates the channel's `default_ttl_seconds`. For anon types
     /// and channel-free server DMs it is stored in the settings repo.
     pub fn set_disappearing_timer(&self, seconds: u32) -> ConversationResult {
@@ -854,8 +849,7 @@ impl ConversationHandle {
                     .set(&key, &ttl)
                     .map_err(|e| ConversationError::Other(e.to_string()))
             }
-            ActiveConversation::MailboxDm { channel_id, .. }
-            | ActiveConversation::Channel(channel_id) => {
+            ActiveConversation::Channel(channel_id) => {
                 self.client.channels().channel_repo
                     .set_default_ttl(channel_id, ttl)
                     .map_err(|e| ConversationError::Other(e.to_string()))
@@ -899,27 +893,15 @@ impl ConversationHandle {
             .ok_or_else(|| ConversationError::Other("Message not found".into()))
     }
 
-    /// Send content via DM (Signal Protocol + mailbox).
-    async fn send_dm_content(
+    /// Send content to a friend DM. The transport (Shield: mailbox; normal:
+    /// sealed-sender streaming) is `send_friend_dm_content`'s decision.
+    async fn send_friend_dm_content(
         &self,
         content: crate::proto::content_v1::Content,
         peer_id: &UserId,
     ) -> ConversationResult {
         self.client.messages()
-            .send_dm(peer_id, content, &**self.client.mailbox_manager())
-            .await
-            .map_err(ConversationError::Message)
-    }
-
-    /// Send content via the channel-free server DM path (per-device sealed
-    /// sender, no channel).
-    async fn send_server_dm_content(
-        &self,
-        content: crate::proto::content_v1::Content,
-        peer_id: &UserId,
-    ) -> ConversationResult {
-        self.client.messages()
-            .send_sealed_dm_content(peer_id, content)
+            .send_friend_dm_content(peer_id, content)
             .await
             .map_err(ConversationError::Message)
     }
@@ -950,23 +932,21 @@ impl ConversationHandle {
     /// id for DMs, the channel id for channels.
     fn dm_or_channel_id(&self) -> String {
         match &self.conversation {
-            ActiveConversation::MailboxDm { peer_id, .. }
-            | ActiveConversation::ServerDm { peer_id } => peer_id.to_string(),
+            ActiveConversation::ServerDm { peer_id } => peer_id.to_string(),
             ActiveConversation::Channel(cid) => cid.to_string(),
             _ => String::new(),
         }
     }
 
     /// Route already-built `Content` to the transport for the active DM or
-    /// channel conversation. Valid only for MailboxDm / ServerDm / Channel;
+    /// channel conversation. Valid only for ServerDm / Channel;
     /// anon and None return `NoConversation`.
     async fn dispatch_content(
         &self,
         content: crate::proto::content_v1::Content,
     ) -> ConversationResult {
         match &self.conversation {
-            ActiveConversation::MailboxDm { peer_id, .. } => self.send_dm_content(content, peer_id).await,
-            ActiveConversation::ServerDm { peer_id } => self.send_server_dm_content(content, peer_id).await,
+            ActiveConversation::ServerDm { peer_id } => self.send_friend_dm_content(content, peer_id).await,
             ActiveConversation::Channel(channel_id) => self.send_channel_content(content, channel_id).await,
             _ => Err(ConversationError::NoConversation),
         }
@@ -1064,6 +1044,42 @@ mod tests {
             .message_repo
             .get_unread_count(id, conv_type)
             .expect("unread count")
+    }
+
+    /// A friend DM's transport is Shield mode's call, made in one place.
+    /// Shield: the mailbox — with no mailbox yet the content is queued for the
+    /// bootstrap flush, and it never falls back to sealed-sender streaming.
+    /// Normal: sealed sender, and nothing touches the mailbox queue.
+    #[tokio::test]
+    async fn friend_dm_transport_follows_shield_mode() {
+        use crate::storage::repositories::settings_repo::keys;
+        use std::sync::atomic::Ordering;
+
+        let (client, _dir) = test_client();
+        let ms = client.messages();
+        // We are the higher UUID: the Shield send queues and asks the friend
+        // to initiate, rather than creating a mailbox first.
+        let me = UserId::from_uuid(uuid::Uuid::max());
+        let friend = UserId::from_uuid(uuid::Uuid::from_u128(1));
+        ms.settings_repo.set_string(keys::CURRENT_USER_ID, &me.to_string()).unwrap();
+        ms.settings_repo.set(keys::CURRENT_DEVICE_ID, &1u32).unwrap();
+        let content = || crate::services::build_text_content("hi", 1);
+
+        ms.shield_mode.store(true, Ordering::Release);
+        let shield = ms.send_friend_dm_content(&friend, content()).await;
+        assert!(
+            matches!(shield, Err(crate::services::message::MessageError::BootstrapInitiated)),
+            "Shield must take the mailbox, got {shield:?}"
+        );
+        assert_eq!(ms.sesame_manager.drain_pending_messages(&friend).unwrap().len(), 1);
+
+        ms.shield_mode.store(false, Ordering::Release);
+        let normal = ms.send_friend_dm_content(&friend, content()).await;
+        assert!(
+            !matches!(normal, Err(crate::services::message::MessageError::BootstrapInitiated)),
+            "normal mode must not take the mailbox"
+        );
+        assert!(ms.sesame_manager.drain_pending_messages(&friend).unwrap().is_empty());
     }
 
     /// Opening a DM has to leave the sidebar badge at zero. The badge is a

@@ -34,17 +34,13 @@ pub enum ActiveConversation {
     None,
     /// A server-managed channel (public/private).
     Channel(ChannelId),
-    /// A DM to a friend (sealed-sender, per-device mailbox delivery,
-    /// Signal Protocol E2EE). Channel-free — there is no server-side DM
-    /// channel. Keyed entirely by the peer's `UserId`; the local
-    /// `conversation_id` (`ChannelId`) is derived via `ChannelId::from(peer_id)`.
+    /// A DM to a friend (Signal Protocol E2EE). Channel-free — there is no
+    /// server-side DM channel. Keyed entirely by the peer's `UserId`; the
+    /// local `conversation_id` (`ChannelId`) is derived via
+    /// `ChannelId::from(peer_id)`. ONE conversation whichever transport
+    /// carries it: sealed-sender streaming normally, the NDSS'21 mailbox in
+    /// Shield mode (`MessageService::send_friend_dm_content`).
     ServerDm {
-        peer_id: UserId,
-    },
-    /// A mailbox-routed DM (NDSS'21 ephemeral mailbox, Signal Protocol E2EE).
-    /// Server cannot see who talks to whom or message content.
-    MailboxDm {
-        channel_id: ChannelId,
         peer_id: UserId,
     },
     /// An anonymous DM (NDSS'21 mailbox, pairwise, HPKE bootstrap).
@@ -69,46 +65,17 @@ impl ActiveConversation {
         match self {
             Self::Channel(id) => Some(*id),
             Self::ServerDm { peer_id } => Some(ChannelId::from(*peer_id)),
-            Self::MailboxDm { channel_id, .. } => Some(*channel_id),
             Self::AnonDm(id) => Some((*id).into()),
             Self::AnonGroup(id) => Some((*id).into()),
             Self::None => None,
         }
     }
 
-    /// Whether an event keyed by `channel_id` belongs to this conversation.
-    ///
-    /// Like `channel_id() == Some(id)`, except that a mailbox DM also answers
-    /// to its peer's DM key: DM control content (typing, receipts) is keyed
-    /// `ChannelId::from(peer)` on receipt, while the mailbox DM's own id is
-    /// its mailbox channel, so the plain comparison never matched it.
+    /// Whether an event or message keyed by `id` belongs to this
+    /// conversation's open view. The ids of different conversation kinds are
+    /// distinct UUIDs, so the id alone decides.
     pub fn is_for_channel(&self, id: ChannelId) -> bool {
-        match self {
-            Self::MailboxDm { channel_id, peer_id } => {
-                *channel_id == id || ChannelId::from(*peer_id) == id
-            }
-            _ => self.channel_id() == Some(id),
-        }
-    }
-
-    /// Whether a message filed under `conversation_id` belongs in this
-    /// conversation's open view — the one "is this message showing" rule
-    /// (see `ChatterClient::is_showing`).
-    ///
-    /// A mailbox DM is attributed to its peer's DM row, so it shows in either
-    /// DM view of that peer. Its id is the pair-derived
-    /// `ChannelId::from_dm_participants`, which needs our own id (`me`) to
-    /// recompute; the old raw-id comparisons against `ServerDm`'s
-    /// `ChannelId::from(peer)` never matched it. The id alone is enough — the
-    /// ids of different conversation kinds are distinct UUIDs.
-    pub fn shows(&self, conversation_id: ChannelId, me: Option<&UserId>) -> bool {
-        let pair_matches = match self {
-            Self::ServerDm { peer_id } | Self::MailboxDm { peer_id, .. } => {
-                me.is_some_and(|me| ChannelId::from_dm_participants(me, peer_id) == conversation_id)
-            }
-            _ => false,
-        };
-        pair_matches || self.channel_id() == Some(conversation_id)
+        self.channel_id() == Some(id)
     }
 
     /// The id the SIDEBAR uses for this conversation — the same string the
@@ -121,7 +88,6 @@ impl ActiveConversation {
         match self {
             Self::Channel(id) => Some(id.to_string()),
             Self::ServerDm { peer_id } => Some(peer_id.to_string()),
-            Self::MailboxDm { channel_id, .. } => Some(channel_id.to_string()),
             Self::AnonDm(id) => Some(id.to_string()),
             Self::AnonGroup(id) => Some(id.to_string()),
             Self::None => None,
@@ -142,7 +108,6 @@ impl ActiveConversation {
         let ct = match self {
             Self::Channel(_) => CT::Channel,
             Self::ServerDm { .. } => CT::ServerDm,
-            Self::MailboxDm { .. } => CT::MailboxDm,
             Self::AnonDm(_) => CT::AnonDm,
             Self::AnonGroup(_) => CT::AnonGroup,
             Self::None => return None,
@@ -151,11 +116,6 @@ impl ActiveConversation {
     }
 
     /// Inverse of [`routing_key`](Self::routing_key).
-    ///
-    /// `MailboxDm` is the one arm that cannot come back: it is keyed by a
-    /// channel id *and* a peer id, and only the channel id survives the
-    /// round trip. Nothing in the live client constructs that variant, so
-    /// this returns `None` rather than inventing the missing half.
     pub fn from_routing_key(
         conversation_type: &crate::domain::message::ConversationType,
         id: &str,
@@ -166,7 +126,7 @@ impl ActiveConversation {
             CT::ServerDm => id.parse().ok().map(|peer_id| Self::ServerDm { peer_id }),
             CT::AnonDm => id.parse().ok().map(Self::AnonDm),
             CT::AnonGroup => id.parse().ok().map(Self::AnonGroup),
-            CT::MailboxDm | CT::Mesh | CT::MeshDm => None,
+            CT::Mesh | CT::MeshDm => None,
         }
     }
 
@@ -182,7 +142,7 @@ impl ActiveConversation {
 
     /// Check if this is a DM-style conversation (1:1).
     pub fn is_dm(&self) -> bool {
-        matches!(self, Self::ServerDm { .. } | Self::MailboxDm { .. } | Self::AnonDm(_))
+        matches!(self, Self::ServerDm { .. } | Self::AnonDm(_))
     }
 
     /// Get the ConversationType for this active conversation.
@@ -203,7 +163,6 @@ impl ActiveConversation {
                 crate::services::message::conversion::conversation_type_for_channel(channel_repo, id),
             ),
             Self::ServerDm { .. } => Some(ConversationType::ServerDm),
-            Self::MailboxDm { .. } => Some(ConversationType::MailboxDm),
             Self::AnonDm(_) => Some(ConversationType::AnonDm),
             Self::AnonGroup(_) => Some(ConversationType::AnonGroup),
             Self::None => None,
@@ -231,20 +190,13 @@ impl ActiveConversation {
             Self::ServerDm { peer_id: pid } => {
                 ChannelId::from(*pid) == *channel_id || pid == peer_id
             }
-            Self::MailboxDm { channel_id: cid, peer_id: pid } => {
-                cid == channel_id || pid == peer_id
-            }
             _ => false,
         }
     }
 
     /// True if the active conversation is a DM with the given peer.
     pub fn matches_dm_peer(&self, peer_id: &UserId) -> bool {
-        matches!(
-            self,
-            Self::ServerDm { peer_id: pid } | Self::MailboxDm { peer_id: pid, .. }
-                if pid == peer_id
-        )
+        matches!(self, Self::ServerDm { peer_id: pid } if pid == peer_id)
     }
 
     /// True if the active conversation is the given anonymous DM.
@@ -1063,24 +1015,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shows_matches_the_view_that_loads_the_message() {
-        let (me, peer, other) = (UserId::new(), UserId::new(), UserId::new());
+    fn is_for_channel_matches_only_its_own_conversation() {
+        let (peer, other) = (UserId::new(), UserId::new());
         let server_dm = ActiveConversation::ServerDm { peer_id: peer };
-        let mailbox = ChannelId::from_dm_participants(&me, &peer);
-
-        // A server DM shows its own messages, not another peer's.
-        assert!(server_dm.shows(ChannelId::from(peer), Some(&me)));
-        assert!(!server_dm.shows(ChannelId::from(other), Some(&me)));
-        // A mailbox DM with the open peer shows; with another peer it does not.
-        assert!(server_dm.shows(mailbox, Some(&me)));
-        assert!(!server_dm.shows(ChannelId::from_dm_participants(&me, &other), Some(&me)));
-        // Without our own id the pair channel cannot be recomputed.
-        assert!(!server_dm.shows(mailbox, None));
+        assert!(server_dm.is_for_channel(ChannelId::from(peer)));
+        assert!(!server_dm.is_for_channel(ChannelId::from(other)));
 
         let channel = ChannelId::new();
-        assert!(ActiveConversation::Channel(channel).shows(channel, Some(&me)));
-        assert!(!ActiveConversation::Channel(channel).shows(ChannelId::new(), Some(&me)));
-        assert!(!ActiveConversation::None.shows(channel, Some(&me)));
+        assert!(ActiveConversation::Channel(channel).is_for_channel(channel));
+        assert!(!ActiveConversation::Channel(channel).is_for_channel(ChannelId::new()));
+        assert!(!ActiveConversation::None.is_for_channel(channel));
     }
 
     /// Call history stores `routing_key()` and redials through
@@ -1680,18 +1624,6 @@ mod tests {
             assert!(state.accept_typing(make_channel_id(), u, 150, true));
             assert!(state.accept_typing(c, make_user_id(), 150, true));
             assert!(state.accept_typing(c, u, 0, true));
-        }
-
-        #[test]
-        fn test_mailbox_dm_matches_peer_dm_key() {
-            let (mailbox, peer) = (make_channel_id(), make_user_id());
-            let conv = ActiveConversation::MailboxDm { channel_id: mailbox, peer_id: peer };
-            assert!(conv.is_for_channel(mailbox));
-            assert!(conv.is_for_channel(ChannelId::from(peer)));
-            assert!(!conv.is_for_channel(make_channel_id()));
-            let ch = make_channel_id();
-            assert!(ActiveConversation::Channel(ch).is_for_channel(ch));
-            assert!(!ActiveConversation::None.is_for_channel(ch));
         }
 
         // ==================== Typing Tests ====================

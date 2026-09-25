@@ -143,7 +143,6 @@ mod tests {
         for conv in &[
             ConversationType::Channel,
             ConversationType::ServerDm,
-            ConversationType::MailboxDm,
             ConversationType::AnonDm,
             ConversationType::AnonGroup,
         ] {
@@ -157,7 +156,6 @@ mod tests {
 
         for conv in &[
             ConversationType::ServerDm,
-            ConversationType::MailboxDm,
             ConversationType::AnonDm,
             ConversationType::AnonGroup,
             ConversationType::SavedMessages,

@@ -529,7 +529,6 @@ mod tests {
         let types = [
             ConversationType::Channel,
             ConversationType::ServerDm,
-            ConversationType::MailboxDm,
             ConversationType::AnonDm,
             ConversationType::AnonGroup,
         ];

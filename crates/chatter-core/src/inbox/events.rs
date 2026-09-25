@@ -53,8 +53,6 @@ pub enum InboxEvent {
     DmReceived {
         /// Peer user ID.
         peer_id: UserId,
-        /// DM channel ID (for reliable active-conversation matching).
-        channel_id: ChannelId,
         /// Decrypted message text.
         text: String,
         /// Server timestamp.
@@ -101,15 +99,6 @@ pub enum InboxEvent {
     DmPollCompleted {
         /// Total messages received across all mailboxes.
         total_messages: u32,
-    },
-    /// DM unread count was updated.
-    DmUnreadCountUpdated {
-        /// DM channel ID.
-        channel_id: ChannelId,
-        /// Peer user ID.
-        peer_id: UserId,
-        /// New unread count.
-        unread_count: u32,
     },
     /// Typing indicator received.
     DmTyping {

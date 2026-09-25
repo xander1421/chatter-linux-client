@@ -172,7 +172,6 @@ mod tests {
         // The property that matters, across every DM kind and every config.
         for conv in &[
             ConversationType::ServerDm,
-            ConversationType::MailboxDm,
             ConversationType::AnonDm,
             ConversationType::AnonGroup,
             ConversationType::SavedMessages,

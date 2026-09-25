@@ -117,7 +117,6 @@ export component ChatHeader inherits Rectangle {
     property <bool> is-channel: conversation-kind == ConversationKind.channel;
     property <bool> is-private: is-channel && private-channel;
     property <bool> is-dm: conversation-kind == ConversationKind.server-dm
-        || conversation-kind == ConversationKind.mailbox-dm
         || conversation-kind == ConversationKind.mesh-dm;
     property <bool> is-anon-dm: conversation-kind == ConversationKind.anon-dm;
     property <bool> is-private-group: conversation-kind == ConversationKind.anon-group;

@@ -145,6 +145,8 @@ pub enum DomainEvent {
     /// Bootstrap format: first 32 bytes = mailbox pk, next 32 = conversation ephemeral.
     KeyExchangeReceived {
         sender_id: UserId,
+        /// The sending device — where the bootstrap message / reply goes.
+        sender_device_id: u32,
         conversation_id: ChannelId,
         ephemeral_public_key: Vec<u8>,
         timestamp: u64,

@@ -1337,7 +1337,7 @@ impl UnifiedMessageRepository {
              WHERE sent_at = ?2
                AND is_read = 0
                AND sender_id != ?3
-               AND conversation_type IN ('server_dm', 'mailbox_dm', 'anon_dm')",
+               AND conversation_type IN ('server_dm', 'anon_dm')",
             params![
                 Utc::now().to_rfc3339(),
                 sent_at as i64,

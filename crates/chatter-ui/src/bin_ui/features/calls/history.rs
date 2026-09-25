@@ -123,8 +123,8 @@ fn open_conversation(
     conversation_id: &str,
     conversation_type: &str,
 ) -> bool {
-    // `MailboxDm` and `None` never come back out of a history row —
-    // `from_routing_key` rejects both.
+    // `None` never comes back out of a history row — `from_routing_key`
+    // rejects it.
     let opened = ui_ctx
         .call_history_conversation(conversation_type, conversation_id)
         .is_some_and(|conv| select_conversation(window, conv));
@@ -143,7 +143,7 @@ fn open_conversation(
 
 /// Fire the sidebar-open callback for `conv` — the same entry point a row tap
 /// uses, so the message list is (re)loaded from storage. False for the
-/// variants no open callback exists for (`MailboxDm`, `None`).
+/// variant no open callback exists for (`None`).
 pub(crate) fn select_conversation(window: &MainWindow, conv: ActiveConversation) -> bool {
     match conv {
         ActiveConversation::Channel(id) => window.invoke_channel_selected(id.to_string().into()),
@@ -154,7 +154,7 @@ pub(crate) fn select_conversation(window: &MainWindow, conv: ActiveConversation)
         ActiveConversation::AnonGroup(id) => {
             window.invoke_private_group_selected(id.to_string().into())
         }
-        ActiveConversation::MailboxDm { .. } | ActiveConversation::None => return false,
+        ActiveConversation::None => return false,
     }
     true
 }

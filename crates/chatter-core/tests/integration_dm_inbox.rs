@@ -360,7 +360,6 @@ fn test_inbox_event_dm_received_format() {
     let peer_id = UserId::new();
     let event = InboxEvent::DmReceived {
         peer_id,
-        channel_id: chatter_core::domain::ids::ChannelId::new(),
         text: "Hello!".to_string(),
         timestamp: 1234567890,
         message_id: "msg-123".to_string(),

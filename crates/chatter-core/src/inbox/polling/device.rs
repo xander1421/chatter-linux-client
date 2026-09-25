@@ -951,6 +951,7 @@ async fn process_identified_sender_message(
     {
         Ok(SealedSenderResult::KeyExchange {
             sender_id,
+            sender_device_id,
             conversation_id,
             ephemeral_public_key,
             timestamp,
@@ -970,6 +971,7 @@ async fn process_identified_sender_message(
 
                 let _ = tx.send(DomainEvent::KeyExchangeReceived {
                     sender_id,
+                    sender_device_id,
                     conversation_id: conv_id,
                     ephemeral_public_key,
                     timestamp,
@@ -1385,6 +1387,7 @@ async fn process_sealed_sender_message(
         }
         Ok(SealedSenderResult::KeyExchange {
             sender_id,
+            sender_device_id,
             conversation_id,
             ephemeral_public_key,
             timestamp,
@@ -1406,6 +1409,7 @@ async fn process_sealed_sender_message(
 
                 let _ = tx.send(DomainEvent::KeyExchangeReceived {
                     sender_id,
+                    sender_device_id,
                     conversation_id: conv_id,
                     ephemeral_public_key,
                     timestamp,

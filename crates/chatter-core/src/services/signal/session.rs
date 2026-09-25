@@ -826,6 +826,55 @@ impl SignalService {
         Ok((ciphertexts, recipient_uak))
     }
 
+    /// Encrypt for every device of `recipient_id` we already hold a usable
+    /// session with — no prekey-bundle fetch, so no RPC that names the
+    /// recipient. Errors when there is no such device.
+    pub async fn encrypt_message_session_devices(
+        &self,
+        auth_client: &mut AuthClient,
+        recipient_id: &str,
+        plaintext: &[u8],
+    ) -> Result<HashMap<u32, Vec<u8>>, ServiceError> {
+        self.refuse_pending_identity_change(recipient_id)?;
+        let device_ids = session_device_ids(
+            recipient_id,
+            self.key_store
+                .list_sessions_for_user(recipient_id)
+                .map_err(ServiceError::Storage)?
+                .iter()
+                .map(|(address, _)| address.as_str()),
+        );
+        let sender_cert = self.get_or_request_sender_certificate(auth_client).await?;
+
+        let mut ciphertexts = HashMap::with_capacity(device_ids.len());
+        for device_id in device_ids {
+            let Ok(device) = DeviceId::try_from(device_id) else { continue };
+            let address = ProtocolAddress::new(recipient_id.to_string(), device);
+            if !self.actor.has_session(address.clone()).await? {
+                continue;
+            }
+            let lock = self.get_encrypt_lock(&format!("{recipient_id}:{device_id}")).await;
+            let _guard = lock.lock().await;
+            match self.actor.encrypt_sealed(plaintext.to_vec(), sender_cert.clone(), address).await {
+                Ok(ciphertext) => {
+                    ciphertexts.insert(device_id, ciphertext);
+                }
+                Err(e) => tracing::warn!(
+                    recipient = %recipient_id,
+                    device_id,
+                    error = %e,
+                    "Failed to encrypt for device"
+                ),
+            }
+        }
+        if ciphertexts.is_empty() {
+            return Err(ServiceError::Validation(format!(
+                "no usable session with any device of {recipient_id}"
+            )));
+        }
+        Ok(ciphertexts)
+    }
+
     // =========================================================================
     // Anonymous Operations (for AnonDM - no authenticated requests)
     // =========================================================================
@@ -1108,5 +1157,25 @@ mod tests {
             without_device(bundles(&[1, 2, 3]), Some(2)).iter().map(|b| b.device_id).collect();
         assert_eq!(ids, [1, 3]);
         assert_eq!(without_device(bundles(&[1, 2]), None).len(), 2);
+    }
+}
+
+/// Device ids of `recipient_id`'s stored session addresses (`"user:device"`).
+fn session_device_ids<'a>(recipient_id: &str, addresses: impl Iterator<Item = &'a str>) -> Vec<u32> {
+    let prefix = format!("{recipient_id}:");
+    let mut ids: Vec<u32> = addresses
+        .filter_map(|a| a.strip_prefix(prefix.as_str())?.parse().ok())
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+#[cfg(test)]
+mod session_device_ids_tests {
+    #[test]
+    fn parses_only_this_recipients_devices() {
+        let addrs = ["u1:1", "u1:6", "u10:2", "u1:x", "u1:6"];
+        assert_eq!(super::session_device_ids("u1", addrs.into_iter()), vec![1, 6]);
     }
 }
