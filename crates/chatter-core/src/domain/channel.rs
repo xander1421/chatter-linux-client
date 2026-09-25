@@ -403,7 +403,7 @@ impl Permissions {
             can_send_messages: true,
             can_edit_own_messages: true,
             can_delete_own_messages: true,
-            can_delete_any_message: true,
+            can_delete_any_message: false,
             can_pin_messages: true,
             can_manage_members: false,
             can_manage_roles: false,

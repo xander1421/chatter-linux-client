@@ -1910,10 +1910,11 @@ async fn join_call_impl(
 
     // Convert proto to domain
     let call_info = response.call_info.ok_or(CallError::NotFound)?;
-    let channel_id = ChannelId::from_str(&call_info.channel_id)
+    let server_channel_id = ChannelId::from_str(&call_info.channel_id)
         .map_err(|_| CallError::InvalidChannelId)?;
     let initiator_id =
         UserId::from_str(&call_info.created_by).map_err(|_| CallError::InvalidUserId)?;
+    let channel_id = joined_channel_id(server_channel_id, &initiator_id, &joiner_id);
 
     let call_type = match ProtoCallType::try_from(call_info.r#type).unwrap_or(ProtoCallType::Unspecified)
     {
@@ -1941,6 +1942,21 @@ async fn join_call_impl(
     });
 
     Ok(call)
+}
+
+/// The conversation a joined call belongs to, from the joiner's side.
+///
+/// A channel-free 1:1 call is created with the caller's scoping id, which is
+/// `ChannelId::from(callee)` — so the callee reads its own id back from the
+/// server. Filed verbatim, that is the callee's Saved Messages; from here the
+/// conversation is the DM with the caller. Group and channel-backed DM calls
+/// carry a real channel id and pass through.
+fn joined_channel_id(server_channel_id: ChannelId, initiator_id: &UserId, joiner_id: &UserId) -> ChannelId {
+    if server_channel_id == ChannelId::from(*joiner_id) {
+        ChannelId::from(*initiator_id)
+    } else {
+        server_channel_id
+    }
 }
 
 /// Connect directly to LiveKit with a pre-made access token (for anonymous calls).
@@ -2807,6 +2823,21 @@ mod ring_timeout_tests {
         // Sender clock ahead of ours, or no timestamp at all: ring.
         assert!(!offer_is_stale(now + 10_000_000_000, now));
         assert!(!offer_is_stale(0, now));
+    }
+}
+
+#[cfg(test)]
+mod joined_channel_tests {
+    use super::{joined_channel_id, ChannelId, UserId};
+
+    #[test]
+    fn callee_files_a_channel_free_dm_call_under_the_caller() {
+        let (caller, callee) = (UserId::new(), UserId::new());
+        // The caller scoped it to us: file under our DM with the caller, not Saved Messages.
+        assert_eq!(joined_channel_id(callee.into(), &caller, &callee), ChannelId::from(caller));
+        // A real channel id (group, or channel-backed DM) is kept.
+        let channel = ChannelId::new();
+        assert_eq!(joined_channel_id(channel, &caller, &callee), channel);
     }
 }
 

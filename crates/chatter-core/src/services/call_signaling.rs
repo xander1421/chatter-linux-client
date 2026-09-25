@@ -566,12 +566,9 @@ impl CallSignalingService {
 
         Ok(CallSetupResult {
             call_id: call.id,
-            // A DM call's channel_id is the OTHER party's user_id (DMs have no
-            // server channel). The server-stored channel_id is the caller's
-            // view (= us, the callee), so using it verbatim would route our
-            // hangup/answer back to ourselves. Rewrite to the caller so this
-            // side's scope points at the real peer.
-            channel_id: (*caller_id).into(),
+            // Already the DM with the caller: `join_call` rewrites the
+            // caller-scoped id (= us) — see `joined_channel_id`.
+            channel_id: call.channel_id,
             verification_emojis: [e1, e2, e3, e4],
             is_video: false, // caller provides this info via the offer
             // Connected as of the join above; the server's `started_at` is the

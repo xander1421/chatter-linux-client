@@ -572,12 +572,10 @@ impl ConversationHandle {
         target_author: &UserId,
         target_sent_timestamp: u64,
     ) -> ConversationResult<bool> {
-        use crate::domain::channel::Permissions;
-        match &self.conversation {
-            ActiveConversation::AnonDm(_)
-            | ActiveConversation::ServerDm { .. } => Ok(Permissions::dm().can_delete_any_message),
-            _ => self.is_own_message(target_author, target_sent_timestamp),
-        }
+        // Signal: only your own messages, in every conversation. A peer's
+        // device honours a delete only for the sender's own message, so
+        // offering it on theirs would promise something that never happens.
+        self.is_own_message(target_author, target_sent_timestamp)
     }
 
     // ========================================================================
