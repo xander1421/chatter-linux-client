@@ -107,6 +107,8 @@ pub enum CallEndReason {
     Declined,
     /// Another of our own devices answered this incoming call.
     AnsweredElsewhere,
+    /// Our outgoing call rang for [`RING_TIMEOUT`] without an answer.
+    NoAnswer,
     /// Signalling / crypto / network failure.
     Error(String),
 }
@@ -249,7 +251,6 @@ struct OrchestratedActive {
     kind: OrchestratedCallKind,
     peer_id: UserId,
     is_video: bool,
-    connected_at: std::time::Instant,
 }
 
 /// Mutable orchestration state owned by the worker task.
@@ -258,6 +259,16 @@ struct OrchestratorState {
     active: Option<OrchestratedActive>,
     incoming: HashMap<CallHandle, PendingIncoming>,
     outgoing: HashMap<CallHandle, PendingOutgoing>,
+}
+
+impl OrchestratorState {
+    /// The connected call's kind, else a dialed call's that is still ringing.
+    fn call_kind(&self) -> Option<OrchestratedCallKind> {
+        self.active
+            .as_ref()
+            .map(|a| a.kind)
+            .or_else(|| self.outgoing.values().next().map(|o| o.kind))
+    }
 }
 
 /// Snapshot of a pending-incoming record returned by the orchestrator to
@@ -315,6 +326,8 @@ enum CallCommand {
     },
     /// Leave the current call.
     LeaveCall {
+        /// What the emitted `ActiveEnded` reports.
+        reason: CallEndReason,
         response: oneshot::Sender<Result<(), CallError>>,
     },
     /// End the current call (creator only).
@@ -502,10 +515,10 @@ enum CallCommand {
     OrchIsActive {
         response: oneshot::Sender<bool>,
     },
-    /// Return the kind of the active orchestrated call and when it connected,
-    /// or `None` if no call.
+    /// Return the kind of the call we are in — connected, or dialed and
+    /// still ringing — or `None` if no call.
     OrchActiveKind {
-        response: oneshot::Sender<Option<(OrchestratedCallKind, std::time::Instant)>>,
+        response: oneshot::Sender<Option<OrchestratedCallKind>>,
     },
 
     /// Shutdown the worker.
@@ -760,13 +773,10 @@ impl CallWorkerHandle {
         rx.await.unwrap_or(false)
     }
 
-    /// Return the kind of the active orchestrated call, or `None`.
+    /// Kind of the call we are in — connected, or our outgoing call still
+    /// ringing — or `None`. What `end_active_call` dispatches on, so a caller
+    /// who cancels while it rings still takes the hangup path.
     pub async fn orch_active_kind(&self) -> Option<OrchestratedCallKind> {
-        self.orch_active_since().await.map(|(kind, _)| kind)
-    }
-
-    /// Kind of the active orchestrated call and the moment it connected.
-    pub async fn orch_active_since(&self) -> Option<(OrchestratedCallKind, std::time::Instant)> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(CallCommand::OrchActiveKind { response: tx })
@@ -856,11 +866,12 @@ impl CallWorkerHandle {
         rx.await.map_err(|_| CallError::WorkerShutdown)?
     }
 
-    /// Leave the current call.
-    pub async fn leave_call(&self) -> Result<(), CallError> {
+    /// Leave the current call. `reason` is what the emitted `ActiveEnded`
+    /// reports.
+    pub async fn leave_call(&self, reason: CallEndReason) -> Result<(), CallError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
-            .try_send(CallCommand::LeaveCall { response: tx })
+            .try_send(CallCommand::LeaveCall { reason, response: tx })
             .map_err(|_| CallError::WorkerShutdown)?;
         rx.await.map_err(|_| CallError::WorkerShutdown)?
     }
@@ -1322,7 +1333,7 @@ fn run_call_worker(
                     let _ = response.send(result);
                 }
 
-                CallCommand::LeaveCall { response } => {
+                CallCommand::LeaveCall { reason, response } => {
                     // Cancel key ratchet timer
                     stop_key_ratchet_timer(&ratchet_cancel);
 
@@ -1340,7 +1351,7 @@ fn run_call_worker(
                         orchestrator.outgoing.remove(&h);
                         let _ = call_events_tx.send(CallOrchestratorEvent::ActiveEnded {
                             call: h,
-                            reason: CallEndReason::LocalHangup,
+                            reason,
                         });
                     }
 
@@ -1664,7 +1675,6 @@ fn run_call_worker(
                         kind,
                         peer_id,
                         is_video,
-                        connected_at: std::time::Instant::now(),
                     });
                     let _ = call_events_tx.send(CallOrchestratorEvent::ActiveConnected {
                         call,
@@ -1768,8 +1778,7 @@ fn run_call_worker(
                 }
 
                 CallCommand::OrchActiveKind { response } => {
-                    let kind = orchestrator.active.as_ref().map(|a| (a.kind, a.connected_at));
-                    let _ = response.send(kind);
+                    let _ = response.send(orchestrator.call_kind());
                 }
 
                 CallCommand::Shutdown => {
@@ -2463,7 +2472,7 @@ fn spawn_end_one_to_one_if_peer_gone(worker: CallWorkerHandle, departed: String)
 /// How long an incoming offer may ring. Signal's ring timeout: an offer older
 /// than this — one that sat in the queue while the app was offline, or whose
 /// call was answered on another of our devices long ago — never rings.
-const RING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+pub(crate) const RING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Whether an offer received at `sent_ns` (ns since epoch) is past the ring
 /// timeout at `now_ns`. For any offer that is the server's receive stamp
@@ -2820,6 +2829,35 @@ mod joined_channel_tests {
         // A real channel id (group, or channel-backed DM) is kept.
         let channel = ChannelId::new();
         assert_eq!(joined_channel_id(channel, &caller, &callee), channel);
+    }
+}
+
+#[cfg(test)]
+mod orchestrator_kind_tests {
+    use super::{CallHandle, OrchestratedActive, OrchestratedCallKind as K, OrchestratorState, PendingOutgoing, UserId};
+
+    /// `end_active_call` dispatches on this kind; `None` returns early with no
+    /// hangup sent. A DM call cancelled while it rings must resolve to
+    /// `DmStandard`, whose end path sends `CallHangup` and leaves.
+    #[test]
+    fn a_ringing_outgoing_call_resolves_to_its_kind() {
+        let mut orch = OrchestratorState::default();
+        assert_eq!(orch.call_kind(), None);
+
+        let call = CallHandle::from("ringing");
+        orch.outgoing.insert(call.clone(), PendingOutgoing {
+            call: call.clone(),
+            kind: K::DmStandard,
+            peer_id: UserId::new(),
+            peer_name: String::new(),
+            is_video: false,
+        });
+        assert_eq!(orch.call_kind(), Some(K::DmStandard));
+
+        // Connected: the active slot is what counts.
+        orch.outgoing.remove(&call);
+        orch.active = Some(OrchestratedActive { call, kind: K::DmStandard, peer_id: UserId::new(), is_video: false });
+        assert_eq!(orch.call_kind(), Some(K::DmStandard));
     }
 }
 

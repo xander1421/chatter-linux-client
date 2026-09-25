@@ -8,21 +8,13 @@
 //! call, and a new transport gets history for free the moment it emits
 //! orchestrator events.
 //!
-//! Outgoing calls are the one thing the orchestrator does not announce
-//! (nothing calls `orch_register_outgoing`), so `ChatterClient::start_call`
-//! writes the opening row for those itself. Both sides converge on the same
-//! `id` — the orchestrator's `CallHandle` string — so the terminal events
-//! below finish either row.
-//
-// ponytail: a *DM* call that ends before it connects (peer declines, or we
-// cancel while it rings) emits no terminal event — the worker derives its
-// handle from `active_call`, which is still empty at that point. The row is
-// written and readable, but it stays open and reads "No answer" rather than
-// "Declined"/"Cancelled". (Anon calls are fine: they go through
-// `orch_mark_ended`, which now forwards untracked terminals.) The fix is to
-// register outgoing calls with the orchestrator — `orch_register_outgoing`
-// exists and has no callers — which also unsticks the "Calling…" view on the
-// same path; do that when the outgoing-call lifecycle is next touched.
+//! Outgoing calls are not all announced — only a DM call is registered
+//! while it rings (`orch_register_outgoing`, `OutgoingStarted`), and that
+//! event carries no conversation — so `ChatterClient::start_call` writes the
+//! opening row for every outgoing call itself. Both sides converge on the
+//! same `id` — the orchestrator's `CallHandle` string — so the terminal
+//! events below finish either row. A DM call cancelled while it rings, or
+//! rung out (`NoAnswer`), ends with the leave's `ActiveEnded` like any other.
 
 use std::collections::HashMap;
 use std::sync::Arc;

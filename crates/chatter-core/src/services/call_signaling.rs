@@ -34,7 +34,9 @@ use crate::services::anon_group::AnonGroupService;
 #[cfg(feature = "media")]
 use crate::services::call_verification::CallVerification;
 #[cfg(feature = "media")]
-use crate::services::call_worker::{CallEndReason, CallWorkerHandle};
+use crate::services::call_worker::{
+    CallEndReason, CallHandle, CallWorkerHandle, OrchestratedCallKind, RING_TIMEOUT,
+};
 use crate::services::channel::ChannelService;
 use crate::services::gateway::{
     build_call_key_offer, build_call_key_answer,
@@ -375,6 +377,18 @@ impl CallSignalingService {
             "Call offer sent, storing pending state"
         );
 
+        // Ringing from here on: register it so `end_active_call` can cancel
+        // it (hangup + leave) before it connects. Registered before the
+        // pending state is stored, so it precedes any answer's mark-connected
+        // on the worker's queue.
+        call_worker.orch_register_outgoing(
+            CallHandle::from(call_id_str.as_str()),
+            OrchestratedCallKind::DmStandard,
+            *peer_id,
+            String::new(),
+            is_video,
+        );
+
         // Store pending call state (ephemeral key kept until answer).
         self.set_pending_dm_call(PendingDmCall {
             call_id: call.id,
@@ -383,6 +397,24 @@ impl CallSignalingService {
             peer_id: *peer_id,
             call_type: call_type_str.to_string(),
             is_video,
+        });
+
+        // Signal's caller ring timeout: unanswered after RING_TIMEOUT, end it
+        // exactly as a cancel does, so the callee stops ringing too. The
+        // pending state is taken by the answer (`complete_dm_call`) and by any
+        // end (`end_dm_call`), so still holding this call's means it rang out.
+        let signaling = self.clone();
+        let worker = call_worker.clone();
+        let call_id = call.id;
+        tokio::spawn(async move {
+            tokio::time::sleep(RING_TIMEOUT).await;
+            if signaling.pending_dm_call.lock().as_ref().map(|p| p.call_id) != Some(call_id) {
+                return;
+            }
+            tracing::info!(call_id = %call_id, "Outgoing call unanswered — ending it");
+            if let Err(e) = signaling.end_dm_call(&worker, CallEndReason::NoAnswer).await {
+                tracing::debug!(error = %e, "ring timeout: call already gone");
+            }
         });
 
         Ok(call.id)
@@ -470,13 +502,9 @@ impl CallSignalingService {
             );
         }
 
-        // Register the now-connected call as the orchestrator's active slot.
-        // Without this the caller's "End call" has nothing to tear down:
-        // `end_active_call` dispatches on `orch_active_kind()`, which stays
-        // `None` until a call is marked connected, so the room (and audio)
-        // would otherwise linger until process shutdown. The callee registers
-        // its slot via `accept_presented_incoming_call`; this is the caller's
-        // equivalent.
+        // Promote the ringing outgoing call (registered in `start_dm_call`) to
+        // the orchestrator's active slot. The callee registers its slot via
+        // `accept_presented_incoming_call`; this is the caller's equivalent.
         call_worker.orch_mark_connected(
             crate::services::call_worker::CallHandle::from(call_id),
             crate::services::call_worker::OrchestratedCallKind::DmStandard,
@@ -1096,16 +1124,23 @@ impl CallSignalingService {
     // End-call orchestration (hangup + history + leave)
     // ================================================================
 
-    /// End an active DM call: send hangup, leave.
+    /// End our DM call, connected or still ringing: send hangup, leave.
     ///
     /// `call_worker` must be provided since it's behind a OnceLock in the client.
-    /// The Call bubble is filed by `call_history_recorder` on the `ActiveEnded`
-    /// the leave emits — the one place every end of a DM call reaches.
+    /// `reason` is what the leave's `ActiveEnded` reports. The Call bubble is
+    /// filed by `call_history_recorder` on that event — the one place every
+    /// end of a DM call reaches.
     #[cfg(feature = "media")]
     pub async fn end_dm_call(
         &self,
         call_worker: &CallWorkerHandle,
+        reason: CallEndReason,
     ) -> Result<(), CallSignalingError> {
+        // A call ended while ringing is over: an answer that lands after this
+        // must not complete it (`complete_dm_call` would mark a dead call
+        // connected), nor may the ring timeout end it again.
+        self.take_pending_dm_call();
+
         let call = call_worker.active_call().await
             .ok_or(CallSignalingError::NoPendingCall)?;
 
@@ -1117,7 +1152,7 @@ impl CallSignalingService {
         }
 
         // Leave the call (orchestrator cleanup is now atomic inside the worker)
-        if let Err(e) = call_worker.leave_call().await {
+        if let Err(e) = call_worker.leave_call(reason).await {
             tracing::error!(error = %e, "Failed to leave call");
         }
 
@@ -1151,7 +1186,7 @@ impl CallSignalingService {
 
         // Leave the room — this is what tears down media + audio. Done last so
         // history is recorded even if the worker shut down early.
-        if let Err(e) = call_worker.leave_call().await {
+        if let Err(e) = call_worker.leave_call(CallEndReason::LocalHangup).await {
             tracing::error!(error = %e, "Failed to leave group call");
         }
 
@@ -1286,7 +1321,7 @@ impl CallSignalingService {
         };
 
         // Leave the call (orchestrator cleanup is now atomic inside the worker)
-        if let Err(e) = call_worker.leave_call().await {
+        if let Err(e) = call_worker.leave_call(CallEndReason::LocalHangup).await {
             tracing::debug!(error = %e, "leave_call after anon hangup");
         }
 

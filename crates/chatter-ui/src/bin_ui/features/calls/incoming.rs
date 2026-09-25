@@ -506,6 +506,7 @@ fn handle_orchestrator_event(
                 CallEndReason::AnsweredElsewhere => None,
                 CallEndReason::RemoteHangup => Some(("Call ended", "info")),
                 CallEndReason::Declined => Some(("Call declined", "info")),
+                CallEndReason::NoAnswer => Some(("No answer", "info")),
                 CallEndReason::Error(_) => Some((super::outgoing::CALL_FAILED, "error")),
             };
             let weak = weak.clone();

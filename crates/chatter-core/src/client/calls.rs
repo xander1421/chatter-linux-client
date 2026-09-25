@@ -113,11 +113,12 @@ impl ChatterClient {
     /// [`OutgoingCallStart`] with everything the UI needs to render the
     /// "Calling…" state.
     ///
-    /// Also opens the call-history row for the outgoing side. The
-    /// orchestrator never announces outgoing calls (nothing calls
-    /// `orch_register_outgoing`), so this is the only place that sees an
-    /// outgoing call of *every* conversation type at the moment it is
-    /// placed; `call_history_recorder` closes the row on the terminal event.
+    /// Also opens the call-history row for the outgoing side. Only a DM call
+    /// is registered with the orchestrator while it rings
+    /// (`orch_register_outgoing`, in `start_dm_call`), so this is the only
+    /// place that sees an outgoing call of *every* conversation type at the
+    /// moment it is placed; `call_history_recorder` closes the row on the
+    /// terminal event.
     #[cfg(feature = "media")]
     pub async fn start_call(
         &self,
@@ -719,7 +720,7 @@ impl ChatterClient {
     #[cfg(feature = "media")]
     pub async fn call_leave_room(&self) -> Result<(), crate::error::CallError> {
         if let Some(worker) = self.call_service().get().cloned() {
-            worker.leave_call().await?;
+            worker.leave_call(crate::services::call_worker::CallEndReason::LocalHangup).await?;
         }
         Ok(())
     }
@@ -935,7 +936,7 @@ impl ChatterClient {
         let call_worker = self.call_service().get()
             .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;
         self.call_signaling()
-            .end_dm_call(call_worker)
+            .end_dm_call(call_worker, crate::services::call_worker::CallEndReason::LocalHangup)
             .await
             .map_err(|e| ClientError::Inbox(e.to_string()))
     }
@@ -972,7 +973,8 @@ impl ChatterClient {
 
     /// End the active call regardless of kind.
     ///
-    /// Resolves the call kind from the orchestrator's active-slot and
+    /// Resolves the call kind from the orchestrator — the connected call, or
+    /// our DM call still ringing, so cancelling it sends the hangup — and
     /// dispatches to the correct wire-level tear-down. UI code should call
     /// this from its "End call" button instead of branching between
     /// `end_dm_call` / `end_anon_call` based on view state.
