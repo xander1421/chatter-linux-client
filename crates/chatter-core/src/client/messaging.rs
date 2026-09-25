@@ -169,6 +169,13 @@ impl ChatterClient {
     /// the per-channel name instead of the global profile. `None` sender →
     /// "Anonymous".
     pub fn message_sender_display_name(&self, msg: &crate::domain::message::Message) -> String {
+        // System lines about us read "You left the channel", as Signal's do.
+        if matches!(msg.content, crate::domain::message::MessageContent::System(_))
+            && msg.sender_id.is_some()
+            && msg.sender_id == self.session_current_user_id()
+        {
+            return "You".to_string();
+        }
         match msg.sender_id {
             Some(ref id) => self.display_name_in(&msg.conversation_type, &msg.conversation_id, id),
             None => "Anonymous".to_string(),

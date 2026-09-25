@@ -71,6 +71,8 @@ pub fn open_channel_settings(
             None => (false, false, false, false, false),
         };
 
+        let can_leave = ui_ctx.can_leave_channel(&channel_id);
+
         let created_at = channel.created_at.with_timezone(&chrono::Local).format("%b %d, %Y").to_string();
 
         // Core shapes the rows; the images are decoded on the UI thread below
@@ -121,6 +123,7 @@ pub fn open_channel_settings(
                 w.set_channel_settings_can_archive(can_archive);
                 w.set_channel_settings_can_delete(can_delete);
                 w.set_channel_settings_is_owner(is_owner);
+                w.set_channel_settings_can_leave(can_leave);
                 apply_member_lists(&w, &members, bans.as_deref());
                 w.set_channel_settings_loading(false);
                 w.set_active_modal("channel-settings".into());
@@ -526,28 +529,16 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx_leave = ui_ctx.clone();
     window.on_channel_settings_leave(move || {
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx_leave.clone();
         // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
-        let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
-        tokio::spawn(async move {
-            if channel_id.is_empty() { return; }
-            let channel_uuid = match channel_id.parse::<uuid::Uuid>() {
-                Ok(id) => ChannelId::from(id),
-                Err(_) => return,
-            };
-            if ui_ctx.leave_channel(&channel_uuid).await.is_ok() {
-                let ui_ctx_refresh = ui_ctx.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        w.set_active_modal("none".into());
-                        ui_ctx_refresh.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::None);
-                        w.set_channel_name("".into());
-                        crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx_refresh);
-                    }
-                });
-            }
-        });
+        let channel_id = weak_window.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
+        leave_channel(weak_window.clone(), ui_ctx_leave.clone(), channel_id);
+    });
+
+    // The sidebar row's long-press menu.
+    let weak_window = window.as_weak();
+    let ui_ctx_leave = ui_ctx.clone();
+    window.on_leave_channel(move |channel_id| {
+        leave_channel(weak_window.clone(), ui_ctx_leave.clone(), channel_id.to_string());
     });
 
     let weak_window = window.as_weak();
@@ -572,6 +563,37 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);
                     }
                 });
+            }
+        });
+    });
+}
+
+/// Leave `channel_id` (Channel Settings and the sidebar row menu). Core files
+/// "You left the channel"; the row stays, read-only, like a removal.
+fn leave_channel(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, channel_id: String) {
+    let Ok(channel_uuid) = channel_id.parse::<uuid::Uuid>().map(ChannelId::from) else { return };
+    tokio::spawn(async move {
+        let result = ui_ctx.leave_channel(&channel_uuid).await;
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(w) = weak.upgrade() else { return };
+            match result {
+                Ok(()) => {
+                    if w.get_channel_settings_id() == channel_id.as_str() {
+                        w.set_active_modal("none".into());
+                    }
+                    if ui_ctx.chat_state().get().active_channel_id == Some(channel_uuid) {
+                        ui_ctx.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::None);
+                        w.set_channel_name("".into());
+                    }
+                    crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);
+                }
+                Err(e) => {
+                    tracing::warn!(%channel_uuid, error = %e, "Leave channel failed");
+                    // A toast, not the modal's error line: the row menu has no modal.
+                    w.set_toast_message(format!("Couldn't leave the channel: {e}").into());
+                    w.set_toast_variant("error".into());
+                    w.set_toast_visible(true);
+                }
             }
         });
     });

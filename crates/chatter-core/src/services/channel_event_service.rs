@@ -354,29 +354,7 @@ impl ChannelEventService {
                     }
                 };
                 let reason = member_removal_reason(&removed);
-
-                if let Ok(Some((message, display_name))) =
-                    self.handle_member_removed(&channel_id, &user_id, reason, timestamp)
-                {
-                    // Emit domain event for UI consumption
-                    let event = DomainEvent::ChannelMemberLeft {
-                        channel_id,
-                        user_id,
-                        display_name: display_name.clone(),
-                        message,
-                    };
-                    
-                    if let Err(e) = self.event_bus.domain_sender().send(event) {
-                        tracing::warn!("Failed to publish ChannelMemberLeft event: {}", e);
-                    }
-                    
-                    tracing::info!(
-                        "Channel member left: channel={}, user={}, display_name={}",
-                        channel_id,
-                        user_id,
-                        display_name
-                    );
-                }
+                self.publish_member_removed(&channel_id, &user_id, reason, timestamp);
             }
             // ── INFRA-29: the arms that used to fall into a silent
             // `_ => debug!("Unhandled channel event type")`.
@@ -654,14 +632,42 @@ impl ChannelEventService {
         let id = member_notice_id(channel_id, user_id, "removed", event_ts);
         let message = self.create_system_message(id, channel_id, content, Some(subject));
 
-        // Remove membership from local storage
-        self.channel_repo.delete_membership(channel_id, user_id)?;
+        // Remove membership from local storage. Already gone is fine: our own
+        // leave deletes it first, and a roster never fetched has no row.
+        match self.channel_repo.delete_membership(channel_id, user_id) {
+            Ok(()) | Err(StorageError::NotFound(_)) => {}
+            Err(e) => return Err(e.into()),
+        }
 
         if !self.message_repo.insert_or_ignore(&message)? {
             return Ok(None);
         }
 
         Ok(Some((message, display_name)))
+    }
+
+    /// [`Self::handle_member_removed`], then tell the UI, which appends the
+    /// notice to the open chat.
+    fn publish_member_removed(&self, channel_id: &ChannelId, user_id: &UserId, reason: MemberRemoval, event_ts: u64) {
+        let Ok(Some((message, display_name))) = self.handle_member_removed(channel_id, user_id, reason, event_ts)
+        else {
+            return;
+        };
+        tracing::info!(%channel_id, %user_id, %display_name, "Channel member left");
+        let event = DomainEvent::ChannelMemberLeft { channel_id: *channel_id, user_id: *user_id, display_name, message };
+        if let Err(e) = self.event_bus.domain_sender().send(event) {
+            tracing::warn!("Failed to publish ChannelMemberLeft event: {}", e);
+        }
+    }
+
+    /// File "You left the channel" after our own leave succeeded. The server
+    /// only broadcasts the departure to the members who remain, so this
+    /// device never hears it on the event stream.
+    pub fn record_own_leave(&self, channel_id: &ChannelId) {
+        match self.settings_repo.current_user_id() {
+            Ok(me) => self.publish_member_removed(channel_id, &me, MemberRemoval::Left, 0),
+            Err(e) => tracing::warn!(%channel_id, error = %e, "No current user; leave notice not filed"),
+        }
     }
 
     /// Get display name for a user, falling back to user ID string.
@@ -1004,6 +1010,38 @@ mod tests {
         // Re-joining later is a new event and a new notice.
         service.handle_stream_event(added(), &channel_id.to_string(), 3_000).await;
         assert_eq!(count(), 3);
+    }
+
+    /// Our own leave files "left the channel" even though the leave already
+    /// deleted our membership row.
+    #[tokio::test]
+    async fn own_leave_files_a_notice_without_a_membership_row() {
+        let (service, bus, channel_repo) = setup();
+        let mut rx = bus.domain_sender().subscribe();
+        let me = UserId::from(uuid::Uuid::new_v4());
+        service
+            .settings_repo
+            .set_string(crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID, &me.to_string())
+            .unwrap();
+        let channel = crate::domain::channel::Channel::new(
+            ChannelId::from(uuid::Uuid::new_v4()),
+            "invtest".to_string(),
+            crate::domain::channel::ChannelType::Private,
+            UserId::from(uuid::Uuid::new_v4()),
+        );
+        channel_repo.upsert(&channel).unwrap();
+
+        service.record_own_leave(&channel.id);
+
+        assert_eq!(service.message_repo.count(&channel.id, &ConversationType::AnonGroup).unwrap(), 1);
+        match rx.try_recv() {
+            Ok(DomainEvent::ChannelMemberLeft { user_id, message, .. }) => {
+                assert_eq!(user_id, me);
+                assert_eq!(message.sender_id, Some(me));
+                assert!(matches!(message.content, MessageContent::System(SystemMessage::UserLeft(u)) if u == me));
+            }
+            other => panic!("expected ChannelMemberLeft, got {other:?}"),
+        }
     }
 
     /// A ban on the local user drops our own membership and surfaces to the UI.

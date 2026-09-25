@@ -255,6 +255,8 @@ export component SectionContextMenu inherits Rectangle {
     // a core ordering pass, so the entry is hidden there rather than shipping a
     // control that toggles a flag nothing reads.
     in property <bool> can-pin: true;
+    // Channel rows: core's `can_leave_channel` (a member, not the owner).
+    in property <bool> can-leave: false;
 
     // Available sections
     in property <[CustomSectionData]> sections: [];
@@ -265,15 +267,21 @@ export component SectionContextMenu inherits Rectangle {
     callback set-pinned(/* conv-id */ string, /* pinned */ bool);
     callback create-section-clicked();
     // DM rows only: deletes the chat on this device (core
-    // `delete_conversation`). A channel is left from Channel Settings.
+    // `delete_conversation`).
     callback delete-chat(/* conv-id */ string, /* conv-type */ ConversationKind);
+    // Channel rows: same leave as Channel Settings' Danger Zone.
+    callback leave-channel(/* channel-id */ string);
     callback close();
 
     property <bool> can-delete: root.conversation-type == ConversationKind.server-dm
         || root.conversation-type == ConversationKind.anon-dm;
     // Delete asks once, inside the menu; reset whenever the menu closes.
     property <bool> confirm-delete: false;
-    changed show => { root.confirm-delete = false; }
+    property <bool> confirm-leave: false;
+    changed show => {
+        root.confirm-delete = false;
+        root.confirm-leave = false;
+    }
 
     visible: root.show;
     width: 100%;
@@ -411,6 +419,49 @@ export component SectionContextMenu inherits Rectangle {
                 label: "Cancel";
                 mobile-mode: root.mobile-mode;
                 clicked => { root.confirm-delete = false; }
+            }
+
+            if root.can-leave: Rectangle {
+                height: 1px;
+                background: Colors.text-muted.with-alpha(0.15);
+            }
+
+            if root.can-leave && !root.confirm-leave: MenuItem {
+                icon: Icons.x;
+                label: "Leave channel";
+                destructive: true;
+                mobile-mode: root.mobile-mode;
+                clicked => { root.confirm-leave = true; }
+            }
+
+            // Asks once, inside the menu, like Delete chat above.
+            if root.can-leave && root.confirm-leave: HorizontalLayout {
+                padding-left: Spacing.md;
+                padding-right: Spacing.md;
+                Text {
+                    text: "Leave this channel? You won't get new messages.";
+                    color: Colors.error;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                }
+            }
+
+            if root.can-leave && root.confirm-leave: MenuItem {
+                icon: Icons.x;
+                label: "Leave";
+                destructive: true;
+                mobile-mode: root.mobile-mode;
+                clicked => {
+                    root.leave-channel(root.conversation-id);
+                    root.close();
+                }
+            }
+
+            if root.can-leave && root.confirm-leave: MenuItem {
+                icon: Icons.x;
+                label: "Cancel";
+                mobile-mode: root.mobile-mode;
+                clicked => { root.confirm-leave = false; }
             }
         }
     }

@@ -26,6 +26,7 @@ struct SectionConvSendData {
     initials: String,
     unread_count: i32,
     is_pinned: bool,
+    can_leave: bool,
 }
 
 impl SectionConvSendData {
@@ -51,6 +52,7 @@ impl SectionConvSendData {
             timestamp: SharedString::new(),
             unread_count: self.unread_count,
             is_pinned: self.is_pinned,
+            can_leave: self.can_leave,
             is_selected: false,
         }
     }
@@ -489,6 +491,8 @@ fn enrich_conversation_send(
         avatar_decoded: None,
         unread_count: conv.unread_count as i32,
         is_pinned: conv.is_pinned,
+        can_leave: matches!(conv.conversation_type, ConversationType::Channel)
+            && conv.conversation_id.parse().is_ok_and(|id| ui_ctx.can_leave_channel(&id)),
     };
 
     // Channels carry their icon as raw bytes on the Channel record, not a URL.

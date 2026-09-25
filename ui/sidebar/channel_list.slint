@@ -22,6 +22,7 @@ export struct ChannelListItemData {
     avatar-source: image,
     has-avatar: bool,
     is-pinned: bool,         // local-only pin; core sorts pinned rows first
+    can-leave: bool,         // core's `can_leave_channel`: offer "Leave channel"
     is-selected: bool,       // Rust-computed selection flag; drives highlight
 }
 
@@ -41,7 +42,7 @@ export component ChannelList inherits Rectangle {
     callback channel-selected(string);
     callback create-channel-clicked();
     callback join-channel-clicked();
-    callback channel-context-menu-requested(/* channel-id */ string, /* is-pinned */ bool, /* x */ length, /* y */ length);
+    callback channel-context-menu-requested(/* channel-id */ string, /* is-pinned */ bool, /* can-leave */ bool, /* x */ length, /* y */ length);
     // Tooltip callbacks removed — ChannelListItem now uses self-contained TooltipArea
 
     // Transparent: the list only lives inside the Sidebar, which paints the
@@ -205,7 +206,7 @@ export component ChannelList inherits Rectangle {
                         root.channel-selected(item.channel-id);
                     }
                     context-menu-requested(x, y) => {
-                        root.channel-context-menu-requested(item.channel-id, item.is-pinned, x, y);
+                        root.channel-context-menu-requested(item.channel-id, item.is-pinned, item.can-leave, x, y);
                     }
                 }
             }

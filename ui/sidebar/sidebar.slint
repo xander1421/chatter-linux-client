@@ -98,6 +98,7 @@ export component Sidebar inherits Rectangle {
     callback remove-from-section(/* conversation-id */ string);
     callback set-conversation-pinned(/* conversation-id */ string, /* pinned */ bool);
     callback delete-conversation(/* conversation-id */ string, /* kind */ ConversationKind);
+    callback leave-channel(/* channel-id */ string);
     callback move-section(/* section-id */ string, /* delta */ int);
     callback set-section-sort-mode(/* section-id */ string, /* mode */ string);
 
@@ -161,6 +162,8 @@ export component Sidebar inherits Rectangle {
     // Private groups are the one list core does not order, so a pin there
     // would set a flag nothing reads. Hide the entry rather than lie.
     property <bool> ctx-menu-can-pin: true;
+    // Channel rows only, as core decided it for the row.
+    property <bool> ctx-menu-can-leave: false;
 
     // Section header context menu state
     property <bool> section-header-ctx-menu-show: false;
@@ -533,6 +536,7 @@ export component Sidebar inherits Rectangle {
                         root.ctx-menu-conv-id = id;
                         root.ctx-menu-is-pinned = pinned;
                         root.ctx-menu-can-pin = true;
+                        root.ctx-menu-can-leave = false;
                         // The row's own kind, as core built it — not the
                         // current mode, which a row need not share.
                         root.ctx-menu-conv-type = is-anon ? ConversationKind.anon-dm : ConversationKind.server-dm;
@@ -671,8 +675,9 @@ export component Sidebar inherits Rectangle {
                     // was missing, so that button did nothing at all. app.slint
                     // turns it into the join tab of CreateChannelModal.
                     join-channel-clicked() => { root.join-channel-clicked(); }
-                    channel-context-menu-requested(id, pinned, x, y) => {
+                    channel-context-menu-requested(id, pinned, can-leave, x, y) => {
                         root.ctx-menu-conv-id = id;
+                        root.ctx-menu-can-leave = can-leave;
                         root.ctx-menu-conv-type = ConversationKind.channel;
                         root.ctx-menu-x = x;
                         root.ctx-menu-y = y;
@@ -693,6 +698,7 @@ export component Sidebar inherits Rectangle {
                         root.ctx-menu-conv-id = id;
                         root.ctx-menu-is-pinned = false;
                         root.ctx-menu-can-pin = false;
+                        root.ctx-menu-can-leave = false;
                         // A private group is an anon group in core.
                         root.ctx-menu-conv-type = ConversationKind.anon-group;
                         root.ctx-menu-x = x;
@@ -765,8 +771,9 @@ export component Sidebar inherits Rectangle {
                     section-conversation-selected(conv-id, conv-type) => { root.section-conversation-selected(conv-id, conv-type); }
                     delete-section-clicked(id) => { root.delete-section-clicked(id); }
                     rename-section-clicked(id) => { root.rename-section-clicked(id); }
-                    section-conversation-context-menu-requested(conv-id, conv-type, section-id, pinned, x, y) => {
+                    section-conversation-context-menu-requested(conv-id, conv-type, section-id, pinned, can-leave, x, y) => {
                         root.ctx-menu-conv-id = conv-id;
+                        root.ctx-menu-can-leave = can-leave;
                         root.ctx-menu-conv-type = conv-type;
                         root.ctx-menu-x = x;
                         root.ctx-menu-y = y;
@@ -1045,6 +1052,7 @@ export component Sidebar inherits Rectangle {
         current-section-id: root.ctx-menu-current-section-id;
         is-pinned: root.ctx-menu-is-pinned;
         can-pin: root.ctx-menu-can-pin;
+        can-leave: root.ctx-menu-can-leave;
         mobile-mode: root.touch;
         sections: root.custom-sections;
 
@@ -1065,6 +1073,9 @@ export component Sidebar inherits Rectangle {
         }
         delete-chat(conv-id, conv-type) => {
             root.delete-conversation(conv-id, conv-type);
+        }
+        leave-channel(conv-id) => {
+            root.leave-channel(conv-id);
         }
     }
 

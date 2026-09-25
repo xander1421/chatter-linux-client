@@ -680,6 +680,7 @@ export component App inherits Rectangle {
     in property <bool> channel-settings-can-archive: false;
     in property <bool> channel-settings-can-delete: false;
     in property <bool> channel-settings-is-owner: false;
+    in property <bool> channel-settings-can-leave: false;
     in-out property <string> channel-settings-notification-pref: "all";
     in-out property <bool> channel-settings-muted: false;
     in-out property <bool> channel-settings-ai-enabled: false;
@@ -846,6 +847,7 @@ export component App inherits Rectangle {
     callback remove-from-section(/* conversation-id */ string);
     callback set-conversation-pinned(/* conversation-id */ string, /* pinned */ bool);
     callback delete-conversation(/* conversation-id */ string, /* kind */ ConversationKind);
+    callback leave-channel(/* channel-id */ string);
     callback move-section(/* section-id */ string, /* delta */ int);
     callback set-section-sort-mode(/* section-id */ string, /* mode */ string);
 
@@ -1456,6 +1458,9 @@ export component App inherits Rectangle {
                 }
                 delete-conversation(conv-id, kind) => {
                     root.delete-conversation(conv-id, kind);
+                }
+                leave-channel(channel-id) => {
+                    root.leave-channel(channel-id);
                 }
                 move-section(section-id, delta) => {
                     root.move-section(section-id, delta);
@@ -2303,6 +2308,7 @@ export component App inherits Rectangle {
         can-archive: root.channel-settings-can-archive;
         can-delete: root.channel-settings-can-delete;
         is-owner: root.channel-settings-is-owner;
+        can-leave: root.channel-settings-can-leave;
         notification-preference <=> root.channel-settings-notification-pref;
         is-muted <=> root.channel-settings-muted;
         ai-enabled <=> root.channel-settings-ai-enabled;

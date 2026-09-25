@@ -166,6 +166,18 @@ impl Channel {
     pub fn can_user_delete(&self, user_id: &UserId) -> bool {
         self.is_owner(user_id) && !self.is_dm()
     }
+
+    /// Whether `user_id` may leave this channel. Every member but the owner:
+    /// the server refuses an owner's leave while others remain
+    /// (`channels.go` Leave, "cannot leave without transferring ownership")
+    /// and there is no transfer RPC, so the owner's way out is Delete.
+    /// `still_member` is false once we left or were removed.
+    #[must_use]
+    pub fn can_user_leave(&self, user_id: &UserId, still_member: bool) -> bool {
+        still_member
+            && !self.is_owner(user_id)
+            && !matches!(self.channel_type, ChannelType::DirectMessage | ChannelType::SavedMessages)
+    }
 }
 
 /// Channel member role.
@@ -286,7 +298,7 @@ pub enum SendBlock {
     /// A moderator muted us; the server refuses our sends until it lapses
     /// (`until`) or, when `None`, until a moderator lifts it.
     Muted { until: Option<DateTime<Utc>> },
-    /// We were kicked or banned (our membership is gone).
+    /// We left, or were kicked or banned (our membership is gone).
     Removed,
 }
 
@@ -331,7 +343,8 @@ impl SendBlock {
                 };
                 format!("{MUTED} until {when}")
             }
-            Self::Removed => "You were removed from this channel".to_string(),
+            // Signal's wording, true whether we left or were removed.
+            Self::Removed => "You're no longer a member of this channel".to_string(),
         }
     }
 }
@@ -478,6 +491,17 @@ mod send_block_tests {
         assert_eq!(SendBlock::for_viewer(None, true), Some(SendBlock::Removed));
         // Roster never synced: not evidence of removal.
         assert_eq!(SendBlock::for_viewer(None, false), None);
+    }
+
+    #[test]
+    fn only_non_owner_members_may_leave() {
+        let (owner, member) = (UserId::new(), UserId::new());
+        let ch = Channel::new(ChannelId::new(), "invtest".into(), ChannelType::Private, owner);
+        assert!(ch.can_user_leave(&member, true));
+        assert!(!ch.can_user_leave(&owner, true));
+        assert!(!ch.can_user_leave(&member, false));
+        let dm = Channel::new(ChannelId::new(), String::new(), ChannelType::DirectMessage, owner);
+        assert!(!dm.can_user_leave(&member, true));
     }
 
     #[test]

@@ -40,6 +40,7 @@ pub fn channel_to_slint(channel: &Channel, ui_ctx: &ChatterClient) -> crate::Cha
         // lookup per row; the sidebar channel list is tens of rows, not
         // thousands.
         is_pinned: ui_ctx.is_conversation_pinned(&channel.id.to_string()),
+        can_leave: ui_ctx.can_leave_channel(&channel.id),
         is_selected: false,
     }
 }

@@ -61,6 +61,8 @@ export component ChannelSettingsModal inherits Rectangle {
     in property <bool> can-archive: false;
     in property <bool> can-delete: false;
     in property <bool> is-owner: false;
+    // Core's answer (`can_leave_channel`): a member who is not the owner.
+    in property <bool> can-leave: false;
 
     // Notification settings (per user)
     in-out property <string> notification-preference: "all";  // "all", "mentions", "none"
@@ -290,8 +292,8 @@ export component ChannelSettingsModal inherits Rectangle {
                         }
                     }
 
-                    // Danger zone section (only for those with permissions)
-                    if root.can-archive || root.can-delete: Rectangle {
+                    // Danger zone section: every member can at least leave.
+                    if root.can-archive || root.can-delete || root.can-leave: Rectangle {
                         height: 36px;
                         background: root.active-section == "danger" ? Colors.error.with-alpha(0.1) : transparent;
                         border-radius: Spacing.radius-sm;
@@ -1158,7 +1160,7 @@ export component ChannelSettingsModal inherits Rectangle {
                             // no rejoin path, and a control that is sometimes
                             // destructive and sometimes not, with no visual
                             // difference, is worse than one that always asks.
-                            if !root.is-owner && !root.show-leave-confirm: HorizontalLayout {
+                            if root.can-leave && !root.show-leave-confirm: HorizontalLayout {
                                 spacing: Spacing.sm;
 
                                 VerticalLayout {
@@ -1189,11 +1191,11 @@ export component ChannelSettingsModal inherits Rectangle {
                                 }
                             }
 
-                            if !root.is-owner && root.show-leave-confirm: VerticalLayout {
+                            if root.can-leave && root.show-leave-confirm: VerticalLayout {
                                 spacing: Spacing.sm;
 
                                 Text {
-                                    text: "Leave \"" + root.channel-name + "\"? You lose access to its messages, and an invite-only channel cannot be rejoined on your own.";
+                                    text: "Leave #" + root.channel-name + "? You won't get new messages, and an invite-only channel cannot be rejoined on your own.";
                                     color: Colors.error;
                                     font-size: Typography.sm;
                                     wrap: word-wrap;
@@ -1219,6 +1221,16 @@ export component ChannelSettingsModal inherits Rectangle {
                                         }
                                     }
                                 }
+                            }
+
+                            // The server refuses an owner's leave while others
+                            // remain and there is no ownership transfer, so say
+                            // why the Leave row is missing.
+                            if root.is-owner && root.can-delete: Text {
+                                text: "As the owner you can't leave this channel. Delete it instead.";
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
+                                wrap: word-wrap;
                             }
 
                             // Archive channel

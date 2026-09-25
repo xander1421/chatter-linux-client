@@ -268,6 +268,20 @@ impl ChatterClient {
             .unwrap_or_default()
     }
 
+    /// Whether to offer "Leave channel": we are still a member and not the
+    /// owner (see [`crate::domain::channel::Channel::can_user_leave`]). An
+    /// unsynced roster counts as membership, as in [`Self::channel_send_notice`].
+    pub fn can_leave_channel(&self, channel_id: &crate::domain::ids::ChannelId) -> bool {
+        let (Some(channel), Some(me)) = (self.get_channel_local(channel_id), self.session_current_user_id()) else {
+            return false;
+        };
+        let members = self.list_channel_members_local(channel_id);
+        let own = members.iter().find(|m| m.user_id == me);
+        let still_member = crate::domain::channel::SendBlock::for_viewer(own, !members.is_empty())
+            != Some(crate::domain::channel::SendBlock::Removed);
+        channel.can_user_leave(&me, still_member)
+    }
+
     /// [`Self::channel_send_notice`] after re-reading the roster from the
     /// server: on channel open and after a refused send, in case a live
     /// `MemberUpdated` was missed. A failed fetch keeps the local
@@ -352,7 +366,9 @@ impl ChatterClient {
         &self,
         channel_id: &crate::domain::ids::ChannelId,
     ) -> Result<(), crate::services::channel::ChannelError> {
-        self.channels().leave_channel_complete(channel_id).await
+        self.channels().leave_channel_complete(channel_id).await?;
+        self.services.channel_event_service.record_own_leave(channel_id);
+        Ok(())
     }
 
     /// Search public channels.
