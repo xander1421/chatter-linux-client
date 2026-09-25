@@ -199,7 +199,10 @@ fn main_view_renders_its_columns_and_they_cover_the_window() {
     // one of the two panes is in the tree and it covers the window. Both
     // failure modes are still "blank screen" — a list that only covers half
     // the width, or a chat column that quietly renders behind it.
+    // A phone: single-pane (compact-layout) needs a touch platform AND a
+    // window under 600 dp; a wider touch window is the tablet two-pane.
     w.set_is_mobile_platform(true);
+    w.window().set_size(slint::LogicalSize::new(400.0, 800.0));
     w.set_mobile_show_chat(false);
     pump(&w);
     let list_side = find(&w, "Sidebar");

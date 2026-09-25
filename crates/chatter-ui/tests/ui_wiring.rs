@@ -1793,7 +1793,12 @@ fn back_press_closes_the_message_context_menu_first() {
 /// and Back out of a chat backgrounding the whole app is the defect this pins.
 #[test]
 fn back_press_pops_the_mobile_conversation_pane() {
+    use slint::ComponentHandle;
     let w = boot();
+    // Compact (phone) layout: touch platform AND a window under 600 dp. On a
+    // two-pane tablet Back has no chat pane to pop.
+    w.set_is_mobile_platform(true);
+    w.window().set_size(slint::LogicalSize::new(400.0, 800.0));
     chatter_ui::bin_ui::features::back::wire(&w);
 
     w.set_mobile_show_chat(true);
