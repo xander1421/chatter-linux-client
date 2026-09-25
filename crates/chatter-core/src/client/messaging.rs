@@ -1146,6 +1146,18 @@ impl ChatterClient {
             .into_iter()
             .map(|m| m.user_id)
             .collect();
+        // Active bans, visible to owner/admin only (`None` otherwise; the
+        // server then refuses a banned invitee with its own reason).
+        let banned: HashSet<UserId> = self
+            .channels()
+            .list_banned_users(channel_id)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|b| b.user_id)
+            .collect();
 
         let mut seen: HashSet<UserId> = HashSet::new();
         let mut out: Vec<InviteCandidate> = Vec::new();
@@ -1164,6 +1176,7 @@ impl ChatterClient {
                 .unwrap_or_default();
             out.push(InviteCandidate {
                 already_member: members.contains(&user_id),
+                banned: banned.contains(&user_id),
                 user_id,
                 display_name,
                 username,
@@ -1339,6 +1352,8 @@ pub struct InviteCandidate {
     /// Peer avatar bytes (decrypted profile image), empty when none cached.
     pub avatar_bytes: Vec<u8>,
     pub already_member: bool,
+    /// Actively banned: not invitable until unbanned.
+    pub banned: bool,
 }
 
 impl InviteCandidate {

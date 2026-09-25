@@ -16,6 +16,7 @@ export struct InviteUser {
     avatar-source: image,
     has-avatar: bool,
     already-member: bool,
+    banned: bool,
     selected: bool,
 }
 
@@ -83,11 +84,13 @@ export component InviteMemberModal inherits Rectangle {
                         padding: Spacing.xs;
 
                         for user[index] in root.users: Rectangle {
+                            // Members and banned users can't be invited.
+                            property <bool> unavailable: user.already-member || user.banned;
                             height: 52px;
-                            background: user.already-member ? transparent :
+                            background: unavailable ? transparent :
                                 (user-touch.has-hover ? Colors.surface-hover : transparent);
                             border-radius: Spacing.radius-md;
-                            opacity: user.already-member ? 0.5 : 1.0;
+                            opacity: unavailable ? 0.5 : 1.0;
 
                             HorizontalLayout {
                                 padding-left: Spacing.sm;
@@ -123,8 +126,8 @@ export component InviteMemberModal inherits Rectangle {
                                     }
                                 }
 
-                                // Already member badge
-                                if user.already-member: Rectangle {
+                                // Member / Banned badge
+                                if unavailable: Rectangle {
                                     width: member-text.width + Spacing.sm * 2;
                                     height: 20px;
                                     background: Colors.text-muted.with-alpha(0.2);
@@ -132,7 +135,7 @@ export component InviteMemberModal inherits Rectangle {
 
                                     member-text := Text {
                                         x: Spacing.sm;
-                                        text: "Member";
+                                        text: user.banned ? "Banned" : "Member";
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
                                         vertical-alignment: center;
@@ -140,8 +143,8 @@ export component InviteMemberModal inherits Rectangle {
                                     }
                                 }
 
-                                // Checkbox (only for non-members)
-                                if !user.already-member: Rectangle {
+                                // Checkbox (only for invitable users)
+                                if !unavailable: Rectangle {
                                     width: 20px;
                                     height: 20px;
                                     border-radius: Spacing.radius-sm;
@@ -163,11 +166,11 @@ export component InviteMemberModal inherits Rectangle {
                             }
 
                             user-touch := TouchArea {
-                                enabled: !user.already-member;
-                                mouse-cursor: user.already-member ? default : pointer;
+                                enabled: !unavailable;
+                                mouse-cursor: unavailable ? default : pointer;
 
                                 clicked => {
-                                    if !user.already-member {
+                                    if !unavailable {
                                         root.toggle-user(index);
                                     }
                                 }

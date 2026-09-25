@@ -676,6 +676,7 @@ fn candidate_to_invite_user(c: InviteCandidate) -> InviteUser {
         has_avatar: avatar.is_some(),
         avatar_source: avatar.unwrap_or_default(),
         already_member: c.already_member,
+        banned: c.banned,
         selected: false,
     }
 }
@@ -751,7 +752,7 @@ fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
             let users = w.get_invite_member_users();
             let selected_vec: Vec<String> = (0..users.row_count())
                 .filter_map(|i| users.row_data(i))
-                .filter(|u| u.selected && !u.already_member)
+                .filter(|u| u.selected && !u.already_member && !u.banned)
                 .map(|u| u.id.to_string())
                 .collect();
             (channel_id, selected_vec)
@@ -789,6 +790,9 @@ fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
 
             // Invite each user
             let mut success_count = 0;
+            // Why the last failure failed, for the toast (F76: a server refusal
+            // only reached the log, so the inviter could not tell why).
+            let mut failure_reason = String::new();
             for user_id_str in &selected_user_ids {
                 let user_id: UserId = match user_id_str.parse() {
                     Ok(id) => id,
@@ -811,6 +815,7 @@ fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                             error = %e,
                             "Failed to invite user to channel"
                         );
+                        failure_reason = e.user_message();
                     }
                 }
             }
@@ -832,8 +837,8 @@ fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                     // Stay open: the selection is still there and retrying is
                     // one tap, which is the right thing to offer here.
                     w.set_toast_message(
-                        if attempted == 1 { "The invite was not sent.".to_string() }
-                        else { format!("None of the {attempted} invites were sent.") }
+                        if attempted == 1 { format!("The invite was not sent. {failure_reason}") }
+                        else { format!("None of the {attempted} invites were sent. {failure_reason}") }
                         .into(),
                     );
                     w.set_toast_variant("error".into());
@@ -845,7 +850,7 @@ fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                 if success_count < attempted {
                     let failed = attempted - success_count;
                     w.set_toast_message(
-                        format!("{success_count} of {attempted} invites sent — {failed} failed.").into(),
+                        format!("{success_count} of {attempted} invites sent — {failed} failed. {failure_reason}").into(),
                     );
                     w.set_toast_variant("warning".into());
                 } else {
@@ -934,8 +939,9 @@ fn wire_invite_member_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                         username,
                                         avatar_bytes: profile.avatar_bytes.unwrap_or_default(),
                                         // ponytail: non-contact found by exact username; if already a
-                                        // member the invite RPC rejects it server-side.
+                                        // member or banned the invite RPC rejects it server-side.
                                         already_member: false,
+                                        banned: false,
                                     });
                                 }
                                 Err(e) => {
