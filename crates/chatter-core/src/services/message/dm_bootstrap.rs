@@ -969,7 +969,7 @@ mod tests {
 
         let mut auth = ms.auth_client();
         let flush = crate::inbox::streaming::dm_bootstrap_handler::send_pending_messages_after_bootstrap(
-            friend, 8, ms.database.clone(), &ms.signal_service, &mut auth, ms.grpc_pool.anon_channel(),
+            friend, 8, ms.database.clone(), &ms.signal_service, &mut auth, ms.grpc_pool.anon_channel(), ms,
         )
         .await;
         assert!(flush.is_none(), "nothing queued, nothing to announce");

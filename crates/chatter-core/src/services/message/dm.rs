@@ -125,11 +125,23 @@ impl MessageService {
             self.owe_unready_devices(auth_client, peer_id, &conversation, &plaintext, grpc_pool)
                 .await;
         }
-        let our_device_id = self.current_device_id_or_zero();
-        if let Some(copy) = own_device_copy(peer_id, &content, our_device_id) {
-            self.sync_to_own_devices(auth_client, copy).await;
-        }
+        self.sync_sent_to_own_devices(auth_client, peer_id, &content).await;
         Ok(())
+    }
+
+    /// Copy `content`, just delivered to `peer_id`, to our own other devices
+    /// if [`own_device_copy`] gives it one. Every DM delivery — Shield, normal
+    /// mode, the responder's post-bootstrap flush — ends here: one policy.
+    pub(crate) async fn sync_sent_to_own_devices(
+        &self,
+        auth_client: &mut AuthClient,
+        peer_id: &UserId,
+        content: &crate::proto::content_v1::Content,
+    ) -> usize {
+        match own_device_copy(peer_id, content, self.current_device_id_or_zero()) {
+            Some(copy) => self.sync_to_own_devices(auth_client, copy).await,
+            None => 0,
+        }
     }
 
     /// Send `sync` to our own devices other than this one — every own-device
@@ -149,7 +161,7 @@ impl MessageService {
     /// is how a newly linked device gets its first session.
     ///
     /// Best effort, like Signal's sync: failures are logged.
-    pub(super) async fn sync_to_own_devices(
+    pub(crate) async fn sync_to_own_devices(
         &self,
         auth_client: &mut AuthClient,
         mut sync: crate::proto::content_v1::Content,
@@ -662,8 +674,9 @@ impl MessageService {
 
 /// What our own other devices get for `content` sent to `peer_id` over
 /// either DM transport, or `None`: the `SyncSent` for a message
-/// ([`sync_sent_copy`]), or the ACCEPTED/DECLINED_ELSEWHERE hangup when this
-/// device answers or declines a call, so our other devices stop ringing.
+/// ([`sync_sent_copy`]), the ACCEPTED/DECLINED_ELSEWHERE hangup when this
+/// device answers or declines a call, so our other devices stop ringing, or
+/// the bare copy of a message-anchored control ([`bare_self_copy`]).
 pub(super) fn own_device_copy(
     peer_id: &UserId,
     content: &crate::proto::content_v1::Content,
@@ -671,6 +684,30 @@ pub(super) fn own_device_copy(
 ) -> Option<crate::proto::content_v1::Content> {
     sync_sent_copy(peer_id, content)
         .or_else(|| crate::services::gateway::build_call_self_sync(content, our_device_id))
+        .or_else(|| bare_self_copy(content))
+}
+
+/// The bare copy our own other devices get of a reaction, pin, edit or
+/// delete-for-everyone: it names its target by (author, sent timestamp), so
+/// the linked device applies it to the message wherever it is filed
+/// (`dispatch_control_content` → `inbox_processor`), no destination needed.
+///
+/// An allow-list, never "everything else": mailbox-internal and anon content
+/// (bootstrap `KeyExchange`, `DmMailboxRotation`, `AnonGroup*`/`AnonDm*`,
+/// `SenderKey*`, `GroupMailboxAddress`) would hand our devices state that is
+/// this conversation's, not theirs; typing and receipts are not synced
+/// (Signal does not); `ReadSync`/`SyncSent` already are own-device content.
+fn bare_self_copy(content: &crate::proto::content_v1::Content) -> Option<crate::proto::content_v1::Content> {
+    use crate::proto::content_v1::{content, Content};
+
+    let inner = match &content.content {
+        Some(content::Content::Reaction(_) | content::Content::Pin(_) | content::Content::Edit(_)) => {
+            content.content.clone()
+        }
+        Some(content::Content::DataMessage(dm)) if dm.delete.is_some() => content.content.clone(),
+        _ => return None,
+    };
+    Some(Content { timestamp: content.timestamp, content: inner, ..Default::default() })
 }
 
 /// The `SyncSent` our own other devices get for `content` sent to `peer_id`,
@@ -793,5 +830,46 @@ mod sync_sent_copy_tests {
         };
         assert!(super::sync_sent_copy(&peer, &empty).is_none());
         assert!(super::sync_sent_copy(&peer, &Content::default()).is_none());
+    }
+
+    /// F62: reactions, pins, edits and deletes-for-everyone reach our own
+    /// devices bare; nothing mailbox-internal, anon or ephemeral does.
+    #[test]
+    fn bare_copies_only_the_allow_list() {
+        use crate::proto::content_v1::*;
+        let peer = UserId::new();
+        let wrap = |c| Content { timestamp: 9, content: Some(c), ephemeral_reply_to: Some(vec![1; 32]), ..Default::default() };
+        let delete = DataMessage { delete: Some(Delete { target_sent_timestamp: 3 }), ..Default::default() };
+
+        for allowed in [
+            content::Content::Reaction(Reaction::default()),
+            content::Content::Pin(PinMessage::default()),
+            content::Content::Edit(EditMessage::default()),
+            content::Content::DataMessage(delete),
+        ] {
+            let copy = super::own_device_copy(&peer, &wrap(allowed.clone()), 1).expect("allowed variant not copied");
+            assert_eq!(copy.content, Some(allowed));
+            assert_eq!(copy.timestamp, 9);
+            assert!(copy.ephemeral_reply_to.is_none(), "our mailbox address must not ride the copy");
+        }
+
+        for internal in [
+            content::Content::KeyExchange(KeyExchange::default()),
+            content::Content::DmMailboxRotation(DmMailboxRotation::default()),
+            content::Content::AnonGroupInvite(AnonGroupInvite::default()),
+            content::Content::AnonDmRequest(AnonDmRequest::default()),
+            content::Content::AnonDmMessage(Box::default()),
+            content::Content::SenderKey(SenderKeyDistribution::default()),
+            content::Content::SenderKeyRequest(SenderKeyRequest::default()),
+            content::Content::GroupMailboxAddress(GroupMailboxAddress::default()),
+            content::Content::Typing(TypingMessage::default()),
+            content::Content::Receipt(ReceiptMessage::default()),
+            content::Content::ReadSync(ReadSync::default()),
+            content::Content::SyncSent(SyncSent::default()),
+            content::Content::DeleteForMeSync(DeleteForMeSync::default()),
+            content::Content::DataMessage(DataMessage::default()),
+        ] {
+            assert!(super::own_device_copy(&peer, &wrap(internal.clone()), 1).is_none(), "{internal:?} copied");
+        }
     }
 }

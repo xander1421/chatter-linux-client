@@ -420,8 +420,11 @@ impl ConversationHandle {
                 let content = crate::services::build_delete_for_me_content(
                     &self.dm_or_channel_id(), &author_aci, target_sent_timestamp,
                 );
-                self.dispatch_content(content).await?;
-                self.client.messages().delete_message_local(&msg.id)
+                // Our own other devices only: a peer's (or channel member's)
+                // device would apply it and delete its own copy.
+                let messages = self.client.messages();
+                messages.sync_to_own_devices(&mut messages.auth_client(), content).await;
+                messages.delete_message_local(&msg.id)
                     .map_err(ConversationError::Message)
             }
         }

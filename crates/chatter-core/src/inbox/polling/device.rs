@@ -2059,6 +2059,16 @@ pub fn dispatch_control_content(
             let _ = event_tx.send(InboxEvent::ReadSync { sender_id: *sender_id, sync });
             stats.write().messages_processed += 1;
         }
+        content::Content::SavedMessageSync(msg) => {
+            let _ = event_tx.send(InboxEvent::SavedMessageSync {
+                sender_id: *sender_id,
+                message_id: msg.message_id,
+                text: msg.text,
+                sent_at: msg.sent_at,
+                attachment_ids: msg.attachment_ids,
+            });
+            stats.write().messages_processed += 1;
+        }
         content::Content::DeleteForMeSync(sync) => {
             tracing::debug!(
                 conversation_id = %sync.conversation_id,
@@ -2067,6 +2077,7 @@ pub fn dispatch_control_content(
                 "Channel delete for me sync"
             );
             let _ = event_tx.send(InboxEvent::ChannelDeleteForMe {
+                sender_id: *sender_id,
                 conversation_id: sync.conversation_id,
                 target_author_aci: sync.target_author_aci,
                 target_sent_timestamp: sync.target_sent_timestamp,

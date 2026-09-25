@@ -160,12 +160,6 @@ pub enum DmContent {
         target_sent_timestamp: u64,
         new_body: String,
     },
-    /// Delete for me (multi-device sync)
-    DeleteForMe {
-        conversation_id: String,
-        target_author_aci: String,
-        target_sent_timestamp: u64,
-    },
     /// Delete for everyone (peer notification)
     DeleteForEveryone {
         target_sent_timestamp: u64,
@@ -205,13 +199,6 @@ pub enum DmContent {
         call_id: String,
         reason: CallHangupReason,
         timestamp: u64,
-    },
-    /// Saved message sync from another device (Note to Self).
-    SavedMessageSync {
-        message_id: String,
-        text: String,
-        sent_at: u64,
-        attachment_ids: Vec<String>,
     },
     /// Mailbox rotation announce (L4): the peer minted a new mailbox and wants
     /// us to send future messages to it. We update the stored peer mailbox.

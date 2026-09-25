@@ -905,7 +905,12 @@ impl InboxEventProcessor {
                 }
             }
 
-            InboxEvent::SavedMessageSync { message_id, text, sent_at, attachment_ids } => {
+            InboxEvent::SavedMessageSync { sender_id, message_id, text, sent_at, attachment_ids } => {
+                // A peer must never write into our Saved Messages.
+                if self.message_service.current_user_id().ok().as_ref() != Some(sender_id) {
+                    tracing::warn!(sender_id = %sender_id, "SavedMessageSync from another user dropped");
+                    return;
+                }
                 // Saved message from another device — store locally
                 match self.message_service.store_synced_saved_message(
                     message_id, text, *sent_at, attachment_ids.clone(),
@@ -919,19 +924,6 @@ impl InboxEventProcessor {
                             error = %e,
                             "Failed to store synced saved message"
                         );
-                    }
-                }
-            }
-
-            InboxEvent::DmDeleteForMe { conversation_id, target_author_aci, target_sent_timestamp } => {
-                if let Some(msg) = self.lookup_message(&target_author_aci, *target_sent_timestamp) {
-                    if let Ok(channel_id) = conversation_id.parse() {
-                        self.event_bus.emit_domain(DomainEvent::DeleteForMeSync {
-                            conversation_id: channel_id,
-                            target_author_id: msg.sender_id.unwrap_or_else(crate::domain::ids::UserId::new),
-                            target_message_id: msg.id,
-                            timestamp: crate::util::time::TimestampNanos::now().as_u64(),
-                        });
                     }
                 }
             }
@@ -952,7 +944,13 @@ impl InboxEventProcessor {
                 }
             }
 
-            InboxEvent::ChannelDeleteForMe { conversation_id, target_author_aci, target_sent_timestamp } => {
+            InboxEvent::ChannelDeleteForMe { sender_id, conversation_id, target_author_aci, target_sent_timestamp } => {
+                // A peer must never delete our messages: only our own
+                // devices send a delete-for-me.
+                if self.message_service.current_user_id().ok().as_ref() != Some(sender_id) {
+                    tracing::warn!(sender_id = %sender_id, "DeleteForMeSync from another user dropped");
+                    return;
+                }
                 if let Some(msg) = self.lookup_message(&target_author_aci, *target_sent_timestamp) {
                     if let Ok(channel_id) = conversation_id.parse() {
                         self.event_bus.emit_domain(DomainEvent::DeleteForMeSync {

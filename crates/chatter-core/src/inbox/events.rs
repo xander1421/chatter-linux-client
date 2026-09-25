@@ -151,17 +151,11 @@ pub enum InboxEvent {
         /// New message body.
         new_body: String,
     },
-    /// Delete for me sync received.
-    DmDeleteForMe {
-        /// Conversation ID.
-        conversation_id: String,
-        /// Target message author.
-        target_author_aci: String,
-        /// Target message timestamp.
-        target_sent_timestamp: u64,
-    },
-    /// Saved message synced from another device (Note to Self).
+    /// Saved message synced from another device (Note to Self). `sender_id`
+    /// is the sealed-sender identity; only our own is accepted.
     SavedMessageSync {
+        /// Sender (must be our own user).
+        sender_id: UserId,
         /// Message ID (UUID, same across all devices).
         message_id: String,
         /// Message text.
@@ -261,8 +255,10 @@ pub enum InboxEvent {
         sender_id: UserId,
         sync: crate::proto::content_v1::ReadSync,
     },
-    /// Delete for me sync received in channel context.
+    /// Delete-for-me from another of our devices (DM or channel).
+    /// `sender_id` is the sealed sender: only our own user may send one.
     ChannelDeleteForMe {
+        sender_id: UserId,
         /// Conversation/channel ID.
         conversation_id: String,
         /// Target message author.

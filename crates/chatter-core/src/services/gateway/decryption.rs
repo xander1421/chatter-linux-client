@@ -534,6 +534,7 @@ impl MessageGateway {
                     | Some(content::Content::Receipt(_))
                     | Some(content::Content::DeleteForMeSync(_))
                     | Some(content::Content::ReadSync(_))
+                    | Some(content::Content::SavedMessageSync(_))
                     | Some(content::Content::CallKey(_))
                     | Some(content::Content::CallHangup(_))
                     | Some(content::Content::GroupCallKey(_))
@@ -949,20 +950,15 @@ impl MessageGateway {
                     new_body,
                 })
             }
-            Some(content::Content::DeleteForMeSync(msg)) => {
-                Ok(DmContent::DeleteForMe {
-                    conversation_id: msg.conversation_id,
-                    target_author_aci: msg.target_author_aci,
-                    target_sent_timestamp: msg.target_sent_timestamp,
-                })
+            Some(content::Content::DeleteForMeSync(_)) => {
+                // Own-device only (`sync_to_own_devices`, device inbox): on
+                // the mailbox it can only come from a peer.
+                Err(ServiceError::Validation("DeleteForMeSync received on DM mailbox path".into()))
             }
-            Some(content::Content::SavedMessageSync(msg)) => {
-                Ok(DmContent::SavedMessageSync {
-                    message_id: msg.message_id,
-                    text: msg.text,
-                    sent_at: msg.sent_at,
-                    attachment_ids: msg.attachment_ids,
-                })
+            Some(content::Content::SavedMessageSync(_)) => {
+                // Own-device only (saved.rs sends it to our device inbox): on
+                // the mailbox it can only come from a peer.
+                Err(ServiceError::Validation("SavedMessageSync received on DM mailbox path".into()))
             }
             Some(content::Content::KeyExchange(kx)) => {
                 // Key exchange received in DM mailbox (bootstrap response from peer)

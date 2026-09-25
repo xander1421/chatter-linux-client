@@ -228,6 +228,7 @@ impl AppContext {
         crate::inbox::streaming::spawn_dm_bootstrap_handler_from_bus(
             self.infrastructure.database.clone(),
             self.infrastructure.grpc_pool.clone(),
+            self.core_services.message_service.clone(),
             &self.core_services.event_bus,
         )
     }

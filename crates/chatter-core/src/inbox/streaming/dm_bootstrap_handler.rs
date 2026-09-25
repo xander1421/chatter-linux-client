@@ -32,7 +32,7 @@ use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::AnonymousMailboxClient;
 use crate::proto::mailbox_v1::EnvelopeType;
-use crate::services::message::{queued_bubble_timestamp, PendingFlush};
+use crate::services::message::{queued_bubble_timestamp, MessageService, PendingFlush};
 use crate::services::SignalService;
 use crate::storage::{Database, KeyStore, SettingsRepository};
 use crate::util::time::TimestampNanos;
@@ -56,10 +56,11 @@ use crate::util::time::TimestampNanos;
 pub fn spawn_dm_bootstrap_handler_from_bus(
     database: Arc<Database>,
     grpc_pool: Arc<GrpcClientPool>,
+    message_service: Arc<MessageService>,
     event_bus: &EventBus,
 ) -> JoinHandle<()> {
     let event_rx = event_bus.subscribe_domain();
-    spawn_dm_bootstrap_handler_with_receiver(database, grpc_pool, event_rx, event_bus.clone())
+    spawn_dm_bootstrap_handler_with_receiver(database, grpc_pool, message_service, event_rx, event_bus.clone())
 }
 
 /// Spawn the DM bootstrap event handler with a custom receiver.
@@ -68,6 +69,7 @@ pub fn spawn_dm_bootstrap_handler_from_bus(
 pub fn spawn_dm_bootstrap_handler_with_receiver(
     database: Arc<Database>,
     grpc_pool: Arc<GrpcClientPool>,
+    message_service: Arc<MessageService>,
     mut event_rx: broadcast::Receiver<DomainEvent>,
     event_bus: EventBus,
 ) -> JoinHandle<()> {
@@ -141,6 +143,7 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                         let ephemeral_key = ephemeral_public_key.clone();
                         let in_progress_clone = in_progress.clone();
                         let event_bus = event_bus.clone();
+                        let message_service = message_service.clone();
                         let turn = peer_turn(&peer_turns, sender_id).await;
 
                         bootstrap_tasks.spawn(async move {
@@ -156,6 +159,7 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                                 sender_id,
                                 sender_device_id,
                                 &ephemeral_key,
+                                &message_service,
                                 &event_bus,
                             )
                             .await;
@@ -418,6 +422,7 @@ async fn handle_bootstrap_async(
     // The device that sent the bootstrap MESSAGE — the one our RESPONSE is for.
     peer_device_id: u32,
     ephemeral_public_key: &[u8],
+    message_service: &MessageService,
     event_bus: &EventBus,
 ) -> Result<(), String> {
     tracing::info!(
@@ -508,6 +513,7 @@ async fn handle_bootstrap_async(
         &signal_service,
         &mut auth_client,
         channel,
+        message_service,
     )
     .await;
     if let Some(flush) = flush {
@@ -532,6 +538,8 @@ pub(crate) async fn send_pending_messages_after_bootstrap(
     signal_service: &SignalService,
     auth_client: &mut AuthClient,
     channel: crate::network::grpc::transport::GrpcTransport,
+    // Self-syncs what goes out, as the initiator's flush (`send_dm_content`) does.
+    message_service: &MessageService,
 ) -> Option<PendingFlush> {
     use prost::Message as ProstMessage;
     use crate::crypto::signal::sesame::{SesameManager, SqliteSesameStore};
@@ -555,11 +563,8 @@ pub(crate) async fn send_pending_messages_after_bootstrap(
     let queued: Vec<_> = pending
         .into_iter()
         .map(|msg| {
-            let bubble = crate::proto::content_v1::Content::decode(msg.content.as_slice())
-                .ok()
-                .as_ref()
-                .and_then(queued_bubble_timestamp);
-            (bubble, msg.content)
+            let decoded = crate::proto::content_v1::Content::decode(msg.content.as_slice()).ok();
+            (decoded, msg.content)
         })
         .collect();
     let mut flush = PendingFlush::default();
@@ -576,8 +581,8 @@ pub(crate) async fn send_pending_messages_after_bootstrap(
                 .find(|(m, _)| m.device_id == peer_device_id)
                 .map(|(m, key)| (key, m.clone()));
             let Some((key, mailbox)) = ready else {
-                for (bubble, _) in queued {
-                    flush.record(bubble, Err("no mailbox keys after bootstrap".into()));
+                for (decoded, _) in queued {
+                    flush.record(decoded.as_ref().and_then(queued_bubble_timestamp), Err("no mailbox keys after bootstrap".into()));
                 }
                 return Some(flush);
             };
@@ -591,21 +596,21 @@ pub(crate) async fn send_pending_messages_after_bootstrap(
             (key, mailbox, unready)
         }
         Ok(None) => {
-            for (bubble, _) in queued {
-                flush.record(bubble, Err("no conversation state after bootstrap".into()));
+            for (decoded, _) in queued {
+                flush.record(decoded.as_ref().and_then(queued_bubble_timestamp), Err("no conversation state after bootstrap".into()));
             }
             return Some(flush);
         }
         Err(e) => {
-            for (bubble, _) in queued {
-                flush.record(bubble, Err(e.to_string()));
+            for (decoded, _) in queued {
+                flush.record(decoded.as_ref().and_then(queued_bubble_timestamp), Err(e.to_string()));
             }
             return Some(flush);
         }
     };
 
     let mut anon_mailbox_client = AnonymousMailboxClient::new(channel);
-    for (bubble, content) in queued {
+    for (decoded, content) in queued {
         let result = deposit(signal_service, auth_client, &mut anon_mailbox_client, &peer_id, &peer_mailbox, &send_key, &content).await;
         if let Err(e) = &result {
             tracing::error!(peer = %peer_id, error = %e, "Failed to send pending message");
@@ -615,8 +620,12 @@ pub(crate) async fn send_pending_messages_after_bootstrap(
                     tracing::warn!(peer = %peer_id, device, error = %e, "Owed copies: queue failed");
                 }
             }
+            // Self-synced when delivered, never when queued (F61 note b).
+            if let Some(decoded) = &decoded {
+                message_service.sync_sent_to_own_devices(auth_client, &peer_id, decoded).await;
+            }
         }
-        flush.record(bubble, result);
+        flush.record(decoded.as_ref().and_then(queued_bubble_timestamp), result);
     }
 
     // This device answered after another got these copies: it catches up.

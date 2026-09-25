@@ -27,7 +27,7 @@ use crate::domain::message::{ConversationType, Message, MessageContent, MixedCon
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::message_client::MessageClient;
 use crate::proto::chat_v1::SealedSenderMessage;
-use crate::proto::content_v1::{content, AttachmentPointer};
+use crate::proto::content_v1::AttachmentPointer;
 use crate::services::current_user::CurrentUserProvider;
 
 use super::{DmSendResult, MessageError, MessageService};
@@ -291,8 +291,8 @@ impl MessageService {
     /// Send an arbitrary `Content` proto (reactions, typing, pin, edit,
     /// delete, receipts, or a DataMessage) to every device of `peer_id`,
     /// sealed-sender + UAK-authorized, with no server-side channel. Also
-    /// fans the same content out to our own other devices (Signal-style
-    /// multi-device sync), sealed the same way.
+    /// copies it to our own other devices (Signal-style multi-device sync)
+    /// when `own_device_copy` gives it one.
     ///
     /// If the recipient's UAK is unavailable this degrades to identified
     /// (Basic auth) delivery, which exposes us to the server as the sender.
@@ -314,27 +314,6 @@ impl MessageService {
             ));
         }
         let plaintext = content.encode_to_vec();
-
-        // Own-device copy: one policy for both DM transports
-        // (`super::dm::own_device_copy`) — the `SyncSent` naming the peer for
-        // a message (F8, V13), the ACCEPTED/DECLINED_ELSEWHERE hangup when we
-        // answer or decline a call. Otherwise the bare copy for the
-        // message-anchored control types (reaction, pin, edit,
-        // delete-for-everyone, delete-for-me), which file correctly on the
-        // linked device with no destination on the wire — see the receive
-        // side (dispatch_control_content / inbox_processor). `None` means not
-        // self-synced: never our own typing (Signal does not), no receipts
-        // (our devices learn what we read from `ReadSync`), no call offer or
-        // other call signaling (it would ring us with a call from ourselves).
-        let self_copy = super::dm::own_device_copy(peer_id, &content, self.current_device_id_or_zero())
-            .or_else(|| match &content.content {
-                Some(content::Content::Typing(_))
-                | Some(content::Content::Receipt(_))
-                | Some(content::Content::CallKey(_))
-                | Some(content::Content::CallHangup(_))
-                | Some(content::Content::GroupCallKey(_)) => None,
-                _ => Some(content.clone()),
-            });
 
         let mut auth_client = self.auth_client();
         let mut message_client = self.message_client();
@@ -373,10 +352,8 @@ impl MessageService {
         }
 
         // Self-sync: every one of our own devices except this one.
-        let own_delivered = match self_copy {
-            Some(copy) => self.sync_to_own_devices(&mut auth_client, copy).await,
-            None => 0,
-        };
+        // One policy for both DM transports (`sync_sent_to_own_devices`).
+        let own_delivered = self.sync_sent_to_own_devices(&mut auth_client, peer_id, &content).await;
 
         // Surface degradation at the top of the send, not just at the deposit
         // site: this is the one place that knows the whole message failed to be

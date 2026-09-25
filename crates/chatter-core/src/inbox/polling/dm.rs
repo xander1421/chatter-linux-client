@@ -466,10 +466,8 @@ fn dispatch_dm_content(
         DmContent::Reaction { .. } => "Reaction",
         DmContent::Pin { .. } => "Pin",
         DmContent::Edit { .. } => "Edit",
-        DmContent::DeleteForMe { .. } => "DeleteForMe",
         DmContent::DeleteForEveryone { .. } => "DeleteForEveryone",
         DmContent::KeyExchange { .. } => "KeyExchange",
-        DmContent::SavedMessageSync { .. } => "SavedMessageSync",
         DmContent::MailboxRotation { .. } => "MailboxRotation",
         _ => "Other",
     };
@@ -688,34 +686,6 @@ fn dispatch_dm_content(
                 peer_id,
                 target_sent_timestamp,
                 new_body,
-            });
-        }
-
-        DmContent::DeleteForMe {
-            conversation_id,
-            target_author_aci,
-            target_sent_timestamp,
-        } => {
-            tracing::debug!(conversation_id = %conversation_id, "DM delete for me sync");
-            let _ = event_tx.send(InboxEvent::DmDeleteForMe {
-                conversation_id,
-                target_author_aci,
-                target_sent_timestamp,
-            });
-        }
-
-        DmContent::SavedMessageSync {
-            message_id,
-            text,
-            sent_at,
-            attachment_ids,
-        } => {
-            tracing::info!(message_id = %message_id, "Saved message sync received from another device");
-            let _ = event_tx.send(InboxEvent::SavedMessageSync {
-                message_id,
-                text,
-                sent_at,
-                attachment_ids,
             });
         }
 

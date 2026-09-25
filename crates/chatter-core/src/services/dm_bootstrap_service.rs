@@ -66,6 +66,7 @@ impl DmBootstrapService {
         crate::inbox::spawn_dm_bootstrap_handler_from_bus(
             self.database.clone(),
             self.grpc_pool.clone(),
+            self.message_service.clone(),
             event_bus,
         )
     }
