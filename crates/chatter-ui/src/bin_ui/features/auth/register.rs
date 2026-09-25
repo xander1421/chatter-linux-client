@@ -224,7 +224,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                 tracing::info!("Register: connected! Calling register()...");
                 // Register
-                match ui_ctx.register(&username, &password, &display_name, "linux-client", Some(&avatar_bytes), Some(&pin)).await {
+                match ui_ctx.register(&username, &password, &display_name, &chatter_core::services::link_device_service::LinkDeviceService::current_device_name(), Some(&avatar_bytes), Some(&pin)).await {
                     Ok(result) => {
                         tracing::info!("Registration successful!");
                         if let Ok(mut g) = selected_avatar().lock() { *g = None; }

@@ -970,6 +970,12 @@ impl InboxEventProcessor {
             // action: 1 = Started, else Stopped. DM typing is keyed by the
             // peer's derived channel_id (matches the stored ServerDm rows).
             // =================================================================
+            // Our own typing, fanned to our other devices along with the
+            // members': it is not "someone is typing" here.
+            InboxEvent::DmTyping { peer_id: user_id, .. }
+            | InboxEvent::ChannelTyping { sender_id: user_id, .. }
+                if self.message_service.current_user_id().ok().as_ref() == Some(user_id) => {}
+
             InboxEvent::DmTyping { peer_id, action, timestamp } => {
                 let channel_id = crate::domain::ids::ChannelId::from(*peer_id);
                 let (user_id, timestamp) = (*peer_id, *timestamp);

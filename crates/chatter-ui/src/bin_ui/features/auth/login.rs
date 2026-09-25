@@ -124,7 +124,7 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             // Login via SDK (handles auth + state + inbox + presence)
             let pin_opt = if pin.is_empty() { None } else { Some(pin.as_str()) };
-            match ui_ctx.login(&username, &password, "linux-client", pin_opt).await {
+            match ui_ctx.login(&username, &password, &chatter_core::services::link_device_service::LinkDeviceService::current_device_name(), pin_opt).await {
                 Ok(_result) => {
                     // Spawn UI-only event handlers (need slint::Weak<MainWindow>)
                     crate::bin_ui::features::modals::spawn_anon_group_invite_handler(weak.clone(), &ui_ctx);

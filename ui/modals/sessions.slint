@@ -27,6 +27,9 @@ export component SessionsModal inherits Rectangle {
     callback revoke-all-others();
     callback link-new-device();    // open primary-side approve modal
 
+    // Phone width: the modal card is the window minus 32px.
+    property <bool> narrow: root.width < 560px;
+
     Modal {
         show: root.show-modal;
         title: "Active Sessions";
@@ -39,7 +42,9 @@ export component SessionsModal inherits Rectangle {
         VerticalLayout {
             spacing: Spacing.md;
 
-            // Header with count and revoke all button
+            // Header: count + actions. On a phone the two buttons do not fit
+            // beside the count (they clipped to "Link new devic" and
+            // "Revoke All Other"), so they stack full-width under it.
             HorizontalLayout {
                 spacing: Spacing.md;
 
@@ -51,24 +56,36 @@ export component SessionsModal inherits Rectangle {
                     horizontal-stretch: 1;
                 }
 
-                // Link a new device (primary-side approve flow)
+                if !root.narrow: Button {
+                    text: "Link new device";
+                    variant: "primary";
+                    disabled: root.revoking;
+                    clicked => { root.link-new-device(); }
+                }
+
+                if !root.narrow && root.sessions.length > 1: Button {
+                    text: "Revoke All Others";
+                    variant: "danger";
+                    disabled: root.revoking;
+                    clicked => { root.revoke-all-others(); }
+                }
+            }
+
+            if root.narrow: VerticalLayout {
+                spacing: Spacing.sm;
+
                 Button {
                     text: "Link new device";
                     variant: "primary";
                     disabled: root.revoking;
-                    clicked => {
-                        root.link-new-device();
-                    }
+                    clicked => { root.link-new-device(); }
                 }
 
-                // Only show revoke all if more than 1 session
                 if root.sessions.length > 1: Button {
                     text: "Revoke All Others";
                     variant: "danger";
                     disabled: root.revoking;
-                    clicked => {
-                        root.revoke-all-others();
-                    }
+                    clicked => { root.revoke-all-others(); }
                 }
             }
 
@@ -125,7 +142,6 @@ export component SessionsModal inherits Rectangle {
                         spacing: Spacing.xs;
 
                         for session[index] in root.sessions: Rectangle {
-                            height: 80px;
                             background: session-touch.has-hover ? Colors.surface-hover : Colors.surface;
                             border-radius: Spacing.radius-md;
 
@@ -166,6 +182,7 @@ export component SessionsModal inherits Rectangle {
                                             font-size: Typography.sm;
                                             font-weight: Typography.medium;
                                             overflow: elide;
+                                            horizontal-stretch: 1;
                                         }
 
                                         // Current session badge
@@ -188,26 +205,27 @@ export component SessionsModal inherits Rectangle {
                                         }
                                     }
 
-                                    Text {
+                                    // The server does not store IPs; an empty
+                                    // field is not shown.
+                                    if session.ip-address != "": Text {
                                         text: "IP: " + session.ip-address;
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
                                     }
 
-                                    HorizontalLayout {
-                                        spacing: Spacing.md;
+                                    // One per line: side by side they clipped on a phone.
+                                    Text {
+                                        text: "Last active: " + session.last-used;
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                    }
 
-                                        Text {
-                                            text: "Last active: " + session.last-used;
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                        }
-
-                                        Text {
-                                            text: "Since: " + session.created-at;
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                        }
+                                    Text {
+                                        text: "Since: " + session.created-at;
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
                                     }
                                 }
 

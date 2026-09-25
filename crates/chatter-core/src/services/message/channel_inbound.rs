@@ -67,8 +67,8 @@ impl ChannelInbound {
         channel_id: ChannelId,
         emit: bool,
     ) -> Ingested {
-        // Own messages are skipped only on the LIVE path, where they are
-        // already on screen from the optimistic send. On a backfill they must
+        // THIS device's own messages are skipped only on the LIVE path, where
+        // they are already on screen from the optimistic send. On a backfill they must
         // still be stored, or a reinstall loses this user's own half of the
         // conversation. (An own message in an ENCRYPTED channel still drops
         // out below — we cannot decrypt our own sender-key ciphertext — which
@@ -136,7 +136,7 @@ impl ChannelInbound {
 
     /// Decrypt + convert, without touching storage.
     ///
-    /// `skip_own` drops messages this user authored — right for the live
+    /// `skip_own` drops messages THIS device authored — right for the live
     /// stream (already rendered optimistically), wrong for a backfill.
     ///
     /// `Err(outcome)` is the non-message result (own message, deferred on a
@@ -171,16 +171,17 @@ impl ChannelInbound {
                 .map(UserId::from)
         };
 
-        if skip_own {
-            // Already on screen from the optimistic send, and we cannot
-            // decrypt our own sender-key ciphertext anyway.
-            if let (Some(sid), Ok(current)) = (
-                sender_id.as_ref(),
-                self.messages.settings_repo.current_user_id(),
-            ) {
-                if *sid == current {
-                    return Err(Ingested::OwnMessage);
-                }
+        let current_user = self.messages.settings_repo.current_user_id().ok();
+        let is_own_user = sender_id.is_some() && sender_id == current_user;
+        // THIS device's send: already on screen from the optimistic send, and
+        // we cannot decrypt our own sender-key ciphertext anyway. A send from
+        // another of our devices is a message this device has not seen, and is
+        // ingested like anyone else's. (No device id = cannot tell; treated as
+        // ours, as before.)
+        if skip_own && is_own_user {
+            let device_id = proto_msg.author_device_id;
+            if device_id == 0 || Some(device_id) == self.current_device_id() {
+                return Err(Ingested::OwnMessage);
             }
         }
 
@@ -215,10 +216,7 @@ impl ChannelInbound {
             // Our own message from THIS device: we never hold receive state for
             // our own sender key, so it cannot decrypt — and the row is already
             // stored from the send. Trying anyway asked ourselves for an SKDM.
-            if self.messages.settings_repo.current_user_id().ok() == Some(sid)
-                && self.messages.settings_repo.get::<u32>(crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID).ok().flatten()
-                    == Some(device_id)
-            {
+            if is_own_user && self.current_device_id() == Some(device_id) {
                 return Err(Ingested::OwnMessage);
             }
             // Already held (a catch-up re-fetch): the first decrypt consumed the
@@ -353,8 +351,21 @@ impl ChannelInbound {
             inbound_quote.as_ref(),
             &self.messages.message_repo,
         );
+        // Our own message (another device's send, or a backfill after link or
+        // reinstall) is never unread to us.
+        if is_own_user {
+            message.is_read = true;
+        }
 
         Ok(message)
+    }
+
+    fn current_device_id(&self) -> Option<u32> {
+        self.messages
+            .settings_repo
+            .get::<u32>(crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID)
+            .ok()
+            .flatten()
     }
 
     /// Upsert, preserving attachments and reactions already stored locally.
@@ -370,7 +381,7 @@ impl ChannelInbound {
                 // Read state is local: the server copy always converts as
                 // unread, so every catch-up re-fetch of a message the user had
                 // already read flipped it back to unread.
-                message.is_read = existing.is_read;
+                message.is_read |= existing.is_read;
                 // Likewise a local soft-delete: the server copy never says deleted.
                 message.is_deleted |= existing.is_deleted;
                 if let Err(e) = self.messages.update_message(message) {

@@ -44,9 +44,11 @@ fn wire_start(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
+            let mut verification_code = String::new();
             while let Some(event) = rx.recv().await {
                 match event {
-                    LinkProgress::QrReady { url, qr_png, .. } => {
+                    LinkProgress::QrReady { url, qr_png, verification_code: code, .. } => {
+                        verification_code = code;
                         let pixels = decode_png_to_rgba(&qr_png);
                         let url_for_ui = url;
                         let weak_for_ui = weak.clone();
@@ -65,7 +67,9 @@ fn wire_start(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         });
                     }
                     LinkProgress::WaitingForApproval => {
-                        set_status(&weak, "Waiting for your other device to approve…");
+                        set_status(&weak, &format!(
+                            "Verification code: {verification_code}\nCheck your other device shows the same code, then approve there."
+                        ));
                     }
                     LinkProgress::Approved => {
                         set_status(&weak, "Approved! Setting up this device…");
@@ -79,7 +83,7 @@ fn wire_start(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         return;
                     }
                     LinkProgress::Cancelled => {
-                        set_status(&weak, "Cancelled.");
+                        set_status(&weak, "This QR code expired or was cancelled. Generate a new one.");
                         let weak_for_view = weak.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak_for_view.upgrade() {

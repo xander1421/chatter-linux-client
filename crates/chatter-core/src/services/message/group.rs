@@ -102,8 +102,12 @@ impl MessageService {
             if outcome.delivered == 0 && !is_self {
                 error_count += 1;
             }
-            if outcome.delivered > 0 && !is_self {
-                self.record_sender_key_delivered(channel_id, member_id);
+            if outcome.delivered > 0 {
+                if is_self {
+                    self.record_own_devices_hold_sender_key(channel_id, &our_user_id).await;
+                } else {
+                    self.record_sender_key_delivered(channel_id, member_id);
+                }
             }
         }
 
@@ -131,6 +135,40 @@ impl MessageService {
     fn record_sender_key_delivered(&self, channel_id: &ChannelId, member_id: &str) {
         if let Err(e) = self.signal_service.mark_sender_key_delivered(channel_id, member_id) {
             tracing::warn!(%channel_id, member_id, error = %e, "Failed to record SKDM delivery");
+        }
+    }
+
+    /// Our own other devices are tracked per DEVICE (`"{user}.{device}"`), not
+    /// per user like other members: a device linked after our key went out
+    /// must get it too, or it cannot read what this device sends to the
+    /// channel (Signal-Desktop fans the SKDM to the sender's own devices).
+    async fn record_own_devices_hold_sender_key(&self, channel_id: &ChannelId, our_user_id: &str) {
+        for device_id in self.own_device_ids().await.unwrap_or_default() {
+            self.record_sender_key_delivered(channel_id, &format!("{our_user_id}.{device_id}"));
+        }
+    }
+
+    /// Our registered device ids, from the `own_devices` cache (refetched when
+    /// over a minute old). `None` when the list cannot be fetched.
+    async fn own_device_ids(&self) -> Option<std::collections::HashSet<u32>> {
+        const MAX_AGE: u64 = 60 * 1_000_000_000;
+        let mut cache = self.own_devices.lock().await;
+        let now = TimestampNanos::now().as_u64();
+        if let Some((fetched_at, ids)) = cache.as_ref() {
+            if now.saturating_sub(*fetched_at) <= MAX_AGE {
+                return Some(ids.clone());
+            }
+        }
+        match self.auth_client().list_devices().await {
+            Ok(resp) => {
+                let ids: std::collections::HashSet<u32> = resp.devices.iter().map(|d| d.device_id).collect();
+                *cache = Some((now, ids.clone()));
+                Some(ids)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Could not list our devices");
+                None
+            }
         }
     }
 
@@ -163,23 +201,45 @@ impl MessageService {
             .get_string(keys::CURRENT_USER_ID)
             .map_err(MessageError::Storage)?
             .ok_or(MessageError::NotLoggedIn)?;
+        let our_device_id = self.settings_repo
+            .get::<u32>(keys::CURRENT_DEVICE_ID)
+            .map_err(MessageError::Storage)?
+            .ok_or(MessageError::NotLoggedIn)?;
         let holders = self.signal_service.sender_key_recipients(channel_id).map_err(crypto)?;
-        let missing: Vec<UserId> = self
+        let members: Vec<UserId> = self
             .channel_repo
             .list_members(channel_id)
             .unwrap_or_default()
             .into_iter()
             .map(|m| m.user_id)
+            .collect();
+        let missing: Vec<UserId> = members
+            .iter()
+            .copied()
             .filter(|u| {
                 let u = u.to_string();
                 u != our_user_id && !holders.contains(&u)
             })
             .collect();
-        if missing.is_empty() {
+        // Our own other devices (e.g. one linked since our key went out).
+        let own_missing = members.iter().any(|u| u.to_string() == our_user_id)
+            && self.own_device_ids().await.is_some_and(|ids| {
+                ids.iter()
+                    .any(|d| *d != our_device_id && !holders.contains(&format!("{our_user_id}.{d}")))
+            });
+        if missing.is_empty() && !own_missing {
             return Ok(());
         }
 
         let skdm = self.create_sender_key_for_channel(channel_id).await?;
+        if own_missing {
+            if let Ok(our_id) = our_user_id.parse::<UserId>() {
+                if let Err(e) = self.send_skdm_to_member(channel_id, &our_id, &skdm).await {
+                    tracing::warn!(%channel_id, error = %e,
+                        "Could not hand our sender key to our own other devices before sending");
+                }
+            }
+        }
         for member_id in &missing {
             if let Err(e) = self.send_skdm_to_member(channel_id, member_id, &skdm).await {
                 tracing::warn!(
@@ -591,12 +651,21 @@ impl MessageService {
 
         let plaintext = skdm_content.encode_to_vec();
         let member_id_str = member_id.to_string();
+        // To ourselves (our other devices asking, or a newly linked one): never
+        // to this device, which already holds the key.
+        let is_self = self.settings_repo.get_string(keys::CURRENT_USER_ID).ok().flatten().as_deref()
+            == Some(member_id_str.as_str());
+        let skip_device = if is_self {
+            self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID).ok().flatten()
+        } else {
+            None
+        };
 
         // Per-device sealed deposit, UAK-authorized: sender keys are keyed by
         // (user, device), so each device needs its own ciphertext.
         let mut message_client = self.message_client();
         let outcome = self
-            .deposit_sealed_to_all_devices(&mut auth_client, &mut message_client, &member_id_str, &plaintext, None)
+            .deposit_sealed_to_all_devices(&mut auth_client, &mut message_client, &member_id_str, &plaintext, skip_device)
             .await;
 
         if outcome.delivered == 0 {
@@ -604,7 +673,11 @@ impl MessageService {
                 "SKDM delivery to new member failed on every device".into()
             ));
         }
-        self.record_sender_key_delivered(channel_id, &member_id_str);
+        if is_self {
+            self.record_own_devices_hold_sender_key(channel_id, &member_id_str).await;
+        } else {
+            self.record_sender_key_delivered(channel_id, &member_id_str);
+        }
 
         tracing::info!(
             channel_id = %channel_id,
@@ -1400,6 +1473,54 @@ mod tests {
         assert!(!eviction_resend_due(&mut gate, a, t0 + Duration::from_secs(59)));
         assert!(eviction_resend_due(&mut gate, b, t0), "another sender has its own budget");
         assert!(eviction_resend_due(&mut gate, a, t0 + Duration::from_secs(60)), "a new minute, a new budget");
+    }
+
+    /// F41: a channel message sent from ANOTHER of our devices reaches this
+    /// one live and must be decrypted and stored (read — it is ours), not
+    /// skipped as "already on screen", which is true only for this device's
+    /// own sends.
+    #[tokio::test]
+    async fn live_message_from_our_other_device_is_stored_as_read() {
+        use crate::domain::ids::MessageId;
+        use crate::domain::message::{ConversationType, MessageContent};
+        use crate::proto::content_v1;
+        use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
+        use prost::Message as _;
+
+        let t = two_members();
+        // Bob's store is Alice's second device (7); Alice's client is device 1.
+        let m = t.bob.messages();
+        m.settings_repo.set(keys::CURRENT_USER_ID, &t.alice_id.to_string()).unwrap();
+        m.settings_repo.set(keys::CURRENT_DEVICE_ID, &7u32).unwrap();
+        let skdm = t.alice.signal().create_sender_key(&t.channel_id).await.unwrap();
+        t.bob.signal().process_sender_key(&t.alice_id, 1, &skdm).await.unwrap();
+
+        let body = content_v1::Content {
+            content: Some(content_v1::content::Content::DataMessage(content_v1::DataMessage {
+                body: "from my tablet".into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+        .encode_to_vec();
+        let (ge, _) = t.alice.signal().encrypt_for_group(&t.channel_id, &body).await.unwrap();
+        let id = MessageId::new();
+        let copy = server_copy(&t, &id, TimestampNanos::now().as_u64(), &ge);
+        let inbound = ChannelInbound::new(m.clone(), t.bob.attachments().clone());
+
+        assert_eq!(inbound.ingest(&copy, t.channel_id, true).await, Ingested::Stored);
+        let stored = m.get_message_local(&id).unwrap().expect("stored");
+        assert!(matches!(stored.content, MessageContent::Text(ref b) if b == "from my tablet"));
+        assert_eq!(
+            m.message_repo.get_unread_count(&t.channel_id, &ConversationType::Channel).unwrap(),
+            0,
+            "our own message is never unread"
+        );
+
+        // Positive control: the same message on the device that sent it is skipped.
+        m.settings_repo.set(keys::CURRENT_DEVICE_ID, &1u32).unwrap();
+        let copy = server_copy(&t, &MessageId::new(), TimestampNanos::now().as_u64(), &ge);
+        assert_eq!(inbound.ingest(&copy, t.channel_id, true).await, Ingested::OwnMessage);
     }
 
     /// Our own previous install (device 1, no longer listed by the server)

@@ -205,6 +205,10 @@ pub enum LinkProgress {
         url: String,
         qr_png: Vec<u8>,
         expires_at: u64,
+        /// The code the approving device shows for this QR
+        /// ([`PendingDeviceLink::verification_code`]); display it so the user
+        /// can compare the two.
+        verification_code: String,
     },
     /// Polling started — primary hasn't approved yet.
     WaitingForApproval,
@@ -274,6 +278,12 @@ impl LinkDeviceService {
         } else {
             "Chatter Client"
         }
+    }
+
+    /// Name this install reports to the server (shown in Active Sessions),
+    /// e.g. "Android (0.1.0)". Link, login and register should all send it.
+    pub fn current_device_name() -> String {
+        format!("{} ({})", Self::current_device_info(), env!("CARGO_PKG_VERSION"))
     }
 
     /// True if a new-device flow is currently running.
@@ -1178,7 +1188,16 @@ impl LinkDeviceService {
         // the new device echoes it back from the decrypted envelope.
         client
             .provision_device(&req.uuid, envelope, &message.provisioning_code)
-            .await?;
+            .await
+            .map_err(|e| match e {
+                // The new device's session is gone (Redis TTL) or closed: the
+                // QR is stale, not a network fault.
+                NetworkError::NotFound(m) => LinkDeviceError::SessionEnded(m),
+                NetworkError::InvalidRequest(m) if m.contains("provisioning session") => {
+                    LinkDeviceError::SessionEnded(m)
+                }
+                e => e.into(),
+            })?;
 
         // Keys are on their way. Now export this account's message history +
         // social graph as an encrypted archive keyed to the ephemeral key the
@@ -1405,6 +1424,7 @@ async fn run_flow(
         url,
         qr_png,
         expires_at,
+        verification_code: verification_code_for_pub(&session.ephemeral.public_bytes()),
     });
     let _ = tx.send(LinkProgress::WaitingForApproval);
 
@@ -1562,6 +1582,14 @@ mod tests {
     // ========================================================================
     // PendingDeviceLink / verification code
     // ========================================================================
+
+    #[test]
+    fn new_device_and_approver_show_the_same_code() {
+        let eph = ProvisioningKeypair::generate();
+        let url = build_link_url("uuid-1", &base64_url(&eph.public_bytes()), None, None);
+        let approver_sees = verification_code_for_pub(&LinkDeviceService::parse_link(&url).unwrap().peer_pub);
+        assert_eq!(approver_sees, verification_code_for_pub(&eph.public_bytes()));
+    }
 
     #[test]
     fn verification_code_is_deterministic_per_pubkey() {

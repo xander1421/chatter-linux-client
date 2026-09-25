@@ -56,7 +56,7 @@ export component LinkDevicePage inherits Rectangle {
                     }
 
                     Text {
-                        text: "On your already-signed-in device, open Settings → Devices → Link new device, then scan this code.";
+                        text: "On your already-signed-in device, open Settings › Active Sessions › View All › Link new device, then scan this code.";
                         color: Colors.text-secondary;
                         font-size: Typography.sm;
                         horizontal-alignment: center;
@@ -115,6 +115,7 @@ export component LinkDevicePage inherits Rectangle {
                             color: root.linking ? Colors.primary : Colors.text-secondary;
                             font-size: Typography.sm;
                             horizontal-alignment: center;
+                            wrap: word-wrap;
                         }
                     }
 

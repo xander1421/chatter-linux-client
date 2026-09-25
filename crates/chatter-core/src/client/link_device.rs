@@ -65,7 +65,7 @@ impl ChatterClient {
             self.connect().await?;
         }
         let device_info = LinkDeviceService::current_device_info().to_string();
-        let device_name = format!("{} ({})", device_info, env!("CARGO_PKG_VERSION"));
+        let device_name = LinkDeviceService::current_device_name();
         Ok(self
             .link_device()
             .run_new_device_flow(device_info, device_name))

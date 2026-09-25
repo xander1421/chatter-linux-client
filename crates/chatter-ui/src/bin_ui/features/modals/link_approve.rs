@@ -165,6 +165,12 @@ fn wire_submit(
                         w.set_link_approve_status("".into());
                         w.set_link_approve_error("Wrong password or PIN.".into());
                     }
+                    Err(LinkDeviceError::SessionEnded(_)) => {
+                        w.set_link_approve_status("".into());
+                        w.set_link_approve_error(
+                            "This link expired. Generate a new QR on the new device.".into(),
+                        );
+                    }
                     Err(e) => {
                         w.set_link_approve_status("".into());
                         w.set_link_approve_error(format!("{e}").into());
