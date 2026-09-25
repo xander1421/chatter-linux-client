@@ -3023,7 +3023,7 @@ impl ChatterClient {
         // An authenticated lookup ties "who is this account looking for" to
         // our identity — exactly what shield mode exists to hide.
         if self.anon_mode_enabled() {
-            return Err(crate::services::user::UserError::ForbiddenInAnonMode);
+            return Err(crate::services::user::UserError::HandleLookupForbiddenInAnonMode);
         }
         self.users().lookup_by_username(username).await
     }
@@ -3064,7 +3064,7 @@ impl ChatterClient {
     {
         // Ends in the same identified lookup as `lookup_by_username`.
         if self.anon_mode_enabled() {
-            return Err(crate::services::user::UserError::ForbiddenInAnonMode);
+            return Err(crate::services::user::UserError::HandleLookupForbiddenInAnonMode);
         }
         self.users().resolve_username_link(url).await
     }

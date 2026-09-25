@@ -260,8 +260,79 @@ pub struct MessageService {
 /// itself under the server id it carries only when it answers one of these:
 /// otherwise any member could squat another member's id before the real copy
 /// lands.
-pub(crate) type SolicitedResends =
-    Arc<parking_lot::Mutex<std::collections::HashSet<(ChannelId, UserId, u64)>>>;
+///
+/// Persisted (settings key `SOLICITED_RESENDS`) so an answer that arrives
+/// after an app restart still keeps the server id. An entry lives as long as
+/// the sender will resend — 24 h from `sent_at` (`resend_on_decryption_error`).
+#[derive(Clone)]
+pub(crate) struct SolicitedResends {
+    set: Arc<parking_lot::Mutex<std::collections::HashSet<SolicitedResend>>>,
+    settings: Arc<SettingsRepository>,
+}
+
+type SolicitedResend = (ChannelId, UserId, u64);
+
+/// How long a sender answers a resend request; older entries are dropped.
+const SOLICITED_RESEND_TTL_MS: u64 = 24 * 60 * 60 * 1000;
+
+impl SolicitedResends {
+    pub(crate) fn load(settings: Arc<SettingsRepository>) -> Self {
+        use crate::storage::repositories::settings_repo::keys;
+        let stored: Vec<SolicitedResend> = settings
+            .get(keys::SOLICITED_RESENDS)
+            .inspect_err(|e| tracing::warn!(error = %e, "Could not load solicited resends"))
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let this = Self { set: Arc::new(parking_lot::Mutex::new(stored.into_iter().collect())), settings };
+        this.persist(&mut this.set.lock());
+        this
+    }
+
+    /// Record a request for `(channel, sender, sent_at ms)`.
+    pub(crate) fn insert(&self, entry: SolicitedResend) {
+        let mut set = self.set.lock();
+        // ponytail: cleared wholesale at 4096 entries; a forgotten entry
+        // files that one resend under a fresh local id.
+        if set.len() >= 4096 {
+            set.clear();
+        }
+        set.insert(entry);
+        self.persist(&mut set);
+    }
+
+    /// Consume the request a resend answers; `false` when there was none.
+    pub(crate) fn take(&self, entry: &SolicitedResend) -> bool {
+        let mut set = self.set.lock();
+        let found = set.remove(entry);
+        if found {
+            self.persist(&mut set);
+        }
+        found
+    }
+
+    #[cfg(test)]
+    pub(crate) fn contains(&self, entry: &SolicitedResend) -> bool {
+        self.set.lock().contains(entry)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.set.lock().is_empty()
+    }
+
+    /// Drop expired entries and write the rest. A failed write only costs a
+    /// resend after a restart its server id.
+    fn persist(&self, set: &mut std::collections::HashSet<SolicitedResend>) {
+        use crate::storage::repositories::settings_repo::keys;
+        let now_ms = crate::util::time::TimestampNanos::now().as_u64() / 1_000_000;
+        set.retain(|&(_, _, sent_at_ms)| now_ms.saturating_sub(sent_at_ms) < SOLICITED_RESEND_TTL_MS);
+        let entries: Vec<&SolicitedResend> = set.iter().collect();
+        if let Err(e) = self.settings.set(keys::SOLICITED_RESENDS, &entries) {
+            tracing::warn!(error = %e, "Could not persist solicited resends");
+        }
+    }
+}
 
 impl MessageService {
     /// Create a new MessageService with dependencies.
@@ -283,6 +354,7 @@ impl MessageService {
         ephemeral_service: Arc<EphemeralService>,
         mailbox_manager: Arc<MailboxManager>,
     ) -> Self {
+        let solicited_resends = SolicitedResends::load(settings_repo.clone());
         Self {
             grpc_pool,
             database,
@@ -303,7 +375,7 @@ impl MessageService {
             pending_group_decrypts: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             sender_key_requests: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             group_retry_requests: Arc::new(parking_lot::Mutex::new(std::collections::HashSet::new())),
-            solicited_resends: Arc::new(parking_lot::Mutex::new(std::collections::HashSet::new())),
+            solicited_resends,
             own_devices: Arc::new(tokio::sync::Mutex::new(None)),
             retired_peer_devices: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             eviction_resends: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
@@ -760,3 +832,29 @@ impl MessageService {
 
 // Re-export helper functions used by other parts of the codebase
 pub use self::core::{proto_to_domain_message, proto_to_domain_message_with_sender, proto_content_to_domain};
+
+#[cfg(test)]
+mod solicited_resends_tests {
+    use super::*;
+
+    #[test]
+    fn solicited_resends_survive_a_restart_and_expire_after_24h() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Arc::new(Database::open(&dir.path().join("s.db"), "testpass").expect("open"));
+        db.run_migrations().expect("migrations");
+        let settings = Arc::new(SettingsRepository::new(db));
+        let now_ms = crate::util::time::TimestampNanos::now().as_u64() / 1_000_000;
+        let fresh = (ChannelId::new(), UserId::new(), now_ms);
+        let stale = (ChannelId::new(), UserId::new(), now_ms - SOLICITED_RESEND_TTL_MS - 1);
+
+        let before = SolicitedResends::load(settings.clone());
+        before.insert(fresh);
+        before.insert(stale);
+
+        let after = SolicitedResends::load(settings.clone());
+        assert!(after.contains(&fresh), "a request made before the restart is still honoured");
+        assert!(!after.contains(&stale), "past the resend window it is dropped");
+        assert!(after.take(&fresh));
+        assert!(SolicitedResends::load(settings).is_empty(), "consumed entries stay consumed");
+    }
+}

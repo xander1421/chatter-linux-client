@@ -205,9 +205,11 @@ export component UnifiedSearch inherits Rectangle {
 
     // People (exact-handle resolve-on-Enter). `query-is-handle` is set by the
     // glue when the query looks like `nickname.discriminator`. `person-status`:
-    // "" idle | "searching" | "found" | "notfound".
+    // "" idle | "searching" | "found" | "notfound" | "error" (core's
+    // user-facing reason in `person-error`).
     in property <bool> query-is-handle: false;
     in property <string> person-status: "";
+    in property <string> person-error: "";
     in property <string> person-id: "";
     in property <string> person-name: "";
     in property <string> person-handle: "";
@@ -358,6 +360,12 @@ export component UnifiedSearch inherits Rectangle {
                     text: "No user @" + root.person-handle;
                     color: Colors.text-muted;
                     font-size: Typography.sm;
+                }
+                if root.person-status == "error": Text {
+                    text: root.person-error;
+                    color: Colors.text-muted;
+                    font-size: Typography.sm;
+                    wrap: word-wrap;
                 }
                 // Tappable: a phone user has no ↵ to press, and the IME's
                 // action key is not guaranteed to reach `accepted`.

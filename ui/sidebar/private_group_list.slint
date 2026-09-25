@@ -30,8 +30,9 @@ export component PrivateGroupList inherits Rectangle {
     callback group-context-menu-requested(/* group-id */ string, /* x */ length, /* y */ length);
     // Tooltip callbacks removed — PrivateGroupListItem now uses self-contained TooltipArea
 
-    // Layout
-    background: root.mobile-mode ? Colors.background : Colors.surface;
+    // Transparent: the list only lives inside the Sidebar, which paints the
+    // page colour — and the Shield tint, which an opaque list painted over.
+    background: transparent;
 
     VerticalLayout {
         // Scrollable group list

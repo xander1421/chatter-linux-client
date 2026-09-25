@@ -107,6 +107,9 @@ pub mod keys {
     /// is not available when it is needed.
     pub const MESH_ENABLED: &str = "mesh.enabled";
 
+    /// Group resends this device asked for — see `SolicitedResends`.
+    pub const SOLICITED_RESENDS: &str = "message.solicited_resends";
+
     // Notification privacy settings
     // Controls what metadata leaks to the OS notification system.
     // Signal Desktop approach: default to no content, user opts in.

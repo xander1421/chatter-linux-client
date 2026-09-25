@@ -1470,7 +1470,7 @@ mod shield_mode_tests {
         ));
         assert!(matches!(
             client.lookup_by_username("alice.4711").await,
-            Err(UserError::ForbiddenInAnonMode)
+            Err(UserError::HandleLookupForbiddenInAnonMode)
         ));
         // Not a friend and no anon DM with this peer: shield mode has nothing
         // to open, and never falls back to the identified DM.

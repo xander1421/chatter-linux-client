@@ -246,8 +246,7 @@ impl MessageGateway {
         let solicited = conversation_type != ConversationType::ServerDm
             && sender_id.is_some_and(|sid| {
                 self.solicited_resends
-                    .lock()
-                    .remove(&(channel_id, sid, data_message.timestamp / 1_000_000))
+                    .take(&(channel_id, sid, data_message.timestamp / 1_000_000))
             });
         let message_id = solicited
             .then(|| data_message.message_id.parse().ok())

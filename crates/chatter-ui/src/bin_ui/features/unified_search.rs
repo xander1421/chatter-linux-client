@@ -127,6 +127,7 @@ fn wire_resolve(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             } else {
                 (handle.clone(), ui_ctx.lookup_by_username(&handle).await)
             };
+            let mut error = String::new();
             let (status, id, name) = match looked_up {
                 Ok(Some(uid)) => {
                     let display = ui_ctx
@@ -137,12 +138,19 @@ fn wire_resolve(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let name = if display.is_empty() { shown_handle.clone() } else { display };
                     ("found".to_string(), uid.to_string(), name)
                 }
-                _ => ("notfound".to_string(), String::new(), String::new()),
+                Ok(None) => ("notfound".to_string(), String::new(), String::new()),
+                // Not "No user": a refusal (Shield) or a failure is not an
+                // answer about the handle. Core words it.
+                Err(e) => {
+                    error = e.user_message();
+                    ("error".to_string(), String::new(), String::new())
+                }
             };
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak_bg.upgrade() {
                     w.set_unified_search_person_id(id.into());
                     w.set_unified_search_person_name(name.into());
+                    w.set_unified_search_person_error(error.into());
                     w.set_unified_search_person_status(status.into());
                 }
             });

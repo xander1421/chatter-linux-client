@@ -740,15 +740,8 @@ impl MessageService {
             return;
         }
         // Recorded before the request goes out, so the answer cannot race it.
-        // ponytail: cleared wholesale at 4096 entries, like the set below; a
-        // forgotten entry files that one resend under a fresh local id.
-        {
-            let mut solicited = self.solicited_resends.lock();
-            if solicited.len() >= 4096 {
-                solicited.clear();
-            }
-            solicited.insert((channel_id, sender_id, proto_msg.timestamp / 1_000_000));
-        }
+        self.solicited_resends
+            .insert((channel_id, sender_id, proto_msg.timestamp / 1_000_000));
         {
             let mut asked = self.group_retry_requests.lock();
             // ponytail: cleared wholesale at 4096 entries; a forgotten entry
@@ -861,6 +854,20 @@ impl MessageService {
                 "Resent a group message pairwise after the member's DecryptionErrorMessage"),
             Ok(false) => tracing::info!(%peer_id, peer_device_id, timestamp_ms,
                 "Group resend request matched nothing we may resend"),
+            // The device is gone: the server refused the send, or — with no
+            // session, so the single-device bundle fetch came first — holds no
+            // bundle for it (NotFound, signal_prekeys.go). Same verdict as the
+            // receiver half above.
+            Err(MessageError::Network(e))
+                if e.is_unknown_destination_device()
+                    || matches!(e, crate::error::NetworkError::NotFound(_)) =>
+            {
+                tracing::info!(%peer_id, peer_device_id, timestamp_ms,
+                    "Group resend: device retired on server");
+                self.retired_peer_devices
+                    .lock()
+                    .insert((*peer_id, peer_device_id), std::time::Instant::now());
+            }
             Err(e) => tracing::warn!(%peer_id, peer_device_id, timestamp_ms, error = %e,
                 "Failed to resend a group message"),
         }
@@ -879,7 +886,11 @@ impl MessageService {
             .signal_service
             .encrypt_message(&mut self.auth_client(), &peer_id.to_string(), peer_device_id, &plaintext)
             .await
-            .map_err(|e| MessageError::EncryptionFailed(e.to_string()))?;
+            .map_err(|e| match e {
+                // Kept typed: a NotFound here is the retired-device verdict.
+                crate::error::ServiceError::Network(e) => MessageError::Network(e),
+                e => MessageError::EncryptionFailed(e.to_string()),
+            })?;
         self.deposit_sealed_to_device(peer_id, peer_device_id, sealed_body).await?;
         Ok(true)
     }
@@ -1316,10 +1327,10 @@ mod tests {
         );
         // Bob's ingest above asked Alice for this message.
         for _ in 0..10 {
-            if !m.solicited_resends.lock().is_empty() { break; }
+            if !m.solicited_resends.is_empty() { break; }
             tokio::task::yield_now().await;
         }
-        assert!(m.solicited_resends.lock().contains(&(channel_id, alice_id, server_ts / 1_000_000)));
+        assert!(m.solicited_resends.contains(&(channel_id, alice_id, server_ts / 1_000_000)));
         gateway.store_data_message(dm, Some(alice_id)).await.unwrap();
         let stored = m
             .message_repo
@@ -1415,7 +1426,7 @@ mod tests {
         assert!(m.pending_group_decrypts.lock().is_empty());
         m.request_group_resend(t.channel_id, t.alice_id, 1, &copy, &ge.ciphertext).await;
         assert!(m.group_retry_requests.lock().is_empty(), "no DEM to a retired device");
-        assert!(m.solicited_resends.lock().is_empty());
+        assert!(m.solicited_resends.is_empty());
 
         // Positive control: the same message from a device the server lists
         // waits for its sender key as usual.
@@ -1464,7 +1475,7 @@ mod tests {
 
         // Solicited from ANOTHER sender: still not honoured for Alice.
         let ts2 = ts1 + 7_000_000;
-        m.solicited_resends.lock().insert((t.channel_id, t.bob_id, ts2 / 1_000_000));
+        m.solicited_resends.insert((t.channel_id, t.bob_id, ts2 / 1_000_000));
         let id2 = MessageId::new();
         gateway.store_data_message(resend(id2, ts2), Some(t.alice_id)).await.unwrap();
         assert_ne!(stored_id(ts2), id2);
@@ -1472,11 +1483,11 @@ mod tests {
         // Solicited from Alice at that sent_at: keeps the server id, and the
         // request is consumed.
         let ts3 = ts1 + 14_000_000;
-        m.solicited_resends.lock().insert((t.channel_id, t.alice_id, ts3 / 1_000_000));
+        m.solicited_resends.insert((t.channel_id, t.alice_id, ts3 / 1_000_000));
         let id3 = MessageId::new();
         gateway.store_data_message(resend(id3, ts3), Some(t.alice_id)).await.unwrap();
         assert_eq!(stored_id(ts3), id3);
-        assert!(!m.solicited_resends.lock().contains(&(t.channel_id, t.alice_id, ts3 / 1_000_000)));
+        assert!(!m.solicited_resends.contains(&(t.channel_id, t.alice_id, ts3 / 1_000_000)));
     }
 
     /// Past the parked cap the oldest message is evicted — and its sender is

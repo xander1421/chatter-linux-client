@@ -119,6 +119,7 @@ export component App inherits Rectangle {
     // People (exact-handle resolve-on-Enter)
     in property <bool> unified-search-query-is-handle: false;
     in property <string> unified-search-person-status: "";
+    in property <string> unified-search-person-error: "";
     in property <string> unified-search-person-id: "";
     in property <string> unified-search-person-name: "";
     in property <string> unified-search-person-handle: "";
@@ -2141,6 +2142,7 @@ export component App inherits Rectangle {
         selected-index <=> root.unified-search-selected-index;
         query-is-handle: root.unified-search-query-is-handle;
         person-status: root.unified-search-person-status;
+        person-error: root.unified-search-person-error;
         person-id: root.unified-search-person-id;
         person-name: root.unified-search-person-name;
         person-handle: root.unified-search-person-handle;

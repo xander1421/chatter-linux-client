@@ -157,10 +157,15 @@ pub enum UserError {
     #[error("requires anon (shield) mode")]
     RequiresAnonMode,
 
-    /// Operation reveals the account's identity (an identified friend request,
-    /// a username lookup) and is refused while anon (shield) mode is on.
+    /// Operation reveals the account's identity (an identified friend
+    /// request) and is refused while anon (shield) mode is on.
     #[error("not available in anon (shield) mode")]
     ForbiddenInAnonMode,
+
+    /// A username / username-link lookup, refused in anon (shield) mode: it
+    /// ties "who is this account looking for" to our identity.
+    #[error("handle lookup not available in anon (shield) mode")]
+    HandleLookupForbiddenInAnonMode,
 
     /// Input validation failed.
     #[error("invalid input: {0}")]
@@ -192,6 +197,9 @@ impl UserError {
             }
             Self::RequiresAnonMode => "Turn on anonymous mode first.".to_string(),
             Self::ForbiddenInAnonMode => "Not available in anonymous mode.".to_string(),
+            Self::HandleLookupForbiddenInAnonMode => {
+                "Looking up people by handle isn't available in Shield mode.".to_string()
+            }
             Self::InvalidInput(m) => {
                 let mut c = m.chars();
                 c.next()
