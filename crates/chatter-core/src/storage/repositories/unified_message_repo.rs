@@ -52,9 +52,14 @@ impl UnifiedMessageRepository {
     /// through `insert` / `insert_or_ignore` / `update`, so the rule lives here
     /// once instead of in each receive path (F41 put it in one, and the rest
     /// still badged the user's own messages).
+    ///
+    /// Call records and system notices are never unread either: they are
+    /// history, not messages, and badging them lit the Chats tab for a
+    /// conversation that showed nothing new (Signal counts neither).
     fn stored_is_read(&self, message: &Message) -> bool {
         use crate::services::current_user::CurrentUserProvider;
         message.is_read
+            || matches!(message.content, MessageContent::System(_) | MessageContent::Call(_))
             || message.sender_id.is_some_and(|sender| {
                 super::settings_repo::SettingsRepository::new(self.db.clone())
                     .current_user_id()

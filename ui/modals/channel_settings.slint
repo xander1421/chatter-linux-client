@@ -1009,13 +1009,15 @@ export component ChannelSettingsModal inherits Rectangle {
                                         }
                                     }
 
-                                    if root.role-picker-user == member.user-id && root.confirm-action == "" && !root.narrow: HorizontalLayout {
+                                    // Wide: one row per group (roles, mute, Remove/Ban).
+                                    // All eight buttons on one line ran past the modal edge.
+                                    if root.role-picker-user == member.user-id && root.confirm-action == "" && !root.narrow: VerticalLayout {
                                         spacing: Spacing.xs;
                                         padding: Spacing.xs;
-                                        alignment: end;
 
                                         if !root.is-private-group && root.can-manage-members: HorizontalLayout {
                                             spacing: Spacing.xs;
+                                            alignment: end;
 
                                             for r in ["member", "moderator", "admin"]: Button {
                                                 text: r;
@@ -1030,19 +1032,24 @@ export component ChannelSettingsModal inherits Rectangle {
                                             }
                                         }
 
-                                        if member.can-mute && member.muted: Button {
-                                            text: "Unmute";
-                                            variant: "secondary";
+                                        if member.can-mute && member.muted: HorizontalLayout {
+                                            alignment: end;
 
-                                            clicked => {
-                                                root.role-picker-user = "";
-                                                root.set-member-muted(member.user-id, false, 0);
+                                            Button {
+                                                text: "Unmute";
+                                                variant: "secondary";
+
+                                                clicked => {
+                                                    root.role-picker-user = "";
+                                                    root.set-member-muted(member.user-id, false, 0);
+                                                }
                                             }
                                         }
 
                                         // Timed or until unmuted (minutes 0); the server lifts a timed mute.
                                         if member.can-mute && !member.muted: HorizontalLayout {
                                             spacing: Spacing.xs;
+                                            alignment: end;
 
                                             for opt in root.mute-options: Button {
                                                 text: opt.label;
@@ -1055,18 +1062,23 @@ export component ChannelSettingsModal inherits Rectangle {
                                             }
                                         }
 
-                                        if root.can-manage-members: Button {
-                                            text: "Remove";
-                                            variant: "danger";
+                                        if root.can-manage-members || member.can-ban: HorizontalLayout {
+                                            spacing: Spacing.xs;
+                                            alignment: end;
 
-                                            clicked => { root.confirm-action = "remove"; }
-                                        }
+                                            if root.can-manage-members: Button {
+                                                text: "Remove";
+                                                variant: "danger";
 
-                                        if member.can-ban: Button {
-                                            text: "Ban";
-                                            variant: "danger";
+                                                clicked => { root.confirm-action = "remove"; }
+                                            }
 
-                                            clicked => { root.confirm-action = "ban"; }
+                                            if member.can-ban: Button {
+                                                text: "Ban";
+                                                variant: "danger";
+
+                                                clicked => { root.confirm-action = "ban"; }
+                                            }
                                         }
                                     }
                                 }

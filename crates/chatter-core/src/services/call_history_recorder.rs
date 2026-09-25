@@ -127,6 +127,7 @@ pub fn spawn_call_history_recorder(
                             tracing::warn!(error = %e, "call history: incoming insert failed");
                         }
                         if missed_on_arrival {
+                            announce_if_missed(&history, &messages, &call);
                             file_dm_bubble(&history, &messages, &call);
                         }
                     }
@@ -139,6 +140,7 @@ pub fn spawn_call_history_recorder(
                     CallOrchestratorEvent::ActiveEnded { call, reason }
                     | CallOrchestratorEvent::IncomingWithdrawn { call, reason } => {
                         finish(&history, &call, connected.remove(&call), &reason);
+                        announce_if_missed(&history, &messages, &call);
                         // Answered on another of our devices: that device has
                         // the call; here it is only a Calls-screen row.
                         if reason != CallEndReason::AnsweredElsewhere {
@@ -183,6 +185,16 @@ fn finish(
     let duration = (chrono::Utc::now() - connected_at).num_seconds().max(0);
     if let Err(e) = history.mark_completed(call.as_str(), duration) {
         tracing::debug!(error = %e, call = %call.as_str(), "call history: no row to end");
+    }
+}
+
+/// Tell the UI the Calls badge moved, when `call`'s row — already written, so
+/// the badge read that follows sees it — is a missed incoming call. A ringing
+/// row is not announced: it only counts once the call is over.
+fn announce_if_missed(history: &CallHistoryRepository, messages: &MessageService, call: &CallHandle) {
+    let Ok(Some(entry)) = history.get(call.as_str()) else { return };
+    if entry.direction == CallDirection::Incoming && entry.result == CallResult::Missed {
+        messages.event_bus.emit_domain(DomainEvent::MissedCallsChanged);
     }
 }
 

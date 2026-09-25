@@ -705,11 +705,8 @@ impl UserService {
             created_at: Utc::now(),
         };
 
-        // The pending row is where the accepter's profile-key handshake lands
-        // (`set_friend_profile_key` only UPDATEs). A peer known only by friend
-        // code has no users row yet, so without this the insert FK-failed
-        // silently and a handshake that beat `FriendAccepted` was dropped,
-        // leaving the friend as "User <id>" until some later profile fetch.
+        // A peer known only by friend code has no users row yet, so without
+        // this the pending insert FK-failed silently.
         self.user_repo.ensure_user_exists(friend_id).ok();
         let _ = self.user_repo.insert_friendship(&friendship);
 
@@ -812,9 +809,8 @@ impl UserService {
 
     /// Persist a friend-request sender's profile key BEFORE we accept them, so
     /// their real display name + avatar can be decrypted for the Received tab.
-    /// Creates a `Pending` local friendship row keyed `(me, sender)` (the
-    /// friend_profile_key column lives on that row); accepting later updates
-    /// the row's status and preserves the key.
+    /// Also creates a `Pending` local friendship row keyed `(me, sender)`;
+    /// accepting later updates the row's status.
     pub fn store_friend_request_sender_key(
         &self,
         sender: &UserId,
@@ -830,7 +826,7 @@ impl UserService {
             created_at: Utc::now(),
         };
         // Row may already exist (repeated poll / prior request) — keep whatever
-        // status it has, we only need the row present for the key UPDATE.
+        // status it has.
         let _ = self.user_repo.insert_friendship(&pending);
 
         self.user_repo

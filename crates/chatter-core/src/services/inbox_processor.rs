@@ -312,46 +312,26 @@ impl InboxEventProcessor {
                     channel_id = %channel_id,
                     requester_id = %requester_id,
                     skdm_len = skdm_bytes.len(),
-                    "Responding with our SKDM"
+                    "SenderKeyRequest received"
                 );
                 let msg_svc = self.message_service.clone();
                 let ch_id = *channel_id;
                 let req_id = *requester_id;
                 let skdm_bytes = skdm_bytes.clone();
                 tokio::spawn(async move {
-                    let skdm_result: Result<crate::proto::content_v1::SenderKeyDistribution, String> = if skdm_bytes.is_empty() {
-                        msg_svc.create_sender_key_for_channel(&ch_id).await
-                            .map_err(|e| e.to_string())
-                    } else {
-                        use prost::Message as ProstMessage;
-                        crate::proto::content_v1::SenderKeyDistribution::decode(skdm_bytes.as_slice())
-                            .map_err(|e| e.to_string())
-                    };
-
-                    match skdm_result {
-                        Ok(skdm) => {
-                            if let Err(e) = msg_svc.send_skdm_to_member(&ch_id, &req_id, &skdm).await {
-                                tracing::warn!(
-                                    channel_id = %ch_id,
-                                    requester_id = %req_id,
-                                    error = %e,
-                                    "Failed to send SKDM response"
-                                );
-                            } else {
-                                tracing::info!(
-                                    channel_id = %ch_id,
-                                    requester_id = %req_id,
-                                    "Sent SKDM response to requester"
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                channel_id = %ch_id,
-                                error = ?e,
-                                "Failed to create/decode SKDM"
-                            );
-                        }
+                    match msg_svc.answer_sender_key_request(&ch_id, &req_id, &skdm_bytes).await {
+                        Ok(true) => tracing::info!(
+                            channel_id = %ch_id,
+                            requester_id = %req_id,
+                            "Sent SKDM response to requester"
+                        ),
+                        Ok(false) => {}
+                        Err(e) => tracing::warn!(
+                            channel_id = %ch_id,
+                            requester_id = %req_id,
+                            error = %e,
+                            "Failed to send SKDM response"
+                        ),
                     }
                 });
             }

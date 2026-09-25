@@ -57,7 +57,8 @@ impl From<&CallHistoryEntry> for CallHistoryRowData {
             name,
             timestamp: format_timestamp(entry.started_at),
             detail: detail_line(entry, is_incoming),
-            is_missed: entry.result == CallResult::Missed,
+            // An unanswered call we placed reads "No answer", not red.
+            is_missed: is_incoming && entry.result == CallResult::Missed,
             is_video: entry.has_video,
             is_incoming,
             can_call_back: ActiveConversation::from_routing_key(

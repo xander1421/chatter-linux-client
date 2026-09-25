@@ -21,6 +21,7 @@ import { ConversationKind } from "chat/conversation_kind.slint";
 import { ReactionPicker } from "chat/reaction_picker.slint";
 import { MessageContextMenu } from "chat/message_context_menu.slint";
 import { SelectionBar } from "chat/selection_bar.slint";
+import { DeleteForMeConfirm } from "chat/delete_confirm.slint";
 import { EmojiPicker, EmojiData } from "components/emoji_picker.slint";
 import { GifPicker, GifData } from "components/gif_picker.slint";
 import { MentionAutocomplete, MentionSuggestion } from "components/mention_autocomplete.slint";
@@ -478,6 +479,11 @@ export component App inherits Rectangle {
     callback reply-message(string, string);
     callback edit-message(string, string);
     callback delete-message(string, string);         // (delete for me)
+    // Delete-for-me waiting on the "Delete message?" confirm: how many
+    // messages (0 = none), and for a single one, which (sender, timestamp-ns).
+    property <int> delete-confirm-count: 0;
+    property <string> delete-confirm-sender;
+    property <string> delete-confirm-timestamp;
     callback delete-everyone-message(string, string); // (delete for everyone)
     callback pin-message(string, string);
     callback forward-message-action(string, string);
@@ -1564,7 +1570,10 @@ export component App inherits Rectangle {
                             root.selection-mode = false;
                             root.selection-cleared();
                         }
-                        delete-clicked => { root.selection-delete-clicked(); }
+                        delete-clicked => {
+                            root.delete-confirm-sender = "";
+                            root.delete-confirm-count = root.selected-message-count;
+                        }
                         copy-clicked => { root.selection-copy-clicked(); }
                         forward-clicked => { root.selection-forward-clicked(); }
                     }
@@ -2971,7 +2980,9 @@ export component App inherits Rectangle {
         }
         delete-clicked(sender-id, timestamp-ns) => {
             root.context-menu-visible = false;
-            root.delete-message(sender-id, timestamp-ns);
+            root.delete-confirm-sender = sender-id;
+            root.delete-confirm-timestamp = timestamp-ns;
+            root.delete-confirm-count = 1;
         }
         delete-everyone-clicked(sender-id, timestamp-ns) => {
             root.context-menu-visible = false;
@@ -2992,6 +3003,21 @@ export component App inherits Rectangle {
         download-clicked(sender-id, timestamp-ns) => {
             root.context-menu-visible = false;
             root.download-message(sender-id, timestamp-ns);
+        }
+    }
+
+    // A single delete names its message; a multi-select leaves the sender
+    // empty and deletes the selection.
+    if root.delete-confirm-count > 0: DeleteForMeConfirm {
+        count: root.delete-confirm-count;
+        cancelled => { root.delete-confirm-count = 0; }
+        confirmed => {
+            root.delete-confirm-count = 0;
+            if root.delete-confirm-sender != "" {
+                root.delete-message(root.delete-confirm-sender, root.delete-confirm-timestamp);
+            } else {
+                root.selection-delete-clicked();
+            }
         }
     }
 

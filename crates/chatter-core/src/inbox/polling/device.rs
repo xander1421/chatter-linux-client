@@ -632,23 +632,6 @@ async fn process_sender_key_message(
                 retry_budget,
             );
         }
-        Ok(RouteResult::RespondWithSkdm { channel_id, requester_id, skdm }) => {
-            tracing::info!(
-                message_guid = %msg.message_guid,
-                channel_id = %channel_id,
-                requester_id = %requester_id,
-                "[INBOX_SK] Received sender key request, emitting event to respond"
-            );
-            // Serialize SKDM for event
-            use prost::Message as ProstMessage;
-            let skdm_bytes = skdm.encode_to_vec();
-            let _ = event_tx.send(InboxEvent::RespondWithSkdm {
-                channel_id,
-                requester_id,
-                skdm_bytes,
-            });
-            stats.write().messages_processed += 1;
-        }
         Ok(RouteResult::MailboxAnnouncement { channel_id, announcement }) => {
             // Gateway detected GroupMailboxAddress - process via coordinator
             if let Err(e) = group_coordinator.process_announcement(*sender_id, &announcement) {
@@ -1087,6 +1070,7 @@ async fn process_identified_sender_message(
             channel_id,
             distribution_message,
             timestamp,
+            profile_key_changed,
         }) => {
             tracing::info!(
                 message_id = %msg.message_guid,
@@ -1095,6 +1079,9 @@ async fn process_identified_sender_message(
                 channel_id = %channel_id,
                 "[INBOX] SKDM processed via identified sender — emitting SenderKeyReceived"
             );
+            if profile_key_changed {
+                let _ = event_tx.send(InboxEvent::ProfileKeyReceived { sender_id });
+            }
             if let Some(tx) = domain_tx {
                 let _ = tx.send(DomainEvent::SenderKeyReceived {
                     sender_id,
@@ -1482,6 +1469,7 @@ async fn process_sealed_sender_message(
             channel_id,
             distribution_message,
             timestamp,
+            profile_key_changed,
         }) => {
             tracing::info!(
                 message_id = %msg.message_guid,
@@ -1490,6 +1478,9 @@ async fn process_sealed_sender_message(
                 channel_id = %channel_id,
                 "[INBOX] SKDM processed — emitting SenderKeyReceived to drain parked group messages"
             );
+            if profile_key_changed {
+                let _ = event_tx.send(InboxEvent::ProfileKeyReceived { sender_id });
+            }
             if let Some(tx) = domain_tx {
                 let _ = tx.send(DomainEvent::SenderKeyReceived {
                     sender_id,

@@ -6,9 +6,9 @@
 //!
 //! Coverage:
 //!   - Finding #1 + #2: `ChannelRepository::get_membership` distinguishes
-//!     current members from non-members. The gate in
-//!     `services/gateway/routing.rs` consults exactly this primitive
-//!     (`process_sender_key_request`). The cleartext SKDM-install path
+//!     current members from non-members. The sender-key request gate
+//!     (`may_hold_sender_key`, `services/message/group.rs`) consults exactly
+//!     this primitive; cleartext requests are refused. The cleartext SKDM-install path
 //!     (`process_sender_key_distribution`) was removed in the H4 fix —
 //!     SKDMs now install only over the authenticated sealed-sender path
 //!     (`services/gateway/decryption.rs`).
@@ -81,7 +81,7 @@ fn make_membership(channel_id: ChannelId, user_id: UserId) -> Membership {
 // #1 + #2 — channel-membership gate primitive
 // ============================================================================
 
-/// `process_sender_key_request` calls `channel_repo.get_membership(channel,
+/// `may_hold_sender_key` calls `channel_repo.get_membership(channel,
 /// peer)` and rejects when it returns `Ok(None)`. (The cleartext
 /// `process_sender_key_distribution` path was removed in the H4 fix.)
 /// Lock that primitive's behavior here.

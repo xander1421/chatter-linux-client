@@ -384,6 +384,12 @@ impl MessageGateway {
                     channel_id = %channel_id,
                     "GATEWAY: Successfully stored sender key from channel member"
                 );
+                // The member's profile key rides their SKDM (Signal shares it
+                // with the group), so a co-member who is not a friend can
+                // decrypt their name and avatar. Stored against the sealed-
+                // sender-authenticated sender only — the key is theirs; a
+                // blocked sender never reaches this point (checked above).
+                let profile_key_changed = self.store_skdm_profile_key(&sender_id, skdm.profile_key.as_deref());
                 // Signal that the key is now installed so the caller can drain
                 // any group messages that arrived before it (F14c). Carry the
                 // exact identifiers the pending-decrypt buffer is keyed on:
@@ -394,6 +400,7 @@ impl MessageGateway {
                     channel_id,
                     distribution_message: skdm.distribution_message.clone(),
                     timestamp: content_proto.timestamp,
+                    profile_key_changed,
                 });
             }
 
@@ -581,6 +588,26 @@ impl MessageGateway {
     ///
     /// When SesameManager is available, uses session convergence to try
     /// multiple sessions if the primary session fails to decrypt.
+    /// Persist a channel member's profile key carried on their SKDM. Returns
+    /// whether it was new or rotated — the caller's cue to refetch their
+    /// profile. Our own (from our other devices) is not a peer key.
+    pub(crate) fn store_skdm_profile_key(&self, sender_id: &UserId, key: Option<&[u8]>) -> bool {
+        let Some(key) = key.and_then(|k| <[u8; 32]>::try_from(k).ok()) else {
+            return false;
+        };
+        use crate::services::current_user::CurrentUserProvider;
+        let Ok(us) = self.settings_repo.current_user_id() else {
+            return false;
+        };
+        if us == *sender_id {
+            return false;
+        }
+        self.user_repo
+            .set_friend_profile_key(&us, sender_id, &key)
+            .inspect_err(|e| tracing::debug!(sender_id = %sender_id, error = %e, "SKDM: failed to store sender profile key"))
+            .unwrap_or(false)
+    }
+
     pub async fn decrypt_identified_message(
         &self,
         envelope: &[u8],

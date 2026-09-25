@@ -26,9 +26,6 @@ impl MessageService {
         channel_id: &ChannelId,
         skdm: &crate::proto::content_v1::SenderKeyDistribution,
     ) -> Result<(), MessageError> {
-        use crate::proto::content_v1::{self, content};
-        use prost::Message;
-
         // Our user ID (the deposit leaves this device out of our own fan-out —
         // it already holds our sender key).
         let our_user_id = self.settings_repo
@@ -54,27 +51,7 @@ impl MessageService {
             return Ok(());
         }
 
-        // Get our mailbox public key for this channel (if available)
-        let ephemeral_reply_to: Option<Vec<u8>> = self.group_mailbox_manager
-            .load_group_state(channel_id)
-            .ok()
-            .flatten()
-            .and_then(|state| state.our_mailbox)
-            .map(|mailbox| mailbox.public_key.to_vec());
-        let has_mailbox = ephemeral_reply_to.is_some();
-
-        // Build the Content proto with SKDM + our mailbox announcement
-        let timestamp = TimestampNanos::now().as_u64();
-
-        let mut skdm_content = content_v1::Content {
-            ephemeral_reply_to,
-            timestamp,
-            padding: vec![],
-            content: Some(content::Content::SenderKey(skdm.clone())),
-        };
-        Self::pad_content_to_bucket(&mut skdm_content);
-
-        let plaintext = skdm_content.encode_to_vec();
+        let has_mailbox = self.our_group_mailbox_pk(channel_id).is_some();
 
         // Distribute to each member's devices pairwise via Sealed Sender.
         let mut success_count = 0;
@@ -82,6 +59,7 @@ impl MessageService {
 
         for member_id in &fanout_user_ids {
             let is_self = member_id == &our_user_id;
+            let plaintext = self.skdm_plaintext(channel_id, skdm, member_id);
 
             // Sender keys are per (user, device), so every device gets its own
             // ciphertext. Our own current device already holds the sender key.
@@ -125,6 +103,65 @@ impl MessageService {
         }
 
         Ok(())
+    }
+
+    /// Our mailbox public key for this channel, if we have one (NDSS '21
+    /// announcement that rides every SKDM).
+    fn our_group_mailbox_pk(&self, channel_id: &ChannelId) -> Option<Vec<u8>> {
+        self.group_mailbox_manager
+            .load_group_state(channel_id)
+            .ok()
+            .flatten()
+            .and_then(|state| state.our_mailbox)
+            .map(|mailbox| mailbox.public_key.to_vec())
+    }
+
+    /// The padded, encoded SKDM Content for one recipient: the SKDM, our
+    /// mailbox announcement, and our profile key (see [`Self::skdm_profile_key`]).
+    fn skdm_plaintext(
+        &self,
+        channel_id: &ChannelId,
+        skdm: &crate::proto::content_v1::SenderKeyDistribution,
+        recipient: &str,
+    ) -> Vec<u8> {
+        use crate::proto::content_v1::{self, content};
+        use prost::Message;
+
+        let mut skdm = skdm.clone();
+        skdm.profile_key = self.skdm_profile_key(channel_id, recipient);
+        let mut skdm_content = content_v1::Content {
+            ephemeral_reply_to: self.our_group_mailbox_pk(channel_id),
+            timestamp: TimestampNanos::now().as_u64(),
+            padding: vec![],
+            content: Some(content::Content::SenderKey(skdm)),
+        };
+        Self::pad_content_to_bucket(&mut skdm_content);
+        skdm_content.encode_to_vec()
+    }
+
+    /// Our profile key for a channel member's SKDM, so they can decrypt our
+    /// name and avatar without being our friend — Signal shares every group
+    /// member's profile key with the group. The SKDM is pairwise-encrypted,
+    /// so it reaches only this member; `None` for ourselves (our own devices
+    /// hold it already), for a member we blocked, and for anyone this device
+    /// does not hold as a member of `channel_id` — an SKDM also answers a
+    /// `SenderKeyRequest`, which anyone can send. Fails closed: a lookup error
+    /// shares nothing.
+    fn skdm_profile_key(&self, channel_id: &ChannelId, recipient: &str) -> Option<Vec<u8>> {
+        use crate::services::current_user::CurrentUserProvider;
+        let us = self.settings_repo.current_user_id().ok()?;
+        let recipient: UserId = recipient.parse().ok()?;
+        if recipient == us
+            || self.user_repo.is_blocked(&us, &recipient).unwrap_or(true)
+            || !matches!(self.channel_repo.get_membership(channel_id, &recipient), Ok(Some(_)))
+        {
+            return None;
+        }
+        self.settings_repo
+            .get_bytes(keys::PROFILE_KEY)
+            .ok()
+            .flatten()
+            .filter(|k| k.len() == 32)
     }
 
     fn record_sender_key_delivered(&self, channel_id: &ChannelId, member_id: &str) {
@@ -634,32 +671,15 @@ impl MessageService {
         member_id: &UserId,
         skdm: &crate::proto::content_v1::SenderKeyDistribution,
     ) -> Result<(), MessageError> {
-        use crate::proto::content_v1::{self, content};
-        use prost::Message;
-
+        if !self.may_hold_sender_key(channel_id, member_id) {
+            return Err(MessageError::EncryptionFailed(format!(
+                "{member_id} is not a current member of {channel_id}; refusing to hand it our sender key"
+            )));
+        }
         let mut auth_client = self.auth_client();
 
-        // Get our mailbox public key for this channel (if available)
-        let ephemeral_reply_to: Option<Vec<u8>> = self.group_mailbox_manager
-            .load_group_state(channel_id)
-            .ok()
-            .flatten()
-            .and_then(|state| state.our_mailbox)
-            .map(|mailbox| mailbox.public_key.to_vec());
-
-        // Build the Content proto with SKDM + our mailbox announcement
-        let timestamp = TimestampNanos::now().as_u64();
-
-        let mut skdm_content = content_v1::Content {
-            ephemeral_reply_to,
-            timestamp,
-            padding: vec![],
-            content: Some(content::Content::SenderKey(skdm.clone())),
-        };
-        Self::pad_content_to_bucket(&mut skdm_content);
-
-        let plaintext = skdm_content.encode_to_vec();
         let member_id_str = member_id.to_string();
+        let plaintext = self.skdm_plaintext(channel_id, skdm, &member_id_str);
         // To ourselves (our other devices asking, or a newly linked one) the
         // deposit leaves out this device, which already holds the key.
         let is_self = self.settings_repo.get_string(keys::CURRENT_USER_ID).ok().flatten().as_deref()
@@ -690,6 +710,41 @@ impl MessageService {
         );
 
         Ok(())
+    }
+
+    /// Whether `user` may be handed our sender key for `channel_id`: only a
+    /// CURRENT member per our local membership, the same rows every SKDM
+    /// fan-out iterates (a kick/ban deletes the row and marks the key for
+    /// rotation). Signal distributes sender keys to current group members
+    /// only. Fails closed: a lookup error hands out nothing.
+    fn may_hold_sender_key(&self, channel_id: &ChannelId, user: &UserId) -> bool {
+        matches!(self.channel_repo.get_membership(channel_id, user), Ok(Some(_)))
+    }
+
+    /// Answer a `SenderKeyRequest` from `requester` — the authenticated sender
+    /// of the request, never a field inside it. Anyone who knows a channel id
+    /// can ask, so a requester that is not a current member is dropped before
+    /// any key is created. `skdm_bytes` is the SKDM the gateway already built,
+    /// or empty to fetch ours here. `Ok(false)` = dropped.
+    pub async fn answer_sender_key_request(
+        &self,
+        channel_id: &ChannelId,
+        requester: &UserId,
+        skdm_bytes: &[u8],
+    ) -> Result<bool, MessageError> {
+        if !self.may_hold_sender_key(channel_id, requester) {
+            tracing::debug!(%channel_id, %requester, "Dropping SenderKeyRequest from a non-member");
+            return Ok(false);
+        }
+        let skdm = if skdm_bytes.is_empty() {
+            self.create_sender_key_for_channel(channel_id).await?
+        } else {
+            use prost::Message as _;
+            crate::proto::content_v1::SenderKeyDistribution::decode(skdm_bytes)
+                .map_err(|e| MessageError::InvalidContent(format!("SKDM decode: {e}")))?
+        };
+        self.send_skdm_to_member(channel_id, requester, &skdm).await?;
+        Ok(true)
     }
 
     /// Create a sender key for a channel (generates or retrieves existing SKDM).
@@ -1324,6 +1379,30 @@ mod tests {
         TwoMembers { alice, bob, alice_id, bob_id, channel_id, _dirs: (da, db) }
     }
 
+    /// Signal hands sender keys to current group members only: a request from
+    /// a non-member is dropped before any key is created; a member's is
+    /// answered (its delivery fails here only because there is no server).
+    #[tokio::test]
+    async fn sender_key_request_is_answered_for_members_only() {
+        let t = two_members();
+        let alice = t.alice.messages();
+        let outsider = UserId::new();
+
+        assert!(matches!(alice.answer_sender_key_request(&t.channel_id, &outsider, &[]).await, Ok(false)));
+        assert!(!t.alice.signal().has_sender_key(&t.channel_id).await.unwrap(),
+            "a non-member's request must not even create our key");
+        let skdm = t.alice.signal().create_sender_key(&t.channel_id).await.unwrap();
+        assert!(alice.send_skdm_to_member(&t.channel_id, &outsider, &skdm).await.is_err());
+
+        let answered = alice.answer_sender_key_request(&t.channel_id, &t.bob_id, &[]).await;
+        assert!(matches!(answered, Err(MessageError::EncryptionFailed(ref e)) if !e.contains("not a current member")),
+            "a member's request goes to delivery: {answered:?}");
+
+        // Removed (kick/ban deletes the row): no longer answered.
+        alice.channel_repo.delete_membership(&t.channel_id, &t.bob_id).unwrap();
+        assert!(matches!(alice.answer_sender_key_request(&t.channel_id, &t.bob_id, &[]).await, Ok(false)));
+    }
+
     /// Alice's group message as the server hands it to Bob.
     fn server_copy(
         t: &TwoMembers,
@@ -1451,6 +1530,61 @@ mod tests {
         m.group_retry_requests.lock().clear();
         m.request_group_resend(channel_id, alice_id, 1, &server_copy, &ge.ciphertext).await;
         assert!(m.group_retry_requests.lock().is_empty());
+    }
+
+    /// F72: a channel member's SKDM carries their profile key to the other
+    /// members — and only to them: not to a non-member who asked, not to a
+    /// member they blocked — and the receiver keeps it without a friendship.
+    #[tokio::test]
+    async fn skdm_shares_profile_key_with_channel_members_only() {
+        use crate::domain::user::{Friendship, FriendshipStatus};
+        use crate::proto::content_v1;
+        use prost::Message as _;
+
+        let t = two_members();
+        let (alice, bob) = (&t.alice, &t.bob);
+        alice.messages().settings_repo.set_bytes(keys::PROFILE_KEY, &[9; 32]).unwrap();
+        let skdm = alice.signal().create_sender_key(&t.channel_id).await.unwrap();
+        let carried = |to: &UserId| {
+            let bytes = alice.messages().skdm_plaintext(&t.channel_id, &skdm, &to.to_string());
+            match content_v1::Content::decode(bytes.as_slice()).unwrap().content {
+                Some(content_v1::content::Content::SenderKey(s)) => s.profile_key,
+                _ => panic!("not an SKDM"),
+            }
+        };
+
+        let key = carried(&t.bob_id).expect("a co-member gets Alice's profile key");
+        assert_eq!(key, vec![9; 32]);
+        assert!(carried(&UserId::new()).is_none(), "a non-member who asked gets none");
+        assert!(carried(&t.alice_id).is_none(), "our own devices already hold it");
+
+        // Bob is not Alice's friend: the key still lands, once.
+        let m = bob.messages();
+        let gateway = crate::services::gateway::MessageGateway::new(
+            (*m.signal_service).clone(),
+            m.message_repo.clone(),
+            m.channel_repo.clone(),
+            m.user_repo.clone(),
+            m.settings_repo.clone(),
+            m.solicited_resends.clone(),
+        );
+        assert!(gateway.store_skdm_profile_key(&t.alice_id, Some(&key)));
+        assert!(!gateway.store_skdm_profile_key(&t.alice_id, Some(&key)), "same key is no change");
+        assert_eq!(m.user_repo.get_friend_profile_key(&t.bob_id, &t.alice_id).unwrap(), Some([9; 32]));
+
+        // Once Alice blocks Bob, her SKDM to him carries no key.
+        let am = alice.messages();
+        am.user_repo.ensure_user_exists(&t.alice_id).unwrap();
+        am.user_repo.ensure_user_exists(&t.bob_id).unwrap();
+        am.user_repo
+            .insert_friendship(&Friendship {
+                requester_id: t.alice_id,
+                addressee_id: t.bob_id,
+                status: FriendshipStatus::Blocked,
+                created_at: chrono::Utc::now(),
+            })
+            .unwrap();
+        assert!(carried(&t.bob_id).is_none(), "a blocked member gets none");
     }
 
     /// A message parked for a sender key that never comes is not dropped

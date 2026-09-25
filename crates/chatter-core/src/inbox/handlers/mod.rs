@@ -666,6 +666,11 @@ pub enum DomainEvent {
         /// Which privacy mode the backend is running in.
         kind: PushKind,
     },
+
+    /// The call-history recorder wrote or closed a missed incoming call, so
+    /// the Calls tab badge (`ChatterClient::missed_call_count`) may have
+    /// moved. Emitted after the row is written: a reader sees it.
+    MissedCallsChanged,
 }
 
 /// Privacy mode of a push notification received from self-hosted ntfy.
@@ -750,6 +755,7 @@ impl DomainEvent {
             DomainEvent::JarvisCleared { .. } => None,
             DomainEvent::SyncComplete { .. } => None,
             DomainEvent::PushWakeup { .. } => None,
+            DomainEvent::MissedCallsChanged => None,
             DomainEvent::DmSessionHealed { .. } => None,
             DomainEvent::PeerIdentityChanged { .. } => None,
             DomainEvent::PeerDevicesChanged { .. } => None,

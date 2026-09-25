@@ -10,10 +10,14 @@
 use crate::domain::call::{CallDirection, CallHistoryEntry, CallHistoryFilter, CallResult};
 use crate::domain::message::ConversationType;
 use crate::error::StorageError;
+use crate::storage::repositories::SettingsRepository;
 use crate::storage::Database;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, params_from_iter, types::Value as SqlValue};
 use std::sync::Arc;
+
+/// `settings` key holding when the Calls screen was last opened (RFC3339).
+const MISSED_SEEN_AT_KEY: &str = "calls.missed_seen_at";
 
 /// Local call history data repository.
 ///
@@ -162,7 +166,9 @@ impl CallHistoryRepository {
         match filter {
             CallHistoryFilter::All => {}
             CallHistoryFilter::Missed => {
-                sql.push_str(" AND result = 'missed'");
+                // An unanswered call we placed is stored as 'missed' too;
+                // the filter means calls the user missed.
+                sql.push_str(" AND result = 'missed' AND direction = 'incoming'");
             }
             CallHistoryFilter::Outgoing => {
                 sql.push_str(" AND direction = 'outgoing'");
@@ -215,15 +221,32 @@ impl CallHistoryRepository {
         Ok(n as u64)
     }
 
-    /// Number of missed calls (for the Calls tab badge).
+    /// Number of UNSEEN missed incoming calls — the Calls tab badge.
+    ///
+    /// Outgoing rows are excluded: an unanswered call we placed is stored as
+    /// `'missed'` too, but it is nothing the user missed. "Unseen" means it
+    /// ended after the last [`mark_missed_seen`](Self::mark_missed_seen); a
+    /// row still ringing (no `ended_at`) is judged by when it started.
     pub fn missed_count(&self) -> Result<u64, StorageError> {
+        let seen_at = SettingsRepository::new(self.db.clone())
+            .get_string(MISSED_SEEN_AT_KEY)?
+            .unwrap_or_default();
         let conn = self.db.read_connection()?;
         let n: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM call_history WHERE result = 'missed'",
-            [],
+            "SELECT COUNT(*) FROM call_history
+             WHERE result = 'missed' AND direction = 'incoming'
+               AND (?1 = '' OR julianday(COALESCE(ended_at, started_at)) > julianday(?1))",
+            params![seen_at],
             |row| row.get(0),
         )?;
         Ok(n as u64)
+    }
+
+    /// The user has looked at the Calls screen: every missed call so far is
+    /// seen, so [`missed_count`](Self::missed_count) drops to zero.
+    pub fn mark_missed_seen(&self) -> Result<(), StorageError> {
+        SettingsRepository::new(self.db.clone())
+            .set_string(MISSED_SEEN_AT_KEY, &Utc::now().to_rfc3339())
     }
 }
 
@@ -389,6 +412,40 @@ mod tests {
         assert_eq!(outgoing.len(), 2);
 
         assert_eq!(repo.count().unwrap(), 3);
+        assert_eq!(repo.missed_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn badge_counts_only_unseen_missed_incoming() {
+        let db = setup_db();
+        let repo = CallHistoryRepository::new(db);
+        let t = Utc::now() - chrono::Duration::minutes(1);
+
+        // Our own unanswered call: stored 'missed', but not a missed call.
+        let mut out = sample_entry("out-unanswered", t);
+        out.result = CallResult::Missed;
+        out.duration_secs = None;
+        repo.insert_entry(&out).unwrap();
+
+        let mut inc = out.clone();
+        inc.id = "in-missed".into();
+        inc.direction = CallDirection::Incoming;
+        repo.insert_entry(&inc).unwrap();
+
+        assert_eq!(repo.missed_count().unwrap(), 1);
+        let missed = repo.list(CallHistoryFilter::Missed, 10, None).unwrap();
+        assert_eq!(missed.len(), 1);
+        assert_eq!(missed[0].id, "in-missed");
+
+        // Opening the Calls screen clears it...
+        repo.mark_missed_seen().unwrap();
+        assert_eq!(repo.missed_count().unwrap(), 0);
+
+        // ...and a call missed afterwards counts again.
+        let mut later = inc.clone();
+        later.id = "in-missed-later".into();
+        later.started_at = Utc::now() + chrono::Duration::seconds(1);
+        repo.insert_entry(&later).unwrap();
         assert_eq!(repo.missed_count().unwrap(), 1);
     }
 

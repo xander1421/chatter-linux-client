@@ -2729,8 +2729,11 @@ impl ChatterClient {
     /// every channel-free server DM: two unread DMs and one unread channel
     /// read "1".
     ///
-    /// Only conversations the current mode shows count: with the shield on,
-    /// an unread identified DM has no row, so it must not light the badge.
+    /// Only conversations the sidebar shows as a row count
+    /// ([`sidebar_row_keys`](Self::sidebar_row_keys)): with the shield on an
+    /// identified channel has no row, and in either mode neither does a DM
+    /// with an ex-friend, a channel we left or a group we were removed from —
+    /// an unread message there lit the tab with no row to clear it.
     ///
     /// Returns 0 on storage error: a missing badge beats a UI hard-fail.
     pub fn unread_conversation_count(&self) -> u32 {
@@ -2747,12 +2750,17 @@ impl ChatterClient {
         let Ok(stats) = self.services.conversation_repo.conversation_stats() else {
             return UnreadBadges::default();
         };
+        let rows = self.sidebar_row_keys();
         let mut badges = UnreadBadges::default();
-        for ((id, kind), st) in &stats {
+        for (key, st) in &stats {
             if st.unread_count == 0 {
                 continue;
             }
-            if self.visible_in_mode(kind) {
+            let (id, kind) = key;
+            // ponytail: mesh rows are desktop-only and keyed by the mesh repo;
+            // they count whenever the mode shows them, as before.
+            let mesh = matches!(kind, ConversationType::Mesh | ConversationType::MeshDm);
+            if rows.contains(key) || (mesh && self.visible_in_mode(kind)) {
                 badges.total += 1;
             }
             if id.parse().is_ok_and(|cid| conversation.is_for_channel(cid)) {
@@ -2760,6 +2768,49 @@ impl ChatterClient {
             }
         }
         badges
+    }
+
+    /// Unread messages in a private group, for its sidebar row — the same
+    /// count `unread_badges` gives the row live, so a rebuild keeps the badge.
+    pub fn anon_group_unread_count(&self, group_id: &crate::domain::anon_group::AnonGroupId) -> u32 {
+        self.messages()
+            .message_repo
+            .get_unread_count(&(*group_id).into(), &ConversationType::AnonGroup)
+            .unwrap_or(0) as u32
+    }
+
+    /// Every conversation the Chats list shows as a row in the current mode,
+    /// keyed as `conversation_stats` keys them — the loose lists
+    /// (`list_dm_sidebar`, `sidebar_channels`, `sidebar_private_groups`) plus
+    /// the folders (`list_sections_with_conversations`). Ids only: the same
+    /// inclusion rules as those builders, without their previews.
+    fn sidebar_row_keys(&self) -> std::collections::HashSet<(String, ConversationType)> {
+        let mut rows = std::collections::HashSet::new();
+        for peer in self.listed_friends() {
+            rows.insert((peer.to_string(), ConversationType::ServerDm));
+        }
+        if self.anon_mode_enabled() {
+            let anon = self
+                .list_anon_dm_conversations()
+                .into_iter()
+                .chain(self.list_anon_dm_message_requests())
+                .chain(self.list_anon_dm_outgoing_requests());
+            for dm in anon {
+                rows.insert((dm.id.to_string(), ConversationType::AnonDm));
+            }
+        }
+        for channel in self.sidebar_channels() {
+            rows.insert((channel.id.to_string(), ConversationType::Channel));
+        }
+        for group in self.list_anon_groups().unwrap_or_default() {
+            rows.insert((group.id.to_string(), ConversationType::AnonGroup));
+        }
+        for section in self.list_sections_with_conversations().unwrap_or_default() {
+            for c in section.conversations {
+                rows.insert((c.conversation_id, c.conversation_type));
+            }
+        }
+        rows
     }
 
     /// Whether `message` belongs in the conversation on screen — the one
@@ -2793,12 +2844,17 @@ impl ChatterClient {
         let me = self.session_current_user_id();
         // Refetch stale member profiles first, as a DM open does for its peer
         // (Signal-Desktop fetches every member's profile on conversation
-        // open). Only friends: theirs are the avatars this device can decrypt.
-        // Throttled per user; a no-op in Shield mode.
+        // open). Only members whose profile key we hold — a friend's, or a
+        // co-member's from their SKDM: those are the profiles this device can
+        // decrypt. Throttled per user; a no-op in Shield mode.
+        let users = &self.messages().user_repo;
         futures::future::join_all(
             members
                 .iter()
-                .filter(|m| me.as_ref() != Some(&m.user_id) && self.is_friend(&m.user_id))
+                .filter(|m| me.as_ref().is_some_and(|me| {
+                    me != &m.user_id
+                        && matches!(users.get_friend_profile_key(me, &m.user_id), Ok(Some(_)))
+                }))
                 .map(|m| self.refresh_profile_if_stale(&m.user_id)),
         )
         .await;
@@ -4072,11 +4128,33 @@ mod unread_badge_tests {
         client.messages().store_message_local(&msg).expect("store");
     }
 
+    /// Make `peer` an accepted friend of a logged-in `me`: the one kind of
+    /// server DM the sidebar gives a row (`listed_friends`).
+    fn befriend(client: &ChatterClient, peer: UserId) {
+        let me = UserId::new();
+        client.auth_state().set_logged_in(me, 1, "Me".into());
+        client
+            .messages()
+            .settings_repo
+            .set_string(crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID, &me.to_string())
+            .unwrap();
+        let users = &client.messages().user_repo;
+        users.ensure_user_exists(&me).unwrap();
+        users.ensure_user_exists(&peer).unwrap();
+        let mut friendship = crate::domain::user::Friendship::new_request(me, peer);
+        friendship.accept();
+        users.insert_friendship(&friendship).unwrap();
+    }
+
     #[tokio::test]
     async fn badges_are_absolute_and_follow_the_mode() {
         let client = build_test_client();
         let peer = UserId::new();
-        let anon = AnonDmId::new();
+        befriend(&client, peer);
+        let mut anon_dm = crate::domain::anon_dm::AnonDm::new_initiated(UserId::new());
+        anon_dm.status = crate::domain::anon_dm::AnonDmStatus::Active;
+        client.anon_dms().anon_dm_repo().insert_conversation(&anon_dm).unwrap();
+        let anon = anon_dm.id;
         receive(&client, ChannelId::from(peer), ConversationType::ServerDm, 1);
         receive(&client, ChannelId::from(peer), ConversationType::ServerDm, 2);
         receive(&client, anon.into(), ConversationType::AnonDm, 3);
@@ -4093,6 +4171,46 @@ mod unread_badge_tests {
             UnreadBadges { row: 1, total: 2 },
         );
         assert_eq!(client.unread_conversation_count(), 2);
+    }
+
+    /// F73: the Chats total counts only conversations the list shows as a
+    /// row, and call records never count.
+    #[tokio::test]
+    async fn rowless_conversations_and_call_records_never_badge() {
+        use crate::domain::message::{CallMessage, CallMessageType, MessageContent};
+        let client = build_test_client();
+        let friend = UserId::new();
+        befriend(&client, friend);
+
+        // A DM with someone who is not a friend (unfriended, or never one)
+        // and a channel we are not in: neither has a row.
+        receive(&client, ChannelId::from(UserId::new()), ConversationType::ServerDm, 1);
+        receive(&client, ChannelId::new(), ConversationType::Channel, 2);
+        assert_eq!(client.unread_conversation_count(), 0);
+
+        // A missed call filed in the friend's DM is history, not unread.
+        let mut call = Message::new_text(
+            ChannelId::from(friend),
+            ConversationType::ServerDm,
+            Some(friend),
+            String::new(),
+            3,
+        );
+        call.content = MessageContent::Call(CallMessage {
+            call_id: "c".into(),
+            call_type: CallMessageType::Missed,
+            initiator_id: friend,
+            initiator_name: String::new(),
+            started_at: None,
+            ended_at: None,
+            duration: None,
+            participant_count: 2,
+        });
+        client.messages().store_message_local(&call).expect("store");
+        assert_eq!(client.unread_conversation_count(), 0);
+
+        receive(&client, ChannelId::from(friend), ConversationType::ServerDm, 4);
+        assert_eq!(client.unread_conversation_count(), 1);
     }
 
     /// A lost timer update healed by the next visible message: the gateway

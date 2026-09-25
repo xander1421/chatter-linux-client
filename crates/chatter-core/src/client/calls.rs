@@ -66,8 +66,8 @@ pub struct CallParticipantSnapshot {
     pub is_local: bool,
 }
 
-/// One load of the Calls screen: the rows to render plus the missed-call
-/// count for the tab badge. Both come from the same blocking read so the
+/// One load of the Calls screen: the rows to render plus the unseen
+/// missed-call count for the tab badge. Both come from the same blocking read so the
 /// list and the badge can never disagree.
 #[derive(Clone, Debug, Default)]
 pub struct CallHistoryPage {
@@ -872,6 +872,9 @@ impl ChatterClient {
     ///
     /// Returns display-ready data — the UI renders it without re-deriving
     /// wording, durations or routing.
+    ///
+    /// Only the Calls screen loads a page, so loading one is the user seeing
+    /// their missed calls: it marks them seen and the badge clears.
     pub async fn call_history_page(
         &self,
         filter: crate::domain::call::CallHistoryFilter,
@@ -882,6 +885,9 @@ impl ChatterClient {
             let entries = repo
                 .list(filter, limit, None)
                 .map_err(|e| ClientError::Inbox(format!("call history list: {}", e)))?;
+            if let Err(e) = repo.mark_missed_seen() {
+                tracing::warn!(error = %e, "call history: mark missed seen failed");
+            }
             Ok(CallHistoryPage {
                 rows: entries.iter().map(crate::ui::CallHistoryRowData::from).collect(),
                 missed_count: repo.missed_count().unwrap_or(0) as u32,
@@ -891,8 +897,8 @@ impl ChatterClient {
         .map_err(|e| ClientError::Inbox(format!("call history join: {}", e)))?
     }
 
-    /// Number of missed calls on its own, for painting the tab badge at
-    /// startup without loading the list.
+    /// Unseen missed incoming calls on their own, for painting the tab badge
+    /// at startup without loading the list (which would mark them seen).
     pub async fn missed_call_count(&self) -> u32 {
         let repo = self.call_history_repo();
         tokio::task::spawn_blocking(move || repo.missed_count().unwrap_or(0) as u32)

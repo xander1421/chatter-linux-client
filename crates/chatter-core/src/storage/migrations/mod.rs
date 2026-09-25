@@ -70,6 +70,7 @@ mod v068_blocked_anon_peer_name;
 mod v069_peer_mailbox_device;
 mod v070_peer_device_mailboxes;
 mod v071_peer_device_asked;
+mod v072_peer_profile_keys;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -143,6 +144,7 @@ pub use v068_blocked_anon_peer_name::V068BlockedAnonPeerName;
 pub use v069_peer_mailbox_device::V069PeerMailboxDevice;
 pub use v070_peer_device_mailboxes::V070PeerDeviceMailboxes;
 pub use v071_peer_device_asked::V071PeerDeviceAsked;
+pub use v072_peer_profile_keys::V072PeerProfileKeys;
 
 /// Trait for database migrations.
 ///
@@ -341,4 +343,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V069PeerMailboxDevice)
         .register(V070PeerDeviceMailboxes)
         .register(V071PeerDeviceAsked)
+        .register(V072PeerProfileKeys)
 }

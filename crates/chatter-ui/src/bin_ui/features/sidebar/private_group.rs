@@ -300,7 +300,7 @@ pub fn private_group_rows(ui_ctx: &Arc<ChatterClient>) -> Vec<PrivateGroupListIt
                 group_id: group.id.to_string().into(),
                 name: group.name.into(),
                 member_count: ui_ctx.get_anon_group_members(&group.id).len() as i32,
-                unread_count: 0,
+                unread_count: ui_ctx.anon_group_unread_count(&group.id) as i32,
                 last_message: last_message.into(),
                 timestamp: timestamp.into(),
                 is_typing: false,

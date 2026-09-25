@@ -86,8 +86,9 @@ impl MessageGateway {
         // for honest clients, so it is refused here.
         //
         // NOTE: `is_sender_key_message` (group *content*, authenticated by the
-        // sender-key SIGNATURE, not by source_user_id) and
-        // `is_sender_key_request` are NOT this bug and are preserved below.
+        // sender-key SIGNATURE, not by source_user_id) is NOT this bug and is
+        // preserved below; the cleartext `is_sender_key_request` is refused
+        // below for the same reason as this path.
         if Self::is_sender_key_distribution(encrypted_data) {
             tracing::warn!(
                 sender_id = %sender_id,
@@ -171,12 +172,18 @@ impl MessageGateway {
                 }
             }
         } else if Self::is_sender_key_request(encrypted_data) {
-            tracing::info!(
+            // Same rule as the cleartext SKDM install above: honest clients
+            // send SenderKeyRequest only over sealed sender, where the sender
+            // certificate names the requester and membership is checked
+            // (MessageService::answer_sender_key_request). The cleartext form
+            // names the requester by server attestation alone, so it is refused.
+            tracing::warn!(
                 sender_id = %sender_id,
-                "[MSG_ROUTE] Detected sender key request"
+                "SECURITY: refusing cleartext SenderKeyRequest from server-attested sender"
             );
-            // Someone is requesting our sender key - return SKDM for sending
-            self.process_sender_key_request(encrypted_data, sender_id).await
+            Err(ServiceError::Validation(
+                "cleartext sender-key request refused (unauthenticated sender)".into(),
+            ))
         } else {
             tracing::error!(
                 sender_id = %sender_id,
@@ -187,88 +194,5 @@ impl MessageGateway {
                 "Unknown encrypted message type".into(),
             ))
         }
-    }
-
-    /// Process an incoming sender key request.
-    ///
-    /// When another member requests our sender key, we create our SKDM
-    /// and return it so the caller can send it to the requester.
-    async fn process_sender_key_request(
-        &self,
-        encrypted_data: &crate::proto::chat_v1::EncryptedData,
-        requester_id: &UserId,
-    ) -> Result<super::RouteResult, ServiceError> {
-        use crate::proto::content_v1::SenderKeyRequest;
-
-        // Check if this is a sender key request
-        if encrypted_data.associated_data != b"sender_key_request" {
-            return Err(ServiceError::Validation(
-                "Not a sender key request".into(),
-            ));
-        }
-
-        // Deserialize the SenderKeyRequest proto
-        let request = SenderKeyRequest::decode(encrypted_data.ciphertext.as_slice())
-            .map_err(|e| {
-                ServiceError::Validation(format!("Failed to decode SenderKeyRequest: {}", e))
-            })?;
-
-        let channel_id: ChannelId = request.channel_id.parse().map_err(|e| {
-            ServiceError::Validation(format!("Invalid channel_id in SenderKeyRequest: {}", e))
-        })?;
-
-        // SECURITY: only honor SKDM requests from current channel members.
-        //
-        // Without this gate, a kicked or banned user can send a
-        // `SenderKeyRequest` for the channel they were removed from to any
-        // remaining member; the remaining member would ship them a fresh
-        // SKDM, defeating the lazy rotation that runs on
-        // `ChannelMemberLeft` events. (Signal does not have a `pull-SKDM`
-        // RPC at all - SKDMs are piggy-backed on outbound group sends and
-        // the sender filters by current `DecryptedGroup` membership.)
-        match self.channel_repo.get_membership(&channel_id, requester_id) {
-            Ok(Some(_)) => {} // current member — proceed
-            Ok(None) => {
-                tracing::warn!(
-                    requester_id = %requester_id,
-                    channel_id = %channel_id,
-                    "SECURITY: dropping SenderKeyRequest from non-member"
-                );
-                return Err(ServiceError::Validation(
-                    "requester is not a current channel member".into(),
-                ));
-            }
-            Err(e) => {
-                tracing::error!(
-                    requester_id = %requester_id,
-                    channel_id = %channel_id,
-                    error = %e,
-                    "Failed to check requester membership; failing closed"
-                );
-                return Err(ServiceError::Storage(e));
-            }
-        }
-
-        tracing::info!(
-            requester_id = %requester_id,
-            channel_id = %channel_id,
-            "Received sender key request from confirmed member, creating SKDM to respond"
-        );
-
-        // Create our SKDM for this channel
-        let skdm = self.signal_service.create_sender_key(&channel_id).await?;
-
-        tracing::info!(
-            channel_id = %channel_id,
-            requester_id = %requester_id,
-            skdm_len = skdm.distribution_message.len(),
-            "Created SKDM to send to requester"
-        );
-
-        Ok(super::RouteResult::RespondWithSkdm {
-            channel_id,
-            requester_id: *requester_id,
-            skdm,
-        })
     }
 }

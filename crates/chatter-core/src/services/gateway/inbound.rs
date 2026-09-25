@@ -314,12 +314,6 @@ pub enum RouteResult {
         channel_id: ChannelId,
         sender_id: UserId,
     },
-    /// Received a sender key request — need to respond with our SKDM.
-    RespondWithSkdm {
-        channel_id: ChannelId,
-        requester_id: UserId,
-        skdm: crate::proto::content_v1::SenderKeyDistribution,
-    },
     /// Group mailbox announcement (NDSS '21 paper).
     MailboxAnnouncement {
         channel_id: ChannelId,
@@ -380,6 +374,10 @@ pub enum SealedSenderResult {
         channel_id: ChannelId,
         distribution_message: Vec<u8>,
         timestamp: u64,
+        /// The SKDM carried the sender's profile key and it was new or
+        /// rotated. Caller emits `InboxEvent::ProfileKeyReceived` so the
+        /// member's name and avatar are fetched and decrypted.
+        profile_key_changed: bool,
     },
     /// Group mailbox announcement received (NDSS '21 paper bootstrap).
     MailboxAnnouncement {

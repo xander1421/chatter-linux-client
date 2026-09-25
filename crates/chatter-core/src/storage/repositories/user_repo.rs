@@ -573,42 +573,41 @@ impl UserRepository {
     // Profile key sharing operations
     // ========================================================================
 
-    /// Get a friend's profile key for decrypting their encrypted display_name.
+    /// Get a peer's profile key for decrypting their encrypted profile
+    /// (display name, status, avatar).
     ///
-    /// Returns None if we don't have their profile key yet.
+    /// Held per peer, not per friendship (Signal keeps it on the recipient):
+    /// a channel co-member who is not a friend shares theirs too. Returns None
+    /// if we don't have their profile key yet.
     pub fn get_friend_profile_key(
         &self,
         user_id: &UserId,
         friend_id: &UserId,
     ) -> Result<Option<[u8; 32]>, StorageError> {
         let conn = self.db.connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT friend_profile_key FROM friendships WHERE user_id = ?1 AND friend_id = ?2",
-        )?;
-
-        let result: Result<Option<Vec<u8>>, _> = stmt.query_row(
+        let result: Result<Vec<u8>, _> = conn.query_row(
+            "SELECT profile_key FROM peer_profile_keys WHERE user_id = ?1 AND peer_id = ?2",
             params![user_id.to_string(), friend_id.to_string()],
             |row| row.get(0),
         );
 
         match result {
-            Ok(Some(key_bytes)) if key_bytes.len() == 32 => {
-                let mut key = [0u8; 32];
-                key.copy_from_slice(&key_bytes);
-                Ok(Some(key))
-            }
-            Ok(_) => Ok(None), // No key or wrong size
+            Ok(key_bytes) => Ok(<[u8; 32]>::try_from(key_bytes.as_slice()).ok()),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Database(e)),
         }
     }
 
-    /// Store a friend's profile key received from an E2E message.
+    /// Store a peer's profile key received from an E2E message.
     ///
-    /// This key allows us to decrypt their encrypted display_name. Returns
-    /// whether the stored key CHANGED (none before, or a different one) —
-    /// the caller's cue to re-fetch the friend's profile, which it could not
-    /// decrypt (or decrypted with a stale key) until now.
+    /// Callers pass only a key the peer delivered themselves (sealed-sender
+    /// authenticated as that peer) — the same rule as Signal's
+    /// `handleDataMessage`, which stores a message's profile key against its
+    /// sender and nobody else — so a different key is the peer's rotated one
+    /// and replaces ours. Returns whether the stored key CHANGED (none
+    /// before, or a different one) — the caller's cue to re-fetch the peer's
+    /// profile, which it could not decrypt (or decrypted with a stale key)
+    /// until now.
     pub fn set_friend_profile_key(
         &self,
         user_id: &UserId,
@@ -617,26 +616,12 @@ impl UserRepository {
     ) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
         let changed = conn.execute(
-            "UPDATE friendships SET friend_profile_key = ?1 \
-             WHERE user_id = ?2 AND friend_id = ?3 AND friend_profile_key IS NOT ?1",
-            params![key.as_slice(), user_id.to_string(), friend_id.to_string()],
+            "INSERT INTO peer_profile_keys (user_id, peer_id, profile_key) VALUES (?1, ?2, ?3) \
+             ON CONFLICT (user_id, peer_id) DO UPDATE SET profile_key = excluded.profile_key \
+             WHERE profile_key IS NOT excluded.profile_key",
+            params![user_id.to_string(), friend_id.to_string(), key.as_slice()],
         )?;
-        if changed > 0 {
-            return Ok(true);
-        }
-
-        let exists: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM friendships WHERE user_id = ?1 AND friend_id = ?2)",
-            params![user_id.to_string(), friend_id.to_string()],
-            |row| row.get(0),
-        )?;
-        if !exists {
-            return Err(StorageError::NotFound(format!(
-                "Friendship {} -> {}",
-                user_id, friend_id
-            )));
-        }
-        Ok(false)
+        Ok(changed > 0)
     }
 
     /// Check if profile sharing is enabled for a friendship.
@@ -797,10 +782,10 @@ mod tests {
         assert!(!repo.set_friend_profile_key(&me, &them, &[1; 32]).unwrap(), "same key");
         assert!(repo.set_friend_profile_key(&me, &them, &[2; 32]).unwrap(), "rotated key");
         assert_eq!(repo.get_friend_profile_key(&me, &them).unwrap(), Some([2; 32]));
-        assert!(matches!(
-            repo.set_friend_profile_key(&me, &UserId::new(), &[1; 32]),
-            Err(StorageError::NotFound(_))
-        ));
+        // A channel co-member with no friendship row still gets theirs kept.
+        let member = UserId::new();
+        assert!(repo.set_friend_profile_key(&me, &member, &[3; 32]).unwrap());
+        assert_eq!(repo.get_friend_profile_key(&me, &member).unwrap(), Some([3; 32]));
     }
 
     /// The durable read that client-side block enforcement stands on.

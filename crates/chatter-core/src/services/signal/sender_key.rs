@@ -55,6 +55,8 @@ impl SignalService {
             channel_id: channel_id.to_string(),
             distribution_message: skdm_bytes,
             timestamp: TimestampNanos::now().as_u64(),
+            // Attached per recipient by `MessageService::skdm_plaintext`.
+            profile_key: None,
         })
     }
 

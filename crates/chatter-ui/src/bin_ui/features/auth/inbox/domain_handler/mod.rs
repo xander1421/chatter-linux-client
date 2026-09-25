@@ -543,6 +543,12 @@ pub async fn handle_domain_event(
         // Events with no UI render — core handles the work, UI doesn't
         // surface anything to the user.
         DomainEvent::PushWakeup { .. } => {}
+        // A call was missed mid-session: repaint the Calls tab badge now, not
+        // at the next restart or Calls open.
+        DomainEvent::MissedCallsChanged => {
+            let missed = ui_ctx.missed_call_count().await as i32;
+            crate::run_ui!(window, |w| w.set_missed_call_count(missed));
+        }
         DomainEvent::DmSessionHealed { .. } => {}
         DomainEvent::PeerDevicesChanged { .. } => {}
         // A peer's identity key changed while we were running. If their
