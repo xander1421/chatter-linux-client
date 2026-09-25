@@ -826,6 +826,34 @@ impl SignalService {
         Ok((ciphertexts, recipient_uak))
     }
 
+    /// Devices of `recipient_id` we hold a usable session with, ascending.
+    /// Local only — no RPC. The session store doubles as our cache of a
+    /// peer's device list: every normal-mode DM send's all-devices bundle
+    /// fetch (`ensure_sessions_and_uak_all_devices`) leaves a session per
+    /// current device, which is what Shield may use without naming the peer.
+    pub async fn session_devices(&self, recipient_id: &str) -> Result<Vec<u32>, ServiceError> {
+        let ids = session_device_ids(
+            recipient_id,
+            self.key_store
+                .list_sessions_for_user(recipient_id)
+                .map_err(ServiceError::Storage)?
+                .iter()
+                .map(|(address, _)| address.as_str()),
+        );
+        let mut usable = Vec::with_capacity(ids.len());
+        for device_id in ids {
+            let Ok(device) = DeviceId::try_from(device_id) else { continue };
+            if self
+                .actor
+                .has_session(ProtocolAddress::new(recipient_id.to_string(), device))
+                .await?
+            {
+                usable.push(device_id);
+            }
+        }
+        Ok(usable)
+    }
+
     /// Encrypt for every device of `recipient_id` we already hold a usable
     /// session with — no prekey-bundle fetch, so no RPC that names the
     /// recipient. Errors when there is no such device.
@@ -836,23 +864,13 @@ impl SignalService {
         plaintext: &[u8],
     ) -> Result<HashMap<u32, Vec<u8>>, ServiceError> {
         self.refuse_pending_identity_change(recipient_id)?;
-        let device_ids = session_device_ids(
-            recipient_id,
-            self.key_store
-                .list_sessions_for_user(recipient_id)
-                .map_err(ServiceError::Storage)?
-                .iter()
-                .map(|(address, _)| address.as_str()),
-        );
+        let device_ids = self.session_devices(recipient_id).await?;
         let sender_cert = self.get_or_request_sender_certificate(auth_client).await?;
 
         let mut ciphertexts = HashMap::with_capacity(device_ids.len());
         for device_id in device_ids {
             let Ok(device) = DeviceId::try_from(device_id) else { continue };
             let address = ProtocolAddress::new(recipient_id.to_string(), device);
-            if !self.actor.has_session(address.clone()).await? {
-                continue;
-            }
             let lock = self.get_encrypt_lock(&format!("{recipient_id}:{device_id}")).await;
             let _guard = lock.lock().await;
             match self.actor.encrypt_sealed(plaintext.to_vec(), sender_cert.clone(), address).await {

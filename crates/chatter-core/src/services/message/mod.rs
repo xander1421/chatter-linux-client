@@ -107,6 +107,11 @@ pub enum MessageError {
     #[error("DM bootstrap initiated - secure channel being established")]
     BootstrapInitiated,
 
+    /// Shield mode, first contact: none of the peer's devices is cached, and
+    /// finding them takes an identified fetch Shield forbids.
+    #[error("{0} is not reachable privately yet — send them one message outside Shield first")]
+    NotReachablePrivately(UserId),
+
     /// Invalid message format or content.
     #[error("invalid message: {0}")]
     InvalidMessage(String),

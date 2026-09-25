@@ -522,9 +522,9 @@ impl MessageGateway {
                 });
             }
 
-            // Channel control content (reaction, pin, edit, typing, receipt,
-            // delete) delivered as per-device sealed sender. Caller dispatches
-            // the inner variant.
+            // Control content (reaction, pin, edit, typing, receipt, delete,
+            // and normal-mode call signaling) delivered as per-device sealed
+            // sender. Caller dispatches the inner variant.
             let is_control = matches!(
                 content_proto.content,
                 Some(content::Content::Reaction(_))
@@ -533,6 +533,9 @@ impl MessageGateway {
                     | Some(content::Content::Typing(_))
                     | Some(content::Content::Receipt(_))
                     | Some(content::Content::DeleteForMeSync(_))
+                    | Some(content::Content::CallKey(_))
+                    | Some(content::Content::CallHangup(_))
+                    | Some(content::Content::GroupCallKey(_))
             );
             if is_control {
                 tracing::info!(

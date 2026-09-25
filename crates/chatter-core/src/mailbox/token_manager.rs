@@ -514,6 +514,22 @@ impl TokenManager {
         }
     }
 
+    /// Claim a token from the pre-fetched batch, and ONLY from it.
+    ///
+    /// The one way a send spends a mailbox token. It never asks the server
+    /// for more: an authenticated `GetMailboxTokens` followed a moment later
+    /// by the anonymous open that spends its output links the two in time,
+    /// which is exactly what the blind signature exists to prevent (NDSS'21
+    /// §VI-F). The batch is refilled on its own jittered schedule, decoupled
+    /// from sends (`CoreServices::spawn_token_refill`); an empty batch fails
+    /// the send with `NoTokensAvailable`.
+    pub fn claim_prefetched_token(&self) -> Result<MailboxToken, MailboxError> {
+        self.claim_available_token()?.ok_or_else(|| {
+            tracing::warn!("TokenManager: pre-fetched token batch is empty; refusing to request-then-spend");
+            MailboxError::NoTokensAvailable
+        })
+    }
+
     /// Mark a token as used.
     ///
     /// # Arguments
@@ -537,14 +553,23 @@ impl TokenManager {
         Ok(())
     }
 
-    /// Count available (unused) tokens.
+    /// Count claimable tokens: unused, under a signing key that is still
+    /// valid — the same filter as `claim_available_token`. Counting dead
+    /// tokens would let the refill think the batch is full while every
+    /// claim comes back empty.
     pub fn available_token_count(&self) -> Result<u32, MailboxError> {
         let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
+        let now_nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as i64)
+            .unwrap_or(0);
 
         let count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM mailbox_tokens WHERE used_at IS NULL",
-                [],
+                "SELECT COUNT(*) FROM mailbox_tokens t \
+                 JOIN mailbox_server_keys k ON k.key_id = t.server_key_id \
+                 WHERE t.used_at IS NULL AND k.valid_until > ?1",
+                [now_nanos],
                 |row| row.get(0),
             )
             .map_err(|e| MailboxError::Storage(e.to_string()))?;

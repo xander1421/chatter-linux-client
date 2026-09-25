@@ -30,7 +30,7 @@ use crate::inbox::handlers::DomainEvent;
 use crate::mailbox::dm::{release_bootstrap_lock, BootstrapResponse, DmBootstrap};
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::network::grpc::{AnonymousMailboxClient, MailboxClient};
+use crate::network::grpc::AnonymousMailboxClient;
 use crate::proto::mailbox_v1::EnvelopeType;
 use crate::services::SignalService;
 use crate::storage::{Database, KeyStore, SettingsRepository};
@@ -352,11 +352,10 @@ async fn handle_bootstrap_request_async(
 
     // Create DmBootstrap and initiate
     let dm_bootstrap = DmBootstrap::new(database.clone());
-    let mut mailbox_client = MailboxClient::new(channel.clone(), auth_interceptor.clone());
     let mut anon_mailbox_client = AnonymousMailboxClient::new(channel.clone());
 
     let bootstrap_result = dm_bootstrap
-        .initiate_dm(peer_id, &mut mailbox_client, &mut anon_mailbox_client)
+        .initiate_dm(peer_id, &mut anon_mailbox_client)
         .await
         .map_err(|e| format!("Failed to initiate bootstrap: {}", e))?;
 
@@ -380,40 +379,10 @@ async fn handle_bootstrap_request_async(
         .await
         .map_err(|e| format!("Failed to encrypt bootstrap: {}", e))?;
 
-    // Get anonymous credential - request tokens if needed
-    tracing::debug!(peer = %peer_id, "BOOTSTRAP[2/4] Checking for anonymous tokens");
-    let token_manager = TokenManager::new(database.clone());
-    let token = match token_manager.claim_available_token() {
-        Ok(Some(t)) => {
-            tracing::debug!(peer = %peer_id, token_id = %t.id, "BOOTSTRAP[2/4] Claimed existing token");
-            t
-        }
-        Ok(None) => {
-            tracing::info!(peer = %peer_id, "BOOTSTRAP[2/4] No tokens available, requesting from server");
-            let mut mailbox_client = MailboxClient::new(channel.clone(), auth_interceptor.clone());
-            match token_manager.request_tokens(&mut mailbox_client, 5).await {
-                Ok(count) if count > 0 => {
-                    tracing::info!(peer = %peer_id, count, "BOOTSTRAP[2/4] Received {} tokens from server", count);
-                    token_manager
-                        .claim_available_token()
-                        .map_err(|e| format!("Failed to claim token after request: {}", e))?
-                        .ok_or_else(|| "No tokens after request".to_string())?
-                }
-                Ok(_) => {
-                    tracing::error!(peer = %peer_id, "BOOTSTRAP[2/4] FAILED - No tokens received from server");
-                    return Err("No tokens received from server".to_string());
-                }
-                Err(e) => {
-                    tracing::error!(peer = %peer_id, error = %e, "BOOTSTRAP[2/4] FAILED - Token request error");
-                    return Err(format!("Failed to request tokens: {}", e));
-                }
-            }
-        }
-        Err(e) => {
-            tracing::error!(peer = %peer_id, error = %e, "BOOTSTRAP[2/4] FAILED - Token claim error");
-            return Err(format!("Failed to claim token: {}", e));
-        }
-    };
+    // Spend a pre-fetched token; never request-then-spend (NDSS'21 §VI-F).
+    let token = TokenManager::new(database.clone())
+        .claim_prefetched_token()
+        .map_err(|e| format!("No anonymous token for the bootstrap MESSAGE: {e}"))?;
 
     // Send to peer's device inbox via anonymous client (no AuthInterceptor)
     // to avoid dual-auth rejection — GRA-436
@@ -480,9 +449,8 @@ async fn handle_bootstrap_async(
     tracing::info!(peer = %peer_id, "BOOTSTRAP[3/4] Creating DmBootstrap");
     let dm_bootstrap = DmBootstrap::new(database.clone());
 
-    // Create mailbox clients (authenticated for token requests, anonymous for mailbox creation)
-    tracing::info!(peer = %peer_id, "BOOTSTRAP[3/4] Creating mailbox clients");
-    let mut mailbox_client = MailboxClient::new(channel.clone(), auth_interceptor.clone());
+    // Anonymous mailbox client for mailbox creation (tokens come from the
+    // pre-fetched batch, never requested here)
     let mut anon_mailbox_client = AnonymousMailboxClient::new(channel.clone());
 
     // Release the bootstrap lock that was held since sending REQUEST
@@ -493,7 +461,7 @@ async fn handle_bootstrap_async(
     // Process the incoming bootstrap
     tracing::info!(peer = %peer_id, "BOOTSTRAP[3/4] Calling handle_incoming_bootstrap");
     let response = match dm_bootstrap
-        .handle_incoming_bootstrap(peer_id, ephemeral_public_key, &mut mailbox_client, &mut anon_mailbox_client)
+        .handle_incoming_bootstrap(peer_id, ephemeral_public_key, &mut anon_mailbox_client)
         .await
     {
         Ok(Some(resp)) => {

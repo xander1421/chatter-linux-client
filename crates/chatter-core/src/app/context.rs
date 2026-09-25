@@ -200,7 +200,6 @@ impl AppContext {
             if let Some(handle) = self.call_service.get().cloned() {
                 let signaling = crate::services::call_signaling::CallSignalingService::new(
                     self.core_services.message_service.clone(),
-                    self.core_services.mailbox_manager.clone(),
                     self.core_services.channel_service.clone(),
                     self.core_services.anon_dm_service.clone(),
                     self.core_services.anon_group_service.clone(),

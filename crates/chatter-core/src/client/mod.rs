@@ -834,7 +834,6 @@ impl ChatterClient {
         self.call_signaling.get_or_init(|| {
             crate::services::call_signaling::CallSignalingService::new(
                 self.messages().clone(),
-                self.mailbox_manager().clone(),
                 self.channels().clone(),
                 self.anon_dms().clone(),
                 self.anon_groups().clone(),
@@ -2408,6 +2407,9 @@ impl ChatterClient {
         // ── DM mailbox key rolling (L4 anonymity rotation) ───────────
         let h_key_rolling = self.services.spawn_key_rolling();
 
+        // ── Mailbox-token refill (jittered, decoupled from sends) ────
+        let h_token_refill = self.services.spawn_token_refill();
+
         // ── Disappearing-messages local reaper ───────────────────────
         // The local-expiry engine only matters if something drives it: this
         // bounded periodic task calls `cleanup_expired`, which HARD-deletes
@@ -2459,7 +2461,7 @@ impl ChatterClient {
 
         // ── Store handles for shutdown ───────────────────────────────
         let mut tasks = self.tasks.lock();
-        tasks.extend([h_events, h_inbox, h_skdm_retry, h_channel_stream, h_channel_messages, h_channel_bootstrap, h_dm_bootstrap, h_ai, h_sync, h_prekey, h_key_rolling, h_ephemeral_reaper]);
+        tasks.extend([h_events, h_inbox, h_skdm_retry, h_channel_stream, h_channel_messages, h_channel_bootstrap, h_dm_bootstrap, h_ai, h_sync, h_prekey, h_key_rolling, h_token_refill, h_ephemeral_reaper]);
         #[cfg(feature = "jarvis")]
         {
             tasks.push(jarvis.maintenance);

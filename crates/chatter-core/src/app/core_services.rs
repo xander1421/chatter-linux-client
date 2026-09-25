@@ -333,6 +333,51 @@ impl CoreServices {
         Ok(fetched)
     }
 
+    /// Spawn the mailbox-token refill loop.
+    ///
+    /// Sends spend only from the pre-fetched batch
+    /// (`TokenManager::claim_prefetched_token`) and never request tokens
+    /// themselves; this loop is the only thing that tops the batch up, at a
+    /// random interval, so the authenticated token request is not tied in
+    /// time to the anonymous send that spends it (NDSS'21 §VI-F).
+    pub fn spawn_token_refill(&self) -> tokio::task::JoinHandle<()> {
+        use rand::Rng;
+        use std::time::Duration;
+
+        /// Refill to this many claimable tokens…
+        const BATCH: u32 = 10;
+        /// …once fewer than this remain.
+        const LOW_WATER: u32 = 5;
+        /// Wait between checks: `BASE` plus up to `JITTER`, uniformly random.
+        const BASE_SECS: u64 = 5 * 60;
+        const JITTER_SECS: u64 = 10 * 60;
+
+        let token_manager = self.token_manager.clone();
+        let grpc_pool = self.grpc_pool.clone();
+        tokio::spawn(async move {
+            loop {
+                let wait = BASE_SECS + rand::rng().random_range(0..=JITTER_SECS);
+                tokio::time::sleep(Duration::from_secs(wait)).await;
+
+                let current = match token_manager.available_token_count() {
+                    Ok(n) => n,
+                    Err(e) => {
+                        tracing::warn!("Token refill: could not count tokens: {}", e);
+                        continue;
+                    }
+                };
+                if current >= LOW_WATER {
+                    continue;
+                }
+                let mut mailbox_client = grpc_pool.mailbox_client();
+                match token_manager.request_tokens(&mut mailbox_client, BATCH - current).await {
+                    Ok(n) => tracing::info!(fetched = n, had = current, "Token refill: batch topped up"),
+                    Err(e) => tracing::warn!("Token refill failed: {}", e),
+                }
+            }
+        })
+    }
+
     /// Decline an incoming call.
     ///
     /// Notifies the server that the call was declined without joining.

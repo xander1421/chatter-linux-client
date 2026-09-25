@@ -52,7 +52,6 @@ use crate::services::gateway::{
     build_call_hangup_content, build_group_call_key_content,
     CallHangupReason,
 };
-use crate::services::mailbox_manager::MailboxManager;
 use crate::services::message::MessageService;
 use crate::services::signal_service::SignalService;
 use crate::network::grpc::client_pool::GrpcClientPool;
@@ -87,10 +86,14 @@ pub enum CallSignalingError {
 }
 
 /// Handles call signaling (key exchange, hangup) over the Signal Protocol.
+///
+/// Every signaling message goes through `MessageService::send_friend_dm_content`,
+/// so its transport follows the mode rule for friend DMs: Shield → the mailbox,
+/// normal → sealed-sender streaming (a call needs signaling that arrives now,
+/// not at the next mailbox poll).
 #[derive(Clone)]
 pub struct CallSignalingService {
     message_service: Arc<MessageService>,
-    mailbox_manager: Arc<MailboxManager>,
     channel_service: Arc<ChannelService>,
     anon_dm_service: Arc<AnonDmService>,
     anon_group_service: Arc<AnonGroupService>,
@@ -106,7 +109,6 @@ pub struct CallSignalingService {
 impl CallSignalingService {
     pub fn new(
         message_service: Arc<MessageService>,
-        mailbox_manager: Arc<MailboxManager>,
         channel_service: Arc<ChannelService>,
         anon_dm_service: Arc<AnonDmService>,
         anon_group_service: Arc<AnonGroupService>,
@@ -115,7 +117,6 @@ impl CallSignalingService {
     ) -> Self {
         Self {
             message_service,
-            mailbox_manager,
             channel_service,
             anon_dm_service,
             anon_group_service,
@@ -167,13 +168,13 @@ impl CallSignalingService {
         let content = build_call_key_offer(call_id, ephemeral_public_key, call_type, channel_id);
         match self
             .message_service
-            .send_dm(peer_id, content, &self.mailbox_manager)
+            .send_friend_dm_content(peer_id, content)
             .await
         {
             Ok(_) => tracing::info!(peer_id = %peer_id, call_id, "Call offer sent"),
-            // First DM to this peer: the Signal session is bootstrapping. send_dm
-            // has QUEUED the offer and will deliver it once the secure channel is
-            // ready — a moment later. Not a failure; let the call proceed (caller
+            // Shield, first DM to this peer: the mailbox is bootstrapping. The
+            // offer is QUEUED and delivered once the secure channel is ready — a
+            // moment later. Not a failure; let the call proceed (caller
             // shows "calling…", callee rings when the offer lands).
             Err(crate::services::message::MessageError::BootstrapInitiated) => {
                 tracing::info!(peer_id = %peer_id, call_id, "Call offer queued during DM bootstrap — will deliver when secure channel is ready");
@@ -195,7 +196,7 @@ impl CallSignalingService {
     ) -> Result<(), CallSignalingError> {
         let content = build_call_key_answer(call_id, ephemeral_public_key);
         self.message_service
-            .send_dm(peer_id, content, &self.mailbox_manager)
+            .send_friend_dm_content(peer_id, content)
             .await?;
         tracing::info!(peer_id = %peer_id, call_id, "Call answer sent");
         Ok(())
@@ -221,7 +222,7 @@ impl CallSignalingService {
         let content = build_call_hangup_content(call_id, reason);
         match self
             .message_service
-            .send_dm(&peer_id, content, &self.mailbox_manager)
+            .send_friend_dm_content(&peer_id, content)
             .await
         {
             Ok(_) => tracing::info!(peer_id = %peer_id, call_id, "Call hangup sent"),
@@ -264,7 +265,7 @@ impl CallSignalingService {
         for peer_id in &recipients {
             let content = build_group_call_key_content(call_id, key, epoch, &channel_id_str);
             if let Err(e) = self.message_service
-                .send_dm(peer_id, content, &self.mailbox_manager)
+                .send_friend_dm_content(peer_id, content)
                 .await
             {
                 tracing::warn!(
@@ -311,7 +312,7 @@ impl CallSignalingService {
 
             let content = build_group_call_key_content(call_id, key, epoch, &channel_id_str);
             if let Err(e) = self.message_service
-                .send_dm(&member.user_id, content, &self.mailbox_manager)
+                .send_friend_dm_content(&member.user_id, content)
                 .await
             {
                 tracing::warn!(

@@ -11,10 +11,8 @@ use crate::domain::ids::{AttachmentId, ChannelId, UserId};
 use crate::mailbox::dm::{
     release_bootstrap_lock, try_acquire_bootstrap_lock, DmBootstrap,
 };
-use crate::mailbox::TokenManager;
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::network::grpc::MailboxClient;
 use crate::proto::chat_v1::SealedSenderMessage;
 use crate::services::current_user::CurrentUserProvider;
 use crate::util::time::TimestampNanos;
@@ -81,17 +79,19 @@ impl MessageService {
             MessageError::DmError("gRPC pool required for DM bootstrap".into())
         })?;
 
+        // Before a mailbox is made or a token spent: is any device reachable?
+        let devices = self.bootstrap_devices(auth_client, peer_id).await?;
+
         let dm_bootstrap = DmBootstrap::new(self.database.clone());
-        let mut mailbox_client =
-            grpc_pool.mailbox_client();
         let mut anon_mailbox_client =
             grpc_pool.anonymous_mailbox_client();
 
-        match dm_bootstrap.initiate_dm(*peer_id, &mut mailbox_client, &mut anon_mailbox_client).await {
+        match dm_bootstrap.initiate_dm(*peer_id, &mut anon_mailbox_client).await {
             Ok(bootstrap_result) => {
-                self.send_bootstrap_message(
+                self.send_bootstrap_payload(
                     auth_client,
                     peer_id,
+                    &devices,
                     &bootstrap_result.bootstrap_message,
                     grpc_pool,
                 ).await?;
@@ -183,19 +183,20 @@ impl MessageService {
     /// mailbox and send the bootstrap REQUEST, with no message queued.
     async fn prewarm_dm_session_initiator(&self, peer_id: &UserId) -> Result<(), MessageError> {
         let grpc_pool = &self.grpc_pool;
+        let mut auth_client = self.auth_client();
+        let devices = self.bootstrap_devices(&mut auth_client, peer_id).await?;
         let dm_bootstrap = DmBootstrap::new(self.database.clone());
-        let mut mailbox_client = grpc_pool.mailbox_client();
         let mut anon_mailbox_client = grpc_pool.anonymous_mailbox_client();
 
         match dm_bootstrap
-            .initiate_dm(*peer_id, &mut mailbox_client, &mut anon_mailbox_client)
+            .initiate_dm(*peer_id, &mut anon_mailbox_client)
             .await
         {
             Ok(bootstrap_result) => {
-                let mut auth_client = self.auth_client();
-                self.send_bootstrap_message(
+                self.send_bootstrap_payload(
                     &mut auth_client,
                     peer_id,
+                    &devices,
                     &bootstrap_result.bootstrap_message,
                     grpc_pool,
                 )
@@ -242,6 +243,28 @@ impl MessageService {
             return Err(MessageError::BootstrapInitiated);
         }
 
+        // Check if we already received their bootstrap (conversation state might be pending)
+        let already_pending = conversation
+            .map(|c| !c.needs_bootstrap())
+            .unwrap_or(false);
+
+        // Prompt the peer (lower UUID) to initiate. This must reach them
+        // before anything is queued: a REQUEST that cannot go out (no cached
+        // device in Shield, empty token batch) fails this send visibly instead
+        // of leaving the message queued for a bootstrap that will never come.
+        // With no pool (the post-bootstrap flush) nothing is sent: the message
+        // is re-queued and we keep waiting for the peer.
+        let request_sent = match grpc_pool {
+            Some(grpc_pool) if !already_pending => {
+                if let Err(e) = self.send_bootstrap_request(auth_client, peer_id, our_user_id, grpc_pool).await {
+                    release_bootstrap_lock(peer_id);
+                    return Err(e);
+                }
+                true
+            }
+            _ => false,
+        };
+
         // Queue the message so it will be sent once bootstrap completes
         let content_bytes = content.encode_to_vec();
         if let Err(e) = self.sesame_manager.queue_pending_message(
@@ -262,30 +285,13 @@ impl MessageService {
             );
         }
 
-        // Check if we already received their bootstrap (conversation state might be pending)
-        let already_pending = conversation
-            .map(|c| !c.needs_bootstrap())
-            .unwrap_or(false);
-
-        if already_pending {
+        // A sent REQUEST keeps the lock until the peer's bootstrap MESSAGE arrives.
+        if !request_sent {
             tracing::info!(
                 peer_id = %peer_id,
                 our_id = %our_user_id,
-                "Sesame: Bootstrap pending from peer (we're higher UUID) - message queued"
-            );
-            release_bootstrap_lock(peer_id);
-            return Err(MessageError::BootstrapInitiated);
-        }
-
-        // Not pending - send a bootstrap REQUEST to prompt peer (lower UUID) to initiate
-        if let Some(grpc_pool) = grpc_pool {
-            self.send_bootstrap_request(auth_client, peer_id, our_user_id, grpc_pool).await;
-            // DON'T release lock here - keep it held until peer's bootstrap MESSAGE arrives
-        } else {
-            tracing::info!(
-                peer_id = %peer_id,
-                our_id = %our_user_id,
-                "Sesame: No gRPC pool for bootstrap request - message queued, waiting for peer"
+                already_pending,
+                "Sesame: waiting for the peer's bootstrap (we're higher UUID) - message queued"
             );
             release_bootstrap_lock(peer_id);
         }
@@ -300,7 +306,7 @@ impl MessageService {
         peer_id: &UserId,
         our_user_id: &UserId,
         grpc_pool: &Arc<GrpcClientPool>,
-    ) {
+    ) -> Result<(), MessageError> {
         tracing::info!(
             peer_id = %peer_id,
             our_id = %our_user_id,
@@ -321,164 +327,286 @@ impl MessageService {
             padding: vec![],
         };
 
-        let request_bytes = request_content.encode_to_vec();
-
-        // Encrypt and send to peer's device inbox
-        let peer_device_id = 1u32;
-        let peer_id_str = peer_id.to_string();
-
-        match self.signal_service.encrypt_message(
-            auth_client,
-            &peer_id_str,
-            peer_device_id,
-            &request_bytes,
-        ).await {
-            Ok(sealed_ciphertext) => {
-                // Get anonymous credential for the request
-                let token_manager = self.token_manager.clone();
-                let token = self.get_or_request_token(&token_manager, peer_id, grpc_pool).await;
-
-                if let Some(token) = token {
-                    // Use anonymous client (no AuthInterceptor) to avoid
-                    // dual-auth rejection — GRA-436
-                    let mut anon_client = grpc_pool.anonymous_message_client();
-
-                    let sealed_msg = SealedSenderMessage {
-                        sealed_body: sealed_ciphertext,
-                        server_key_id: self.signal_service.get_server_key_id(),
-                        timestamp: TimestampNanos::now().as_u64(),
-                    };
-
-                    if let Err(e) = anon_client.send_with_anonymous_credential(
-                        &peer_id_str,
-                        peer_device_id,
-                        sealed_msg,
-                        &token.public_key,
-                        &token.signature,
-                        token.randomizer.as_deref(),
-                    ).await {
-                        tracing::error!(
-                            peer_id = %peer_id,
-                            error = %e,
-                            "BOOTSTRAP[1/4] FAILED to send REQUEST"
-                        );
-                    } else {
-                        tracing::info!(
-                            peer_id = %peer_id,
-                            "BOOTSTRAP[1/4] SUCCESS - REQUEST sent to peer's device inbox"
-                        );
-                    }
-                } else {
-                    tracing::error!(
-                        peer_id = %peer_id,
-                        "BOOTSTRAP[1/4] FAILED - No anonymous tokens available"
-                    );
-                }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    peer_id = %peer_id,
-                    error = %e,
-                    "Failed to encrypt bootstrap request"
-                );
-            }
-        }
+        let devices = self.bootstrap_devices(auth_client, peer_id).await?;
+        self.send_bootstrap_payload(auth_client, peer_id, &devices, &request_content.encode_to_vec(), grpc_pool)
+            .await
     }
 
-    /// Send the bootstrap message to the peer's device inbox.
-    pub(super) async fn send_bootstrap_message(
+    /// The devices of `peer_id` a bootstrap MESSAGE or REQUEST may go to, in
+    /// the order to try them.
+    ///
+    /// The Signal session store is our cache of a peer's devices: every
+    /// normal-mode DM send's all-devices bundle fetch leaves a session per
+    /// current device. Normal mode refreshes it here with that same fetch;
+    /// Shield must not name the peer in an identified RPC, so it uses only
+    /// what is cached — nothing cached is `NotReachablePrivately`, never a
+    /// fetch and never a device-1 guess.
+    pub(super) async fn bootstrap_devices(
         &self,
         auth_client: &mut AuthClient,
         peer_id: &UserId,
-        bootstrap_message: &[u8],
-        grpc_pool: &Arc<GrpcClientPool>,
-    ) -> Result<(), MessageError> {
-        let peer_device_id = 1u32;
+    ) -> Result<Vec<u32>, MessageError> {
         let peer_id_str = peer_id.to_string();
-
-        let sealed_ciphertext = self
-            .signal_service
-            .encrypt_message(auth_client, &peer_id_str, peer_device_id, bootstrap_message)
-            .await
-            .map_err(|e| MessageError::EncryptionFailed(format!("Bootstrap encrypt: {}", e)))?;
-
-        // Get anonymous credential for initial contact
-        let token_manager = self.token_manager.clone();
-
-        let credential_token = match token_manager.claim_available_token() {
-            Ok(Some(token)) => token,
-            Ok(None) => {
-                // No tokens available - request new ones from server
-                tracing::info!(peer_id = %peer_id, "No tokens available, requesting from server");
-                let mut mailbox_client = grpc_pool.mailbox_client();
-                if let Err(e) = token_manager.request_tokens(&mut mailbox_client, 5).await {
-                    tracing::error!(peer_id = %peer_id, error = %e, "Failed to request anonymous tokens");
-                    return Err(MessageError::DmError(format!("Failed to get anonymous token: {}", e)));
-                }
-
-                match token_manager.claim_available_token() {
-                    Ok(Some(t)) => t,
-                    Ok(None) => return Err(MessageError::DmError("No tokens available after request".into())),
-                    Err(e) => return Err(MessageError::DmError(format!("Failed to get token: {}", e))),
-                }
-            }
-            Err(e) => return Err(MessageError::DmError(format!("Failed to get anonymous token: {}", e))),
-        };
-
-        // Send to peer's device inbox via anonymous client (no AuthInterceptor)
-        // to avoid dual-auth rejection — GRA-436
-        let mut anon_client = grpc_pool.anonymous_message_client();
-
-        let sealed_msg = SealedSenderMessage {
-            sealed_body: sealed_ciphertext,
-            server_key_id: self.signal_service.get_server_key_id(),
-            timestamp: TimestampNanos::now().as_u64(),
-        };
-
-        anon_client
-            .send_with_anonymous_credential(
-                &peer_id_str,
-                peer_device_id,
-                sealed_msg,
-                &credential_token.public_key,
-                &credential_token.signature,
-                credential_token.randomizer.as_deref(),
-            )
-            .await
-            .map_err(|e| MessageError::DmError(format!("Failed to send bootstrap: {}", e)))?;
-
-        tracing::info!(
-            peer_id = %peer_id,
-            "DM bootstrap sent successfully - waiting for key exchange response"
-        );
-
-        Ok(())
-    }
-
-    /// Get an available token or request new ones from the server.
-    pub(super) async fn get_or_request_token(
-        &self,
-        token_manager: &TokenManager,
-        peer_id: &UserId,
-        grpc_pool: &Arc<GrpcClientPool>,
-    ) -> Option<crate::mailbox::MailboxToken> {
-        match token_manager.claim_available_token() {
-            Ok(Some(t)) => Some(t),
-            Ok(None) => {
-                tracing::info!(peer_id = %peer_id, "No tokens for bootstrap request, requesting from server");
-                let mut mailbox_client = MailboxClient::new(
-                    grpc_pool.channel(),
-                    grpc_pool.auth_clone(),
-                );
-                match token_manager.request_tokens(&mut mailbox_client, 5).await {
-                    Ok(count) if count > 0 => token_manager.claim_available_token().ok().flatten(),
-                    _ => None,
-                }
-            }
-            Err(e) => {
-                tracing::warn!(peer_id = %peer_id, error = %e, "Failed to check tokens");
-                None
+        let shield = self.shield_mode.load(std::sync::atomic::Ordering::Acquire);
+        if !shield {
+            if let Err(e) = self
+                .signal_service
+                .ensure_sessions_and_uak_all_devices(auth_client, &peer_id_str, None)
+                .await
+            {
+                tracing::warn!(peer_id = %peer_id, error = %e, "Bootstrap: device refresh failed; using cached sessions");
             }
         }
+        let mut live = Vec::new();
+        for device_id in self
+            .signal_service
+            .session_devices(&peer_id_str)
+            .await
+            .map_err(|e| MessageError::from_signal_send(e, "Bootstrap device lookup"))?
+        {
+            if !self.is_retired_device(*peer_id, device_id, 0).await {
+                live.push(device_id);
+            }
+        }
+        let devices = bootstrap_device_order(live);
+        if devices.is_empty() {
+            return Err(if shield {
+                MessageError::NotReachablePrivately(*peer_id)
+            } else {
+                MessageError::DmError(format!("no reachable device of {peer_id} for the DM bootstrap"))
+            });
+        }
+        Ok(devices)
+    }
+
+    /// Seal `payload` (bootstrap MESSAGE or REQUEST) to ONE device of
+    /// `peer_id` and deposit it under a pre-fetched anonymous token.
+    ///
+    /// One device, not all: each device that gets a bootstrap answers with
+    /// its own mailbox and the initiator keeps only the last answer (the
+    /// mailbox conversation is one-peer-device). `devices` comes from
+    /// [`Self::bootstrap_devices`], newest first; a device the server refuses
+    /// as unknown is archived and marked retired, and the next one is tried.
+    ///
+    /// The token comes from the pre-fetched batch only — requesting one here
+    /// would tie the authenticated request to this anonymous send in time
+    /// (NDSS'21 §VI-F). An empty batch fails the send.
+    pub(super) async fn send_bootstrap_payload(
+        &self,
+        auth_client: &mut AuthClient,
+        peer_id: &UserId,
+        devices: &[u32],
+        payload: &[u8],
+        grpc_pool: &Arc<GrpcClientPool>,
+    ) -> Result<(), MessageError> {
+        let peer_id_str = peer_id.to_string();
+
+        for &peer_device_id in devices {
+            let sealed_ciphertext = self
+                .signal_service
+                .encrypt_message(auth_client, &peer_id_str, peer_device_id, payload)
+                .await
+                .map_err(|e| MessageError::EncryptionFailed(format!("Bootstrap encrypt: {}", e)))?;
+
+            let credential_token = self.token_manager.claim_prefetched_token().map_err(|e| {
+                MessageError::DmError(format!("No anonymous token for the DM bootstrap ({e}); try again shortly"))
+            })?;
+
+            // Send to peer's device inbox via anonymous client (no AuthInterceptor)
+            // to avoid dual-auth rejection — GRA-436
+            let sealed_msg = SealedSenderMessage {
+                sealed_body: sealed_ciphertext,
+                server_key_id: self.signal_service.get_server_key_id(),
+                timestamp: TimestampNanos::now().as_u64(),
+            };
+
+            match grpc_pool
+                .anonymous_message_client()
+                .send_with_anonymous_credential(
+                    &peer_id_str,
+                    peer_device_id,
+                    sealed_msg,
+                    &credential_token.public_key,
+                    &credential_token.signature,
+                    credential_token.randomizer.as_deref(),
+                )
+                .await
+            {
+                Ok(_) => {
+                    tracing::info!(peer_id = %peer_id, peer_device_id, "DM bootstrap payload sent to peer's device inbox");
+                    return Ok(());
+                }
+                Err(e) if e.is_unknown_destination_device() => {
+                    tracing::info!(peer_id = %peer_id, peer_device_id, "DM bootstrap: device retired on server, trying the next");
+                    self.retired_peer_devices
+                        .lock()
+                        .insert((*peer_id, peer_device_id), std::time::Instant::now());
+                    if let Err(e) = self
+                        .signal_service
+                        .actor
+                        .archive_session_for_resend(peer_id_str.clone(), peer_device_id, None)
+                        .await
+                    {
+                        tracing::warn!(peer_id = %peer_id, peer_device_id, error = %e, "Failed to archive session for retired device");
+                    }
+                }
+                Err(e) => return Err(MessageError::DmError(format!("Failed to send bootstrap: {}", e))),
+            }
+        }
+
+        Err(if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+            MessageError::NotReachablePrivately(*peer_id)
+        } else {
+            MessageError::DmError(format!("every known device of {peer_id} is retired"))
+        })
+    }
+}
+
+/// Newest device first — the server assigns device ids as `MAX + 1`, so the
+/// lowest session is the likeliest retired install — and at most two: the
+/// pick and one fallback.
+fn bootstrap_device_order(mut devices: Vec<u32>) -> Vec<u32> {
+    devices.sort_unstable_by(|a, b| b.cmp(a));
+    devices.dedup();
+    devices.truncate(2);
+    devices
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    use libsignal_protocol::{kem, DeviceId, IdentityKeyPair, KeyPair, PreKeyBundle, ProtocolAddress};
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
+
+    use super::bootstrap_device_order;
+    use crate::client::ChatterClient;
+    use crate::domain::ids::UserId;
+    use crate::services::message::{MessageError, MessageService};
+    use crate::storage::repositories::settings_repo::keys;
+
+    #[test]
+    fn bootstrap_targets_the_newest_device_then_one_fallback() {
+        assert_eq!(bootstrap_device_order(vec![1, 6, 3]), vec![6, 3]);
+        assert_eq!(bootstrap_device_order(vec![2]), vec![2]);
+        assert!(bootstrap_device_order(vec![]).is_empty());
+    }
+
+    /// A client with a temp datastore, a local identity, and nothing behind
+    /// its server URL: any RPC fails, so an outcome other than a network
+    /// error proves none was made.
+    fn shield_client(me: UserId) -> (Arc<ChatterClient>, tempfile::TempDir) {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("http://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        let ms = client.messages();
+        ms.settings_repo.set_string(keys::CURRENT_USER_ID, &me.to_string()).unwrap();
+        ms.settings_repo.set(keys::CURRENT_DEVICE_ID, &1u32).unwrap();
+        let identity = IdentityKeyPair::generate(&mut StdRng::seed_from_u64(7));
+        ms.signal_service.key_store.set_local_identity(42, &identity.serialize()).unwrap();
+        ms.shield_mode.store(true, Ordering::Release);
+        (client, dir)
+    }
+
+    /// Cache `peer`'s `device` the way a normal-mode send does: a session.
+    /// One identity per user, shared by all its devices.
+    async fn cache_device(ms: &MessageService, peer: &UserId, device: u32, rng: &mut StdRng) {
+        let peer_identity = IdentityKeyPair::generate(&mut StdRng::seed_from_u64(peer.as_uuid().as_u128() as u64));
+        let signed = KeyPair::generate(rng);
+        let kyber = kem::KeyPair::generate(kem::KeyType::Kyber1024, rng);
+        let signed_sig = peer_identity.private_key().calculate_signature(&signed.public_key.serialize(), rng).unwrap();
+        let kyber_sig = peer_identity.private_key().calculate_signature(&kyber.public_key.serialize(), rng).unwrap();
+        let device_id = DeviceId::new(device as u8).unwrap();
+        let bundle = PreKeyBundle::new(
+            rng.random::<u32>() & 0x3fff,
+            device_id,
+            None,
+            rng.random::<u32>().into(),
+            signed.public_key,
+            signed_sig.to_vec(),
+            rng.random::<u32>().into(),
+            kyber.public_key.clone(),
+            kyber_sig.to_vec(),
+            *peer_identity.identity_key(),
+        )
+        .unwrap();
+        ms.signal_service
+            .actor
+            .establish_session(ProtocolAddress::new(peer.to_string(), device_id), bundle)
+            .await
+            .expect("session");
+    }
+
+    /// Shield, first contact, nothing cached: a clear refusal — no
+    /// identified fetch, no device-1 guess, no mailbox made, nothing queued.
+    #[tokio::test]
+    async fn shield_bootstrap_without_cached_devices_is_not_reachable_privately() {
+        // Lower UUID: we would initiate (make a mailbox, spend a token).
+        let me = UserId::from_uuid(uuid::Uuid::from_u128(1));
+        let friend = UserId::from_uuid(uuid::Uuid::max());
+        let (client, _dir) = shield_client(me);
+        let ms = client.messages();
+
+        let sent = ms.send_friend_dm_content(&friend, crate::services::build_text_content("hi", 1)).await;
+        assert!(
+            matches!(sent, Err(MessageError::NotReachablePrivately(p)) if p == friend),
+            "got {sent:?}"
+        );
+        assert!(ms.sesame_manager.drain_pending_messages(&friend).unwrap().is_empty());
+        assert!(crate::mailbox::dm::DmConversationManager::new(ms.database.clone())
+            .load_conversation(&friend)
+            .unwrap()
+            .is_none());
+    }
+
+    /// Shield uses the cached devices, newest first, skipping one the server
+    /// has refused as retired — all without a single RPC.
+    #[tokio::test]
+    async fn shield_bootstrap_targets_cached_devices_newest_first() {
+        let me = UserId::from_uuid(uuid::Uuid::from_u128(1));
+        let friend = UserId::from_uuid(uuid::Uuid::max());
+        let (client, _dir) = shield_client(me);
+        let ms = client.messages();
+        let mut rng = StdRng::seed_from_u64(0xF34);
+        for device in [1, 6, 3] {
+            cache_device(ms, &friend, device, &mut rng).await;
+        }
+
+        let mut auth = ms.auth_client();
+        assert_eq!(ms.bootstrap_devices(&mut auth, &friend).await.unwrap(), vec![6, 3]);
+
+        ms.retired_peer_devices
+            .lock()
+            .insert((friend, 6), std::time::Instant::now());
+        assert_eq!(ms.bootstrap_devices(&mut auth, &friend).await.unwrap(), vec![3, 1]);
+    }
+
+    /// A send spends only the pre-fetched batch: with it empty, the send fails
+    /// on the empty batch itself — not on a network error from a token
+    /// request made in the same call — and makes no mailbox.
+    #[tokio::test]
+    async fn shield_send_with_empty_token_batch_fails_without_requesting_tokens() {
+        let me = UserId::from_uuid(uuid::Uuid::from_u128(1));
+        let friend = UserId::from_uuid(uuid::Uuid::max());
+        let (client, _dir) = shield_client(me);
+        let ms = client.messages();
+        cache_device(ms, &friend, 2, &mut StdRng::seed_from_u64(9)).await;
+
+        let sent = ms.send_friend_dm_content(&friend, crate::services::build_text_content("hi", 1)).await;
+        match sent {
+            Err(MessageError::DmError(msg)) => assert!(msg.contains("no tokens available"), "got {msg}"),
+            other => panic!("expected the empty-batch refusal, got {other:?}"),
+        }
+        assert_eq!(ms.token_manager.available_token_count().unwrap(), 0);
+        assert!(ms.sesame_manager.drain_pending_messages(&friend).unwrap().is_empty());
     }
 }

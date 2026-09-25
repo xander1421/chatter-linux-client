@@ -312,6 +312,11 @@ impl MessageService {
             // does not, and a linked device echoing "you are typing" in a phantom
             // self-thread is noise, not a feature. Drop the self-copy entirely.
             Some(content::Content::Typing(_)) => None,
+            // Call signaling is for the peer's devices only: a self-synced
+            // offer would ring our other devices with a call from ourselves.
+            Some(content::Content::CallKey(_))
+            | Some(content::Content::CallHangup(_))
+            | Some(content::Content::GroupCallKey(_)) => None,
             // Delivery receipts are auto-acks ("I received your message"). A copy
             // on our other devices has nothing meaningful to display (delivery
             // status is a sender-side concept about the PEER's messages) and would

@@ -22,7 +22,7 @@ use crate::domain::UserId;
 use crate::error::MailboxError;
 use crate::mailbox::dm::{ConversationKey, DmConversationManager, DmMailbox, PeerMailbox};
 use crate::mailbox::{MailboxToken, TokenManager};
-use crate::network::grpc::{AnonymousMailboxClient, MailboxClient};
+use crate::network::grpc::AnonymousMailboxClient;
 use crate::proto::content_v1::{content, Content, KeyExchange};
 use crate::storage::Database;
 use crate::util::time::TimestampNanos;
@@ -158,7 +158,7 @@ impl DmBootstrap {
     /// # Arguments
     ///
     /// * `peer_id` - The user we want to DM
-    /// * `mailbox_client` - For creating the ephemeral mailbox
+    /// * `anon_mailbox_client` - For creating the ephemeral mailbox
     ///
     /// # Returns
     ///
@@ -167,13 +167,12 @@ impl DmBootstrap {
     /// # Errors
     ///
     /// - `ConversationExists` - Conversation already exists and doesn't need bootstrap
-    /// - `NoTokensAvailable` - No tokens available and couldn't request more
+    /// - `NoTokensAvailable` - The pre-fetched token batch is empty
     /// - `Network` - Failed to communicate with server
     /// - `Storage` - Failed to persist state
     pub async fn initiate_dm(
         &self,
         peer_id: UserId,
-        mailbox_client: &mut MailboxClient,
         anon_mailbox_client: &mut AnonymousMailboxClient,
     ) -> Result<BootstrapResult, MailboxError> {
         // Acquire bootstrap lock for this peer to prevent concurrent operations
@@ -190,7 +189,7 @@ impl DmBootstrap {
         }
 
         // Use a guard to ensure cleanup on all exit paths
-        let result = self.initiate_dm_inner(peer_id, mailbox_client, anon_mailbox_client).await;
+        let result = self.initiate_dm_inner(peer_id, anon_mailbox_client).await;
 
         // Release lock
         {
@@ -205,7 +204,6 @@ impl DmBootstrap {
     async fn initiate_dm_inner(
         &self,
         peer_id: UserId,
-        mailbox_client: &mut MailboxClient,
         anon_mailbox_client: &mut AnonymousMailboxClient,
     ) -> Result<BootstrapResult, MailboxError> {
         tracing::info!(peer_id = %peer_id, "DM bootstrap: step 1 - checking existing conversation");
@@ -230,8 +228,8 @@ impl DmBootstrap {
 
         tracing::info!(peer_id = %peer_id, "DM bootstrap: step 2 - ensuring token available");
 
-        // 2. Get available token or request new ones
-        let token = self.ensure_token(mailbox_client).await?;
+        // 2. Spend a pre-fetched token (never request-then-spend)
+        let token = self.token_manager.claim_prefetched_token()?;
         tracing::debug!(peer_id = %peer_id, token_id = %token.id, "DM bootstrap: got token");
 
         tracing::info!(peer_id = %peer_id, "DM bootstrap: step 3 - creating ephemeral mailbox");
@@ -292,7 +290,7 @@ impl DmBootstrap {
         let conversation_key = ConversationKey::new();
         tracing::debug!(peer_id = %peer_id, "DM bootstrap: step 5 - conversation keys generated");
 
-        // 6. Save state (token already marked used by claim_available_token in ensure_token)
+        // 6. Save state (token already marked used by claim_prefetched_token)
         self.conversation_manager
             .save_our_mailbox(&peer_id, &our_mailbox)?;
         self.conversation_manager
@@ -313,34 +311,6 @@ impl DmBootstrap {
             bootstrap_message,
             peer_id,
         })
-    }
-
-    /// Atomically claim a token, requesting more if needed.
-    ///
-    /// Uses `claim_available_token` (UPDATE ... RETURNING) so two concurrent
-    /// bootstraps can never pick up the same credential — the server rejects
-    /// repeats as `permission_denied: credential already used`.
-    async fn ensure_token(
-        &self,
-        client: &mut MailboxClient,
-    ) -> Result<MailboxToken, MailboxError> {
-        tracing::info!("DM bootstrap: claiming available token");
-        if let Some(token) = self.token_manager.claim_available_token()? {
-            tracing::info!(token_id = %token.id, "DM bootstrap: claimed existing token");
-            return Ok(token);
-        }
-
-        tracing::info!("DM bootstrap: no available token, requesting new tokens from server");
-        let count = self.token_manager.request_tokens(client, 5).await?;
-        tracing::info!(count, "DM bootstrap: requested tokens from server");
-        if count == 0 {
-            tracing::error!("DM bootstrap: no tokens received from server");
-            return Err(MailboxError::NoTokensAvailable);
-        }
-
-        self.token_manager
-            .claim_available_token()?
-            .ok_or(MailboxError::NoTokensAvailable)
     }
 
     /// Build DmMailbox from token and server response.
@@ -398,7 +368,7 @@ impl DmBootstrap {
     ///
     /// * `sender_id` - Who sent the bootstrap
     /// * `ephemeral_pk` - The 64-byte combined key (mailbox || conversation)
-    /// * `mailbox_client` - For creating our response mailbox
+    /// * `anon_mailbox_client` - For creating our response mailbox
     ///
     /// # Returns
     ///
@@ -407,14 +377,13 @@ impl DmBootstrap {
     ///
     /// # Errors
     ///
-    /// - `NoTokensAvailable` - No tokens available and couldn't request more
+    /// - `NoTokensAvailable` - The pre-fetched token batch is empty
     /// - `Network` - Failed to communicate with server
     /// - `Storage` - Failed to persist state
     pub async fn handle_incoming_bootstrap(
         &self,
         sender_id: UserId,
         ephemeral_pk: &[u8],
-        mailbox_client: &mut MailboxClient,
         anon_mailbox_client: &mut AnonymousMailboxClient,
     ) -> Result<Option<BootstrapResponse>, MailboxError> {
         // Validate 64-byte format (bootstrap vs regular key exchange)
@@ -438,7 +407,7 @@ impl DmBootstrap {
 
         // Use inner function for cleanup
         let result = self
-            .handle_incoming_bootstrap_inner(sender_id, ephemeral_pk, mailbox_client, anon_mailbox_client)
+            .handle_incoming_bootstrap_inner(sender_id, ephemeral_pk, anon_mailbox_client)
             .await;
 
         // Release lock
@@ -455,7 +424,6 @@ impl DmBootstrap {
         &self,
         sender_id: UserId,
         ephemeral_pk: &[u8],
-        mailbox_client: &mut MailboxClient,
         anon_mailbox_client: &mut AnonymousMailboxClient,
     ) -> Result<Option<BootstrapResponse>, MailboxError> {
         // Extract peer's mailbox address and conversation key
@@ -524,7 +492,7 @@ impl DmBootstrap {
             .map(|c| c.our_mailbox.is_none())
             .unwrap_or(true)
         {
-            let token = self.ensure_token(mailbox_client).await?;
+            let token = self.token_manager.claim_prefetched_token()?;
             let response = {
                 const MAX_RETRIES: u32 = 3;
                 let mut attempt = 0;

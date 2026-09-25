@@ -2095,6 +2095,62 @@ pub fn dispatch_control_content(
             }
             stats.write().messages_processed += 1;
         }
+        // Normal-mode call signaling: friend DMs (and so calls) ride sealed-
+        // sender streaming there. Same events as the mailbox path
+        // (inbox/polling/dm.rs); a friend DM's conversation id is the peer's.
+        inner @ (content::Content::CallKey(_)
+        | content::Content::CallHangup(_)
+        | content::Content::GroupCallKey(_)) => {
+            use crate::services::gateway::DmContent;
+            let parsed = MessageGateway::parse_content(Content {
+                content: Some(inner),
+                ..Default::default()
+            });
+            let event = match parsed {
+                Ok(DmContent::CallKeyOffer { call_id, ephemeral_public_key, timestamp, call_type, channel_id }) => {
+                    InboxEvent::CallKeyOfferReceived {
+                        peer_id: *sender_id,
+                        call_id,
+                        ephemeral_public_key,
+                        call_type: if call_type.is_empty() { "Voice Call".to_string() } else { call_type },
+                        channel_id: if channel_id.is_empty() { sender_id.to_string() } else { channel_id },
+                        timestamp,
+                    }
+                }
+                Ok(DmContent::CallKeyAnswer { call_id, ephemeral_public_key, timestamp }) => {
+                    InboxEvent::CallKeyAnswerReceived { peer_id: *sender_id, call_id, ephemeral_public_key, timestamp }
+                }
+                Ok(DmContent::CallHangup { call_id, reason, timestamp }) => InboxEvent::CallHangup {
+                    peer_id: *sender_id,
+                    call_id,
+                    reason: format!("{:?}", reason),
+                    timestamp,
+                },
+                Ok(DmContent::GroupCallKey { call_id, key_material, key_epoch, channel_id, timestamp }) => {
+                    let Ok(channel_id) = channel_id.parse::<ChannelId>() else {
+                        tracing::warn!(sender_id = %sender_id, "Group call key with invalid channel_id");
+                        stats.write().messages_failed += 1;
+                        return;
+                    };
+                    InboxEvent::GroupCallKeyReceived {
+                        sender_id: *sender_id,
+                        call_id,
+                        key_material,
+                        key_epoch,
+                        channel_id,
+                        timestamp,
+                    }
+                }
+                other => {
+                    let error = other.err().map(|e| e.to_string()).unwrap_or_default();
+                    tracing::warn!(sender_id = %sender_id, error = %error, "Malformed call signaling content");
+                    stats.write().messages_failed += 1;
+                    return;
+                }
+            };
+            let _ = event_tx.send(event);
+            stats.write().messages_processed += 1;
+        }
         _ => {
             tracing::debug!(
                 message_id = %message_guid,
@@ -2117,4 +2173,34 @@ fn parse_channel_reaction_author(target_author_aci: &str) -> Option<(String, Str
         }
     }
     None
+}
+
+#[cfg(test)]
+mod call_control_tests {
+    use super::*;
+
+    /// Normal mode carries call signaling over sealed-sender streaming, so the
+    /// control dispatcher must turn a CallKey offer into the same event the
+    /// mailbox path emits — with a friend DM's conversation id (the peer's)
+    /// when the offer names none.
+    #[test]
+    fn streamed_call_offer_rings_like_a_mailbox_one() {
+        let (event_tx, mut event_rx) = broadcast::channel(4);
+        let stats = Arc::new(RwLock::new(InboxStats::default()));
+        let caller = UserId::new();
+        let offer = crate::services::build_call_key_offer("call-1", [7u8; 32], "", "");
+
+        dispatch_control_content(offer.content.unwrap(), &caller, "guid", &event_tx, &stats);
+
+        match event_rx.try_recv().expect("an event") {
+            InboxEvent::CallKeyOfferReceived { peer_id, call_id, ephemeral_public_key, call_type, channel_id, .. } => {
+                assert_eq!(peer_id, caller);
+                assert_eq!(call_id, "call-1");
+                assert_eq!(ephemeral_public_key, [7u8; 32]);
+                assert_eq!(call_type, "Voice Call");
+                assert_eq!(channel_id, caller.to_string());
+            }
+            other => panic!("expected CallKeyOfferReceived, got {other:?}"),
+        }
+    }
 }

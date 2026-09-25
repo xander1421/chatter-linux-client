@@ -1047,9 +1047,10 @@ mod tests {
     }
 
     /// A friend DM's transport is Shield mode's call, made in one place.
-    /// Shield: the mailbox — with no mailbox yet the content is queued for the
-    /// bootstrap flush, and it never falls back to sealed-sender streaming.
-    /// Normal: sealed sender, and nothing touches the mailbox queue.
+    /// Shield: the mailbox — here first contact with no cached device, so the
+    /// mailbox bootstrap refuses (`NotReachablePrivately`) and it never falls
+    /// back to sealed-sender streaming. Normal: sealed sender, and nothing
+    /// touches the mailbox queue.
     #[tokio::test]
     async fn friend_dm_transport_follows_shield_mode() {
         use crate::storage::repositories::settings_repo::keys;
@@ -1057,8 +1058,8 @@ mod tests {
 
         let (client, _dir) = test_client();
         let ms = client.messages();
-        // We are the higher UUID: the Shield send queues and asks the friend
-        // to initiate, rather than creating a mailbox first.
+        // We are the higher UUID: the Shield send would ask the friend to
+        // initiate — but no device of theirs is cached yet.
         let me = UserId::from_uuid(uuid::Uuid::max());
         let friend = UserId::from_uuid(uuid::Uuid::from_u128(1));
         ms.settings_repo.set_string(keys::CURRENT_USER_ID, &me.to_string()).unwrap();
@@ -1068,10 +1069,10 @@ mod tests {
         ms.shield_mode.store(true, Ordering::Release);
         let shield = ms.send_friend_dm_content(&friend, content()).await;
         assert!(
-            matches!(shield, Err(crate::services::message::MessageError::BootstrapInitiated)),
+            matches!(shield, Err(crate::services::message::MessageError::NotReachablePrivately(_))),
             "Shield must take the mailbox, got {shield:?}"
         );
-        assert_eq!(ms.sesame_manager.drain_pending_messages(&friend).unwrap().len(), 1);
+        assert!(ms.sesame_manager.drain_pending_messages(&friend).unwrap().is_empty());
 
         ms.shield_mode.store(false, Ordering::Release);
         let normal = ms.send_friend_dm_content(&friend, content()).await;

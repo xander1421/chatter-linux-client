@@ -199,13 +199,11 @@ fn test_channel_message_storage() {
     }
 }
 
-/// The sidebar's channel rows rendered as a bare name because the row builder
-/// looked the latest message up under `ConversationType::Channel`, while a
-/// channel's messages are filed under `Channel::conversation_type()` —
-/// `AnonGroup` for an encrypted channel, and encryption is the DEFAULT
-/// (`ChannelConfig::default().require_encryption`). The message list never hit
-/// this because `features/sidebar/channel.rs` already derives the type from the
-/// channel; only the sidebar hardcoded it.
+/// A server channel's messages are filed under `ConversationType::Channel`,
+/// encrypted or not (encryption is the default,
+/// `ChannelConfig::default().require_encryption`). Filing encrypted channels
+/// under `AnonGroup` is what left channel rows without their latest message or
+/// unread badge (663c9b82) — anon groups live only in their own table.
 ///
 /// `test_channel_message_storage` above could not catch it: it reads back by
 /// message id, which is bucket-blind. This one goes through the bucketed list
@@ -218,13 +216,10 @@ fn test_channel_messages_are_listed_under_the_channels_own_conversation_type() {
 
     let channel = create_test_channel(&channel_repo, ChannelType::Public);
     let conv_type = channel.conversation_type();
-    assert_ne!(
+    assert_eq!(
         conv_type,
         ConversationType::Channel,
-        "a default channel is encrypted, so its messages are NOT filed under \
-         ConversationType::Channel — hardcoding that variant is what blanked \
-         the sidebar rows. If this default ever flips, the sidebar is fine but \
-         this test's premise moved."
+        "a server channel is a Channel, encrypted or not"
     );
 
     let msg = Message::new_text(
@@ -236,21 +231,21 @@ fn test_channel_messages_are_listed_under_the_channels_own_conversation_type() {
     );
     message_repo.insert(&msg).unwrap();
 
-    // What the sidebar row builder asks for now.
+    // What the sidebar row builder asks for.
     let found = message_repo
         .list_for_channel(&channel.id, &conv_type, None, 1)
         .unwrap();
     assert_eq!(found.len(), 1, "the channel's own bucket must hold its messages");
     assert_eq!(found[0].as_text(), Some("what the fuck9"));
 
-    // What it used to ask for. Kept as the negative control: this is the query
-    // that returned None and produced the bare row.
+    // The old rule's bucket. Kept as the negative control: nothing of a
+    // server channel may land under AnonGroup.
     let wrong_bucket = message_repo
-        .list_for_channel(&channel.id, &ConversationType::Channel, None, 1)
+        .list_for_channel(&channel.id, &ConversationType::AnonGroup, None, 1)
         .unwrap();
     assert!(
         wrong_bucket.is_empty(),
-        "hardcoding ConversationType::Channel must stay proven wrong"
+        "a server channel's messages must never be filed as AnonGroup"
     );
 }
 
