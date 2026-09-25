@@ -16,6 +16,43 @@ mod tests {
     };
     use super::super::{FriendRequestFilter, UserError, UserService};
 
+    /// F30: a peer whose only live device is 6 (device 1 retired) must still
+    /// yield the account identity key — the friend request asks for all
+    /// devices and never names one.
+    #[test]
+    fn friend_request_identity_key_from_any_device() {
+        use crate::proto::chat_v1::{
+            get_pre_key_bundle_response::Result as BundleResult, GetPreKeyBundleResponse,
+            PreKeyBundleDeviceList, SignalPreKeyBundle,
+        };
+        use super::super::friend_request_identity_key;
+
+        let ik = vec![5u8; 33];
+        let only_device_6 = GetPreKeyBundleResponse {
+            result: Some(BundleResult::Devices(PreKeyBundleDeviceList {
+                bundles: vec![SignalPreKeyBundle {
+                    device_id: 6,
+                    identity_key: ik.clone(),
+                    ..Default::default()
+                }],
+                identity_key: ik.clone(),
+            })),
+        };
+        assert_eq!(friend_request_identity_key(only_device_6).unwrap(), ik);
+
+        let none = GetPreKeyBundleResponse { result: None };
+        let err = friend_request_identity_key(none).unwrap_err();
+        assert_eq!(err.user_message(), "This user has no registered devices");
+    }
+
+    #[test]
+    fn user_message_hides_the_error_chain() {
+        use crate::error::NetworkError;
+        let e = UserError::Network(NetworkError::ServerError("failed to get prekey bundle".into()));
+        assert_eq!(e.user_message(), "Couldn't reach the server. Try again.");
+        assert!(!UserError::Network(NetworkError::PermissionDenied).user_message().contains("error"));
+    }
+
     #[test]
     fn lookup_handle_shape() {
         use super::super::is_lookup_handle;

@@ -353,7 +353,7 @@ pub(crate) fn refresh_blocked_users(
         .into_iter()
         .map(|user_id| crate::BlockedUserData {
             user_id: user_id.to_string().into(),
-            display_name: format!("User {}", &user_id.to_string()[..8]).into(),
+            display_name: ui_ctx.display_name(&user_id).into(),
             username: "Private".into(),
             blocked_at: String::new().into(),
         })

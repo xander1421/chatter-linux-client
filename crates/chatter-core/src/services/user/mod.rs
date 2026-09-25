@@ -179,6 +179,53 @@ pub enum UserError {
     Crypto(#[from] CryptoError),
 }
 
+impl UserError {
+    /// Text for a toast or status line; the `Display` chain
+    /// ("invalid input: ... server error: ...") is for logs.
+    #[must_use]
+    pub fn user_message(&self) -> String {
+        match self {
+            Self::NotLoggedIn => "You're signed out.".to_string(),
+            Self::UserNotFound(_) => "No account found.".to_string(),
+            Self::NotAuthorized | Self::Network(NetworkError::PermissionDenied) => {
+                "You can't contact this user.".to_string()
+            }
+            Self::RequiresAnonMode => "Turn on anonymous mode first.".to_string(),
+            Self::ForbiddenInAnonMode => "Not available in anonymous mode.".to_string(),
+            Self::InvalidInput(m) => {
+                let mut c = m.chars();
+                c.next()
+                    .map(|f| f.to_uppercase().chain(c).collect())
+                    .unwrap_or_default()
+            }
+            Self::Network(NetworkError::NotFound(_)) => "No account found.".to_string(),
+            Self::Network(NetworkError::RateLimited) => {
+                "Too many attempts. Try again in a minute.".to_string()
+            }
+            Self::Network(_) => "Couldn't reach the server. Try again.".to_string(),
+            Self::Storage(_) | Self::Crypto(_) => "Something went wrong. Try again.".to_string(),
+        }
+    }
+}
+
+/// The recipient's account identity key from an all-devices bundle fetch.
+fn friend_request_identity_key(
+    resp: crate::proto::chat_v1::GetPreKeyBundleResponse,
+) -> Result<Vec<u8>, UserError> {
+    use crate::proto::chat_v1::get_pre_key_bundle_response::Result as BundleResult;
+    let key = match resp.result {
+        Some(BundleResult::Devices(d)) => d.identity_key,
+        Some(BundleResult::Bundle(b)) => b.identity_key,
+        None => Vec::new(),
+    };
+    if key.is_empty() {
+        return Err(UserError::InvalidInput(
+            "this user has no registered devices".to_string(),
+        ));
+    }
+    Ok(key)
+}
+
 impl From<CurrentUserError> for UserError {
     fn from(err: CurrentUserError) -> Self {
         match err {
@@ -674,7 +721,6 @@ impl UserService {
         note: &str,
     ) -> Result<Vec<u8>, UserError> {
         use crate::crypto::ecies;
-        use crate::proto::chat_v1::get_pre_key_bundle_response::Result as BundleResult;
         use crate::storage::repositories::settings_repo::keys;
 
         let profile_key = self
@@ -683,22 +729,15 @@ impl UserService {
             .filter(|k| k.len() == 32)
             .ok_or_else(|| UserError::InvalidInput("missing profile key".to_string()))?;
 
+        // All-devices fetch: the identity key is account-wide, but a peer's
+        // live device ids are unknown here (device 1 may be a retired
+        // install), so never name one.
         let resp = self
             .grpc_pool
             .auth_client()
-            .get_pre_key_bundle(&recipient.to_string(), "1")
-            .await
-            .map_err(|e| UserError::InvalidInput(format!("prekey fetch failed: {e}")))?;
-
-        let identity_key = match resp.result {
-            Some(BundleResult::Bundle(b)) => b.identity_key,
-            Some(BundleResult::Devices(d)) => d.identity_key,
-            None => {
-                return Err(UserError::InvalidInput(
-                    "empty prekey bundle response".to_string(),
-                ))
-            }
-        };
+            .get_pre_key_bundles_all_devices(&recipient.to_string())
+            .await?;
+        let identity_key = friend_request_identity_key(resp)?;
 
         let x25519_pub = ecies::signal_identity_to_x25519(&identity_key)
             .map_err(|e| UserError::InvalidInput(format!("identity key convert failed: {e}")))?;
@@ -1102,8 +1141,14 @@ impl UserService {
             created_at: Utc::now(),
         };
 
+        // FK on users(id): a peer known only from a channel or DM has no
+        // users row, so the insert failed silently and the Blocked tab stayed
+        // empty until `sync_blocked_users` (which does this) ran on restart.
+        self.user_repo.ensure_user_exists(user_id).ok();
         if self.user_repo.update_friendship(&friendship).is_err() {
-            let _ = self.user_repo.insert_friendship(&friendship);
+            if let Err(e) = self.user_repo.insert_friendship(&friendship) {
+                tracing::warn!(error = %e, "block_user: local block row not written");
+            }
         }
 
         Ok(())
@@ -1188,7 +1233,11 @@ impl UserService {
             return profile.display_name;
         }
         if let Ok(Some(user)) = self.user_repo.get(user_id) {
-            return user.username;
+            // `ensure_user_exists` stores the id itself as a placeholder
+            // username; that is not a name, so keep resolving.
+            if !user.username.is_empty() && user.username != user_id.to_string() {
+                return user.username;
+            }
         }
         if let Ok(Some(anon_dm)) = self.anon_dm_repo.get_conversation_by_peer(user_id) {
             if let Some(name) = anon_dm.peer_display_name {

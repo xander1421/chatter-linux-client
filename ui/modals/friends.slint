@@ -902,6 +902,8 @@ export component FriendsModal inherits Rectangle {
                             viewport-height: received-list.preferred-height;
 
                             received-list := VerticalLayout {
+                                // Rows stack from the top (see friends-list).
+                                alignment: start;
                                 spacing: Spacing.xs;
 
                                 for request in root.received-requests: Rectangle {
@@ -998,6 +1000,8 @@ export component FriendsModal inherits Rectangle {
                             viewport-height: sent-list.preferred-height;
 
                             sent-list := VerticalLayout {
+                                // Rows stack from the top (see friends-list).
+                                alignment: start;
                                 spacing: Spacing.xs;
 
                                 for request in root.sent-requests: Rectangle {
@@ -1086,6 +1090,8 @@ export component FriendsModal inherits Rectangle {
                             viewport-height: private-list.preferred-height;
 
                             private-list := VerticalLayout {
+                                // Rows stack from the top (see friends-list).
+                                alignment: start;
                                 spacing: Spacing.xs;
 
                                 for request in root.private-requests: Rectangle {
@@ -1230,6 +1236,8 @@ export component FriendsModal inherits Rectangle {
                             viewport-height: group-invite-list.preferred-height;
 
                             group-invite-list := VerticalLayout {
+                                // Rows stack from the top (see friends-list).
+                                alignment: start;
                                 spacing: Spacing.xs;
 
                                 for invite in root.group-invites: Rectangle {
@@ -1364,6 +1372,8 @@ export component FriendsModal inherits Rectangle {
                             viewport-height: channel-invite-list.preferred-height;
 
                             channel-invite-list := VerticalLayout {
+                                // Rows stack from the top (see friends-list).
+                                alignment: start;
                                 spacing: Spacing.xs;
 
                                 for invite in root.channel-invites: Rectangle {
@@ -1503,6 +1513,8 @@ export component FriendsModal inherits Rectangle {
                         viewport-height: blocked-list.preferred-height;
 
                         blocked-list := VerticalLayout {
+                            // Rows stack from the top (see friends-list).
+                            alignment: start;
                             spacing: Spacing.xs;
 
                             for user in root.blocked-users: Rectangle {

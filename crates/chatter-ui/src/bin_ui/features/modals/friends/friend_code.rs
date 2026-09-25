@@ -42,7 +42,7 @@ pub(crate) fn wire_generate_friend_code(window: &MainWindow, ui_ctx: &Arc<Chatte
                 });
             }
             Err(e) => {
-                let error_msg = format!("{}", e);
+                let error_msg = e.user_message();
                 tracing::error!("Failed to generate friend code: {}", e);
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
@@ -329,8 +329,8 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<Cha
                     });
                 }
                 Err(e) => {
-                    let error_msg = format!("{}", e);
-                    tracing::error!("Failed to connect via friend code: {}", error_msg);
+                    tracing::error!("Failed to connect via friend code: {}", e);
+                    let error_msg = e.user_message();
 
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {

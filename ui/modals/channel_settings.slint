@@ -82,7 +82,8 @@ export component ChannelSettingsModal inherits Rectangle {
     // a DIFFERENT channel) already asking to leave or delete.
     property <bool> show-delete-confirm: false;
     property <bool> show-leave-confirm: false;
-    // user-id whose role picker is expanded in the member list ("" = none).
+    // user-id whose action row (role picker + Remove) is expanded in the
+    // member list ("" = none).
     property <string> role-picker-user: "";
     changed show-modal => {
         self.show-delete-confirm = false;
@@ -283,6 +284,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     color: root.active-section == "danger" ? Colors.error : Colors.text-secondary;
                                     font-size: Typography.sm;
                                     vertical-alignment: center;
+                                    wrap: word-wrap;
                                 }
                             }
                         }
@@ -321,18 +323,22 @@ export component ChannelSettingsModal inherits Rectangle {
 
                                 VerticalLayout {
                                     spacing: Spacing.xs;
+                                    horizontal-stretch: 1;
+                                    min-width: 0px;
 
                                     Text {
                                         text: root.channel-name;
                                         color: Colors.text-primary;
                                         font-size: Typography.lg;
                                         font-weight: Typography.semibold;
+                                        wrap: word-wrap;
                                     }
 
                                     Text {
                                         text: root.member-count + (root.member-count == 1 ? " member" : " members") + " • Created " + root.created-at;
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
+                                        wrap: word-wrap;
                                     }
                                 }
                             }
@@ -367,6 +373,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     text: root.channel-name;
                                     color: Colors.text-primary;
                                     font-size: Typography.base;
+                                    wrap: word-wrap;
                                 }
                             }
 
@@ -395,6 +402,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     color: root.channel-description != "" ? Colors.text-primary : Colors.text-muted;
                                     font-size: Typography.base;
                                     font-italic: root.channel-description == "";
+                                    wrap: word-wrap;
                                 }
                             }
 
@@ -458,6 +466,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 color: Colors.text-primary;
                                 font-size: Typography.lg;
                                 font-weight: Typography.semibold;
+                                wrap: word-wrap;
                             }
 
                             // Mute toggle
@@ -466,16 +475,19 @@ export component ChannelSettingsModal inherits Rectangle {
 
                                 VerticalLayout {
                                     horizontal-stretch: 1;
+                                    min-width: 0px;
 
                                     Text {
                                         text: "Mute Channel";
                                         color: Colors.text-primary;
                                         font-size: Typography.sm;
+                                        wrap: word-wrap;
                                     }
                                     Text {
                                         text: "You won't receive any notifications from this channel";
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
+                                        wrap: word-wrap;
                                     }
                                 }
 
@@ -493,16 +505,19 @@ export component ChannelSettingsModal inherits Rectangle {
 
                                 VerticalLayout {
                                     horizontal-stretch: 1;
+                                    min-width: 0px;
 
                                     Text {
                                         text: "AI assistant";
                                         color: Colors.text-primary;
                                         font-size: Typography.sm;
+                                        wrap: word-wrap;
                                     }
                                     Text {
                                         text: "Let the AI read this channel when you ask it something here. Off by default.";
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
+                                        wrap: word-wrap;
                                     }
                                 }
 
@@ -523,125 +538,141 @@ export component ChannelSettingsModal inherits Rectangle {
                                 text: "When not muted, notify me for:";
                                 color: Colors.text-secondary;
                                 font-size: Typography.sm;
+                                wrap: word-wrap;
                             }
 
                             // All messages — Neo selection card
                             Rectangle {
-                                height: 44px;
+                                min-height: 44px;
                                 background: root.notification-preference == "all" ? Colors.neo-inset-bg : transparent;
                                 border-radius: Spacing.radius-sm;
                                 border-width: root.notification-preference == "all" ? 1px : 0;
                                 border-color: Colors.glow-cyan.with-alpha(0.4);
 
-                                TouchArea {
-                                    clicked => { root.change-notification("all"); }
+                                HorizontalLayout {
+                                    padding: Spacing.sm;
+                                    spacing: Spacing.sm;
 
-                                    HorizontalLayout {
-                                        padding: Spacing.sm;
-                                        spacing: Spacing.sm;
+                                    Rectangle {
+                                        width: 20px;
+                                        height: 20px;
+                                        border-radius: 10px;
+                                        border-width: 2px;
+                                        border-color: root.notification-preference == "all" ? Colors.glow-cyan : Colors.neo-inset-shadow;
+                                        background: root.notification-preference == "all" ? Colors.glow-cyan : transparent;
+                                    }
 
-                                        Rectangle {
-                                            width: 20px;
-                                            height: 20px;
-                                            border-radius: 10px;
-                                            border-width: 2px;
-                                            border-color: root.notification-preference == "all" ? Colors.glow-cyan : Colors.neo-inset-shadow;
-                                            background: root.notification-preference == "all" ? Colors.glow-cyan : transparent;
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        min-width: 0px;
+
+                                        Text {
+                                            text: "All Messages";
+                                            color: Colors.text-primary;
+                                            font-size: Typography.sm;
+                                            wrap: word-wrap;
                                         }
-
-                                        VerticalLayout {
-                                            Text {
-                                                text: "All Messages";
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                            }
-                                            Text {
-                                                text: "Get notified for every message";
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                            }
+                                        Text {
+                                            text: "Get notified for every message";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            wrap: word-wrap;
                                         }
                                     }
+                                }
+
+                                TouchArea {
+                                    clicked => { root.change-notification("all"); }
                                 }
                             }
 
                             // Mentions only — Neo selection card
                             Rectangle {
-                                height: 44px;
+                                min-height: 44px;
                                 background: root.notification-preference == "mentions" ? Colors.neo-inset-bg : transparent;
                                 border-radius: Spacing.radius-sm;
                                 border-width: root.notification-preference == "mentions" ? 1px : 0;
                                 border-color: Colors.glow-cyan.with-alpha(0.4);
 
-                                TouchArea {
-                                    clicked => { root.change-notification("mentions"); }
+                                HorizontalLayout {
+                                    padding: Spacing.sm;
+                                    spacing: Spacing.sm;
 
-                                    HorizontalLayout {
-                                        padding: Spacing.sm;
-                                        spacing: Spacing.sm;
+                                    Rectangle {
+                                        width: 20px;
+                                        height: 20px;
+                                        border-radius: 10px;
+                                        border-width: 2px;
+                                        border-color: root.notification-preference == "mentions" ? Colors.glow-cyan : Colors.neo-inset-shadow;
+                                        background: root.notification-preference == "mentions" ? Colors.glow-cyan : transparent;
+                                    }
 
-                                        Rectangle {
-                                            width: 20px;
-                                            height: 20px;
-                                            border-radius: 10px;
-                                            border-width: 2px;
-                                            border-color: root.notification-preference == "mentions" ? Colors.glow-cyan : Colors.neo-inset-shadow;
-                                            background: root.notification-preference == "mentions" ? Colors.glow-cyan : transparent;
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        min-width: 0px;
+
+                                        Text {
+                                            text: "Mentions Only";
+                                            color: Colors.text-primary;
+                                            font-size: Typography.sm;
+                                            wrap: word-wrap;
                                         }
-
-                                        VerticalLayout {
-                                            Text {
-                                                text: "Mentions Only";
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                            }
-                                            Text {
-                                                text: "Only when someone @mentions you";
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                            }
+                                        Text {
+                                            text: "Only when someone @mentions you";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            wrap: word-wrap;
                                         }
                                     }
+                                }
+
+                                TouchArea {
+                                    clicked => { root.change-notification("mentions"); }
                                 }
                             }
 
                             // None — Neo selection card
                             Rectangle {
-                                height: 44px;
+                                min-height: 44px;
                                 background: root.notification-preference == "none" ? Colors.neo-inset-bg : transparent;
                                 border-radius: Spacing.radius-sm;
                                 border-width: root.notification-preference == "none" ? 1px : 0;
                                 border-color: Colors.glow-cyan.with-alpha(0.4);
 
-                                TouchArea {
-                                    clicked => { root.change-notification("none"); }
+                                HorizontalLayout {
+                                    padding: Spacing.sm;
+                                    spacing: Spacing.sm;
 
-                                    HorizontalLayout {
-                                        padding: Spacing.sm;
-                                        spacing: Spacing.sm;
+                                    Rectangle {
+                                        width: 20px;
+                                        height: 20px;
+                                        border-radius: 10px;
+                                        border-width: 2px;
+                                        border-color: root.notification-preference == "none" ? Colors.glow-cyan : Colors.neo-inset-shadow;
+                                        background: root.notification-preference == "none" ? Colors.glow-cyan : transparent;
+                                    }
 
-                                        Rectangle {
-                                            width: 20px;
-                                            height: 20px;
-                                            border-radius: 10px;
-                                            border-width: 2px;
-                                            border-color: root.notification-preference == "none" ? Colors.glow-cyan : Colors.neo-inset-shadow;
-                                            background: root.notification-preference == "none" ? Colors.glow-cyan : transparent;
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        min-width: 0px;
+
+                                        Text {
+                                            text: "Nothing";
+                                            color: Colors.text-primary;
+                                            font-size: Typography.sm;
+                                            wrap: word-wrap;
                                         }
-
-                                        VerticalLayout {
-                                            Text {
-                                                text: "Nothing";
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                            }
-                                            Text {
-                                                text: "Never notify (still shows unread badge)";
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                            }
+                                        Text {
+                                            text: "Never notify (still shows unread badge)";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            wrap: word-wrap;
                                         }
                                     }
+                                }
+
+                                TouchArea {
+                                    clicked => { root.change-notification("none"); }
                                 }
                             }
                         }
@@ -716,10 +747,10 @@ export component ChannelSettingsModal inherits Rectangle {
 
                             // Member list
                             for member in root.members: Rectangle {
-                                height: root.role-picker-user == member.user-id ? 96px : 52px;
+                                height: member-col.preferred-height;
                                 background: transparent;
 
-                                VerticalLayout {
+                                member-col := VerticalLayout {
                                     HorizontalLayout {
                                         height: 52px;
                                         spacing: Spacing.sm;
@@ -733,23 +764,26 @@ export component ChannelSettingsModal inherits Rectangle {
                                             fallback-text: "?";
                                         }
 
-                                        // Name and role
+                                        // Name on its own line so it gets the whole
+                                        // column; the role badge sits with the handle
+                                        // underneath instead of eating the name.
                                         VerticalLayout {
                                             horizontal-stretch: 1;
                                             min-width: 0px;
+                                            alignment: center;
 
-                                            HorizontalLayout {
+                                            Text {
+                                                text: member.display-name;
+                                                color: Colors.text-primary;
+                                                font-size: Typography.sm;
+                                                overflow: elide;
+                                            }
+
+                                            if member.role != "member" || member.username != "": HorizontalLayout {
                                                 spacing: Spacing.xs;
 
-                                                Text {
-                                                    text: member.display-name;
-                                                    color: Colors.text-primary;
-                                                    font-size: Typography.sm;
-                                                    overflow: elide;
-                                                }
-
                                                 if member.role != "member": Rectangle {
-                                                    width: role-text.width + Spacing.sm;
+                                                    width: role-text.preferred-width + Spacing.sm;
                                                     height: 18px;
                                                     background: root.role-color(member.role).with-alpha(0.15);
                                                     border-radius: Spacing.radius-sm;
@@ -764,55 +798,115 @@ export component ChannelSettingsModal inherits Rectangle {
                                                         height: 100%;
                                                     }
                                                 }
-                                            }
 
-                                            // Empty when the peer's handle is not known locally.
-                                            if member.username != "": Text {
-                                                text: "@" + member.username;
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                                overflow: elide;
-                                            }
-                                        }
-
-                                        // Actions (only if can manage and not owner). Roles are a
-                                        // server-channel concept; anon groups have no role RPC.
-                                        if root.can-manage-members && !root.is-private-group && member.role != "owner": Button {
-                                            text: "Role";
-                                            variant: "ghost";
-
-                                            clicked => {
-                                                root.role-picker-user = root.role-picker-user == member.user-id ? "" : member.user-id;
+                                                // Empty when the peer's handle is not known locally.
+                                                if member.username != "": Text {
+                                                    text: "@" + member.username;
+                                                    color: Colors.text-muted;
+                                                    font-size: Typography.xs;
+                                                    vertical-alignment: center;
+                                                    overflow: elide;
+                                                }
                                             }
                                         }
 
-                                        if root.can-manage-members && member.role != "owner": Button {
+                                        // One ⋮ instead of Role + Remove, which on a phone
+                                        // squeezed the name to "…". Tapping it expands the
+                                        // action row below. Only if can manage and not owner.
+                                        if root.can-manage-members && member.role != "owner": Rectangle {
+                                            width: 44px;
+                                            height: 44px;
+                                            border-radius: Spacing.radius-sm;
+                                            background: member-more.has-hover || root.role-picker-user == member.user-id
+                                                ? Colors.surface-hover : transparent;
+                                            accessible-role: button;
+                                            accessible-label: "Member actions";
+
+                                            // Icons.more-vertical, not U+22EE (no glyph in Inter).
+                                            Image {
+                                                source: Icons.more-vertical;
+                                                colorize: Colors.text-secondary;
+                                                width: 16px;
+                                                height: 16px;
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
+                                            }
+
+                                            member-more := TouchArea {
+                                                mouse-cursor: pointer;
+                                                clicked => {
+                                                    root.role-picker-user = root.role-picker-user == member.user-id ? "" : member.user-id;
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // Roles are a server-channel concept (anon groups have
+                                    // no role RPC), and ownership is not grantable (the
+                                    // server rejects OWNER), so the picker offers only the
+                                    // three assignable roles.
+                                    // On a phone the pane is ~230px wide (360dp); the three
+                                    // role buttons alone need ~270px, so the actions stack
+                                    // one per line there instead of running off the card.
+                                    if root.role-picker-user == member.user-id && root.narrow: VerticalLayout {
+                                        spacing: Spacing.xs;
+                                        padding: Spacing.xs;
+
+                                        if !root.is-private-group: VerticalLayout {
+                                            spacing: Spacing.xs;
+
+                                            for r in ["member", "moderator", "admin"]: Button {
+                                                text: r;
+                                                variant: r == member.role ? "primary" : "secondary";
+
+                                                clicked => {
+                                                    root.role-picker-user = "";
+                                                    if r != member.role {
+                                                        root.change-member-role(member.user-id, r);
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        Button {
                                             text: "Remove";
-                                            variant: "ghost";
+                                            variant: "danger";
 
                                             clicked => {
+                                                root.role-picker-user = "";
                                                 root.remove-member(member.user-id);
                                             }
                                         }
                                     }
 
-                                    // Ownership is not grantable (the server rejects OWNER), so
-                                    // the picker offers only the three assignable roles.
-                                    if root.role-picker-user == member.user-id: HorizontalLayout {
-                                        height: 44px;
+                                    if root.role-picker-user == member.user-id && !root.narrow: HorizontalLayout {
                                         spacing: Spacing.xs;
                                         padding: Spacing.xs;
                                         alignment: end;
 
-                                        for r in ["member", "moderator", "admin"]: Button {
-                                            text: r;
-                                            variant: r == member.role ? "primary" : "secondary";
+                                        if !root.is-private-group: HorizontalLayout {
+                                            spacing: Spacing.xs;
+
+                                            for r in ["member", "moderator", "admin"]: Button {
+                                                text: r;
+                                                variant: r == member.role ? "primary" : "secondary";
+
+                                                clicked => {
+                                                    root.role-picker-user = "";
+                                                    if r != member.role {
+                                                        root.change-member-role(member.user-id, r);
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        Button {
+                                            text: "Remove";
+                                            variant: "danger";
 
                                             clicked => {
                                                 root.role-picker-user = "";
-                                                if r != member.role {
-                                                    root.change-member-role(member.user-id, r);
-                                                }
+                                                root.remove-member(member.user-id);
                                             }
                                         }
                                     }
@@ -842,6 +936,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 text: "These actions are irreversible. Please be certain.";
                                 color: Colors.text-muted;
                                 font-size: Typography.sm;
+                                wrap: word-wrap;
                             }
 
                             Rectangle {
@@ -859,16 +954,19 @@ export component ChannelSettingsModal inherits Rectangle {
 
                                 VerticalLayout {
                                     horizontal-stretch: 1;
+                                    min-width: 0px;
 
                                     Text {
                                         text: "Leave Channel";
                                         color: Colors.text-primary;
                                         font-size: Typography.sm;
+                                        wrap: word-wrap;
                                     }
                                     Text {
                                         text: "You will lose access to this channel's messages";
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
+                                        wrap: word-wrap;
                                     }
                                 }
 
@@ -920,16 +1018,19 @@ export component ChannelSettingsModal inherits Rectangle {
 
                                 VerticalLayout {
                                     horizontal-stretch: 1;
+                                    min-width: 0px;
 
                                     Text {
                                         text: root.is-archived ? "Unarchive Channel" : "Archive Channel";
                                         color: Colors.text-primary;
                                         font-size: Typography.sm;
+                                        wrap: word-wrap;
                                     }
                                     Text {
                                         text: root.is-archived ? "Make channel active again" : "Archive to hide from active channels";
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
+                                        wrap: word-wrap;
                                     }
                                 }
 
@@ -956,17 +1057,20 @@ export component ChannelSettingsModal inherits Rectangle {
 
                                 VerticalLayout {
                                     horizontal-stretch: 1;
+                                    min-width: 0px;
 
                                     Text {
                                         text: "Delete Channel";
                                         color: Colors.error;
                                         font-size: Typography.sm;
                                         font-weight: Typography.medium;
+                                        wrap: word-wrap;
                                     }
                                     Text {
                                         text: "Permanently delete this channel and all messages";
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
+                                        wrap: word-wrap;
                                     }
                                 }
 
@@ -1018,16 +1122,21 @@ export component ChannelSettingsModal inherits Rectangle {
 
                         // Error message
                         if root.error-message != "": Rectangle {
-                            height: 40px;
+                            min-height: 40px;
                             background: Colors.error.with-alpha(0.1);
                             border-radius: Spacing.radius-sm;
 
-                            Text {
-                                text: root.error-message;
-                                color: Colors.error;
-                                font-size: Typography.sm;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
+                            VerticalLayout {
+                                padding: Spacing.sm;
+                                alignment: center;
+
+                                Text {
+                                    text: root.error-message;
+                                    color: Colors.error;
+                                    font-size: Typography.sm;
+                                    horizontal-alignment: center;
+                                    wrap: word-wrap;
+                                }
                             }
                         }
                     }
