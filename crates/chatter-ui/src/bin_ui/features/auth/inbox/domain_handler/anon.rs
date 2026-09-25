@@ -205,7 +205,11 @@ pub(super) fn handle_group_member_kicked(
     let message = ui_ctx.anon_group_system_message(
         group_id,
         kicked_by, // sender = admin who did it
-        SystemMessage::UserRemoved { by: kicked_by, removed: user_id },
+        SystemMessage::UserRemoved {
+            by: kicked_by,
+            removed: user_id,
+            removed_name: Some(ui_ctx.display_name_in(&chatter_core::domain::message::ConversationType::AnonGroup, &group_id.into(), &user_id)),
+        },
     );
     super::messaging::handle_message_received(window, ui_ctx, message);
     super::messaging::update_active_channel_member_count(window, ui_ctx, group_id.into());

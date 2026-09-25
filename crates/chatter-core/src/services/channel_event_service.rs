@@ -632,8 +632,14 @@ impl ChannelEventService {
             MemberRemoval::Kicked(by) | MemberRemoval::Banned(by) if is_self => {
                 (SystemMessage::SelfRemoved { by }, by)
             }
-            MemberRemoval::Kicked(by) => (SystemMessage::UserRemoved { by, removed: *user_id }, by),
-            MemberRemoval::Banned(by) => (SystemMessage::UserBanned { by, banned: *user_id }, by),
+            MemberRemoval::Kicked(by) => (
+                SystemMessage::UserRemoved { by, removed: *user_id, removed_name: self.known_name(user_id) },
+                by,
+            ),
+            MemberRemoval::Banned(by) => (
+                SystemMessage::UserBanned { by, banned: *user_id, banned_name: self.known_name(user_id) },
+                by,
+            ),
         };
         let message = self.create_system_message(channel_id, content, Some(subject));
 
@@ -659,6 +665,24 @@ impl ChannelEventService {
                 user_id.to_string()
             }
         }
+    }
+
+    /// A real name for `user_id` from the local stores — profile display name,
+    /// then a handle — in `UserService::get_display_name`'s order. `None` when
+    /// only the id-placeholder username is known, so the caller can word the
+    /// notice generically instead of printing a UUID.
+    fn known_name(&self, user_id: &UserId) -> Option<String> {
+        if let Ok(Some(profile)) = self.user_repo.get_profile(user_id) {
+            if !profile.display_name.is_empty() {
+                return Some(profile.display_name);
+            }
+        }
+        self.user_repo
+            .get(user_id)
+            .ok()
+            .flatten()
+            .map(|user| user.username)
+            .filter(|name| !name.is_empty() && *name != user_id.to_string())
     }
 
     /// Create a system message for the given channel.

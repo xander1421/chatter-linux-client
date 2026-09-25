@@ -153,9 +153,8 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                             )
                             .await;
 
-                            // Release the global bootstrap lock for this peer.
-                            // This lock was held by the higher UUID user when they sent the REQUEST.
-                            // Now that we've processed their MESSAGE, they can send actual messages.
+                            // Release the global bootstrap lock for this peer
+                            // (a concurrent send may hold it across its REQUEST).
                             release_bootstrap_lock(&sender_id);
                             tracing::debug!(
                                 peer = %sender_id,
@@ -296,9 +295,8 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
 
 /// Handle bootstrap REQUEST asynchronously.
 ///
-/// When higher UUID peer requests bootstrap, we (lower UUID) initiate:
-/// 1. Check if session already exists or is pending
-/// 2. If not, create our mailbox and send bootstrap message to peer
+/// When higher UUID peer requests bootstrap, we (lower UUID) send it our
+/// bootstrap MESSAGE: our live mailbox and key again, or fresh ones.
 ///
 /// Uses shared database and gRPC pool - no passphrase needed.
 async fn handle_bootstrap_request_async(
@@ -308,35 +306,12 @@ async fn handle_bootstrap_request_async(
     // The device that sent the REQUEST — the one waiting for our MESSAGE.
     peer_device_id: u32,
 ) -> Result<(), String> {
-    use crate::mailbox::dm::DmConversationManager;
     use crate::mailbox::TokenManager;
     use crate::proto::chat_v1::SealedSenderMessage;
 
-    // Check if we already have a session or pending bootstrap
-    let conversation_manager = DmConversationManager::new(database.clone());
-    let existing = conversation_manager
-        .load_conversation(&peer_id)
-        .map_err(|e| format!("Failed to load conversation: {}", e))?;
-
-    if let Some(ref conv) = existing {
-        if !conv.needs_bootstrap() {
-            tracing::info!(
-                peer = %peer_id,
-                "Bootstrap request received but session already exists - ignoring"
-            );
-            return Ok(());
-        }
-
-        // Check if bootstrap is already in progress (we have our mailbox)
-        if conv.our_mailbox.is_some() {
-            tracing::info!(
-                peer = %peer_id,
-                "Bootstrap request received but we already initiated - waiting for response"
-            );
-            return Ok(());
-        }
-    }
-
+    // No early return on state we already hold: the REQUEST means the peer
+    // has no mailbox of ours it can reach — whatever we hold. `initiate_dm`
+    // re-announces a live mailbox and key, or makes fresh ones.
     tracing::info!(
         peer = %peer_id,
         "BOOTSTRAP[2/4] Processing REQUEST - initiating as lower UUID"
@@ -454,10 +429,9 @@ async fn handle_bootstrap_async(
     // pre-fetched batch, never requested here)
     let mut anon_mailbox_client = AnonymousMailboxClient::new(channel.clone());
 
-    // Release the bootstrap lock that was held since sending REQUEST
-    // (Higher UUID holds lock while waiting for MESSAGE - now release it for processing)
+    // A concurrent send may hold the lock across its REQUEST; taking the
+    // MESSAGE over it beats `handle_incoming_bootstrap` dropping it.
     release_bootstrap_lock(&peer_id);
-    tracing::debug!(peer = %peer_id, "BOOTSTRAP[3/4] Released REQUEST lock before processing MESSAGE");
 
     // Process the incoming bootstrap
     tracing::info!(peer = %peer_id, "BOOTSTRAP[3/4] Calling handle_incoming_bootstrap");

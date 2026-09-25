@@ -13,9 +13,12 @@
 //!     SKDMs now install only over the authenticated sealed-sender path
 //!     (`services/gateway/decryption.rs`).
 //!   - Finding #3 + #6: `ConversationKey::is_established` +
-//!     `their_ephemeral_public` together act as the bootstrap idempotency
-//!     marker AND the replay guard, exactly as
-//!     `mailbox/dm/bootstrap.rs::handle_incoming_bootstrap_inner` uses them.
+//!     `their_ephemeral_public` are the bootstrap idempotency marker. Replay
+//!     and forgery are stopped below the app layer: a bootstrap is accepted
+//!     only from Double-Ratchet plaintext under the sender's pinned identity
+//!     (libsignal rejects replayed ciphertexts), so
+//!     `handle_incoming_bootstrap_inner` accepts a new ephemeral from that
+//!     authenticated peer as a re-bootstrap (F53).
 //!   - Finding #4: `EphemeralCallKey::generate` + `generate_group_call_key`
 //!     are random per draw (covered by unit tests in
 //!     `crypto/call_key_provider.rs`; not re-tested here).
@@ -140,15 +143,15 @@ fn round3_finding_2_membership_gate_drops_after_kick() {
 // #3 + #6 — bootstrap idempotency + replay-guard primitive
 // ============================================================================
 
-/// `handle_incoming_bootstrap_inner` accepts a re-delivery of the same
-/// bootstrap envelope (idempotent) but rejects a different ephemeral against
-/// an established conversation.
+/// `handle_incoming_bootstrap_inner` treats a re-delivery of the same
+/// ephemeral as idempotent; a different ephemeral from the authenticated peer
+/// is a re-bootstrap that replaces the conversation secret.
 ///
-/// At the data-layer the guard is two checks against `ConversationKey`:
+/// Both rely on two `ConversationKey` properties:
 ///   1. `is_established()` returns true once the shared secret is derived,
-///   2. `their_ephemeral_public` matches the redelivered ephemeral.
+///   2. `their_ephemeral_public` records the ephemeral it was derived from.
 ///
-/// These tests pin those two properties so the gate logic can rely on them.
+/// These tests pin those two properties.
 #[test]
 fn round3_finding_3_6_unestablished_key_accepts_first_bootstrap() {
     let mut key = ConversationKey::new();

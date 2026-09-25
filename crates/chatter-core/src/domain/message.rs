@@ -566,9 +566,12 @@ pub enum SystemMessage {
     ChannelCreated,
     ChannelRenamed { old_name: String, new_name: String },
     UserAdded { by: UserId, added: UserId },
-    UserRemoved { by: UserId, removed: UserId },
-    /// Rendered with the moderator as sender: "{by} banned a member".
-    UserBanned { by: UserId, banned: UserId },
+    /// Rendered with the moderator as sender: "{by} removed {removed_name}".
+    /// The name is snapshotted when the event lands, while the member is still
+    /// in the local stores; `None` (unknown) reads "removed a member".
+    UserRemoved { by: UserId, removed: UserId, removed_name: Option<String> },
+    /// Rendered with the moderator as sender: "{by} banned {banned_name}".
+    UserBanned { by: UserId, banned: UserId, banned_name: Option<String> },
     /// WE were kicked or banned; rendered with the moderator as sender, so it
     /// reads "{by} removed you" (Signal's wording for both).
     SelfRemoved { by: UserId },
@@ -620,8 +623,12 @@ impl SystemMessage {
                 format!("renamed the channel from \"{}\" to \"{}\"", old_name, new_name)
             }
             Self::UserAdded { .. } => "added a member".to_string(),
-            Self::UserRemoved { .. } => "removed a member".to_string(),
-            Self::UserBanned { .. } => "banned a member".to_string(),
+            Self::UserRemoved { removed_name, .. } => {
+                format!("removed {}", removed_name.as_deref().unwrap_or("a member"))
+            }
+            Self::UserBanned { banned_name, .. } => {
+                format!("banned {}", banned_name.as_deref().unwrap_or("a member"))
+            }
             Self::SelfRemoved { .. } => "removed you".to_string(),
             // Rendered as "{sender_name} {description}", so this reads
             // "Alice sent a message that couldn't be delivered. ...".
@@ -1027,6 +1034,16 @@ mod tests {
         };
         assert!(rename_msg.description().contains("old"));
         assert!(rename_msg.description().contains("new"));
+
+        let removed = |removed_name: Option<&str>| SystemMessage::UserRemoved {
+            by: user_id,
+            removed: UserId::new(),
+            removed_name: removed_name.map(str::to_string),
+        };
+        assert_eq!(removed(Some("Bob Tester")).description(), "removed Bob Tester");
+        assert_eq!(removed(None).description(), "removed a member");
+        let banned = SystemMessage::UserBanned { by: user_id, banned: UserId::new(), banned_name: None };
+        assert_eq!(banned.description(), "banned a member");
     }
 
     #[test]

@@ -153,6 +153,7 @@ impl DmBootstrap {
     /// Initiate a DM with a peer.
     ///
     /// Creates our mailbox, generates conversation keys, prepares bootstrap message.
+    /// When our mailbox is still live, re-announces it and its key instead.
     /// Caller is responsible for sending the message via sealed sender.
     ///
     /// # Arguments
@@ -166,7 +167,7 @@ impl DmBootstrap {
     ///
     /// # Errors
     ///
-    /// - `ConversationExists` - Conversation already exists and doesn't need bootstrap
+    /// - `ConversationExists` - A bootstrap with this peer is already in progress
     /// - `NoTokensAvailable` - The pre-fetched token batch is empty
     /// - `Network` - Failed to communicate with server
     /// - `Storage` - Failed to persist state
@@ -219,8 +220,21 @@ impl DmBootstrap {
                 has_shared_secret = conv.conversation_key.as_ref().map(|k| k.shared_secret.is_some()).unwrap_or(false),
                 "DM bootstrap: existing conversation found"
             );
-            if !conv.needs_bootstrap() {
-                return Err(MailboxError::ConversationExists);
+            // Our mailbox is live but the peer cannot reach us (no or an
+            // expired peer mailbox — or they asked, with a REQUEST): announce
+            // the SAME mailbox and key again. No token, no new mailbox, and a
+            // peer that already holds this key takes it as an idempotent
+            // re-delivery, so repeating it is safe while a RESPONSE is due.
+            if let (false, Some(mailbox), Some(key)) =
+                (conv.needs_bootstrap(), &conv.our_mailbox, &conv.conversation_key)
+            {
+                tracing::info!(peer_id = %peer_id, "DM bootstrap: re-announcing our live mailbox");
+                return Ok(BootstrapResult {
+                    our_mailbox: mailbox.clone(),
+                    our_ephemeral_public: key.our_ephemeral_public,
+                    bootstrap_message: self.build_bootstrap_message(mailbox, key, &peer_id)?,
+                    peer_id,
+                });
             }
         } else {
             tracing::debug!(peer_id = %peer_id, "DM bootstrap: no existing conversation");
@@ -437,47 +451,20 @@ impl DmBootstrap {
         // Check if we already have a conversation
         let existing = self.conversation_manager.load_conversation(&sender_id)?;
 
-        // SECURITY: gate re-bootstrap of an established conversation.
-        //
-        // Without this check, any envelope that decrypts via the established
-        // sealed-sender path would silently overwrite the existing
-        // `shared_secret` and `their_ephemeral_public`. That breaks two
-        // properties at once:
-        //   1. Replay protection (#6): a captured (or server-replayed)
-        //      bootstrap can be re-applied repeatedly, pinning the session
-        //      to whatever ephemeral the attacker recorded.
-        //   2. Re-key gating (#3): libsignal's `process_prekey_bundle`
-        //      gates session replacement on `is_trusted_identity`; chatter
-        //      had no equivalent identity-key trust gate at this layer.
-        //
-        // Idempotent re-delivery of the SAME bootstrap (same peer ephemeral)
-        // is benign — we no-op and return the existing mailbox response.
-        // A DIFFERENT ephemeral against an established conversation is
-        // rejected; legitimate rotation (peer device reset etc.) requires
-        // an out-of-band conversation reset by the user.
-        if let Some(ex_key) = existing.as_ref().and_then(|c| c.conversation_key.as_ref())
-        {
-            if ex_key.is_established() {
-                if ex_key.their_ephemeral_public == Some(peer_conversation_pk) {
-                    tracing::debug!(
-                        peer_id = %sender_id,
-                        "DM bootstrap: idempotent re-delivery of established session — no-op"
-                    );
-                    let our_mailbox = existing.as_ref().and_then(|c| c.our_mailbox.clone());
-                    return Ok(our_mailbox.map(|mailbox| BootstrapResponse {
-                        our_mailbox_public_key: mailbox.public_key,
-                        our_ephemeral_public: ex_key.our_ephemeral_public,
-                        peer_mailbox_public_key: peer_mailbox_pk,
-                        peer_id: sender_id,
-                    }));
-                }
-                tracing::warn!(
-                    peer_id = %sender_id,
-                    "SECURITY: dropping bootstrap with new ephemeral against established conversation"
-                );
-                return Err(MailboxError::ConversationExists);
-            }
-        }
+        // SECURITY: `sender_id` is authenticated, and this bootstrap is fresh,
+        // before it gets here. Every `KeyExchangeReceived` is emitted only from
+        // Double-Ratchet plaintext (`services/gateway/decryption.rs`): a sealed
+        // envelope's sender certificate is validated against the trust root
+        // and its inner message decrypted under that sender's address, whose
+        // session or PreKey identity must equal the account's pinned identity
+        // key (`crypto/signal/store.rs::is_trusted_identity`); libsignal
+        // refuses a replayed ciphertext as a duplicate. So a new ephemeral here
+        // is the pinned peer re-bootstrapping — typically because its own
+        // mailbox expired, which it knows and we cannot (`expires_at` is not on
+        // the wire). Like a new PreKey session from a trusted identity, it
+        // replaces the peer mailbox and conversation secret; message history
+        // is stored elsewhere and untouched. Anyone else's bootstrap lands on
+        // their own `sender_id` conversation, never on this one.
 
         // Save peer's mailbox address, owned by the device that sent this
         // bootstrap: it made the mailbox and is the only one polling it.
@@ -490,12 +477,8 @@ impl DmBootstrap {
         self.conversation_manager
             .save_peer_mailbox(&sender_id, &peer_mailbox)?;
 
-        // If we don't have our own mailbox, create one
-        let our_mailbox = if existing
-            .as_ref()
-            .map(|c| c.our_mailbox.is_none())
-            .unwrap_or(true)
-        {
+        // If we don't have a live mailbox of our own, create one
+        let our_mailbox = if existing.as_ref().map_or(true, |c| c.needs_bootstrap()) {
             let token = self.token_manager.claim_prefetched_token()?;
             let response = {
                 const MAX_RETRIES: u32 = 3;

@@ -1772,7 +1772,10 @@ export component App inherits Rectangle {
                 // Must match MobileBottomNav's own `occupied-height` — the dock
                 // floats with a gap under it, so reserving only the bar height
                 // would let the last row slide beneath the glass.
-                height: Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom;
+                // Plus the return-to-call bar stacked on it (its 44px height +
+                // gap), which shows whenever a call runs on this screen.
+                height: Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom
+                    + (root.active-call-visible ? 44px + Spacing.sm : 0px);
             }
         } // end VerticalLayout (banner + chat area)
 
@@ -3005,7 +3008,7 @@ export component App inherits Rectangle {
         // Position above the composer buttons (right side). Lift with the
         // IME so the picker doesn't get hidden behind the keyboard.
         x: root.width - self.width - Spacing.md;
-        y: root.height - self.height - 80px - root.safe-area-bottom;
+        y: parent.height - self.height - 80px;
 
         emoji-selected(emoji) => {
             // Stays open: the composer picker is for composing, and closing
@@ -3044,7 +3047,7 @@ export component App inherits Rectangle {
 
         // Position above the composer buttons (right side). Lift with IME.
         x: root.width - self.width - Spacing.md;
-        y: root.height - self.height - 80px - root.safe-area-bottom;
+        y: parent.height - self.height - 80px;
 
         gif-selected(id, url) => {
             root.composer-gif-picker-visible = false;
@@ -3066,15 +3069,19 @@ export component App inherits Rectangle {
     // ========== Return-to-call bar ==========
     // The call view is docked in the conversation pane, so anywhere else — the
     // chat list, Contacts, any modal — nothing said a call was running. Declared
-    // after the modals so it sits above them; floats over the bottom tab bar.
+    // after the modals so it sits above them; sits just above the bottom tab
+    // bar, whose spacer in the main column also reserves this bar's height.
+    // Positioned against `parent` (the inset content layer), like the tab bar:
+    // `root.height` counted both system insets a second time and dropped the
+    // bar under the tabs.
     if root.active-call-visible && (root.active-modal != "none"
         || (root.compact-layout && !root.mobile-show-chat)): ReturnToCallBar {
         call-data: root.active-call-data;
-        width: min(420px, root.width - 2 * Spacing.lg);
-        x: (root.width - self.width) / 2;
-        y: root.height - self.height - Spacing.sm - (root.bottom-nav-visible
+        width: min(420px, parent.width - 2 * Spacing.lg);
+        x: (parent.width - self.width) / 2;
+        y: parent.height - self.height - Spacing.sm - (root.bottom-nav-visible
             ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom
-            : root.safe-area-bottom + Spacing.lg);
+            : Spacing.lg);
         clicked => {
             root.active-modal = "none";
             root.mobile-show-chat = true;
@@ -3105,12 +3112,11 @@ export component App inherits Rectangle {
         x: bottom-anchored
             ? (root.width - self.width) / 2
             : root.width - self.width - Spacing.md;
-        // Clear of the composer and of the bottom safe area. Same offset the gif
-        // picker above uses, so the two never disagree about where "above the
-        // composer" is.
+        // Clear of the composer. `parent` is the inset content layer (like the
+        // return-to-call bar above), so the system insets are already excluded.
         y: bottom-anchored
-            ? root.height - self.height - 80px - root.safe-area-bottom
-            : Spacing.lg + root.safe-area-top;
+            ? parent.height - self.height - 80px
+            : Spacing.lg;
 
         dismissed => {
             root.toast-visible = false;

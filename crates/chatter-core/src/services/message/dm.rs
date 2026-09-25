@@ -87,7 +87,6 @@ impl MessageService {
                 grpc_pool,
                 attachment_ids,
                 channel_id,
-                conversation.as_ref(),
             ).await;
         }
 
