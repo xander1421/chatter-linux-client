@@ -16,7 +16,6 @@ pub mod saved_message;
 pub mod draft;
 pub mod ephemeral;
 pub mod mention;
-pub mod embed;
 pub mod anon_primitives;
 pub mod anon_group;
 pub mod anon_dm;
@@ -61,7 +60,6 @@ pub use draft::{Draft, DraftKey};
 pub use ephemeral::{EphemeralMessage, EphemeralState, MessageTTL};
 pub use saved_message::{SavedContent, SavedMessage};
 pub use mention::{Mention, MentionExtractor, MentionSuggestion, MentionType};
-pub use embed::{EmbedType, GitHubEmbed, LinkEmbed, LinkPreview, TwitterEmbed, YouTubeEmbed};
 pub use anon_primitives::{AnonId, AnonMailbox, AnonMessageId, AnonRateLimitEntry};
 pub use anon_group::{
     AnonGroup, AnonGroupId, AnonGroupMailbox, AnonGroupMember, AnonGroupPending,

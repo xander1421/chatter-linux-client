@@ -2,59 +2,11 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, SharedString};
 
 use chatter_core::client::ChatterClient;
 
-use crate::{MainWindow, UserSearchResult};
-
-/// Wire the friends-modal user search (F-UI-3).
-///
-/// Previously a dead wire: `friends-search-users` was emitted with NO Rust
-/// handler and `friends-search-results` was never populated. Now each keystroke
-/// runs `ChatterClient::search_users` (exact `nickname.discriminator` lookup —
-/// the only privacy-preserving discovery, matching the invite-member search) and
-/// populates the bound results list.
-pub(crate) fn wire_search_users(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let weak_window = window.as_weak();
-    let ui_ctx = ui_ctx.clone();
-
-    window.on_friends_search_users(move |query: SharedString| {
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx.clone();
-        let query = query.to_string();
-        let has_query = !query.trim().is_empty();
-
-        // Show loading immediately for a real query; resolve off the UI thread.
-        let weak_loading = weak.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak_loading.upgrade() {
-                w.set_friends_search_loading(has_query);
-            }
-        });
-
-        tokio::spawn(async move {
-            let hits = ui_ctx.search_users(&query).await.unwrap_or_default();
-            let rows: Vec<UserSearchResult> = hits
-                .into_iter()
-                .map(|h| UserSearchResult {
-                    user_id: h.user_id.to_string().into(),
-                    display_name: h.display_name.into(),
-                    username: h.username.into(),
-                    is_friend: h.is_friend,
-                    request_pending: false,
-                })
-                .collect();
-
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    w.set_friends_search_results(ModelRc::new(VecModel::from(rows)));
-                    w.set_friends_search_loading(false);
-                }
-            });
-        });
-    });
-}
+use crate::MainWindow;
 
 pub(crate) fn wire_view_profile(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();

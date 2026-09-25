@@ -304,11 +304,25 @@ impl CoreServices {
         }
     }
 
-    /// Pre-fetch anonymous tokens for sealed sender messaging.
+    /// Pre-fetch anonymous tokens for sealed sender messaging, and the
+    /// call-room pool.
     ///
     /// Ensures tokens are available before the first SKDM distribution.
-    /// Returns the number of tokens fetched, or 0 if already sufficient.
+    /// Returns the number of mailbox tokens fetched, or 0 if already sufficient.
     pub async fn prefetch_tokens(&self, target_count: u32) -> Result<u32, crate::error::MailboxError> {
+        // A call claims only from the call-room pool, so fill it at login too
+        // or the first anonymous call waits for the refill loop.
+        let calls = TokenPool::CallRoom;
+        let have = calls.count(&self.token_manager)?;
+        calls
+            .top_up(
+                &self.token_manager,
+                &mut self.grpc_pool.mailbox_client(),
+                have,
+                crate::mailbox::DEFAULT_CALL_ROOM_TOKEN_REQUEST_COUNT,
+            )
+            .await;
+
         let current = self.token_manager.available_token_count()?;
         if current >= target_count {
             tracing::debug!(
@@ -333,64 +347,71 @@ impl CoreServices {
         Ok(fetched)
     }
 
-    /// Spawn the mailbox-token refill loop.
+    /// Spawn the token refill loop and the parked-send retry loop.
     ///
-    /// Sends spend only from the pre-fetched batch
-    /// (`TokenManager::claim_prefetched_token`) and never request tokens
-    /// themselves; this loop is the only thing that tops the batch up, at a
+    /// Sends and calls spend only from the pre-fetched pools
+    /// (`TokenManager::claim_prefetched_token`,
+    /// `claim_prefetched_call_room_token`) and never request tokens
+    /// themselves; this loop is the only thing that tops the pools up, at a
     /// random interval, so the authenticated token request is not tied in
     /// time to the anonymous send that spends it (NDSS'21 §VI-F).
+    ///
+    /// Anon-group posts parked because the batch ran dry are retried by a
+    /// second loop on its own independent jitter, for the same reason: a
+    /// retry right after a refill would spend the fresh tokens next to the
+    /// request that fetched them. Aborting the returned handle stops both.
     pub fn spawn_token_refill(&self) -> tokio::task::JoinHandle<()> {
-        use rand::Rng;
-        use std::time::Duration;
+        use crate::mailbox::{DEFAULT_CALL_ROOM_TOKEN_REQUEST_COUNT, MIN_CALL_ROOM_TOKEN_THRESHOLD};
 
         /// Refill to this many claimable tokens…
         ///
         /// Sized for the largest burst a send makes: an anon-group post
         /// spends one token per member it has no session with yet (first
         /// contact), so a fresh join of an N-member group spends N at once.
-        // ponytail: fixed batch; a first post to more than BATCH new members
-        // fails for the overflow until the next refill. Size to the group
-        // roster if that bites. Server daily budget is 48 + 2/conversation.
+        /// Members past the batch are parked and retried below.
+        // ponytail: fixed batch; size to the group roster if the parked
+        // backlog bites. Server daily budget is 48 + 2/conversation.
         const BATCH: u32 = 20;
         /// …once fewer than this remain.
         const LOW_WATER: u32 = 10;
-        /// Wait between checks: `BASE` plus up to `JITTER`, uniformly random.
-        const BASE_SECS: u64 = 5 * 60;
-        const JITTER_SECS: u64 = 10 * 60;
 
         let token_manager = self.token_manager.clone();
         let grpc_pool = self.grpc_pool.clone();
-        tokio::spawn(async move {
+        let refill = async move {
             loop {
-                let wait = BASE_SECS + rand::rng().random_range(0..=JITTER_SECS);
-                tokio::time::sleep(Duration::from_secs(wait)).await;
-
-                let current = match token_manager.available_token_count() {
-                    Ok(n) => n,
-                    Err(e) => {
-                        tracing::warn!("Token refill: could not count tokens: {}", e);
-                        continue;
-                    }
-                };
-                if current >= LOW_WATER {
-                    continue;
-                }
-                // The server grants at most 10 per request, so top up in rounds.
-                let mut mailbox_client = grpc_pool.mailbox_client();
-                let mut have = current;
-                while have < BATCH {
-                    match token_manager.request_tokens(&mut mailbox_client, BATCH - have).await {
-                        Ok(0) => break,
-                        Ok(n) => have += n,
-                        Err(e) => {
-                            tracing::warn!("Token refill failed: {}", e);
-                            break;
+                jittered_sleep().await;
+                let mut client = grpc_pool.mailbox_client();
+                for pool in [TokenPool::Mailbox, TokenPool::CallRoom] {
+                    let (target, low_water) = match pool {
+                        TokenPool::Mailbox => (BATCH, LOW_WATER),
+                        TokenPool::CallRoom => {
+                            (DEFAULT_CALL_ROOM_TOKEN_REQUEST_COUNT, MIN_CALL_ROOM_TOKEN_THRESHOLD)
                         }
+                    };
+                    match pool.count(&token_manager) {
+                        Ok(current) if current < low_water => {
+                            let now = pool.top_up(&token_manager, &mut client, current, target).await;
+                            tracing::info!(?pool, had = current, now, "Token refill: pool topped up");
+                        }
+                        Ok(_) => {}
+                        Err(e) => tracing::warn!(?pool, "Token refill: could not count tokens: {}", e),
                     }
                 }
-                tracing::info!(had = current, now = have, "Token refill: batch topped up");
             }
+        };
+
+        let anon_group_service = self.anon_group_service.clone();
+        let retry_parked = async move {
+            loop {
+                jittered_sleep().await;
+                if let Err(e) = anon_group_service.retry_parked_sends().await {
+                    tracing::warn!("Parked anon-group send retry failed: {}", e);
+                }
+            }
+        };
+
+        tokio::spawn(async move {
+            tokio::join!(refill, retry_parked);
         })
     }
 
@@ -721,4 +742,55 @@ impl CoreServices {
         }
     }
 
+}
+
+/// Wait `BASE` plus up to `JITTER`, uniformly random.
+async fn jittered_sleep() {
+    use rand::Rng;
+    const BASE_SECS: u64 = 5 * 60;
+    const JITTER_SECS: u64 = 10 * 60;
+    let wait = BASE_SECS + rand::rng().random_range(0..=JITTER_SECS);
+    tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+}
+
+/// The two blind-signed token pools, one server budget.
+#[derive(Clone, Copy, Debug)]
+enum TokenPool {
+    Mailbox,
+    CallRoom,
+}
+
+impl TokenPool {
+    fn count(self, tm: &TokenManager) -> Result<u32, crate::error::MailboxError> {
+        match self {
+            Self::Mailbox => tm.available_token_count(),
+            Self::CallRoom => tm.available_call_room_token_count(),
+        }
+    }
+
+    /// Top the pool up from `have` to `target` in rounds (the server grants
+    /// at most 10 per request). Returns the claimable count reached.
+    async fn top_up(
+        self,
+        tm: &TokenManager,
+        client: &mut crate::network::grpc::MailboxClient,
+        mut have: u32,
+        target: u32,
+    ) -> u32 {
+        while have < target {
+            let got = match self {
+                Self::Mailbox => tm.request_tokens(client, target - have).await,
+                Self::CallRoom => tm.request_call_room_tokens(client, target - have).await,
+            };
+            match got {
+                Ok(0) => break,
+                Ok(n) => have += n,
+                Err(e) => {
+                    tracing::warn!(pool = ?self, "Token refill failed: {}", e);
+                    break;
+                }
+            }
+        }
+        have
+    }
 }

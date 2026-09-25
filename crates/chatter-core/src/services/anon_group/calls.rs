@@ -18,40 +18,6 @@ use crate::util::time::TimestampNanos;
 use super::{AnonGroupError, AnonGroupService};
 
 impl AnonGroupService {
-    /// Get an available call room token from the token manager.
-    pub fn get_available_call_room_token(
-        &self,
-    ) -> Result<Option<CallRoomToken>, AnonGroupError> {
-        self.token_manager
-            .get_available_call_room_token()
-            .map_err(|e| {
-                AnonGroupError::CryptoError(format!("Failed to get call room token: {}", e))
-            })
-    }
-
-    /// Mark a call room token as used.
-    pub fn mark_call_room_token_used(&self, token_id: &str) -> Result<(), AnonGroupError> {
-        self.token_manager
-            .mark_call_room_token_used(token_id)
-            .map_err(|e| {
-                AnonGroupError::CryptoError(format!("Failed to mark token as used: {}", e))
-            })
-    }
-
-    /// Request new call room tokens from the server.
-    pub async fn request_call_room_tokens(&self, count: u32) -> Result<u32, AnonGroupError> {
-        if !self.grpc_pool.is_connected() {
-            return Err(AnonGroupError::CryptoError("No gRPC connection available".to_string()));
-        }
-        let mut client = self.grpc_pool.mailbox_client();
-        self.token_manager
-            .request_call_room_tokens(&mut client, count)
-            .await
-            .map_err(|e| {
-                AnonGroupError::CryptoError(format!("Failed to request tokens: {}", e))
-            })
-    }
-
     /// Initiate an anonymous call in a private group.
     ///
     /// Creates a call room and sends the offer to all group members.

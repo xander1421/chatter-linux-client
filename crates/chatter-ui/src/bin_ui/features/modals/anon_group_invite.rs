@@ -65,7 +65,7 @@ fn refresh_group_invites_ui(weak: &Weak<MainWindow>) {
             let inviter_name = inv
                 .inviter_display_name
                 .clone()
-                .unwrap_or_else(|| format!("User {}", &inv.inviter_id.to_string()[..8]));
+                .unwrap_or_else(|| chatter_core::services::user::friend_display_name_placeholder(&inv.inviter_id));
             GroupInviteSendData {
                 group_id: inv.group_id.to_string(),
                 group_name: inv.group_name.clone(),

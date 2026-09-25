@@ -261,7 +261,15 @@ impl AnonGroupService {
             padding: Self::generate_padding(160),
         };
 
+        // A user's post is parked per member when that member's send fails,
+        // and retried by `retry_parked_sends`: a first post spends one
+        // pre-fetched token per member without a session, so a post to more
+        // new members than the batch holds fails for the overflow until the
+        // next refill. Call signaling is not parked — a late ring is worse
+        // than none.
+        let parkable = undelivered_post(&content).is_some();
         let mut sent_count = 0;
+        let mut parked_count = 0;
         // Fan out to each member's anonymous mailbox
         for member in &members {
             if member.user_id == current_user {
@@ -274,13 +282,23 @@ impl AnonGroupService {
                 .expect("get_members_with_mailbox guarantees mailbox_pk");
 
             // Send to member's anonymous group mailbox (not DM)
-            if let Err(e) = self
+            match self
                 .send_to_anon_mailbox(&member.user_id, &mailbox_pk, content.clone())
                 .await
             {
-                tracing::warn!("Failed to send to member {}: {}", member.user_id, e);
-            } else {
-                sent_count += 1;
+                Ok(()) => sent_count += 1,
+                Err(e) if parkable => {
+                    tracing::info!("Send to member {} failed ({}); parked for retry", member.user_id, e);
+                    match self.anon_group_repo.enqueue_pending_message(
+                        group_id,
+                        &member.user_id,
+                        &content.encode_to_vec(),
+                    ) {
+                        Ok(()) => parked_count += 1,
+                        Err(e) => tracing::warn!("Failed to park send to member {}: {}", member.user_id, e),
+                    }
+                }
+                Err(e) => tracing::warn!("Failed to send to member {}: {}", member.user_id, e),
             }
         }
 
@@ -311,9 +329,10 @@ impl AnonGroupService {
         }
 
         tracing::debug!(
-            "Sent message to group {} ({} members, {} queued for pending joiners)",
+            "Sent message to group {} ({} members, {} parked, {} queued for pending joiners)",
             group_id,
             sent_count,
+            parked_count,
             queued_count,
         );
         Ok(())
@@ -324,7 +343,11 @@ impl AnonGroupService {
     ///
     /// Each row is re-decoded into a `Content` proto and delivered via
     /// `send_to_anon_mailbox`. Rows are deleted on success, left in place on
-    /// failure for retry on the next JoinAck or subsequent drain.
+    /// failure for retry on the next JoinAck or `retry_parked_sends`. A row
+    /// that fails `MAX_PARKED_ATTEMPTS` times is given up and, if it was a
+    /// user's post, reported in the chat as `SystemMessage::Undelivered`. A
+    /// failure because the token batch is empty is not the member's fault
+    /// and does not count.
     pub(crate) async fn drain_pending_messages(
         &self,
         group_id: &AnonGroupId,
@@ -348,7 +371,7 @@ impl AnonGroupService {
             "Draining pending anon group messages after JoinAck"
         );
 
-        for (row_id, blob) in pending {
+        for (row_id, blob, attempts) in pending {
             let content = match Content::decode(blob.as_slice()) {
                 Ok(c) => c,
                 Err(e) => {
@@ -364,7 +387,7 @@ impl AnonGroupService {
             };
 
             match self
-                .send_to_anon_mailbox(recipient_user_id, recipient_mailbox_pk, content)
+                .send_to_anon_mailbox(recipient_user_id, recipient_mailbox_pk, content.clone())
                 .await
             {
                 Ok(()) => {
@@ -377,21 +400,65 @@ impl AnonGroupService {
                     }
                 }
                 Err(e) => {
+                    // Stop draining on first failure so messages stay in order.
+                    if self.token_manager.available_token_count().unwrap_or(0) == 0 {
+                        tracing::info!(row_id, "Pending anon group message waits for the token refill");
+                        break;
+                    }
+                    if attempts + 1 < MAX_PARKED_ATTEMPTS {
+                        tracing::warn!(
+                            row_id,
+                            recipient = %recipient_user_id,
+                            error = %e,
+                            "Failed to drain pending anon group message; leaving for retry"
+                        );
+                        let _ = self
+                            .anon_group_repo
+                            .increment_pending_message_attempts(row_id);
+                        break;
+                    }
                     tracing::warn!(
                         row_id,
                         recipient = %recipient_user_id,
                         error = %e,
-                        "Failed to drain pending anon group message; leaving for retry"
+                        "Giving up on pending anon group message"
                     );
-                    let _ = self
-                        .anon_group_repo
-                        .increment_pending_message_attempts(row_id);
-                    // Stop draining on first failure so messages stay in order.
+                    self.anon_group_repo.delete_pending_message(row_id)?;
+                    if let Some(undelivered) = undelivered_post(&content) {
+                        self.store_system_message(
+                            group_id,
+                            Some(*recipient_user_id),
+                            undelivered,
+                            TimestampNanos::now().as_u64(),
+                        )?;
+                    }
                     break;
                 }
             }
         }
 
+        Ok(())
+    }
+
+    /// Retry every parked send to a member whose mailbox is known.
+    ///
+    /// Driven by its own jittered loop (`CoreServices::spawn_token_refill`),
+    /// not by the refill itself, so the anonymous sends that spend the new
+    /// tokens are not adjacent in time to the authenticated request that
+    /// fetched them (NDSS'21 §VI-F). Stops early when the batch is empty.
+    pub async fn retry_parked_sends(&self) -> Result<(), AnonGroupError> {
+        for group in self.anon_group_repo.list_active_groups()? {
+            for member in self.anon_group_repo.get_members_with_mailbox(&group.id)? {
+                if self.token_manager.available_token_count().unwrap_or(0) == 0 {
+                    return Ok(());
+                }
+                let mailbox_pk = member
+                    .mailbox_pk
+                    .expect("get_members_with_mailbox guarantees mailbox_pk");
+                self.drain_pending_messages(&group.id, &member.user_id, &mailbox_pk)
+                    .await?;
+            }
+        }
         Ok(())
     }
 
@@ -461,5 +528,68 @@ impl AnonGroupService {
             sent_count
         );
         Ok(())
+    }
+}
+
+/// Failed attempts after which a parked send is given up.
+const MAX_PARKED_ATTEMPTS: u32 = 5;
+
+/// The `Undelivered` notice for a parked `Content`, if it was a user's post.
+fn undelivered_post(content: &Content) -> Option<crate::domain::message::SystemMessage> {
+    let Some(content_v1::content::Content::AnonGroupMessage(m)) = &content.content else {
+        return None;
+    };
+    let Some(content_v1::content::Content::DataMessage(dm)) =
+        m.inner_content.as_deref().and_then(|c| c.content.as_ref())
+    else {
+        return None;
+    };
+    let preview = if dm.body.is_empty() && !dm.attachments.is_empty() {
+        "📎 Attachment".to_string()
+    } else {
+        crate::domain::message::truncate_preview_text(&dm.body, 40)
+    };
+    Some(crate::domain::message::SystemMessage::Undelivered { sent_at: dm.timestamp, preview })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::message::SystemMessage;
+    use crate::proto::content_v1::AnonGroupMessage;
+
+    fn wrap(inner: Content) -> Content {
+        Content {
+            content: Some(content_v1::content::Content::AnonGroupMessage(Box::new(
+                AnonGroupMessage { group_id: vec![0; 16], inner_content: Some(Box::new(inner)) },
+            ))),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn only_a_users_post_is_parked_and_reported() {
+        let long = "x".repeat(100);
+        match undelivered_post(&wrap(build_text_content(&long, 42))) {
+            Some(SystemMessage::Undelivered { sent_at, preview }) => {
+                assert_eq!(sent_at, 42);
+                assert_eq!(preview.chars().count(), 40);
+                assert!(preview.ends_with("..."));
+            }
+            other => panic!("expected Undelivered, got {other:?}"),
+        }
+
+        let attachment_only = build_data_message_content("", vec![Default::default()], 7);
+        assert!(matches!(
+            undelivered_post(&wrap(attachment_only)),
+            Some(SystemMessage::Undelivered { preview, .. }) if preview == "📎 Attachment"
+        ));
+
+        // Call signaling is never parked: a late ring is worse than none.
+        let hangup = Content {
+            content: Some(content_v1::content::Content::AnonCallHangup(Default::default())),
+            ..Default::default()
+        };
+        assert!(undelivered_post(&wrap(hangup)).is_none());
     }
 }

@@ -287,7 +287,7 @@ fn spawn_request_stream(
                     // Use sender_display_name from the init message
                     // Do NOT use user_service - these are strangers
                     let sender_name = if sender_display_name.is_empty() {
-                        format!("User {}", &sender_id.to_string()[..8])
+                        chatter_core::services::user::friend_display_name_placeholder(&sender_id)
                     } else {
                         sender_display_name.clone()
                     };

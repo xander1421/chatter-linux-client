@@ -19,7 +19,6 @@ export component SealedSenderIntroModal inherits Rectangle {
     in-out property <bool> allow-from-anyone: false;
 
     callback confirmed();
-    callback allow-from-anyone-changed(bool);
 
     opacity: root.show-modal ? 1 : 0;
     visible: root.show-modal;
@@ -113,7 +112,6 @@ export component SealedSenderIntroModal inherits Rectangle {
                         mouse-cursor: pointer;
                         clicked => {
                             root.allow-from-anyone = !root.allow-from-anyone;
-                            root.allow-from-anyone-changed(root.allow-from-anyone);
                         }
                     }
                 }
@@ -128,7 +126,6 @@ export component SealedSenderIntroModal inherits Rectangle {
                     mouse-cursor: pointer;
                     clicked => {
                         root.allow-from-anyone = !root.allow-from-anyone;
-                        root.allow-from-anyone-changed(root.allow-from-anyone);
                     }
                 }
             }

@@ -352,54 +352,6 @@ fn settings_delete_account_is_wired_behind_confirmation() {
 }
 
 // ============================================================================
-// F-UI-3 (RESOLVED): friends-modal user search is no longer a dead wire.
-//
-//  L1 (DYNAMIC): `on_friends_search_users` is now a registered handler — invoking
-//      the generated callback runs the REAL production handler (from
-//      wire_friends_modal) without panicking. Before, the callback fired into the
-//      void (no `.on_friends_search_users`). Offline (no server) the lookup yields
-//      nothing; we assert the WIRE runs, not a server result.
-//  L2 (STATIC): the handler reaches `ChatterClient::search_users` and populates the
-//      bound `friends-search-results` model. The real taken-vs-unknown effect is
-//      proven end-to-end by validated.rs::v31.
-// ============================================================================
-#[test]
-fn friends_search_users_is_wired_to_core() {
-    no_keyring();
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let _guard = rt.enter();
-    let tmp = tempfile::tempdir().unwrap();
-    testing::init_no_event_loop();
-    let client = chatter_core::client::ChatterClient::builder()
-        .data_dir(tmp.path().to_string_lossy().to_string())
-        .build()
-        .expect("offline ChatterClient::build");
-    let w = MainWindow::new().expect("MainWindow::new");
-
-    // Register the REAL friends-modal handlers, then fire the search callback.
-    chatter_ui::bin_ui::features::modals::wire_friends_modal(&w, &client);
-    // Must not panic: the callback is wired to a Rust handler (dead wire otherwise).
-    w.invoke_friends_search_users("someone.4242".into());
-
-    // ---- L2 static: handler reaches core + populates the results model -------
-    let src = include_str!("../src/bin_ui/features/modals/friends/friends_list.rs");
-    assert!(
-        src.contains("on_friends_search_users"),
-        "friends_list.rs must register the search handler"
-    );
-    let idx = src.find("on_friends_search_users").unwrap();
-    let after = &src[idx..];
-    assert!(
-        after.contains(".search_users("),
-        "the search handler must call ChatterClient::search_users (dead wire otherwise)"
-    );
-    assert!(
-        after.contains("set_friends_search_results"),
-        "the search handler must populate the bound friends-search-results model"
-    );
-}
-
-// ============================================================================
 // F-UI-1 (RESOLVED for mute): the channel-settings MUTE toggle now persists.
 //
 //  L1 (DYNAMIC): `on_channel_settings_toggle_mute` runs the real handler without
@@ -1309,7 +1261,7 @@ fn public_channels_do_not_claim_end_to_end_encryption() {
     let binding = &binding[..binding.find(';').expect("privacy-line binding terminated")];
 
     assert!(
-        binding.contains("channel-type == \"public\""),
+        binding.contains("root.conversation-kind == ConversationKind.channel && !root.private-channel"),
         "the privacy line does not branch on a public channel, so a plaintext \
          public channel is labelled end-to-end encrypted: {binding}"
     );
@@ -1322,7 +1274,7 @@ fn public_channels_do_not_claim_end_to_end_encryption() {
         .expect("public-broadcast binding present");
     let broadcast = &broadcast[..broadcast.find(';').expect("public-broadcast terminated")];
     assert!(
-        broadcast.contains("channel-type == \"public\""),
+        broadcast.contains("root.conversation-kind == ConversationKind.channel && !root.private-channel"),
         "public-broadcast does not include public channels, so the lock icon \
          contradicts the privacy text: {broadcast}"
     );
@@ -2237,7 +2189,7 @@ fn pin_conversation_reaches_core_from_the_sidebar_menu() {
         "the channel row must carry its pin state into the menu"
     );
     assert!(
-        dms.contains("root.dm-context-menu-requested(item.channel-id, item.is-pinned, x, y)"),
+        dms.contains("root.dm-context-menu-requested(item.channel-id, item.is-anon, item.is-pinned, x, y)"),
         "the DM row must carry its pin state into the menu"
     );
 }
@@ -2958,8 +2910,8 @@ fn the_identity_change_bar_is_wired_and_not_dismissable() {
 
     let layout = include_str!("../../../ui/chat/chat_layout.slint");
     assert!(
-        layout.contains(r#"if root.identity-change-visible && root.channel-type == "dm": IdentityChangeBar"#),
-        "the bar must render inside the conversation, gated on channel-type so a \
+        layout.contains(r#"&& root.conversation-kind == ConversationKind.server-dm: IdentityChangeBar"#),
+        "the bar must render inside the conversation, gated on conversation-kind so a \
          prompt cannot survive a switch into a channel, group or mesh room"
     );
     // The whole four-hop chain, because a break at any hop leaves a button that

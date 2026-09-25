@@ -436,25 +436,6 @@ impl ChatterClient {
         self.jarvis().summarize_conversation(context).await
     }
 
-    pub fn jarvis_get_entity_knowledge(
-        &self,
-        entity_name: &str,
-    ) -> Result<crate::domain::jarvis::EntityKnowledge, crate::services::jarvis::JarvisError> {
-        self.jarvis().get_entity_knowledge(entity_name)
-    }
-
-    pub async fn jarvis_observe_message(
-        &self,
-        context: &crate::domain::jarvis::JarvisContext,
-        message: &str,
-        author_id: Option<&crate::domain::ids::UserId>,
-        message_id: Option<&str>,
-    ) -> Result<(), crate::services::jarvis::JarvisError> {
-        self.jarvis()
-            .observe_message(context, message, author_id, message_id)
-            .await
-    }
-
 }
 
 /// `(statement, leaves_device)` for the AI channel on `silo`.

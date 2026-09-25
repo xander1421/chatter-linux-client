@@ -53,7 +53,7 @@ pub(crate) fn wire_accept_private_request(window: &MainWindow, ui_ctx: &Arc<Chat
                     let peer_id = dm.peer_id;
                     // Use stored display name, not user_service (strangers aren't in the database)
                     let peer_name = dm.peer_display_name.clone()
-                        .unwrap_or_else(|| format!("User {}", &peer_id.to_string()[..8]));
+                        .unwrap_or_else(|| chatter_core::services::user::friend_display_name_placeholder(&peer_id));
                     let dm_id = dm.id;
 
                     tracing::info!(
@@ -238,7 +238,7 @@ async fn refresh_private_requests(
 
     for dm in requests {
         let peer_name = dm.peer_display_name.clone()
-            .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
+            .unwrap_or_else(|| chatter_core::services::user::friend_display_name_placeholder(&dm.peer_id));
         let conv_id_str = dm.id.to_string();
 
         private_requests.push(FriendRequestSendData {

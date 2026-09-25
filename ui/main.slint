@@ -1,7 +1,7 @@
 // Chatter Linux Client - Main UI
 // Root component for the application
 
-import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, CallHistoryRow, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem, SharedContentItem, SharedTab } from "app.slint";
+import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, CallHistoryRow, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem, SharedContentItem, SharedTab } from "app.slint";
 import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 import { AiIntegrationGlobal } from "ai/ai_global.slint";
 import { TextFormat } from "chat/message_composer.slint";
@@ -14,7 +14,7 @@ import { ConversationKind } from "chat/conversation_kind.slint";
 import { VirtualKeyboard } from "components/modal_container.slint";
 
 // Re-export all types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem, SharedContentItem, SharedTab }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem, SharedContentItem, SharedTab }
 export { JarvisGlobal }
 // Server-side AI integration flags. FEAT-5: the create-channel "AI assistant"
 // template is off unless the `ai-channel-template` Cargo feature is built.
@@ -208,15 +208,9 @@ export component MainWindow inherits Window {
     in property <int> code-preview-line-count <=> app.code-preview-line-count;
     in property <image> code-preview-image <=> app.code-preview-image;
     in property <string> code-preview-plain-text <=> app.code-preview-plain-text;
-    in property <bool> code-preview-has-selection <=> app.code-preview-has-selection;
-    in property <string> code-preview-selected-text <=> app.code-preview-selected-text;
     callback close-code-preview <=> app.close-code-preview;
     callback copy-code <=> app.copy-code;
-    callback copy-code-selection <=> app.copy-code-selection;
     callback open-code-external <=> app.open-code-external;
-    callback code-preview-pointer-down <=> app.code-preview-pointer-down;
-    callback code-preview-pointer-move <=> app.code-preview-pointer-move;
-    callback code-preview-pointer-up <=> app.code-preview-pointer-up;
 
     // ========== PDF preview state ==========
     in-out property <bool> pdf-preview-visible <=> app.pdf-preview-visible;
@@ -430,9 +424,6 @@ export component MainWindow inherits Window {
     // Friends modal properties (comprehensive)
     in-out property <string> friends-modal-tab <=> app.friends-modal-tab;
     in property <[FriendData]> friends-list <=> app.friends-list;
-    in-out property <string> friends-search-query <=> app.friends-search-query;
-    in property <[UserSearchResult]> friends-search-results <=> app.friends-search-results;
-    in property <bool> friends-search-loading <=> app.friends-search-loading;
     in-out property <string> friends-requests-sub-tab <=> app.friends-requests-sub-tab;
     in property <[FriendRequestData]> friends-received-requests <=> app.friends-received-requests;
     in property <[FriendRequestData]> friends-sent-requests <=> app.friends-sent-requests;
@@ -728,8 +719,6 @@ export component MainWindow inherits Window {
     callback friends-view-profile <=> app.friends-view-profile;
     callback friends-start-dm <=> app.friends-start-dm;
     callback friends-remove-friend <=> app.friends-remove-friend;
-    callback friends-search-users <=> app.friends-search-users;
-    callback friends-send-request <=> app.friends-send-request;
     callback friends-accept-request <=> app.friends-accept-request;
     callback friends-decline-request <=> app.friends-decline-request;
     callback friends-cancel-request <=> app.friends-cancel-request;

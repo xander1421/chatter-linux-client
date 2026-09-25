@@ -88,7 +88,6 @@ use crate::services::gateway::outgoing::{
 #[cfg(feature = "jarvis")]
 use crate::services::jarvis::JarvisService;
 use crate::services::ai::LocalAIService;
-use crate::services::mailbox_manager::MailboxManager;
 use crate::services::message::MessageService;
 use crate::services::pin_service::PinService;
 use crate::services::session_service::{SessionError, SessionService};
@@ -721,7 +720,6 @@ impl ChatterClient {
     ) -> Result<String, crate::services::mesh::MeshError> {
         self.mesh().send_file(path)
     }
-    crate::service_accessor!(mailbox_manager, MailboxManager, mailbox_manager);
     crate::service_accessor!(local_ai, LocalAIService, local_ai_service);
     crate::service_accessor!(
         http_local_ai,
@@ -837,8 +835,6 @@ impl ChatterClient {
                 self.channels().clone(),
                 self.anon_dms().clone(),
                 self.anon_groups().clone(),
-                self.signal().clone(),
-                self.services.grpc_pool.clone(),
             )
         })
     }
@@ -1375,15 +1371,6 @@ impl ChatterClient {
             .set_string_setting(crate::storage::repositories::settings_repo::keys::PRESENCE_MODE, mode)
     }
 
-    /// Toggle the "send sealed-sender messages unrestricted" privacy setting.
-    pub fn set_sealed_sender_unrestricted(
-        &self,
-        unrestricted: bool,
-    ) -> Result<(), crate::services::session_service::SessionError> {
-        self.sessions()
-            .set_bool_setting("privacy.sealed_sender_unrestricted", unrestricted)
-    }
-
     /// Read the sealed-sender RECEIVING policy from the SERVER
     /// (users.unrestricted_unidentified_access). This is a receiving policy:
     /// `false` (default) = contacts-only (only holders of your UAK may reach
@@ -1460,35 +1447,6 @@ impl ChatterClient {
             }
         }
         Ok(())
-    }
-
-    // ── Mailbox / DM bootstrapping façade ────────────────────────────────
-
-    /// Ensure mailbox manager initialized and token pool has capacity.
-    pub async fn ensure_mailbox_ready(
-        &self,
-        min_tokens: usize,
-    ) -> Result<(), crate::services::mailbox_manager::MailboxError> {
-        let mm = self.mailbox_manager();
-        if let Err(e) = mm.initialize().await {
-            tracing::warn!(error = %e, "mailbox_manager initialize failed (may be already initialized)");
-        }
-        if mm.token_count().await < min_tokens {
-            mm.acquire_tokens(min_tokens).await?;
-        }
-        Ok(())
-    }
-
-    /// Get or create a pairwise mailbox for a conversation with the given TTL.
-    pub async fn get_or_create_mailbox(
-        &self,
-        conversation_id: &str,
-        ttl_seconds: u64,
-    ) -> Result<crate::services::mailbox_manager::ActiveMailbox, crate::services::mailbox_manager::MailboxError>
-    {
-        self.mailbox_manager()
-            .get_or_create_mailbox(conversation_id, ttl_seconds)
-            .await
     }
 
     // ── Sidebar sections (custom grouping) façade ────────────────────────
@@ -1971,7 +1929,7 @@ impl ChatterClient {
         let switch_result = self.services.grpc_pool.set_transport_mode(mode);
 
         // Reflect the pool's ACTUAL transport into the process-global HTTP flag
-        // that leaf media modules (gif/youtube/link_preview) gate on and that the
+        // that leaf media modules (gif) gate on and that the
         // CDN reqwest callsites branch on. Keyed on the real transport, not the
         // request, so a failed onion switch leaves it false — no false anonymity.
         let on_onion = self.services.grpc_pool.transport_mode() == TransportMode::Onion;
@@ -2605,15 +2563,6 @@ impl ChatterClient {
         ConversationHandle::new(conv, self.clone())
     }
 
-    /// Pin or unpin a conversation in the conversation list.
-    pub fn pin_conversation(
-        self: &Arc<Self>,
-        conv: ActiveConversation,
-        pinned: bool,
-    ) -> Result<(), crate::services::conversation::ConversationError> {
-        self.conversation(conv).pin_conversation(pinned)
-    }
-
     /// Mute or unmute a conversation's notifications.
     pub fn mute_conversation(
         self: &Arc<Self>,
@@ -2700,61 +2649,11 @@ impl ChatterClient {
         self.services.draft_service.list_all_drafts()
     }
 
-    /// List every draft pre-joined with the owning conversation's display
-    /// name + conversation type. Keeps the join + fallback logic on the
-    /// client side rather than pushing it into each UI platform (Android,
-    /// desktop, iOS).
-    pub fn list_drafts_with_conversation_names(
-        &self,
-    ) -> Result<Vec<crate::domain::draft::DraftWithConversation>, crate::services::draft_service::DraftError> {
-        use std::collections::HashMap;
-        let drafts = self.services.draft_service.list_all_drafts()?;
-        let conversations = self
-            .services
-            .conversation_repo
-            .list_all()
-            .map_err(crate::services::draft_service::DraftError::Storage)?;
-        let lookup: HashMap<String, (String, crate::domain::message::ConversationType)> =
-            conversations
-                .into_iter()
-                .map(|c| (c.id, (c.name, c.conversation_type)))
-                .collect();
-        Ok(drafts
-            .into_iter()
-            .map(|d| {
-                let (name, ty) = lookup
-                    .get(&d.key.channel_id.to_string())
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        (
-                            "(unknown conversation)".to_string(),
-                            crate::domain::message::ConversationType::Channel,
-                        )
-                    });
-                crate::domain::draft::DraftWithConversation {
-                    draft: d,
-                    conversation_name: name,
-                    conversation_type: ty,
-                }
-            })
-            .collect())
-    }
-
     // ── Conversation listing ────────────────────────────────────────
 
     /// List all channels the user is a member of.
     pub fn list_channels(&self) -> Result<Vec<Channel>, crate::services::channel::ChannelError> {
         self.channels().get_channels_for_user()
-    }
-
-    /// Unified conversation rollup — channels, DMs, anon DMs, anon groups —
-    /// used by cross-conversation screens (drafts list, etc). Returns
-    /// `UnifiedConversation` rows with a `conversation_type` field already
-    /// classified.
-    pub fn list_all_conversations(
-        &self,
-    ) -> Result<Vec<crate::domain::UnifiedConversation>, crate::error::StorageError> {
-        self.services.conversation_repo.list_all()
     }
 
     /// Number of conversations with at least one unread message — the Chats
@@ -2822,11 +2721,6 @@ impl ChatterClient {
     /// List all anonymous DM conversations.
     pub fn list_anon_dms(&self) -> Result<Vec<crate::domain::anon_dm::AnonDm>, crate::services::anon_dm::AnonDmError> {
         self.anon_dms().list_conversations()
-    }
-
-    /// List pending anon DM message requests (incoming).
-    pub fn list_anon_dm_requests(&self) -> Result<Vec<crate::domain::anon_dm::AnonDm>, crate::services::anon_dm::AnonDmError> {
-        self.anon_dms().list_message_requests()
     }
 
     // ── Friend / social operations ──────────────────────────────────
@@ -3047,15 +2941,6 @@ impl ChatterClient {
     }
 
     // ── Profile ─────────────────────────────────────────────────────
-
-    /// Update the current user's profile.
-    pub async fn update_profile(
-        &self,
-        display_name: Option<String>,
-        status: Option<crate::domain::user::StatusMessage>,
-    ) -> Result<crate::domain::Profile, crate::services::user::UserError> {
-        self.users().update_user_profile(display_name, status).await
-    }
 
     /// Decode + crop + resize + WebP-encode raw image bytes into a normalised
     /// avatar. Pure delegation to [`crate::media::ImageProcessor::process_avatar_from_memory`]
@@ -3595,28 +3480,6 @@ impl ChatterClient {
         self.services.message_service.get_pinned_messages_local(channel_id, conversation_type)
     }
 
-    pub fn get_anon_dm_display_name(&self) -> Option<String> {
-        self.services.anon_dm_service.get_my_display_name()
-    }
-
-    pub async fn start_anon_dm_private(
-        &self,
-        code: &crate::domain::PrivateFriendCode,
-        message: Option<&str>,
-        display_name: Option<&str>,
-    ) -> Result<crate::domain::anon_dm::AnonDm, crate::services::anon_dm::AnonDmError> {
-        self.services.anon_dm_service
-            .start_conversation_private(code, message, display_name)
-            .await
-    }
-
-    pub fn has_attachment_locally(
-        &self,
-        attachment_id: &crate::domain::ids::AttachmentId,
-    ) -> bool {
-        self.services.attachment_service.has_local_content(attachment_id)
-    }
-
     pub fn set_notification_detail_level(
         &self,
         level: crate::services::notification_service::NotificationDetailLevel,
@@ -3768,13 +3631,6 @@ impl ChatterClient {
 
         tracing::info!(topic = %topic, "Ntfy push listener configured");
         Ok(())
-    }
-
-    pub fn get_peer_identity(
-        &self,
-        peer_id: &str,
-    ) -> Result<Option<Vec<u8>>, crate::error::StorageError> {
-        self.services.signal_service.get_peer_identity(peer_id)
     }
 
     // ── Escape hatches ──────────────────────────────────────────────────

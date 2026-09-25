@@ -121,8 +121,6 @@ pub fn conversation_item(
         date_separator_text: Default::default(),
         is_continuation: false,
         show_date_separator: false,
-        has_link_preview: false,
-        link_preview: Default::default(),
         ..Default::default()
     }
 }

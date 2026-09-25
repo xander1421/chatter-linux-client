@@ -810,16 +810,16 @@ impl AnonGroupRepository {
 
     /// Get all pending messages queued for a specific (group, recipient).
     ///
-    /// Returns a vector of (row_id, content_blob) pairs ordered by insertion
-    /// order so the drain preserves send order.
+    /// Returns (row_id, content_blob, attempts) ordered by insertion order so
+    /// the drain preserves send order.
     pub fn get_pending_messages_for_member(
         &self,
         group_id: &AnonGroupId,
         recipient_user_id: &UserId,
-    ) -> Result<Vec<(i64, Vec<u8>)>, StorageError> {
+    ) -> Result<Vec<(i64, Vec<u8>, u32)>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, encrypted_content_blob FROM pending_anon_group_messages
+            "SELECT id, encrypted_content_blob, attempts FROM pending_anon_group_messages
              WHERE group_id = ?1 AND recipient_user_id = ?2
              ORDER BY id ASC",
         )?;
@@ -832,7 +832,8 @@ impl AnonGroupRepository {
         while let Some(row) = rows.next()? {
             let id: i64 = row.get(0)?;
             let blob: Vec<u8> = row.get(1)?;
-            out.push((id, blob));
+            let attempts: u32 = row.get(2)?;
+            out.push((id, blob, attempts));
         }
         Ok(out)
     }
@@ -847,8 +848,8 @@ impl AnonGroupRepository {
         Ok(())
     }
 
-    /// Increment the attempts counter for a pending message row (kept for
-    /// diagnostics / future backoff).
+    /// Increment the attempts counter for a pending message row; the drain
+    /// gives a row up after `MAX_PARKED_ATTEMPTS`.
     pub fn increment_pending_message_attempts(&self, row_id: i64) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         conn.execute(

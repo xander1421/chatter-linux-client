@@ -34,16 +34,6 @@ export struct MessageAttachmentData {
     progress: float,        // Transfer progress 0.0 to 1.0
 }
 
-// Data struct for link previews embedded in messages
-export struct LinkPreviewData {
-    url: string,            // Full URL
-    domain: string,         // Display domain (e.g., "github.com")
-    title: string,          // Page title
-    description: string,    // Meta description (truncated)
-    has-image: bool,        // Whether a preview image is available
-    preview-image: image,   // OG image thumbnail
-}
-
 // Styled text span for markdown-parsed message rendering.
 // Each span has at most one style flag set (bold, italic, etc.).
 export struct RichTextSpan {
@@ -97,9 +87,6 @@ export struct MessageItemData {
     reply-to-thumbnail-width: int,   // Quoted thumbnail natural width (px) — for aspect sizing; 0 = unknown
     reply-to-thumbnail-height: int,  // Quoted thumbnail natural height (px)
     show-sender: bool,
-    // Link preview
-    has-link-preview: bool,
-    link-preview: LinkPreviewData,
     delivery-status: string,  // "sent", "delivered", "read", or "" for non-own messages
     is-pinned: bool,          // Whether message is pinned
     // Call message fields

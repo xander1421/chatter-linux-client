@@ -40,30 +40,6 @@ pub fn wire_code_preview_callbacks(window: &MainWindow) {
         }
     });
 
-    // Copy selection to clipboard — selection unavailable without renderer,
-    // fall back to copying full plain text.
-    let weak_window = window.as_weak();
-    window.on_copy_code_selection(move || {
-        if let Some(w) = weak_window.upgrade() {
-            let content = w.get_code_preview_plain_text().to_string();
-            if !content.is_empty() {
-                #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                std::thread::spawn(move || {
-                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                        if let Err(e) = clipboard.set_text(&content) {
-                            tracing::error!("Failed to copy to clipboard: {}", e);
-                        }
-                    }
-                });
-            }
-        }
-    });
-
-    // Pointer events — no-op without selection renderer.
-    window.on_code_preview_pointer_down(|_x, _y, _shift, _ctrl| {});
-    window.on_code_preview_pointer_move(|_x, _y| {});
-    window.on_code_preview_pointer_up(|_x, _y| {});
-
     // Open code in external editor - uses Save As for secure export
     window.on_open_code_external(|| {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]

@@ -1,4 +1,4 @@
-//! Friend request actions: send, accept, decline, cancel.
+//! Friend request actions: accept, decline, cancel.
 //!
 //! Thin glue — core emits `DomainEvent::FriendRequestsUpdated` after every
 //! send / respond / remove, and the sidebar domain-handler dispatcher
@@ -12,58 +12,6 @@ use slint::{ComponentHandle, SharedString};
 use chatter_core::client::ChatterClient;
 
 use crate::MainWindow;
-
-pub(crate) fn wire_send_request(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let weak_window = window.as_weak();
-    let ui_ctx = ui_ctx.clone();
-
-    window.on_friends_send_request(move |user_id: SharedString| {
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx.clone();
-        let user_id_str = user_id.to_string();
-        // Read the optional intro note on the UI thread before spawning.
-        let note = weak_window
-            .upgrade()
-            .map(|w| w.get_friends_request_note().to_string())
-            .unwrap_or_default();
-
-        tokio::spawn(async move {
-            set_loading(&weak, true);
-
-            let friend_id = match user_id_str.parse() {
-                Ok(id) => id,
-                Err(_) => {
-                    tracing::error!("Invalid user ID: {}", user_id_str);
-                    set_loading(&weak, false);
-                    return;
-                }
-            };
-
-            let note_trimmed = note.trim();
-            let note_arg = if note_trimmed.is_empty() { None } else { Some(note_trimmed) };
-            match ui_ctx.send_friend_request(&friend_id, note_arg).await {
-                Ok(_) => {
-                    tracing::info!("Friend request sent to {}", user_id_str);
-                    // Core emits FriendRequestsUpdated; dispatcher updates list.
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_friends_loading(false);
-                            w.set_friends_request_note("".into());
-                            let query = w.get_friends_search_query().to_string();
-                            if !query.is_empty() {
-                                w.invoke_friends_search_users(query.into());
-                            }
-                        }
-                    });
-                }
-                Err(e) => {
-                    tracing::error!("Failed to send friend request: {}", e);
-                    report_failure(&weak, "The friend request was not sent.");
-                }
-            }
-        });
-    });
-}
 
 pub(crate) fn wire_accept_request(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();

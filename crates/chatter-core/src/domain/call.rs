@@ -527,46 +527,6 @@ impl std::fmt::Debug for AnonCallSetupResult {
     }
 }
 
-/// Call setup data for mobile clients (Android/iOS).
-///
-/// Contains LiveKit connection info and encryption key so the mobile client
-/// can connect via the platform-native LiveKit SDK instead of the desktop
-/// GStreamer-based media stack. `encryption_key` is wrapped in `Zeroizing`
-/// so the E2EE key is wiped from memory when this struct is dropped; the
-/// custom `Debug` impl redacts the key + LiveKit token so they cannot leak
-/// through log statements or `format!("{:?}", ...)`.
-#[derive(Clone)]
-pub struct MobileCallSetup {
-    /// The call ID.
-    pub call_id: CallId,
-    /// The channel ID.
-    pub channel_id: ChannelId,
-    /// Verification emojis for secure call verification (4 emojis).
-    pub verification_emojis: [String; 4],
-    /// Whether this is a video call.
-    pub is_video: bool,
-    /// LiveKit server URL.
-    pub livekit_url: String,
-    /// LiveKit room access token.
-    pub livekit_token: String,
-    /// E2EE encryption key (32 bytes) for LiveKit frame encryption. Zeroized on drop.
-    pub encryption_key: Zeroizing<Vec<u8>>,
-}
-
-impl std::fmt::Debug for MobileCallSetup {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MobileCallSetup")
-            .field("call_id", &self.call_id)
-            .field("channel_id", &self.channel_id)
-            .field("verification_emojis", &self.verification_emojis)
-            .field("is_video", &self.is_video)
-            .field("livekit_url", &self.livekit_url)
-            .field("livekit_token", &"<redacted>")
-            .field("encryption_key", &"<redacted 32 bytes>")
-            .finish()
-    }
-}
-
 // ============================================================================
 // Call History (local-only record of past calls)
 // ============================================================================

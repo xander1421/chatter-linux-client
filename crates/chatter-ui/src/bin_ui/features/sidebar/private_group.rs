@@ -6,7 +6,6 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::anon_group::AnonGroupId;
-use chatter_core::domain::ids::ChannelId;
 
 use crate::{MainWindow, PrivateGroupListItemData, run_ui};
 
@@ -181,8 +180,7 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
                     .unwrap_or_else(|| "[Pinned message]".to_string());
                 (ids, preview)
             };
-            let channel_id = ChannelId::from_uuid(*group_id.as_uuid());
-            super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), channel_id, msg_ids, preview);
+            super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), msg_ids, preview);
 
             // Mark messages as read
             let handle = ui_ctx.conversation(chatter_core::state::ActiveConversation::AnonGroup(group_id));

@@ -136,10 +136,6 @@ export component MessageComposer inherits Rectangle {
     // Reply bar height
     property <length> reply-bar-height: is-replying ? 48px : 0px;
 
-    // Ghost-writing AI suggestion (UI-only placeholder — backend wires later)
-    in property <string> ghost-text: "";
-    in property <bool> ghost-writing-enabled: false;
-
     // Callbacks
     callback send(string);
     callback send-edit(string, string);  // (message_id, new_text)
@@ -155,7 +151,6 @@ export component MessageComposer inherits Rectangle {
     callback remove-attachment(string);
     callback typing-changed(bool);  // true when started typing, false when stopped
     callback process-text(string) -> string;  // Insert word breaks for wrapping
-    callback accept-ghost-text();  // Accept the AI suggestion (e.g. Tab key)
 
     // Wrap the current selection (or insert markers at the cursor) with the
     // markdown for `fmt`, then re-select the inner text. Byte offsets captured
@@ -847,10 +842,6 @@ export component MessageComposer inherits Rectangle {
                             }
                             return accept;
                         }
-                        if (event.text == Key.Tab && root.ghost-writing-enabled && root.ghost-text != "") {
-                            root.accept-ghost-text();
-                            return accept;
-                        }
                         if (event.text == "v" && (event.modifiers.control || event.modifiers.meta)) {
                             // Attach clipboard image if present; TextInput still
                             // handles text paste (we don't consume the event).
@@ -866,22 +857,6 @@ export component MessageComposer inherits Rectangle {
                         }
                         root.typing-changed(self.text != "");
                     }
-                }
-
-                // Ghost-writing overlay — low-contrast italicized AI suggestion
-                if root.ghost-writing-enabled && root.ghost-text != "" && root.text != "": Text {
-                    x: Spacing.md;
-                    y: Spacing.sm;
-                    width: parent.width - Spacing.md * 2;
-                    text: root.text + root.ghost-text;
-                    color: Colors.text-muted.with-alpha(0.4);
-                    font-size: Typography.base;
-                    font-italic: true;
-                    font-weight: Typography.light;
-                    wrap: word-wrap;
-                    opacity: 0.8;
-
-                    animate opacity { duration: 200ms; easing: ease-in-out; }
                 }
             }
 

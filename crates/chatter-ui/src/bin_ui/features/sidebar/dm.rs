@@ -144,8 +144,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         .unwrap_or_else(|| "[Pinned message]".to_string());
                     (ids, preview)
                 };
-                let channel_id = ChannelId::from_uuid(*anon_dm_id.as_uuid());
-                super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), channel_id, msg_ids, preview);
+                super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), msg_ids, preview);
 
                 // Load messages
                 let messages = match ui_ctx.get_anon_dm_messages_asc(&anon_dm_id, None, chatter_core::config::MESSAGE_PAGE_SIZE) {
@@ -239,7 +238,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
                 _ => (vec![], String::new()),
             };
-            super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), channel_id, msg_ids, preview);
+            super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), msg_ids, preview);
 
             // Load messages
             let messages = match ui_ctx.get_messages_local_asc(&channel_id, &conv_type, None, chatter_core::config::MESSAGE_PAGE_SIZE as u32) {

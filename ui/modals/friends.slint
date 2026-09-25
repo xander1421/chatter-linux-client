@@ -32,15 +32,6 @@ export struct FriendData {
     initials: string,
 }
 
-// Search result for finding users
-export struct UserSearchResult {
-    user-id: string,
-    display-name: string,
-    username: string,
-    is-friend: bool,
-    request-pending: bool,  // true if we already sent a request
-}
-
 // Friend request data
 export struct FriendRequestData {
     user-id: string,
@@ -77,11 +68,6 @@ export component FriendsModal inherits Rectangle {
 
     // Friends tab data
     in property <[FriendData]> friends: [];
-
-    // Legacy search properties (unused — friend code is the discovery method)
-    in-out property <string> search-query: "";
-    in property <[UserSearchResult]> search-results: [];
-    in property <bool> search-loading: false;
 
     // Requests tab data
     in-out property <string> requests-sub-tab: "received";  // "received", "sent", "private", "groups", or "channels"
@@ -125,10 +111,6 @@ export component FriendsModal inherits Rectangle {
     callback view-profile(string);    // user_id
     callback start-dm(string);        // user_id
     callback remove-friend(string);   // user_id
-
-    // Find users actions
-    callback search-users(string);    // query
-    callback send-friend-request(string);  // user_id
 
     // Request actions
     callback accept-request(string);  // user_id

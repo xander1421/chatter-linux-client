@@ -682,8 +682,6 @@ fn display_code_from_buffer(
             w.set_code_preview_line_count(line_count);
             w.set_code_preview_image(slint::Image::default());
             w.set_code_preview_plain_text(text.into());
-            w.set_code_preview_has_selection(false);
-            w.set_code_preview_selected_text("".into());
             w.set_code_preview_visible(true);
         }
     });

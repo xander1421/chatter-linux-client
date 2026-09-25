@@ -32,11 +32,12 @@ pub const DEFAULT_TOKEN_REQUEST_COUNT: u32 = 5;
 /// Request more mailbox tokens when below this threshold.
 pub const MIN_TOKEN_THRESHOLD: u32 = 2;
 
-/// Default number of call room tokens to request at once.
-pub const DEFAULT_CALL_ROOM_TOKEN_REQUEST_COUNT: u32 = 3;
+/// Call-room tokens the refill loop keeps claimable. An outgoing anonymous
+/// call spends two (the offer's room and the join); accepting spends one.
+pub const DEFAULT_CALL_ROOM_TOKEN_REQUEST_COUNT: u32 = 4;
 
-/// Request more call room tokens when below this threshold.
-pub const MIN_CALL_ROOM_TOKEN_THRESHOLD: u32 = 1;
+/// The refill loop tops call-room tokens up once fewer than this remain.
+pub const MIN_CALL_ROOM_TOKEN_THRESHOLD: u32 = 2;
 
 /// A ready-to-use mailbox token.
 ///
@@ -771,82 +772,76 @@ impl TokenManager {
         Ok(())
     }
 
-    /// Get an available (unused) call room token.
+    /// Claim a call-room token from the pre-fetched pool, and ONLY from it.
     ///
-    /// Returns the oldest unused token or None if no tokens available.
-    pub fn get_available_call_room_token(&self) -> Result<Option<CallRoomToken>, MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        let result: Option<(String, Vec<u8>, Vec<u8>, Vec<u8>, Option<Vec<u8>>)> = conn
-            .query_row(
-                "SELECT id, ephemeral_public_key, ephemeral_private_key, signature, message_randomizer
-                 FROM call_room_tokens WHERE used_at IS NULL ORDER BY created_at ASC LIMIT 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
-            )
-            .ok();
-
-        match result {
-            Some((id, public_key, private_key, signature, randomizer)) => Ok(Some(CallRoomToken {
-                id,
-                public_key,
-                private_key,
-                signature,
-                randomizer,
-            })),
-            None => Ok(None),
-        }
-    }
-
-    /// Mark a call room token as used.
-    pub fn mark_call_room_token_used(&self, token_id: &str) -> Result<(), MailboxError> {
+    /// The call-room twin of `claim_prefetched_token`: the one way a call
+    /// spends a call-room token. Marked used in the same statement, so two
+    /// concurrent calls never get the same key. Never asks the server for
+    /// more (NDSS'21 §VI-F); the pool is refilled by
+    /// `CoreServices::spawn_token_refill`, and an empty pool fails the call
+    /// with `NoTokensAvailable`. Tokens under an expired signing key are
+    /// skipped, as the server would reject them.
+    pub fn claim_prefetched_call_room_token(&self) -> Result<CallRoomToken, MailboxError> {
         let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
+        let now_nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as i64)
+            .unwrap_or(0);
 
-        let rows = conn
-            .execute(
-                "UPDATE call_room_tokens SET used_at = ?1 WHERE id = ?2 AND used_at IS NULL",
-                rusqlite::params![now, token_id],
-            )
-            .map_err(|e| MailboxError::Storage(e.to_string()))?;
+        let result = conn.query_row(
+            "UPDATE call_room_tokens \
+             SET used_at = ?1 \
+             WHERE id = ( \
+                 SELECT t.id FROM call_room_tokens t \
+                 JOIN mailbox_server_keys k ON k.key_id = t.server_key_id \
+                 WHERE t.used_at IS NULL AND k.valid_until > ?2 \
+                 ORDER BY t.created_at ASC \
+                 LIMIT 1 \
+             ) \
+             RETURNING id, ephemeral_public_key, ephemeral_private_key, signature, message_randomizer",
+            rusqlite::params![now, now_nanos],
+            |row| {
+                Ok(CallRoomToken {
+                    id: row.get(0)?,
+                    public_key: row.get(1)?,
+                    private_key: row.get(2)?,
+                    signature: row.get(3)?,
+                    randomizer: row.get(4)?,
+                })
+            },
+        );
 
-        if rows == 0 {
-            return Err(MailboxError::TokenNotFound(token_id.to_string()));
+        match result {
+            Ok(token) => Ok(token),
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                tracing::warn!("TokenManager: pre-fetched call-room pool is empty; refusing to request-then-spend");
+                Err(MailboxError::NoTokensAvailable)
+            }
+            Err(e) => Err(MailboxError::Storage(e.to_string())),
         }
-
-        Ok(())
     }
 
-    /// Count available (unused) call room tokens.
+    /// Count claimable call-room tokens (same filter as
+    /// `claim_prefetched_call_room_token`).
     pub fn available_call_room_token_count(&self) -> Result<u32, MailboxError> {
         let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
+        let now_nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as i64)
+            .unwrap_or(0);
 
         let count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM call_room_tokens WHERE used_at IS NULL",
-                [],
+                "SELECT COUNT(*) FROM call_room_tokens t \
+                 JOIN mailbox_server_keys k ON k.key_id = t.server_key_id \
+                 WHERE t.used_at IS NULL AND k.valid_until > ?1",
+                [now_nanos],
                 |row| row.get(0),
             )
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
 
         Ok(count as u32)
-    }
-
-    /// Ensure we have enough call room tokens available.
-    ///
-    /// Requests more tokens if below the minimum threshold.
-    pub async fn ensure_call_room_tokens_available(
-        &self,
-        client: &mut MailboxClient,
-    ) -> Result<(), MailboxError> {
-        let count = self.available_call_room_token_count()?;
-        if count < MIN_CALL_ROOM_TOKEN_THRESHOLD {
-            let needed = DEFAULT_CALL_ROOM_TOKEN_REQUEST_COUNT.saturating_sub(count);
-            if needed > 0 {
-                self.request_call_room_tokens(client, needed).await?;
-            }
-        }
-        Ok(())
     }
 }
 
@@ -880,6 +875,43 @@ mod tests {
         assert_eq!(token.private_key.len(), 64);
         assert_eq!(token.signature.len(), 256);
         assert!(token.randomizer.is_some());
+    }
+
+    fn test_db() -> Arc<Database> {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Arc::new(Database::open(&dir.path().join("tokens.db"), "testpass").expect("open"));
+        db.run_migrations().expect("migrations");
+        Box::leak(Box::new(dir));
+        db
+    }
+
+    #[test]
+    fn call_room_claim_spends_only_the_prefetched_pool() {
+        let tm = TokenManager::new(test_db());
+        let far = i64::MAX / 2;
+        tm.store_server_key("live", b"der", far as u64).unwrap();
+        tm.store_server_key("dead", b"der", 1).unwrap();
+        let conn = tm.db.connection().unwrap();
+        for (id, key) in [("t-live", "live"), ("t-dead", "dead")] {
+            conn.execute(
+                "INSERT INTO call_room_tokens
+                 (id, ephemeral_public_key, ephemeral_private_key, signature, message_randomizer, server_key_id, created_at, used_at)
+                 VALUES (?1, CAST(?1 AS BLOB), x'00', x'00', NULL, ?2, ?3, NULL)",
+                rusqlite::params![id, key, Utc::now().to_rfc3339()],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        // A token under an expired signing key is neither counted nor claimed.
+        assert_eq!(tm.available_call_room_token_count().unwrap(), 1);
+        assert_eq!(tm.claim_prefetched_call_room_token().unwrap().id, "t-live");
+        // Claimed means spent: the pool is now empty and says so.
+        assert_eq!(tm.available_call_room_token_count().unwrap(), 0);
+        assert!(matches!(
+            tm.claim_prefetched_call_room_token(),
+            Err(MailboxError::NoTokensAvailable)
+        ));
     }
 
     #[test]

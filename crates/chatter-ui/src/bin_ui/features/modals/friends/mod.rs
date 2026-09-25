@@ -28,14 +28,7 @@ pub fn wire_friends_modal(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // this covers anything missed while the modal was closed).
     wire_switch_tab(window, ui_ctx);
 
-    // User search (F-UI-3): re-enabled with Signal-style EXACT-username lookup
-    // (the same privacy-preserving discovery the invite-member search uses).
-    // Display names are profile-key-encrypted, so only an exact
-    // `nickname.discriminator` resolves — no substring enumeration of accounts.
-    friends_list::wire_search_users(window, ui_ctx);
-
-    // Friend requests (send, accept, decline, cancel)
-    requests::wire_send_request(window, ui_ctx);
+    // Friend requests (accept, decline, cancel)
     requests::wire_accept_request(window, ui_ctx);
     requests::wire_decline_request(window, ui_ctx);
     requests::wire_cancel_request(window, ui_ctx);

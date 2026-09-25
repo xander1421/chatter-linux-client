@@ -149,7 +149,7 @@ pub async fn load_channel_into_ui(
         }
         _ => (vec![], String::new()),
     };
-    super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), channel_id, msg_ids, preview);
+    super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), msg_ids, preview);
 
     // 2. Load messages — use the channel's actual conversation type so
     // SavedMessages (stored as ConversationType::SavedMessages) round-trip correctly.

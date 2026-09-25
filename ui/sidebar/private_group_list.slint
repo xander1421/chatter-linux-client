@@ -1,14 +1,11 @@
 // Private group list component
 //
-// Displays a scrollable list of private groups with section header.
+// Displays a scrollable list of private groups.
 // These are NDSS'21 style anonymous groups - server has no knowledge.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
-import { Typography } from "../theme/typography.slint";
-import { Icons } from "../theme/icons.slint";
 import { PrivateGroupListItem } from "private_group_list_item.slint";
-import { EmptyState } from "../components/empty_state.slint";
 
 // Data struct for private group items
 export struct PrivateGroupListItemData {
@@ -27,11 +24,9 @@ export component PrivateGroupList inherits Rectangle {
     in property <[PrivateGroupListItemData]> groups: [];
     in property <bool> collapsed: false;
     in property <bool> mobile-mode: false;
-    in property <bool> show-header: true;
 
     // Callbacks
     callback group-selected(string);
-    callback create-group-clicked();
     callback group-context-menu-requested(/* group-id */ string, /* x */ length, /* y */ length);
     // Tooltip callbacks removed — PrivateGroupListItem now uses self-contained TooltipArea
 
@@ -39,35 +34,6 @@ export component PrivateGroupList inherits Rectangle {
     background: root.mobile-mode ? Colors.background : Colors.surface;
 
     VerticalLayout {
-        // Section header (hidden when show-header is false)
-        if root.show-header: Rectangle {
-            height: root.collapsed ? 0px : 32px;
-            background: root.mobile-mode ? Colors.background : Colors.surface;
-
-            if !root.collapsed: HorizontalLayout {
-                padding-left: Spacing.sm;
-                padding-right: Spacing.sm;
-                alignment: start;
-
-                Text {
-                    text: "Private Groups";
-                    color: Colors.text-muted;
-                    font-size: Typography.xs2;
-                    font-weight: 600;
-                    letter-spacing: 0.5px;
-                    vertical-alignment: center;
-                }
-            }
-        }
-
-        // Empty state when no groups
-        if !root.collapsed && root.groups.length == 0: EmptyState {
-            icon: Icons.lock;
-            message: "No private groups";
-            cta-text: "Create group";
-            cta-clicked => { root.create-group-clicked(); }
-        }
-
         // Scrollable group list
         flickable := Flickable {
             viewport-height: group-layout.preferred-height;

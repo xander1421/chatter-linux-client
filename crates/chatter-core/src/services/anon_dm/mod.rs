@@ -252,31 +252,4 @@ impl AnonDmService {
     // any other message body, and the receiving path has always preferred those
     // bytes (see the `avatar` branch in the UI's anon-DM profile handler). The
     // URL was only ever the fallback. Peer-supplied URLs are now ignored.
-
-    /// Get an available call room token.
-    pub fn get_available_call_room_token(&self) -> Result<Option<crate::mailbox::CallRoomToken>, AnonDmError> {
-        self.token_manager
-            .get_available_call_room_token()
-            .map_err(|e| AnonDmError::MessageError(format!("Failed to get call room token: {}", e)))
-    }
-    
-    /// Mark a call room token as used.
-    pub fn mark_call_room_token_used(&self, token_id: &str) -> Result<(), AnonDmError> {
-        self.token_manager
-            .mark_call_room_token_used(token_id)
-            .map_err(|e| AnonDmError::MessageError(format!("Failed to mark token as used: {}", e)))
-    }
-    
-    /// Request new call room tokens.
-    pub async fn request_call_room_tokens(&self, count: u32) -> Result<u32, AnonDmError> {
-        if !self.grpc_pool.is_connected() {
-            return Err(AnonDmError::MessageError("No gRPC connection available".to_string()));
-        }
-        let mut client = self.grpc_pool.mailbox_client();
-        self.token_manager
-            .request_call_room_tokens(&mut client, count)
-            .await
-            .map_err(|e| AnonDmError::MessageError(format!("Failed to request tokens: {}", e)))
-    }
-    
 }

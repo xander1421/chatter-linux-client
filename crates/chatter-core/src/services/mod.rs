@@ -38,7 +38,6 @@ pub mod pin_service;
 pub mod outgoing_typing;
 pub mod presence_service;
 pub mod ephemeral_service;
-pub mod embed_service;
 // Removed - gif_service.rs file was deleted
 pub mod quick_switcher;
 pub mod search;

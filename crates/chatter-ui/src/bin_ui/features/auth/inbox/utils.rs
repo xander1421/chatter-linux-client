@@ -54,27 +54,3 @@ pub fn generate_preview_from_ui_message(msg: &crate::MessageItemData) -> String 
 
     "[Pinned message]".to_string()
 }
-
-/// Format a nanosecond timestamp for display.
-pub fn format_timestamp(timestamp_nanos: u64) -> String {
-    use chrono::{Local, TimeZone};
-
-    if timestamp_nanos == 0 {
-        return "".to_string();
-    }
-
-    let secs = (timestamp_nanos / 1_000_000_000) as i64;
-    let nsecs = (timestamp_nanos % 1_000_000_000) as u32;
-
-    match Local.timestamp_opt(secs, nsecs).single() {
-        Some(dt) => {
-            let now = Local::now();
-            if dt.date_naive() == now.date_naive() {
-                dt.format("%H:%M").to_string()
-            } else {
-                dt.format("%b %d, %H:%M").to_string()
-            }
-        }
-        None => "".to_string(),
-    }
-}

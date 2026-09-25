@@ -592,6 +592,11 @@ pub enum SystemMessage {
     /// false means the peer id came from server-supplied envelope metadata and
     /// nothing proved it, so the wording must not assert who this was.
     IdentityChanged { attributed: bool },
+    /// One of OUR messages never reached this member (the system message's
+    /// sender): its anonymous-mailbox send kept failing and was given up.
+    /// `sent_at` is the undelivered message's timestamp; `preview` a short
+    /// excerpt so the line says which message.
+    Undelivered { sent_at: u64, preview: String },
 }
 
 impl SystemMessage {
@@ -625,6 +630,11 @@ impl SystemMessage {
                  them, but nothing proved that. Compare safety numbers over another channel \
                  before you accept."
                 .to_string(),
+            // Rendered as "{member_name} {description}".
+            Self::Undelivered { preview, .. } => format!(
+                "did not get your message \"{preview}\" — it could not be sent after several \
+                 tries. Send it again if it mattered."
+            ),
         }
     }
 }

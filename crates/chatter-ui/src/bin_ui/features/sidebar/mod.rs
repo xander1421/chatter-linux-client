@@ -250,7 +250,6 @@ pub(crate) fn refresh_section_badges(window: &MainWindow, ui_ctx: &Arc<ChatterCl
 pub(crate) fn apply_pinned_ui(
     weak: &slint::Weak<MainWindow>,
     chat_state: &chatter_core::state::ChatState,
-    channel_id: chatter_core::domain::ids::ChannelId,
     message_ids: Vec<chatter_core::domain::ids::MessageId>,
     preview: String,
 ) {
@@ -263,7 +262,7 @@ pub(crate) fn apply_pinned_ui(
         });
     } else {
         let total_count = message_ids.len() as i32;
-        chat_state.set_pinned_messages(channel_id, message_ids);
+        chat_state.set_pinned_messages(message_ids);
         let should_show = chat_state.pinned_should_show();
         run_ui!(weak, |w| {
             w.set_has_pinned_messages(should_show);

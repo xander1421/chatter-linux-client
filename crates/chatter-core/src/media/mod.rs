@@ -10,7 +10,6 @@ pub mod audio_player;
 pub mod audio_recorder;
 pub mod code_preview;
 pub mod decoder;
-pub mod embed;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod file_picker;
 pub mod gif;
@@ -52,5 +51,3 @@ pub use video_recorder::VideoRecorder;
 #[cfg(feature = "desktop-media")]
 pub use waveform::{extract_waveform, extract_waveform_from_memory, WAVEFORM_BAR_COUNT};
 
-// Embed extractors
-pub use embed::{LinkPreviewGenerator, PreviewFetcher, UrlUnfurler, YouTubeExtractor};

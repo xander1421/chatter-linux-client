@@ -28,7 +28,7 @@ import { MentionAutocomplete, MentionSuggestion } from "components/mention_autoc
 // Import modals
 import { CreateChannelModal, AIProviderOption, AIModelOption, CreateChannelConfig, PrivateGroupFriend } from "modals/create_channel.slint";
 import { UserProfileModal, SharedContentItem, SharedTab, EditProfileModal, RecoveryCodesModal, SealedSenderIntroModal, LinkDeviceApproveModal } from "modals/mod.slint";
-import { FriendsModal, FriendData, UserSearchResult, FriendRequestData, BlockedUserData } from "modals/friends.slint";
+import { FriendsModal, FriendData, FriendRequestData, BlockedUserData } from "modals/friends.slint";
 import { ForwardMessageModal, ForwardTarget } from "modals/forward_message.slint";
 import { SessionsModal, SessionInfo } from "modals/sessions.slint";
 import { SearchResultChannel } from "modals/join_channel.slint";
@@ -61,7 +61,7 @@ import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 import { AnonModePinModal } from "modals/anon_mode_pin.slint";
 
 // Re-export types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, CustomSectionData, SectionConversationData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, CallHistoryRow, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, QuickSwitcherItem, SharedContentItem, SharedTab }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, CustomSectionData, SectionConversationData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, CallHistoryRow, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, QuickSwitcherItem, SharedContentItem, SharedTab }
 
 export component App inherits Rectangle {
     // ========== Safe area insets (set by Rust on Android) ==========
@@ -361,15 +361,9 @@ export component App inherits Rectangle {
     in property <int> code-preview-line-count: 0;
     in property <image> code-preview-image;
     in property <string> code-preview-plain-text: "";
-    in property <bool> code-preview-has-selection: false;
-    in property <string> code-preview-selected-text: "";
     callback close-code-preview();
     callback copy-code();
-    callback copy-code-selection();
     callback open-code-external();
-    callback code-preview-pointer-down(/* x */ length, /* y */ length, /* shift */ bool, /* ctrl */ bool);
-    callback code-preview-pointer-move(/* x */ length, /* y */ length);
-    callback code-preview-pointer-up(/* x */ length, /* y */ length);
 
     // ========== PDF preview state ==========
     in-out property <bool> pdf-preview-visible: false;
@@ -609,9 +603,6 @@ export component App inherits Rectangle {
     // Friends modal properties (comprehensive)
     in-out property <string> friends-modal-tab: "find";  // "find", "friends", "requests", "blocked"
     in property <[FriendData]> friends-list: [];
-    in-out property <string> friends-search-query: "";
-    in property <[UserSearchResult]> friends-search-results: [];
-    in property <bool> friends-search-loading: false;
     in-out property <string> friends-requests-sub-tab: "received";
     in property <[FriendRequestData]> friends-received-requests: [];
     in property <[FriendRequestData]> friends-sent-requests: [];
@@ -884,8 +875,6 @@ export component App inherits Rectangle {
     callback friends-view-profile(string);
     callback friends-start-dm(string);
     callback friends-remove-friend(string);
-    callback friends-search-users(string);
-    callback friends-send-request(string);
     callback friends-accept-request(string);
     callback friends-decline-request(string);
     callback friends-cancel-request(string);
@@ -1573,12 +1562,6 @@ export component App inherits Rectangle {
                     // Picker state
                     emoji-picker-visible <=> root.composer-emoji-picker-visible;
                     gif-picker-visible <=> root.composer-gif-picker-visible;
-                    emoji-list: root.composer-emoji-list;
-                    emoji-category: root.composer-emoji-category;
-                    emoji-search: root.composer-emoji-search;
-                    gif-loading: root.composer-gif-picker-loading;
-                    gif-results: root.composer-gif-picker-results;
-                    gif-search-query: root.composer-gif-picker-search;
 
                     settings-clicked => { root.chat-settings-clicked(); }
                     voice-call-clicked => { root.start-voice-call(); }
@@ -1632,22 +1615,6 @@ export component App inherits Rectangle {
                     paste-image => { root.paste-image(); }
                     emoji-clicked => { root.emoji-clicked(); }
                     gif-clicked => { root.gif-clicked(); }
-                    
-                    // Picker callbacks
-                    emoji-selected(emoji) => { root.composer-emoji-selected(emoji); }
-                    emoji-category-changed(cat) => { 
-                        root.composer-emoji-category = cat;
-                        root.composer-emoji-category-changed(cat); 
-                    }
-                    emoji-search-changed(q) => { 
-                        root.composer-emoji-search = q;
-                        root.composer-emoji-search-changed(q); 
-                    }
-                    gif-selected(id, url) => { root.composer-gif-selected(id, url); }
-                    gif-search(q) => {
-                        root.composer-gif-picker-search = q;
-                        root.composer-gif-search-changed(q);
-                    }
 
                     mention-triggered(query) => { root.mention-triggered(query); }
                     remove-attachment(id) => { root.remove-attachment(id); }
@@ -2039,9 +2006,6 @@ export component App inherits Rectangle {
         show-modal: true;
         active-tab <=> root.friends-modal-tab;
         friends: root.friends-list;
-        search-query <=> root.friends-search-query;
-        search-results: root.friends-search-results;
-        search-loading: root.friends-search-loading;
         requests-sub-tab <=> root.friends-requests-sub-tab;
         received-requests: root.friends-received-requests;
         sent-requests: root.friends-sent-requests;
@@ -2072,12 +2036,6 @@ export component App inherits Rectangle {
         }
         remove-friend(user-id) => {
             root.friends-remove-friend(user-id);
-        }
-        search-users(query) => {
-            root.friends-search-users(query);
-        }
-        send-friend-request(user-id) => {
-            root.friends-send-request(user-id);
         }
         accept-request(user-id) => {
             root.friends-accept-request(user-id);
@@ -2704,8 +2662,6 @@ export component App inherits Rectangle {
                 line-count: root.code-preview-line-count;
                 code-image: root.code-preview-image;
                 plain-text: root.code-preview-plain-text;
-                has-selection: root.code-preview-has-selection;
-                selected-text: root.code-preview-selected-text;
 
                 close-clicked => {
                     root.code-preview-visible = false;
@@ -2716,25 +2672,9 @@ export component App inherits Rectangle {
                     root.copy-code();
                 }
 
-                copy-selection-clicked => {
-                    root.copy-code-selection();
-                }
-
                 open-external-clicked => {
                     root.code-preview-visible = false;
                     root.open-code-external();
-                }
-
-                pointer-down(x, y, shift, ctrl) => {
-                    root.code-preview-pointer-down(x, y, shift, ctrl);
-                }
-
-                pointer-move(x, y) => {
-                    root.code-preview-pointer-move(x, y);
-                }
-
-                pointer-up(x, y) => {
-                    root.code-preview-pointer-up(x, y);
                 }
             }
         }

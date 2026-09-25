@@ -14,7 +14,7 @@
 //!
 //! # Structure
 //! The [`ANON_HTTP_ACTIVE`] flag and URL parsing are always compiled so the leaf
-//! media modules (gif / youtube / link_preview) can gate on anon state without
+//! media modules (gif) can gate on anon state without
 //! pulling in the `onion` feature. The actual Tor transport ([`get`] / [`put`])
 //! is gated behind `onion`.
 
@@ -24,7 +24,7 @@ use std::sync::atomic::AtomicBool;
 ///
 /// Set true by the client when anon mode is enabled AND the transport actually
 /// switched to Onion; false otherwise (including every failure path). Leaf media
-/// modules that have no gRPC pool handle (gif/youtube/link_preview) read this to
+/// modules that have no gRPC pool handle (gif) read this to
 /// hard-disable their third-party HTTP fetches in anon mode. Under a build
 /// without the `onion` feature the transport can never be Onion, so this stays
 /// false and every anon branch is dead.

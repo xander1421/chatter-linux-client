@@ -311,8 +311,6 @@ impl ThreadPanel {
 /// as `pinned`.
 #[derive(Clone, Debug, Default)]
 pub struct PinnedSubstate {
-    /// Current channel (pinned messages context).
-    pub channel_id: Option<ChannelId>,
     /// Ordered list of pinned message IDs.
     pub pinned_message_ids: Vec<MessageId>,
     /// Current navigation position (0-based).
@@ -695,12 +693,11 @@ impl ChatState {
     // single ChatState store.
     // ========================================================================
 
-    /// Set pinned messages for a channel.
+    /// Set pinned messages for the open conversation.
     ///
     /// Resets the navigation index to 0 and clears dismissed state.
-    pub fn set_pinned_messages(&self, channel_id: ChannelId, message_ids: Vec<MessageId>) {
+    pub fn set_pinned_messages(&self, message_ids: Vec<MessageId>) {
         self.store.update(|state| {
-            state.pinned.channel_id = Some(channel_id);
             state.pinned.pinned_message_ids = message_ids;
             state.pinned.current_index = 0;
             state.pinned.is_dismissed = false; // Reset on channel change
@@ -710,7 +707,6 @@ impl ChatState {
     /// Clear all pinned-bar state.
     pub fn clear_pinned(&self) {
         self.store.update(|state| {
-            state.pinned.channel_id = None;
             state.pinned.pinned_message_ids.clear();
             state.pinned.current_index = 0;
             state.pinned.is_dismissed = false;
@@ -1289,8 +1285,6 @@ mod tests {
         fn test_pinned_state_default() {
             let state = ChatState::new();
             let data = state.get();
-
-            assert!(data.pinned.channel_id.is_none());
             assert!(data.pinned.pinned_message_ids.is_empty());
             assert_eq!(data.pinned.current_index, 0);
             assert!(!data.pinned.is_dismissed);
@@ -1299,14 +1293,11 @@ mod tests {
         #[test]
         fn test_set_pinned_messages() {
             let state = ChatState::new();
-            let channel_id = ChannelId::new();
             let msg1 = MessageId::new();
             let msg2 = MessageId::new();
 
-            state.set_pinned_messages(channel_id, vec![msg1, msg2]);
+            state.set_pinned_messages(vec![msg1, msg2]);
             let data = state.get();
-
-            assert_eq!(data.pinned.channel_id, Some(channel_id));
             assert_eq!(data.pinned.pinned_message_ids.len(), 2);
             assert_eq!(data.pinned.current_index, 0);
         }
@@ -1314,31 +1305,26 @@ mod tests {
         #[test]
         fn test_set_pinned_messages_resets_index() {
             let state = ChatState::new();
-            let channel_id = ChannelId::new();
 
-            state.set_pinned_messages(
-                channel_id,
-                vec![MessageId::new(), MessageId::new(), MessageId::new()],
+            state.set_pinned_messages(vec![MessageId::new(), MessageId::new(), MessageId::new()],
             );
             state.pinned_navigate_to(2);
             assert_eq!(state.get().pinned.current_index, 2);
 
             // Setting new messages should reset index
-            state.set_pinned_messages(channel_id, vec![MessageId::new()]);
+            state.set_pinned_messages(vec![MessageId::new()]);
             assert_eq!(state.get().pinned.current_index, 0);
         }
 
         #[test]
         fn test_clear_pinned() {
             let state = ChatState::new();
-            let channel_id = ChannelId::new();
 
-            state.set_pinned_messages(channel_id, vec![MessageId::new()]);
+            state.set_pinned_messages(vec![MessageId::new()]);
             state.pinned_dismiss();
             state.clear_pinned();
 
             let data = state.get();
-            assert!(data.pinned.channel_id.is_none());
             assert!(data.pinned.pinned_message_ids.is_empty());
             assert_eq!(data.pinned.current_index, 0);
             assert!(!data.pinned.is_dismissed);
@@ -1347,12 +1333,11 @@ mod tests {
         #[test]
         fn test_navigate_next_wraparound() {
             let state = ChatState::new();
-            let channel_id = ChannelId::new();
             let msg1 = MessageId::new();
             let msg2 = MessageId::new();
             let msg3 = MessageId::new();
 
-            state.set_pinned_messages(channel_id, vec![msg1, msg2, msg3]);
+            state.set_pinned_messages(vec![msg1, msg2, msg3]);
 
             assert_eq!(state.pinned_current_message_id(), Some(msg1));
 
@@ -1370,12 +1355,11 @@ mod tests {
         #[test]
         fn test_navigate_prev_wraparound() {
             let state = ChatState::new();
-            let channel_id = ChannelId::new();
             let msg1 = MessageId::new();
             let msg2 = MessageId::new();
             let msg3 = MessageId::new();
 
-            state.set_pinned_messages(channel_id, vec![msg1, msg2, msg3]);
+            state.set_pinned_messages(vec![msg1, msg2, msg3]);
 
             // Start at first, go back to wrap to last
             state.pinned_navigate_prev();
@@ -1403,12 +1387,11 @@ mod tests {
         #[test]
         fn test_navigate_to() {
             let state = ChatState::new();
-            let channel_id = ChannelId::new();
             let msg1 = MessageId::new();
             let msg2 = MessageId::new();
             let msg3 = MessageId::new();
 
-            state.set_pinned_messages(channel_id, vec![msg1, msg2, msg3]);
+            state.set_pinned_messages(vec![msg1, msg2, msg3]);
 
             state.pinned_navigate_to(2);
             assert_eq!(state.pinned_current_message_id(), Some(msg3));
@@ -1421,9 +1404,8 @@ mod tests {
         #[test]
         fn test_dismiss() {
             let state = ChatState::new();
-            let channel_id = ChannelId::new();
 
-            state.set_pinned_messages(channel_id, vec![MessageId::new()]);
+            state.set_pinned_messages(vec![MessageId::new()]);
             assert!(!state.pinned_is_dismissed());
             assert!(state.pinned_should_show());
 
@@ -1435,13 +1417,12 @@ mod tests {
         #[test]
         fn test_should_show() {
             let state = ChatState::new();
-            let channel_id = ChannelId::new();
 
             // No pinned messages - should not show
             assert!(!state.pinned_should_show());
 
             // Has pinned messages - should show
-            state.set_pinned_messages(channel_id, vec![MessageId::new()]);
+            state.set_pinned_messages(vec![MessageId::new()]);
             assert!(state.pinned_should_show());
 
             // Dismissed - should not show
@@ -1449,7 +1430,7 @@ mod tests {
             assert!(!state.pinned_should_show());
 
             // New channel resets dismissed
-            state.set_pinned_messages(ChannelId::new(), vec![MessageId::new()]);
+            state.set_pinned_messages(vec![MessageId::new()]);
             assert!(state.pinned_should_show());
         }
 
@@ -1457,10 +1438,8 @@ mod tests {
         fn test_current_message_id() {
             let state = ChatState::new();
             assert!(state.pinned_current_message_id().is_none());
-
-            let channel_id = ChannelId::new();
             let msg = MessageId::new();
-            state.set_pinned_messages(channel_id, vec![msg]);
+            state.set_pinned_messages(vec![msg]);
 
             assert_eq!(state.pinned_current_message_id(), Some(msg));
         }
@@ -1469,9 +1448,7 @@ mod tests {
         fn test_total_count() {
             let state = ChatState::new();
             assert_eq!(state.pinned_total_count(), 0);
-
-            let channel_id = ChannelId::new();
-            state.set_pinned_messages(channel_id, vec![MessageId::new(), MessageId::new()]);
+            state.set_pinned_messages(vec![MessageId::new(), MessageId::new()]);
 
             assert_eq!(state.pinned_total_count(), 2);
         }
@@ -1479,25 +1456,23 @@ mod tests {
         #[test]
         fn test_has_multiple() {
             let state = ChatState::new();
-            let channel_id = ChannelId::new();
 
             assert!(!state.pinned_has_multiple());
 
-            state.set_pinned_messages(channel_id, vec![MessageId::new()]);
+            state.set_pinned_messages(vec![MessageId::new()]);
             assert!(!state.pinned_has_multiple());
 
-            state.set_pinned_messages(channel_id, vec![MessageId::new(), MessageId::new()]);
+            state.set_pinned_messages(vec![MessageId::new(), MessageId::new()]);
             assert!(state.pinned_has_multiple());
         }
 
         #[test]
         fn test_add_pinned_message() {
             let state = ChatState::new();
-            let channel_id = ChannelId::new();
             let msg1 = MessageId::new();
             let msg2 = MessageId::new();
 
-            state.set_pinned_messages(channel_id, vec![msg1]);
+            state.set_pinned_messages(vec![msg1]);
             state.add_pinned_message(msg2);
 
             let data = state.get();
@@ -1512,12 +1487,11 @@ mod tests {
         #[test]
         fn test_remove_pinned_message() {
             let state = ChatState::new();
-            let channel_id = ChannelId::new();
             let msg1 = MessageId::new();
             let msg2 = MessageId::new();
             let msg3 = MessageId::new();
 
-            state.set_pinned_messages(channel_id, vec![msg1, msg2, msg3]);
+            state.set_pinned_messages(vec![msg1, msg2, msg3]);
             state.pinned_navigate_to(2); // Focus msg3
 
             state.remove_pinned_message(&msg2);
@@ -1532,11 +1506,10 @@ mod tests {
         #[test]
         fn test_remove_pinned_message_adjusts_index() {
             let state = ChatState::new();
-            let channel_id = ChannelId::new();
             let msg1 = MessageId::new();
             let msg2 = MessageId::new();
 
-            state.set_pinned_messages(channel_id, vec![msg1, msg2]);
+            state.set_pinned_messages(vec![msg1, msg2]);
             state.pinned_navigate_to(1); // Focus msg2
 
             // Remove msg2 (the one at current index)
@@ -1550,10 +1523,9 @@ mod tests {
         #[test]
         fn test_remove_last_pinned_message() {
             let state = ChatState::new();
-            let channel_id = ChannelId::new();
             let msg = MessageId::new();
 
-            state.set_pinned_messages(channel_id, vec![msg]);
+            state.set_pinned_messages(vec![msg]);
             state.remove_pinned_message(&msg);
 
             let data = state.get();
@@ -1565,10 +1537,9 @@ mod tests {
         async fn test_pinned_state_subscribe() {
             let state = ChatState::new();
             let mut rx = state.subscribe();
-            let channel_id = ChannelId::new();
             let msg = MessageId::new();
 
-            state.set_pinned_messages(channel_id, vec![msg]);
+            state.set_pinned_messages(vec![msg]);
 
             let received = rx.recv().await.unwrap();
             assert_eq!(received.pinned.pinned_message_ids.len(), 1);
@@ -1578,9 +1549,8 @@ mod tests {
         fn test_pinned_state_clone_shares_state() {
             let state1 = ChatState::new();
             let state2 = state1.clone();
-            let channel_id = ChannelId::new();
 
-            state1.set_pinned_messages(channel_id, vec![MessageId::new(), MessageId::new()]);
+            state1.set_pinned_messages(vec![MessageId::new(), MessageId::new()]);
             assert_eq!(state2.pinned_total_count(), 2);
 
             state1.pinned_navigate_next();

@@ -624,7 +624,6 @@ export component Sidebar inherits Rectangle {
                     mobile-mode: root.mobile-mode;
                     groups: root.private-groups;
                     collapsed: root.collapsed;
-                    show-header: false;
                     group-selected(id) => { root.private-group-selected(id); }
                     group-context-menu-requested(id, x, y) => {
                         root.ctx-menu-conv-id = id;
