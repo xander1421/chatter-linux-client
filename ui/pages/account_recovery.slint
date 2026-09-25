@@ -34,10 +34,11 @@ export component AccountRecoveryPage inherits Rectangle {
     // Centered form container
     VerticalLayout {
         alignment: center;
+        // Centre the card (see login.slint).
+        cross-axis-alignment: center;
 
         Rectangle {
-            max-width: 400px;
-            horizontal-stretch: 0;
+            width: min(480px, root.width);
             background: Colors.surface;
             border-radius: Spacing.radius-lg;
 

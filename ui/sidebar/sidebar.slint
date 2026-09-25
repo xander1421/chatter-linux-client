@@ -43,7 +43,13 @@ export component Sidebar inherits Rectangle {
     // ── Properties: State ──
     in-out property <bool> collapsed: false;
     in-out property <bool> hidden: false;
+    // Compact (phone-width) layout: the panel IS the screen and the bottom tab
+    // bar carries Friends, Profile and Settings. Not "is a phone": a tablet
+    // shows this panel beside the chat, with its own footer, like desktop.
     in property <bool> mobile-mode: false;
+    // Touch input: sizes the targets. Independent of `mobile-mode`, so a
+    // two-pane tablet keeps finger-sized rows.
+    in property <bool> touch: false;
     // The server is settled-unreachable. Shown as a dot on the settings button,
     // mirroring how the anon-mode button carries its Tor dot, so the connection
     // banner can be dismissed without the outage becoming invisible.
@@ -106,16 +112,18 @@ export component Sidebar inherits Rectangle {
     // a hole punched between them, which is the "huge space from Search to
     // Saved" complaint. 56px is the standard list row: same type, same tap
     // target, no cavern.
-    property <length> quick-link-height: root.mobile-mode ? 56px : 34px;
+    property <length> quick-link-height: root.touch ? 56px : 34px;
     // The panel's first row, pinned above the scroll. On desktop it takes the
     // shared header height so it and the conversation header beside it read as
     // one row across the seam — and on macOS that is the row the traffic
     // lights are in. Mobile keeps the conversation-row geometry: there the
     // panel IS the screen, so its first row belongs to the list.
-    property <length> top-row-height: root.mobile-mode ? Spacing.row-height-touch : Spacing.header-height;
-    property <length> quick-link-text-size: root.mobile-mode ? Typography.base : Typography.sm2;
-    property <brush> quick-link-text-color: root.mobile-mode ? Colors.text-primary : Colors.text-secondary;
-    property <length> quick-link-icon-size: root.mobile-mode ? 24px : 14px;
+    // A two-pane tablet sits beside a touch-height conversation header.
+    property <length> top-row-height: root.mobile-mode ? Spacing.row-height-touch
+        : root.touch ? Spacing.header-height-touch : Spacing.header-height;
+    property <length> quick-link-text-size: root.touch ? Typography.base : Typography.sm2;
+    property <brush> quick-link-text-color: root.touch ? Colors.text-primary : Colors.text-secondary;
+    property <length> quick-link-icon-size: root.touch ? 24px : 14px;
     // The expanded panel's footer row. 36px on touch, not the full 48px
     // minimum: the panel is capped at 45% of a phone's width, and three 48px
     // buttons plus the avatar and name overflowed it — which silently pushed
@@ -123,13 +131,13 @@ export component Sidebar inherits Rectangle {
     // expanded state. 36px is the largest that fits with the collapse control
     // still on screen; the rail's buttons, which have the whole width to
     // themselves, keep the full 48px.
-    property <length> footer-icon-size: root.mobile-mode ? 36px : 24px;
+    property <length> footer-icon-size: root.touch ? 36px : 24px;
     // One size for every button in the collapsed rail's bottom cluster, so the
     // container height below stays in step with them.
-    property <length> rail-icon-size: root.mobile-mode ? Spacing.touch-target-min : 32px;
+    property <length> rail-icon-size: root.touch ? Spacing.touch-target-min : 32px;
     // The visual plate inside a rail row. Smaller than the row so adjacent slots
     // do not touch; the row stays the touch target, the slot is what you see.
-    property <length> rail-slot-size: root.mobile-mode ? 44px : 32px;
+    property <length> rail-slot-size: root.touch ? 44px : 32px;
     property <length> rail-slot-radius: 12px;
     property <brush> rail-slot-bg: Colors.surface-hover;
     property <bool> rail-has-mesh: MeshGlobal.enabled && MeshGlobal.conversations.length > 0;
@@ -160,8 +168,8 @@ export component Sidebar inherits Rectangle {
     // ── Sizing ──
     // Always a side panel, on every platform: collapsed to the icon rail or
     // expanded to the list, never a full-screen view that swaps the chat out.
-    // `mobile-mode` here means "touch input", and sizes the targets below; it
-    // does NOT change the layout.
+    // `touch` sizes the targets; `mobile-mode` (compact width) is what makes
+    // the expanded panel full-screen.
     // Expanded on touch, the panel takes the WHOLE screen. 240px is 58% of a
     // 411dp phone and 45% is not much better: at either width the panel is too
     // cramped to browse folders in and the chat behind it is too narrow to read,
@@ -170,7 +178,7 @@ export component Sidebar inherits Rectangle {
     // navigation always-available, which is why the panel does not have to.
     // `mobile-width` is fed the window width by app.slint.
     width: root.hidden ? Spacing.sidebar-width-hidden
-         : root.collapsed ? (root.mobile-mode ? 68px : Spacing.sidebar-width-collapsed)
+         : root.collapsed ? (root.touch ? 68px : Spacing.sidebar-width-collapsed)
          : root.mobile-mode ? root.mobile-width
          : Spacing.sidebar-width;
     visible: !root.hidden;
@@ -461,7 +469,7 @@ export component Sidebar inherits Rectangle {
                     vertical-stretch: 0;
                     conversations: root.dm-conversations;
                     collapsed: root.collapsed;
-                    mobile-mode: root.mobile-mode;
+                    mobile-mode: root.touch;
                     show-header: false;
                     conversation-selected(id) => { root.dm-selected(id); }
                     add-friend-clicked => { root.friends-clicked(); }
@@ -596,7 +604,7 @@ export component Sidebar inherits Rectangle {
                     vertical-stretch: 0;
                     channels: root.channels;
                     collapsed: root.collapsed;
-                    mobile-mode: root.mobile-mode;
+                    mobile-mode: root.touch;
                     show-header: false;
                     has-sibling-content: root.private-groups.length > 0;
                     channel-selected(id) => { root.channel-selected(id); }
@@ -621,7 +629,7 @@ export component Sidebar inherits Rectangle {
 
                 if root.channels-expanded && root.private-groups.length > 0: PrivateGroupList {
                     vertical-stretch: 0;
-                    mobile-mode: root.mobile-mode;
+                    mobile-mode: root.touch;
                     groups: root.private-groups;
                     collapsed: root.collapsed;
                     group-selected(id) => { root.private-group-selected(id); }
@@ -695,7 +703,7 @@ export component Sidebar inherits Rectangle {
                     vertical-stretch: 0;
                     sections: root.custom-sections;
                     collapsed: root.collapsed;
-                    mobile-mode: root.mobile-mode;
+                    mobile-mode: root.touch;
                     create-section-clicked => { root.create-section-clicked(); }
                     section-toggle-expanded(id) => { root.section-toggle-expanded(id); }
                     section-conversation-selected(conv-id, conv-type) => { root.section-conversation-selected(conv-id, conv-type); }
@@ -981,7 +989,7 @@ export component Sidebar inherits Rectangle {
         current-section-id: root.ctx-menu-current-section-id;
         is-pinned: root.ctx-menu-is-pinned;
         can-pin: root.ctx-menu-can-pin;
-        mobile-mode: root.mobile-mode;
+        mobile-mode: root.touch;
         sections: root.custom-sections;
 
         close => {
@@ -1008,7 +1016,7 @@ export component Sidebar inherits Rectangle {
         position-y: root.section-header-ctx-menu-y;
         section-id: root.section-header-ctx-menu-section-id;
         section-sort-mode: root.section-header-ctx-menu-sort-mode;
-        mobile-mode: root.mobile-mode;
+        mobile-mode: root.touch;
 
         close => {
             root.section-header-ctx-menu-show = false;

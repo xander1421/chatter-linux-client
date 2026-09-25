@@ -293,8 +293,9 @@ pub async fn app_init() -> AppState {
     window.set_login_server_url(ui_ctx.endpoint().into());
     window.set_configured_server_url(ui_ctx.endpoint().into());
 
-    // Flag as mobile platform so the UI uses mobile layout (full-screen sidebar,
-    // bottom nav, etc.) when the screen is narrow.
+    // Touch platform: touch-sized targets and gestures. The phone layout
+    // (single pane, bottom nav) is NOT implied — app.slint's `compact-layout`
+    // picks it from the window's logical width, so a tablet gets two panes.
     #[cfg(any(target_os = "android", target_os = "ios"))]
     window.set_is_mobile_platform(true);
 

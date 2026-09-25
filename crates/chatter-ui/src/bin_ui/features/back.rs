@@ -19,13 +19,15 @@
 //!   5. The mobile conversation pane returns to the conversation list. On a
 //!      phone the two are separate screens, so Back out of a chat means "up to
 //!      the list" — going straight to backgrounding the app there is the single
-//!      most jarring thing Back can do in a messenger.
+//!      most jarring thing Back can do in a messenger. Only in the compact
+//!      layout: on a two-pane tablet the list is already beside the chat, so
+//!      there is nothing to go up to.
 //!   6. Otherwise the task is backgrounded, which is Android's normal
 //!      back-out-of-app. `moveTaskToBack(true)`, NOT `finish()`: finishing
 //!      destroys the Activity and with it the whole in-memory session, which is
 //!      wrong for a messaging app the user expects to come back to.
 //!
-//! On desktop steps 5 and 6 are no-ops: `mobile-show-chat` is never set there
+//! On desktop steps 5 and 6 are no-ops: the layout is never compact there
 //! (both panes are on screen at once), and — popping in-app layers is the only meaningful
 //! part, and nothing should try to "background" a desktop window.
 
@@ -107,7 +109,11 @@ pub fn handle_back(window: &MainWindow) -> bool {
         return true;
     }
 
-    if window.get_mobile_show_chat() {
+    // `mobile-show-chat` is set by every conversation tap, on every layout,
+    // so gate on the layout rather than the flag: a two-pane tablet popping it
+    // changes nothing on screen and ate a Back press. Left set there, it is
+    // what keeps the chat open if the window later narrows to compact.
+    if window.get_compact_layout() && window.get_mobile_show_chat() {
         window.set_mobile_show_chat(false);
         return true;
     }

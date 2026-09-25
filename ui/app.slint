@@ -68,10 +68,18 @@ export component App inherits Rectangle {
     in property <length> safe-area-top: 0px;     // Android status bar (~24dp)
     in property <length> safe-area-bottom: 0px;  // Android nav bar / gesture area
 
-    // True on Android — set by Rust at startup. Used only by inset polling
-    // wiring on the Rust side; the Slint layout itself is platform-agnostic
-    // (mobile renders the same split view as a narrow desktop window).
+    // True on Android/iOS — set by Rust at startup. Means TOUCH INPUT: target
+    // sizes, press-and-hold, no keyboard shortcuts. It does not pick the
+    // layout; `compact-layout` does.
     in property <bool> is-mobile-platform: false;
+    // Single pane + bottom tab bar + back button. Decided by logical width,
+    // not by platform: a 1000dp+ tablet gets the two-pane desktop structure
+    // (with touch-sized targets), a phone the stacked one. Material's compact
+    // breakpoint is 600dp; 600-839dp is two-pane on the icon rail
+    // (`is-small-screen`). Re-evaluated on every resize, so rotation and
+    // split-screen switch live; `mobile-show-chat` and the open conversation
+    // survive the switch. Out so Rust's Back handler can ask it.
+    out property <bool> compact-layout: root.is-mobile-platform && root.width < 600px;
     // macOS only, both set by Rust once the native titlebar is made
     // transparent/unified (platform::macos::apply_unified_titlebar). 0 on
     // every other platform, which is what makes the bindings below no-ops
@@ -96,7 +104,7 @@ export component App inherits Rectangle {
     // a strip for it (bottom-inset) must use this same condition: they used to
     // omit `mobile-show-chat`, so over an open chat the strip showed the chat
     // composer through the page instead of the (hidden) tab bar.
-    property <bool> bottom-nav-visible: root.is-mobile-platform && root.current-view == "main"
+    property <bool> bottom-nav-visible: root.compact-layout && root.current-view == "main"
         && !root.keyboard-open && !root.mobile-show-chat;
 
     // ========== View routing ==========
@@ -1231,7 +1239,7 @@ export component App inherits Rectangle {
             // Hidden entirely in call-fullscreen so the call view fills the whole
             // window width — a landscape viewport for a landscape screen share.
             if !root.active-call-fullscreen
-                && !(root.is-mobile-platform && root.mobile-show-chat): Sidebar {
+                && !(root.compact-layout && root.mobile-show-chat): Sidebar {
                 // Survives dismissing the connection banner: the dot on the
                 // settings button is what keeps saying the server is down.
                 server-unreachable: root.server-unreachable;
@@ -1247,8 +1255,10 @@ export component App inherits Rectangle {
                 // (Chats is one tap from anywhere), and the rail was spending
                 // 16% of the width of every conversation to avoid it. So on a
                 // phone this is a full-width list that the chat replaces, never
-                // a rail beside it.
-                mobile-mode: root.is-mobile-platform;
+                // a rail beside it. A tablet is wide enough for the desktop
+                // two-pane role, so only its target sizes follow touch.
+                mobile-mode: root.compact-layout;
+                touch: root.is-mobile-platform;
                 mobile-width: root.width;
                 // The panel is the top-left thing on screen, so it is the one
                 // that has to keep the macOS traffic lights clear.
@@ -1267,8 +1277,8 @@ export component App inherits Rectangle {
                 // from being undone by a resize.
                 // Never a rail on mobile — when this panel is on screen at all
                 // it is the whole screen.
-                collapsed: root.is-mobile-platform ? false : root.sidebar-is-rail;
-                hidden: root.is-mobile-platform ? false : root.sidebar-hidden;
+                collapsed: root.compact-layout ? false : root.sidebar-is-rail;
+                hidden: root.compact-layout ? false : root.sidebar-hidden;
                 pending-friend-requests: root.friends-received-requests.length;
                 pending-message-requests: root.pending-message-requests;
                 pending-group-invites: root.pending-group-invites;
@@ -1406,7 +1416,7 @@ export component App inherits Rectangle {
             // below: a hidden element still occupies its layout slot, and a
             // zero-width chat column beside a full-width panel is exactly the
             // shape that pushes content past the clipped edge.
-            if !(root.is-mobile-platform && !root.mobile-show-chat): chat-panel-area := Rectangle {
+            if !(root.compact-layout && !root.mobile-show-chat): chat-panel-area := Rectangle {
                 horizontal-stretch: 1;
                 vertical-stretch: 1;
                 visible: true;
@@ -1505,7 +1515,7 @@ export component App inherits Rectangle {
                     // The only way back to the list on a phone, so it is not
                     // optional there. Desktop still shows both panes at once
                     // and has nothing to go back to.
-                    show-back-button: root.is-mobile-platform;
+                    show-back-button: root.compact-layout;
                     header-leading-inset: root.chat-traffic-lights-lead;
                     back-clicked => { root.mobile-show-chat = false; }
                     selection-mode: root.selection-mode;
@@ -1676,7 +1686,7 @@ export component App inherits Rectangle {
             // went inert. Reserving the height here (rather than overlaying
             // the bar on the chat) keeps the original property that nothing
             // above is clipped by it.
-            if root.is-mobile-platform && !root.keyboard-open && !root.mobile-show-chat: Rectangle {
+            if root.bottom-nav-visible: Rectangle {
                 // Must match MobileBottomNav's own `occupied-height` — the dock
                 // floats with a gap under it, so reserving only the bar height
                 // would let the last row slide beneath the glass.
@@ -1831,7 +1841,7 @@ export component App inherits Rectangle {
         shared-tab <=> root.profile-shared-tab;
         shared-items: root.profile-shared-items;
         shared-loading: root.profile-shared-loading;
-        mobile-mode: root.is-mobile-platform;
+        mobile-mode: root.compact-layout;
         // Keep the tab bar visible under the profile page — unless the
         // keyboard has replaced it, in which case there is nothing to leave
         // room for. Same expression the Contacts screen uses.
@@ -1967,7 +1977,7 @@ export component App inherits Rectangle {
     // reason Contacts and Settings are: on a phone it is a full-screen page
     // reached from the tab bar, and the bar keeps its strip at the bottom.
     if root.active-modal == "calls": CallHistoryScreen {
-        mobile-mode: root.is-mobile-platform;
+        mobile-mode: root.compact-layout;
         bottom-inset: root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
         show-modal: true;
         rows: root.call-history-rows;
@@ -1999,7 +2009,7 @@ export component App inherits Rectangle {
     // Friend Requests Modal (legacy)
     // Friends Modal (comprehensive)
     if root.active-modal == "friends": FriendsModal {
-        mobile-mode: root.is-mobile-platform;
+        mobile-mode: root.compact-layout;
         // Keep the tab bar visible under the Contacts screen — unless the
         // keyboard has replaced it, in which case there is nothing to leave
         // room for.

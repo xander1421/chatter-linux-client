@@ -134,19 +134,20 @@ export component RegisterPage inherits Rectangle {
             }
         }
 
-        Flickable {
+        flick := Flickable {
             viewport-height: content.preferred-height;
             interactive: content.preferred-height > self.height;
 
             content := VerticalLayout {
                 padding: Spacing.lg;
                 spacing: 0px;
+                // Centre the card (see login.slint).
+                cross-axis-alignment: center;
 
                 Rectangle { height: Spacing.xl; }
 
                 Rectangle {
-                    max-width: 400px;
-                    horizontal-stretch: 0;
+                    width: min(480px, flick.width - 2 * Spacing.lg);
                     background: Colors.surface;
                     border-radius: Spacing.radius-lg;
 
