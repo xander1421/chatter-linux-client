@@ -140,6 +140,17 @@ pub enum CallOrchestratorEvent {
         replaces_active: bool,
     },
 
+    /// An incoming offer arrived too late to ring (older than
+    /// [`RING_TIMEOUT`] — delivered from the queue after the app was offline).
+    /// Never presented; it only becomes a missed-call history row.
+    IncomingMissed {
+        call: CallHandle,
+        kind: OrchestratedCallKind,
+        peer_name: String,
+        is_video: bool,
+        conversation_id: String,
+    },
+
     /// A presented incoming call was withdrawn before the user acted (caller
     /// hung up, timed out, declined remotely).
     IncomingWithdrawn {
@@ -618,6 +629,26 @@ impl CallWorkerHandle {
             conversation_id,
         };
         let _ = self.cmd_tx.try_send(CallCommand::OrchPresentIncoming { incoming });
+    }
+
+    /// Record an incoming call whose offer is too old to ring. Touches no
+    /// orchestrator state, so it is emitted straight onto the event stream.
+    pub fn orch_missed_incoming(
+        &self,
+        call: CallHandle,
+        kind: OrchestratedCallKind,
+        peer_name: String,
+        is_video: bool,
+        conversation_id: String,
+    ) {
+        tracing::info!(call = %call.as_str(), "Incoming call offer is past the ring timeout — recording as missed, not ringing");
+        let _ = self.call_events_tx.send(CallOrchestratorEvent::IncomingMissed {
+            call,
+            kind,
+            peer_name,
+            is_video,
+            conversation_id,
+        });
     }
 
     /// Withdraw a previously presented incoming call.
@@ -2416,6 +2447,26 @@ fn spawn_end_one_to_one_if_peer_gone(
     });
 }
 
+/// How long an incoming offer may ring. Signal's ring timeout: an offer older
+/// than this — one that sat in the queue while the app was offline, or whose
+/// call was answered on another of our devices long ago — never rings.
+const RING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Whether an offer sent at `sent_ns` (sender clock, ns since epoch) is past
+/// the ring timeout at `now_ns`. `0` means the sender stamped nothing: ring
+/// rather than silently drop a live call. A sender clock ahead of ours
+/// saturates to age 0 and rings.
+// ponytail: sender clock, so a caller whose clock runs >60 s slow never rings
+// us. Signal ages by the server's receive timestamp; switch to that once the
+// inbox carries it onto the offer event.
+fn offer_is_stale(sent_ns: u64, now_ns: u64) -> bool {
+    sent_ns != 0 && now_ns.saturating_sub(sent_ns) > RING_TIMEOUT.as_nanos() as u64
+}
+
+fn offer_is_stale_now(sent_ns: u64) -> bool {
+    offer_is_stale(sent_ns, crate::util::time::TimestampNanos::now().as_u64())
+}
+
 fn handle_domain_event(
     worker: &CallWorkerHandle,
     signaling: &crate::services::call_signaling::CallSignalingService,
@@ -2431,10 +2482,21 @@ fn handle_domain_event(
             is_identity_verified,
             identity_warning,
             caller_name,
+            timestamp,
             ..
         } => {
             let is_video = call_type.eq_ignore_ascii_case("video")
                 || call_type.eq_ignore_ascii_case("Video Call");
+            if offer_is_stale_now(timestamp) {
+                worker.orch_missed_incoming(
+                    CallHandle::from(call_id),
+                    OrchestratedCallKind::DmStandard,
+                    caller_name,
+                    is_video,
+                    peer_id.to_string(),
+                );
+                return;
+            }
             worker.orch_present_incoming(
                 CallHandle::from(call_id),
                 OrchestratedCallKind::DmStandard,
@@ -2451,7 +2513,10 @@ fn handle_domain_event(
             );
         }
 
-        DomainEvent::CallHangupReceived { .. } => {
+        DomainEvent::CallHangupReceived { call_id, .. } => {
+            // Still ringing? The caller gave up — stop ringing. A no-op when
+            // this call was never presented or was already accepted.
+            worker.orch_withdraw_incoming(CallHandle::from(call_id), CallEndReason::RemoteHangup);
             // Disconnect from LiveKit + clear active_call + orchestrator.
             // Previously only cleared orchestrator, leaving the room connected.
             worker.disconnect_local_nonblocking(CallEndReason::RemoteHangup);
@@ -2463,6 +2528,7 @@ fn handle_domain_event(
             call_type,
             caller_display_name,
             conversation_id,
+            timestamp,
             ..
         } => {
             let is_video = call_type == 2;
@@ -2474,6 +2540,16 @@ fn handle_domain_event(
                 .anon_dm_peer_name(&conversation_id)
                 .or_else(|| (!caller_display_name.is_empty()).then_some(caller_display_name))
                 .unwrap_or_else(|| "Anonymous".to_string());
+            if offer_is_stale_now(timestamp) {
+                worker.orch_missed_incoming(
+                    CallHandle::from(room_name),
+                    OrchestratedCallKind::AnonDm,
+                    peer_name,
+                    is_video,
+                    conversation_id.to_string(),
+                );
+                return;
+            }
             worker.orch_present_incoming(
                 CallHandle::from(room_name),
                 OrchestratedCallKind::AnonDm,
@@ -2520,6 +2596,7 @@ fn handle_domain_event(
             call_type,
             caller_display_name,
             group_id,
+            timestamp,
             ..
         } => {
             let is_video = call_type == 2;
@@ -2528,6 +2605,16 @@ fn handle_domain_event(
             } else {
                 caller_display_name
             };
+            if offer_is_stale_now(timestamp) {
+                worker.orch_missed_incoming(
+                    CallHandle::from(room_name),
+                    OrchestratedCallKind::AnonGroup,
+                    peer_name,
+                    is_video,
+                    group_id.to_string(),
+                );
+                return;
+            }
             worker.orch_present_incoming(
                 CallHandle::from(room_name),
                 OrchestratedCallKind::AnonGroup,
@@ -2660,6 +2747,25 @@ fn spawn_anon_call_answer_task(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod ring_timeout_tests {
+    use super::{offer_is_stale, RING_TIMEOUT};
+
+    #[test]
+    fn only_offers_past_the_ring_timeout_are_stale() {
+        let now = 1_800_000_000_000_000_000u64;
+        let timeout = RING_TIMEOUT.as_nanos() as u64;
+        assert!(!offer_is_stale(now - 5_000_000_000, now));
+        assert!(!offer_is_stale(now - timeout, now));
+        assert!(offer_is_stale(now - timeout - 1, now));
+        // The F56 case: an offer from 40 minutes ago, drained on app start.
+        assert!(offer_is_stale(now - 40 * 60 * 1_000_000_000, now));
+        // Sender clock ahead of ours, or no timestamp at all: ring.
+        assert!(!offer_is_stale(now + 10_000_000_000, now));
+        assert!(!offer_is_stale(0, now));
+    }
 }
 
 #[cfg(test)]

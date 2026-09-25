@@ -2050,6 +2050,10 @@ pub fn dispatch_control_content(
                 );
             }
         }
+        content::Content::ReadSync(sync) => {
+            let _ = event_tx.send(InboxEvent::ReadSync { sender_id: *sender_id, sync });
+            stats.write().messages_processed += 1;
+        }
         content::Content::DeleteForMeSync(sync) => {
             tracing::debug!(
                 conversation_id = %sync.conversation_id,

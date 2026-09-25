@@ -90,6 +90,7 @@ pub fn content_type_name(content: &Option<content::Content>) -> &'static str {
         Some(content::Content::SavedMessageSync(_)) => "SavedMessageSync",
         Some(content::Content::DmMailboxRotation(_)) => "DmMailboxRotation",
         Some(content::Content::SyncSent(_)) => "SyncSent",
+        Some(content::Content::ReadSync(_)) => "ReadSync",
         None => "None",
     }
 }

@@ -525,7 +525,7 @@ async fn handle_bootstrap_async(
 ///
 /// IMPORTANT: Uses the same SignalService instance as the bootstrap response
 /// to ensure session counters stay in sync.
-async fn send_pending_messages_after_bootstrap(
+pub(crate) async fn send_pending_messages_after_bootstrap(
     peer_id: UserId,
     peer_device_id: u32,
     database: Arc<Database>,
@@ -545,10 +545,9 @@ async fn send_pending_messages_after_bootstrap(
             return None;
         }
     };
-    if pending.is_empty() {
-        tracing::info!(peer = %peer_id, "BOOTSTRAP[3/4] No pending messages queued - nothing to send");
-        return None;
-    }
+    // Nothing queued is not nothing to send: a device answering after another
+    // already took the queue is still owed its copies (drained below).
+    let nothing_queued = pending.is_empty();
     tracing::info!(peer = %peer_id, count = pending.len(), "BOOTSTRAP[3/4] Sending pending messages (responder side)");
 
     // From here the queue is drained: every failure loses messages, so each
@@ -639,7 +638,7 @@ async fn send_pending_messages_after_bootstrap(
         failed = flush.failed.len(),
         "Finished sending pending messages after bootstrap"
     );
-    Some(flush)
+    (!nothing_queued).then_some(flush)
 }
 
 /// Seal `content` for the device owning `peer_mailbox` and deposit it there.

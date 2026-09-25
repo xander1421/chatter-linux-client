@@ -522,7 +522,9 @@ fn handle_orchestrator_event(
         }
 
         CallOrchestratorEvent::OutgoingStarted { call, .. }
-        | CallOrchestratorEvent::ActiveConnected { call, .. } => {
+        | CallOrchestratorEvent::ActiveConnected { call, .. }
+        // Too late to ring; core already filed it as a missed call.
+        | CallOrchestratorEvent::IncomingMissed { call, .. } => {
             tracing::debug!(call = %call.as_str(), "Orchestrator state transition");
         }
 

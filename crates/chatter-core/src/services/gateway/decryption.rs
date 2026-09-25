@@ -533,6 +533,7 @@ impl MessageGateway {
                     | Some(content::Content::Typing(_))
                     | Some(content::Content::Receipt(_))
                     | Some(content::Content::DeleteForMeSync(_))
+                    | Some(content::Content::ReadSync(_))
                     | Some(content::Content::CallKey(_))
                     | Some(content::Content::CallHangup(_))
                     | Some(content::Content::GroupCallKey(_))

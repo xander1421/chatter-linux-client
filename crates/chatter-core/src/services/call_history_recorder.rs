@@ -60,6 +60,8 @@ pub fn spawn_call_history_recorder(call: &CallWorkerHandle, database: Arc<Databa
 
             loop {
                 match rx.blocking_recv() {
+                    // A too-late offer never rings but writes the same row:
+                    // missed, which is what a presented call starts as too.
                     Ok(CallOrchestratorEvent::IncomingPresented {
                         call,
                         kind,
@@ -67,6 +69,13 @@ pub fn spawn_call_history_recorder(call: &CallWorkerHandle, database: Arc<Databa
                         is_video,
                         conversation_id,
                         ..
+                    })
+                    | Ok(CallOrchestratorEvent::IncomingMissed {
+                        call,
+                        kind,
+                        peer_name,
+                        is_video,
+                        conversation_id,
                     }) => {
                         let conversation_type = kind.conversation_type();
                         // The conversation's own name beats the caller's

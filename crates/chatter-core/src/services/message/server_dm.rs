@@ -324,7 +324,7 @@ impl MessageService {
         // devices file it as our OUTGOING message in the right conversation.
         //
         // SCOPE: the self-sync copy is decided per content type. The other
-        // control types (reaction, read receipt, pin, edit, delete-for-everyone,
+        // control types (reaction, pin, edit, delete-for-everyone,
         // delete-for-me) are message-anchored by Signal's `(author, ns-timestamp)`
         // key or carry their own `conversation_id`, so the bare copy files
         // correctly on the linked device with no destination on the wire — see
@@ -364,17 +364,11 @@ impl MessageService {
             Some(content::Content::CallKey(_))
             | Some(content::Content::CallHangup(_))
             | Some(content::Content::GroupCallKey(_)) => None,
-            // Delivery receipts are auto-acks ("I received your message"). A copy
-            // on our other devices has nothing meaningful to display (delivery
-            // status is a sender-side concept about the PEER's messages) and would
-            // mis-file on the A-self thread. Drop it. Read receipts ARE synced —
-            // the receive side turns a self-synced read receipt into a local
-            // mark-read so the unread badge clears across our devices.
-            Some(content::Content::Receipt(r))
-                if r.r#type == crate::proto::content_v1::receipt_message::Type::Delivery as i32 =>
-            {
-                None
-            }
+            // Receipts tell the PEER about its messages; a copy on our other
+            // devices would mis-file on the A-self thread. Our own devices learn
+            // what we read from a `ReadSync` (`MessageService::sync_read`),
+            // which is sent whether or not read receipts are on.
+            Some(content::Content::Receipt(_)) => None,
             _ => Some(plaintext.clone()),
         };
 
@@ -419,7 +413,7 @@ impl MessageService {
         // Self-sync: every one of our own devices except this one. Ships the
         // SyncSent-wrapped copy on the text DM path (F8 fix, V13) or the bare
         // (message-anchored) copy for other control types. `None` means this
-        // content type is deliberately not self-synced (typing, delivery receipt).
+        // content type is deliberately not self-synced (typing, receipts).
         let own = match self_plaintext.as_ref() {
             Some(bytes) => {
                 self.deposit_sealed_to_all_devices(

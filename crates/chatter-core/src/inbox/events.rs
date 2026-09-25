@@ -255,6 +255,12 @@ pub enum InboxEvent {
         /// Target message timestamp.
         target_sent_timestamp: u64,
     },
+    /// Messages read on another device (`ReadSync`). `sender_id` is the
+    /// sealed sender: only our own user may mark our messages read.
+    ReadSync {
+        sender_id: UserId,
+        sync: crate::proto::content_v1::ReadSync,
+    },
     /// Delete for me sync received in channel context.
     ChannelDeleteForMe {
         /// Conversation/channel ID.

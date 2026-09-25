@@ -2637,12 +2637,15 @@ impl ChatterClient {
             let mut seen: std::collections::HashMap<crate::domain::ids::ChannelId, u32> =
                 std::collections::HashMap::new();
             loop {
-                match src.recv().await {
+                let ev = src.recv().await; eprintln!("DBG ev {:?}", ev.as_ref().map(|_|()));
+                match ev {
                     Ok(DomainEvent::MessageReceived { message })
                         if message.conversation_type == ConversationType::ServerDm =>
                     {
                         let peer = crate::domain::ids::UserId::from_uuid(*message.conversation_id.as_uuid());
+                        eprintln!("DBG before timer");
                         let now = crate::services::disappearing::server_dm_timer(&settings, &peer);
+                        eprintln!("DBG now {now}");
                         let notice = matches!(
                             message.content,
                             MessageContent::System(SystemMessage::DisappearingTimerChanged { .. })

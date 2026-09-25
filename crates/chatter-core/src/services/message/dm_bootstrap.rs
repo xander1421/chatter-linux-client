@@ -941,4 +941,38 @@ mod tests {
             );
         }
     }
+
+    /// F55: a device that answers after another already took the Sesame queue
+    /// finds that queue empty; what it is owed (queued when the first device
+    /// got the copies) still goes to it. The responder flush used to return on
+    /// the empty queue, so the late Tab never got rc4–rc6. Nothing is behind
+    /// the server URL: the deposit fails, but the owed copy was taken for it.
+    #[tokio::test]
+    async fn late_device_gets_what_it_is_owed_when_nothing_is_queued() {
+        use crate::mailbox::dm::{ConversationKey, DmConversationManager};
+        let me = UserId::from_uuid(uuid::Uuid::max());
+        let friend = UserId::from_uuid(uuid::Uuid::from_u128(1));
+        let (client, _dir) = shield_client(me);
+        let ms = client.messages();
+        cache_sender_certificate(ms, &me);
+        let mut rng = StdRng::seed_from_u64(0xF55B);
+        for device in [6, 8] {
+            cache_device(ms, &friend, device, &mut rng).await;
+        }
+        seed_half_open(ms, &friend, &ConversationKey::new(), 5);
+        let conversations = DmConversationManager::new(ms.database.clone());
+        conversations.queue_for_device(&friend, 8, b"rc4").unwrap();
+        conversations
+            .record_peer_device(&friend, 8, [8u8; 32], ConversationKey::new().our_ephemeral_public)
+            .unwrap();
+        assert!(ms.sesame_manager.drain_pending_messages(&friend).unwrap().is_empty());
+
+        let mut auth = ms.auth_client();
+        let flush = crate::inbox::streaming::dm_bootstrap_handler::send_pending_messages_after_bootstrap(
+            friend, 8, ms.database.clone(), &ms.signal_service, &mut auth, ms.grpc_pool.anon_channel(),
+        )
+        .await;
+        assert!(flush.is_none(), "nothing queued, nothing to announce");
+        assert!(conversations.drain_device_queue(&friend, 8).unwrap().is_empty(), "owed copy taken for device 8");
+    }
 }

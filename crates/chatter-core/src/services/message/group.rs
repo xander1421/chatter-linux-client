@@ -1122,7 +1122,7 @@ impl MessageService {
     ///
     /// The server validates that sealed sender ciphertexts match one of these plaintext bucket
     /// sizes: 256, 512, 1024, 4096 bytes. Without padding, message sizes leak event type info.
-    fn pad_content_to_bucket(content: &mut crate::proto::content_v1::Content) {
+    pub(super) fn pad_content_to_bucket(content: &mut crate::proto::content_v1::Content) {
         use prost::Message;
         const BUCKETS: [usize; 4] = [256, 512, 1024, 4096];
 

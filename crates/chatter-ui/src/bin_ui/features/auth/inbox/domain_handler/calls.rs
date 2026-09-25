@@ -53,13 +53,24 @@ pub(super) fn handle_call_hangup(
     reason: String,
 ) {
     let weak = window.clone();
-
-    // Clear call state in core
-    ui_ctx.chat_state().clear_call_state();
+    let ui_ctx = ui_ctx.clone();
 
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
-            super::super::super::initial_data::hide_incoming_call(&w);
+            // A hangup names its call: a late one for an older call must not
+            // dismiss or tear down the call on screen now.
+            let ringing = w.get_incoming_call_visible()
+                && w.get_incoming_call_data().call_id == call_id.as_str();
+            let active = w.get_active_call_visible()
+                && w.get_active_call_data().call_id == call_id.as_str();
+            if !ringing && !active {
+                tracing::info!(call_id = %call_id, "Hangup for a call not on screen; ignored");
+                return;
+            }
+            ui_ctx.chat_state().clear_call_state();
+            if ringing {
+                super::super::super::initial_data::hide_incoming_call(&w);
+            }
             tracing::info!(
                 call_id = %call_id,
                 peer_id = %peer_id,

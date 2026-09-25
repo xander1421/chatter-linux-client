@@ -616,9 +616,78 @@ impl MessageService {
         conversation_id: &crate::domain::ids::ChannelId,
         conversation_type: &crate::domain::message::ConversationType,
     ) -> Result<crate::domain::message::UnreadAnchor, MessageError> {
-        Ok(self
+        let (anchor, read) = self
             .message_repo
-            .mark_conversation_read(conversation_id, conversation_type)?)
+            .mark_conversation_read_returning(conversation_id, conversation_type)?;
+        self.sync_read(conversation_id, conversation_type, read);
+        Ok(anchor)
+    }
+
+    /// Tell our other devices what was just read here (Signal's
+    /// `SyncMessage.Read`), whatever the read-receipt setting — that setting
+    /// is about what the sender learns, not our own devices. Friend DMs and
+    /// channels only: anonymous conversations stay off our own devices' wire.
+    /// Fire-and-forget; a failed sync leaves the other devices unread.
+    fn sync_read(
+        &self,
+        conversation_id: &ChannelId,
+        conversation_type: &ConversationType,
+        read: Vec<(UserId, u64)>,
+    ) {
+        use crate::proto::content_v1::{content, Content, ReadSync, ReadSyncEntry};
+
+        if !matches!(conversation_type, ConversationType::ServerDm | ConversationType::Channel) {
+            return;
+        }
+        let Ok(me) = self.current_user_id() else { return };
+        let messages: Vec<ReadSyncEntry> = read
+            .into_iter()
+            .filter(|(sender, _)| *sender != me)
+            .map(|(sender, sent_at)| ReadSyncEntry {
+                conversation_id: conversation_id.to_string(),
+                sender_aci: sender.to_string(),
+                sent_timestamp: sent_at,
+            })
+            .collect();
+        if messages.is_empty() {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            tracing::warn!("ReadSync: no runtime to send on; other devices stay unread");
+            return;
+        };
+        let mut sync = Content {
+            timestamp: crate::util::time::TimestampNanos::now().as_u64(),
+            content: Some(content::Content::ReadSync(ReadSync { messages })),
+            ..Default::default()
+        };
+        Self::pad_content_to_bucket(&mut sync);
+        let plaintext = prost::Message::encode_to_vec(&sync);
+        let service = self.clone();
+        runtime.spawn(async move {
+            let mut auth_client = service.auth_client();
+            let mut message_client = service.message_client();
+            let own = service
+                .deposit_sealed_to_all_devices(&mut auth_client, &mut message_client, &me.to_string(), &plaintext)
+                .await;
+            tracing::debug!(devices = own.delivered, "ReadSync sent to our other devices");
+        });
+    }
+
+    /// Apply a `ReadSync` from another of our devices. Returns the
+    /// conversations in which something was newly read. Sends nothing back:
+    /// only a local read (`mark_conversation_read`) syncs.
+    pub fn apply_read_sync(
+        &self,
+        sync: &crate::proto::content_v1::ReadSync,
+    ) -> Result<Vec<ChannelId>, MessageError> {
+        let me = self.current_user_id()?;
+        let reads: Vec<(ChannelId, UserId, u64)> = sync
+            .messages
+            .iter()
+            .filter_map(|m| Some((m.conversation_id.parse().ok()?, m.sender_aci.parse().ok()?, m.sent_timestamp)))
+            .collect();
+        Ok(self.message_repo.mark_read_synced(&reads, &me)?)
     }
 
     pub fn set_message_pinned(
@@ -704,15 +773,6 @@ impl MessageService {
     ) -> Result<bool, MessageError> {
         self.message_repo
             .update_delivery_status_by_timestamp(conversation_id, conversation_type, sent_at, status)
-            .map_err(MessageError::from)
-    }
-
-    /// Mark an inbound DM with the given sent-at timestamp as read (multi-device
-    /// read-sync). See `UnifiedMessageRepository::mark_read_by_timestamp`.
-    pub fn mark_read_by_timestamp(&self, sent_at: u64) -> Result<bool, MessageError> {
-        let self_user_id = self.current_user_id()?;
-        self.message_repo
-            .mark_read_by_timestamp(sent_at, &self_user_id)
             .map_err(MessageError::from)
     }
 

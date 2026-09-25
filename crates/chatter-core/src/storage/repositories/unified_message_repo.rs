@@ -593,14 +593,35 @@ impl UnifiedMessageRepository {
         conversation_id: &ChannelId,
         conversation_type: &ConversationType,
     ) -> Result<UnreadAnchor, StorageError> {
+        Ok(self.mark_conversation_read_returning(conversation_id, conversation_type)?.0)
+    }
+
+    /// [`Self::mark_conversation_read`], also returning the `(sender, sent_at)`
+    /// of every message it flipped — what a `ReadSync` names to our other
+    /// devices. Read by the same UPDATE, so a message arriving meanwhile is
+    /// either flipped and named, or left unread.
+    pub fn mark_conversation_read_returning(
+        &self,
+        conversation_id: &ChannelId,
+        conversation_type: &ConversationType,
+    ) -> Result<(UnreadAnchor, Vec<(UserId, u64)>), StorageError> {
         let anchor = self.unread_anchor(conversation_id, conversation_type)?;
         let conn = self.db.connection()?;
-        conn.execute(
-            "UPDATE messages SET is_read = 1 WHERE conversation_id = ?1 AND conversation_type = ?2 AND is_read = 0",
-            params![conversation_id.to_string(), conversation_type.as_str()],
-        )?;
+        let flipped = conn
+            .prepare(
+                "UPDATE messages SET is_read = 1 WHERE conversation_id = ?1 AND conversation_type = ?2 AND is_read = 0
+                 RETURNING sender_id, sent_at",
+            )?
+            .query_map(params![conversation_id.to_string(), conversation_type.as_str()], |row| {
+                Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
         super::ephemeral_repo::start_read_countdowns(&conn)?;
-        Ok(anchor)
+        let read = flipped
+            .into_iter()
+            .filter_map(|(sender, sent_at)| Some((sender?.parse().ok()?, sent_at as u64)))
+            .collect();
+        Ok((anchor, read))
     }
 
     /// The unread boundary of a conversation, without clearing it.
@@ -1316,59 +1337,37 @@ impl UnifiedMessageRepository {
         Ok(rows > 0)
     }
 
-    /// Mark an inbound DM with a given sent-at timestamp as read.
-    ///
-    /// Used for multi-device read-sync: when we read a peer's messages on one of
-    /// our devices, that device self-syncs a read receipt to our others, which
-    /// mark the same messages read here so the unread badge clears everywhere
-    /// (Signal's read-sync).
-    ///
-    /// `sent_at` is NOT a unique key, and the doc comment that used to say so was
-    /// the whole justification for running this as a bare
-    /// `WHERE sent_at = ?` UPDATE across the entire message table. Migration v061
-    /// exists precisely because it is not: mesh `sent_at` is milliseconds widened
-    /// to nanoseconds (`mapping::millis_to_nanos`), so two distinct messages from
-    /// one sender inside one millisecond collided on
-    /// `(conversation_type, conversation_id, sender_id, sent_at)` and one was
-    /// silently discarded. Unscoped, a peer's read receipt could flip a different
-    /// conversation's message — or one of our own — to read.
-    ///
-    /// Two scopes are available at this call site and both are applied:
-    ///
-    ///   * `sender_id != self_user_id`. We never mark our own messages read; the
-    ///     sending device already did, and a self-receipt is noise the send path
-    ///     drops.
-    ///   * DM conversation types only. A `DmReceipt` is by construction a
-    ///     channel-free receipt (`inbox/polling/device.rs` routes a receipt with a
-    ///     non-empty `channel_id` to the channel path instead), so a channel row
-    ///     can never be its subject — and neither can a mesh row, which is where
-    ///     v061's collisions live.
-    ///
-    /// What is still NOT scoped is *which* DM: `ReceiptMessage.channel_id` is
-    /// already the channel/DM discriminator on the wire, so a DM receipt cannot
-    /// also carry its peer without a protocol change. See docs/OPEN-ITEMS.md.
-    ///
-    /// Returns `true` if a row was flipped from unread to read.
-    pub fn mark_read_by_timestamp(
+    /// Apply a `ReadSync` from another of our devices: mark each named message
+    /// read. Every entry is scoped to its conversation, author and sent time —
+    /// never a bare `sent_at` match (INFRA-25: mesh timestamps collide) — and
+    /// to server conversations, the only ones a `ReadSync` is sent for. Our own
+    /// messages are never "unread" and are skipped. Returns the conversations
+    /// in which something was newly read.
+    pub fn mark_read_synced(
         &self,
-        sent_at: u64,
+        reads: &[(ChannelId, UserId, u64)],
         self_user_id: &UserId,
-    ) -> Result<bool, StorageError> {
+    ) -> Result<Vec<ChannelId>, StorageError> {
         let conn = self.db.connection()?;
-        let rows = conn.execute(
-            "UPDATE messages SET is_read = 1, updated_at = ?1
-             WHERE sent_at = ?2
-               AND is_read = 0
-               AND sender_id != ?3
-               AND conversation_type IN ('server_dm', 'anon_dm')",
-            params![
-                Utc::now().to_rfc3339(),
-                sent_at as i64,
-                self_user_id.to_string(),
-            ],
-        )?;
+        let now = Utc::now().to_rfc3339();
+        let mut changed = Vec::new();
+        for (conversation_id, sender_id, sent_at) in reads {
+            if sender_id == self_user_id {
+                continue;
+            }
+            let rows = conn.execute(
+                "UPDATE messages SET is_read = 1, updated_at = ?1
+                 WHERE conversation_id = ?2 AND sender_id = ?3 AND sent_at = ?4
+                   AND is_read = 0
+                   AND conversation_type IN ('server_dm', 'channel')",
+                params![now, conversation_id.to_string(), sender_id.to_string(), *sent_at as i64],
+            )?;
+            if rows > 0 && !changed.contains(conversation_id) {
+                changed.push(*conversation_id);
+            }
+        }
         super::ephemeral_repo::start_read_countdowns(&conn)?;
-        Ok(rows > 0)
+        Ok(changed)
     }
 
     /// Update delivery status by timestamp with automatic conversation lookup.

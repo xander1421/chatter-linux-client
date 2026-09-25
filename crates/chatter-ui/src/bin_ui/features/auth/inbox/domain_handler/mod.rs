@@ -218,6 +218,17 @@ pub async fn handle_domain_event(
             );
         }
 
+        // Read on another of our devices: core marked the messages read;
+        // rows and badges are rebuilt from storage.
+        DomainEvent::ReadOnOtherDevice { .. } => {
+            crate::bin_ui::features::sidebar::sections::refresh_conversation_lists(window, ui_ctx);
+            let ui_ctx = ui_ctx.clone();
+            crate::run_ui!(window, |w| {
+                crate::bin_ui::features::sidebar::refresh_section_badges(&w, &ui_ctx);
+                helpers::recompute_total_unread(&w, &ui_ctx);
+            });
+        }
+
         // No Slint model update needed
         DomainEvent::ViewedReceipt { .. } => {}
 

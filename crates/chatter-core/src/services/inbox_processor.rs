@@ -936,6 +936,22 @@ impl InboxEventProcessor {
                 }
             }
 
+            InboxEvent::ReadSync { sender_id, sync } => {
+                // A peer must never mark our messages read: only our own
+                // devices send a ReadSync.
+                if self.message_service.current_user_id().ok().as_ref() != Some(sender_id) {
+                    tracing::warn!(sender_id = %sender_id, "ReadSync from another user dropped");
+                    return;
+                }
+                match self.message_service.apply_read_sync(sync) {
+                    Ok(conversation_ids) if !conversation_ids.is_empty() => {
+                        self.event_bus.emit_domain(DomainEvent::ReadOnOtherDevice { conversation_ids });
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(error = %e, "ReadSync: marking messages read failed"),
+                }
+            }
+
             InboxEvent::ChannelDeleteForMe { conversation_id, target_author_aci, target_sent_timestamp } => {
                 if let Some(msg) = self.lookup_message(&target_author_aci, *target_sent_timestamp) {
                     if let Ok(channel_id) = conversation_id.parse() {
@@ -998,24 +1014,10 @@ impl InboxEventProcessor {
             // DM read/delivery receipt → update stored delivery_status, same as
             // the channel path above (ServerDm rows keyed by peer channel_id).
             InboxEvent::DmReceipt { peer_id, receipt_type, timestamps } => {
-                // Self-sync: a receipt whose sealed-sender identity is US is our
-                // OWN read receipt, synced from another of our devices (we read
-                // the peer's messages there). `peer_id` here is the sealed sender,
-                // so `peer_id == current_user` is the self-sync marker. Filing it
-                // as a delivery-status update on the A-self thread (ChannelId::from
-                // (current_user)) is exactly the F8 mis-routing: those rows don't
-                // exist there. Instead mark the peer's messages READ so the unread
-                // badge clears across our devices (Signal's read-sync). Messages
-                // are ns-timestamp-unique, so the timestamps pin the right rows in
-                // the peer's thread without needing the destination on the wire.
-                // (A self *delivery* receipt is dropped on the send side as noise,
-                // so only read/viewed reach here.)
+                // A receipt from ourselves is about no message of ours: filing
+                // it on the A-self thread is the F8 mis-routing. Our devices
+                // sync reads with `ReadSync`, never receipts.
                 if self.message_service.current_user_id().ok().as_ref() == Some(peer_id) {
-                    if *receipt_type == 2 || *receipt_type == 3 {
-                        for ts in timestamps {
-                            let _ = self.message_service.mark_read_by_timestamp(*ts);
-                        }
-                    }
                     return;
                 }
                 let status = match receipt_type {
