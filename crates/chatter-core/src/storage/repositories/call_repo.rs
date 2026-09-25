@@ -71,22 +71,17 @@ impl CallHistoryRepository {
         Ok(())
     }
 
-    /// Mark a previously-inserted call as ended with a duration.
-    ///
-    /// Sets `ended_at = now`, `duration_secs = duration`, and flips `result`
-    /// from any non-terminal value to `'completed'`. Missed/declined/failed
-    /// entries are left alone (their result is already terminal).
-    pub fn mark_ended(&self, id: &str, duration_secs: i64) -> Result<(), StorageError> {
+    /// Close out a call that CONNECTED: `ended_at = now`, the duration, and
+    /// `result = 'completed'`. A connected call was answered, so this
+    /// overrides the pessimistic `'missed'` an incoming row starts as.
+    pub fn mark_completed(&self, id: &str, duration_secs: i64) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         let now = Utc::now().to_rfc3339();
         let rows = conn.execute(
             "UPDATE call_history
              SET ended_at = ?1,
                  duration_secs = ?2,
-                 result = CASE
-                    WHEN result IN ('missed', 'declined', 'failed') THEN result
-                    ELSE 'completed'
-                 END
+                 result = 'completed'
              WHERE id = ?3",
             params![now, duration_secs, id],
         )?;
@@ -102,9 +97,8 @@ impl CallHistoryRepository {
     /// Close out a call that never connected: stamp `ended_at`, leave
     /// `duration_secs` NULL, and record the terminal `result`.
     ///
-    /// Separate from [`mark_ended`](Self::mark_ended) because that one exists
-    /// to *preserve* an already-terminal result; this one is the write that
-    /// sets it.
+    /// The other half of [`mark_completed`](Self::mark_completed), which is
+    /// only for a call that connected.
     pub fn mark_unconnected(&self, id: &str, result: CallResult) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         let rows = conn.execute(
@@ -431,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn mark_ended_sets_duration_and_flips_result() {
+    fn mark_completed_sets_duration_and_result() {
         let db = setup_db();
         let repo = CallHistoryRepository::new(db);
 
@@ -442,7 +436,7 @@ mod tests {
         e.result = CallResult::Completed; // pre-populated in-progress
         repo.insert_entry(&e).unwrap();
 
-        repo.mark_ended("call-live", 125).unwrap();
+        repo.mark_completed("call-live", 125).unwrap();
 
         let rows = repo.list(CallHistoryFilter::All, 10, None).unwrap();
         assert_eq!(rows.len(), 1);
@@ -452,7 +446,7 @@ mod tests {
     }
 
     #[test]
-    fn mark_ended_preserves_terminal_result() {
+    fn mark_completed_overrides_the_pessimistic_missed() {
         let db = setup_db();
         let repo = CallHistoryRepository::new(db);
 
@@ -462,18 +456,20 @@ mod tests {
         e.duration_secs = None;
         repo.insert_entry(&e).unwrap();
 
-        // A late "mark_ended" shouldn't clobber a missed outcome.
-        repo.mark_ended("call-missed", 0).unwrap();
+        // An incoming row starts as missed; answering and talking makes it
+        // a completed call.
+        repo.mark_completed("call-missed", 11).unwrap();
         let rows = repo.list(CallHistoryFilter::All, 10, None).unwrap();
-        assert_eq!(rows[0].result, CallResult::Missed);
+        assert_eq!(rows[0].result, CallResult::Completed);
+        assert_eq!(rows[0].duration_secs, Some(11));
     }
 
     #[test]
-    fn mark_ended_missing_row_errors() {
+    fn mark_completed_missing_row_errors() {
         let db = setup_db();
         let repo = CallHistoryRepository::new(db);
 
-        let err = repo.mark_ended("nope", 10).unwrap_err();
+        let err = repo.mark_completed("nope", 10).unwrap_err();
         matches!(err, StorageError::NotFound(_));
     }
 

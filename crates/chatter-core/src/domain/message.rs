@@ -340,7 +340,9 @@ impl Message {
     ///   truncated to 50 chars.
     /// - Empty-body messages take `attachment_label` when the caller resolved
     ///   one ("🖼️ Photo", "📎 report.pdf"), else "📎 N attachment(s)".
-    /// - Empty-body messages with no attachments render as "[Message]".
+    /// - A call reads "📞 Missed/Incoming/Outgoing call"; a system notice reads
+    ///   its description.
+    /// - Other empty-body messages with no attachments render as "[Message]".
     /// - If `current_user_id` is provided and matches this message's sender,
     ///   the preview is prefixed with "You: " (text messages only).
     /// - A pinned message carries a 📌 marker, so the row says *why* this is
@@ -367,6 +369,19 @@ impl Message {
         let text = self.as_text().unwrap_or("");
         let att_count = self.attachments.len();
 
+        match &self.content {
+            // A call or a notice has no body; say what it was.
+            MessageContent::Call(call) => {
+                let what = match call.call_type {
+                    CallMessageType::Missed => "Missed call",
+                    _ if current_user_id == Some(&call.initiator_id) => "Outgoing call",
+                    _ => "Incoming call",
+                };
+                return format!("{}\u{1F4DE} {}", pin, what);
+            }
+            MessageContent::System(system) => return format!("{}{}", pin, system.description()),
+            _ => {}
+        }
         if text.is_empty() {
             if let Some(label) = attachment_label {
                 return format!("{}{}", pin, label);
@@ -1071,6 +1086,22 @@ mod tests {
     /// The sidebar's second line is the one place every activity kind has to
     /// come out as *something*. Each branch of `sidebar_preview` is a row a
     /// user would otherwise see blank.
+    #[test]
+    fn test_sidebar_preview_names_the_call() {
+        let me = UserId::new();
+        let them = UserId::new();
+        let call = |initiator: UserId, call_type: CallMessageType| {
+            let mut m = Message::new_text(ChannelId::from(them), ConversationType::ServerDm, Some(them), String::new(), 1);
+            let mut c = CallMessage::started("c".into(), initiator, String::new());
+            c.call_type = call_type;
+            m.content = MessageContent::Call(c);
+            m
+        };
+        assert_eq!(call(them, CallMessageType::Missed).sidebar_preview(Some(&me), None), "\u{1F4DE} Missed call");
+        assert_eq!(call(them, CallMessageType::Ended).sidebar_preview(Some(&me), None), "\u{1F4DE} Incoming call");
+        assert_eq!(call(me, CallMessageType::Ended).sidebar_preview(Some(&me), None), "\u{1F4DE} Outgoing call");
+    }
+
     #[test]
     fn test_sidebar_preview_covers_every_activity_kind() {
         let conv = ChannelId::new();

@@ -165,8 +165,8 @@ fn finish(
     let Some(connected_at) = connected_at else {
         // Never connected. `Declined` is an explicit "no" from either side;
         // everything else (caller gave up, ring timed out, setup blew up)
-        // reads as missed. `mark_ended` refuses to overwrite a terminal
-        // result, so stamp it directly.
+        // reads as missed. Stamped directly: `mark_completed` is only for a
+        // call that connected.
         let result = match reason {
             CallEndReason::Declined => CallResult::Declined,
             // Signal files it as an answered incoming call, not a missed one.
@@ -181,7 +181,7 @@ fn finish(
     };
 
     let duration = (chrono::Utc::now() - connected_at).num_seconds().max(0);
-    if let Err(e) = history.mark_ended(call.as_str(), duration) {
+    if let Err(e) = history.mark_completed(call.as_str(), duration) {
         tracing::debug!(error = %e, call = %call.as_str(), "call history: no row to end");
     }
 }
