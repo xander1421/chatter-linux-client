@@ -288,6 +288,15 @@ impl ChannelInbound {
                         || es.contains("SenderKeyRecord")
                         || es.contains("not found")
                     {
+                        // A device the server no longer lists (typically our
+                        // own previous install) will never send its SKDM:
+                        // parking the message only ends in a request to a
+                        // device that does not exist.
+                        if self.messages.is_retired_device(sid, device_id, proto_msg.timestamp).await {
+                            tracing::debug!(%channel_id, %sid, device_id, message_id = %proto_msg.id,
+                                "Channel message from a retired device is unrecoverable; dropped");
+                            return Err(Ingested::Dropped);
+                        }
                         tracing::warn!(
                             %channel_id, %sid, device_id,
                             "Missing sender key; deferring message and requesting SKDM"

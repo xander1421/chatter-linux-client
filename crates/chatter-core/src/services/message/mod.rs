@@ -249,7 +249,30 @@ pub struct MessageService {
     /// Group messages we already sent a `DecryptionErrorMessage` for, keyed
     /// `(message id, sender device)`: one retry request per message per device.
     pub(crate) group_retry_requests: Arc<parking_lot::Mutex<std::collections::HashSet<(String, u32)>>>,
+    /// Group messages this device asked a sender to resend — shared with
+    /// `MessageGateway`, which honours a resend's carried server id only
+    /// against an entry here, and consumes it.
+    pub(crate) solicited_resends: SolicitedResends,
+    /// Our own device list as the server last gave it: (fetched at, epoch
+    /// nanos; device ids). See [`MessageService::is_retired_device`].
+    pub(crate) own_devices: Arc<tokio::sync::Mutex<Option<(u64, std::collections::HashSet<u32>)>>>,
+    /// Peer devices the server refused a send to as "unknown destination
+    /// device", and when. Timed, because the server reuses a removed device's
+    /// id (`MAX(device_id) + 1`).
+    pub(crate) retired_peer_devices:
+        Arc<parking_lot::Mutex<std::collections::HashMap<(UserId, u32), std::time::Instant>>>,
+    /// Rate limit on resend requests for messages the parked-decrypt cap
+    /// evicted — see [`group::eviction_resend_due`].
+    pub(crate) eviction_resends: Arc<parking_lot::Mutex<group::EvictionResendGate>>,
 }
+
+/// `(channel, sender, server sent_at in epoch millis)` of every group message
+/// this device sent a `DecryptionErrorMessage` for. A pairwise resend may file
+/// itself under the server id it carries only when it answers one of these:
+/// otherwise any member could squat another member's id before the real copy
+/// lands.
+pub(crate) type SolicitedResends =
+    Arc<parking_lot::Mutex<std::collections::HashSet<(ChannelId, UserId, u64)>>>;
 
 impl MessageService {
     /// Create a new MessageService with dependencies.
@@ -288,6 +311,10 @@ impl MessageService {
             pending_group_decrypts: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             sender_key_requests: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             group_retry_requests: Arc::new(parking_lot::Mutex::new(std::collections::HashSet::new())),
+            solicited_resends: Arc::new(parking_lot::Mutex::new(std::collections::HashSet::new())),
+            own_devices: Arc::new(tokio::sync::Mutex::new(None)),
+            retired_peer_devices: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
+            eviction_resends: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
         }
     }
 

@@ -243,6 +243,7 @@ impl MessageService {
 
         // Enforce the global cap by evicting the globally-oldest parked message
         // until back within budget.
+        let mut evicted = Vec::new();
         let mut total: usize = guard.values().map(|v| v.len()).sum();
         while total > MAX_PENDING {
             let oldest_key = guard
@@ -253,7 +254,7 @@ impl MessageService {
             match oldest_key {
                 Some(k) => {
                     if let Some(v) = guard.get_mut(&k) {
-                        v.remove(0);
+                        evicted.push((k, v.remove(0).1));
                         total -= 1;
                     }
                 }
@@ -262,6 +263,25 @@ impl MessageService {
         }
         guard.retain(|_, msgs| !msgs.is_empty());
         drop(guard);
+
+        // An evicted message is not lost silently: its sender is asked to
+        // resend it, exactly as when its wait runs out. Channel messages are
+        // resendable (the sender keeps them 24h), which is where Signal-Desktop
+        // sends a DecryptionErrorMessage rather than recording a delivery
+        // issue (`handleRetry.ts`: `ContentHint.RESENDABLE`). Rate-limited per
+        // sender so one flooding member cannot turn the cap into a DEM storm.
+        let now = std::time::Instant::now();
+        for ((channel_id, sender_id, device_id), proto_msg) in evicted {
+            if !eviction_resend_due(&mut self.eviction_resends.lock(), sender_id, now) {
+                tracing::warn!(%channel_id, %sender_id, device_id, message_id = %proto_msg.id,
+                    "Parked group message evicted over the cap and the sender's resend budget; dropped");
+                continue;
+            }
+            let svc = self.clone();
+            tokio::spawn(async move {
+                svc.resend_parked(channel_id, sender_id, device_id, proto_msg).await;
+            });
+        }
 
         let svc = self.clone();
         tokio::spawn(async move {
@@ -282,10 +302,6 @@ impl MessageService {
         device_id: u32,
         message_id: &str,
     ) {
-        use crate::proto::chat_v1::message::content::Type;
-        use crate::proto::content_v1::GroupEncrypted;
-        use prost::Message as _;
-
         let expired = {
             let mut guard = self.pending_group_decrypts.lock();
             let key = (channel_id, sender_id, device_id);
@@ -299,12 +315,28 @@ impl MessageService {
             expired
         };
         let Some((_, proto_msg)) = expired.into_iter().next() else { return };
+        tracing::info!(%channel_id, %sender_id, device_id, %message_id,
+            "Sender key never arrived for a parked message; requesting a resend");
+        self.resend_parked(channel_id, sender_id, device_id, proto_msg).await;
+    }
+
+    /// Hand a parked (still sender-key encrypted) message that left the queue
+    /// undecrypted to [`Self::request_group_resend`].
+    async fn resend_parked(
+        &self,
+        channel_id: ChannelId,
+        sender_id: UserId,
+        device_id: u32,
+        proto_msg: crate::proto::chat_v1::Message,
+    ) {
+        use crate::proto::chat_v1::message::content::Type;
+        use crate::proto::content_v1::GroupEncrypted;
+        use prost::Message as _;
+
         let Some(Type::Encrypted(enc)) = proto_msg.content.as_ref().and_then(|c| c.r#type.as_ref()) else {
             return;
         };
         let Ok(group_encrypted) = GroupEncrypted::decode(enc.ciphertext.as_slice()) else { return };
-        tracing::info!(%channel_id, %sender_id, device_id, %message_id,
-            "Sender key never arrived for a parked message; requesting a resend");
         self.request_group_resend(channel_id, sender_id, device_id, &proto_msg, &group_encrypted.ciphertext)
             .await;
     }
@@ -700,6 +732,23 @@ impl MessageService {
         if held {
             return;
         }
+        // A retired device will never answer, and the server refuses to queue
+        // anything for it.
+        if self.is_retired_device(sender_id, device_id, proto_msg.timestamp).await {
+            tracing::info!(%channel_id, %sender_id, device_id, message_id = %proto_msg.id,
+                "Group message from a retired device is unrecoverable; dropped");
+            return;
+        }
+        // Recorded before the request goes out, so the answer cannot race it.
+        // ponytail: cleared wholesale at 4096 entries, like the set below; a
+        // forgotten entry files that one resend under a fresh local id.
+        {
+            let mut solicited = self.solicited_resends.lock();
+            if solicited.len() >= 4096 {
+                solicited.clear();
+            }
+            solicited.insert((channel_id, sender_id, proto_msg.timestamp / 1_000_000));
+        }
         {
             let mut asked = self.group_retry_requests.lock();
             // ponytail: cleared wholesale at 4096 entries; a forgotten entry
@@ -729,10 +778,66 @@ impl MessageService {
                 %channel_id, %sender_id, device_id, message_id = %proto_msg.id,
                 "Asked the sender to resend a group message we cannot decrypt"
             ),
+            Err(MessageError::Network(e)) if e.is_unknown_destination_device() => {
+                tracing::info!(%channel_id, %sender_id, device_id,
+                    "Sender device is retired; dropping its parked group messages");
+                self.retired_peer_devices
+                    .lock()
+                    .insert((sender_id, device_id), std::time::Instant::now());
+                self.pending_group_decrypts
+                    .lock()
+                    .retain(|(_, s, d), _| (*s, *d) != (sender_id, device_id));
+            }
             Err(e) => tracing::warn!(
                 %channel_id, %sender_id, device_id, message_id = %proto_msg.id, error = %e,
                 "Failed to send DecryptionErrorMessage for a group message"
             ),
+        }
+    }
+
+    /// Whether `(user, device)` is a device the server no longer lists, for a
+    /// group message the server stamped `sent_at` (epoch nanos). Nobody holds
+    /// such a device's sender key any more, so a message from it is
+    /// unrecoverable: asking for its SKDM or a resend only reaches a device
+    /// that does not exist.
+    ///
+    /// Our OWN devices are checked against the server's list (`ListDevices`).
+    /// A peer's devices have no listing that does not pop their one-time
+    /// prekeys, so a peer device counts as retired only once the server has
+    /// refused a send to it, for [`PENDING_GROUP_DECRYPT_TTL`] — the server
+    /// reuses a removed device's id, so the verdict must not stick.
+    /// Fails open (not retired) when the list cannot be fetched.
+    pub(crate) async fn is_retired_device(&self, user_id: UserId, device_id: u32, sent_at: u64) -> bool {
+        use crate::services::current_user::CurrentUserProvider;
+
+        if self.settings_repo.current_user_id().ok() != Some(user_id) {
+            let mut retired = self.retired_peer_devices.lock();
+            retired.retain(|_, at| at.elapsed() < PENDING_GROUP_DECRYPT_TTL);
+            return retired.contains_key(&(user_id, device_id));
+        }
+        // Held across the fetch: a history sync full of one retired device's
+        // messages costs one ListDevices, not one per message.
+        let mut cache = self.own_devices.lock().await;
+        let now = TimestampNanos::now().as_u64();
+        if let Some((fetched_at, ids)) = cache.as_ref() {
+            if ids.contains(&device_id) {
+                return false;
+            }
+            if !own_device_list_stale(*fetched_at, now, sent_at) {
+                return true;
+            }
+        }
+        match self.auth_client().list_devices().await {
+            Ok(resp) => {
+                let ids: std::collections::HashSet<u32> = resp.devices.iter().map(|d| d.device_id).collect();
+                let retired = !ids.contains(&device_id);
+                *cache = Some((now, ids));
+                retired
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, device_id, "Could not list our devices; treating the device as current");
+                false
+            }
         }
     }
 
@@ -967,6 +1072,36 @@ impl MessageService {
 /// SKDM before we ask the sender to resend it instead.
 const PENDING_GROUP_DECRYPT_TTL: std::time::Duration = std::time::Duration::from_secs(300);
 
+/// Whether a cached own-device list that lacks a device must be refetched
+/// before calling that device retired: it is over a minute old, or the message
+/// is newer than the list (a device linked since). 30s of slack for the gap
+/// between the server's clock, which stamps `sent_at`, and ours.
+fn own_device_list_stale(fetched_at: u64, now: u64, sent_at: u64) -> bool {
+    const MAX_AGE: u64 = 60 * 1_000_000_000;
+    const CLOCK_SLACK: u64 = 30 * 1_000_000_000;
+    now.saturating_sub(fetched_at) > MAX_AGE || sent_at.saturating_add(CLOCK_SLACK) > fetched_at
+}
+
+/// Per sender: start of the current one-minute window, and resend requests
+/// sent in it for parked messages the cap evicted.
+pub(crate) type EvictionResendGate = std::collections::HashMap<UserId, (std::time::Instant, u32)>;
+
+/// At most 10 eviction resend requests per sender per minute.
+pub(crate) fn eviction_resend_due(gate: &mut EvictionResendGate, sender: UserId, now: std::time::Instant) -> bool {
+    const WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+    const PER_WINDOW: u32 = 10;
+    // ponytail: never pruned; one entry per sender that ever overflowed the cap.
+    let entry = gate.entry(sender).or_insert((now, 0));
+    if now.duration_since(entry.0) >= WINDOW {
+        *entry = (now, 0);
+    }
+    if entry.1 >= PER_WINDOW {
+        return false;
+    }
+    entry.1 += 1;
+    true
+}
+
 /// Backoff state per `(channel, sender, device)`: when the next request may go
 /// out, and how many have gone out without an answer.
 pub(crate) type SenderKeyRequestGate =
@@ -1177,7 +1312,14 @@ mod tests {
             m.channel_repo.clone(),
             m.user_repo.clone(),
             m.settings_repo.clone(),
+            m.solicited_resends.clone(),
         );
+        // Bob's ingest above asked Alice for this message.
+        for _ in 0..10 {
+            if !m.solicited_resends.lock().is_empty() { break; }
+            tokio::task::yield_now().await;
+        }
+        assert!(m.solicited_resends.lock().contains(&(channel_id, alice_id, server_ts / 1_000_000)));
         gateway.store_data_message(dm, Some(alice_id)).await.unwrap();
         let stored = m
             .message_repo
@@ -1221,5 +1363,143 @@ mod tests {
         m.group_retry_requests.lock().clear();
         m.expire_pending_group_decrypt(t.channel_id, t.alice_id, 1, &copy.id).await;
         assert!(m.group_retry_requests.lock().is_empty());
+    }
+
+    #[test]
+    fn own_device_list_is_refetched_only_when_it_may_be_out_of_date() {
+        let s = 1_000_000_000u64;
+        let fetched = 10_000 * s;
+        // A message from long before the list: the list is authoritative.
+        assert!(!own_device_list_stale(fetched, fetched + 10 * s, fetched - 3600 * s));
+        // A message newer than the list (or within clock slack): maybe a new device.
+        assert!(own_device_list_stale(fetched, fetched + 10 * s, fetched + 5 * s));
+        assert!(own_device_list_stale(fetched, fetched + 10 * s, fetched - 10 * s));
+        // A list over a minute old is refetched regardless.
+        assert!(own_device_list_stale(fetched, fetched + 61 * s, fetched - 3600 * s));
+    }
+
+    #[test]
+    fn eviction_resends_are_capped_per_sender_per_minute() {
+        let mut gate = EvictionResendGate::new();
+        let (a, b) = (UserId::new(), UserId::new());
+        let t0 = Instant::now();
+        for _ in 0..10 {
+            assert!(eviction_resend_due(&mut gate, a, t0));
+        }
+        assert!(!eviction_resend_due(&mut gate, a, t0 + Duration::from_secs(59)));
+        assert!(eviction_resend_due(&mut gate, b, t0), "another sender has its own budget");
+        assert!(eviction_resend_due(&mut gate, a, t0 + Duration::from_secs(60)), "a new minute, a new budget");
+    }
+
+    /// Our own previous install (device 1, no longer listed by the server)
+    /// sent channel messages before it was retired. Nobody holds its sender
+    /// key: the message is dropped, not parked, and nothing is asked of a
+    /// device that does not exist.
+    #[tokio::test]
+    async fn message_from_our_own_retired_device_is_dropped_not_parked() {
+        use crate::domain::ids::MessageId;
+        use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
+
+        let t = two_members();
+        // Bob's store is Alice's new install: same user, device 6.
+        let m = t.bob.messages();
+        m.settings_repo.set(keys::CURRENT_USER_ID, &t.alice_id.to_string()).unwrap();
+        m.settings_repo.set(keys::CURRENT_DEVICE_ID, &6u32).unwrap();
+        let now = TimestampNanos::now().as_u64();
+        *m.own_devices.lock().await = Some((now, [6].into()));
+
+        let (ge, _) = t.alice.signal().encrypt_for_group(&t.channel_id, b"old install").await.unwrap();
+        let copy = server_copy(&t, &MessageId::new(), now - 3600 * 1_000_000_000, &ge);
+        let inbound = ChannelInbound::new(m.clone(), t.bob.attachments().clone());
+        assert_eq!(inbound.ingest(&copy, t.channel_id, false).await, Ingested::Dropped);
+        assert!(m.pending_group_decrypts.lock().is_empty());
+        m.request_group_resend(t.channel_id, t.alice_id, 1, &copy, &ge.ciphertext).await;
+        assert!(m.group_retry_requests.lock().is_empty(), "no DEM to a retired device");
+        assert!(m.solicited_resends.lock().is_empty());
+
+        // Positive control: the same message from a device the server lists
+        // waits for its sender key as usual.
+        *m.own_devices.lock().await = Some((now, [1, 6].into()));
+        assert_eq!(inbound.ingest(&copy, t.channel_id, false).await, Ingested::DeferredPendingSenderKey);
+    }
+
+    /// A pairwise resend may take the server id it carries only when this
+    /// device asked that sender for the message at that sent_at, once.
+    #[tokio::test]
+    async fn resend_keeps_its_carried_id_only_when_solicited() {
+        use crate::domain::ids::MessageId;
+        use crate::proto::content_v1::DataMessage;
+
+        let t = two_members();
+        let m = t.bob.messages();
+        let gateway = crate::services::gateway::MessageGateway::new(
+            (*m.signal_service).clone(),
+            m.message_repo.clone(),
+            m.channel_repo.clone(),
+            m.user_repo.clone(),
+            m.settings_repo.clone(),
+            m.solicited_resends.clone(),
+        );
+        let resend = |id: MessageId, ts: u64| DataMessage {
+            body: "resent".into(),
+            channel_id: t.channel_id.to_string(),
+            timestamp: ts,
+            message_id: id.to_string(),
+            ..Default::default()
+        };
+        let stored_id = |ts: u64| {
+            m.message_repo
+                .get_by_conversation_sender_timestamp(&t.channel_id, &t.alice_id, ts)
+                .unwrap()
+                .expect("stored")
+                .id
+        };
+
+        // Unsolicited: another member's id cannot be squatted.
+        let foreign = MessageId::new();
+        let ts1 = TimestampNanos::now().as_u64();
+        gateway.store_data_message(resend(foreign, ts1), Some(t.alice_id)).await.unwrap();
+        assert_ne!(stored_id(ts1), foreign);
+        assert!(m.get_message_local(&foreign).unwrap().is_none());
+
+        // Solicited from ANOTHER sender: still not honoured for Alice.
+        let ts2 = ts1 + 7_000_000;
+        m.solicited_resends.lock().insert((t.channel_id, t.bob_id, ts2 / 1_000_000));
+        let id2 = MessageId::new();
+        gateway.store_data_message(resend(id2, ts2), Some(t.alice_id)).await.unwrap();
+        assert_ne!(stored_id(ts2), id2);
+
+        // Solicited from Alice at that sent_at: keeps the server id, and the
+        // request is consumed.
+        let ts3 = ts1 + 14_000_000;
+        m.solicited_resends.lock().insert((t.channel_id, t.alice_id, ts3 / 1_000_000));
+        let id3 = MessageId::new();
+        gateway.store_data_message(resend(id3, ts3), Some(t.alice_id)).await.unwrap();
+        assert_eq!(stored_id(ts3), id3);
+        assert!(!m.solicited_resends.lock().contains(&(t.channel_id, t.alice_id, ts3 / 1_000_000)));
+    }
+
+    /// Past the parked cap the oldest message is evicted — and its sender is
+    /// asked to resend it rather than it vanishing.
+    #[tokio::test]
+    async fn parked_message_evicted_by_the_cap_requests_a_resend() {
+        use crate::domain::ids::MessageId;
+
+        let t = two_members();
+        let m = t.bob.messages();
+        let (ge, _) = t.alice.signal().encrypt_for_group(&t.channel_id, b"flood").await.unwrap();
+        let ts = TimestampNanos::now().as_u64();
+        let copies: Vec<_> = (0..513).map(|i| server_copy(&t, &MessageId::new(), ts + i, &ge)).collect();
+        for c in &copies {
+            m.defer_pending_group_decrypt(t.channel_id, t.alice_id, 1, c.clone());
+        }
+        assert_eq!(m.pending_group_decrypts.lock().values().map(Vec::len).sum::<usize>(), 512);
+        let oldest = (copies[0].id.clone(), 1);
+        for _ in 0..10 {
+            if m.group_retry_requests.lock().contains(&oldest) { break; }
+            tokio::task::yield_now().await;
+        }
+        assert!(m.group_retry_requests.lock().contains(&oldest),
+            "the evicted message is handed to request_group_resend");
     }
 }

@@ -170,6 +170,7 @@ impl ServiceContainer {
             infra.settings_repo.clone(),
             infra.sesame_manager.clone(),
             infra.ephemeral_repo.clone(),
+            message_service.solicited_resends.clone(),
         ));
 
         // 5. DM bootstrap service

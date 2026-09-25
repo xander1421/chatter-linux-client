@@ -115,6 +115,8 @@ pub struct MessageGateway {
     /// — arming is simply skipped there.
     pub(crate) ephemeral_repo:
         Option<Arc<crate::storage::repositories::ephemeral_repo::EphemeralRepository>>,
+    /// Shared with `MessageService`: the group resends this device asked for.
+    pub(crate) solicited_resends: crate::services::message::SolicitedResends,
 }
 
 impl MessageGateway {
@@ -125,6 +127,7 @@ impl MessageGateway {
         channel_repo: Arc<crate::storage::repositories::channel_repo::ChannelRepository>,
         user_repo: Arc<crate::storage::repositories::UserRepository>,
         settings_repo: Arc<crate::storage::repositories::settings_repo::SettingsRepository>,
+        solicited_resends: crate::services::message::SolicitedResends,
     ) -> Self {
         Self {
             signal_service,
@@ -134,6 +137,7 @@ impl MessageGateway {
             settings_repo,
             sesame_manager: None,
             ephemeral_repo: None,
+            solicited_resends,
         }
     }
 
@@ -146,6 +150,7 @@ impl MessageGateway {
         settings_repo: Arc<crate::storage::repositories::settings_repo::SettingsRepository>,
         sesame_manager: Arc<SesameManager<SqliteSesameStore>>,
         ephemeral_repo: Arc<crate::storage::repositories::ephemeral_repo::EphemeralRepository>,
+        solicited_resends: crate::services::message::SolicitedResends,
     ) -> Self {
         Self {
             signal_service,
@@ -155,6 +160,7 @@ impl MessageGateway {
             channel_repo,
             sesame_manager: Some(sesame_manager),
             ephemeral_repo: Some(ephemeral_repo),
+            solicited_resends,
         }
     }
 
@@ -231,14 +237,22 @@ impl MessageGateway {
 
         // A sender-key resend (`rebuild_group_content`) carries the server id
         // the other members hold, so thread replies and later references by
-        // id reach the recovered message. Everything else gets a local id.
-        // A claimed id already in use fails the insert below rather than
+        // id reach the recovered message. The id is honoured only for a resend
+        // this device asked THIS sender for, at this sent_at (the request is
+        // consumed): otherwise any member could squat another member's id
+        // before its real copy lands. Everything else gets a local id. A
+        // claimed id already in use fails the insert below rather than
         // replacing that row.
-        let message_id = match conversation_type {
-            ConversationType::ServerDm => None,
-            _ => data_message.message_id.parse().ok(),
-        }
-        .unwrap_or_else(MessageId::new);
+        let solicited = conversation_type != ConversationType::ServerDm
+            && sender_id.is_some_and(|sid| {
+                self.solicited_resends
+                    .lock()
+                    .remove(&(channel_id, sid, data_message.timestamp / 1_000_000))
+            });
+        let message_id = solicited
+            .then(|| data_message.message_id.parse().ok())
+            .flatten()
+            .unwrap_or_else(MessageId::new);
 
         // Convert timestamp to datetime (nanoseconds since epoch)
         let created_at = if data_message.timestamp > 0 {
