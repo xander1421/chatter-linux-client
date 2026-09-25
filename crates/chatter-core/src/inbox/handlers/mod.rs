@@ -256,22 +256,6 @@ pub enum DomainEvent {
         change_type: String,
     },
 
-    /// Incoming call presented by the call orchestrator. Bridged from
-    /// `CallOrchestratorEvent::IncomingPresented` so the desktop
-    /// notification listener (or any other domain-bus subscriber) can
-    /// surface an urgent toast even when the in-app call modal isn't
-    /// open. `peer_name` is the orchestrator's best-effort display name
-    /// (user-supplied or falls back to peer_id).
-    IncomingCall {
-        call_id: String,
-        peer_id: UserId,
-        peer_name: String,
-        is_video: bool,
-        /// Group channel context when the call is rung into a channel,
-        /// None for 1:1 DM calls.
-        channel_context: Option<String>,
-    },
-
     /// Call hangup received from peer (remote call ended).
     CallHangupReceived {
         call_id: String,
@@ -722,7 +706,6 @@ impl DomainEvent {
             DomainEvent::SavedMessageSynced { message } => Some(message.conversation_id),
             DomainEvent::ConversationsRead { .. } => None,
             DomainEvent::DeviceLinked { .. } => None,
-            DomainEvent::IncomingCall { .. } => None,
             DomainEvent::CallHangupReceived { .. } => None,
             DomainEvent::CallKeyAnswerReceived { .. } => None,
             DomainEvent::GroupCallKeyReceived { channel_id, .. } => Some(*channel_id),

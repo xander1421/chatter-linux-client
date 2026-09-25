@@ -35,7 +35,7 @@ impl ChatterClient {
 
     /// Spawn the auth-gated notification streams: the gRPC message-notification
     /// stream and the call → notification bridge (`IncomingPresented` →
-    /// `DomainEvent::IncomingCall` → ringing OS notification). Call after login
+    /// ringing OS notification, cancelled when the ring ends). Call after login
     /// (e.g. from initial-data load). Idempotent — runs its spawns once.
     pub fn start_authed_notification_streams(self: &Arc<Self>) {
         let user_id = match self.auth_state().get().current_user_id {
@@ -63,8 +63,8 @@ impl ChatterClient {
         #[cfg(feature = "media")]
         if let Some(call_worker) = self.services.call_service.get() {
             let bridge_handle = crate::services::call_notification_bridge::spawn_call_notification_bridge(
-                call_worker,
-                self.event_bus().clone(),
+                call_worker.subscribe_call_events(),
+                self.services.notification_service.clone(),
             );
             self.tasks.lock().push(bridge_handle);
             tracing::info!("call → notification bridge started");

@@ -997,11 +997,6 @@ impl EventHandlers {
             | DomainEvent::PeerIdentityChanged { .. }
             | DomainEvent::PeerDevicesChanged { .. } => {}
 
-            // IncomingCall surfaces as a desktop toast via
-            // spawn_notification_listener; no state-store mutation here
-            // (call UI subscribes to CallOrchestratorEvent directly for
-            // in-app modal state).
-            DomainEvent::IncomingCall { .. } => {}
         }
     }
 

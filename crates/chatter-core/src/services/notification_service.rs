@@ -309,24 +309,6 @@ pub fn spawn_notification_listener(
                 // Typed lifecycle events (from gRPC notification stream).
                 // Side-effects run in spawned tasks so the event loop stays hot.
                 // ================================================================
-                DomainEvent::IncomingCall { call_id, peer_id: _, peer_name, is_video, channel_context } => {
-                    // Urgent priority so the OS surfaces with sound even
-                    // when device is on focus-assist — matches Signal's
-                    // ring notification behaviour. Title carries media
-                    // flag so the user knows whether to expect video.
-                    let title = if *is_video { "Incoming video call" } else { "Incoming call" };
-                    let body = match channel_context.as_deref() {
-                        Some(ch) if !ch.is_empty() => format!("{} is calling in {}", peer_name, ch),
-                        _ => format!("{} is calling", peer_name),
-                    };
-                    tracing::info!(
-                        call_id = %call_id,
-                        is_video = *is_video,
-                        "IncomingCall notification → ringing call notification"
-                    );
-                    let _ = notification_service.show_incoming_call(call_id, title, &body);
-                }
-
                 DomainEvent::DeviceLinked { device_id, device_name, device_info, approved_by_self } => {
                     // Skip the toast on the device that just approved the
                     // pairing — the UI there already showed a confirm

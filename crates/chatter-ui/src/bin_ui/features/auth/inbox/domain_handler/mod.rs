@@ -693,10 +693,5 @@ pub async fn handle_domain_event(
             });
             crate::bin_ui::features::auth::load_initial_data(window.clone(), ui_ctx).await;
         }
-
-        // Incoming calls are surfaced via a dedicated IncomingCallData
-        // channel + IncomingCallModal — handled outside this inbox
-        // domain-event path.
-        DomainEvent::IncomingCall { .. } => {}
     }
 }

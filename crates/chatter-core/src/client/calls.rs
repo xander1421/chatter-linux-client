@@ -461,6 +461,10 @@ impl ChatterClient {
             worker.orch_accept_incoming(handle.clone()).await
         }
         .map_err(|e| ClientError::Inbox(e.to_string()))?;
+        // The call has left the ringing set, so its ring notification goes —
+        // whether the answer came from the in-app modal or the notification's
+        // own Accept, and whether or not the connect below succeeds.
+        let _ = self.services.notification_service.cancel_incoming_call(call_id);
 
         if replaces_active {
             // Fire wire-level hangup on the current active call so the old

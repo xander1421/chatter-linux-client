@@ -354,7 +354,7 @@ impl PushListener {
 // a wake-up hint — the SSE title/body fields carry no structured data,
 // so rendering a toast from them would fight the gRPC typed-notification
 // stream which is the authoritative source for user-facing alerts
-// (DeviceLinked, IncomingCall, etc.). Keeping push toast-free also lets
+// (DeviceLinked, etc.). Keeping push toast-free also lets
 // the server run ntfy in content-free mode without UI regression.
 // If a platform needs a foreground-wake visual again, add a dedicated
 // path that doesn't render push payload text verbatim.
