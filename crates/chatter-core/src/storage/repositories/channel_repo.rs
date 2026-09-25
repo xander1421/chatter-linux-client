@@ -361,14 +361,19 @@ impl ChannelRepository {
     // Membership operations
     // ========================================================================
 
-    /// Insert a new membership.
+    /// Record a membership. Idempotent: the same join can arrive more than
+    /// once (the MemberAdded broadcast reaches the joiner too, then the
+    /// invite-accept path writes it), so an existing row only takes the new
+    /// role and keeps the member's local state (read position, notification
+    /// choice).
     pub fn insert_membership(&self, membership: &Membership) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         conn.execute(
             "INSERT INTO memberships (
                 channel_id, user_id, role, joined_at, last_read_message_id,
                 is_muted, muted_until, notification_preference
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            ON CONFLICT(channel_id, user_id) DO UPDATE SET role = excluded.role",
             params![
                 membership.channel_id.to_string(),
                 membership.user_id.to_string(),
@@ -789,6 +794,21 @@ mod tests {
 
     fn make_channel(id: ChannelId) -> Channel {
         Channel::new(id, "test-channel".into(), ChannelType::Public, UserId::new())
+    }
+
+    #[test]
+    fn the_same_membership_recorded_twice_is_one_row() {
+        // The MemberAdded broadcast and the invite-accept path both record the
+        // joiner; the second write must not fail (it used to abort the accept).
+        let (repo, _dir) = create_test_repo();
+        let channel = ChannelId::new();
+        let user = UserId::new();
+        repo.insert_membership(&make_membership(channel, user)).unwrap();
+        let mut again = make_membership(channel, user);
+        again.role = MemberRole::Moderator;
+        repo.insert_membership(&again).unwrap();
+        let stored = repo.get_membership(&channel, &user).unwrap().unwrap();
+        assert_eq!(stored.role, MemberRole::Moderator);
     }
 
     fn make_membership(channel_id: ChannelId, user_id: UserId) -> Membership {

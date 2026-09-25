@@ -174,7 +174,7 @@ impl ChannelEventService {
         &self,
         event: channel_event::Event,
         channel_id: &str,
-        _timestamp: u64,
+        timestamp: u64,
     ) {
         use channel_event::Event;
         use crate::domain::channel::{MemberRole, NotificationPreference};
@@ -208,7 +208,9 @@ impl ChannelEventService {
                     muted_until: None,
                 };
                 
-                if let Ok((message, display_name)) = self.handle_member_joined(&channel_id, &user_id, &membership) {
+                if let Ok(Some((message, display_name))) =
+                    self.handle_member_joined(&channel_id, &user_id, &membership, timestamp)
+                {
                     // Emit domain event for UI consumption
                     let event = DomainEvent::ChannelMemberJoined {
                         channel_id,
@@ -353,7 +355,9 @@ impl ChannelEventService {
                 };
                 let reason = member_removal_reason(&removed);
 
-                if let Ok((message, display_name)) = self.handle_member_removed(&channel_id, &user_id, reason) {
+                if let Ok(Some((message, display_name))) =
+                    self.handle_member_removed(&channel_id, &user_id, reason, timestamp)
+                {
                     // Emit domain event for UI consumption
                     let event = DomainEvent::ChannelMemberLeft {
                         channel_id,
@@ -591,42 +595,43 @@ impl ChannelEventService {
     /// Handle a member joining a channel.
     ///
     /// Creates a system message and syncs membership to local storage.
-    /// Returns (message, display_name) for UI updates.
+    /// Returns (message, display_name) for UI updates, or `None` when this
+    /// event's notice is already filed (see [`member_notice_id`]).
     pub fn handle_member_joined(
         &self,
         channel_id: &ChannelId,
         user_id: &UserId,
         membership: &Membership,
-    ) -> Result<(Message, String), ChannelEventError> {
-        // Get display name
-        let display_name = self.get_display_name(user_id);
+        event_ts: u64,
+    ) -> Result<Option<(Message, String)>, ChannelEventError> {
+        // Sync membership (insert or ignore if already exists)
+        self.channel_repo.insert_or_ignore_membership(membership)?;
 
-        // Create system message
         let message = self.create_system_message(
+            member_notice_id(channel_id, user_id, "joined", event_ts),
             channel_id,
             SystemMessage::UserJoined(*user_id),
             Some(*user_id),
         );
+        if !self.message_repo.insert_or_ignore(&message)? {
+            return Ok(None);
+        }
 
-        // Persist message
-        self.message_repo.insert(&message)?;
-
-        // Sync membership (insert or ignore if already exists)
-        self.channel_repo.insert_or_ignore_membership(membership)?;
-
-        Ok((message, display_name))
+        Ok(Some((message, self.get_display_name(user_id))))
     }
 
     /// Handle a member leaving/being removed from a channel.
     ///
     /// Creates a system message and removes membership from local storage.
-    /// Returns (message, display_name) for UI updates.
+    /// Returns (message, display_name) for UI updates, or `None` when this
+    /// event's notice is already filed (see [`member_notice_id`]).
     pub fn handle_member_removed(
         &self,
         channel_id: &ChannelId,
         user_id: &UserId,
         reason: MemberRemoval,
-    ) -> Result<(Message, String), ChannelEventError> {
+        event_ts: u64,
+    ) -> Result<Option<(Message, String)>, ChannelEventError> {
         let display_name = self.get_display_name(user_id);
         let is_self = self.settings_repo.current_user_id().ok() == Some(*user_id);
 
@@ -646,14 +651,17 @@ impl ChannelEventService {
                 by,
             ),
         };
-        let message = self.create_system_message(channel_id, content, Some(subject));
-
-        self.message_repo.insert(&message)?;
+        let id = member_notice_id(channel_id, user_id, "removed", event_ts);
+        let message = self.create_system_message(id, channel_id, content, Some(subject));
 
         // Remove membership from local storage
         self.channel_repo.delete_membership(channel_id, user_id)?;
 
-        Ok((message, display_name))
+        if !self.message_repo.insert_or_ignore(&message)? {
+            return Ok(None);
+        }
+
+        Ok(Some((message, display_name)))
     }
 
     /// Get display name for a user, falling back to user ID string.
@@ -693,6 +701,7 @@ impl ChannelEventService {
     /// Create a system message for the given channel.
     fn create_system_message(
         &self,
+        id: MessageId,
         channel_id: &ChannelId,
         content: SystemMessage,
         subject: Option<UserId>,
@@ -704,7 +713,7 @@ impl ChannelEventService {
         // about (joiner / leaver / kicked) so `get_display_name` can
         // resolve a real name instead of falling back to "Anonymous".
         Message {
-            id: MessageId::new(),
+            id,
             conversation_id: *channel_id,
             // Channel message reads use `ConversationType::AnonGroup` (see
             // services/anon_group/storage.rs, services/conversation.rs,
@@ -737,6 +746,22 @@ impl ChannelEventService {
             delivery_status: String::new(),
         }
     }
+}
+
+/// The member notice's primary key, derived from the server event it records.
+///
+/// The server publishes one membership `ChannelEvent` to the channel's stream
+/// AND to every member's `user:{id}:channel_events`, and the global stream is
+/// subscribed to both, so a member receives the same event twice (same bytes,
+/// same `timestamp`). With a deterministic id `insert_or_ignore` files it once
+/// however many paths deliver it. A zero timestamp carries no identity, so it
+/// gets a fresh id rather than colliding with every other such event.
+fn member_notice_id(channel_id: &ChannelId, user_id: &UserId, kind: &str, event_ts: u64) -> MessageId {
+    if event_ts == 0 {
+        return MessageId::new();
+    }
+    let key = format!("channel_member_notice:{channel_id}:{user_id}:{kind}:{event_ts}");
+    MessageId(uuid::Uuid::new_v5(&uuid::Uuid::nil(), key.as_bytes()))
 }
 
 /// Why a member dropped off the roster, from the server's `MemberRemoved`.
@@ -931,6 +956,54 @@ mod tests {
             Ok(DomainEvent::ChannelDeleted { channel_id: got }) => assert_eq!(got, channel_id),
             other => panic!("ChannelDeleted did not reach the domain bus: {:?}", other),
         }
+    }
+
+    /// F77: the server delivers one membership event on two paths (channel
+    /// stream + per-user stream). Each must file exactly one notice and tell
+    /// the UI once; a later event for the same user is a new notice.
+    #[tokio::test]
+    async fn a_membership_event_delivered_twice_files_one_notice() {
+        use crate::proto::chat_v1::{channel::ChannelMember as ProtoMember, member_removed::Reason, MemberRemoved};
+        let (service, bus, channel_repo) = setup();
+        let mut rx = bus.domain_sender().subscribe();
+
+        let channel = crate::domain::channel::Channel::new(
+            ChannelId::from(uuid::Uuid::new_v4()),
+            "invtest".to_string(),
+            crate::domain::channel::ChannelType::Public,
+            UserId::from(uuid::Uuid::new_v4()),
+        );
+        let channel_id = channel.id;
+        channel_repo.upsert(&channel).unwrap();
+        let joiner = UserId::from(uuid::Uuid::new_v4());
+        let count = || service.message_repo.count(&channel_id, &ConversationType::AnonGroup).unwrap();
+        let added = || channel_event::Event::MemberAdded(ProtoMember {
+            user_id: joiner.to_string(),
+            ..Default::default()
+        });
+        let left = || channel_event::Event::MemberRemoved(MemberRemoved {
+            user_id: joiner.to_string(),
+            reason: Reason::Left as i32,
+            moderator_id: String::new(),
+        });
+
+        for _ in 0..2 {
+            service.handle_stream_event(added(), &channel_id.to_string(), 1_000).await;
+        }
+        assert_eq!(count(), 1, "one join filed two notices");
+        assert!(matches!(rx.try_recv(), Ok(DomainEvent::ChannelMemberJoined { .. })));
+        assert!(rx.try_recv().is_err(), "the duplicate reached the UI");
+
+        for _ in 0..2 {
+            service.handle_stream_event(left(), &channel_id.to_string(), 2_000).await;
+        }
+        assert_eq!(count(), 2, "one leave filed two notices");
+        assert!(matches!(rx.try_recv(), Ok(DomainEvent::ChannelMemberLeft { .. })));
+        assert!(rx.try_recv().is_err(), "the duplicate reached the UI");
+
+        // Re-joining later is a new event and a new notice.
+        service.handle_stream_event(added(), &channel_id.to_string(), 3_000).await;
+        assert_eq!(count(), 3);
     }
 
     /// A ban on the local user drops our own membership and surfaces to the UI.
