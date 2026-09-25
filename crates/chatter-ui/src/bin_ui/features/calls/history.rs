@@ -11,10 +11,12 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
+use chatter_core::client::calls::CallHistoryPage;
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::call::CallHistoryFilter;
 use chatter_core::state::ActiveConversation;
 
+use crate::bin_ui::converters::avatar_bytes_to_image;
 use crate::run_ui;
 use crate::{CallHistoryRow, MainWindow};
 
@@ -188,23 +190,25 @@ pub(crate) fn refresh_badge(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 }
 
-/// Translate core's page into Slint rows. Off the event loop — the `From`
-/// conversions and the `Vec` build are done before we hop back.
-async fn load_page(
-    ui_ctx: &Arc<ChatterClient>,
-    filter: CallHistoryFilter,
-) -> (Vec<CallHistoryRow>, i32) {
-    let page = match ui_ctx.call_history_page(filter, HISTORY_PAGE).await {
-        Ok(page) => page,
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to load call history");
-            return (Vec::new(), 0);
-        }
-    };
-    let rows = page
+/// Load core's page off the event loop; `paint` turns it into Slint rows
+/// there, since a `slint::Image` (the avatar) cannot cross threads.
+async fn load_page(ui_ctx: &Arc<ChatterClient>, filter: CallHistoryFilter) -> CallHistoryPage {
+    ui_ctx.call_history_page(filter, HISTORY_PAGE).await.unwrap_or_else(|e| {
+        tracing::error!(error = %e, "Failed to load call history");
+        CallHistoryPage::default()
+    })
+}
+
+fn paint(window: &MainWindow, page: CallHistoryPage) {
+    let rows: Vec<CallHistoryRow> = page
         .rows
         .into_iter()
         .map(|r| CallHistoryRow {
+            avatar_source: r
+                .avatar_bytes
+                .as_deref()
+                .and_then(avatar_bytes_to_image)
+                .unwrap_or_default(),
             id: r.id.into(),
             conversation_id: r.conversation_id.into(),
             conversation_type: r.conversation_type.into(),
@@ -218,11 +222,7 @@ async fn load_page(
             can_call_back: r.can_call_back,
         })
         .collect();
-    (rows, page.missed_count as i32)
-}
-
-fn paint(window: &MainWindow, (rows, missed): (Vec<CallHistoryRow>, i32)) {
     window.set_call_history_rows(ModelRc::new(VecModel::from(rows)));
     window.set_call_history_loading(false);
-    window.set_missed_call_count(missed);
+    window.set_missed_call_count(page.missed_count as i32);
 }

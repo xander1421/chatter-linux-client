@@ -881,20 +881,36 @@ impl ChatterClient {
         limit: u32,
     ) -> Result<CallHistoryPage, ClientError> {
         let repo = self.call_history_repo();
-        tokio::task::spawn_blocking(move || {
+        let mut page = tokio::task::spawn_blocking(move || {
             let entries = repo
                 .list(filter, limit, None)
                 .map_err(|e| ClientError::Inbox(format!("call history list: {}", e)))?;
             if let Err(e) = repo.mark_missed_seen() {
                 tracing::warn!(error = %e, "call history: mark missed seen failed");
             }
-            Ok(CallHistoryPage {
+            Ok::<_, ClientError>(CallHistoryPage {
                 rows: entries.iter().map(crate::ui::CallHistoryRowData::from).collect(),
                 missed_count: repo.missed_count().unwrap_or(0) as u32,
             })
         })
         .await
-        .map_err(|e| ClientError::Inbox(format!("call history join: {}", e)))?
+        .map_err(|e| ClientError::Inbox(format!("call history join: {}", e)))??;
+        for row in &mut page.rows {
+            row.avatar_bytes = self.call_peer_avatar(&row.conversation_type, &row.conversation_id);
+        }
+        Ok(page)
+    }
+
+    /// Avatar for a call-history row's peer, from the stores the chat list
+    /// reads: the peer's profile for a server DM, the anon DM row for an
+    /// anonymous one. Group and channel calls have no single peer → `None`.
+    fn call_peer_avatar(&self, conversation_type: &str, conversation_id: &str) -> Option<Vec<u8>> {
+        use crate::domain::message::ConversationType as CT;
+        match CT::from_str_value(conversation_type).ok()? {
+            CT::ServerDm => self.user_avatar(&conversation_id.parse().ok()?),
+            CT::AnonDm => self.get_anon_dm_conversation(&conversation_id.parse().ok()?)?.peer_avatar,
+            _ => None,
+        }
     }
 
     /// Unseen missed incoming calls on their own, for painting the tab badge

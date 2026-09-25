@@ -25,6 +25,10 @@ pub struct CallHistoryRowData {
     pub name: String,
     /// Avatar fallback initials for `name`.
     pub initials: String,
+    /// The peer's avatar for a 1:1 call, the same source the chat list uses;
+    /// `None` = initials. Filled by `ChatterClient::call_history_page`, which
+    /// has the stores — the `From` conversion leaves it empty.
+    pub avatar_bytes: Option<Vec<u8>>,
     /// When the call happened, relative-formatted ("Yesterday 4:12 PM").
     pub timestamp: String,
     /// Outcome line: "Outgoing · 3:42", "Missed", "Declined".
@@ -54,6 +58,7 @@ impl From<&CallHistoryEntry> for CallHistoryRowData {
             conversation_id: entry.conversation_id.clone(),
             conversation_type: entry.conversation_type.as_str().to_string(),
             initials: initials_from_name(&name),
+            avatar_bytes: None,
             name,
             timestamp: format_timestamp(entry.started_at),
             detail: detail_line(entry, is_incoming),
