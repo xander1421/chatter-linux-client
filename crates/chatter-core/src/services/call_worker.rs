@@ -105,6 +105,8 @@ pub enum CallEndReason {
     ReplacedByIncoming,
     /// Call was declined before it connected.
     Declined,
+    /// Another of our own devices answered this incoming call.
+    AnsweredElsewhere,
     /// Signalling / crypto / network failure.
     Error(String),
 }
@@ -2452,19 +2454,30 @@ fn spawn_end_one_to_one_if_peer_gone(
 /// call was answered on another of our devices long ago — never rings.
 const RING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// Whether an offer sent at `sent_ns` (sender clock, ns since epoch) is past
-/// the ring timeout at `now_ns`. `0` means the sender stamped nothing: ring
-/// rather than silently drop a live call. A sender clock ahead of ours
-/// saturates to age 0 and rings.
-// ponytail: sender clock, so a caller whose clock runs >60 s slow never rings
-// us. Signal ages by the server's receive timestamp; switch to that once the
-// inbox carries it onto the offer event.
+/// Whether an offer received at `sent_ns` (ns since epoch) is past the ring
+/// timeout at `now_ns`. For a 1:1 offer that is the server's receive stamp
+/// (Signal's rule; the inbox falls back to the caller's clock only when the
+/// server gave none). `0` means nothing was stamped: ring rather than silently
+/// drop a live call. A clock ahead of ours saturates to age 0 and rings.
+// ponytail: anon offers still carry the caller's clock — their transports
+// don't surface a server stamp on the offer event yet.
 fn offer_is_stale(sent_ns: u64, now_ns: u64) -> bool {
     sent_ns != 0 && now_ns.saturating_sub(sent_ns) > RING_TIMEOUT.as_nanos() as u64
 }
 
 fn offer_is_stale_now(sent_ns: u64) -> bool {
     offer_is_stale(sent_ns, crate::util::time::TimestampNanos::now().as_u64())
+}
+
+/// The withdrawal reason for a hangup saying another of our devices answered
+/// or declined (`CallHangupReason`'s Debug name, as it rides the event).
+fn elsewhere_reason(reason: &str) -> Option<CallEndReason> {
+    use crate::services::gateway::CallHangupReason as R;
+    match reason {
+        r if r == format!("{:?}", R::AcceptedElsewhere) => Some(CallEndReason::AnsweredElsewhere),
+        r if r == format!("{:?}", R::DeclinedElsewhere) => Some(CallEndReason::Declined),
+        _ => None,
+    }
 }
 
 fn handle_domain_event(
@@ -2513,13 +2526,30 @@ fn handle_domain_event(
             );
         }
 
-        DomainEvent::CallHangupReceived { call_id, .. } => {
+        DomainEvent::CallHangupReceived { call_id, peer_id, reason } => {
+            // Signal's Hangup ACCEPTED/DECLINED: another of OUR devices took
+            // this call. Only our own user may say so, and it only stops the
+            // ringing — it must never tear down a call this device is in.
+            if let Some(reason) = elsewhere_reason(&reason) {
+                if signaling.is_current_user(&peer_id) {
+                    worker.orch_withdraw_incoming(CallHandle::from(call_id), reason);
+                    return;
+                }
+                tracing::warn!(peer_id = %peer_id, "Answered/declined-elsewhere hangup from another user; treating as a plain hangup");
+            }
+            // The callee declined our outgoing call: say so, and file it as
+            // declined rather than unanswered.
+            let end = if reason == format!("{:?}", crate::services::gateway::CallHangupReason::Declined) {
+                CallEndReason::Declined
+            } else {
+                CallEndReason::RemoteHangup
+            };
             // Still ringing? The caller gave up — stop ringing. A no-op when
             // this call was never presented or was already accepted.
-            worker.orch_withdraw_incoming(CallHandle::from(call_id), CallEndReason::RemoteHangup);
+            worker.orch_withdraw_incoming(CallHandle::from(call_id), end.clone());
             // Disconnect from LiveKit + clear active_call + orchestrator.
             // Previously only cleared orchestrator, leaving the room connected.
-            worker.disconnect_local_nonblocking(CallEndReason::RemoteHangup);
+            worker.disconnect_local_nonblocking(end);
         }
 
         DomainEvent::AnonCallOfferReceived {

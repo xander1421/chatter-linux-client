@@ -178,10 +178,13 @@ pub enum DomainEvent {
         target_message_id: MessageId,
         timestamp: u64,
     },
-    /// Messages were read on another of our devices (`ReadSync`): these
-    /// conversations' unread counts dropped.
-    ReadOnOtherDevice {
+    /// Messages in these conversations were read — here
+    /// (`mark_conversation_read`) or on another of our devices (`ReadSync`,
+    /// `from_other_device`). Their unread counts dropped and their
+    /// notifications are stale.
+    ConversationsRead {
         conversation_ids: Vec<ChannelId>,
+        from_other_device: bool,
     },
     /// Saved message synced from another device (Note to Self).
     SavedMessageSynced {
@@ -717,7 +720,7 @@ impl DomainEvent {
             DomainEvent::GroupMailboxReceived { channel_id, .. } => Some(*channel_id),
             DomainEvent::DeleteForMeSync { conversation_id, .. } => Some(*conversation_id),
             DomainEvent::SavedMessageSynced { message } => Some(message.conversation_id),
-            DomainEvent::ReadOnOtherDevice { .. } => None,
+            DomainEvent::ConversationsRead { .. } => None,
             DomainEvent::DeviceLinked { .. } => None,
             DomainEvent::IncomingCall { .. } => None,
             DomainEvent::CallHangupReceived { .. } => None,

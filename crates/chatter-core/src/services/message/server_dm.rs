@@ -361,9 +361,21 @@ impl MessageService {
             Some(content::Content::Typing(_)) => None,
             // Call signaling is for the peer's devices only: a self-synced
             // offer would ring our other devices with a call from ourselves.
-            Some(content::Content::CallKey(_))
-            | Some(content::Content::CallHangup(_))
-            | Some(content::Content::GroupCallKey(_)) => None,
+            // The exception is answering/declining: our other devices ring for
+            // the same call and get a Signal-style ACCEPTED/DECLINED hangup.
+            Some(content::Content::CallKey(_)) | Some(content::Content::CallHangup(_)) => {
+                // The device id only labels the sync; its absence must not
+                // fail the peer send.
+                let our_device_id = self
+                    .settings_repo
+                    .get::<u32>(crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID)
+                    .ok()
+                    .flatten()
+                    .unwrap_or(0);
+                crate::services::gateway::build_call_self_sync(&content, our_device_id)
+                    .map(|c| c.encode_to_vec())
+            }
+            Some(content::Content::GroupCallKey(_)) => None,
             // Receipts tell the PEER about its messages; a copy on our other
             // devices would mis-file on the A-self thread. Our own devices learn
             // what we read from a `ReadSync` (`MessageService::sync_read`),

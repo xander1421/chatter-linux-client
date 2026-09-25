@@ -56,6 +56,7 @@ pub use builders::{
     build_group_call_key_content,
     // Call hangup
     build_call_hangup_content,
+    build_call_self_sync,
     // Anonymous call signaling (anon DM + anon group)
     generate_anon_call_room,
     build_anon_call_token,
@@ -88,6 +89,10 @@ pub enum CallHangupReason {
     Timeout,
     /// Network connectivity issue
     NetworkError,
+    /// One of OUR other devices answered this call (own-user sync only).
+    AcceptedElsewhere,
+    /// One of OUR other devices declined this call (own-user sync only).
+    DeclinedElsewhere,
 }
 
 // DmContent, DecryptResult, RouteResult, SealedSenderResult are in inbound.rs

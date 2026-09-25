@@ -620,6 +620,12 @@ impl MessageService {
             .message_repo
             .mark_conversation_read_returning(conversation_id, conversation_type)?;
         self.sync_read(conversation_id, conversation_type, read);
+        // Unconditional: an anonymous message has no sender, so `read` can be
+        // empty while its notification is still up.
+        self.event_bus.emit_domain(crate::events::DomainEvent::ConversationsRead {
+            conversation_ids: vec![*conversation_id],
+            from_other_device: false,
+        });
         Ok(anchor)
     }
 

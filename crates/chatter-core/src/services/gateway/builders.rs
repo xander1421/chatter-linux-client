@@ -484,11 +484,44 @@ pub fn build_call_hangup_content(call_id: &str, reason: CallHangupReason) -> Con
                 CallHangupReason::Busy => call_hangup::Reason::Busy as i32,
                 CallHangupReason::Timeout => call_hangup::Reason::Timeout as i32,
                 CallHangupReason::NetworkError => call_hangup::Reason::NetworkError as i32,
+                CallHangupReason::AcceptedElsewhere => call_hangup::Reason::AcceptedElsewhere as i32,
+                CallHangupReason::DeclinedElsewhere => call_hangup::Reason::DeclinedElsewhere as i32,
             },
             timestamp: now,
+            device_id: 0,
         })),
         ..Default::default()
     }
+}
+
+/// The copy of an outgoing 1:1 call message our OWN other devices get.
+///
+/// Signal's `CallMessage.Hangup` ACCEPTED / DECLINED with `deviceId`: when this
+/// device answers (sends the key answer) or declines a call, our other devices
+/// — which are ringing for the same call id — are told to stop. Every other
+/// call message is for the peer's devices only (a synced offer would ring us
+/// with a call from ourselves), so it gets `None`.
+pub fn build_call_self_sync(content: &Content, our_device_id: u32) -> Option<Content> {
+    use crate::proto::content_v1::{CallHangup, call_hangup};
+    let (call_id, reason) = match &content.content {
+        Some(content::Content::CallKey(key)) if !key.is_offer => {
+            (&key.call_id, call_hangup::Reason::AcceptedElsewhere)
+        }
+        Some(content::Content::CallHangup(h)) if h.reason == call_hangup::Reason::Declined as i32 => {
+            (&h.call_id, call_hangup::Reason::DeclinedElsewhere)
+        }
+        _ => return None,
+    };
+    Some(Content {
+        timestamp: content.timestamp,
+        content: Some(content::Content::CallHangup(CallHangup {
+            call_id: call_id.clone(),
+            reason: reason as i32,
+            timestamp: content.timestamp,
+            device_id: our_device_id,
+        })),
+        ..Default::default()
+    })
 }
 
 // =============================================================================
@@ -602,5 +635,31 @@ pub fn build_anon_call_hangup_content(
             timestamp: now,
         })),
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod call_self_sync_tests {
+    use super::*;
+    use crate::proto::content_v1::call_hangup::Reason;
+
+    fn synced(c: &Content) -> Option<(String, i32, u32)> {
+        build_call_self_sync(c, 6).map(|s| match s.content {
+            Some(content::Content::CallHangup(h)) => (h.call_id, h.reason, h.device_id),
+            other => panic!("expected CallHangup, got {other:?}"),
+        })
+    }
+
+    /// Answering / declining tells our other devices; nothing else rings them.
+    #[test]
+    fn only_answer_and_decline_reach_our_other_devices() {
+        let answer = build_call_key_answer("c1", [1u8; 32]);
+        assert_eq!(synced(&answer), Some(("c1".into(), Reason::AcceptedElsewhere as i32, 6)));
+        let decline = build_call_hangup_content("c2", CallHangupReason::Declined);
+        assert_eq!(synced(&decline), Some(("c2".into(), Reason::DeclinedElsewhere as i32, 6)));
+
+        assert_eq!(synced(&build_call_key_offer("c3", [1u8; 32], "", "")), None);
+        assert_eq!(synced(&build_call_hangup_content("c4", CallHangupReason::Normal)), None);
+        assert_eq!(synced(&build_call_hangup_content("c5", CallHangupReason::Busy)), None);
     }
 }

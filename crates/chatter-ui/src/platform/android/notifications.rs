@@ -33,6 +33,10 @@ const CHANNEL_CALLS_NAME: &str = "Calls";
 
 const IMPORTANCE_HIGH: i32 = 4;
 
+/// Id of every conversation notification; the conversation id is its tag, so
+/// the (tag, id) pair is per conversation and never meets an untagged id.
+const CONVERSATION_NOTIFICATION_ID: i32 = 1;
+
 // PendingIntent flags.
 const FLAG_UPDATE_CURRENT: i32 = 0x0800_0000; // 134217728
 const FLAG_IMMUTABLE: i32 = 0x0400_0000; // 67108864
@@ -257,12 +261,19 @@ impl AndroidNotifications {
         Ok(())
     }
 
-    fn show_raw(&self, title: &str, body: &str, priority: u8) -> Result<(), SystemError> {
+    /// Post a notification. With a `conversation` tag it is posted as
+    /// (tag, `CONVERSATION_NOTIFICATION_ID`), so the conversation's next one
+    /// replaces it and `cancel_conversation_raw` dismisses it; untagged ones
+    /// get a fresh id each.
+    fn show_raw(&self, conversation: Option<&str>, title: &str, body: &str, priority: u8) -> Result<(), SystemError> {
         if !self.channel_initialized.load(Ordering::Relaxed) {
             self.init_channel()?;
         }
 
-        let notification_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let notification_id = match conversation {
+            Some(_) => CONVERSATION_NOTIFICATION_ID,
+            None => self.next_id.fetch_add(1, Ordering::Relaxed),
+        };
 
         let mut env = get_jni_env()?;
         let context = get_app_context(&mut env)?;
@@ -340,17 +351,48 @@ impl AndroidNotifications {
 
         let manager = get_notification_manager(&mut env, &context)?;
 
-        env.call_method(
-            &manager,
-            "notify",
-            "(ILandroid/app/Notification;)V",
-            &[
-                JValue::Int(notification_id),
-                JValue::Object(&notification),
-            ],
-        ).map_err(|e| SystemError::NotificationSend(format!("notify: {}", e)))?;
+        match conversation {
+            Some(tag) => {
+                let j_tag = env.new_string(tag).map_err(nerr)?;
+                env.call_method(
+                    &manager,
+                    "notify",
+                    "(Ljava/lang/String;ILandroid/app/Notification;)V",
+                    &[
+                        JValue::Object(&j_tag),
+                        JValue::Int(notification_id),
+                        JValue::Object(&notification),
+                    ],
+                )
+            }
+            None => env.call_method(
+                &manager,
+                "notify",
+                "(ILandroid/app/Notification;)V",
+                &[
+                    JValue::Int(notification_id),
+                    JValue::Object(&notification),
+                ],
+            ),
+        }
+        .map_err(|e| SystemError::NotificationSend(format!("notify: {}", e)))?;
 
         tracing::debug!(notification_id, title, "Android notification shown");
+        Ok(())
+    }
+
+    fn cancel_conversation_raw(&self, conversation: &str) -> Result<(), SystemError> {
+        let mut env = get_jni_env()?;
+        let context = get_app_context(&mut env)?;
+        let manager = get_notification_manager(&mut env, &context)?;
+        let j_tag = env.new_string(conversation).map_err(nerr)?;
+        env.call_method(
+            &manager,
+            "cancel",
+            "(Ljava/lang/String;I)V",
+            &[JValue::Object(&j_tag), JValue::Int(CONVERSATION_NOTIFICATION_ID)],
+        )
+        .map_err(nerr)?;
         Ok(())
     }
 }
@@ -368,13 +410,21 @@ impl NotificationSink for AndroidNotifications {
         body: &str,
         priority: NotificationPriority,
     ) -> Result<(), SystemError> {
-        let p = match priority {
-            NotificationPriority::Urgent => 5,
-            NotificationPriority::High => 4,
-            NotificationPriority::Low => 2,
-            NotificationPriority::Normal => 3,
-        };
-        self.show_raw(title, body, p)
+        self.show_raw(None, title, body, android_priority_level(priority))
+    }
+
+    fn show_conversation(
+        &self,
+        conversation: &str,
+        title: &str,
+        body: &str,
+        priority: NotificationPriority,
+    ) -> Result<(), SystemError> {
+        self.show_raw(Some(conversation), title, body, android_priority_level(priority))
+    }
+
+    fn cancel_conversation(&self, conversation: &str) -> Result<(), SystemError> {
+        self.cancel_conversation_raw(conversation)
     }
 
     fn show_incoming_call(&self, call_id: &str, title: &str, body: &str) -> Result<(), SystemError> {
@@ -388,6 +438,15 @@ impl NotificationSink for AndroidNotifications {
     fn init(&self) -> Result<(), SystemError> {
         self.init_channel()?;
         self.init_calls_channel()
+    }
+}
+
+fn android_priority_level(priority: NotificationPriority) -> u8 {
+    match priority {
+        NotificationPriority::Urgent => 5,
+        NotificationPriority::High => 4,
+        NotificationPriority::Low => 2,
+        NotificationPriority::Normal => 3,
     }
 }
 

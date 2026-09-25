@@ -761,6 +761,16 @@ impl ChatterClient {
 
         match snapshot.kind {
             OrchestratedCallKind::DmStandard | OrchestratedCallKind::GroupChannel => {
+                if snapshot.kind == OrchestratedCallKind::DmStandard {
+                    // The caller hears the decline end-to-end; our other
+                    // devices get its DECLINED_ELSEWHERE copy and stop ringing.
+                    if let Err(e) = self.call_signaling()
+                        .send_call_decline(&snapshot.peer_id, call_id)
+                        .await
+                    {
+                        tracing::warn!(error = %e, call_id, "Call decline not delivered");
+                    }
+                }
                 self.decline_call(call_id).await.map_err(|e| {
                     ClientError::Inbox(format!("decline_call: {e}"))
                 })?;

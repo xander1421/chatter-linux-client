@@ -17,15 +17,23 @@ use notify_rust::Urgency;
 
 /// Desktop notification service.
 ///
-/// Wraps notify-rust to show system notifications.
-/// Stateless - each notification is independent.
-pub struct DesktopNotifications;
+/// Wraps notify-rust to show system notifications. On Linux it keeps the
+/// handle of each conversation's notification, so a new message replaces it
+/// and a read closes it; Windows/macOS handles here cannot close by key, so
+/// there each notification is independent.
+pub struct DesktopNotifications {
+    #[cfg(target_os = "linux")]
+    conversations: std::sync::Mutex<std::collections::HashMap<String, notify_rust::NotificationHandle>>,
+}
 
 impl DesktopNotifications {
     /// Create a new desktop notifications service.
     #[must_use]
     pub fn new() -> Self {
-        Self
+        Self {
+            #[cfg(target_os = "linux")]
+            conversations: Default::default(),
+        }
     }
 
     /// Show a notification from the domain model.
@@ -167,6 +175,42 @@ impl super::notification_sink::NotificationSink for DesktopNotifications {
 
     fn show_domain(&self, notification: &Notification) -> Result<(), SystemError> {
         DesktopNotifications::show(self, notification)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn show_conversation(
+        &self,
+        conversation: &str,
+        title: &str,
+        body: &str,
+        priority: NotificationPriority,
+    ) -> Result<(), SystemError> {
+        let mut conversations = self.conversations.lock().unwrap_or_else(|e| e.into_inner());
+        let mut notif = DesktopNotif::new();
+        notif
+            .appname(APP_DISPLAY_NAME)
+            .summary(title)
+            .body(body)
+            .icon("mail-message-new")
+            .urgency(self.priority_to_urgency(priority));
+        // Same server-side id = replaces the conversation's earlier one.
+        if let Some(previous) = conversations.get(conversation) {
+            notif.id(previous.id());
+        }
+        let handle = notif
+            .show()
+            .map_err(|e| SystemError::NotificationSend(e.to_string()))?;
+        conversations.insert(conversation.to_string(), handle);
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn cancel_conversation(&self, conversation: &str) -> Result<(), SystemError> {
+        let handle = self.conversations.lock().unwrap_or_else(|e| e.into_inner()).remove(conversation);
+        if let Some(handle) = handle {
+            handle.close();
+        }
+        Ok(())
     }
 }
 

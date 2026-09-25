@@ -149,6 +149,8 @@ fn finish(
         // result, so stamp it directly.
         let result = match reason {
             CallEndReason::Declined => CallResult::Declined,
+            // Signal files it as an answered incoming call, not a missed one.
+            CallEndReason::AnsweredElsewhere => CallResult::Completed,
             CallEndReason::Error(_) => CallResult::Failed,
             _ => CallResult::Missed,
         };

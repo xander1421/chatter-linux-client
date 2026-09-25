@@ -502,6 +502,8 @@ fn handle_orchestrator_event(
                 CallEndReason::LocalHangup => return,
                 // The accepted call is about to be painted over this one.
                 CallEndReason::ReplacedByIncoming => None,
+                // Only ever a withdrawal of a ringing call, never an active one.
+                CallEndReason::AnsweredElsewhere => None,
                 CallEndReason::RemoteHangup => Some(("Call ended", "info")),
                 CallEndReason::Declined => Some(("Call declined", "info")),
                 CallEndReason::Error(_) => Some((super::outgoing::CALL_FAILED, "error")),

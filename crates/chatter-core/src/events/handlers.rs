@@ -973,7 +973,7 @@ impl EventHandlers {
             DomainEvent::SyncComplete { .. } => {
                 // Sync completion is handled by the UI directly
             }
-            DomainEvent::ReadOnOtherDevice { .. } => {}
+            DomainEvent::ConversationsRead { .. } => {}
 
             // ================================================================
             // Push Notifications

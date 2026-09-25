@@ -386,7 +386,9 @@ pub enum InboxEvent {
         call_type: String,
         /// Channel/DM ID for context.
         channel_id: String,
-        /// Timestamp when offer was sent.
+        /// When the server received the offer (ns) — what the ring timeout
+        /// ages it by, as Signal does. The caller's own stamp only when the
+        /// server gave none.
         timestamp: u64,
     },
     /// Call key answer received (response to our offer).

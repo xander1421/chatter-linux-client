@@ -864,7 +864,7 @@ fn dispatch_dm_content(
                 ephemeral_public_key,
                 call_type: resolved_call_type,
                 channel_id: resolved_channel_id,
-                timestamp,
+                timestamp: if server_timestamp > 0 { server_timestamp } else { timestamp },
             });
         }
 

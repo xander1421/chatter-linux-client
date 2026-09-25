@@ -180,14 +180,32 @@ impl CallSignalingService {
             Some(p) => p,
             None => UserId::from_uuid(*channel_id.as_uuid()),
         };
+        self.send_call_hangup_to(&peer_id, call_id, reason).await
+    }
 
+    /// Tell the caller we declined their 1:1 call. The self-sync copy of this
+    /// hangup stops our other devices ringing (`build_call_self_sync`).
+    pub async fn send_call_decline(
+        &self,
+        peer_id: &UserId,
+        call_id: &str,
+    ) -> Result<(), CallSignalingError> {
+        self.send_call_hangup_to(peer_id, call_id, CallHangupReason::Declined).await
+    }
+
+    async fn send_call_hangup_to(
+        &self,
+        peer_id: &UserId,
+        call_id: &str,
+        reason: CallHangupReason,
+    ) -> Result<(), CallSignalingError> {
         let content = build_call_hangup_content(call_id, reason);
         match self
             .message_service
-            .send_friend_dm_content(&peer_id, content)
+            .send_friend_dm_content(peer_id, content)
             .await
         {
-            Ok(_) => tracing::info!(peer_id = %peer_id, call_id, "Call hangup sent"),
+            Ok(_) => tracing::info!(peer_id = %peer_id, call_id, reason = ?reason, "Call hangup sent"),
             // Session still bootstrapping — the queued hangup will deliver, and the
             // peer sees the LiveKit disconnect regardless. Not fatal.
             Err(crate::services::message::MessageError::BootstrapInitiated) => {
@@ -594,6 +612,12 @@ impl CallSignalingService {
         let verification = CallVerification::derive_verification_emojis(&key_arr, room_name);
         let (e1, e2, e3, e4) = CallVerification::to_slint_tuple(&verification);
         [e1, e2, e3, e4]
+    }
+
+    /// Whether `user_id` is the logged-in user — i.e. a message from one of our
+    /// own devices.
+    pub fn is_current_user(&self, user_id: &UserId) -> bool {
+        self.channel_service.current_user_id().is_ok_and(|me| me == *user_id)
     }
 
     /// Resolve the display name *we* locally know for an anon-DM peer, from the

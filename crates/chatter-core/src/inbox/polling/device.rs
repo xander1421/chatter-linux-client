@@ -567,6 +567,7 @@ async fn process_sender_key_message(
                             inner,
                             sender_id,
                             &msg.message_guid,
+                            msg.server_timestamp,
                             event_tx,
                             stats,
                         );
@@ -1149,6 +1150,7 @@ async fn process_identified_sender_message(
                     inner,
                     &actual_sender,
                     &msg.message_guid,
+                    msg.server_timestamp,
                     event_tx,
                     stats,
                 );
@@ -1530,6 +1532,7 @@ async fn process_sealed_sender_message(
                     inner,
                     &actual_sender,
                     &msg.message_guid,
+                    msg.server_timestamp,
                     event_tx,
                     stats,
                 );
@@ -1853,6 +1856,8 @@ pub fn dispatch_control_content(
     inner: content::Content,
     sender_id: &UserId,
     message_guid: &str,
+    // When the server received the envelope (ns); ages call offers.
+    server_timestamp: u64,
     event_tx: &broadcast::Sender<InboxEvent>,
     stats: &Arc<RwLock<InboxStats>>,
 ) {
@@ -2118,7 +2123,7 @@ pub fn dispatch_control_content(
                         ephemeral_public_key,
                         call_type: if call_type.is_empty() { "Voice Call".to_string() } else { call_type },
                         channel_id: if channel_id.is_empty() { sender_id.to_string() } else { channel_id },
-                        timestamp,
+                        timestamp: if server_timestamp > 0 { server_timestamp } else { timestamp },
                     }
                 }
                 Ok(DmContent::CallKeyAnswer { call_id, ephemeral_public_key, timestamp }) => {
@@ -2194,10 +2199,12 @@ mod call_control_tests {
         let caller = UserId::new();
         let offer = crate::services::build_call_key_offer("call-1", [7u8; 32], "", "");
 
-        dispatch_control_content(offer.content.unwrap(), &caller, "guid", &event_tx, &stats);
+        dispatch_control_content(offer.content.unwrap(), &caller, "guid", 42, &event_tx, &stats);
 
         match event_rx.try_recv().expect("an event") {
-            InboxEvent::CallKeyOfferReceived { peer_id, call_id, ephemeral_public_key, call_type, channel_id, .. } => {
+            InboxEvent::CallKeyOfferReceived { peer_id, call_id, ephemeral_public_key, call_type, channel_id, timestamp } => {
+                // Aged by the server's receive stamp, not the caller's clock.
+                assert_eq!(timestamp, 42);
                 assert_eq!(peer_id, caller);
                 assert_eq!(call_id, "call-1");
                 assert_eq!(ephemeral_public_key, [7u8; 32]);

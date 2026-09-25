@@ -218,9 +218,22 @@ pub async fn handle_domain_event(
             );
         }
 
+        // Read here: everything in these conversations is read. Also the
+        // foreground catch-up (`set_app_visible`), which has no UI caller to
+        // clear the badge, so without this the row kept a stale count until
+        // the next rebuild.
+        DomainEvent::ConversationsRead { conversation_ids, from_other_device: false } => {
+            let ui_ctx = ui_ctx.clone();
+            crate::run_ui!(window, |w| {
+                for id in &conversation_ids {
+                    helpers::update_unread_count(&w, &ui_ctx, &id.to_string(), 0);
+                }
+                crate::bin_ui::features::sidebar::refresh_section_badges(&w, &ui_ctx);
+            });
+        }
         // Read on another of our devices: core marked the messages read;
-        // rows and badges are rebuilt from storage.
-        DomainEvent::ReadOnOtherDevice { .. } => {
+        // rows and badges are rebuilt from storage (a sync can read only some).
+        DomainEvent::ConversationsRead { from_other_device: true, .. } => {
             crate::bin_ui::features::sidebar::sections::refresh_conversation_lists(window, ui_ctx);
             let ui_ctx = ui_ctx.clone();
             crate::run_ui!(window, |w| {

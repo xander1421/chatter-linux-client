@@ -125,7 +125,71 @@ impl MessageService {
             self.owe_unready_devices(auth_client, peer_id, &conversation, &plaintext, grpc_pool)
                 .await;
         }
+        self.sync_sent_to_own_devices(auth_client, peer_id, &content).await;
         Ok(())
+    }
+
+    /// Copy a message we just delivered over the mailbox to our own other
+    /// devices as a `SyncSent` naming the peer (Signal's `SyncMessage.Sent`),
+    /// so they file it as our outgoing message in the peer's conversation —
+    /// the Shield half of what `send_sealed_dm_content` does in normal mode.
+    ///
+    /// NDSS'21 §VI-F: nothing here names the peer to the server — the peer is
+    /// only inside the sealed payload. Every RPC names OUR OWN account, and:
+    /// - no prekey-bundle fetch: only own devices we already hold a session
+    ///   with (`session_devices`, local), so a linked device we have never
+    ///   messaged is skipped until a normal-mode send makes a session;
+    /// - deposited identified on the authenticated channel, NOT with our UAK
+    ///   on the anonymous channel: that one carries the mailbox deposit we
+    ///   just made, and a UAK deposit to our own account on the same
+    ///   connection would tie that mailbox to us.
+    ///
+    /// Best effort, like Signal's sync: the peer already has the message.
+    async fn sync_sent_to_own_devices(
+        &self,
+        auth_client: &mut AuthClient,
+        peer_id: &UserId,
+        content: &crate::proto::content_v1::Content,
+    ) {
+        use crate::storage::repositories::settings_repo::keys;
+
+        let Some(mut sync) = sync_sent_copy(peer_id, content) else { return };
+        let Ok(me) = self.current_user_id() else { return };
+        let me = me.to_string();
+        let this_device = self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID).ok().flatten();
+        let devices: Vec<u32> = match self.signal_service.session_devices(&me).await {
+            Ok(devices) => devices.into_iter().filter(|d| Some(*d) != this_device).collect(),
+            Err(e) => {
+                tracing::warn!(error = %e, "Shield SyncSent: own session lookup failed");
+                return;
+            }
+        };
+        if devices.is_empty() {
+            return;
+        }
+        Self::pad_content_to_bucket(&mut sync);
+        let ciphertexts = match self
+            .signal_service
+            .encrypt_message_session_devices(auth_client, &me, devices, &sync.encode_to_vec())
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "Shield SyncSent: encrypt for own devices failed");
+                return;
+            }
+        };
+        let timestamp = crate::util::time::TimestampNanos::now().as_u64();
+        let server_key_id = self.signal_service.get_server_key_id();
+        let mut message_client = self.message_client();
+        for (device_id, sealed_body) in ciphertexts {
+            let sealed = crate::proto::chat_v1::SealedSenderMessage { sealed_body, server_key_id, timestamp };
+            // ponytail: a retired own device just logs here; the normal-mode
+            // fan-out (`deposit_sealed_to_all_devices`) archives its session.
+            if let Err(e) = message_client.send_sealed_message(&me, device_id, sealed).await {
+                tracing::warn!(device_id, error = %e, "Shield SyncSent: own device missed the copy");
+            }
+        }
     }
 
     /// Seal `plaintext` for one peer device and deposit it in its mailbox.
@@ -595,6 +659,30 @@ impl MessageService {
     }
 }
 
+/// The `SyncSent` our own other devices get for `content` sent to `peer_id`,
+/// or `None` when it is not a message they should file (F8, V13): a
+/// text/attachment `DataMessage` or a timer update, never a delete carrier.
+pub(super) fn sync_sent_copy(
+    peer_id: &UserId,
+    content: &crate::proto::content_v1::Content,
+) -> Option<crate::proto::content_v1::Content> {
+    use crate::proto::content_v1::{content, Content, SyncSent};
+
+    let Some(content::Content::DataMessage(dm)) = &content.content else { return None };
+    let is_message = !dm.body.is_empty()
+        || !dm.attachments.is_empty()
+        || crate::services::disappearing::is_timer_update(dm);
+    (is_message && dm.delete.is_none()).then(|| Content {
+        timestamp: content.timestamp,
+        content: Some(content::Content::SyncSent(SyncSent {
+            destination_user_id: peer_id.to_string(),
+            timestamp: dm.timestamp,
+            message: Some(dm.clone()),
+        })),
+        ..Default::default()
+    })
+}
+
 /// Typing indicators and receipts: worth nothing late, so never queued.
 pub(super) fn is_ephemeral_content(content: &crate::proto::content_v1::Content) -> bool {
     matches!(
@@ -669,5 +757,27 @@ impl MessageService {
             reply_to_thumbnail,
             reply_to_thumbnail_mime,
         }
+    }
+}
+
+#[cfg(test)]
+mod sync_sent_copy_tests {
+    use crate::domain::ids::UserId;
+    use crate::proto::content_v1::{content, Content, DataMessage};
+
+    #[test]
+    fn wraps_messages_only_and_names_the_peer() {
+        let peer = UserId::new();
+        let copy = super::sync_sent_copy(&peer, &crate::services::build_text_content("hi", 7)).unwrap();
+        let Some(content::Content::SyncSent(sync)) = copy.content else { panic!("not a SyncSent") };
+        assert_eq!(sync.destination_user_id, peer.to_string());
+        assert_eq!(sync.message.unwrap().body, "hi");
+
+        let empty = Content {
+            content: Some(content::Content::DataMessage(DataMessage::default())),
+            ..Default::default()
+        };
+        assert!(super::sync_sent_copy(&peer, &empty).is_none());
+        assert!(super::sync_sent_copy(&peer, &Content::default()).is_none());
     }
 }

@@ -1030,6 +1030,8 @@ impl MessageGateway {
                     Ok(call_hangup::Reason::Busy) => CallHangupReason::Busy,
                     Ok(call_hangup::Reason::Timeout) => CallHangupReason::Timeout,
                     Ok(call_hangup::Reason::NetworkError) => CallHangupReason::NetworkError,
+                    Ok(call_hangup::Reason::AcceptedElsewhere) => CallHangupReason::AcceptedElsewhere,
+                    Ok(call_hangup::Reason::DeclinedElsewhere) => CallHangupReason::DeclinedElsewhere,
                     _ => CallHangupReason::Normal,
                 };
                 Ok(DmContent::CallHangup {

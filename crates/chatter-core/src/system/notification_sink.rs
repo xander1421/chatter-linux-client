@@ -21,6 +21,26 @@ pub trait NotificationSink: Send + Sync {
         self.show(&notification.title, &notification.body, NotificationPriority::Normal)
     }
 
+    /// Show the notification for one conversation (Signal: one per thread).
+    /// `conversation` is a stable key; showing it again replaces the earlier
+    /// one, and [`Self::cancel_conversation`] dismisses it. The default can
+    /// replace nothing and falls back to a plain notification.
+    fn show_conversation(
+        &self,
+        _conversation: &str,
+        title: &str,
+        body: &str,
+        priority: NotificationPriority,
+    ) -> Result<(), SystemError> {
+        self.show(title, body, priority)
+    }
+
+    /// Dismiss `conversation`'s notification: it was read, here or on another
+    /// of our devices. No-op by default and when none is showing.
+    fn cancel_conversation(&self, _conversation: &str) -> Result<(), SystemError> {
+        Ok(())
+    }
+
     /// Show an incoming-call notification with Accept/Decline actions.
     ///
     /// Platforms that support actionable call notifications (Android) override

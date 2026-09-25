@@ -90,11 +90,13 @@ impl NotificationService {
         *self.detail_level.read().unwrap()
     }
 
-    /// Show a notification for an incoming message.
+    /// Show `conversation_id`'s notification for an incoming message,
+    /// replacing the conversation's earlier one.
     ///
     /// Respects privacy settings and sealed sender status.
     pub fn show_message_notification(
         &self,
+        conversation_id: &crate::domain::ids::ChannelId,
         sender_name: Option<&str>,
         message_preview: Option<&str>,
         is_sealed_sender: bool,
@@ -119,7 +121,12 @@ impl NotificationService {
             ),
         };
 
-        self.show_platform_notification(&title, &body, priority)
+        self.sink.show_conversation(&notification_key(conversation_id), &title, &body, priority)
+    }
+
+    /// Dismiss `conversation_id`'s notification (it was read).
+    pub fn cancel_conversation(&self, conversation_id: &crate::domain::ids::ChannelId) -> Result<(), SystemError> {
+        self.sink.cancel_conversation(&notification_key(conversation_id))
     }
 
     /// Show a notification from a domain Notification object.
@@ -178,6 +185,20 @@ impl NotificationService {
     ) -> Result<(), SystemError> {
         self.sink.show(title, body, priority)
     }
+}
+
+/// The key a conversation's notification is filed under. Not the id itself:
+/// the platform can hand the key to other apps (an Android tag is visible to
+/// every notification listener), and a friend DM's id IS the peer's user id —
+/// a contact identifier leaking whatever the detail level. A hash still lets
+/// the same conversation replace and cancel its notification.
+fn notification_key(conversation_id: &crate::domain::ids::ChannelId) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::new()
+        .chain_update(b"chatter-notification-key:")
+        .chain_update(conversation_id.to_string())
+        .finalize();
+    hex::encode(&digest[..16])
 }
 
 impl Default for NotificationService {
@@ -245,6 +266,7 @@ pub fn spawn_notification_listener(
                     let preview = message.as_text();
 
                     let _ = notification_service.show_message_notification(
+                        &message.conversation_id,
                         sender_name.as_deref(),
                         preview,
                         message.is_sealed_sender(),
@@ -267,11 +289,20 @@ pub fn spawn_notification_listener(
                         continue;
                     }
                     let _ = notification_service.show_message_notification(
+                        &target.conversation_id,
                         None,
                         Some(&format!("Reacted {}", emoji)),
                         false,
                         NotificationPriority::Low,
                     );
+                }
+
+                // Read here or on another of our devices: the notification is
+                // stale (Signal cancels a thread's notification either way).
+                DomainEvent::ConversationsRead { conversation_ids, .. } => {
+                    for id in conversation_ids {
+                        let _ = notification_service.cancel_conversation(id);
+                    }
                 }
 
                 // ================================================================
@@ -519,10 +550,11 @@ mod tests {
         }
         let sink = Arc::new(Capture(Default::default()));
         let service = NotificationService::new(sink.clone());
+        let conversation = crate::domain::ids::ChannelId::new();
         let shown = |level, sealed| {
             service.set_detail_level(level);
             service
-                .show_message_notification(Some("Alice"), Some("are you free?"), sealed, NotificationPriority::Normal)
+                .show_message_notification(&conversation, Some("Alice"), Some("are you free?"), sealed, NotificationPriority::Normal)
                 .unwrap();
             sink.0.lock().unwrap().pop().unwrap()
         };
@@ -532,6 +564,14 @@ mod tests {
         assert_eq!(shown(NotificationDetailLevel::NameOnly, false), pair("Alice", "New message"));
         assert_eq!(shown(NotificationDetailLevel::None, false), pair("Chatter", "New message"));
         assert_eq!(shown(NotificationDetailLevel::NameAndMessage, true), pair("Chatter", "New message"));
+    }
+
+    #[test]
+    fn notification_key_is_stable_and_hides_the_id() {
+        let id = crate::domain::ids::ChannelId::new();
+        assert_eq!(notification_key(&id), notification_key(&id));
+        assert_ne!(notification_key(&id), notification_key(&crate::domain::ids::ChannelId::new()));
+        assert!(!notification_key(&id).contains(&id.to_string()));
     }
 
     #[test]

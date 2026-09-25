@@ -945,7 +945,7 @@ impl InboxEventProcessor {
                 }
                 match self.message_service.apply_read_sync(sync) {
                     Ok(conversation_ids) if !conversation_ids.is_empty() => {
-                        self.event_bus.emit_domain(DomainEvent::ReadOnOtherDevice { conversation_ids });
+                        self.event_bus.emit_domain(DomainEvent::ConversationsRead { conversation_ids, from_other_device: true });
                     }
                     Ok(_) => {}
                     Err(e) => tracing::warn!(error = %e, "ReadSync: marking messages read failed"),
