@@ -48,7 +48,7 @@ pub use token_manager::{
 // Re-export DM types
 pub use dm::{
     BootstrapResponse, BootstrapResult, DmBootstrap, DmConversation, DmConversationManager,
-    DmMailbox, PollResult, ReceivedMessage, SendResult, TwoWayAnonymity,
+    DmMailbox, PollResult, ReceivedMessage, TwoWayAnonymity,
 };
 
 // Re-export group types

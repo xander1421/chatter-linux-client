@@ -7,8 +7,9 @@ use prost::Message as ProstMessage;
 
 use crate::crypto::encrypt_dm_bytes;
 use crate::domain::ids::UserId;
-use crate::mailbox::dm::DmConversationManager;
+use crate::mailbox::dm::{DmConversation, DmConversationManager, PeerMailbox};
 use crate::network::grpc::auth_client::AuthClient;
+use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::proto::mailbox_v1::EnvelopeType;
 use crate::services::current_user::CurrentUserProvider;
 use crate::services::mailbox_manager::MailboxManager;
@@ -59,8 +60,7 @@ impl MessageService {
             peer_id = %peer_id,
             conversation_exists = conversation.is_some(),
             has_our_mailbox = conversation.as_ref().map(|c| c.our_mailbox.is_some()).unwrap_or(false),
-            has_peer_mailbox = conversation.as_ref().map(|c| c.peer_mailbox.is_some()).unwrap_or(false),
-            has_shared_secret = conversation.as_ref().map(|c| c.conversation_key.as_ref().map(|k| k.shared_secret.is_some()).unwrap_or(false)).unwrap_or(false),
+            peer_devices = conversation.as_ref().map(|c| c.peer_mailboxes.len()).unwrap_or(0),
             is_ready = conversation.as_ref().map(|c| c.is_ready_to_send()).unwrap_or(false),
             "MessageService: conversation state loaded"
         );
@@ -92,50 +92,145 @@ impl MessageService {
 
         // Conversation is ready - proceed with sending
         let conversation = conversation.unwrap();
-
-        let peer_mailbox = conversation
-            .peer_mailbox
-            .as_ref()
-            .ok_or_else(|| MessageError::DmError("No peer mailbox address".into()))?;
-
-        // Per-direction key: outbound mailbox-layer encryption uses our
-        // send_key (XChaCha20-Poly1305). Peer's matching recv_key is
-        // derived deterministically from the same shared root.
-        let shared_secret = conversation
-            .conversation_key
-            .as_ref()
-            .and_then(|k| k.send_key())
-            .ok_or_else(|| MessageError::DmError("No shared secret".into()))?;
-
-        // Serialize Content proto
         let plaintext = content.encode_to_vec();
 
-        // Layer 1: Signal Protocol, sealed for the ONE device that owns the
-        // peer mailbox. The mailbox conversation is one-peer-device: only that
-        // device polls this mailbox, so a copy for any other device is read by
-        // the owner and fails there as a message addressed to someone else.
+        // Every ready peer device gets its own copy: sealed for that device
+        // only (Layer 1, Signal), wrapped under that device's secret (Layer 2)
+        // and deposited in that device's mailbox, the one only it polls.
+        // Delivered once any device has it, as Signal counts a send.
         //
         // Never a prekey-bundle fetch: in Shield that identified RPC names the
         // recipient at the moment we message them — the link the mailbox
-        // exists to hide. The session exists (the bootstrap made it).
-        let device_id = peer_mailbox.device_id;
+        // exists to hide. The sessions exist (each bootstrap made one).
+        let mut delivered = 0usize;
+        let mut last_error = None;
+        for (mailbox, send_key) in conversation.ready_devices() {
+            match self
+                .send_to_peer_device(auth_client, mailbox_manager, peer_id, mailbox, &send_key, &plaintext)
+                .await
+            {
+                Ok(()) => delivered += 1,
+                Err(e) => {
+                    tracing::warn!(peer_id = %peer_id, device_id = mailbox.device_id, error = %e, "Mailbox DM to a peer device failed");
+                    last_error = Some(e);
+                }
+            }
+        }
+        if delivered == 0 {
+            return Err(last_error.unwrap_or_else(|| MessageError::DmError("No ready peer device".into())));
+        }
+        tracing::debug!(peer_id = %peer_id, delivered, "Sent DM to the peer's ready devices");
+
+        if !is_ephemeral_content(&content) {
+            self.owe_unready_devices(auth_client, peer_id, &conversation, &plaintext, grpc_pool)
+                .await;
+        }
+        Ok(())
+    }
+
+    /// Seal `plaintext` for one peer device and deposit it in its mailbox.
+    async fn send_to_peer_device(
+        &self,
+        auth_client: &mut AuthClient,
+        mailbox_manager: &MailboxManager,
+        peer_id: &UserId,
+        mailbox: &PeerMailbox,
+        send_key: &[u8; 32],
+        plaintext: &[u8],
+    ) -> Result<(), MessageError> {
+        let device_id = mailbox.device_id;
         let peer_ciphertexts = self
             .signal_service
-            .encrypt_message_session_devices(auth_client, &peer_id.to_string(), vec![device_id], &plaintext)
+            .encrypt_message_session_devices(auth_client, &peer_id.to_string(), vec![device_id], plaintext)
             .await
             .map_err(|e| MessageError::from_signal_send(e, "Mailbox DM encrypt"))?;
-
-        // Layer 2: Mailbox encryption (sender anonymity)
         for signal_ciphertext in peer_ciphertexts.into_values() {
-            let mailbox_encrypted = encrypt_dm_bytes(&signal_ciphertext, &shared_secret)
+            let mailbox_encrypted = encrypt_dm_bytes(&signal_ciphertext, send_key)
                 .map_err(|e| MessageError::EncryptionFailed(format!("Mailbox encrypt: {}", e)))?;
             self.send_to_mailbox_retried(
-                mailbox_manager, &peer_mailbox.public_key, mailbox_encrypted, peer_id, device_id,
+                mailbox_manager, &mailbox.public_key, mailbox_encrypted, peer_id, device_id,
             ).await?;
         }
-        tracing::debug!(peer_id = %peer_id, device_id, "Sent DM to the peer mailbox's device");
-
         Ok(())
+    }
+
+    /// Hold `plaintext` for every live peer device that has no half of the
+    /// conversation yet, flushed when it answers the bootstrap
+    /// ([`Self::send_pending_messages`], `dm_bootstrap_handler`). A device
+    /// is asked to answer once — when the first copy is owed to it — and only
+    /// on a live send (`grpc_pool`); the post-bootstrap flush follows a
+    /// bootstrap that already asked every device. No RPC beyond that ask.
+    pub(super) async fn owe_unready_devices(
+        &self,
+        auth_client: &mut AuthClient,
+        peer_id: &UserId,
+        conversation: &DmConversation,
+        plaintext: &[u8],
+        grpc_pool: Option<&std::sync::Arc<GrpcClientPool>>,
+    ) {
+        let devices = match self.live_session_devices(peer_id).await {
+            Ok(devices) => devices,
+            Err(e) => {
+                tracing::warn!(peer_id = %peer_id, error = %e, "Owed copies: device lookup failed");
+                return;
+            }
+        };
+        let conversations = DmConversationManager::new(self.database.clone());
+        for device in devices {
+            if conversation.peer_mailboxes.iter().any(|m| m.device_id == device) {
+                continue;
+            }
+            // ponytail: "already owed something" stands for "already asked", so
+            // an ask that failed (empty token batch) is repeated only once the
+            // owed copies age out; a per-device asked_at if that proves slow.
+            let asked = conversations.has_queued_for_device(peer_id, device).unwrap_or(true);
+            if let Err(e) = conversations.queue_for_device(peer_id, device, plaintext) {
+                tracing::warn!(peer_id = %peer_id, device, error = %e, "Owed copies: queue failed");
+                continue;
+            }
+            if let (false, Some(grpc_pool)) = (asked, grpc_pool) {
+                if let Err(e) = self.prompt_peer_device(auth_client, peer_id, device, grpc_pool).await {
+                    tracing::warn!(peer_id = %peer_id, device, error = %e, "Owed copies: could not ask the device to bootstrap");
+                }
+            }
+        }
+    }
+
+    /// Deliver what is owed to every peer device that is ready now. Failures
+    /// are logged, not announced: each of these messages already reached
+    /// another device, so its bubble is already "sent".
+    async fn flush_owed_copies(
+        &self,
+        auth_client: &mut AuthClient,
+        peer_id: &UserId,
+        mailbox_manager: &MailboxManager,
+    ) {
+        let conversations = DmConversationManager::new(self.database.clone());
+        let conversation = match conversations.load_conversation(peer_id) {
+            Ok(Some(conversation)) => conversation,
+            Ok(None) => return,
+            Err(e) => {
+                tracing::warn!(peer_id = %peer_id, error = %e, "Owed copies: conversation load failed");
+                return;
+            }
+        };
+        for (mailbox, send_key) in conversation.ready_devices() {
+            let owed = match conversations.drain_device_queue(peer_id, mailbox.device_id) {
+                Ok(owed) => owed,
+                Err(e) => {
+                    tracing::warn!(peer_id = %peer_id, device = mailbox.device_id, error = %e, "Owed copies: drain failed");
+                    continue;
+                }
+            };
+            for plaintext in owed {
+                if let Err(e) = self
+                    .send_to_peer_device(auth_client, mailbox_manager, peer_id, mailbox, &send_key, &plaintext)
+                    .await
+                {
+                    tracing::warn!(peer_id = %peer_id, device = mailbox.device_id, error = %e, "Owed copy to a late device lost");
+                }
+            }
+        }
     }
 
     /// Send a Content proto to a DM peer (simplified API - no client params).
@@ -216,6 +311,9 @@ impl MessageService {
             };
             flush.record(bubble, result);
         }
+
+        // A device that answered after another got these copies catches up.
+        self.flush_owed_copies(auth_client, peer_id, mailbox_manager).await;
 
         tracing::info!(
             peer_id = %peer_id,
@@ -495,6 +593,15 @@ impl MessageService {
 
         Ok(content)
     }
+}
+
+/// Typing indicators and receipts: worth nothing late, so never queued.
+pub(super) fn is_ephemeral_content(content: &crate::proto::content_v1::Content) -> bool {
+    matches!(
+        &content.content,
+        Some(crate::proto::content_v1::content::Content::Typing(_))
+            | Some(crate::proto::content_v1::content::Content::Receipt(_))
+    )
 }
 
 /// Reply metadata assembled from a quoted message, feeding both the outgoing

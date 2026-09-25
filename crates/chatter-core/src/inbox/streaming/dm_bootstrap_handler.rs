@@ -17,7 +17,7 @@
 //! This handler receives a shared `Arc<Database>` rather than reopening the database.
 //! This means the database passphrase is never passed around after initial unlock.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use tokio::sync::{broadcast, Mutex};
@@ -71,8 +71,13 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
     mut event_rx: broadcast::Receiver<DomainEvent>,
     event_bus: EventBus,
 ) -> JoinHandle<()> {
-    // Track in-progress bootstraps to prevent concurrent requests for same peer
-    let in_progress: Arc<Mutex<HashSet<UserId>>> = Arc::new(Mutex::new(HashSet::new()));
+    // Bootstraps in progress, per peer DEVICE: a repeat from the same device
+    // is dropped, while every device of a multi-device peer gets its own.
+    let in_progress: Arc<Mutex<HashSet<(UserId, u32)>>> = Arc::new(Mutex::new(HashSet::new()));
+    // One bootstrap task per peer at a time: two devices answering together
+    // must not both find no mailbox of ours and each spend a token on one.
+    // ponytail: one entry per peer ever bootstrapped, never pruned.
+    let peer_turns: Arc<Mutex<HashMap<UserId, Arc<Mutex<()>>>>> = Arc::new(Mutex::new(HashMap::new()));
 
     // Get user ID from grpc_pool for UUID comparison
     let auth_user_id = grpc_pool.auth_info().user_id.clone();
@@ -115,14 +120,14 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                         // Check if bootstrap is already in progress for this peer
                         {
                             let mut guard = in_progress.lock().await;
-                            if guard.contains(&sender_id) {
+                            if !guard.insert((sender_id, sender_device_id)) {
                                 tracing::debug!(
                                     peer = %sender_id,
-                                    "BOOTSTRAP[3/4] Skipping - already in progress for this peer"
+                                    sender_device_id,
+                                    "BOOTSTRAP[3/4] Skipping - already in progress for this device"
                                 );
                                 continue;
                             }
-                            guard.insert(sender_id);
                         }
 
                         tracing::info!(
@@ -136,8 +141,10 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                         let ephemeral_key = ephemeral_public_key.clone();
                         let in_progress_clone = in_progress.clone();
                         let event_bus = event_bus.clone();
+                        let turn = peer_turn(&peer_turns, sender_id).await;
 
                         bootstrap_tasks.spawn(async move {
+                            let _turn = turn.lock().await;
                             tracing::debug!(
                                 peer = %sender_id,
                                 "BOOTSTRAP[3/4] handler task started"
@@ -170,7 +177,7 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                             }
 
                             // Remove from in-progress set when done
-                            in_progress_clone.lock().await.remove(&sender_id);
+                            in_progress_clone.lock().await.remove(&(sender_id, sender_device_id));
 
                             tracing::debug!(
                                 peer = %sender_id,
@@ -184,14 +191,14 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                         // Check if bootstrap is already in progress for this peer
                         {
                             let mut guard = in_progress.lock().await;
-                            if guard.contains(&sender_id) {
+                            if !guard.insert((sender_id, sender_device_id)) {
                                 tracing::debug!(
                                     peer = %sender_id,
-                                    "BOOTSTRAP[2/4] Skipping REQUEST - already in progress for this peer"
+                                    sender_device_id,
+                                    "BOOTSTRAP[2/4] Skipping REQUEST - already in progress for this device"
                                 );
                                 continue;
                             }
-                            guard.insert(sender_id);
                         }
 
                         tracing::info!(
@@ -209,7 +216,7 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                                     "BOOTSTRAP[2/4] FAILED - Invalid local user UUID"
                                 );
                                 // Remove from in-progress on early exit
-                                in_progress.lock().await.remove(&sender_id);
+                                in_progress.lock().await.remove(&(sender_id, sender_device_id));
                                 continue;
                             }
                         };
@@ -234,8 +241,10 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                             let database = database.clone();
                             let grpc_pool = grpc_pool.clone();
                             let in_progress_clone = in_progress.clone();
+                            let turn = peer_turn(&peer_turns, sender_id).await;
 
                             bootstrap_tasks.spawn(async move {
+                                let _turn = turn.lock().await;
                                 if let Err(e) = handle_bootstrap_request_async(
                                     database,
                                     grpc_pool,
@@ -251,7 +260,7 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                                     );
                                 }
                                 // Remove from in-progress set when done
-                                in_progress_clone.lock().await.remove(&sender_id);
+                                in_progress_clone.lock().await.remove(&(sender_id, sender_device_id));
                             });
                         } else {
                             // We're the higher UUID - ignore (we shouldn't receive this)
@@ -263,7 +272,7 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                                 "BOOTSTRAP[2/4] IGNORED - We're higher UUID, shouldn't receive REQUEST"
                             );
                             // Remove from in-progress since we're not handling it
-                            in_progress.lock().await.remove(&sender_id);
+                            in_progress.lock().await.remove(&(sender_id, sender_device_id));
                         }
                     } else {
                         tracing::trace!(
@@ -291,6 +300,11 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
             }
         }
     })
+}
+
+/// The lock that serialises `peer`'s bootstrap tasks.
+async fn peer_turn(turns: &Mutex<HashMap<UserId, Arc<Mutex<()>>>>, peer: UserId) -> Arc<Mutex<()>> {
+    turns.lock().await.entry(peer).or_default().clone()
 }
 
 /// Handle bootstrap REQUEST asynchronously.
@@ -551,17 +565,32 @@ async fn send_pending_messages_after_bootstrap(
         .collect();
     let mut flush = PendingFlush::default();
 
-    let conversation = DmConversationManager::new(database.clone()).load_conversation(&peer_id);
-    let (send_key, peer_mailbox) = match conversation {
-        Ok(Some(conv)) => match (conv.conversation_key.as_ref().and_then(|k| k.send_key()), conv.peer_mailbox) {
-            (Some(key), Some(mailbox)) => (key, mailbox),
-            _ => {
+    let conversations = DmConversationManager::new(database.clone());
+    let conversation = conversations.load_conversation(&peer_id);
+    // Just made by this device's bootstrap; the peer's other devices that have
+    // no half yet are owed each copy until they answer.
+    let (send_key, peer_mailbox, unready) = match conversation {
+        Ok(Some(conv)) => {
+            let ready = conv
+                .ready_devices()
+                .into_iter()
+                .find(|(m, _)| m.device_id == peer_device_id)
+                .map(|(m, key)| (key, m.clone()));
+            let Some((key, mailbox)) = ready else {
                 for (bubble, _) in queued {
                     flush.record(bubble, Err("no mailbox keys after bootstrap".into()));
                 }
                 return Some(flush);
-            }
-        },
+            };
+            let unready: Vec<u32> = signal_service
+                .session_devices(&peer_id.to_string())
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|d| !conv.peer_mailboxes.iter().any(|m| m.device_id == *d))
+                .collect();
+            (key, mailbox, unready)
+        }
         Ok(None) => {
             for (bubble, _) in queued {
                 flush.record(bubble, Err("no conversation state after bootstrap".into()));
@@ -578,20 +607,30 @@ async fn send_pending_messages_after_bootstrap(
 
     let mut anon_mailbox_client = AnonymousMailboxClient::new(channel);
     for (bubble, content) in queued {
-        let result = async {
-            for envelope in seal_for_peer_mailbox(signal_service, auth_client, &peer_id, peer_device_id, &content, &send_key).await? {
-                anon_mailbox_client
-                    .send_to_ephemeral_mailbox(peer_mailbox.public_key.to_vec(), envelope, EnvelopeType::Message as i32)
-                    .await
-                    .map_err(|e| format!("mailbox send: {e}"))?;
-            }
-            Ok::<(), String>(())
-        }
-        .await;
+        let result = deposit(signal_service, auth_client, &mut anon_mailbox_client, &peer_id, &peer_mailbox, &send_key, &content).await;
         if let Err(e) = &result {
             tracing::error!(peer = %peer_id, error = %e, "Failed to send pending message");
+        } else {
+            for &device in &unready {
+                if let Err(e) = conversations.queue_for_device(&peer_id, device, &content) {
+                    tracing::warn!(peer = %peer_id, device, error = %e, "Owed copies: queue failed");
+                }
+            }
         }
         flush.record(bubble, result);
+    }
+
+    // This device answered after another got these copies: it catches up.
+    // Already "sent" (another device has each), so a failure is only logged.
+    match conversations.drain_device_queue(&peer_id, peer_device_id) {
+        Ok(owed) => {
+            for content in owed {
+                if let Err(e) = deposit(signal_service, auth_client, &mut anon_mailbox_client, &peer_id, &peer_mailbox, &send_key, &content).await {
+                    tracing::warn!(peer = %peer_id, peer_device_id, error = %e, "Owed copy to a late device lost");
+                }
+            }
+        }
+        Err(e) => tracing::warn!(peer = %peer_id, peer_device_id, error = %e, "Owed copies: drain failed"),
     }
 
     tracing::info!(
@@ -603,13 +642,30 @@ async fn send_pending_messages_after_bootstrap(
     Some(flush)
 }
 
+/// Seal `content` for the device owning `peer_mailbox` and deposit it there.
+async fn deposit(
+    signal_service: &SignalService,
+    auth_client: &mut AuthClient,
+    anon_mailbox_client: &mut AnonymousMailboxClient,
+    peer_id: &UserId,
+    peer_mailbox: &crate::mailbox::dm::PeerMailbox,
+    send_key: &[u8; 32],
+    content: &[u8],
+) -> Result<(), String> {
+    for envelope in seal_for_peer_mailbox(signal_service, auth_client, peer_id, peer_mailbox.device_id, content, send_key).await? {
+        anon_mailbox_client
+            .send_to_ephemeral_mailbox(peer_mailbox.public_key.to_vec(), envelope, EnvelopeType::Message as i32)
+            .await
+            .map_err(|e| format!("mailbox send: {e}"))?;
+    }
+    Ok(())
+}
+
 /// Seal `plaintext` for `peer_device_id` of `peer_id`, wrapped for the peer's
 /// mailbox under `send_key`.
 ///
-/// Only that device: it sent the bootstrap MESSAGE, so it owns the mailbox
-/// this conversation delivers to (the mailbox conversation is
-/// one-peer-device) and has just left a session (the RESPONSE was encrypted
-/// under it). Sealing to every session device also sealed to retired
+/// Only that device: it owns the mailbox and secret this copy goes under
+/// (each peer device has its own), and its bootstrap left a session. Sealing to every session device also sealed to retired
 /// installs that no longer exist. Never a prekey fetch: this flush runs in
 /// Shield, where naming the peer in an identified RPC is the link the mailbox
 /// exists to hide.

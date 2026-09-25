@@ -68,6 +68,7 @@ mod v066_messages_sent_at_index;
 mod v067_deleted_messages;
 mod v068_blocked_anon_peer_name;
 mod v069_peer_mailbox_device;
+mod v070_peer_device_mailboxes;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -139,6 +140,7 @@ pub use v066_messages_sent_at_index::V066MessagesSentAtIndex;
 pub use v067_deleted_messages::V067DeletedMessages;
 pub use v068_blocked_anon_peer_name::V068BlockedAnonPeerName;
 pub use v069_peer_mailbox_device::V069PeerMailboxDevice;
+pub use v070_peer_device_mailboxes::V070PeerDeviceMailboxes;
 
 /// Trait for database migrations.
 ///
@@ -335,4 +337,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V067DeletedMessages)
         .register(V068BlockedAnonPeerName)
         .register(V069PeerMailboxDevice)
+        .register(V070PeerDeviceMailboxes)
 }

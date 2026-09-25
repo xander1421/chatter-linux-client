@@ -20,7 +20,7 @@ use tokio::time::sleep;
 
 use crate::domain::UserId;
 use crate::error::MailboxError;
-use crate::mailbox::dm::{ConversationKey, DmConversationManager, DmMailbox, PeerMailbox};
+use crate::mailbox::dm::{ConversationKey, DmConversationManager, DmMailbox};
 use crate::mailbox::{MailboxToken, TokenManager};
 use crate::network::grpc::AnonymousMailboxClient;
 use crate::proto::content_v1::{content, Content, KeyExchange};
@@ -216,7 +216,7 @@ impl DmBootstrap {
                 peer_id = %peer_id,
                 needs_bootstrap = conv.needs_bootstrap(),
                 has_our_mailbox = conv.our_mailbox.is_some(),
-                has_peer_mailbox = conv.peer_mailbox.is_some(),
+                peer_devices = conv.peer_mailboxes.len(),
                 has_shared_secret = conv.conversation_key.as_ref().map(|k| k.shared_secret.is_some()).unwrap_or(false),
                 "DM bootstrap: existing conversation found"
             );
@@ -464,20 +464,13 @@ impl DmBootstrap {
         // the wire). Like a new PreKey session from a trusted identity, it
         // replaces the peer mailbox and conversation secret; message history
         // is stored elsewhere and untouched. Anyone else's bootstrap lands on
-        // their own `sender_id` conversation, never on this one.
+        // their own `sender_id` conversation, never on this one. The same
+        // holds per device: `sender_device_id` is the sealed sender's
+        // certified device, so this bootstrap replaces that device's half of
+        // the conversation and no other device's.
 
-        // Save peer's mailbox address, owned by the device that sent this
-        // bootstrap: it made the mailbox and is the only one polling it.
-        let peer_mailbox = PeerMailbox {
-            public_key: peer_mailbox_pk,
-            device_id: sender_device_id,
-            received_at: Utc::now(),
-            expires_at: None, // Unknown - peer's mailbox TTL isn't communicated
-        };
-        self.conversation_manager
-            .save_peer_mailbox(&sender_id, &peer_mailbox)?;
-
-        // If we don't have a live mailbox of our own, create one
+        // If we don't have a live mailbox of our own, create one. One mailbox
+        // of ours serves every peer device.
         let our_mailbox = if existing.as_ref().map_or(true, |c| c.needs_bootstrap()) {
             let token = self.token_manager.claim_prefetched_token()?;
             let response = {
@@ -518,19 +511,27 @@ impl DmBootstrap {
                 .save_our_mailbox(&sender_id, &mailbox)?;
             Some(mailbox)
         } else {
-            existing.and_then(|c| c.our_mailbox)
+            existing.as_ref().and_then(|c| c.our_mailbox.clone())
         };
 
-        // Get or create conversation key and derive shared secret
-        let existing_for_key = self.conversation_manager.load_conversation(&sender_id)?;
-        let mut conversation_key = existing_for_key
-            .and_then(|c| c.conversation_key)
-            .unwrap_or_else(ConversationKey::new);
+        // Our half: the one every peer device pairs with, or a fresh one.
+        let conversation_key = match existing.and_then(|c| c.conversation_key) {
+            Some(key) => key,
+            None => {
+                let key = ConversationKey::new();
+                self.conversation_manager.save_conversation_key(&sender_id, &key)?;
+                key
+            }
+        };
 
-        // Derive shared secret from their ephemeral key
-        conversation_key.derive_shared_secret(peer_conversation_pk)?;
-        self.conversation_manager
-            .save_conversation_key(&sender_id, &conversation_key)?;
+        // That device's half: its mailbox (it made it and polls it) and its
+        // ephemeral, checked against ours before anything is saved.
+        self.conversation_manager.record_peer_device(
+            &sender_id,
+            sender_device_id,
+            peer_mailbox_pk,
+            peer_conversation_pk,
+        )?;
 
         // Build response if we have a mailbox
         let response = our_mailbox.map(|mailbox| BootstrapResponse {

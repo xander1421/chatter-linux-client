@@ -159,7 +159,7 @@ fn test_dm_conversation_new() {
 
     assert_eq!(conv.peer_id, peer_id);
     assert!(conv.our_mailbox.is_none());
-    assert!(conv.peer_mailbox.is_none());
+    assert!(conv.peer_mailboxes.is_empty());
     assert!(conv.conversation_key.is_none());
     assert!(conv.needs_bootstrap());
     assert!(!conv.is_ready_to_send());
@@ -188,19 +188,13 @@ fn test_dm_conversation_ready_states() {
     assert!(conv.is_ready_to_receive());
     assert!(!conv.is_ready_to_send()); // Still need peer mailbox and key
 
-    // Add peer mailbox
-    conv.peer_mailbox = Some(PeerMailbox::new([0u8; 32], 1, None));
-    assert!(!conv.is_ready_to_send()); // Still need conversation key
+    // Add one peer device's half (its mailbox + ephemeral)
+    let peer_ephemeral = ConversationKey::new().our_ephemeral_public;
+    conv.peer_mailboxes.push(PeerMailbox::new([0u8; 32], 1, peer_ephemeral, None));
+    assert!(!conv.is_ready_to_send()); // Still need our half
 
-    // Add conversation key without shared secret
+    // Our half: the secret with each device is derived from it
     conv.conversation_key = Some(ConversationKey::new());
-    assert!(!conv.is_ready_to_send()); // Need shared secret
-
-    // Establish shared secret
-    let mut key = conv.conversation_key.take().unwrap();
-    key.derive_shared_secret([1u8; 32]).unwrap();
-    conv.conversation_key = Some(key);
-
     assert!(conv.is_ready_to_send());
 }
 
@@ -281,20 +275,20 @@ fn test_dm_conversation_manager_save_load() {
     let mailbox = create_test_mailbox(&db, &peer_id, "mailbox-123", "token-abc");
     manager.save_our_mailbox(&peer_id, &mailbox).unwrap();
 
-    // Save peer mailbox
-    let peer_mailbox = PeerMailbox::new([9u8; 32], 1, Some(Utc::now() + Duration::days(7)));
-    manager.save_peer_mailbox(&peer_id, &peer_mailbox).unwrap();
+    // Save our half first: a new ephemeral of ours drops every device half
+    manager.save_conversation_key(&peer_id, &ConversationKey::new()).unwrap();
 
-    // Save conversation key
-    let mut conv_key = ConversationKey::new();
-    conv_key.derive_shared_secret([10u8; 32]).unwrap();
-    manager.save_conversation_key(&peer_id, &conv_key).unwrap();
+    // Save one peer device's half
+    let peer_ephemeral = ConversationKey::new().our_ephemeral_public;
+    let peer_mailbox =
+        PeerMailbox::new([9u8; 32], 1, peer_ephemeral, Some(Utc::now() + Duration::days(7)));
+    manager.save_peer_mailbox(&peer_id, &peer_mailbox).unwrap();
 
     // Load and verify
     let loaded = manager.load_conversation(&peer_id).unwrap().unwrap();
     assert_eq!(loaded.peer_id, peer_id);
     assert!(loaded.our_mailbox.is_some());
-    assert!(loaded.peer_mailbox.is_some());
+    assert_eq!(loaded.peer_mailboxes.len(), 1);
     assert!(loaded.conversation_key.is_some());
     assert!(loaded.is_ready_to_send());
     assert!(loaded.is_ready_to_receive());
@@ -413,11 +407,11 @@ fn test_two_way_anonymity_can_send_receive() {
     // Add mailboxes and key
     let mailbox = create_test_mailbox(&db, &peer_id, "mb", "t");
     manager.save_our_mailbox(&peer_id, &mailbox).unwrap();
-    manager.save_peer_mailbox(&peer_id, &PeerMailbox::new([9u8; 32], 1, None)).unwrap();
-
-    let mut key = ConversationKey::new();
-    key.derive_shared_secret([10u8; 32]).unwrap();
-    manager.save_conversation_key(&peer_id, &key).unwrap();
+    manager.save_conversation_key(&peer_id, &ConversationKey::new()).unwrap();
+    let peer_ephemeral = ConversationKey::new().our_ephemeral_public;
+    manager
+        .save_peer_mailbox(&peer_id, &PeerMailbox::new([9u8; 32], 1, peer_ephemeral, None))
+        .unwrap();
 
     // Now should be able to send and receive
     assert!(two_way.can_send(&peer_id).unwrap());

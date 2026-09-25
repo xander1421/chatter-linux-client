@@ -32,13 +32,7 @@ impl MessageService {
         channel_id: Option<ChannelId>,
     ) -> Result<(), MessageError> {
         // Check if this is an ephemeral message (typing indicator, receipt) that should be dropped
-        let is_ephemeral = matches!(
-            &content.content,
-            Some(crate::proto::content_v1::content::Content::Typing(_)) |
-            Some(crate::proto::content_v1::content::Content::Receipt(_))
-        );
-
-        if is_ephemeral {
+        if super::dm::is_ephemeral_content(&content) {
             tracing::debug!(
                 peer_id = %peer_id,
                 "Dropping ephemeral message (typing/receipt) - bootstrap not complete"
@@ -292,7 +286,8 @@ impl MessageService {
         Err(MessageError::BootstrapInitiated)
     }
 
-    /// Send a bootstrap request (empty KeyExchange) to prompt the peer to initiate.
+    /// Send a bootstrap REQUEST to every live device of the peer (lower UUID),
+    /// prompting each to announce its own mailbox.
     async fn send_bootstrap_request(
         &self,
         auth_client: &mut AuthClient,
@@ -306,27 +301,14 @@ impl MessageService {
             "BOOTSTRAP[1/4] Higher UUID sending REQUEST to lower UUID peer"
         );
 
-        // Build bootstrap request: KeyExchange with empty ephemeral_pk
-        let bootstrap_request = crate::proto::content_v1::KeyExchange {
-            ephemeral_pk: vec![], // 0 bytes = bootstrap REQUEST
-            conversation_id: our_user_id.to_string(),
-            timestamp: TimestampNanos::now().as_u64(),
-        };
-
-        let request_content = crate::proto::content_v1::Content {
-            content: Some(crate::proto::content_v1::content::Content::KeyExchange(bootstrap_request)),
-            ephemeral_reply_to: None,
-            timestamp: TimestampNanos::now().as_u64(),
-            padding: vec![],
-        };
-
         let devices = self.bootstrap_devices(auth_client, peer_id).await?;
-        self.send_bootstrap_payload(auth_client, peer_id, &devices, &request_content.encode_to_vec(), grpc_pool)
+        self.send_bootstrap_payload(auth_client, peer_id, &devices, &bootstrap_request(our_user_id), grpc_pool)
             .await
+            .map(|_| ())
     }
 
-    /// The devices of `peer_id` a bootstrap MESSAGE or REQUEST may go to, in
-    /// the order to try them.
+    /// The devices of `peer_id` a bootstrap MESSAGE or REQUEST goes to,
+    /// newest first.
     ///
     /// The Signal session store is our cache of a peer's devices: every
     /// normal-mode DM send's all-devices bundle fetch leaves a session per
@@ -378,18 +360,21 @@ impl MessageService {
         Ok(live)
     }
 
-    /// Seal `payload` (bootstrap MESSAGE or REQUEST) to ONE device of
-    /// `peer_id` and deposit it under a pre-fetched anonymous token.
+    /// Seal `payload` (bootstrap MESSAGE or REQUEST) to EVERY device in
+    /// `devices`, each under its own session, and deposit each under its own
+    /// pre-fetched anonymous token. Returns the devices it reached.
     ///
-    /// One device, not all: each device that gets a bootstrap answers with
-    /// its own mailbox and the initiator keeps only the last answer (the
-    /// mailbox conversation is one-peer-device). `devices` comes from
-    /// [`Self::bootstrap_devices`], newest first; a device the server refuses
-    /// as unknown is archived and marked retired, and the next one is tried.
+    /// Every device, not one: each device that answers keeps its own half of
+    /// the conversation (`DmConversationManager::record_peer_device`), so an
+    /// offline device answering hours later cannot take an online one's
+    /// mailbox over, and picking one device for a multi-device peer would
+    /// leave the message waiting on whichever was picked. A device the server
+    /// refuses as unknown is archived, marked retired and dropped from the
+    /// conversation. Succeeds when any device was reached.
     ///
     /// The token comes from the pre-fetched batch only — requesting one here
     /// would tie the authenticated request to this anonymous send in time
-    /// (NDSS'21 §VI-F). An empty batch fails the send.
+    /// (NDSS'21 §VI-F). An empty batch stops the fan-out.
     pub(super) async fn send_bootstrap_payload(
         &self,
         auth_client: &mut AuthClient,
@@ -397,19 +382,34 @@ impl MessageService {
         devices: &[u32],
         payload: &[u8],
         grpc_pool: &Arc<GrpcClientPool>,
-    ) -> Result<(), MessageError> {
+    ) -> Result<Vec<u32>, MessageError> {
         let peer_id_str = peer_id.to_string();
+        let mut reached = Vec::new();
+        let mut last_error = None;
 
         for &peer_device_id in devices {
-            let sealed_ciphertext = self
+            let sealed_ciphertext = match self
                 .signal_service
                 .encrypt_message(auth_client, &peer_id_str, peer_device_id, payload)
                 .await
-                .map_err(|e| MessageError::EncryptionFailed(format!("Bootstrap encrypt: {}", e)))?;
+            {
+                Ok(sealed) => sealed,
+                Err(e) => {
+                    tracing::warn!(peer_id = %peer_id, peer_device_id, error = %e, "DM bootstrap: encrypt failed for device");
+                    last_error = Some(MessageError::EncryptionFailed(format!("Bootstrap encrypt: {}", e)));
+                    continue;
+                }
+            };
 
-            let credential_token = self.token_manager.claim_prefetched_token().map_err(|e| {
-                MessageError::DmError(format!("No anonymous token for the DM bootstrap ({e}); try again shortly"))
-            })?;
+            let credential_token = match self.token_manager.claim_prefetched_token() {
+                Ok(token) => token,
+                Err(e) => {
+                    last_error = Some(MessageError::DmError(format!(
+                        "No anonymous token for the DM bootstrap ({e}); try again shortly"
+                    )));
+                    break;
+                }
+            };
 
             // Send to peer's device inbox via anonymous client (no AuthInterceptor)
             // to avoid dual-auth rejection — GRA-436
@@ -433,41 +433,100 @@ impl MessageService {
             {
                 Ok(_) => {
                     tracing::info!(peer_id = %peer_id, peer_device_id, "DM bootstrap payload sent to peer's device inbox");
-                    return Ok(());
+                    reached.push(peer_device_id);
                 }
                 Err(e) if e.is_unknown_destination_device() => {
-                    tracing::info!(peer_id = %peer_id, peer_device_id, "DM bootstrap: device retired on server, trying the next");
-                    self.retired_peer_devices
-                        .lock()
-                        .insert((*peer_id, peer_device_id), std::time::Instant::now());
-                    if let Err(e) = self
-                        .signal_service
-                        .actor
-                        .archive_session_for_resend(peer_id_str.clone(), peer_device_id, None)
-                        .await
-                    {
-                        tracing::warn!(peer_id = %peer_id, peer_device_id, error = %e, "Failed to archive session for retired device");
-                    }
+                    tracing::info!(peer_id = %peer_id, peer_device_id, "DM bootstrap: device retired on server, dropping it");
+                    self.retire_peer_device(peer_id, peer_device_id).await;
                 }
-                Err(e) => return Err(MessageError::DmError(format!("Failed to send bootstrap: {}", e))),
+                Err(e) => {
+                    tracing::warn!(peer_id = %peer_id, peer_device_id, error = %e, "DM bootstrap: send failed for device");
+                    last_error = Some(MessageError::DmError(format!("Failed to send bootstrap: {}", e)));
+                }
             }
         }
 
-        Err(if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
-            MessageError::NotReachablePrivately(*peer_id)
+        if !reached.is_empty() {
+            return Ok(reached);
+        }
+        Err(last_error.unwrap_or_else(|| {
+            if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+                MessageError::NotReachablePrivately(*peer_id)
+            } else {
+                MessageError::DmError(format!("every known device of {peer_id} is retired"))
+            }
+        }))
+    }
+
+    /// The server refused `peer_device_id` as unknown: mark it retired,
+    /// archive its session and drop it from the mailbox conversation.
+    async fn retire_peer_device(&self, peer_id: &UserId, peer_device_id: u32) {
+        self.retired_peer_devices
+            .lock()
+            .insert((*peer_id, peer_device_id), std::time::Instant::now());
+        if let Err(e) = self
+            .signal_service
+            .actor
+            .archive_session_for_resend(peer_id.to_string(), peer_device_id, None)
+            .await
+        {
+            tracing::warn!(peer_id = %peer_id, peer_device_id, error = %e, "Failed to archive session for retired device");
+        }
+        if let Err(e) = crate::mailbox::dm::DmConversationManager::new(self.database.clone())
+            .forget_peer_device(peer_id, peer_device_id)
+        {
+            tracing::warn!(peer_id = %peer_id, peer_device_id, error = %e, "Failed to drop retired device from the mailbox conversation");
+        }
+    }
+
+    /// Ask one peer device that has no half of the conversation yet to make
+    /// one: the lower UUID re-announces its live mailbox and key to it (a
+    /// bootstrap MESSAGE), the higher sends it a REQUEST. One token.
+    pub(super) async fn prompt_peer_device(
+        &self,
+        auth_client: &mut AuthClient,
+        peer_id: &UserId,
+        peer_device_id: u32,
+        grpc_pool: &Arc<GrpcClientPool>,
+    ) -> Result<(), MessageError> {
+        let our_user_id = self.settings_repo.current_user_id()?;
+        let payload = if our_user_id.as_uuid() < peer_id.as_uuid() {
+            DmBootstrap::new(self.database.clone())
+                .initiate_dm(*peer_id, &mut grpc_pool.anonymous_mailbox_client())
+                .await
+                .map_err(|e| MessageError::DmError(format!("re-announce for device {peer_device_id}: {e}")))?
+                .bootstrap_message
         } else {
-            MessageError::DmError(format!("every known device of {peer_id} is retired"))
-        })
+            bootstrap_request(&our_user_id)
+        };
+        self.send_bootstrap_payload(auth_client, peer_id, &[peer_device_id], &payload, grpc_pool)
+            .await
+            .map(|_| ())
     }
 }
 
+/// A bootstrap REQUEST: a KeyExchange with an empty ephemeral.
+fn bootstrap_request(our_user_id: &UserId) -> Vec<u8> {
+    crate::proto::content_v1::Content {
+        content: Some(crate::proto::content_v1::content::Content::KeyExchange(
+            crate::proto::content_v1::KeyExchange {
+                ephemeral_pk: vec![], // 0 bytes = bootstrap REQUEST
+                conversation_id: our_user_id.to_string(),
+                timestamp: TimestampNanos::now().as_u64(),
+            },
+        )),
+        ephemeral_reply_to: None,
+        timestamp: TimestampNanos::now().as_u64(),
+        padding: vec![],
+    }
+    .encode_to_vec()
+}
+
 /// Newest device first — the server assigns device ids as `MAX + 1`, so the
-/// lowest session is the likeliest retired install — and at most two: the
-/// pick and one fallback.
+/// lowest session is the likeliest retired install.
 fn bootstrap_device_order(mut devices: Vec<u32>) -> Vec<u32> {
     devices.sort_unstable_by(|a, b| b.cmp(a));
     devices.dedup();
-    devices.truncate(2);
     devices
 }
 
@@ -487,8 +546,8 @@ mod tests {
     use crate::storage::repositories::settings_repo::keys;
 
     #[test]
-    fn bootstrap_targets_the_newest_device_then_one_fallback() {
-        assert_eq!(bootstrap_device_order(vec![1, 6, 3]), vec![6, 3]);
+    fn bootstrap_targets_every_device_newest_first() {
+        assert_eq!(bootstrap_device_order(vec![1, 6, 3, 6]), vec![6, 3, 1]);
         assert_eq!(bootstrap_device_order(vec![2]), vec![2]);
         assert!(bootstrap_device_order(vec![]).is_empty());
     }
@@ -567,7 +626,7 @@ mod tests {
             .is_none());
     }
 
-    /// Shield uses the cached devices, newest first, skipping one the server
+    /// Shield uses every cached device, newest first, skipping one the server
     /// has refused as retired — all without a single RPC.
     #[tokio::test]
     async fn shield_bootstrap_targets_cached_devices_newest_first() {
@@ -581,7 +640,7 @@ mod tests {
         }
 
         let mut auth = ms.auth_client();
-        assert_eq!(ms.bootstrap_devices(&mut auth, &friend).await.unwrap(), vec![6, 3]);
+        assert_eq!(ms.bootstrap_devices(&mut auth, &friend).await.unwrap(), vec![6, 3, 1]);
 
         ms.retired_peer_devices
             .lock()
@@ -759,9 +818,9 @@ mod tests {
         assert_eq!(response.our_mailbox_public_key, hi_mailbox);
         let conv = DmConversationManager::new(hi.database.clone()).load_conversation(&lower).unwrap().unwrap();
         assert!(conv.is_ready_to_send());
-        let peer_mailbox = conv.peer_mailbox.as_ref().unwrap();
+        let peer_mailbox = &conv.peer_mailboxes[0];
         assert_eq!((peer_mailbox.public_key, peer_mailbox.device_id), (lo_mailbox, 3));
-        assert_eq!(conv.conversation_key.unwrap().send_key(), lo_key.recv_key());
+        assert_eq!(conv.device_key(peer_mailbox).unwrap().send_key(), lo_key.recv_key());
 
         // F53: the lower side's mailbox expires, so it re-bootstraps with a
         // fresh mailbox and ephemeral. The higher side still holds a working
@@ -780,8 +839,9 @@ mod tests {
         new_lo_key.derive_shared_secret(response.our_ephemeral_public).unwrap();
         let conv = DmConversationManager::new(hi.database.clone()).load_conversation(&lower).unwrap().unwrap();
         assert!(conv.is_ready_to_send());
-        assert_eq!(conv.peer_mailbox.as_ref().unwrap().public_key, new_lo_mailbox);
-        let hi_key = conv.conversation_key.unwrap();
+        assert_eq!(conv.peer_mailboxes.len(), 1, "device 3's half replaced, not added");
+        assert_eq!(conv.peer_mailboxes[0].public_key, new_lo_mailbox);
+        let hi_key = conv.device_key(&conv.peer_mailboxes[0]).unwrap();
         assert_eq!(hi_key.send_key(), new_lo_key.recv_key());
         assert_ne!(hi_key.send_key(), lo_key.recv_key(), "the old secret is gone");
 
@@ -796,7 +856,89 @@ mod tests {
             other => panic!("expected the empty token batch, got {:?}", other.map(|r| r.is_some())),
         }
         let conv = DmConversationManager::new(hi.database.clone()).load_conversation(&lower).unwrap().unwrap();
-        assert_eq!(conv.peer_mailbox.as_ref().unwrap().public_key, new_lo_mailbox);
-        assert_eq!(conv.conversation_key.unwrap().send_key(), new_lo_key.recv_key());
+        assert_eq!(conv.peer_mailboxes[0].public_key, new_lo_mailbox);
+        assert_eq!(conv.device_key(&conv.peer_mailboxes[0]).unwrap().send_key(), new_lo_key.recv_key());
+    }
+
+    /// `n` claimable pre-fetched tokens.
+    fn seed_tokens(ms: &MessageService, n: usize) {
+        let conn = ms.database.connection().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO mailbox_server_keys (key_id, public_key_der, valid_until, created_at) VALUES ('live', x'00', ?1, '')",
+            [i64::MAX],
+        )
+        .unwrap();
+        for i in 0..n {
+            conn.execute(
+                "INSERT INTO mailbox_tokens (id, ephemeral_public_key, ephemeral_private_key, signature, server_key_id, created_at)
+                 VALUES (?1, ?2, ?3, x'00', 'live', ?4)",
+                rusqlite::params![format!("t{i}"), [0xA0 + i as u8; 32].as_slice(), [0xA0 + i as u8; 64].as_slice(), format!("{i:04}")],
+            )
+            .unwrap();
+        }
+    }
+
+    /// F54: a REQUEST goes to EVERY live device of a multi-device peer, each
+    /// sealed to that device under its own token — not to the newest one
+    /// only (the offline Tab while the S9 was online). Nothing is behind the
+    /// server URL, so each deposit fails after its token is spent: four
+    /// devices, four tokens.
+    #[tokio::test]
+    async fn request_fans_out_to_every_live_device() {
+        let me = UserId::from_uuid(uuid::Uuid::max());
+        let friend = UserId::from_uuid(uuid::Uuid::from_u128(1));
+        let (client, _dir) = shield_client(me);
+        let ms = client.messages();
+        cache_sender_certificate(ms, &me);
+        let mut rng = StdRng::seed_from_u64(0xF54);
+        for device in [2, 6, 7, 8] {
+            cache_device(ms, &friend, device, &mut rng).await;
+        }
+        seed_half_open(ms, &friend, &crate::mailbox::dm::ConversationKey::new(), 5);
+        seed_tokens(ms, 10);
+
+        let sent = ms.send_friend_dm_content(&friend, crate::services::build_text_content("hi", 1)).await;
+        assert!(matches!(sent, Err(MessageError::DmError(ref m)) if m.contains("Failed to send bootstrap")), "got {sent:?}");
+        assert_eq!(ms.token_manager.available_token_count().unwrap(), 6, "one REQUEST per device");
+    }
+
+    /// F54: with device 6 ready, a send owes its copy to devices 7 and 8
+    /// (no half yet) and asks each of them once; the next send owes them
+    /// another copy without asking again. Device 6, which has the message,
+    /// is owed nothing.
+    #[tokio::test]
+    async fn unready_devices_are_owed_each_copy_and_asked_once() {
+        use crate::mailbox::dm::{ConversationKey, DmConversationManager};
+        let me = UserId::from_uuid(uuid::Uuid::max());
+        let friend = UserId::from_uuid(uuid::Uuid::from_u128(1));
+        let (client, _dir) = shield_client(me);
+        let ms = client.messages();
+        cache_sender_certificate(ms, &me);
+        let mut rng = StdRng::seed_from_u64(0xF55);
+        for device in [6, 7, 8] {
+            cache_device(ms, &friend, device, &mut rng).await;
+        }
+        seed_half_open(ms, &friend, &ConversationKey::new(), 5);
+        let conversations = DmConversationManager::new(ms.database.clone());
+        conversations
+            .record_peer_device(&friend, 6, [6u8; 32], ConversationKey::new().our_ephemeral_public)
+            .unwrap();
+        let conv = conversations.load_conversation(&friend).unwrap().unwrap();
+        assert!(conv.is_ready_to_send());
+        seed_tokens(ms, 10);
+
+        let mut auth = ms.auth_client();
+        ms.owe_unready_devices(&mut auth, &friend, &conv, b"one", Some(&ms.grpc_pool)).await;
+        assert_eq!(ms.token_manager.available_token_count().unwrap(), 8, "7 and 8 asked");
+        ms.owe_unready_devices(&mut auth, &friend, &conv, b"two", Some(&ms.grpc_pool)).await;
+        assert_eq!(ms.token_manager.available_token_count().unwrap(), 8, "not asked twice");
+
+        assert!(conversations.drain_device_queue(&friend, 6).unwrap().is_empty());
+        for device in [7, 8] {
+            assert_eq!(
+                conversations.drain_device_queue(&friend, device).unwrap(),
+                vec![b"one".to_vec(), b"two".to_vec()]
+            );
+        }
     }
 }

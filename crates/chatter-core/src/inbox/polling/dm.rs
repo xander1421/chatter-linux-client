@@ -15,7 +15,7 @@ use crate::domain::UserId;
 use crate::error::MailboxError;
 use crate::inbox::events::InboxEvent;
 use crate::inbox::handlers::DomainEvent;
-use crate::mailbox::dm::{ConversationKey, DmConversationManager, PeerMailbox, TwoWayAnonymity};
+use crate::mailbox::dm::{DmConversationManager, TwoWayAnonymity};
 use crate::network::grpc::AnonymousMailboxClient;
 use crate::network::validation::MessageDeduplicator;
 use crate::services::gateway::{DmContent, MessageGateway};
@@ -186,17 +186,18 @@ pub async fn poll_dm_mailboxes(
                 // no marker of any kind.
                 let mut message_ids: Vec<String> = Vec::with_capacity(result.messages.len());
 
-                // Per-direction key: inbound mailbox-layer decryption uses
-                // recv_key so the peer's send_key matches.
-                let mut shared_secret: Option<[u8; 32]> = match conversation_manager.load_conversation(&peer_id) {
-                    Ok(Some(conv)) => conv.conversation_key.as_ref().and_then(|k| k.recv_key()),
+                // Per-device, per-direction keys: every peer device deposits
+                // into our one mailbox under its own secret, so the key that
+                // opens an envelope also names the device that sent it.
+                let mut recv_keys: Vec<(u32, [u8; 32])> = match conversation_manager.load_conversation(&peer_id) {
+                    Ok(Some(conv)) => conv.recv_keys(),
                     Ok(None) => {
                         tracing::warn!(peer_id = %peer_id, "No conversation state for DM");
-                        None
+                        Vec::new()
                     }
                     Err(e) => {
                         tracing::error!(peer_id = %peer_id, error = %e, "Failed to load conversation");
-                        None
+                        Vec::new()
                     }
                 };
 
@@ -222,10 +223,49 @@ pub async fn poll_dm_mailboxes(
                         continue;
                     }
 
-                    let decision = if let Some(ref secret) = shared_secret {
+                    // A trial AEAD open picks the device's key; nothing opening
+                    // is either a device's bootstrap RESPONSE (a different
+                    // envelope) or a failure, reported under the first key.
+                    let opening = recv_keys
+                        .iter()
+                        .find(|(_, key)| crate::crypto::dm_crypto::decrypt_dm_bytes(&msg.encrypted_envelope, key).is_ok())
+                        .copied();
+                    let response = if opening.is_none() {
+                        try_parse_bootstrap_response(
+                            &msg.encrypted_envelope,
+                            peer_id,
+                            conversation_manager,
+                            message_gateway,
+                        )
+                        .await
+                    } else {
+                        None
+                    };
+
+                    let decision = if response.is_some() {
+                        // NOTE: We intentionally do NOT emit KeyExchangeReceived here.
+                        // This is a bootstrap RESPONSE (we were the initiator), not a new
+                        // bootstrap request. The dm_bootstrap_handler handles NEW bootstraps
+                        // from device inbox, not responses we receive in our DM mailbox.
+                        // Emitting here would cause the handler to send a duplicate response.
+                        tracing::info!(
+                            peer_id = %peer_id,
+                            "BOOTSTRAP[4/4] SUCCESS - RESPONSE processed, device secret established"
+                        );
+                        // The answering device's key opens the rest of this batch.
+                        recv_keys = conversation_manager
+                            .load_conversation(&peer_id)
+                            .ok()
+                            .flatten()
+                            .map(|c| c.recv_keys())
+                            .unwrap_or_default();
+                        // Flushes what is queued, and what is owed to this device.
+                        let _ = event_tx.send(InboxEvent::DmBootstrapCompleted { peer_id });
+                        AckDecision::Ack
+                    } else if let Some((sender_device_id, secret)) = opening.or(recv_keys.first().copied()) {
                         // Decrypt with Signal Protocol (forward secrecy via Double Ratchet)
                         match message_gateway
-                            .process_dm_message(&msg.encrypted_envelope, secret)
+                            .process_dm_message(&msg.encrypted_envelope, &secret)
                             .await
                         {
                             // Blocked sender: the gateway authenticated them
@@ -271,6 +311,7 @@ pub async fn poll_dm_mailboxes(
                                 dispatch_dm_content(
                                     dm_content,
                                     &sender_id,
+                                    sender_device_id,
                                     peer_id,
                                     &msg.message_id,
                                     msg.server_timestamp,
@@ -331,86 +372,35 @@ pub async fn poll_dm_mailboxes(
                             }
                         }
                     } else {
-                        // No shared secret yet - this might be the bootstrap response
-                        // The bootstrap response is encrypted with Signal Protocol (X3DH/DR)
-                        // but NOT with the mailbox-layer encryption (we need peer's key first)
-                        tracing::info!(
+                        tracing::warn!(
                             peer_id = %peer_id,
                             message_id = %msg.message_id,
-                            envelope_len = msg.encrypted_envelope.len(),
-                            "BOOTSTRAP[4/4] No shared secret - checking if this is bootstrap RESPONSE"
+                            "BOOTSTRAP[4/4] FAILED - no peer device has a key yet and this is not a \
+                             bootstrap response; leaving it queued until the session exists"
                         );
-
-                        // Try to decrypt with Signal Protocol and parse as KeyExchange
-                        if let Some(_key_exchange_result) = try_parse_bootstrap_response(
-                            &msg.encrypted_envelope,
+                        let _ = event_tx.send(InboxEvent::DmDecryptionFailed {
                             peer_id,
-                            conversation_manager,
-                            message_gateway,
-                        ).await {
-                            // Successfully extracted and saved peer's keys
-                            // NOTE: We intentionally do NOT emit KeyExchangeReceived here.
-                            // This is a bootstrap RESPONSE (we were the initiator), not a new
-                            // bootstrap request. The dm_bootstrap_handler handles NEW bootstraps
-                            // from device inbox, not responses we receive in our DM mailbox.
-                            // Emitting here would cause the handler to send a duplicate response.
-                            tracing::info!(
-                                peer_id = %peer_id,
-                                "BOOTSTRAP[4/4] SUCCESS - RESPONSE processed, shared secret established!"
-                            );
-
-                            // Reload recv_key so remaining messages in this batch can be decrypted
-                            shared_secret = conversation_manager
-                                .load_conversation(&peer_id)
-                                .ok()
-                                .flatten()
-                                .and_then(|c| c.conversation_key)
-                                .and_then(|k| k.recv_key());
-
-                            tracing::info!(
-                                peer_id = %peer_id,
-                                has_shared_secret = shared_secret.is_some(),
-                                "BOOTSTRAP[4/4] Reloaded shared secret for remaining messages in batch"
-                            );
-
-                            tracing::info!(
-                                peer_id = %peer_id,
-                                "BOOTSTRAP[4/4] Emitting DmBootstrapCompleted event to flush pending messages"
-                            );
-                            // Emit bootstrap completed event so UI can retry pending messages
-                            let _ = event_tx.send(InboxEvent::DmBootstrapCompleted { peer_id });
-                            AckDecision::Ack
-                        } else {
-                            tracing::warn!(
-                                peer_id = %peer_id,
-                                message_id = %msg.message_id,
-                                "BOOTSTRAP[4/4] FAILED - Message is not a valid bootstrap \
-                                 response; leaving it queued until the session exists"
-                            );
-                            let _ = event_tx.send(InboxEvent::DmDecryptionFailed {
-                                peer_id,
-                                error: "No shared secret established".to_string(),
-                                convergence_failed: false, // Not a convergence failure - no session exists
-                            });
-                            // TRANSIENT, and the clearest case of it: we have no
-                            // session yet. The bootstrap can still complete via
-                            // the device inbox, and then these same bytes
-                            // decrypt. Acking here deleted every message that
-                            // arrived before its own bootstrap landed.
-                            //
-                            // Bounded, though: if the bootstrap never completes
-                            // this is a re-decrypt of the same bytes on every
-                            // poll for as long as the client runs.
-                            ack_policy::retain_within_budget(
-                                ack_policy::dm_target(peer_id, msg.server_timestamp),
-                                message_repo,
-                                domain_tx,
-                                &msg.message_id,
-                                retry_budget,
-                                ack_policy::now_ns(),
-                                "no shared secret established for this peer yet",
-                            )
-                        }
+                            error: "No shared secret established".to_string(),
+                            convergence_failed: false, // Not a convergence failure - no session exists
+                        });
+                        // TRANSIENT, and the clearest case of it: we have no
+                        // session yet. The bootstrap can still complete via
+                        // the device inbox, and then these same bytes
+                        // decrypt. Acking here deleted every message that
+                        // arrived before its own bootstrap landed.
+                        //
+                        // Bounded, though: if the bootstrap never completes
+                        // this is a re-decrypt of the same bytes on every
+                        // poll for as long as the client runs.
+                        ack_policy::retain_within_budget(
+                            ack_policy::dm_target(peer_id, msg.server_timestamp),
+                            message_repo,
+                            domain_tx,
+                            &msg.message_id,
+                            retry_budget,
+                            ack_policy::now_ns(),
+                            "no shared secret established for this peer yet",
+                        )
                     };
 
                     match decision {
@@ -454,6 +444,8 @@ pub async fn poll_dm_mailboxes(
 fn dispatch_dm_content(
     dm_content: DmContent,
     sender_id: &UserId,
+    // The peer device whose mailbox-layer key opened this envelope.
+    sender_device_id: u32,
     peer_id: UserId,
     message_id: &str,
     server_timestamp: u64,
@@ -789,9 +781,10 @@ fn dispatch_dm_content(
         }
 
         DmContent::MailboxRotation { new_mailbox_pk } => {
-            // L4 rotation announce: peer minted a new mailbox and wants future
-            // sends directed there. Update the stored peer mailbox address.
-            // Does NOT touch the ratchet / conversation key.
+            // L4 rotation announce: the sending peer device minted a new
+            // mailbox and wants future sends directed there. Only that
+            // device's mailbox moves — the key that opened the envelope
+            // names it. Does NOT touch the ratchet / conversation key.
             let pk: [u8; 32] = match new_mailbox_pk.as_slice().try_into() {
                 Ok(pk) => pk,
                 Err(_) => {
@@ -803,25 +796,19 @@ fn dispatch_dm_content(
                     return;
                 }
             };
-            // The rotating device is the one that owned the old mailbox — no
-            // other device of theirs is in this conversation.
-            let owner = match conversation_manager.load_conversation(&peer_id) {
-                Ok(Some(conv)) => conv.peer_mailbox.map(|m| m.device_id),
-                _ => None,
-            };
-            let Some(owner) = owner else {
-                tracing::warn!(
-                    peer_id = %peer_id,
-                    "MailboxRotation announce with no peer mailbox on record, ignoring"
-                );
-                return;
-            };
-            let peer_mailbox = PeerMailbox::new(pk, owner, None);
-            match conversation_manager.save_peer_mailbox(&peer_id, &peer_mailbox) {
-                Ok(()) => {
+            match conversation_manager.rotate_peer_mailbox(&peer_id, sender_device_id, pk) {
+                Ok(true) => {
                     tracing::info!(
                         peer_id = %peer_id,
-                        "MailboxRotation: peer mailbox updated to rotated address"
+                        sender_device_id,
+                        "MailboxRotation: peer device mailbox updated to rotated address"
+                    );
+                }
+                Ok(false) => {
+                    tracing::warn!(
+                        peer_id = %peer_id,
+                        sender_device_id,
+                        "MailboxRotation announce from a device with no mailbox on record, ignoring"
                     );
                 }
                 Err(e) => {
@@ -1205,7 +1192,7 @@ async fn try_parse_bootstrap_response(
             tracing::debug!(
                 peer_id = %peer_id,
                 has_mailbox = conv.our_mailbox.is_some(),
-                has_peer_mailbox = conv.peer_mailbox.is_some(),
+                peer_devices = conv.peer_mailboxes.len(),
                 has_conv_key = conv.conversation_key.is_some(),
                 "BOOTSTRAP[4/4] Loaded conversation state"
             );
@@ -1389,104 +1376,16 @@ fn process_bootstrap_key_exchange(
     peer_mailbox_pk.copy_from_slice(&ephemeral_pk[0..32]);
     peer_conversation_pk.copy_from_slice(&ephemeral_pk[32..64]);
 
-    // Save peer's mailbox address
-    let peer_mailbox = PeerMailbox {
-        public_key: peer_mailbox_pk,
-        device_id: peer_device_id,
-        received_at: chrono::Utc::now(),
-        expires_at: None,
-    };
-
-    if let Err(e) = conversation_manager.save_peer_mailbox(&peer_id, &peer_mailbox) {
-        tracing::error!(
-            peer_id = %peer_id,
-            error = %e,
-            "Failed to save peer's mailbox from bootstrap response"
-        );
-        return None;
-    }
-
-    tracing::debug!(peer_id = %peer_id, "Saved peer's mailbox address");
-
-    // Load our existing conversation key and derive the shared secret
-    match conversation_manager.load_conversation(&peer_id) {
-        Ok(Some(conv)) => {
-            if let Some(mut key) = conv.conversation_key {
-                // Derive shared secret using peer's conversation ephemeral public key
-                if let Err(e) = key.derive_shared_secret(peer_conversation_pk) {
-                    tracing::error!(
-                        peer_id = %peer_id,
-                        error = %e,
-                        "Failed to derive shared secret from peer's ephemeral key"
-                    );
-                    return None;
-                }
-
-                // Save the updated key with shared secret
-                if let Err(e) = conversation_manager.save_conversation_key(&peer_id, &key) {
-                    tracing::error!(
-                        peer_id = %peer_id,
-                        error = %e,
-                        "Failed to save conversation key with shared secret"
-                    );
-                    return None;
-                }
-
-                tracing::info!(
-                    peer_id = %peer_id,
-                    "Derived and saved shared secret from bootstrap response"
-                );
-
-                Some(ephemeral_pk.to_vec())
-            } else {
-                // No conversation key yet - this shouldn't happen for the initiator
-                // (they created the key when sending the bootstrap)
-                tracing::warn!(
-                    peer_id = %peer_id,
-                    "No conversation key found - creating new one"
-                );
-
-                // Create a new key and derive the shared secret
-                let mut new_key = ConversationKey::new();
-                if let Err(e) = new_key.derive_shared_secret(peer_conversation_pk) {
-                    tracing::error!(peer_id = %peer_id, error = %e, "Failed to derive shared secret");
-                    return None;
-                }
-
-                if let Err(e) = conversation_manager.save_conversation_key(&peer_id, &new_key) {
-                    tracing::error!(peer_id = %peer_id, error = %e, "Failed to save new conversation key");
-                    return None;
-                }
-
-                Some(ephemeral_pk.to_vec())
-            }
-        }
-        Ok(None) => {
-            tracing::warn!(
-                peer_id = %peer_id,
-                "No conversation state found - creating new"
-            );
-
-            // Create new conversation key
-            let mut new_key = ConversationKey::new();
-            if let Err(e) = new_key.derive_shared_secret(peer_conversation_pk) {
-                tracing::error!(peer_id = %peer_id, error = %e, "Failed to derive shared secret");
-                return None;
-            }
-
-            if let Err(e) = conversation_manager.save_conversation_key(&peer_id, &new_key) {
-                tracing::error!(peer_id = %peer_id, error = %e, "Failed to save conversation key");
-                return None;
-            }
-
+    // That device's half only: a late device adds its own mailbox and
+    // secret beside the others', never over them. Our half must exist — we
+    // announced it in the bootstrap this answers.
+    match conversation_manager.record_peer_device(&peer_id, peer_device_id, peer_mailbox_pk, peer_conversation_pk) {
+        Ok(_) => {
+            tracing::info!(peer_id = %peer_id, peer_device_id, "Recorded peer device's half from its bootstrap response");
             Some(ephemeral_pk.to_vec())
         }
         Err(e) => {
-            tracing::error!(
-                peer_id = %peer_id,
-                error = %e,
-                "Failed to load conversation state"
-            );
+            tracing::error!(peer_id = %peer_id, peer_device_id, error = %e, "Bootstrap response not recorded");
             None
         }
     }
@@ -1570,6 +1469,7 @@ mod tests {
             dispatch_dm_content(
                 content,
                 &friend,
+                1,
                 friend,
                 id,
                 0,

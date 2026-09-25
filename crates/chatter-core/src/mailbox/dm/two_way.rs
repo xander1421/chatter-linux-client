@@ -12,7 +12,6 @@ use crate::domain::UserId;
 use crate::error::MailboxError;
 use crate::mailbox::dm::{DmConversationManager, DmMailbox};
 use crate::network::grpc::AnonymousMailboxClient;
-use crate::proto::mailbox_v1::EnvelopeType;
 use crate::storage::Database;
 
 /// Maximum messages to fetch per poll.
@@ -47,16 +46,6 @@ pub struct ReceivedMessage {
     pub encrypted_envelope: Vec<u8>,
     /// Envelope type (SealedSender, PreKey, Message).
     pub envelope_type: i32,
-    /// Server timestamp.
-    pub server_timestamp: u64,
-}
-
-/// Result of sending a message.
-pub struct SendResult {
-    /// Conversation peer.
-    pub peer_id: UserId,
-    /// Server-assigned message ID.
-    pub message_id: String,
     /// Server timestamp.
     pub server_timestamp: u64,
 }
@@ -310,58 +299,6 @@ impl TwoWayAnonymity {
         Ok(())
     }
 
-    /// Send an encrypted envelope to peer's mailbox.
-    ///
-    /// The envelope should already be encrypted (sealed sender format).
-    /// This method handles delivery to the ephemeral mailbox.
-    ///
-    /// # Arguments
-    ///
-    /// * `peer_id` - The conversation peer
-    /// * `encrypted_envelope` - Pre-encrypted message content
-    /// * `envelope_type` - Type of envelope (SealedSender, PreKey, Message)
-    /// * `mailbox_client` - For mailbox operations
-    pub async fn send_to_peer(
-        &self,
-        peer_id: &UserId,
-        encrypted_envelope: Vec<u8>,
-        envelope_type: EnvelopeType,
-        mailbox_client: &mut AnonymousMailboxClient,
-    ) -> Result<SendResult, MailboxError> {
-        // Load conversation state
-        let conversation = self
-            .conversation_manager
-            .load_conversation(peer_id)?
-            .ok_or(MailboxError::ConversationNotFound)?;
-
-        // Check we have established shared secret for encryption
-        if !conversation.is_ready_to_send() {
-            return Err(MailboxError::ConversationNotEstablished);
-        }
-
-        let peer_mailbox = conversation
-            .peer_mailbox
-            .ok_or(MailboxError::PeerMailboxUnknown)?;
-
-        // Send to peer's ephemeral mailbox (anonymous - no auth needed)
-        let response = mailbox_client
-            .send_to_ephemeral_mailbox(
-                peer_mailbox.public_key.to_vec(),
-                encrypted_envelope,
-                envelope_type as i32,
-            )
-            .await
-            .map_err(|e| MailboxError::Network(e.to_string()))?;
-
-        // SendToEphemeralMailboxResponse doesn't have a timestamp, use 0 as placeholder
-        // The caller can use their local timestamp if needed
-        Ok(SendResult {
-            peer_id: *peer_id,
-            message_id: response.message_id,
-            server_timestamp: 0, // Not provided by server response
-        })
-    }
-
     /// Check if conversation is ready for sending.
     pub fn can_send(&self, peer_id: &UserId) -> Result<bool, MailboxError> {
         let conversation = self.conversation_manager.load_conversation(peer_id)?;
@@ -395,6 +332,7 @@ impl TwoWayAnonymity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proto::mailbox_v1::EnvelopeType;
 
     #[test]
     fn test_poll_result_structure() {
@@ -436,20 +374,6 @@ mod tests {
         assert_eq!(msg.encrypted_envelope.len(), 512);
         assert_eq!(msg.envelope_type, EnvelopeType::PrekeyMessage as i32);
         assert_eq!(msg.server_timestamp, 1234567890);
-    }
-
-    #[test]
-    fn test_send_result_structure() {
-        let peer_id = UserId::new();
-        let result = SendResult {
-            peer_id,
-            message_id: "sent-msg".to_string(),
-            server_timestamp: 9876543210,
-        };
-
-        assert_eq!(result.peer_id, peer_id);
-        assert_eq!(result.message_id, "sent-msg");
-        assert_eq!(result.server_timestamp, 9876543210);
     }
 
     #[test]

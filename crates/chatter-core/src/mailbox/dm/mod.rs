@@ -14,4 +14,4 @@ pub use bootstrap::{
 pub use conversation::{
     ConversationKey, DmConversation, DmConversationManager, DmMailbox, PeerMailbox,
 };
-pub use two_way::{PollResult, ReceivedMessage, SendResult, TwoWayAnonymity};
+pub use two_way::{PollResult, ReceivedMessage, TwoWayAnonymity};
