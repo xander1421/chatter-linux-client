@@ -564,9 +564,8 @@ impl ConversationHandle {
 
     /// Whether the current user may delete a message for everyone.
     ///
-    /// DMs let either participant delete any message (`Permissions::dm()`);
-    /// channels and groups are role-based, which here reduces to "you can
-    /// delete your own message". Keeps the capability rule in core.
+    /// Only your own message, in every conversation (Signal). Keeps the
+    /// capability rule in core.
     pub fn can_delete_for_everyone(
         &self,
         target_author: &UserId,
