@@ -1318,7 +1318,14 @@ impl CallSignalingService {
         duration_secs: i64,
         expected_call_id: Option<&str>,
     ) -> Result<(), CallSignalingError> {
-        if let Some(call) = call_worker.active_call().await {
+        let active = call_worker.active_call().await;
+        // A named hangup for a call we are not in changes nothing: with no
+        // active call there is nothing of ours to end (a ringing one is
+        // withdrawn by the orchestrator, not here).
+        if active.is_none() && expected_call_id.is_some() {
+            return Ok(());
+        }
+        if let Some(call) = active {
             // Ignore hangups for a call we are not in. Moved here so the UI
             // doesn't need to reach into call state to gate the event.
             if let Some(expected) = expected_call_id {

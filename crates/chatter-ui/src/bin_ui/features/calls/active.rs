@@ -334,12 +334,18 @@ pub fn wire_call_hangup_handler(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
                 }
             });
 
-            stop_call_timer();
-            stop_video_frame_timer();
-
+            // Only the call this hangup names leaves the screen; a hangup for
+            // another call (or "answered elsewhere" for one still ringing,
+            // which the orchestrator withdraws) must not touch the call shown.
             if let Some(w) = weak.upgrade() {
-                w.set_active_call_visible(false);
-                w.set_incoming_call_visible(false);
+                if w.get_active_call_visible() && w.get_active_call_data().call_id == call_id.as_str() {
+                    stop_call_timer();
+                    stop_video_frame_timer();
+                    w.set_active_call_visible(false);
+                }
+                if w.get_incoming_call_visible() && w.get_incoming_call_data().call_id == call_id.as_str() {
+                    w.set_incoming_call_visible(false);
+                }
             }
         }
     })
