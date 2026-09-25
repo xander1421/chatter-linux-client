@@ -2637,15 +2637,12 @@ impl ChatterClient {
             let mut seen: std::collections::HashMap<crate::domain::ids::ChannelId, u32> =
                 std::collections::HashMap::new();
             loop {
-                let ev = src.recv().await; eprintln!("DBG ev {:?}", ev.as_ref().map(|_|()));
-                match ev {
+                match src.recv().await {
                     Ok(DomainEvent::MessageReceived { message })
                         if message.conversation_type == ConversationType::ServerDm =>
                     {
                         let peer = crate::domain::ids::UserId::from_uuid(*message.conversation_id.as_uuid());
-                        eprintln!("DBG before timer");
                         let now = crate::services::disappearing::server_dm_timer(&settings, &peer);
-                        eprintln!("DBG now {now}");
                         let notice = matches!(
                             message.content,
                             MessageContent::System(SystemMessage::DisappearingTimerChanged { .. })
@@ -4092,12 +4089,14 @@ mod unread_badge_tests {
         // Two unread on the DM row; the anon DM is hidden, so the total is 1.
         assert_eq!(client.unread_badges(&dm), UnreadBadges { row: 2, total: 1 });
 
+        // Shield on: the anon DM shows, and so does the friend DM (friend DMs
+        // show in both modes — `visible_in_mode`), so the total is 2.
         client.anon_mode.store(true, Ordering::Release);
         assert_eq!(
             client.unread_badges(&ActiveConversation::AnonDm(anon)),
-            UnreadBadges { row: 1, total: 1 },
+            UnreadBadges { row: 1, total: 2 },
         );
-        assert_eq!(client.unread_conversation_count(), 1);
+        assert_eq!(client.unread_conversation_count(), 2);
     }
 
     /// A lost timer update healed by the next visible message: the gateway
@@ -4121,22 +4120,28 @@ mod unread_badge_tests {
         };
         let bus = &client.services.event_bus;
 
+        // The subscriber reads the stored timer when it handles a message, and
+        // on this current-thread runtime it only runs once the test awaits: so
+        // receive each change before moving the stored timer on.
+        async fn next_change(changes: &mut tokio::sync::broadcast::Receiver<ChannelId>) -> ChannelId {
+            tokio::time::timeout(Duration::from_secs(2), changes.recv())
+                .await
+                .expect("a change")
+                .expect("open")
+        }
+
         bus.emit_domain(dm(1)); // first sight: fires
         bus.emit_domain(dm(2)); // same timer: silent
+        assert_eq!(next_change(&mut changes).await, ChannelId::from(peer));
+
         client
             .channels()
             .settings_repo
             .set(&format!("conv.disappearing.server_dm.{peer}"), &3_600u32)
             .expect("set timer");
         bus.emit_domain(dm(3)); // healed to 1 hour: fires
+        assert_eq!(next_change(&mut changes).await, ChannelId::from(peer));
 
-        for _ in 0..2 {
-            let id = tokio::time::timeout(Duration::from_secs(2), changes.recv())
-                .await
-                .expect("a change")
-                .expect("open");
-            assert_eq!(id, ChannelId::from(peer));
-        }
         assert!(
             tokio::time::timeout(Duration::from_millis(200), changes.recv()).await.is_err(),
             "a message restating the same timer is not a change"
