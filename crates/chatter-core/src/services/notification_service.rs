@@ -428,12 +428,15 @@ fn should_notify_message(
     message.sender_id.as_ref() != Some(me) && !on_screen && !muted
 }
 
-/// `(on_screen, muted)` for the conversation `message` belongs to.
+/// `(on_screen, muted)` for the conversation `message` belongs to. On screen
+/// is the same "is the user looking at this" rule that marks messages read:
+/// the app is visible AND `is_showing` (which also matches a mailbox DM in
+/// its peer's DM view — the old `is_for_channel` check notified for those).
 fn conversation_attention(
     client: &std::sync::Arc<crate::client::ChatterClient>,
     message: &crate::domain::message::Message,
 ) -> (bool, bool) {
-    let on_screen = client.chat_state().is_on_screen(message.conversation_id);
+    let on_screen = client.chat_state().is_app_visible() && client.is_showing(message);
     let conversation = client.classify_active_conversation(
         &message.conversation_id,
         &message.conversation_type,

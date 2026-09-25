@@ -7,6 +7,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { ChatHeader } from "chat_header.slint";
+import { ConversationKind } from "conversation_kind.slint";
 import { MessageList, MessageItemData, MessageAttachmentData, ReactionEntry } from "message_list.slint";
 import { MessageComposer, PendingAttachmentData } from "message_composer.slint";
 import { PinnedBar } from "pinned_bar.slint";
@@ -23,7 +24,15 @@ export component ChatLayout inherits Rectangle {
     // Header properties
     in property <string> channel-id: "";
     in property <string> channel-name: "";
-    in property <string> channel-type: "public";
+    in property <ConversationKind> conversation-kind;
+    in property <bool> private-channel: false;
+    // Core's own statement of where this conversation's messages go, for the
+    // conversations whose kind cannot say it (the Jarvis channel: local or
+    // cloud). Empty means "derive it from the kind". Every conversation open
+    // resets it (bin_ui::converters::set_conversation_kind).
+    in property <string> privacy-line-override: "";
+    // With an override: whether the messages leave this device unencrypted.
+    in property <bool> privacy-line-exposed: false;
     in property <bool> is-dm: false;  // When true, show minimal message UI (no avatars/names)
     in property <int> member-count: 0;
     in property <string> topic: "";
@@ -190,7 +199,8 @@ export component ChatLayout inherits Rectangle {
             mobile: root.mobile;
             channel-id: root.channel-id;
             channel-name: root.channel-name;
-            channel-type: root.channel-type;
+            conversation-kind: root.conversation-kind;
+            private-channel: root.private-channel;
             member-count: root.member-count;
             topic: root.topic;
             typing-indicator: root.typing-indicator;
@@ -224,10 +234,12 @@ export component ChatLayout inherits Rectangle {
 
         // Peer identity change. Above the message list so it is the first thing
         // read, and directly above the marker for the message that could not be
-        // decrypted. Gated on channel-type as well as the flag: the flag is set
+        // decrypted. Gated on the kind as well as the flag: the flag is set
         // per DM open, and this keeps a stale one from ever surviving a switch
         // into a channel, group or mesh room.
-        if root.identity-change-visible && root.channel-type == "dm": IdentityChangeBar {
+        if root.identity-change-visible
+            && (root.conversation-kind == ConversationKind.server-dm
+                || root.conversation-kind == ConversationKind.mailbox-dm): IdentityChangeBar {
             width: 100%;
             vertical-stretch: 0;
             title: root.identity-change-title;
@@ -441,16 +453,20 @@ export component ChatLayout inherits Rectangle {
             // Encrypted:false and this client ships cleartext to it on purpose
             // (services/message/core.rs — "plaintext is the intended, visible
             // property"). It must not claim end-to-end encryption. The
-            // channel-type default is "public", so a conversation whose type
+            // default kind is a public channel, so a conversation whose kind
             // has not loaded yet understates privacy rather than overstating it.
-            public-broadcast: MeshGlobal.active-kind == "room"
+            public-broadcast: root.privacy-line-override != ""
+                ? root.privacy-line-exposed
+              : MeshGlobal.active-kind == "room"
                 || MeshGlobal.active-kind == "geohash"
-                || root.channel-type == "public";
-            privacy-line: MeshGlobal.active-kind == "room"
+                || (root.conversation-kind == ConversationKind.channel && !root.private-channel);
+            privacy-line: root.privacy-line-override != ""
+                ? root.privacy-line-override
+              : MeshGlobal.active-kind == "room"
                 ? "Anyone in radio range can read this"
               : MeshGlobal.active-kind == "geohash"
                 ? "Anyone in this cell can read this"
-              : root.channel-type == "public"
+              : root.conversation-kind == ConversationKind.channel && !root.private-channel
                 ? "Public channel — anyone can read this"
                 : "Messages are end-to-end encrypted";
             current-playing-attachment-id: root.current-playing-attachment-id;

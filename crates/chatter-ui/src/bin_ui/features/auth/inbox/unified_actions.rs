@@ -1,8 +1,9 @@
 //! Unified UI action handlers for all conversation types.
 //!
 //! These handlers replace the duplicated dm/actions.rs and anon_dm_actions.rs
-//! for common message actions (typing, reaction,
-//! pin, edit, delete). Each handler checks if the event is for the currently
+//! for common message actions (typing, receipts,
+//! pin). Edits and deletes go through `domain_handler`, keyed by
+//! (author, sent timestamp) in the conversation on screen. Each handler checks if the event is for the currently
 //! active conversation using `ChatState::active_conversation()`.
 
 use slint::{Model, VecModel};
@@ -123,96 +124,6 @@ pub fn handle_receipt(
                 }
             }
         }
-    });
-}
-
-// ============================================================================
-// Edit
-// ============================================================================
-
-/// Handle message edit for any conversation type.
-pub fn handle_edit(
-    weak_window: &slint::Weak<MainWindow>,
-    chat_state: &ChatState,
-    source: EventSource,
-    target_sent_timestamp: u64,
-    new_text: String,
-) {
-    let chat_state = chat_state.clone();
-    let weak = weak_window.clone();
-
-    let _ = slint::invoke_from_event_loop(move || {
-        let Some(window) = weak.upgrade() else { return };
-
-        if !is_active(&chat_state, &source) {
-            return;
-        }
-
-        let messages = window.get_messages();
-        let target_ts_ns = target_sent_timestamp.to_string();
-
-        for i in 0..messages.row_count() {
-            if let Some(msg) = messages.row_data(i) {
-                if msg.timestamp_ns.as_str() == target_ts_ns {
-                    let mut updated_msg = msg.clone();
-                    crate::bin_ui::converters::apply_edit(&mut updated_msg, &new_text);
-
-                    if let Some(model) =
-                        messages.as_any().downcast_ref::<VecModel<MessageItemData>>()
-                    {
-                        model.set_row_data(i, updated_msg);
-                    }
-                    return;
-                }
-            }
-        }
-    });
-}
-
-// ============================================================================
-// Delete
-// ============================================================================
-
-/// Handle message deletion for any conversation type.
-pub fn handle_delete(
-    weak_window: &slint::Weak<MainWindow>,
-    chat_state: &ChatState,
-    source: EventSource,
-    target_sent_timestamp: u64,
-) {
-    let chat_state = chat_state.clone();
-    let weak = weak_window.clone();
-
-    let _ = slint::invoke_from_event_loop(move || {
-        let Some(window) = weak.upgrade() else { return };
-
-        if !is_active(&chat_state, &source) {
-            return;
-        }
-
-        let messages = window.get_messages();
-        let target_ts_ns = target_sent_timestamp.to_string();
-
-        let mut new_messages = Vec::new();
-        for i in 0..messages.row_count() {
-            if let Some(msg) = messages.row_data(i) {
-                if msg.timestamp_ns.as_str() == target_ts_ns {
-                    // Unregister GIF animations
-                    if msg.has_attachments {
-                        let attachments = msg.attachments.iter();
-                        for att in attachments {
-                            let mime = att.mime_type.to_string();
-                            if mime.starts_with("image/gif") || mime == "image/webp" {
-                                crate::bin_ui::gif_state::unregister_inline_gif(&att.id);
-                            }
-                        }
-                    }
-                } else {
-                    new_messages.push(msg);
-                }
-            }
-        }
-        window.set_messages(slint::ModelRc::new(VecModel::from(new_messages)));
     });
 }
 

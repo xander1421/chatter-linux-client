@@ -187,7 +187,9 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     tracing::info!(before_count = before, replacing_with = slint_messages.len(), "[UI_OPEN_DM] anon DM run_ui replacing messages");
                     w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
                     w.set_loading_messages(false);
-                    w.set_channel_type("anon-dm".into());
+                    crate::bin_ui::converters::set_conversation_kind(
+                        &w, &chatter_core::domain::message::ConversationType::AnonDm, false,
+                    );
                     w.set_is_dm(true);
                     w.set_channel_name(title.into());
                     w.set_topic(subtitle.into());
@@ -287,7 +289,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
                 w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
                 w.set_loading_messages(false);
-                w.set_channel_type("dm".into());
+                crate::bin_ui::converters::set_conversation_kind(&w, &conv_type, false);
                 w.set_is_dm(true);
                 w.set_channel_name(title.into());
                 // A DM has no topic. This used to carry the presence word

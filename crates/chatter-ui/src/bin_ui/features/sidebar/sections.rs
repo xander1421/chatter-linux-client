@@ -20,7 +20,7 @@ use crate::{CustomSectionData, MainWindow, SectionConversationData, run_ui};
 /// Send-safe intermediate for `SectionConversationData`.
 struct SectionConvSendData {
     conversation_id: String,
-    conversation_type: String,
+    conversation_type: ConversationType,
     display_name: String,
     avatar_decoded: Option<DecodedImagePixels>,
     initials: String,
@@ -42,7 +42,7 @@ impl SectionConvSendData {
 
         SectionConversationData {
             conversation_id: self.conversation_id.into(),
-            conversation_type: self.conversation_type.into(),
+            conversation_type: crate::bin_ui::converters::conversation_kind(&self.conversation_type),
             display_name: self.display_name.into(),
             avatar_source,
             has_avatar,
@@ -320,9 +320,9 @@ fn wire_move_to_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak = window.as_weak();
 
-    window.on_move_to_section(move |conv_id: SharedString, conv_type: SharedString, section_id: SharedString| {
+    window.on_move_to_section(move |conv_id: SharedString, kind: crate::ConversationKind, section_id: SharedString| {
         let conv_id_str = conv_id.to_string();
-        let conv_type_str = conv_type.to_string();
+        let conv_type = crate::bin_ui::converters::conversation_type(kind);
         let section_id_str = section_id.to_string();
         let ui_ctx = ui_ctx.clone();
         let weak_clone = weak.clone();
@@ -332,23 +332,6 @@ fn wire_move_to_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 tracing::error!(section_id = %section_id_str, "move to folder: unparseable section id");
                 return;
             };
-            // This bare `return` used to be silent, and the UI was sending "dm"
-            // and "private_group" — neither of which ConversationType accepts.
-            // Every attempt to file a DM or a private group into a folder did
-            // nothing at all: no log, no toast, the menu just closed.
-            let conv_type = match ConversationType::from_str_value(&conv_type_str) {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::error!(
-                        conversation_type = %conv_type_str,
-                        error = %e,
-                        "move to folder: the UI sent a conversation type core does not know — \
-                         the move was dropped. This is a wiring bug, not user error."
-                    );
-                    return;
-                }
-            };
-
             match ui_ctx.move_conversation_to_section(&conv_id_str, conv_type, &sid) {
                 Ok(()) => {
                     refresh_sections_ui(&weak_clone, &ui_ctx);
@@ -390,15 +373,16 @@ fn wire_remove_from_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 fn wire_section_conversation_selected(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
 
-    window.on_section_conversation_selected(move |conv_id: SharedString, conv_type: SharedString| {
+    window.on_section_conversation_selected(move |conv_id: SharedString, kind: crate::ConversationKind| {
+        use crate::ConversationKind as K;
         let conv_id_str = conv_id.to_string();
-        let conv_type_str = conv_type.to_string();
         run_ui!(weak, |w| {
-            match conv_type_str.as_str() {
-                "channel" | "saved_messages" => w.invoke_channel_selected(conv_id_str.into()),
-                "server_dm" | "mailbox_dm" | "anon_dm" => w.invoke_dm_selected(conv_id_str.into()),
-                "anon_group" => w.invoke_private_group_selected(conv_id_str.into()),
-                _ => {}
+            match kind {
+                K::Channel | K::SavedMessages => w.invoke_channel_selected(conv_id_str.into()),
+                K::ServerDm | K::MailboxDm | K::AnonDm => w.invoke_dm_selected(conv_id_str.into()),
+                K::AnonGroup => w.invoke_private_group_selected(conv_id_str.into()),
+                // Mesh conversations are never filed into folders.
+                K::Mesh | K::MeshDm => {}
             }
         });
     });
@@ -499,7 +483,7 @@ fn enrich_conversation_send(
 
     let mut data = SectionConvSendData {
         conversation_id: conv.conversation_id.clone(),
-        conversation_type: conv.conversation_type.as_str().to_string(),
+        conversation_type: conv.conversation_type.clone(),
         initials: get_initials(&display_name),
         display_name,
         avatar_decoded: None,

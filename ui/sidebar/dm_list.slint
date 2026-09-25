@@ -40,7 +40,7 @@ export component DMList inherits Rectangle {
     // Callbacks
     callback conversation-selected(string);
     callback add-friend-clicked();
-    callback dm-context-menu-requested(/* channel-id */ string, /* is-pinned */ bool, /* x */ length, /* y */ length);
+    callback dm-context-menu-requested(/* channel-id */ string, /* is-anon */ bool, /* is-pinned */ bool, /* x */ length, /* y */ length);
     // Tooltip callbacks removed — DMListItem now uses self-contained TooltipArea
 
     // Layout
@@ -106,7 +106,7 @@ export component DMList inherits Rectangle {
                         root.conversation-selected(item.channel-id);
                     }
                     context-menu-requested(x, y) => {
-                        root.dm-context-menu-requested(item.channel-id, item.is-pinned, x, y);
+                        root.dm-context-menu-requested(item.channel-id, item.is-anon, item.is-pinned, x, y);
                     }
                 }
             }

@@ -175,7 +175,7 @@ pub(crate) fn refresh_section_selection(window: &MainWindow, ui_ctx: &Arc<Chatte
                 .map(|mut item| {
                     item.is_selected = section_row_is_active(
                         &active,
-                        item.conversation_type.as_str(),
+                        item.conversation_type,
                         item.conversation_id.as_str(),
                     );
                     item
@@ -190,20 +190,19 @@ pub(crate) fn refresh_section_selection(window: &MainWindow, ui_ctx: &Arc<Chatte
 
 /// Does this folder row point at the currently open conversation?
 ///
-/// `conversation_type` carries core's vocabulary (`ConversationType::as_str`),
-/// not the UI's — the old arms matched "dm" and "private_group", which core has
-/// never produced, so a foldered DM never highlighted.
+/// `kind` is core's `ConversationType`, typed (`converters::conversation_kind`).
 fn section_row_is_active(
     active: &chatter_core::state::ActiveConversation,
-    kind: &str,
+    kind: crate::ConversationKind,
     conv_id: &str,
 ) -> bool {
+    use crate::ConversationKind as K;
     match kind {
-        "channel" | "saved_messages" => conv_id
+        K::Channel | K::SavedMessages => conv_id
             .parse()
             .map(|id| active.matches_channel(&id))
             .unwrap_or(false),
-        "server_dm" | "mailbox_dm" | "anon_dm" => {
+        K::ServerDm | K::MailboxDm | K::AnonDm => {
             // Folder rows may carry an anon_dm_id, a channel_id, or a peer_id
             // in `conversation_id`. Match against all shapes.
             let anon = conv_id.parse().map(|id| active.matches_anon_dm(&id)).unwrap_or(false);
@@ -214,11 +213,12 @@ fn section_row_is_active(
             };
             anon || peer || chan
         }
-        "anon_group" => conv_id
+        K::AnonGroup => conv_id
             .parse()
             .map(|id| active.matches_anon_group(&id))
             .unwrap_or(false),
-        _ => false,
+        // Mesh conversations are never filed into folders.
+        K::Mesh | K::MeshDm => false,
     }
 }
 

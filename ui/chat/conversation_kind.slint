@@ -1,0 +1,19 @@
+// The kind of a conversation, open or listed. Mirrors
+// chatter_core::domain::message::ConversationType one-to-one, and Rust
+// converts between the two in exactly one place
+// (bin_ui::converters::conversation_kind) — so the UI never classifies a
+// conversation by comparing strings.
+//
+// `channel` is first, so it is the default: with `private-channel` false that
+// reads as a public (plaintext) channel, which understates privacy for a
+// conversation whose kind has not loaded yet rather than overstating it.
+export enum ConversationKind {
+    channel,
+    saved-messages,
+    server-dm,
+    mailbox-dm,
+    anon-dm,
+    anon-group,
+    mesh,
+    mesh-dm,
+}

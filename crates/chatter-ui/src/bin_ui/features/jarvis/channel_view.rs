@@ -34,12 +34,18 @@ pub async fn load_jarvis_channel_into_ui(weak: slint::Weak<MainWindow>, ui_ctx: 
         .get()
         .display_name
         .unwrap_or_else(|| "Me".to_string());
-    // Where these messages go (local vs cloud) is core's call.
+    // Where these messages go (local vs cloud) is core's call — both the
+    // topic and the privacy line under the messages say so.
     let topic = ui_ctx.jarvis_channel_topic();
+    let (privacy_line, leaves_device) = ui_ctx.jarvis_privacy_line();
 
     run_ui!(weak, |w| {
         w.set_channel_name(chatter_core::client::JARVIS_CHANNEL_NAME.into());
-        w.set_channel_type("private".into());
+        crate::bin_ui::converters::set_conversation_kind(
+            &w, &chatter_core::domain::message::ConversationType::Channel, true,
+        );
+        w.set_privacy_line_override(privacy_line.into());
+        w.set_privacy_line_exposed(leaves_device);
         w.set_is_dm(false);
         w.set_member_count(0);
         w.set_topic(topic.into());

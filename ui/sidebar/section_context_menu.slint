@@ -9,6 +9,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { CustomSectionData } from "custom_section_list.slint";
+import { ConversationKind } from "../chat/conversation_kind.slint";
 
 // Reusable menu item — Neo 2.0 (icon + label, neo hover highlight)
 component MenuItem inherits Rectangle {
@@ -247,7 +248,7 @@ export component SectionContextMenu inherits Rectangle {
 
     // Conversation being acted on
     in property <string> conversation-id: "";
-    in property <string> conversation-type: "";   // ConversationType::as_str
+    in property <ConversationKind> conversation-type;
     in property <string> current-section-id: "";   // non-empty => already in a section
     in property <bool> is-pinned: false;
     // Pinning reorders the list core builds. Private groups are built without
@@ -259,7 +260,7 @@ export component SectionContextMenu inherits Rectangle {
     in property <[CustomSectionData]> sections: [];
 
     // Callbacks
-    callback move-to-section(/* conv-id */ string, /* conv-type */ string, /* section-id */ string);
+    callback move-to-section(/* conv-id */ string, /* conv-type */ ConversationKind, /* section-id */ string);
     callback remove-from-section(/* conv-id */ string);
     callback set-pinned(/* conv-id */ string, /* pinned */ bool);
     callback create-section-clicked();

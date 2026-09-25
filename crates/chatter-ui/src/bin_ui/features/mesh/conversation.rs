@@ -108,7 +108,12 @@ fn apply_header(window: &MainWindow, row: &MeshRow) {
     window.set_loading_messages(true);
     window.set_channel_id(row.id.clone().into());
     window.set_channel_name(row.title.clone().into());
-    window.set_channel_type(if row.kind == "dm" { "dm".into() } else { "public".into() });
+    let conversation_type = if row.kind == "dm" {
+        chatter_core::domain::message::ConversationType::MeshDm
+    } else {
+        chatter_core::domain::message::ConversationType::Mesh
+    };
+    crate::bin_ui::converters::set_conversation_kind(window, &conversation_type, false);
     window.set_is_dm(row.kind == "dm");
     // Not "N members": a mesh scope has no membership, only whoever happens to
     // be in range. The strip below the header owns that number so there is one

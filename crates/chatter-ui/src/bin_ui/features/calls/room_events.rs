@@ -23,6 +23,11 @@ fn split_local(mut participants: Vec<CallParticipantData>) -> (Vec<CallParticipa
 /// The GL frame list is published in ascending participant-id order and matched
 /// to tiles positionally (see `gl_call.rs`), so the remote rows must be sorted
 /// the same way or a peer's frame lands on the wrong tile.
+/// The remote tile rendered before its peer joined (empty `user_id`), if any.
+fn unjoined_peer_tile(remotes: &mut [CallParticipantData]) -> Option<&mut CallParticipantData> {
+    remotes.iter_mut().find(|p| p.user_id.is_empty())
+}
+
 fn order_participants(mut remotes: Vec<CallParticipantData>, local: Option<CallParticipantData>) -> Vec<CallParticipantData> {
     remotes.sort_by(|a, b| a.user_id.as_str().cmp(b.user_id.as_str()));
     if let Some(l) = local {
@@ -108,6 +113,14 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 p.display_name = display.into();
                                 p.initials = initials.into();
                                 p.avatar_source = avatar_img;
+                            } else if let Some(p) = unjoined_peer_tile(&mut remotes) {
+                                // A 1:1 anon call renders its peer before the
+                                // join with an empty id (its identity comes from
+                                // an ephemeral key — see incoming.rs). Give that
+                                // tile the identity so frames and track events
+                                // find it; its name/avatar came from the anon DM,
+                                // which knows the peer better than the identity.
+                                p.user_id = identity.into();
                             } else {
                                 remotes.push(CallParticipantData {
                                     user_id: identity.into(),

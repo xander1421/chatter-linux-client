@@ -698,13 +698,32 @@ impl ChatterClient {
             }
         }
         let peer_id = dm_id.parse::<crate::domain::ids::UserId>().ok()?;
-        // Shield mode never opens an identified DM. A peer we also know
-        // anonymously opens that conversation instead; otherwise there is
-        // nothing to open.
-        if self.anon_mode_enabled() {
+        // Shield mode never opens an identified DM, and neither does a peer
+        // we know only from an anon group (an identified DM would tie their
+        // anonymous membership — and ours — to the real accounts). A peer we
+        // also know anonymously opens that conversation instead; otherwise
+        // there is nothing to open.
+        if self.anon_mode_enabled() || self.known_only_from_anon_group(&peer_id) {
             return self.find_anon_dm_by_peer(&peer_id).map(ActiveConversation::AnonDm);
         }
         Some(ActiveConversation::ServerDm { peer_id })
+    }
+
+    /// Whether `peer` shares an anon group with us and we have no identified
+    /// relationship to it — not a friend, no server DM history. For such a
+    /// peer the identified DM is a NEW link between the two identities; for a
+    /// friend or an existing DM that link already exists.
+    fn known_only_from_anon_group(&self, peer: &crate::domain::ids::UserId) -> bool {
+        let comember = self.list_anon_groups().unwrap_or_default().iter().any(|g| {
+            self.get_anon_group_members(&g.id).iter().any(|m| &m.user_id == peer)
+        });
+        if !comember || self.is_friend(peer) {
+            return false;
+        }
+        let has_server_dm = self
+            .get_messages_local_asc(&crate::domain::ids::ChannelId::from(*peer), &ConversationType::ServerDm, None, 1)
+            .is_ok_and(|m| !m.is_empty());
+        !has_server_dm
     }
 
     /// Every conversation a message can be forwarded to, filtered by a
@@ -1474,5 +1493,28 @@ mod shield_mode_tests {
             Some(ActiveConversation::ServerDm { peer_id: peer })
         );
         assert!(!client.visible_in_mode(&ConversationType::AnonDm));
+    }
+
+    /// With Shield off, a peer known only from an anon group never gets an
+    /// identified DM: opening one would link their anonymous membership to
+    /// their account. Anyone else still does.
+    #[tokio::test]
+    async fn anon_group_comember_never_gets_an_identified_dm() {
+        use crate::domain::anon_group::{AnonGroup, AnonGroupMember, AnonGroupRole};
+
+        let client = build_test_client();
+        let (me, member, stranger) = (UserId::new(), UserId::new(), UserId::new());
+        let group = AnonGroup::new_as_owner("g".into(), me);
+        let repo = &client.anon_groups().anon_group_repo;
+        repo.insert_group(&group).unwrap();
+        repo.add_member(&AnonGroupMember::new(group.id, member, AnonGroupRole::Member)).unwrap();
+
+        assert!(!client.anon_mode_enabled());
+        // No anon DM with the member either: nothing to open.
+        assert_eq!(client.resolve_dm_conversation(&member.to_string()), None);
+        assert_eq!(
+            client.resolve_dm_conversation(&stranger.to_string()),
+            Some(ActiveConversation::ServerDm { peer_id: stranger })
+        );
     }
 }

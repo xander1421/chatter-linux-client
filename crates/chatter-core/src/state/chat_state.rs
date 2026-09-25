@@ -490,12 +490,6 @@ impl ChatState {
         self.app_visible.load(Ordering::Acquire)
     }
 
-    /// Whether the conversation keyed `id` is what the user is looking at
-    /// right now: it is the active one AND the app is on screen.
-    pub fn is_on_screen(&self, id: ChannelId) -> bool {
-        self.is_app_visible() && self.active_conversation().is_for_channel(id)
-    }
-
     /// Get the current chat state.
     #[must_use]
     pub fn get(&self) -> ChatStateData {
@@ -1107,19 +1101,15 @@ mod tests {
         assert!(ActiveConversation::None.routing_key().is_none());
     }
 
-    /// An open chat only counts as seen while the app is on screen.
+    /// A fresh launch is in view; the platform lifecycle flips the flag.
     #[test]
-    fn on_screen_needs_active_and_visible() {
+    fn app_visible_starts_true_and_follows_lifecycle() {
         let state = ChatState::new();
-        let open = ChannelId::new();
-        state.set_active_conversation(ActiveConversation::Channel(open));
-
-        assert!(state.is_on_screen(open));
-        assert!(!state.is_on_screen(ChannelId::new()));
+        assert!(state.is_app_visible());
         assert!(state.set_app_visible(false), "starts visible");
-        assert!(!state.is_on_screen(open));
+        assert!(!state.is_app_visible());
         assert!(!state.set_app_visible(true));
-        assert!(state.is_on_screen(open));
+        assert!(state.is_app_visible());
     }
 
     #[test]

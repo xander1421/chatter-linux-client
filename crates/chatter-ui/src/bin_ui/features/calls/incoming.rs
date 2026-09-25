@@ -246,17 +246,24 @@ fn render_active_anon_call(
         // thread (it races AnonCallConnected via two independent
         // `invoke_from_event_loop` dispatches), the remote slot already
         // carries the server-assigned identity (e.g. "anon-c1954f…").
-        // Re-stamping a literal "Anonymous" placeholder here clobbers it,
-        // and subsequent `TrackSubscribed` events can't match the
-        // identity back to a participant — the screen-share tile then
-        // stays in is_video_enabled=false until the user does pause+
-        // unpause to force a flag flip.
+        // Re-stamping a placeholder here clobbers it, and subsequent
+        // `TrackSubscribed` events can't match the identity back to a
+        // participant — the screen-share tile then stays in
+        // is_video_enabled=false until the user does pause+unpause.
+        //
+        // Otherwise the remote tile starts with an EMPTY user_id: the peer's
+        // LiveKit identity is derived by the server from the ephemeral key it
+        // joins with ("anon-" + sha256(pk)[..8], mailbox handlers.go), so
+        // nobody knows it before the join. `ParticipantJoined` adopts the
+        // empty-id tile (room_events.rs); the old literal "Anonymous" matched
+        // no identity, so a join after this render added a second remote
+        // tile and the peer's frames never reached this one.
         let existing = w.get_active_call_data().participants;
         let preserved_remote_user_id: Option<slint::SharedString> = (0..existing.row_count())
             .filter_map(|i| existing.row_data(i))
             .find(|p| {
                 let uid = p.user_id.as_str();
-                !uid.is_empty() && uid != "You" && uid != "Anonymous"
+                !uid.is_empty() && uid != "You"
             })
             .map(|p| p.user_id);
 
@@ -278,7 +285,7 @@ fn render_active_anon_call(
             .and_then(avatar_bytes_to_image)
             .unwrap_or_default();
         let remote_participant = CallParticipantData {
-            user_id: preserved_remote_user_id.unwrap_or_else(|| "Anonymous".into()),
+            user_id: preserved_remote_user_id.unwrap_or_default(),
             display_name: peer_display_name.into(),
             initials: remote_initials.into(),
             avatar_source: remote_avatar_source,

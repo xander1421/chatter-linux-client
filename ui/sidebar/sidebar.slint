@@ -23,6 +23,7 @@ import { TooltipArea } from "../components/tooltip.slint";
 import { AnonMode, TorStatus } from "../anon_mode/anon_mode_global.slint";
 import { MeshGlobal } from "../mesh/mesh_global.slint";
 import { MeshList } from "../mesh/mesh_list.slint";
+import { ConversationKind } from "../chat/conversation_kind.slint";
 
 export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, CustomSectionData, SectionConversationData }
 
@@ -81,10 +82,10 @@ export component Sidebar inherits Rectangle {
     callback anon-mode-clicked();
     callback create-section-clicked();
     callback section-toggle-expanded(/* section-id */ string);
-    callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ string);
+    callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ ConversationKind);
     callback delete-section-clicked(/* section-id */ string);
     callback rename-section-clicked(/* section-id */ string);
-    callback move-to-section(/* conversation-id */ string, /* conversation-type */ string, /* section-id */ string);
+    callback move-to-section(/* conversation-id */ string, /* conversation-type */ ConversationKind, /* section-id */ string);
     callback remove-from-section(/* conversation-id */ string);
     callback set-conversation-pinned(/* conversation-id */ string, /* pinned */ bool);
     callback move-section(/* section-id */ string, /* delta */ int);
@@ -142,7 +143,7 @@ export component Sidebar inherits Rectangle {
     property <length> ctx-menu-x: 0;
     property <length> ctx-menu-y: 0;
     property <string> ctx-menu-conv-id: "";
-    property <string> ctx-menu-conv-type: "";
+    property <ConversationKind> ctx-menu-conv-type;
     property <string> ctx-menu-current-section-id: "";
     property <bool> ctx-menu-is-pinned: false;
     // Private groups are the one list core does not order, so a pin there
@@ -464,14 +465,13 @@ export component Sidebar inherits Rectangle {
                     show-header: false;
                     conversation-selected(id) => { root.dm-selected(id); }
                     add-friend-clicked => { root.friends-clicked(); }
-                    dm-context-menu-requested(id, pinned, x, y) => {
+                    dm-context-menu-requested(id, is-anon, pinned, x, y) => {
                         root.ctx-menu-conv-id = id;
                         root.ctx-menu-is-pinned = pinned;
                         root.ctx-menu-can-pin = true;
-                        // Core's vocabulary, not the UI's: ConversationType
-                        // (domain/message.rs) has never accepted "dm", so this
-                        // menu silently no-oped on every DM.
-                        root.ctx-menu-conv-type = AnonMode.enabled ? "anon_dm" : "server_dm";
+                        // The row's own kind, as core built it — not the
+                        // current mode, which a row need not share.
+                        root.ctx-menu-conv-type = is-anon ? ConversationKind.anon-dm : ConversationKind.server-dm;
                         root.ctx-menu-x = x;
                         root.ctx-menu-y = y;
                         root.ctx-menu-current-section-id = "";
@@ -609,7 +609,7 @@ export component Sidebar inherits Rectangle {
                     join-channel-clicked() => { root.join-channel-clicked(); }
                     channel-context-menu-requested(id, pinned, x, y) => {
                         root.ctx-menu-conv-id = id;
-                        root.ctx-menu-conv-type = "channel";
+                        root.ctx-menu-conv-type = ConversationKind.channel;
                         root.ctx-menu-x = x;
                         root.ctx-menu-y = y;
                         root.ctx-menu-current-section-id = "";
@@ -630,9 +630,8 @@ export component Sidebar inherits Rectangle {
                         root.ctx-menu-conv-id = id;
                         root.ctx-menu-is-pinned = false;
                         root.ctx-menu-can-pin = false;
-                        // A private group is an anon_group in core. "private_group" is not
-                        // a ConversationType and silently no-oped.
-                        root.ctx-menu-conv-type = "anon_group";
+                        // A private group is an anon group in core.
+                        root.ctx-menu-conv-type = ConversationKind.anon-group;
                         root.ctx-menu-x = x;
                         root.ctx-menu-y = y;
                         root.ctx-menu-current-section-id = "";
@@ -710,7 +709,7 @@ export component Sidebar inherits Rectangle {
                         root.ctx-menu-y = y;
                         root.ctx-menu-current-section-id = section-id;
                         root.ctx-menu-is-pinned = pinned;
-                        root.ctx-menu-can-pin = conv-type != "anon_group";
+                        root.ctx-menu-can-pin = conv-type != ConversationKind.anon-group;
                         root.ctx-menu-show = true;
                     }
                     section-header-context-menu-requested(section-id, sort-mode, x, y) => {

@@ -356,7 +356,7 @@ pub(super) fn handle_message_edit(
     let new_text = new_text.to_string();
 
     crate::run_ui!(window, |w| {
-        crate::bin_ui::features::thread::apply_thread_edit(&w, &message_id, target_sent_timestamp, &new_text);
+        crate::bin_ui::features::thread::apply_thread_edit(&w, &message_id, &author, target_sent_timestamp, &new_text);
         let messages = w.get_messages();
         for i in 0..messages.row_count() {
             if let Some(msg) = messages.row_data(i) {

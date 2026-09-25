@@ -111,7 +111,9 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
 
             // Set chat header info for private group
             w.set_channel_name(group_name.into());
-            w.set_channel_type("private-group".into());
+            crate::bin_ui::converters::set_conversation_kind(
+            &w, &chatter_core::domain::message::ConversationType::AnonGroup, false,
+        );
             w.set_is_dm(false);
             w.set_member_count(member_count);
             w.set_topic("".into());
@@ -263,7 +265,9 @@ async fn load_private_group_messages_internal(
         crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(&w, &ui_ctx_for_ui, &group_id_str, 0);
 
         w.set_channel_name(group_name.into());
-        w.set_channel_type("private-group".into());
+        crate::bin_ui::converters::set_conversation_kind(
+            &w, &chatter_core::domain::message::ConversationType::AnonGroup, false,
+        );
         w.set_is_dm(false);
         w.set_member_count(member_count);
         w.set_topic("".into());

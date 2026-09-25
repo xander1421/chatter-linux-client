@@ -191,6 +191,10 @@ impl ChatterClient {
     /// peers of ready anon DMs, de-duplicated, never this user, and — for an
     /// existing `group` — never someone already in it. Read from local state,
     /// so there is no page cap on the friend list.
+    ///
+    /// In Shield mode friends are not offered — same rule as channel invites:
+    /// only peers known anonymously (a friend who is also an anon-DM peer is
+    /// still listed, as that anon peer).
     pub fn list_anon_group_invite_candidates(
         &self,
         group: Option<&crate::domain::anon_group::AnonGroupId>,
@@ -205,7 +209,7 @@ impl ChatterClient {
         }
 
         let mut out = Vec::new();
-        if let Some(me) = me {
+        if let Some(me) = me.filter(|_| !self.anon_mode_enabled()) {
             for f in self.users().get_friends_local().unwrap_or_default() {
                 if f.status != crate::domain::user::FriendshipStatus::Accepted {
                     continue;

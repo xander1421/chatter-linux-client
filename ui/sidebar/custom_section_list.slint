@@ -11,12 +11,13 @@ import { Icons } from "../theme/icons.slint";
 import { Typography } from "../theme/typography.slint";
 import { Avatar } from "../components/avatar.slint";
 import { TooltipArea } from "../components/tooltip.slint";
+import { ConversationKind } from "../chat/conversation_kind.slint";
 
 // ── Data structs ────────────────────────────────────────────────
 
 export struct SectionConversationData {
     conversation-id: string,
-    conversation-type: string,   // ConversationType::as_str — "channel", "server_dm", "anon_dm", "anon_group", …
+    conversation-type: ConversationKind,
     display-name: string,
     avatar-source: image,
     has-avatar: bool,
@@ -46,7 +47,7 @@ export struct CustomSectionData {
 
 component SectionConversationItem inherits Rectangle {
     in property <string> conversation-id;
-    in property <string> conversation-type: "channel";
+    in property <ConversationKind> conversation-type;
     in property <string> display-name;
     in property <image> avatar-source;
     in property <bool> has-avatar: false;
@@ -68,14 +69,13 @@ component SectionConversationItem inherits Rectangle {
               : touch.has-hover ? Colors.surface-hover
               : transparent;
 
-    // Two glyph families live in `conversation-type`: DMs arrive as
-    // "server_dm" / "mailbox_dm" / "anon_dm", groups as "anon_group".
-    property <bool> is-dm: root.conversation-type == "server_dm"
-                        || root.conversation-type == "mailbox_dm"
-                        || root.conversation-type == "anon_dm";
-    property <bool> is-group: root.conversation-type == "anon_group";
-    property <bool> is-channel: root.conversation-type == "channel"
-                             || root.conversation-type == "saved_messages";
+    // Three glyph families: channels (#), DMs (avatar), anon groups (shield).
+    property <bool> is-dm: root.conversation-type == ConversationKind.server-dm
+                        || root.conversation-type == ConversationKind.mailbox-dm
+                        || root.conversation-type == ConversationKind.anon-dm;
+    property <bool> is-group: root.conversation-type == ConversationKind.anon-group;
+    property <bool> is-channel: root.conversation-type == ConversationKind.channel
+                             || root.conversation-type == ConversationKind.saved-messages;
 
     if !root.collapsed: HorizontalLayout {
         padding-left: Spacing.md;
@@ -413,8 +413,8 @@ export component CustomSectionList inherits Rectangle {
 
     callback create-section-clicked();
     callback section-toggle-expanded(/* section-id */ string);
-    callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ string);
-    callback section-conversation-context-menu-requested(/* conversation-id */ string, /* conversation-type */ string, /* section-id */ string, /* is-pinned */ bool, /* x */ length, /* y */ length);
+    callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ ConversationKind);
+    callback section-conversation-context-menu-requested(/* conversation-id */ string, /* conversation-type */ ConversationKind, /* section-id */ string, /* is-pinned */ bool, /* x */ length, /* y */ length);
     callback section-header-context-menu-requested(/* section-id */ string, /* sort-mode */ string, /* x */ length, /* y */ length);
     callback delete-section-clicked(/* section-id */ string);
     callback rename-section-clicked(/* section-id */ string);

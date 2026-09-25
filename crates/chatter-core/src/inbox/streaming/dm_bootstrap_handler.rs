@@ -58,7 +58,7 @@ pub fn spawn_dm_bootstrap_handler_from_bus(
     event_bus: &EventBus,
 ) -> JoinHandle<()> {
     let event_rx = event_bus.subscribe_domain();
-    spawn_dm_bootstrap_handler_with_receiver(database, grpc_pool, event_rx)
+    spawn_dm_bootstrap_handler_with_receiver(database, grpc_pool, event_rx, event_bus.clone())
 }
 
 /// Spawn the DM bootstrap event handler with a custom receiver.
@@ -68,6 +68,7 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
     database: Arc<Database>,
     grpc_pool: Arc<GrpcClientPool>,
     mut event_rx: broadcast::Receiver<DomainEvent>,
+    event_bus: EventBus,
 ) -> JoinHandle<()> {
     // Track in-progress bootstraps to prevent concurrent requests for same peer
     let in_progress: Arc<Mutex<HashSet<UserId>>> = Arc::new(Mutex::new(HashSet::new()));
@@ -132,6 +133,7 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                         let grpc_pool = grpc_pool.clone();
                         let ephemeral_key = ephemeral_public_key.clone();
                         let in_progress_clone = in_progress.clone();
+                        let event_bus = event_bus.clone();
 
                         bootstrap_tasks.spawn(async move {
                             tracing::debug!(
@@ -144,6 +146,7 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                                 grpc_pool.clone(),
                                 sender_id,
                                 &ephemeral_key,
+                                &event_bus,
                             )
                             .await;
 
@@ -450,6 +453,7 @@ async fn handle_bootstrap_async(
     grpc_pool: Arc<GrpcClientPool>,
     peer_id: UserId,
     ephemeral_public_key: &[u8],
+    event_bus: &EventBus,
 ) -> Result<(), String> {
     tracing::info!(
         peer = %peer_id,
@@ -526,14 +530,22 @@ async fn handle_bootstrap_async(
         "BOOTSTRAP[3/4] Now draining and sending pending messages (if any)"
     );
 
-    send_pending_messages_after_bootstrap(
+    // The queue was drained, so a failed send is otherwise a message lost
+    // without a word: announce it like the initiator-side flush does.
+    if let Err(error) = send_pending_messages_after_bootstrap(
         peer_id,
         database,
         &signal_service,
         &mut auth_client,
         channel,
     )
-    .await;
+    .await
+    {
+        event_bus.emit_domain(DomainEvent::MessageSendFailed {
+            channel_id: crate::domain::ids::ChannelId::from(peer_id),
+            error,
+        });
+    }
 
     Ok(())
 }
@@ -551,7 +563,7 @@ async fn send_pending_messages_after_bootstrap(
     signal_service: &SignalService,
     auth_client: &mut AuthClient,
     channel: crate::network::grpc::transport::GrpcTransport,
-) {
+) -> Result<(), String> {
     use prost::Message as ProstMessage;
     use crate::crypto::signal::sesame::{SesameManager, SqliteSesameStore};
     use crate::mailbox::dm::DmConversationManager;
@@ -574,7 +586,7 @@ async fn send_pending_messages_after_bootstrap(
                 error = %e,
                 "BOOTSTRAP[3/4] Failed to drain pending messages"
             );
-            return;
+            return Ok(());
         }
     };
 
@@ -583,7 +595,7 @@ async fn send_pending_messages_after_bootstrap(
             peer = %peer_id,
             "BOOTSTRAP[3/4] No pending messages queued - nothing to send"
         );
-        return;
+        return Ok(());
     }
 
     tracing::info!(
@@ -597,16 +609,20 @@ async fn send_pending_messages_after_bootstrap(
     let conversation_manager = DmConversationManager::new(database.clone());
     let mut anon_mailbox_client = AnonymousMailboxClient::new(channel.clone());
 
+    // From here the queue is drained: every failure loses messages, so each
+    // one is reported to the caller rather than only logged.
+    let pending_count = pending.len();
+
     // Get conversation state for sending
     let conversation = match conversation_manager.load_conversation(&peer_id) {
         Ok(Some(conv)) => conv,
         Ok(None) => {
             tracing::error!(peer = %peer_id, "No conversation state after bootstrap");
-            return;
+            return Err(format!("{pending_count} queued message(s) lost: no conversation state after bootstrap"));
         }
         Err(e) => {
             tracing::error!(peer = %peer_id, error = %e, "Failed to load conversation");
-            return;
+            return Err(format!("{pending_count} queued message(s) lost: {e}"));
         }
     };
 
@@ -620,7 +636,7 @@ async fn send_pending_messages_after_bootstrap(
         Some(s) => s,
         None => {
             tracing::error!(peer = %peer_id, "No shared secret after bootstrap");
-            return;
+            return Err(format!("{pending_count} queued message(s) lost: no shared secret after bootstrap"));
         }
     };
 
@@ -628,11 +644,12 @@ async fn send_pending_messages_after_bootstrap(
         Some(m) => m,
         None => {
             tracing::error!(peer = %peer_id, "No peer mailbox after bootstrap");
-            return;
+            return Err(format!("{pending_count} queued message(s) lost: no peer mailbox after bootstrap"));
         }
     };
 
     let mut sent_count = 0;
+    let mut last_error = None;
 
     for msg in pending {
         // Parse content for timestamp and DataMessage.timestamp
@@ -667,6 +684,7 @@ async fn send_pending_messages_after_bootstrap(
                     error = %e,
                     "Failed to encrypt pending message with Signal"
                 );
+                last_error = Some(e.to_string());
                 continue;
             }
         };
@@ -683,6 +701,7 @@ async fn send_pending_messages_after_bootstrap(
                     error = %e,
                     "Failed to encrypt with DM shared secret"
                 );
+                last_error = Some(e.to_string());
                 continue;
             }
         };
@@ -701,6 +720,7 @@ async fn send_pending_messages_after_bootstrap(
                 error = %e,
                 "Failed to send pending message to mailbox"
             );
+            last_error = Some(e.to_string());
             continue;
         }
 
@@ -718,6 +738,14 @@ async fn send_pending_messages_after_bootstrap(
             sent = sent_count,
             "Finished sending pending messages after bootstrap"
         );
+    }
+
+    match last_error {
+        None => Ok(()),
+        Some(e) => Err(format!(
+            "{} of {pending_count} queued message(s) failed to send: {e}",
+            pending_count - sent_count
+        )),
     }
 }
 

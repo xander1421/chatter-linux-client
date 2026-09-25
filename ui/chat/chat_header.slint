@@ -10,12 +10,14 @@ import { NeoActionToggle } from "../components/neo_action_toggle.slint";
 import { Avatar } from "../components/avatar.slint";
 import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 import { MeshGlobal } from "../mesh/mesh_global.slint";
+import { ConversationKind } from "conversation_kind.slint";
 
 // Data struct for chat header (mirrors Rust ChatHeaderData)
 export struct ChatHeaderData {
     channel-id: string,
     channel-name: string,
-    channel-type: string,  // "public", "private", "dm", "anon-dm", "private-group", "saved"
+    conversation-kind: ConversationKind,
+    private-channel: bool,
     member-count: int,
     topic: string,
     typing-indicator: string,
@@ -73,7 +75,9 @@ export component ChatHeader inherits Rectangle {
     // Properties from ChatHeaderData
     in property <string> channel-id: "";
     in property <string> channel-name: "";
-    in property <string> channel-type: "public";  // "public", "private", "dm", "anon-dm", "private-group", "saved"
+    in property <ConversationKind> conversation-kind;
+    // Only meaningful for `ConversationKind.channel`: an invite-only channel.
+    in property <bool> private-channel: false;
     in property <int> member-count: 0;
     in property <string> topic: "";
     in property <string> typing-indicator: "";
@@ -110,11 +114,14 @@ export component ChatHeader inherits Rectangle {
       : Colors.offline;
 
     // Type detection properties
-    property <bool> is-private: channel-type == "private";
-    property <bool> is-dm: channel-type == "dm";
-    property <bool> is-anon-dm: channel-type == "anon-dm";
-    property <bool> is-private-group: channel-type == "private-group";
-    property <bool> is-saved: channel-type == "saved";
+    property <bool> is-channel: conversation-kind == ConversationKind.channel;
+    property <bool> is-private: is-channel && private-channel;
+    property <bool> is-dm: conversation-kind == ConversationKind.server-dm
+        || conversation-kind == ConversationKind.mailbox-dm
+        || conversation-kind == ConversationKind.mesh-dm;
+    property <bool> is-anon-dm: conversation-kind == ConversationKind.anon-dm;
+    property <bool> is-private-group: conversation-kind == ConversationKind.anon-group;
+    property <bool> is-saved: conversation-kind == ConversationKind.saved-messages;
 
     // No conversation open → suppress all conversation-scoped actions.
     // Name is the reliable signal: anon DMs and saved messages can have
@@ -123,7 +130,7 @@ export component ChatHeader inherits Rectangle {
     property <bool> has-channel: channel-name != "";
 
     // Show member count for channels and private groups (not DMs)
-    property <bool> show-member-count: has-channel && !tight && (channel-type == "public" || channel-type == "private" || is-private-group) && member-count > 0;
+    property <bool> show-member-count: has-channel && !tight && (is-channel || is-private-group) && member-count > 0;
 
     // Show settings for regular channels and private groups, not for anon DMs or saved messages
     property <bool> show-settings: has-channel && ((!is-anon-dm && !is-saved) || is-private-group) && !is-mesh;
@@ -271,13 +278,11 @@ export component ChatHeader inherits Rectangle {
                 presence-color: root.presence-dot;
             }
 
-            // Mesh conversations are pushed in as `channel-type == "public"` so
-            // they inherit the public-channel treatment, but their names already
-            // carry the mark: core labels them "#mesh" and "#<geohash>"
-            // (services/mesh/timeline.rs). Drawing the header's own "#" on top of
-            // that produced "# #mesh". The name keeps its hash — it is part of
-            // the name a user would type — so the glyph yields.
-            if has-channel && !root.has-avatar && channel-type == "public" && !root.is-mesh: Text {
+            // Mesh rooms are their own kind, not a channel, and their names
+            // already carry the mark: core labels them "#mesh" and
+            // "#<geohash>" (services/mesh/timeline.rs), so the header draws no
+            // "#" of its own ("# #mesh"). `is-mesh` stays as a second guard.
+            if has-channel && !root.has-avatar && is-channel && !is-private && !root.is-mesh: Text {
                 text: "#";
                 color: Colors.text-muted;
                 font-size: root.header-title-size;

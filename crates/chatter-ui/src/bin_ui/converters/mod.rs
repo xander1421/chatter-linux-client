@@ -9,6 +9,7 @@ mod utils;
 mod channel;
 mod attachment;
 mod message;
+mod kind;
 pub(crate) mod markdown;
 
 pub use chatter_core::ui::sidebar_data::{DMListItemSendData, FriendDataSendData, FriendRequestSendData};
@@ -16,3 +17,4 @@ pub use utils::*;
 pub use channel::*;
 pub use attachment::*;
 pub use message::*;
+pub use kind::*;

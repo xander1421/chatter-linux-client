@@ -486,17 +486,10 @@ fn spawn_action_stream(
                         target_sent_timestamp, false, // is_pinned = false (unpin)
                     );
                 }
-                chatter_core::inbox::DomainEvent::MessageDeleted {
-                    channel_id: Some(channel_id),
-                    target_sent_timestamp,
-                    ..
-                } => {
-                    unified_actions::handle_delete(
-                        &weak_window, &chat_state,
-                        EventSource::Channel(channel_id),
-                        target_sent_timestamp,
-                    );
-                }
+                // Edits and deletes are domain_handler's: it matches the
+                // (author, sent timestamp) bubble in the conversation on
+                // screen. A timestamp-only copy here let a peer rewrite or
+                // blank another sender's bubble by reusing its timestamp.
                 chatter_core::inbox::DomainEvent::MessagesRead {
                     message_timestamps,
                     channel_id,
@@ -550,22 +543,6 @@ fn spawn_action_stream(
                             }
                         }
                     });
-                }
-                chatter_core::inbox::DomainEvent::MessageEdited {
-                    new_content,
-                    channel_id,
-                    target_sent_timestamp,
-                    ..
-                } => {
-                    let new_body = match new_content {
-                        chatter_core::domain::message::MessageContent::Text(text) => text,
-                        _ => "[Unsupported content]".to_string(),
-                    };
-                    unified_actions::handle_edit(
-                        &weak_window, &chat_state,
-                        EventSource::Channel(channel_id),
-                        target_sent_timestamp, new_body,
-                    );
                 }
                 _ => {
                     // Ignore other events

@@ -183,12 +183,8 @@ pub async fn load_channel_into_ui(
     let is_saved = matches!(channel.channel_type, ChannelType::SavedMessages);
     let group_name = if is_saved { "Saved Messages".to_string() } else { channel.name.clone() };
     let topic = if is_saved { String::new() } else { channel.description.clone().unwrap_or_default() };
-    let channel_type_str = match channel.channel_type {
-        ChannelType::Public => "public",
-        ChannelType::Private => "private",
-        ChannelType::SavedMessages => "saved",
-        _ => "public",
-    };
+    let conversation_type = channel.conversation_type();
+    let private_channel = matches!(channel.channel_type, ChannelType::Private);
     let member_count = channel.member_count as i32;
     let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
     let ui_ctx_gifs = ui_ctx.clone();
@@ -211,7 +207,7 @@ pub async fn load_channel_into_ui(
     run_ui!(weak, |w| {
         super::apply_unread_anchor(&w, anchor, &anchor_page);
         w.set_channel_name(group_name.into());
-        w.set_channel_type(channel_type_str.into());
+        crate::bin_ui::converters::set_conversation_kind(&w, &conversation_type, private_channel);
         w.set_is_dm(false);
         w.set_member_count(member_count);
         w.set_topic(topic.into());

@@ -10,6 +10,7 @@ import { DismissButton } from "../components/dismiss_button.slint";
 import { Skeleton } from "../components/skeleton.slint";
 import { MessageItemData } from "message_list.slint";
 import { MessageItem } from "message_item.slint";
+import { ConversationKind } from "conversation_kind.slint";
 
 export component ThreadPanel inherits Rectangle {
     // Root message data
@@ -18,9 +19,9 @@ export component ThreadPanel inherits Rectangle {
     in property <string> root-content-preview;
     in property <int> reply-count: 0;
     in property <string> channel-name;
-    // Same vocabulary as ChatHeader's channel-type. Only channels get the "#":
+    // Same kind as ChatHeader's. Only channels get the "#":
     // a thread in Saved Messages or a DM read "# Saved Messages".
-    in property <string> channel-type: "public";
+    in property <ConversationKind> conversation-kind;
 
     // Replies list (reuses MessageItemData pattern)
     in property <[MessageItemData]> replies: [];
@@ -140,7 +141,7 @@ export component ThreadPanel inherits Rectangle {
 
                     // Channel name (small, muted)
                     if root.channel-name != "": Text {
-                        text: (root.channel-type == "public" || root.channel-type == "private" ? "# " : "")
+                        text: (root.conversation-kind == ConversationKind.channel ? "# " : "")
                             + root.channel-name;
                         color: Colors.text-muted;
                         font-size: Typography.xs;

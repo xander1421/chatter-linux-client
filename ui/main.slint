@@ -10,6 +10,7 @@ import { MeshGlobal, MeshConversationData } from "mesh/mesh_global.slint";
 import { Typography } from "theme/typography.slint";
 import { Haptics } from "components/haptics.slint";
 import { AvatarText } from "components/avatar.slint";
+import { ConversationKind } from "chat/conversation_kind.slint";
 import { VirtualKeyboard } from "components/modal_container.slint";
 
 // Re-export all types for Rust binding
@@ -27,6 +28,7 @@ export { MeshGlobal, MeshConversationData }
 // Touch feedback. Bound in `bin_ui::haptics`; unbound (and so a no-op) on desktop.
 export { Haptics }
 export { AvatarText }
+export { ConversationKind }
 
 export component MainWindow inherits Window {
     title: "Chatter";
@@ -146,7 +148,10 @@ export component MainWindow inherits Window {
     // ========== Chat properties ==========
     in property <string> channel-id <=> app.channel-id;
     in property <string> channel-name <=> app.channel-name;
-    in property <string> channel-type <=> app.channel-type;
+    in property <ConversationKind> conversation-kind <=> app.conversation-kind;
+    in property <bool> private-channel <=> app.private-channel;
+    in property <string> privacy-line-override <=> app.privacy-line-override;
+    in property <bool> privacy-line-exposed <=> app.privacy-line-exposed;
     in property <int> member-count <=> app.member-count;
     in property <string> topic <=> app.topic;
     in-out property <bool> is-dm <=> app.is-dm;

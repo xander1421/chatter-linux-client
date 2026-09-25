@@ -17,6 +17,7 @@ import { WelcomePage } from "pages/welcome.slint";
 import { Sidebar, ChannelListItemData, DMListItemData, PrivateGroupListItemData, CustomSectionData, SectionConversationData } from "sidebar/sidebar.slint";
 import { ChatLayout, MessageItemData, MessageAttachmentData, PendingAttachmentData, ReactionEntry } from "chat/chat_layout.slint";
 import { ThreadPanel } from "chat/thread_panel.slint";
+import { ConversationKind } from "chat/conversation_kind.slint";
 import { ReactionPicker } from "chat/reaction_picker.slint";
 import { MessageContextMenu } from "chat/message_context_menu.slint";
 import { SelectionBar } from "chat/selection_bar.slint";
@@ -298,7 +299,10 @@ export component App inherits Rectangle {
     // ========== Chat properties ==========
     in property <string> channel-id: "";
     in property <string> channel-name: "";
-    in property <string> channel-type: "public";
+    in property <ConversationKind> conversation-kind;
+    in property <bool> private-channel: false;
+    in property <string> privacy-line-override: "";
+    in property <bool> privacy-line-exposed: false;
     in-out property <bool> is-dm: false;  // True for DM conversations (hides avatars/names in messages)
     in property <int> member-count: 0;
     in property <string> topic: "";
@@ -788,10 +792,10 @@ export component App inherits Rectangle {
     callback open-join-channel();
     callback toggle-sidebar();
     callback section-toggle-expanded(/* section-id */ string);
-    callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ string);
+    callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ ConversationKind);
     callback delete-section-clicked(/* section-id */ string);
     callback rename-section-clicked(/* section-id */ string);
-    callback move-to-section(/* conversation-id */ string, /* conversation-type */ string, /* section-id */ string);
+    callback move-to-section(/* conversation-id */ string, /* conversation-type */ ConversationKind, /* section-id */ string);
     callback remove-from-section(/* conversation-id */ string);
     callback set-conversation-pinned(/* conversation-id */ string, /* pinned */ bool);
     callback move-section(/* section-id */ string, /* delta */ int);
@@ -1528,7 +1532,10 @@ export component App inherits Rectangle {
                     }
                     channel-id: root.channel-id;
                     channel-name: root.channel-name;
-                    channel-type: root.channel-type;
+                    conversation-kind: root.conversation-kind;
+                    private-channel: root.private-channel;
+                    privacy-line-override: root.privacy-line-override;
+                    privacy-line-exposed: root.privacy-line-exposed;
                     is-dm: root.is-dm;
                     member-count: root.member-count;
                     topic: root.topic;
@@ -1669,7 +1676,7 @@ export component App inherits Rectangle {
                     root-content-preview: root.thread-root-content-preview;
                     reply-count: root.thread-reply-count;
                     channel-name: root.channel-name;  // threads open on the active conversation
-                    channel-type: root.channel-type;
+                    conversation-kind: root.conversation-kind;
                     replies: root.thread-replies;
                     loading: root.thread-loading;
                     composer-text <=> root.thread-composer-text;

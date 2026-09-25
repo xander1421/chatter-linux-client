@@ -630,6 +630,11 @@ impl MessageService {
     }
 
     /// Send pending messages after bootstrap completes.
+    ///
+    /// Every queued message is attempted; if any could not be sent the whole
+    /// flush is an error (the queue is already drained, so a swallowed failure
+    /// was a message lost without a word — the caller turns this into
+    /// `MessageSendFailed`). `Ok(n)` means all `n` went out.
     pub async fn send_pending_messages(
         &self,
         auth_client: &mut AuthClient,
@@ -671,6 +676,7 @@ impl MessageService {
         );
 
         let mut sent_count = 0;
+        let mut last_error = None;
 
         for msg in pending {
             // Deserialize the content
@@ -682,6 +688,7 @@ impl MessageService {
                         error = %e,
                         "Failed to deserialize pending message content"
                     );
+                    last_error = Some(format!("undecodable queued message: {e}"));
                     continue;
                 }
             };
@@ -725,6 +732,7 @@ impl MessageService {
                         error = %e,
                         "PENDING_MESSAGES: FAILED to send message"
                     );
+                    last_error = Some(e.to_string());
                 }
             }
         }
@@ -738,7 +746,14 @@ impl MessageService {
             pending_count
         );
 
-        Ok(sent_count)
+        match last_error {
+            None => Ok(sent_count),
+            Some(e) => Err(MessageError::DmError(format!(
+                "{} of {} queued message(s) failed to send: {e}",
+                pending_count - sent_count,
+                pending_count
+            ))),
+        }
     }
 
     /// Reset session with a peer and attempt to re-establish.

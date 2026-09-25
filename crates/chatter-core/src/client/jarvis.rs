@@ -120,15 +120,15 @@ impl ChatterClient {
     /// go. The channel follows the user's silo preference, so it is only
     /// "never leaves this device" when it really runs locally.
     pub fn jarvis_channel_topic(&self) -> String {
-        match self.jarvis_channel_silo() {
-            crate::ai_policy::policy::Silo::Local => format!(
-                "Local AI · {} · never leaves this device",
-                self.jarvis_engine_description()
-            ),
-            crate::ai_policy::policy::Silo::Cloud => {
-                "Cloud AI · messages are sent to your cloud AI provider".to_string()
-            }
-        }
+        self.jarvis_privacy_line().0
+    }
+
+    /// The AI channel's privacy line: the same statement as its topic, and
+    /// whether its messages leave this device (to a cloud provider, not end-
+    /// to-end encrypted). Its kind — a private channel — would otherwise
+    /// claim "Messages are end-to-end encrypted", which is false either way.
+    pub fn jarvis_privacy_line(&self) -> (String, bool) {
+        jarvis_privacy_for(self.jarvis_channel_silo(), &self.jarvis_engine_description())
     }
 
     /// Silo for the AI channel and the context-free global prompt: the
@@ -457,9 +457,31 @@ impl ChatterClient {
 
 }
 
+/// `(statement, leaves_device)` for the AI channel on `silo`.
+fn jarvis_privacy_for(silo: crate::ai_policy::policy::Silo, engine: &str) -> (String, bool) {
+    use crate::ai_policy::policy::Silo;
+    match silo {
+        Silo::Local => (format!("Local AI · {engine} · never leaves this device"), false),
+        Silo::Cloud => ("Cloud AI · messages are sent to your cloud AI provider".to_string(), true),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_jarvis_mention;
+    use super::{jarvis_privacy_for, parse_jarvis_mention};
+    use crate::ai_policy::policy::Silo;
+
+    /// Only a local engine may say the messages stay here; cloud says where
+    /// they go and flags that they leave the device.
+    #[test]
+    fn jarvis_privacy_line_follows_the_silo() {
+        let (local, local_leaves) = jarvis_privacy_for(Silo::Local, "llama");
+        assert!(local.contains("never leaves this device") && local.contains("llama"));
+        assert!(!local_leaves);
+        let (cloud, cloud_leaves) = jarvis_privacy_for(Silo::Cloud, "llama");
+        assert!(cloud.contains("cloud AI provider") && !cloud.contains("never leaves"));
+        assert!(cloud_leaves);
+    }
 
     #[test]
     fn jarvis_mention_is_a_whole_word() {

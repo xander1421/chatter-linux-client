@@ -20,6 +20,7 @@ import { ModalContainer } from "../components/modal_container.slint";
 import { DismissButton } from "../components/dismiss_button.slint";
 import { Button } from "../components/button.slint";
 import { Avatar } from "../components/avatar.slint";
+import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 
 // One tile (Media/GIFs) or row (Files/Links/Voice/Music) of the shared-content
 // tabs. Built by `chatter_core::ui::SharedContentItemData` — every string here
@@ -60,6 +61,10 @@ export component UserProfileModal inherits Rectangle {
     in property <string> bio: "";
     in property <bool> is-friend: false;
     in property <bool> is-blocked: false;
+    // Block asks first (Signal: "Block <name>? They won't be able to call or
+    // message you."); reset whenever another profile is shown.
+    property <bool> confirm-block: false;
+    changed display-name => { self.confirm-block = false; }
     in property <bool> is-self: false;  // viewing own profile
     in property <bool> is-muted: false;
     in property <bool> loading: false;
@@ -315,7 +320,13 @@ export component UserProfileModal inherits Rectangle {
                         padding-right: Spacing.md;
                         spacing: Spacing.xs;
 
-                        for act in [
+                        // No "Message" in Anon Mode: it opens an identified
+                        // server DM, which core refuses there.
+                        for act in AnonMode.enabled ? [
+                            { id: "mute", label: root.is-muted ? "Unmute" : "Mute", icon: Icons.mic-off },
+                            { id: "call", label: "Call", icon: Icons.phone },
+                            { id: "video", label: "Video", icon: Icons.video },
+                        ] : [
                             { id: "message", label: "Message", icon: Icons.message-circle },
                             { id: "mute", label: root.is-muted ? "Unmute" : "Mute", icon: Icons.mic-off },
                             { id: "call", label: "Call", icon: Icons.phone },
@@ -747,7 +758,9 @@ export component UserProfileModal inherits Rectangle {
                             }
                         }
 
-                        if !root.is-friend: Button {
+                        // Core refuses friend requests in Anon Mode (they
+                        // reveal the real identity), so the button is not shown.
+                        if !root.is-friend && !AnonMode.enabled: Button {
                             text: root.loading ? "" : "Add Friend";
                             variant: "secondary";
                             horizontal-stretch: 1;
@@ -761,7 +774,41 @@ export component UserProfileModal inherits Rectangle {
                             text: "Block";
                             variant: "secondary";
                             horizontal-stretch: 1;
-                            clicked => { root.block-user(); }
+                            clicked => { root.confirm-block = true; }
+                        }
+                    }
+
+                    if root.confirm-block && !root.is-self && !root.is-blocked: VerticalLayout {
+                        padding-left: Spacing.md;
+                        padding-right: Spacing.md;
+                        spacing: Spacing.sm;
+
+                        Text {
+                            text: "Block " + root.display-name + "? They won't be able to call or message you.";
+                            color: Colors.text-primary;
+                            font-size: Typography.sm;
+                            wrap: word-wrap;
+                        }
+
+                        HorizontalLayout {
+                            spacing: Spacing.sm;
+
+                            Button {
+                                text: "Cancel";
+                                variant: "secondary";
+                                horizontal-stretch: 1;
+                                clicked => { root.confirm-block = false; }
+                            }
+
+                            Button {
+                                text: "Block";
+                                variant: "danger";
+                                horizontal-stretch: 1;
+                                clicked => {
+                                    root.confirm-block = false;
+                                    root.block-user();
+                                }
+                            }
                         }
                     }
 
