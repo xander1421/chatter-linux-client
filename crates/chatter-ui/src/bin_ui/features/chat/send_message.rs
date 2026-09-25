@@ -77,6 +77,16 @@ pub fn refresh_send_notice(
     });
 }
 
+/// Re-render the notice from the stored membership, e.g. after a live
+/// `MemberUpdated` (mute, unmute, mute expiry) already refreshed it.
+pub fn show_send_notice(
+    weak: &slint::Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    channel_id: chatter_core::domain::ids::ChannelId,
+) {
+    set_send_notice(weak, ui_ctx, channel_id, ui_ctx.channel_send_notice(&channel_id));
+}
+
 /// Apply a notice only while its channel is still the one on screen.
 fn set_send_notice(
     weak: &slint::Weak<MainWindow>,
@@ -97,8 +107,8 @@ fn set_send_notice(
 
 /// Every conversation switch goes through `ChatState` (see the draft watcher
 /// in `features::composer`): clear the notice on leaving, recompute it for a
-/// channel on entering. A mute reaches the muted member by no event, so the
-/// open is where it is picked up.
+/// channel on entering. Live mute changes arrive as `MemberUpdated`
+/// ([`show_send_notice`]); the open re-reads the roster in case one was missed.
 fn wire_send_notice(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let mut current = ui_ctx.chat_state().get().active_channel_id;
     let mut rx = ui_ctx.chat_state().subscribe();

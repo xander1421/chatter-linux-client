@@ -222,13 +222,14 @@ impl AndroidNotifications {
         env.call_method(&builder, "setContentTitle", "(Ljava/lang/CharSequence;)Landroid/app/Notification$Builder;", &[JValue::Object(&j_title)]).map_err(nerr)?;
         env.call_method(&builder, "setContentText", "(Ljava/lang/CharSequence;)Landroid/app/Notification$Builder;", &[JValue::Object(&j_body)]).map_err(nerr)?;
         // PRIORITY_MAX (2) for heads-up on pre-26; category=call; ongoing so it
-        // can't be swiped away while ringing; auto-timeout if unanswered.
+        // can't be swiped away while ringing; auto-timeout if unanswered,
+        // when core stops ringing it too (setTimeoutAfter: API 26 = minSdk).
         env.call_method(&builder, "setPriority", "(I)Landroid/app/Notification$Builder;", &[JValue::Int(2)]).map_err(nerr)?;
         let j_cat = env.new_string("call").map_err(nerr)?;
         env.call_method(&builder, "setCategory", "(Ljava/lang/String;)Landroid/app/Notification$Builder;", &[JValue::Object(&j_cat)]).map_err(nerr)?;
         env.call_method(&builder, "setOngoing", "(Z)Landroid/app/Notification$Builder;", &[JValue::Bool(1)]).map_err(nerr)?;
         env.call_method(&builder, "setAutoCancel", "(Z)Landroid/app/Notification$Builder;", &[JValue::Bool(1)]).map_err(nerr)?;
-        env.call_method(&builder, "setTimeoutAfter", "(J)Landroid/app/Notification$Builder;", &[JValue::Long(45_000)]).map_err(nerr)?;
+        env.call_method(&builder, "setTimeoutAfter", "(J)Landroid/app/Notification$Builder;", &[JValue::Long(chatter_core::services::call_worker::RING_TIMEOUT.as_millis() as i64)]).map_err(nerr)?;
 
         // Full-screen + content intent → open the in-app ring screen (no auto-accept).
         let fs_pi = build_activity_intent(&mut env, &context, call_id, id, false)?;

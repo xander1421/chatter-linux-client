@@ -2405,7 +2405,7 @@ pub fn spawn_call_orchestrator_bridge(
                 },
                 event = room_rx.recv() => match event {
                     Ok(LiveKitRoomEvent::ParticipantLeft { identity }) => {
-                        spawn_end_one_to_one_if_peer_gone(worker.clone(), identity);
+                        spawn_end_if_left_alone(worker.clone(), identity);
                     }
                     Ok(_) | Err(RecvError::Lagged(_)) => {}
                     Err(RecvError::Closed) => {
@@ -2424,26 +2424,30 @@ pub fn spawn_call_orchestrator_bridge(
 /// LiveKit reconnect, which reappears under the same identity.
 const PEER_LEFT_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// Whether `departed` leaving ends the call: it is 1:1 and nobody else is left
-/// in the room (`remaining` may still list `departed` — the SDK's eviction
-/// order is not something to depend on).
+/// Whether `departed` leaving ends the call: nobody else is left in the room
+/// (`remaining` may still list `departed` — the SDK's eviction order is not
+/// something to depend on), and it is a 1:1 or anon group call.
 fn peer_left_ends_call(
     kind: Option<OrchestratedCallKind>,
     remaining: &[String],
     departed: &str,
 ) -> bool {
-    matches!(kind, Some(OrchestratedCallKind::DmStandard | OrchestratedCallKind::AnonDm))
-        && remaining.iter().all(|id| id == departed)
+    matches!(
+        kind,
+        Some(OrchestratedCallKind::DmStandard | OrchestratedCallKind::AnonDm | OrchestratedCallKind::AnonGroup)
+    ) && remaining.iter().all(|id| id == departed)
 }
 
-/// A 1:1 call (DM or anon DM) is over when the other person leaves the room.
+/// A 1:1 call (DM or anon DM) is over when the other person leaves the room,
+/// and an anon group call when the last other member does.
 ///
-/// The peer's hangup signal normally ends it, but that signal is a message and
-/// can be late or lost — the room saying the peer is gone is the ground truth.
-/// Without this the caller sat alone in the room, timer running, until they
-/// hung up themselves. Group calls (channel, anon group) are untouched: people
-/// leaving is ordinary there, and the channel initiator rekeys instead.
-fn spawn_end_one_to_one_if_peer_gone(worker: CallWorkerHandle, departed: String) {
+/// The peer's hangup signal normally ends a 1:1 call, but that signal is a
+/// message and can be late or lost — the room saying the peer is gone is the
+/// ground truth. Without this the caller sat alone in the room, timer
+/// running, until they hung up themselves. An anon group member's hangup only
+/// leaves (`handle_anon_hangup`), so this is what ends the group call once we
+/// are alone. Channel calls are untouched: the initiator rekeys instead.
+fn spawn_end_if_left_alone(worker: CallWorkerHandle, departed: String) {
     tokio::spawn(async move {
         let Some(call) = worker.active_call().await.map(|c| c.id) else { return };
         let still_ends = || async {
@@ -2462,7 +2466,7 @@ fn spawn_end_one_to_one_if_peer_gone(worker: CallWorkerHandle, departed: String)
         if worker.active_call().await.map(|c| c.id) != Some(call) || !still_ends().await {
             return;
         }
-        tracing::info!(call = %call, "1:1 call peer left the room — ending the call");
+        tracing::info!(call = %call, "Last other participant left the room — ending the call");
         // The resulting `ActiveEnded` files the DM's Call bubble
         // (`call_history_recorder`), as for any other end of the call.
         worker.disconnect_local(CallEndReason::RemoteHangup).await;
@@ -2472,7 +2476,7 @@ fn spawn_end_one_to_one_if_peer_gone(worker: CallWorkerHandle, departed: String)
 /// How long an incoming offer may ring. Signal's ring timeout: an offer older
 /// than this — one that sat in the queue while the app was offline, or whose
 /// call was answered on another of our devices long ago — never rings.
-pub(crate) const RING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+pub const RING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Whether an offer received at `sent_ns` (ns since epoch) is past the ring
 /// timeout at `now_ns`. For any offer that is the server's receive stamp
@@ -2632,11 +2636,11 @@ fn handle_domain_event(
             );
         }
 
-        DomainEvent::AnonCallHangupReceived { .. } => {
-            // Disconnect from LiveKit + clear active_call + orchestrator.
-            // Previously only cleared orchestrator, leaving the room connected
-            // and active_call set — causing "Already in a call" on retry.
-            worker.disconnect_local_nonblocking(None, CallEndReason::RemoteHangup);
+        DomainEvent::AnonCallHangupReceived { call_room_id, sender_id, .. } => {
+            handle_anon_hangup(worker, signaling, OrchestratedCallKind::AnonDm, &call_room_id, sender_id);
+        }
+        DomainEvent::AnonGroupCallHangupReceived { call_room_id, sender_id, .. } => {
+            handle_anon_hangup(worker, signaling, OrchestratedCallKind::AnonGroup, &call_room_id, sender_id);
         }
 
         DomainEvent::AnonGroupCallOfferReceived {
@@ -2699,10 +2703,6 @@ fn handle_domain_event(
             );
         }
 
-        DomainEvent::AnonGroupCallHangupReceived { .. } => {
-            worker.disconnect_local_nonblocking(None, CallEndReason::RemoteHangup);
-        }
-
         DomainEvent::CallKeyAnswerReceived { .. }
         | DomainEvent::GroupCallKeyReceived { .. } => {
             // Key-answer handling is driven by the UI/glue layer against the
@@ -2712,6 +2712,54 @@ fn handle_domain_event(
 
         _ => {}
     }
+}
+
+/// `sender`'s hangup of the anon call `kind` in room `call_room_id`.
+///
+/// It calls off the ring `sender` started: the callee stops ringing and the
+/// pending call is dropped. Beyond that, only a 1:1 call ends on the peer's
+/// hangup ([`anon_hangup_ends_call`]). In a group the member only leaves — the
+/// room drops them from the roster, and ends the call for us only once nobody
+/// else is left in it ([`peer_left_ends_call`]).
+fn handle_anon_hangup(
+    worker: &CallWorkerHandle,
+    signaling: &crate::services::call_signaling::CallSignalingService,
+    kind: OrchestratedCallKind,
+    call_room_id: &[u8],
+    sender: UserId,
+) {
+    let Some(call) = anon_room_handle(call_room_id) else {
+        tracing::debug!(len = call_room_id.len(), "Anon hangup with a malformed call_room_id; ignored");
+        return;
+    };
+    let rang_us = signaling.take_incoming_anon_call(call.as_str(), sender);
+    if !anon_hangup_ends_call(kind) {
+        // Only the member who rang us can call our ring off; another's hangup
+        // (or our own, echoed back by the group mailbox) leaves it ringing.
+        if rang_us {
+            worker.orch_withdraw_incoming(call, CallEndReason::RemoteHangup);
+        }
+        return;
+    }
+    // Still ringing? The caller gave up or it rang out — stop ringing.
+    // A no-op when this call was never presented or already accepted.
+    worker.orch_withdraw_incoming(call.clone(), CallEndReason::RemoteHangup);
+    // In this call? Disconnect from LiveKit + clear active_call +
+    // orchestrator. A hangup for any other call leaves this one alone.
+    worker.disconnect_local_nonblocking(Some(call), CallEndReason::RemoteHangup);
+}
+
+/// Whether a participant's hangup ends anon call `kind` for us: a 1:1 call
+/// ends on the peer's hangup, a group call outlives any one member (Signal).
+fn anon_hangup_ends_call(kind: OrchestratedCallKind) -> bool {
+    kind == OrchestratedCallKind::AnonDm
+}
+
+/// The orchestrator handle of an anon call: its room name, `anon-<uuid>` of
+/// the 16-byte `call_room_id` every anon offer, answer and hangup carries.
+fn anon_room_handle(call_room_id: &[u8]) -> Option<CallHandle> {
+    let id: [u8; 16] = call_room_id.try_into().ok()?;
+    Some(CallHandle::from(format!("anon-{}", uuid::Uuid::from_bytes(id))))
 }
 
 /// Handle an anonymous call answer (DM or group) inside the orchestrator.
@@ -2734,12 +2782,8 @@ fn spawn_anon_call_answer_task(
     answer_timestamp_ns: u64,
 ) {
     tokio::spawn(async move {
-        let room_handle = CallHandle::from(format!(
-            "anon-{}",
-            uuid::Uuid::from_bytes(
-                <[u8; 16]>::try_from(call_room_id.as_slice()).unwrap_or([0u8; 16])
-            )
-        ));
+        let room_handle = anon_room_handle(&call_room_id)
+            .unwrap_or_else(|| CallHandle::from(format!("anon-{}", uuid::Uuid::nil())));
 
         match signaling
             .handle_anon_call_answer(
@@ -2786,6 +2830,12 @@ fn spawn_anon_call_answer_task(
                     call = %room_handle.as_str(),
                     "Ignoring duplicate anon call answer (already in call)"
                 );
+            }
+            // Not a call of ours that is ringing: cancelled or rung out
+            // before this answer landed (that end already closed it), or
+            // another member's call in a group.
+            Err(crate::services::call_signaling::CallSignalingError::NoPendingCall) => {
+                tracing::debug!(call = %room_handle.as_str(), "Anon call answer for no pending call; ignored");
             }
             Err(e) => {
                 tracing::error!(error = %e, "Anon call answer handling failed");
@@ -2871,10 +2921,23 @@ mod peer_left_tests {
         assert!(peer_left_ends_call(Some(K::DmStandard), &[], "peer"));
         assert!(peer_left_ends_call(Some(K::AnonDm), &gone, "peer"));
         assert!(!peer_left_ends_call(Some(K::DmStandard), &["other".into()], "peer"));
-        // Groups and no-call are never ended by a departure.
+        // Channel calls and no-call are never ended by a departure.
         assert!(!peer_left_ends_call(Some(K::GroupChannel), &[], "peer"));
-        assert!(!peer_left_ends_call(Some(K::AnonGroup), &[], "peer"));
         assert!(!peer_left_ends_call(None, &[], "peer"));
+    }
+
+    #[test]
+    fn anon_group_ends_only_when_we_are_left_alone() {
+        assert!(!peer_left_ends_call(Some(K::AnonGroup), &["other".into()], "peer"));
+        assert!(peer_left_ends_call(Some(K::AnonGroup), &["peer".into()], "peer"));
+        assert!(peer_left_ends_call(Some(K::AnonGroup), &[], "peer"));
+    }
+
+    #[test]
+    fn group_hangup_does_not_end_the_call() {
+        use super::anon_hangup_ends_call;
+        assert!(!anon_hangup_ends_call(K::AnonGroup));
+        assert!(anon_hangup_ends_call(K::AnonDm));
     }
 }
 

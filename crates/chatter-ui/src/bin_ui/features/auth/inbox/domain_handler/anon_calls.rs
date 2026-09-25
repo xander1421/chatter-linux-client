@@ -43,21 +43,6 @@ pub(super) fn handle_anon_call_offer(
 // transitions as `AnonCallConnected` / `ActiveEnded` orchestrator events,
 // handled in `features::calls::incoming`.
 
-/// Handle anonymous call hangup received.
-pub(super) fn handle_anon_call_hangup(
-    window: &Weak<MainWindow>,
-    conversation_id: AnonDmId,
-) {
-    let weak = window.clone();
-    let _ = slint::invoke_from_event_loop(move || {
-        if let Some(window) = weak.upgrade() {
-            // Hide any call-related UI elements
-            super::super::super::initial_data::hide_incoming_call(&window);
-            tracing::info!(conversation_id = %conversation_id, "Anon call ended");
-        }
-    });
-}
-
 /// Handle anonymous group call offer received.
 pub(super) fn handle_anon_group_call_offer(
     window: &Weak<MainWindow>,
@@ -102,20 +87,6 @@ pub(super) fn handle_anon_group_call_offer(
                 call_type = call_type,
                 "Showing incoming anonymous group call UI"
             );
-        }
-    });
-}
-
-/// Handle anonymous group call hangup received.
-pub(super) fn handle_anon_group_call_hangup(
-    window: &Weak<MainWindow>,
-    group_id: AnonGroupId,
-) {
-    let weak = window.clone();
-    let _ = slint::invoke_from_event_loop(move || {
-        if let Some(window) = weak.upgrade() {
-            super::super::super::initial_data::hide_incoming_call(&window);
-            tracing::info!(group_id = %group_id, "Anon group call ended");
         }
     });
 }

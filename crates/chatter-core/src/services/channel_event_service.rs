@@ -280,7 +280,7 @@ impl ChannelEventService {
                 tracing::info!("Channel updated: channel={}, name={}", channel_id, updated.name);
             }
             Event::MemberUpdated(proto_member) => {
-                use crate::services::channel::converters::proto_role_to_domain;
+                use crate::services::channel::converters::{mute_expiry, proto_role_to_domain};
 
                 let user_id = match proto_member.user_id.parse::<uuid::Uuid>() {
                     Ok(uuid) => UserId::from(uuid),
@@ -290,6 +290,9 @@ impl ChannelEventService {
                     }
                 };
                 let new_role = proto_role_to_domain(proto_member.role);
+                // The server sends the whole member on a role change and on a
+                // mute, unmute or mute expiry, so take its moderator mute too.
+                let (is_muted, muted_until) = (proto_member.muted, mute_expiry(&proto_member));
 
                 // Update the cached membership role. If we don't have the target
                 // member cached (e.g. an admin changed a THIRD user's role and we
@@ -298,6 +301,8 @@ impl ChannelEventService {
                 match self.channel_repo.get_membership(&channel_id, &user_id) {
                     Ok(Some(mut membership)) => {
                         membership.role = new_role;
+                        membership.is_muted = is_muted;
+                        membership.muted_until = muted_until;
                         if let Err(e) = self.channel_repo.update_membership(&membership) {
                             tracing::warn!("Failed to persist member role change locally: {}", e);
                             return;
@@ -311,8 +316,8 @@ impl ChannelEventService {
                             notification_preference: NotificationPreference::All,
                             joined_at: Utc::now(),
                             last_read_message_id: None,
-                            is_muted: false,
-                            muted_until: None,
+                            is_muted,
+                            muted_until,
                         };
                         if let Err(e) = self.channel_repo.insert_membership(&membership) {
                             tracing::warn!("Failed to insert member for role change locally: {}", e);
@@ -325,13 +330,13 @@ impl ChannelEventService {
                     }
                 }
 
-                let event = DomainEvent::ChannelMemberRoleChanged {
+                let event = DomainEvent::ChannelMemberUpdated {
                     channel_id,
                     user_id,
                     role: new_role,
                 };
                 if let Err(e) = self.event_bus.domain_sender().send(event) {
-                    tracing::warn!("Failed to publish ChannelMemberRoleChanged event: {}", e);
+                    tracing::warn!("Failed to publish ChannelMemberUpdated event: {}", e);
                 }
                 tracing::info!(
                     "Channel member role changed: channel={}, user={}, role={:?}",

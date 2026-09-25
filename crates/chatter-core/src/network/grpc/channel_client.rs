@@ -826,6 +826,7 @@ mod tests {
             muted: false,
             banned: false,
             ban_expires_at: 0,
+            mute_expires_at: 0,
             invitation_status: InvitationStatus::Active as i32,
         };
 

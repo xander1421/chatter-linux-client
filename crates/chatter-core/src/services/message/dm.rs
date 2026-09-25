@@ -234,8 +234,8 @@ impl MessageService {
     /// Hold `plaintext` for every live peer device that has no half of the
     /// conversation yet, flushed when it answers the bootstrap
     /// ([`Self::send_pending_messages`], `dm_bootstrap_handler`). A device
-    /// is asked to answer once — when the first copy is owed to it — and only
-    /// on a live send (`grpc_pool`); the post-bootstrap flush follows a
+    /// is asked to answer until an ask reaches it (`was_device_asked`), and
+    /// only on a live send (`grpc_pool`); the post-bootstrap flush follows a
     /// bootstrap that already asked every device. No RPC beyond that ask.
     pub(super) async fn owe_unready_devices(
         &self,
@@ -257,10 +257,9 @@ impl MessageService {
             if conversation.peer_mailboxes.iter().any(|m| m.device_id == device) {
                 continue;
             }
-            // ponytail: "already owed something" stands for "already asked", so
-            // an ask that failed (empty token batch) is repeated only once the
-            // owed copies age out; a per-device asked_at if that proves slow.
-            let asked = conversations.has_queued_for_device(peer_id, device).unwrap_or(true);
+            // Asked only if an ask actually reached it: one that failed
+            // (empty token batch) is repeated on the next send.
+            let asked = conversations.was_device_asked(peer_id, device).unwrap_or(true);
             if let Err(e) = conversations.queue_for_device(peer_id, device, plaintext) {
                 tracing::warn!(peer_id = %peer_id, device, error = %e, "Owed copies: queue failed");
                 continue;

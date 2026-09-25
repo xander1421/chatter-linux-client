@@ -42,6 +42,84 @@ pub struct PendingAnonCall {
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+/// The room of our dialed, unanswered call among `calls` (only if it is
+/// `room_name`'s, when given). An answer marks a call started; an incoming
+/// call is never ours to cancel.
+fn ringing_room(calls: &HashMap<String, PendingAnonCall>, room_name: Option<&str>) -> Option<String> {
+    calls
+        .iter()
+        .find(|(room, call)| {
+            call.is_outgoing && call.started_at.is_none() && room_name.is_none_or(|r| r == room.as_str())
+        })
+        .map(|(room, _)| room.clone())
+}
+
+/// Whether `call` is `sender` ringing us: incoming, unanswered, theirs.
+fn rings_us(call: &PendingAnonCall, sender: crate::domain::UserId) -> bool {
+    !call.is_outgoing && call.started_at.is_none() && call.sender_id == Some(sender)
+}
+
+#[cfg(test)]
+mod ringing_room_tests {
+    use super::*;
+
+    fn call(room: &str, is_outgoing: bool, answered: bool) -> (String, PendingAnonCall) {
+        let token = CallRoomToken {
+            id: String::new(),
+            public_key: vec![],
+            private_key: vec![],
+            signature: vec![],
+            randomizer: None,
+        };
+        (room.to_string(), PendingAnonCall {
+            call_room_id: [0; 16],
+            room_name: room.to_string(),
+            conversation_id: AnonDmId::new(),
+            token,
+            is_video_call: false,
+            is_outgoing,
+            display_name: String::new(),
+            encryption_key: vec![],
+            sender_id: None,
+            started_at: answered.then(chrono::Utc::now),
+        })
+    }
+
+    #[test]
+    fn only_our_unanswered_call_is_ringing() {
+        let calls: HashMap<_, _> = [
+            call("incoming", false, false),
+            call("answered", true, true),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(ringing_room(&calls, None), None);
+
+        let mut calls = calls;
+        calls.extend([call("ringing", true, false)]);
+        assert_eq!(ringing_room(&calls, None).as_deref(), Some("ringing"));
+        assert_eq!(ringing_room(&calls, Some("ringing")).as_deref(), Some("ringing"));
+        // The ring timeout of another call must not end this one.
+        assert_eq!(ringing_room(&calls, Some("answered")), None);
+    }
+
+    #[test]
+    fn only_the_ringer_calls_off_our_ring() {
+        let ringer = crate::domain::UserId::new();
+        let (_, mut ring) = call("room", false, false);
+        ring.sender_id = Some(ringer);
+        assert!(rings_us(&ring, ringer));
+        // Another group member's hangup leaves the ring alone.
+        assert!(!rings_us(&ring, crate::domain::UserId::new()));
+        let (_, mut accepted) = call("room", false, true);
+        accepted.sender_id = Some(ringer);
+        assert!(!rings_us(&accepted, ringer));
+        let (_, mut ours) = call("room", true, false);
+        ours.sender_id = Some(ringer);
+        assert!(!rings_us(&ours, ringer));
+    }
+}
+
 /// LiveKit credentials for joining an anonymous call room.
 #[derive(Debug, Clone)]
 pub struct AnonCallRoomCredentials {
@@ -124,6 +202,26 @@ impl AnonDmService {
         calls.remove(room_name)
     }
     
+    /// Take our outgoing call that is still ringing — dialed, not yet
+    /// answered — optionally only if it is `room_name`'s. Checked and removed
+    /// under one lock, so an answer being processed and a cancel or ring
+    /// timeout cannot both claim the call.
+    pub fn take_ringing_anon_call(&self, room_name: Option<&str>) -> Option<PendingAnonCall> {
+        let mut calls = PENDING_ANON_CALLS.lock().unwrap();
+        let room = ringing_room(&calls, room_name)?;
+        calls.remove(&room)
+    }
+
+    /// Take the incoming call `sender` is still ringing us with in
+    /// `room_name` — offered, not yet accepted — so a ring called off leaves
+    /// nothing behind. `None` for any other call in that room: ours, one we
+    /// accepted, or (in a group) one another member rang.
+    pub fn take_incoming_anon_call(&self, room_name: &str, sender: crate::domain::UserId) -> Option<PendingAnonCall> {
+        let mut calls = PENDING_ANON_CALLS.lock().unwrap();
+        calls.get(room_name).filter(|c| rings_us(c, sender))?;
+        calls.remove(room_name)
+    }
+
     /// Clear a pending anonymous call by room name.
     pub fn clear_pending_anon_call(&self, room_name: &str) {
         let mut calls = PENDING_ANON_CALLS.lock().unwrap();

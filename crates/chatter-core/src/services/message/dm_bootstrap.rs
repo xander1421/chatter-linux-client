@@ -434,6 +434,11 @@ impl MessageService {
                 Ok(_) => {
                     tracing::info!(peer_id = %peer_id, peer_device_id, "DM bootstrap payload sent to peer's device inbox");
                     reached.push(peer_device_id);
+                    if let Err(e) = crate::mailbox::dm::DmConversationManager::new(self.database.clone())
+                        .mark_device_asked(peer_id, peer_device_id)
+                    {
+                        tracing::warn!(peer_id = %peer_id, peer_device_id, error = %e, "Failed to record the bootstrap ask");
+                    }
                 }
                 Err(e) if e.is_unknown_destination_device() => {
                     tracing::info!(peer_id = %peer_id, peer_device_id, "DM bootstrap: device retired on server, dropping it");
@@ -903,9 +908,9 @@ mod tests {
     }
 
     /// F54: with device 6 ready, a send owes its copy to devices 7 and 8
-    /// (no half yet) and asks each of them once; the next send owes them
-    /// another copy without asking again. Device 6, which has the message,
-    /// is owed nothing.
+    /// (no half yet) and asks each of them. An ask that did not get through
+    /// (nothing is behind the server URL) is repeated on the next send; one
+    /// that did is not. Device 6, which has the message, is owed nothing.
     #[tokio::test]
     async fn unready_devices_are_owed_each_copy_and_asked_once() {
         use crate::mailbox::dm::{ConversationKey, DmConversationManager};
@@ -931,13 +936,18 @@ mod tests {
         ms.owe_unready_devices(&mut auth, &friend, &conv, b"one", Some(&ms.grpc_pool)).await;
         assert_eq!(ms.token_manager.available_token_count().unwrap(), 8, "7 and 8 asked");
         ms.owe_unready_devices(&mut auth, &friend, &conv, b"two", Some(&ms.grpc_pool)).await;
-        assert_eq!(ms.token_manager.available_token_count().unwrap(), 8, "not asked twice");
+        assert_eq!(ms.token_manager.available_token_count().unwrap(), 6, "failed asks repeated");
+        for device in [7, 8] {
+            conversations.mark_device_asked(&friend, device).unwrap();
+        }
+        ms.owe_unready_devices(&mut auth, &friend, &conv, b"three", Some(&ms.grpc_pool)).await;
+        assert_eq!(ms.token_manager.available_token_count().unwrap(), 6, "a delivered ask is not repeated");
 
         assert!(conversations.drain_device_queue(&friend, 6).unwrap().is_empty());
         for device in [7, 8] {
             assert_eq!(
                 conversations.drain_device_queue(&friend, device).unwrap(),
-                vec![b"one".to_vec(), b"two".to_vec()]
+                vec![b"one".to_vec(), b"two".to_vec(), b"three".to_vec()]
             );
         }
     }

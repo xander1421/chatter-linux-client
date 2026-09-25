@@ -283,8 +283,9 @@ impl MemberModeration {
 /// [`Self::notice`], as Signal replaces it for a member who can't send.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SendBlock {
-    /// A moderator muted us; the server refuses our sends until it lapses.
-    Muted,
+    /// A moderator muted us; the server refuses our sends until it lapses
+    /// (`until`) or, when `None`, until a moderator lifts it.
+    Muted { until: Option<DateTime<Utc>> },
     /// We were kicked or banned (our membership is gone).
     Removed,
 }
@@ -296,20 +297,41 @@ impl SendBlock {
     #[must_use]
     pub fn for_viewer(own: Option<&Membership>, roster_known: bool) -> Option<Self> {
         match own {
-            Some(m) if m.is_muted => Some(Self::Muted),
+            Some(m) if m.is_muted => Some(Self::Muted { until: m.muted_until }),
             Some(_) => None,
             None if roster_known => Some(Self::Removed),
             None => None,
         }
     }
 
-    // ponytail: no until-time — the member proto carries `muted` but not the
-    // mute's expiry. Add it to the notice once ChannelMember carries one.
     #[must_use]
-    pub fn notice(self) -> &'static str {
+    pub fn notice(self) -> String {
+        self.notice_at(chrono::Local::now())
+    }
+
+    /// [`Self::notice`] with the mute's end in `now`'s time zone: "until
+    /// 15:30" today, "until tomorrow 09:00", else "until Oct 03, 09:00".
+    #[must_use]
+    pub fn notice_at<Tz: chrono::TimeZone>(self, now: DateTime<Tz>) -> String
+    where
+        Tz::Offset: std::fmt::Display,
+    {
+        const MUTED: &str = "You can't send messages in this channel while muted";
         match self {
-            Self::Muted => "You can't send messages in this channel while muted",
-            Self::Removed => "You were removed from this channel",
+            Self::Muted { until: None } => MUTED.to_string(),
+            Self::Muted { until: Some(until) } => {
+                let until = until.with_timezone(&now.timezone());
+                let (day, today) = (until.date_naive(), now.date_naive());
+                let when = if day == today {
+                    until.format("%H:%M").to_string()
+                } else if today.succ_opt() == Some(day) {
+                    until.format("tomorrow %H:%M").to_string()
+                } else {
+                    until.format("%b %d, %H:%M").to_string()
+                };
+                format!("{MUTED} until {when}")
+            }
+            Self::Removed => "You were removed from this channel".to_string(),
         }
     }
 }
@@ -452,10 +474,22 @@ mod send_block_tests {
         };
         assert_eq!(SendBlock::for_viewer(Some(&me), true), None);
         me.is_muted = true;
-        assert_eq!(SendBlock::for_viewer(Some(&me), true), Some(SendBlock::Muted));
+        assert_eq!(SendBlock::for_viewer(Some(&me), true), Some(SendBlock::Muted { until: None }));
         assert_eq!(SendBlock::for_viewer(None, true), Some(SendBlock::Removed));
         // Roster never synced: not evidence of removal.
         assert_eq!(SendBlock::for_viewer(None, false), None);
+    }
+
+    #[test]
+    fn mute_notice_names_the_end_time() {
+        use chrono::TimeZone;
+        let now = Utc.with_ymd_and_hms(2026, 9, 25, 12, 0, 0).unwrap();
+        let at = |d, h, m| SendBlock::Muted { until: Some(Utc.with_ymd_and_hms(2026, 9, d, h, m, 0).unwrap()) }.notice_at(now);
+        let base = "You can't send messages in this channel while muted";
+        assert_eq!(SendBlock::Muted { until: None }.notice_at(now), base);
+        assert_eq!(at(25, 15, 30), format!("{base} until 15:30"));
+        assert_eq!(at(26, 9, 0), format!("{base} until tomorrow 09:00"));
+        assert_eq!(at(28, 9, 0), format!("{base} until Sep 28, 09:00"));
     }
 }
 

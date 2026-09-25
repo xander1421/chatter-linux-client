@@ -540,10 +540,10 @@ pub enum DomainEvent {
         icon: Option<Vec<u8>>,
     },
 
-    /// A member's role was changed (promote / demote) by an admin. Fanned out
-    /// from the server's `MemberUpdated` event so other members' UIs reflect
-    /// the new role in the member list.
-    ChannelMemberRoleChanged {
+    /// A member's role or mute state changed (promote / demote, mute, unmute,
+    /// mute expiry). Fanned out from the server's `MemberUpdated` event so the
+    /// member list and the muted member's composer notice update at once.
+    ChannelMemberUpdated {
         channel_id: ChannelId,
         user_id: UserId,
         role: crate::domain::channel::MemberRole,
@@ -734,7 +734,7 @@ impl DomainEvent {
             DomainEvent::ChannelMemberJoined { channel_id, .. } => Some(*channel_id),
             DomainEvent::ChannelMemberLeft { channel_id, .. } => Some(*channel_id),
             DomainEvent::ChannelUpdated { channel_id, .. } => Some(*channel_id),
-            DomainEvent::ChannelMemberRoleChanged { channel_id, .. } => Some(*channel_id),
+            DomainEvent::ChannelMemberUpdated { channel_id, .. } => Some(*channel_id),
             DomainEvent::ChannelDeleted { channel_id } => Some(*channel_id),
             DomainEvent::ChannelCreated { channel_id, .. } => Some(*channel_id),
             DomainEvent::ChannelArchivedChanged { channel_id, .. } => Some(*channel_id),

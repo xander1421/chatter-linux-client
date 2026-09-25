@@ -675,7 +675,22 @@ impl DmConversationManager {
         let mut key = conversation.conversation_key.ok_or(MailboxError::ConversationNotEstablished)?;
         key.derive_shared_secret(their_ephemeral_public)?;
         self.save_peer_mailbox(peer_id, &mailbox)?;
+        self.clear_device_asked(peer_id, peer_device_id)?;
         Ok(mailbox)
+    }
+
+    /// The device answered (or is gone): the next ask is a new one.
+    fn clear_device_asked(&self, peer_id: &UserId, peer_device_id: u32) -> Result<(), MailboxError> {
+        let conn = self
+            .db
+            .connection()
+            .map_err(|e| MailboxError::Storage(e.to_string()))?;
+        conn.execute(
+            "DELETE FROM dm_device_asked WHERE conversation_id = ?1 AND peer_device_id = ?2",
+            rusqlite::params![peer_id.to_string(), peer_device_id],
+        )
+        .map_err(|e| MailboxError::Storage(e.to_string()))?;
+        Ok(())
     }
 
     /// Point `peer_device_id`'s half at its rotated mailbox. False when that
@@ -712,7 +727,7 @@ impl DmConversationManager {
             .db
             .connection()
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
-        for table in ["dm_peer_mailboxes", "dm_device_pending"] {
+        for table in ["dm_peer_mailboxes", "dm_device_pending", "dm_device_asked"] {
             conn.execute(
                 &format!("DELETE FROM {table} WHERE conversation_id = ?1 AND peer_device_id = ?2"),
                 rusqlite::params![peer_id.to_string(), peer_device_id],
@@ -794,16 +809,35 @@ impl DmConversationManager {
         Ok(())
     }
 
-    /// Whether anything is owed to `peer_device_id` — i.e. it has already
-    /// been asked to answer the bootstrap and not yet done so.
-    pub fn has_queued_for_device(&self, peer_id: &UserId, peer_device_id: u32) -> Result<bool, MailboxError> {
+    /// Record that a bootstrap MESSAGE or REQUEST reached `peer_device_id`.
+    pub fn mark_device_asked(&self, peer_id: &UserId, peer_device_id: u32) -> Result<(), MailboxError> {
         let conn = self
             .db
             .connection()
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO dm_device_asked (conversation_id, peer_device_id, asked_at) VALUES (?1, ?2, ?3)",
+            rusqlite::params![peer_id.to_string(), peer_device_id, Utc::now().to_rfc3339()],
+        )
+        .map_err(|e| MailboxError::Storage(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Whether `peer_device_id` was asked to answer the bootstrap within the
+    /// last mailbox lifetime and has not answered since. An ask older than
+    /// that is repeated: the mailbox it announced may be gone.
+    pub fn was_device_asked(&self, peer_id: &UserId, peer_device_id: u32) -> Result<bool, MailboxError> {
+        let conn = self
+            .db
+            .connection()
+            .map_err(|e| MailboxError::Storage(e.to_string()))?;
+        let cutoff = (Utc::now()
+            - Duration::seconds(super::bootstrap::DEFAULT_MAILBOX_TTL_SECONDS as i64))
+        .to_rfc3339();
         conn.query_row(
-            "SELECT EXISTS (SELECT 1 FROM dm_device_pending WHERE conversation_id = ?1 AND peer_device_id = ?2)",
-            rusqlite::params![peer_id.to_string(), peer_device_id],
+            "SELECT EXISTS (SELECT 1 FROM dm_device_asked
+                            WHERE conversation_id = ?1 AND peer_device_id = ?2 AND asked_at >= ?3)",
+            rusqlite::params![peer_id.to_string(), peer_device_id, cutoff],
             |row| row.get(0),
         )
         .map_err(|e| MailboxError::Storage(e.to_string()))
@@ -1007,6 +1041,12 @@ impl DmConversationManager {
 
         conn.execute(
             "DELETE FROM dm_device_pending WHERE conversation_id = ?1",
+            rusqlite::params![peer_id_str],
+        )
+        .map_err(|e| MailboxError::Storage(e.to_string()))?;
+
+        conn.execute(
+            "DELETE FROM dm_device_asked WHERE conversation_id = ?1",
             rusqlite::params![peer_id_str],
         )
         .map_err(|e| MailboxError::Storage(e.to_string()))?;
@@ -1436,18 +1476,25 @@ mod tests {
         seed_our_half(&mgr, &peer);
         mgr.record_peer_device(&peer, 2, [2u8; 32], ConversationKey::new().our_ephemeral_public).unwrap();
 
-        assert!(!mgr.has_queued_for_device(&peer, 8).unwrap());
         mgr.queue_for_device(&peer, 8, b"one").unwrap();
         mgr.queue_for_device(&peer, 8, b"two").unwrap();
         mgr.queue_for_device(&peer, 2, b"other").unwrap();
-        assert!(mgr.has_queued_for_device(&peer, 8).unwrap());
 
         assert_eq!(mgr.drain_device_queue(&peer, 8).unwrap(), vec![b"one".to_vec(), b"two".to_vec()]);
         assert!(mgr.drain_device_queue(&peer, 8).unwrap().is_empty());
 
+        // An ask is remembered until the device answers.
+        assert!(!mgr.was_device_asked(&peer, 8).unwrap());
+        mgr.mark_device_asked(&peer, 8).unwrap();
+        assert!(mgr.was_device_asked(&peer, 8).unwrap());
+        mgr.record_peer_device(&peer, 8, [8u8; 32], ConversationKey::new().our_ephemeral_public).unwrap();
+        assert!(!mgr.was_device_asked(&peer, 8).unwrap(), "answering clears the ask");
+
         mgr.forget_peer_device(&peer, 2).unwrap();
         assert!(mgr.drain_device_queue(&peer, 2).unwrap().is_empty());
-        assert!(mgr.load_conversation(&peer).unwrap().unwrap().peer_mailboxes.is_empty());
+        let left: Vec<u32> = mgr.load_conversation(&peer).unwrap().unwrap()
+            .peer_mailboxes.iter().map(|m| m.device_id).collect();
+        assert_eq!(left, vec![8], "only the retired device is gone");
     }
 
     // CRYPTO-10: every other X25519 site in the tree rejects a non-contributory

@@ -264,13 +264,13 @@ impl ChatterClient {
         let members = self.list_channel_members_local(channel_id);
         let own = members.iter().find(|m| m.user_id == me);
         crate::domain::channel::SendBlock::for_viewer(own, !members.is_empty())
-            .map(|b| b.notice().to_string())
+            .map(|b| b.notice())
             .unwrap_or_default()
     }
 
     /// [`Self::channel_send_notice`] after re-reading the roster from the
-    /// server. A mute reaches the muted member by no event, so run this on
-    /// channel open and after a refused send. A failed fetch keeps the local
+    /// server: on channel open and after a refused send, in case a live
+    /// `MemberUpdated` was missed. A failed fetch keeps the local
     /// answer.
     // ponytail: refetches the full roster; a "my membership" RPC if that
     // shows up in large channels.

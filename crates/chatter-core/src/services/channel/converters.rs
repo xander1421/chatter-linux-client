@@ -1,6 +1,6 @@
 //! Proto/domain type conversions for channels.
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 
 use crate::util::time::TimestampNanos;
 
@@ -172,9 +172,16 @@ pub fn proto_to_domain_membership(
         joined_at,
         last_read_message_id: None, // Not in proto
         is_muted: proto.muted,
-        muted_until: None,                              // Not in proto (ban_expires_at is for bans, not mutes)
+        muted_until: mute_expiry(proto),
         notification_preference: NotificationPreference::All, // Not in proto
     })
+}
+
+/// A member's timed-mute end; `None` when unmuted or muted until lifted.
+pub fn mute_expiry(proto: &chat_v1::channel::ChannelMember) -> Option<DateTime<Utc>> {
+    (proto.muted && proto.mute_expires_at != 0)
+        .then(|| TimestampNanos::from_nanos(proto.mute_expires_at).to_datetime())
+        .flatten()
 }
 
 /// Convert proto ChannelRole (i32) to domain MemberRole.

@@ -7569,18 +7569,18 @@ async fn v30_group_management_changes_propagate() {
         .await
         .expect("A update_channel_member_role failed");
 
-    // (a) B receives a live ChannelMemberRoleChanged event naming B + Admin.
+    // (a) B receives a live ChannelMemberUpdated event naming B + Admin.
     let gid = group.id.clone();
     let target = uid_b.clone();
     let got_role = wait_for_event(&mut events_b, EVENT_TIMEOUT, move |e| {
-        matches!(e, DomainEvent::ChannelMemberRoleChanged { channel_id, user_id, role }
+        matches!(e, DomainEvent::ChannelMemberUpdated { channel_id, user_id, role }
             if *channel_id == gid && *user_id == target && *role == MemberRole::Admin)
     })
     .await;
     assert!(
         got_role.is_some(),
         "ROLE PROPAGATION BROKEN: A promoted B to Admin in channel {}, but B never received a \
-         ChannelMemberRoleChanged domain event within {EVENT_TIMEOUT:?}. Root cause if RED: \
+         ChannelMemberUpdated domain event within {EVENT_TIMEOUT:?}. Root cause if RED: \
          UpdateMemberRole in the Go service published NO Redis event at all (only the actor's own \
          RPC stream saw MemberUpdated).",
         group.id

@@ -372,13 +372,11 @@ pub async fn handle_domain_event(
             // AnonCallConnected / ActiveEnded orchestrator events.
         }
 
-        #[cfg(feature = "call-ui")]
-        DomainEvent::AnonCallHangupReceived { conversation_id, .. } => {
-            anon_calls::handle_anon_call_hangup(window, conversation_id);
-        }
-        #[cfg(not(feature = "call-ui"))]
-        DomainEvent::AnonCallHangupReceived { .. } => {
-            tracing::debug!("Ignoring AnonCallHangupReceived (desktop-media disabled)");
+        DomainEvent::AnonCallHangupReceived { .. }
+        | DomainEvent::AnonGroupCallHangupReceived { .. } => {
+            // Handled by the call orchestrator bridge: it withdraws the ring
+            // or ends the call (1:1 only), and the UI follows its
+            // `IncomingWithdrawn` / `ActiveEnded` for that call.
         }
 
         // =========================================================================
@@ -408,15 +406,6 @@ pub async fn handle_domain_event(
         DomainEvent::AnonGroupCallAnswerReceived { .. } => {
             // Handled entirely by the call orchestrator bridge (same path as
             // AnonCallAnswerReceived).
-        }
-
-        #[cfg(feature = "call-ui")]
-        DomainEvent::AnonGroupCallHangupReceived { group_id, .. } => {
-            anon_calls::handle_anon_group_call_hangup(window, group_id);
-        }
-        #[cfg(not(feature = "call-ui"))]
-        DomainEvent::AnonGroupCallHangupReceived { .. } => {
-            tracing::debug!("Ignoring AnonGroupCallHangupReceived (desktop-media disabled)");
         }
 
         // =========================================================================
@@ -468,10 +457,12 @@ pub async fn handle_domain_event(
             }
         }
 
-        // A member's role changed. Core persisted the new role to the membership
-        // repo; refresh the member view so the new role is reflected.
-        DomainEvent::ChannelMemberRoleChanged { channel_id, user_id: _, role: _ } => {
+        // A member's role or moderator mute changed (server `MemberUpdated`).
+        // Core persisted it to the membership repo; refresh the member view and,
+        // in case it was our own mute, the composer notice.
+        DomainEvent::ChannelMemberUpdated { channel_id, user_id: _, role: _ } => {
             messaging::update_active_channel_member_count(window, ui_ctx, channel_id);
+            crate::bin_ui::features::chat::show_send_notice(window, ui_ctx, channel_id);
         }
 
         // =========================================================================

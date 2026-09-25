@@ -835,7 +835,7 @@ impl EventHandlers {
             DomainEvent::ChannelUpdated { channel_id, name, .. } => {
                 trace!(?channel_id, %name, "Channel metadata updated");
             }
-            DomainEvent::ChannelMemberRoleChanged { channel_id, user_id, role } => {
+            DomainEvent::ChannelMemberUpdated { channel_id, user_id, role } => {
                 trace!(?channel_id, ?user_id, ?role, "Channel member role changed");
             }
 

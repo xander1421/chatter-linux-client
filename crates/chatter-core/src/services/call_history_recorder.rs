@@ -8,13 +8,13 @@
 //! call, and a new transport gets history for free the moment it emits
 //! orchestrator events.
 //!
-//! Outgoing calls are not all announced — only a DM call is registered
-//! while it rings (`orch_register_outgoing`, `OutgoingStarted`), and that
-//! event carries no conversation — so `ChatterClient::start_call` writes the
-//! opening row for every outgoing call itself. Both sides converge on the
-//! same `id` — the orchestrator's `CallHandle` string — so the terminal
-//! events below finish either row. A DM call cancelled while it rings, or
-//! rung out (`NoAnswer`), ends with the leave's `ActiveEnded` like any other.
+//! Outgoing calls are not all announced — only DM and anon calls are
+//! registered while they ring (`orch_register_outgoing`, `OutgoingStarted`),
+//! and that event carries no conversation — so `ChatterClient::start_call`
+//! writes the opening row for every outgoing call itself. Both sides converge
+//! on the same `id` — the orchestrator's `CallHandle` string — so the terminal
+//! events below finish either row. A DM or anon call cancelled while it
+//! rings, or rung out (`NoAnswer`), ends with an `ActiveEnded` like any other.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -42,10 +42,10 @@ use crate::storage::Database;
 /// — the same blocking, with an await point and a closure around every
 /// statement. `blocking_recv` is exactly the blocking take this loop wants.
 ///
-/// It also files the Call bubble a finished 1:1 call leaves in the DM
-/// (`file_dm_bubble`): the terminal events here are the one point every end
-/// of a DM call passes — our hangup, the peer's, the peer leaving the room,
-/// a decline, a miss — on both sides.
+/// It also files the Call bubble a finished 1:1 call leaves in the DM or
+/// anon DM (`file_dm_bubble`): the terminal events here are the one point
+/// every end of such a call passes — our hangup, the peer's, the peer leaving
+/// the room, a decline, a miss — on both sides.
 pub fn spawn_call_history_recorder(
     call: &CallWorkerHandle,
     database: Arc<Database>,
@@ -186,7 +186,7 @@ fn finish(
     }
 }
 
-/// File the Call bubble for a finished call, when it was a 1:1 DM call, and
+/// File the Call bubble for a finished call, when it was a 1:1 call, and
 /// show it in the open chat. Built from the closed history row, so the bubble
 /// and the Calls screen can never disagree.
 fn file_dm_bubble(history: &CallHistoryRepository, messages: &MessageService, call: &CallHandle) {
@@ -211,23 +211,35 @@ fn file_dm_bubble(history: &CallHistoryRepository, messages: &MessageService, ca
     }
 }
 
-/// The Call bubble a closed history row leaves in the DM with the peer, or
-/// `None` for a call that is not a 1:1 DM call (group and anon calls file
-/// their own).
+/// The Call bubble a closed history row leaves in the 1:1 conversation with
+/// the peer — a friend DM or an anon DM — or `None` for a group call (they
+/// file their own).
 ///
-/// * Filed under `ChannelId::from(peer)` as `ServerDm` — the key and bucket
-///   the DM's own messages use.
+/// * Filed under the conversation's `ChannelId` and type — the key and
+///   bucket its own messages use: `ChannelId::from(peer)` for a friend DM,
+///   the anon DM's id for an anon one.
 /// * `initiator_id` decides "Incoming" / "Outgoing" in the chat; only an
 ///   incoming call nobody answered reads as missed. Our own unanswered or
 ///   declined call is still an outgoing call, as in Signal.
 /// * `sender_id` is the peer, as for the DM's failure markers: the chat and
-///   sidebar route a `ServerDm` message by its sender. A Call record raises
-///   no notification (`should_notify_message`) and is filed read.
+///   sidebar route a `ServerDm` message by its sender. An anon peer has no
+///   `UserId` (the orchestrator rings it as nil too) and the anon chat routes
+///   by conversation, so there it is nil. A Call record raises no
+///   notification (`should_notify_message`) and is filed read.
+/// * The id is the call's: the handle's UUID (an anon handle is
+///   `anon-<uuid>`), so every terminal event of one call names one bubble.
 fn dm_call_bubble(entry: &CallHistoryEntry, me: UserId) -> Option<Message> {
-    if entry.conversation_type != ConversationType::ServerDm {
-        return None;
-    }
-    let peer: UserId = entry.conversation_id.parse().ok()?;
+    let (channel, peer) = match entry.conversation_type {
+        ConversationType::ServerDm => {
+            let peer: UserId = entry.conversation_id.parse().ok()?;
+            (ChannelId::from(peer), peer)
+        }
+        ConversationType::AnonDm => {
+            let anon: crate::domain::anon_dm::AnonDmId = entry.conversation_id.parse().ok()?;
+            (ChannelId::from(anon), UserId(uuid::Uuid::nil()))
+        }
+        _ => return None,
+    };
     let incoming = entry.direction == CallDirection::Incoming;
     let call_type = if incoming && entry.result == CallResult::Missed {
         CallMessageType::Missed
@@ -236,15 +248,13 @@ fn dm_call_bubble(entry: &CallHistoryEntry, me: UserId) -> Option<Message> {
     };
     let now = chrono::Utc::now();
     let mut bubble = Message::new_text(
-        ChannelId::from(peer),
-        ConversationType::ServerDm,
+        channel,
+        entry.conversation_type.clone(),
         Some(peer),
         String::new(),
         crate::util::time::TimestampNanos::now().as_u64(),
     );
-    if let Ok(id) = entry.id.parse::<uuid::Uuid>() {
-        bubble.id = MessageId::from_uuid(id);
-    }
+    bubble.id = MessageId::from_uuid(entry.id.trim_start_matches("anon-").parse().ok()?);
     bubble.is_read = true;
     bubble.content = MessageContent::Call(CallMessage {
         call_id: entry.id.clone(),
@@ -326,9 +336,30 @@ mod dm_call_bubble_tests {
     }
 
     #[test]
-    fn group_and_anon_calls_are_not_dm_bubbles() {
+    fn an_anon_dm_call_is_filed_in_the_anon_conversation() {
+        let me = UserId::new();
+        let anon = crate::domain::anon_dm::AnonDmId::new();
+        let room = uuid::Uuid::new_v4();
+        let mut r = row(me, CallDirection::Incoming, CallResult::Missed, None);
+        r.id = format!("anon-{room}");
+        r.conversation_id = anon.to_string();
+        r.conversation_type = ConversationType::AnonDm;
+
+        let b = dm_call_bubble(&r, me).expect("anon bubble");
+        assert_eq!(b.conversation_id, ChannelId::from(anon));
+        assert_eq!(b.conversation_type, ConversationType::AnonDm);
+        assert_eq!(b.id, MessageId::from_uuid(room), "one bubble per call");
+        assert_eq!(call(&b).call_type, CallMessageType::Missed);
+        assert_ne!(call(&b).initiator_id, me, "incoming on the callee's side");
+
+        r.direction = CallDirection::Outgoing;
+        assert_eq!(call(&dm_call_bubble(&r, me).unwrap()).initiator_id, me);
+    }
+
+    #[test]
+    fn group_calls_are_not_dm_bubbles() {
         let (me, peer) = (UserId::new(), UserId::new());
-        for ct in [ConversationType::Channel, ConversationType::AnonDm, ConversationType::AnonGroup] {
+        for ct in [ConversationType::Channel, ConversationType::AnonGroup] {
             let mut r = row(peer, CallDirection::Incoming, CallResult::Completed, Some(3));
             r.conversation_type = ct;
             assert!(dm_call_bubble(&r, me).is_none());

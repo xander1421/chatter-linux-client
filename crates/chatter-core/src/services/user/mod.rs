@@ -1148,11 +1148,13 @@ impl UserService {
         let user_id_str = user_id.to_string();
         let mut stream = user_client.block_user(&user_id_str).await?;
 
+        // Drain to the end, as `unblock_user` does: the first event is the
+        // PENDING sent before the block runs (friend.go `BlockUser`), and the
+        // server closes the stream only once the block is committed (or with
+        // the error). Breaking on that PENDING wrote the local Blocked row
+        // before — or even when — the server block never happened.
         while let Some(event_result) = stream.next().await {
-            let event = event_result?;
-            if let Some(user_event::Event::FriendStatusChanged(ref _status)) = event.event {
-                break;
-            }
+            event_result?;
         }
 
         let friendship = Friendship {

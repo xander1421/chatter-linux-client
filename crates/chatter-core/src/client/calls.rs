@@ -113,12 +113,12 @@ impl ChatterClient {
     /// [`OutgoingCallStart`] with everything the UI needs to render the
     /// "Calling…" state.
     ///
-    /// Also opens the call-history row for the outgoing side. Only a DM call
-    /// is registered with the orchestrator while it rings
-    /// (`orch_register_outgoing`, in `start_dm_call`), so this is the only
-    /// place that sees an outgoing call of *every* conversation type at the
-    /// moment it is placed; `call_history_recorder` closes the row on the
-    /// terminal event.
+    /// Also opens the call-history row for the outgoing side. Only DM and
+    /// anon calls are registered with the orchestrator while they ring
+    /// (`orch_register_outgoing`), and that registration names no
+    /// conversation, so this is the only place that sees an outgoing call of
+    /// *every* conversation type at the moment it is placed;
+    /// `call_history_recorder` closes the row on the terminal event.
     #[cfg(feature = "media")]
     pub async fn start_call(
         &self,
@@ -792,27 +792,33 @@ impl ChatterClient {
     // ── Anonymous Call Orchestration ─────────────────────────────────
 
     /// Start an anonymous DM call: acquire token, send offer, store pending state.
+    #[cfg(feature = "media")]
     pub async fn start_anon_dm_call(
         &self,
         anon_dm_id: &crate::domain::anon_dm::AnonDmId,
         is_video: bool,
         display_name: &str,
     ) -> Result<crate::services::anon_dm::AnonCallOfferResult, ClientError> {
+        let call_worker = self.call_service().get()
+            .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?;
         self.call_signaling()
-            .start_anon_dm_call(anon_dm_id, is_video, display_name)
+            .start_anon_dm_call(anon_dm_id, is_video, display_name, call_worker)
             .await
             .map_err(|e| ClientError::Inbox(e.to_string()))
     }
 
     /// Start an anonymous group call: acquire token, send offer to all members, store pending state.
+    #[cfg(feature = "media")]
     pub async fn start_anon_group_call(
         &self,
         group_id: &crate::domain::anon_group::AnonGroupId,
         is_video: bool,
         display_name: &str,
     ) -> Result<crate::services::anon_dm::AnonCallOfferResult, ClientError> {
+        let call_worker = self.call_service().get()
+            .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?;
         self.call_signaling()
-            .start_anon_group_call(group_id, is_video, display_name)
+            .start_anon_group_call(group_id, is_video, display_name, call_worker)
             .await
             .map_err(|e| ClientError::Inbox(e.to_string()))
     }
@@ -974,7 +980,7 @@ impl ChatterClient {
     /// End the active call regardless of kind.
     ///
     /// Resolves the call kind from the orchestrator — the connected call, or
-    /// our DM call still ringing, so cancelling it sends the hangup — and
+    /// our DM or anon call still ringing, so cancelling it sends the hangup — and
     /// dispatches to the correct wire-level tear-down. UI code should call
     /// this from its "End call" button instead of branching between
     /// `end_dm_call` / `end_anon_call` based on view state.
